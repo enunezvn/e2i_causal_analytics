@@ -3,10 +3,11 @@
 Grounding contract (mirrors ``executive_brief``): the route derives EVERY figure
 SERVER-SIDE from the persisted segment-analysis record (``analysis_id`` is the
 only caller input), and the LM output passes a fail-closed numeric guard before
-it is served — any numeric claim the grounding cannot vouch for downgrades the
-response to the deterministic factual fallback. Effects on the binary clinical
-outcomes are probability deltas presented in PERCENTAGE POINTS (pp), matching
-the /ai-insights HTE card's display unit.
+it is served — any numeric claim the grounding cannot vouch for (including a
+flipped sign, a pp/% unit swap, or a name digit re-used out of context)
+downgrades the response to the deterministic factual fallback. Effects on the
+binary clinical outcomes are probability deltas presented in PERCENTAGE POINTS
+(pp), matching the /ai-insights HTE card's display unit.
 
 The insight must keep two questions separate (the card's core honesty issue):
 
@@ -98,16 +99,131 @@ def _fmt_int(value: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Vouched phrases — name digits are grounded only IN CONTEXT
+# ---------------------------------------------------------------------------
+
+# Natural-word expansions for unit letters embedded in variable names, so
+# "persistent_180d" keeps "180-day persistence" grounded.
+_UNIT_WORDS = {"d": "day", "w": "week", "m": "month", "y": "year"}
+
+
+def _phrase_variants(raw: Any) -> set[str]:
+    """A digit-bearing name plus its natural paraphrases.
+
+    These phrases are stripped from text BEFORE numeric-claim extraction, so
+    their internal digits pass the guard only in context: "persistent_180d"
+    and "180-day persistence" are fine, a bare re-use like "Treat 180
+    patients" still trips it.
+    """
+    s = str(raw or "").strip()
+    if not s or not re.search(r"\d", s):
+        return set()
+    out = {s}
+    for sep in (" ", "-", ""):
+        out.add(s.replace("_", sep))
+    band = re.fullmatch(r"(\d+)\s*-\s*(\d+)", s)  # age bands like "50-65"
+    if band:
+        a, b = band.group(1), band.group(2)
+        out.update({f"{a}-{b}", f"{a}–{b}", f"{a}—{b}", f"{a} - {b}", f"{a} to {b}"})
+    for num, unit in re.findall(r"(\d+)([A-Za-z]+)", s):
+        out.update({f"{num}{unit}", f"{num} {unit}"})
+        word = _UNIT_WORDS.get(unit.lower())
+        if word:
+            out.update({f"{num}-{word}", f"{num} {word}", f"{num}-{word}s", f"{num} {word}s"})
+    return out
+
+
+def _strip_phrases(text: str, phrases: list[str]) -> str:
+    """Remove vouched phrases (longest first) so only bare numbers remain."""
+    for p in phrases:
+        if p:
+            text = re.sub(re.escape(p), " ", text, flags=re.IGNORECASE)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed output guard
+# ---------------------------------------------------------------------------
+
+# A numeric claim is (sign, number, unit): "+11.1pp" / "-2.8" / "95%". The
+# sign counts only when directly attached to the number, so a markdown bullet
+# ("- 11.1pp") reads unsigned and "top-2" keeps its hyphen inside the word.
+_CLAIM_RE = re.compile(
+    r"(?:(?<![\w.\-])([+\-−]))?"
+    r"(\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s*(pp\b|%|percentage[\s-]points?\b|percent\b))?",
+    re.IGNORECASE,
+)
+# Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14".
+_FRACTION_RE = re.compile(r"\b(\d+)\s*(?:/|-?\s*(?:out\s+of|of)\s*-?)\s*(\d+)\b", re.IGNORECASE)
+
+
+def _extract_claims(text: str) -> list[tuple[str, str, str]]:
+    """(sign, comma-stripped number, normalized unit) for every number."""
+    claims: list[tuple[str, str, str]] = []
+    for m in _CLAIM_RE.finditer(text):
+        sign = "-" if m.group(1) in ("-", "−") else (m.group(1) or "")
+        unit_raw = (m.group(3) or "").lower()
+        if unit_raw == "pp" or "point" in unit_raw:
+            unit = "pp"
+        elif unit_raw:
+            unit = "%"
+        else:
+            unit = ""
+        claims.append((sign, m.group(2).replace(",", ""), unit))
+    return claims
+
+
+def _claim_vouched(
+    sign: str, num: str, unit: str, vouched: dict[str, set[tuple[str, str]]]
+) -> bool:
+    """True iff a grounded rendering of ``num`` exists that the claim does not
+    contradict: omitting the sign or unit is fine, flipping the sign or
+    swapping pp for % is not."""
+    for v_sign, v_unit in vouched.get(num, ()):
+        if (not sign or sign == v_sign) and (not unit or unit == v_unit):
+            return True
+    return False
+
+
+def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
+    """True iff every numeric claim in ``candidate`` is vouched by the grounding.
+
+    Fail-closed: any digit sequence the grounding did not render (different
+    rounding, re-derived deltas, invented figures, flipped signs, swapped
+    units, name digits re-used out of context) rejects the whole output.
+    Count fractions whose denominator is the segment total must state the
+    true significant count.
+    """
+    text = _strip_phrases(candidate, g["phrases"])
+    vouched: dict[str, set[tuple[str, str]]] = g["vouched"]
+    for frac in _FRACTION_RE.finditer(text):
+        m_str, k_str = frac.group(1), frac.group(2)
+        if k_str == str(g["total_count"]):
+            # Any "m of <segment total>" claim is a significance-count claim:
+            # the numerator must be the actual significant count. Both digits
+            # being individually vouched is NOT enough ("3 of 3" from a true
+            # 2-of-3 would otherwise pass).
+            if m_str != str(g["sig_count"]):
+                return False
+            continue
+        if not (_claim_vouched("", m_str, "", vouched) and _claim_vouched("", k_str, "", vouched)):
+            return False
+    return all(_claim_vouched(s, n, u, vouched) for s, n, u in _extract_claims(text))
+
+
+# ---------------------------------------------------------------------------
 # Grounding
 # ---------------------------------------------------------------------------
 
 
 def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
-    """Build the grounded prompt inputs + vouched numeric sets from a record.
+    """Build the grounded prompt inputs + the guard's vouched vocabulary.
 
     ``record`` is a plain-dict projection of the persisted
-    ``SegmentAnalysisResponse`` (see the /insights/hte route). Only figures
-    rendered into the strings below are vouched for the output guard.
+    ``SegmentAnalysisResponse`` (see the /insights/hte route). The guard
+    vocabulary is EXTRACTED from the exact strings rendered into the prompt —
+    sign and unit included — so the LM can only echo figures as given.
     """
     treatment = record.get("treatment_var") or "the treatment"
     outcome = record.get("outcome_var") or "the outcome"
@@ -135,19 +251,6 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
     sig_count = sum(1 for r in rows if r.get("statistical_significance"))
     total_count = len(rows)
 
-    # Vouched numeric vocabulary (the guard's whitelist). Keyed by canonical
-    # unsigned string; every figure rendered into the prompt must be added.
-    vouched: set[str] = set()
-    segment_tokens: dict[str, set[str]] = {}
-
-    def _vouch(s: str | None) -> str:
-        if not s:
-            return "—"
-        for m in re.findall(r"\d[\d,]*(?:\.\d+)?", s):
-            vouched.add(m.replace(",", ""))
-            vouched.add(m)
-        return s
-
     ate_pp = _pp(overall_ate)
     het = record.get("heterogeneity_score")
     het_str = f"{float(het):.2f}" if het is not None and math.isfinite(float(het)) else None
@@ -158,50 +261,39 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         + (f", cohort n={_fmt_int(n_total)}" if n_total else "")
         + f", {ci_pct}% CIs"
     )
-    _vouch(scope)
 
     effect_summary = (
-        f"Overall ATE {_vouch(ate_pp)}; "
+        f"Overall ATE {ate_pp or '—'}; "
         f"{sig_count} of {total_count} segments have {ci_pct}% CIs excluding zero; "
         + (
-            f"heterogeneity score {_vouch(het_str)} (0-1 scale)"
+            f"heterogeneity score {het_str} (0-1 scale)"
             if het_str
             else "heterogeneity score unavailable"
         )
     )
-    vouched.update({str(sig_count), str(total_count), ci_pct})
 
     seg_lines: list[str] = []
     ordered = sorted(rows, key=lambda r: float(r.get("cate_estimate") or 0.0), reverse=True)
     for r in ordered:
         name = f"{r['dimension']}={r.get('segment_value')}"
-        cate_s = _vouch(_pp(r.get("cate_estimate")))
-        lo_s = _vouch(_pp(r.get("cate_ci_lower")))
-        hi_s = _vouch(_pp(r.get("cate_ci_upper")))
-        n_s = _vouch(_fmt_int(r.get("sample_size")))
+        cate_s = _pp(r.get("cate_estimate")) or "—"
+        lo_s = _pp(r.get("cate_ci_lower")) or "—"
+        hi_s = _pp(r.get("cate_ci_upper")) or "—"
+        n_s = _fmt_int(r.get("sample_size")) or "—"
         sig = "significant" if r.get("statistical_significance") else "not significant"
         seg_lines.append(f"{name}: {cate_s} [CI {lo_s} to {hi_s}], n={n_s}, {sig}")
-        # Segment-name numerals (age bands like "50-65") must not trip the guard.
-        toks = set(re.findall(r"\d[\d,]*(?:\.\d+)?", str(r.get("segment_value") or "")))
-        vouched.update(toks)
-        segment_tokens[str(r.get("segment_value") or "")] = {
-            t.replace(",", "")
-            for t in re.findall(r"\d[\d,]*(?:\.\d+)?", f"{cate_s} {lo_s} {hi_s} {n_s}")
-        }
 
-    # expected_lift_pp is ALREADY in percentage points — format directly.
-    lift_pp = record.get("expected_lift_pp")
-    lift_s = (
-        f"{float(lift_pp):+.1f}pp"
-        if lift_pp is not None and math.isfinite(float(lift_pp))
-        else None
-    )
+    # expected_lift_pp is stored as a probability FRACTION despite its name:
+    # policy_learner validates it in [0, 1] and multiplies by 100 only at
+    # display. Render through _pp like every other effect — a 0.10 lift is
+    # +10.0pp, not +0.1pp.
+    lift_s = _pp(record.get("expected_lift_pp"))
     allocation = str(record.get("optimal_allocation_summary") or "").strip()
     if len(allocation) > 300:
         allocation = allocation[:297] + "..."
-    targeting = (
-        f"Expected lift from differential targeting: {_vouch(lift_s)}. " if lift_s else ""
-    ) + (_vouch(allocation) if allocation else "No allocation summary available.")
+    targeting = (f"Expected lift from differential targeting: {lift_s}. " if lift_s else "") + (
+        allocation if allocation else "No allocation summary available."
+    )
 
     grounding_chips = [
         {"label": "Overall ATE", "value": ate_pp or "—"},
@@ -210,10 +302,22 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         {"label": "n", "value": _fmt_int(n_total) or "—"},
     ]
 
-    # Variable names can carry digits (persistent_180d) — vouch them so the
-    # guard does not flag the design description itself.
-    for name in (treatment, outcome):
-        vouched.update(re.findall(r"\d+", str(name)))
+    # Digit-bearing NAMES (variables, brand, dimensions, segment values) are
+    # grounded as PHRASES, not free-floating numbers: their digits pass the
+    # guard only in context.
+    phrases: set[str] = set()
+    for name_part in (treatment, outcome, brand, *dims):
+        phrases |= _phrase_variants(name_part)
+    for r in rows:
+        phrases |= _phrase_variants(r.get("segment_value"))
+    phrase_list = sorted(phrases, key=len, reverse=True)
+
+    vouched: dict[str, set[tuple[str, str]]] = {}
+    grounded_text = _strip_phrases(
+        "\n".join([scope, effect_summary, *seg_lines, targeting]), phrase_list
+    )
+    for sign, num, unit in _extract_claims(grounded_text):
+        vouched.setdefault(num, set()).add((sign, unit))
 
     return {
         "scope": scope,
@@ -221,53 +325,12 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         "segments": "\n".join(seg_lines),
         "targeting": targeting,
         "grounding": grounding_chips,
+        "phrases": phrase_list,
         "vouched": vouched,
-        "segment_tokens": segment_tokens,
         "has_signal": has_signal,
         "sig_count": sig_count,
         "total_count": total_count,
     }
-
-
-# ---------------------------------------------------------------------------
-# Fail-closed output guard
-# ---------------------------------------------------------------------------
-
-_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
-# "13/14" or "13 of 14" count-fraction claims.
-_FRACTION_RE = re.compile(r"\b(\d+)\s*(?:/|of)\s*(\d+)\b")
-
-
-def _numeric_claims(text: str) -> list[str]:
-    """Every numeric token in ``text``, comma-stripped."""
-    return [m.replace(",", "") for m in _NUM_RE.findall(text)]
-
-
-def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
-    """True iff every numeric claim in ``candidate`` is vouched by the grounding.
-
-    Fail-closed: any digit sequence the grounding did not render (different
-    rounding, re-derived deltas, invented figures) rejects the whole output.
-    Count fractions ("m of k" / "m/k") must additionally match the actual
-    significant/total pair or be composed of vouched integers.
-    """
-    vouched: set[str] = g["vouched"]
-    for frac in _FRACTION_RE.finditer(candidate):
-        m_str, k_str = frac.group(1), frac.group(2)
-        if k_str == str(g["total_count"]):
-            # Any "m of <segment total>" claim is a significance-count claim:
-            # the numerator must be the actual significant count. Both digits
-            # being individually vouched is NOT enough ("3 of 3" from a true
-            # 2-of-3 would otherwise pass).
-            if m_str != str(g["sig_count"]):
-                return False
-            continue
-        if m_str not in vouched or k_str not in vouched:
-            return False
-    for claim in _numeric_claims(candidate):
-        if claim not in vouched:
-            return False
-    return True
 
 
 # ---------------------------------------------------------------------------

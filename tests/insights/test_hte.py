@@ -79,14 +79,17 @@ class TestBuildGrounding:
         assert "not significant" in lines[-1]
         assert "n=1,385" in lines[0]
 
-    def test_segment_value_numerals_are_vouched(self):
-        # Age band "50-65" must not trip the numeric guard.
-        g = hte.build_grounding(_record())
-        assert "50" in g["vouched"] and "65" in g["vouched"]
+    def test_expected_lift_fraction_renders_true_pp(self):
+        # The producer stores expected_lift_pp as a probability FRACTION
+        # despite the name (policy_learner validates [0,1] and multiplies by
+        # 100 only at display) — a 0.021 lift is +2.1pp, not +0.0pp.
+        g = hte.build_grounding(_record(expected_lift_pp=0.021))
+        assert "+2.1pp" in g["targeting"]
+        assert "+0.0pp" not in g["targeting"]
 
-    def test_outcome_variable_digits_are_vouched(self):
+    def test_zero_expected_lift_still_stated(self):
         g = hte.build_grounding(_record())
-        assert "180" in g["vouched"]
+        assert "+0.0pp" in g["targeting"]
 
     def test_no_signal_when_no_cate_rows(self):
         g = hte.build_grounding(_record(cate_by_segment={}, overall_ate=None))
@@ -128,6 +131,55 @@ class TestGuard:
     def test_unvouched_integer_rejected(self):
         g = hte.build_grounding(_record())
         assert hte._is_grounded("Roll out to 500 more HCPs.", g) is False
+
+    def test_sign_flip_rejected(self):
+        # codex round-1 HIGH: grounded "+11.1pp" must not vouch "-11.1pp".
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Overall ATE is -11.1pp.", g) is False
+
+    def test_unit_swap_rejected(self):
+        # codex round-1 HIGH: grounded "+11.1pp" must not vouch "+11.1%".
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Overall ATE is +11.1%.", g) is False
+
+    def test_signed_pp_and_percentage_point_wording_pass(self):
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Overall ATE is +11.1pp.", g) is True
+        assert hte._is_grounded("An 11.1 percentage-point gain overall.", g) is True
+
+    def test_negative_ci_bound_keeps_its_sign(self):
+        # Low band CI lower is -2.8pp: the negative form passes, the flipped
+        # positive form is a different claim and must not.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The low band CI dips to -2.8pp.", g) is True
+        assert hte._is_grounded("The low band gains +2.8pp.", g) is False
+
+    def test_markdown_bullet_hyphen_is_not_a_sign(self):
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("- 11.1pp overall effect", g) is True
+
+    def test_fraction_variants_all_checked(self):
+        # codex round-1 HIGH: "3 out of 3" / "3-of-3" bypassed the fraction
+        # rule and passed on individually-vouched digits.
+        g = hte.build_grounding(_record())
+        for wrong in ("3 of 3", "3/3", "3 out of 3", "3-of-3"):
+            assert hte._is_grounded(f"Fully {wrong} segments are significant.", g) is False
+        assert hte._is_grounded("2 out of 3 segments are significant.", g) is True
+
+    def test_variable_name_digits_pass_only_in_context(self):
+        # codex round-1 HIGH: "Treat 180 patients." re-used persistent_180d's
+        # digits bare. In-context uses (the name itself, "180-day") stay fine.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("persistent_180d (180-day persistence) improves.", g) is True
+        assert hte._is_grounded("Persistence at 180 days improves.", g) is True
+        assert hte._is_grounded("Treat 180 patients.", g) is False
+
+    def test_segment_value_digits_pass_only_in_context(self):
+        # codex round-1 HIGH: "2 of 65 segments" passed because the 50-65 age
+        # band vouched a free-floating 65.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Patients 50 to 65 (the 50-65 band) respond.", g) is True
+        assert hte._is_grounded("2 of 65 segments clear zero.", g) is False
 
 
 class TestGenerateInsight:
