@@ -362,9 +362,11 @@ test.describe('AI Agent Insights Page', () => {
     });
   });
 
-  test.describe('Experiment Recommendations', () => {
-    test('should display Experiment Recommendations section', async ({ page }) => {
-      await expect(page.getByText(/Experiment Recommendations/i)).toBeVisible();
+  test.describe('Experiment Health Monitor', () => {
+    test('should display Experiment Health Monitor section', async ({ page }) => {
+      // The card was reframed from an invented "Experiment Recommendations"
+      // pipeline to an honest monitoring feed (PR #1148).
+      await expect(page.getByText(/Experiment Health Monitor/i).first()).toBeVisible();
     });
   });
 
