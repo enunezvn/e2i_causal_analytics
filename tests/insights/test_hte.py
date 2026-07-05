@@ -1085,6 +1085,122 @@ class TestGuard:
             is False
         )
 
+    def test_ci_exclusion_is_a_row_status(self):
+        # codex round-20 HIGH: "with a CI excluding zero" / "its CI includes
+        # zero" asserted of a named row escaped _ROW_STATUS_RE, which only
+        # knew "significant" / "reach significance" vocabulary. Polarity
+        # XOR-composes across have-negation, verb negation, and containment
+        # verbs; the grounding's own count phrase ("2 of 3 segments have 95%
+        # CIs excluding zero") sharing a sentence with a named row is a
+        # count-subject status and must NOT cross-bind.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low has the weakest effect at +3.4pp "
+                "[CI -2.8pp to +9.6pp], n=2,498, with a CI excluding zero.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "age_band=50-65 shows +13.8pp [CI +8.0pp to +19.6pp], n=2,015, "
+                "but its CI includes zero.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=high posts +17.7pp [CI +12.7pp to +22.8pp], "
+                "n=1,385, with a CI excluding zero.",
+                g,
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low shows +3.4pp, n=2,498, but its CI includes zero.", g
+            )
+            is True
+        )
+        assert hte._is_grounded("disease_severity_band=low clears zero at +3.4pp.", g) is False
+        assert hte._is_grounded("age_band=50-65's CI does not exclude zero at +13.8pp.", g) is False
+        assert (
+            hte._is_grounded("age_band=50-65 does not have a CI excluding zero at +13.8pp.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=high does not have a CI including zero at +17.7pp.", g
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded("age_band=50-65 posts +13.8pp, but zero lies within its CI.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "For disease_severity_band=high, zero falls outside the CI at +17.7pp.", g
+            )
+            is True
+        )
+        # count-subject skip: the summary phrase must not bind as row status,
+        # while a later genuine row status still does.
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low posts +3.4pp, n=2,498, while "
+                "2 of 3 segments have 95% CIs excluding zero.",
+                g,
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded(
+                "2 of 3 segments have CIs excluding zero, but age_band=50-65's CI includes zero.",
+                g,
+            )
+            is False
+        )
+
+    def test_containment_verbs_and_clause_bounded_counts(self):
+        # codex round-20 family: containment verbs are the negative CI
+        # polarity in count land ("2 of 3 segments have CIs including zero"
+        # claims the complement), and the round-20 MEDIUM: a subordinator or
+        # coordinator+determiner after a sample size starts a new clause, so
+        # "n=1,385, while the low severity segment ..." must not bind 1,385
+        # as a segment count.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("2 of 3 segments have CIs including zero.", g) is False
+        assert hte._is_grounded("1 of 3 segments has CIs including zero.", g) is True
+        assert hte._is_grounded("3 have CIs including zero.", g) is False
+        assert hte._is_grounded("2 segments have CIs spanning zero.", g) is False
+        assert hte._is_grounded("1 segment straddles zero.", g) is True
+        assert hte._is_grounded("2 segments straddle zero.", g) is False
+        assert (
+            hte._is_grounded(
+                "Of the 3 segments, 1 had 95% CIs that could not exclude zero, so 2 "
+                "are considered significant. The high severity segment posts +17.7pp "
+                "[CI +12.7pp to +22.8pp], n=1,385, while the low severity segment "
+                "posts +3.4pp [CI -2.8pp to +9.6pp], n=2,498. Expected lift from "
+                "differential targeting is +0.0pp.",
+                g,
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded(
+                "The high severity segment posts +17.7pp, n=1,385, and the low "
+                "severity segment posts +3.4pp, n=2,498.",
+                g,
+            )
+            is True
+        )
+        # retention: NP-internal coordination and bare "of the" still bind.
+        assert hte._is_grounded("3 significant and robust segments emerged.", g) is False
+        assert hte._is_grounded("3 of the segments were significant.", g) is False
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so

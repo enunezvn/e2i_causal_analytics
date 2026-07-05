@@ -321,10 +321,17 @@ _SEG_COUNT_EXEMPT = (
 # is not counting what follows). The tail glued to the number itself
 # ("1,385-significant") tolerates punctuation but not ")". The number may
 # not start mid-decimal or mid-thousands ("1pp" inside "+11.1pp" is not a
-# count of anything).
+# count of anything). A subordinating conjunction starts a NEW clause with
+# its own subject ("n=1,385, while the low severity segment posts ..." does
+# not count segments), so it ends the modifier run — as does a coordinator
+# introducing a fresh determiner-headed NP ("n=1,385, and the low severity
+# segment ..."). Bare coordinators stay legal NP-internally ("3 significant
+# and robust segments").
 _SEG_COUNT_RE = re.compile(
     rf"\b(?<![.,\-])(\d(?:[\d,]*\d)?)(?!-\d)[^\s.!?)]*\s+"
-    rf"(?:(?!{_SEG_COUNT_EXEMPT}[^\w\s]*\s)(?![\d)])[^\s.!?]+\s+)*"
+    rf"(?:(?!{_SEG_COUNT_EXEMPT}[^\w\s]*\s)(?!(?:while|whereas|although|though)\b)"
+    rf"(?!(?:and|but|or|nor|yet|so)\s+(?:the|a|an|its|their|this|these|those)\b)"
+    rf"(?![\d)])[^\s.!?]+\s+)*"
     rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
 )
@@ -335,6 +342,10 @@ _SEG_COUNT_RE = re.compile(
 # ("not only significant but also large"), which affirm.
 _MODAL_NOT = r"(?:(?:do(?:es)?|did|could|would|will)\s+not|can\s*not)"
 _LY_WORD = r"(?!(?:only|merely|simply|solely)\b)\w+ly"
+# Verbs that assert a CI CONTAINS zero — the negative significance polarity
+# ("its CI includes zero", "the interval spans zero"). An outer negation
+# composes by XOR ("does not include zero" excludes it again).
+_CI_NEG_VERB = r"(?:includ|contain|span|cross|cover|straddl|overlap)\w*"
 # Words that may sit between a (possibly negated) copula and "significant"
 # without changing the claim: adverbs plus evaluative participles ("is not
 # considered significant", "cannot be deemed significant").
@@ -386,7 +397,8 @@ _SIG_ELIDED_RE = re.compile(
     rf"(?:(?:(?P<negthat>(?:(?:that|which)\s+(?:{_MODAL_NOT}|fail\w*\s+to"
     rf"|(?:are|is|were|was)\s+unable\s+to)"
     rf"|fail\w*\s+to|not|without|unable\s+to)\s+)"
-    rf"|(?:that|which)\s+)?(?:exclud|clear)\w*)\s+zero"
+    rf"|(?:that|which)\s+)?(?:{_LY_WORD}\s+)?"
+    rf"(?:(?P<negverb>{_CI_NEG_VERB})|(?:exclud|clear)\w*))\s+zero"
     rf"|(?:(?P<negdo2>{_MODAL_NOT})\s+)?clear(?:s|ed)?\s+zero"
     rf"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
     rf"|(?:(?:do(?:es)?|did|are|is|were|was|could|would|will|can)\s+)?"
@@ -407,7 +419,8 @@ _FRACTION_NEGATION_RE = re.compile(
     rf"|\b(?:that|which)\s+{_MODAL_NOT}\s+exclud\w*\b"
     rf"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b"
     rf"|\bunable\s+to\s+(?:have|clear|exclude|reach|achieve)\b"
-    rf"|\b(?:not|without)\s+(?:excluding|reaching|clearing|achieving)\b",
+    rf"|\b(?:not|without)\s+(?:excluding|reaching|clearing|achieving)\b"
+    rf"|\b{_CI_NEG_VERB}\s+zero\b",
     re.IGNORECASE,
 )
 # Where a segment count's negated predicate may live: after the noun, up to
@@ -430,7 +443,7 @@ _SEG_MODIFIER_NEG_RE = re.compile(
 def _sig_elided_negated(m: re.Match[str]) -> bool:
     span = m.group("span") or ""
     # \b-anchored: "notably significant" is an affirmation, not a negation.
-    return (
+    negated = (
         bool(re.search(r"\bnot\b", span, flags=re.IGNORECASE))
         or bool(m.group("negbe"))
         or bool(m.group("negdo"))
@@ -439,6 +452,10 @@ def _sig_elided_negated(m: re.Match[str]) -> bool:
         or bool(m.group("fail"))
         or bool(m.group("negreach"))
     )
+    # A negative CI verb ("3 have CIs including zero") flips polarity, and
+    # composes with an outer negation by XOR ("do not have CIs including
+    # zero" is an exclusion claim again).
+    return negated ^ bool(m.group("negverb"))
 
 
 # Chip-style reversed form: "Significant segments: 3" / "... : 2/2".
@@ -450,8 +467,8 @@ _SIG_COUNT_LABEL_RE = re.compile(
 # the total — each side must be true, not merely vouched.
 _FRACTION_SEG_CONTEXT_RE = re.compile(
     rf"\s*(?:[\w-]+\s+){{0,2}}(?:{_SEG_NOUNS}\b|(?<!not )\bsignificant\b"
-    rf"|CIs?\s+(?:(?:that|which)\s+)?exclud\w*\s+zero"
-    rf"|clear(?:s|ed)?\s+zero|exclud(?:es?|ed)?\s+zero)",
+    rf"|CIs?\s+(?:(?:that|which)\s+)?(?:exclud\w*|{_CI_NEG_VERB})\s+zero"
+    rf"|clear(?:s|ed)?\s+zero|exclud(?:es?|ed)?\s+zero|{_CI_NEG_VERB}\s+zero)",
     re.IGNORECASE,
 )
 
@@ -624,14 +641,46 @@ def _metric_misattributed(
 # A significance status asserted of a named row (table-line ", significant"
 # or copular "is (not) (statistically) significant"; "non-significant",
 # "nonsignificant", and adverb-interposed forms like "not reliably
-# significant" are negative statuses too).
+# significant" are negative statuses too). CI-exclusion wording is a row
+# status of its own — the grounding renders "CIs excluding zero", so "with
+# a CI excluding zero" / "its CI includes zero" / "clears zero" assert the
+# row's significance as directly as the word "significant" does. Polarity
+# XOR-composes across an outer have-negation, an inner verb negation, and
+# a containment verb ("does not have a CI including zero" excludes it).
+# "zero lies within/outside the CI" is the subject-inverted realization.
 _ROW_STATUS_RE = re.compile(
     rf"(?:(?:,\s*|\b(?:is|was|are|were|remains?)\s+{_STATUS_INTERPOSER}{{0,2}}"
     rf"|\b(?P<negbe>{_MODAL_NOT})\s+be\s+{_STATUS_INTERPOSER}{{0,2}})"
     rf"(?P<neg>not\s+|non[\s-]?)?{_STATUS_INTERPOSER}{{0,2}}significant\b"
     rf"|\b(?:(?P<negreach>{_MODAL_NOT}|fail\w*\s+to"
     rf"|(?:is|are|was|were)\s+unable\s+to)\s+)?"
-    rf"(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b)",
+    rf"(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b"
+    rf"|\b(?:(?P<cihavneg>{_MODAL_NOT}\s+have|without|lack\w*)\s+)?"
+    rf"(?:(?:a|an|its|the|their|whose)\s+)?(?:\d+%\s+)?"
+    rf"(?P<cinoun>CIs?|intervals?|estimates?|effects?|bounds?)\s+"
+    rf"(?:(?:that|which)\s+)?"
+    rf"(?:(?P<cineg>{_MODAL_NOT}|fail\w*\s+to|(?:is|are|was|were)\s+unable\s+to"
+    rf"|not|unable\s+to)\s+)?(?:{_LY_WORD}\s+)?"
+    rf"(?:(?P<cinegverb>{_CI_NEG_VERB})|(?:exclud|clear)\w*)\s+zero\b(?!-)"
+    rf"|\bzero\s+(?:lies|falls|sits|is|was|remains?)\s+"
+    rf"(?:(?:{_LY_WORD}|well|just)\s+|(?:contained|included|captured)\s+)?"
+    rf"(?P<zin>(?:with)?in(?:side)?|outside)\s+"
+    rf"(?:(?:the|its|their|this|that)\s+)?(?:\d+%\s+)?(?:CIs?|intervals?|bounds?|ranges?)\b"
+    rf"|\b(?:(?P<bareneg>{_MODAL_NOT}|fail\w*\s+to|(?:is|are|was|were)\s+unable\s+to"
+    rf"|unable\s+to|not|without)\s+)?(?:{_LY_WORD}\s+)?"
+    rf"(?P<cibare>(?:(?P<barenegverb>{_CI_NEG_VERB})"
+    rf"|exclud(?:es?|ed|ing)?|clear(?:s|ed|ing)?)\s+zero\b(?!-)))",
+    re.IGNORECASE,
+)
+# A CI-exclusion status whose subject is a segment COUNT ("2 of 3 segments
+# have 95% CIs excluding zero") restates the grounding's own summary line —
+# it must not bind as the named row's status when both share a sentence.
+# The count checks validate it separately.
+_COUNT_SUBJECT_TAIL_RE = re.compile(
+    rf"(?:\d[\d,]*\s+(?:[\w-]+\s+){{0,3}}(?:{_SEG_NOUNS}|CIs?)\s+"
+    rf"(?:(?:that|which)\s+)?(?:{_MODAL_NOT}\s+)?"
+    rf"(?:(?:have|has|had|show\w*|carry|carried|report\w*|with)\s+)?"
+    rf"|\d[\d,]*\s*(?:of|/)\s*(?:(?:the|these|those|all)\s+)?\d[\d,]*\s+)$",
     re.IGNORECASE,
 )
 
@@ -649,11 +698,27 @@ def _segment_attribution_ok(norm_text: str, g: dict[str, Any]) -> bool:
         mentioned = [r for r in rows if re.search(r["mention"], sentence, flags=re.IGNORECASE)]
         if len(mentioned) != 1:
             continue
-        status = _ROW_STATUS_RE.search(sentence)
+        status = None
+        for cand in _ROW_STATUS_RE.finditer(sentence):
+            if (cand.group("cinoun") or cand.group("cibare")) and _COUNT_SUBJECT_TAIL_RE.search(
+                sentence[: cand.start()]
+            ):
+                continue
+            status = cand
+            break
         if status is not None:
-            negative = bool(
-                status.group("neg") or status.group("negbe") or status.group("negreach")
-            )
+            if status.group("zin"):
+                negative = not status.group("zin").lower().startswith("out")
+            elif status.group("cinoun") or status.group("cibare"):
+                negative = (
+                    bool(status.group("cihavneg") or status.group("bareneg"))
+                    ^ bool(status.group("cineg"))
+                    ^ bool(status.group("cinegverb") or status.group("barenegverb"))
+                )
+            else:
+                negative = bool(
+                    status.group("neg") or status.group("negbe") or status.group("negreach")
+                )
             if negative == mentioned[0]["significant"]:
                 return False
         allowed: set[str] = mentioned[0]["numbers"] | g["global_numbers"]
