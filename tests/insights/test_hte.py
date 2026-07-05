@@ -699,6 +699,53 @@ class TestGuard:
         )
         assert hte._is_grounded(text, g) is True
 
+    def test_elided_ci_predicates_and_fraction_denominators_bind(self):
+        # codex round-13 HIGHs: elided counts with CI phrasing ("3 have 95%
+        # CIs excluding zero"), wrong fraction DENOMINATORS ("2 of 2 segments
+        # ..."), and "the analysis has 2 segments" all escaped. Negated
+        # fractions count the complement.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "Overall ATE is +11.1pp, with 3 total segments in the analysis; "
+                "3 have 95% CIs excluding zero.",
+                g,
+            )
+            is False
+        )
+        assert hte._is_grounded("Of the 3 segments, 3 clear zero.", g) is False
+        assert (
+            hte._is_grounded(
+                "Overall ATE is +11.1pp; 2 of 2 segments have 95% CIs excluding zero.", g
+            )
+            is False
+        )
+        assert hte._is_grounded("Significant segments: 2/2.", g) is False
+        assert (
+            hte._is_grounded(
+                "The analysis has 2 segments and reports an overall ATE of +11.1pp.", g
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "Overall ATE is +11.1pp, with 3 total segments in the analysis; "
+                "2 have 95% CIs excluding zero.",
+                g,
+            )
+            is True
+        )
+        assert hte._is_grounded("Of the 3 segments, 2 clear zero.", g) is True
+        assert hte._is_grounded("Significant segments: 2/3.", g) is True
+        assert (
+            hte._is_grounded(
+                "The analysis has 3 segments and reports an overall ATE of +11.1pp.", g
+            )
+            is True
+        )
+        assert hte._is_grounded("1 of 3 segments is not significant.", g) is True
+        assert hte._is_grounded("2 of 3 segments are not significant.", g) is False
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so

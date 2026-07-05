@@ -349,19 +349,34 @@ _FRACTION_PRECEDER_RE = re.compile(
 _TOTAL_PREDICATE_RE = re.compile(
     r"\btotal\b|\bin\s+the\s+analysis\b|\banaly[sz]ed\b|\btested\b|\bexamined\b"
     r"|\bevaluated\b|\bincluded?\b|\bincludes\b|\bcovers?\b|\bcovered\b"
-    r"|\bcomprises?\b|\bcomprised\b|\bcontains?\b|\bcontained\b|\bspans?\b|\bspanned\b",
+    r"|\bcomprises?\b|\bcomprised\b|\bcontains?\b|\bcontained\b|\bspans?\b|\bspanned\b"
+    r"|\bhas\b|\bhave\b|\bhad\b",
     re.IGNORECASE,
 )
-# An elided-subject significance count ("3 are significant" with the noun
-# understood from the previous clause) binds directly: the affirmative form
-# must be the significant count, the negated form the complement.
+# An elided-subject significance count ("3 are significant", "3 have 95%
+# CIs excluding zero", "3 clear zero" — noun understood from the previous
+# clause) binds directly: the affirmative form must be the significant
+# count, the negated form the complement.
 _SIG_ELIDED_RE = re.compile(
-    r"\b(\d[\d,]*)\s+(?:are|is|were|was|remained?)\s+"
-    r"(?:statistically\s+)?(?P<neg>not\s+)?significant\b",
+    r"\b(\d[\d,]*)\s+(?:"
+    r"(?:are|is|were|was|remained?)\s+(?:statistically\s+)?(?P<neg>not\s+)?significant\b"
+    r"|(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+exclud\w*\s+zero"
+    r"|clears?\s+zero"
+    r")",
     re.IGNORECASE,
 )
-# Chip-style reversed form: "Significant segments: 3".
-_SIG_COUNT_LABEL_RE = re.compile(rf"significant\s+{_SEG_NOUNS}\s*[:=]\s*(\d[\d,]*)", re.IGNORECASE)
+# Chip-style reversed form: "Significant segments: 3" / "... : 2/2".
+_SIG_COUNT_LABEL_RE = re.compile(
+    rf"significant\s+{_SEG_NOUNS}\s*[:=]\s*(\d[\d,]*)(?:\s*/\s*(\d[\d,]*))?", re.IGNORECASE
+)
+# A fraction that directly quantifies segments or significance ("2 of 2
+# segments have CIs excluding zero") claims BOTH the significant count and
+# the total — each side must be true, not merely vouched.
+_FRACTION_SEG_CONTEXT_RE = re.compile(
+    rf"\s*(?:[\w-]+\s+){{0,2}}(?:{_SEG_NOUNS}\b|(?<!not )\bsignificant\b"
+    rf"|CIs?\s+exclud\w*\s+zero|clears?\s+zero|excludes?\s+zero)",
+    re.IGNORECASE,
+)
 
 
 # A postpositive sign adjective after a unit-bearing figure ("an 11.1pp
@@ -608,18 +623,36 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     for label in _SIG_COUNT_LABEL_RE.finditer(text):
         if label.group(1).replace(",", "") != str(g["sig_count"]):
             return False
+        if label.group(2) and label.group(2).replace(",", "") != str(g["total_count"]):
+            return False
     for elided in _SIG_ELIDED_RE.finditer(text):
+        if _FRACTION_PRECEDER_RE.search(text[: elided.start(1)]):
+            continue
         expected = g["total_count"] - g["sig_count"] if elided.group("neg") else g["sig_count"]
         if elided.group(1).replace(",", "") != str(expected):
             return False
     for frac in _FRACTION_RE.finditer(text):
         m_str, k_str = frac.group(1), frac.group(2)
+        # "1 of 3 segments is not significant" counts the COMPLEMENT.
+        negated = re.search(
+            r"\bnot\s+significant\b|\bnon-?significant\b",
+            text[frac.end() : frac.end() + 60],
+            re.IGNORECASE,
+        )
+        expected_m = str(g["total_count"] - g["sig_count"] if negated else g["sig_count"])
+        if _FRACTION_SEG_CONTEXT_RE.match(text, frac.end()):
+            # A fraction quantifying segments/significance claims BOTH sides:
+            # "2 of 2 segments have CIs excluding zero" is wrong even though
+            # both 2s are individually vouched.
+            if m_str != expected_m or k_str != str(g["total_count"]):
+                return False
+            continue
         if k_str == str(g["total_count"]):
             # Any "m of <segment total>" claim is a significance-count claim:
             # the numerator must be the actual significant count. Both digits
             # being individually vouched is NOT enough ("3 of 3" from a true
             # 2-of-3 would otherwise pass).
-            if m_str != str(g["sig_count"]):
+            if m_str != expected_m:
                 return False
             continue
         if not (_claim_vouched("", m_str, "", vouched) and _claim_vouched("", k_str, "", vouched)):
