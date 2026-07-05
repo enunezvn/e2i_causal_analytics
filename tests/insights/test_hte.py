@@ -828,6 +828,37 @@ class TestGuard:
             is False
         )
 
+    def test_past_tense_and_participial_negations_bind_to_complement(self):
+        # codex round-16 HIGH: the negation vocabulary knew only finite
+        # present forms ("do/does not"), so past tense ("did not"),
+        # participial ("not excluding"), prepositional ("without excluding"),
+        # possessive-CI subjects, and the "reach/achieve statistical
+        # significance" realization all escaped complement binding.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("2 segments did not have 95% CIs excluding zero.", g) is False
+        assert hte._is_grounded("2 segments' 95% CIs did not exclude zero.", g) is False
+        assert hte._is_grounded("2 segments did not reach statistical significance.", g) is False
+        assert hte._is_grounded("2 segments did not achieve statistical significance.", g) is False
+        assert hte._is_grounded("2 segments did not clear zero.", g) is False
+        assert hte._is_grounded("3 segments have 95% CIs not excluding zero.", g) is False
+        assert hte._is_grounded("3 segments have 95% CIs without excluding zero.", g) is False
+        assert hte._is_grounded("3 segments are not reaching statistical significance.", g) is False
+        assert hte._is_grounded("1 segment did not have 95% CIs excluding zero.", g) is True
+        assert hte._is_grounded("1 segment's 95% CI did not exclude zero.", g) is True
+        assert hte._is_grounded("1 segment did not reach statistical significance.", g) is True
+        # "reach/achieve statistical significance" is now an affirmative
+        # significance predicate as well — the count must be the significant
+        # count, in noun, elided, and past-tense-clear forms alike.
+        assert hte._is_grounded("2 segments reached statistical significance.", g) is True
+        assert hte._is_grounded("3 segments reached statistical significance.", g) is False
+        assert hte._is_grounded("Of the 3 segments, 2 reached statistical significance.", g) is True
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 did not reach statistical significance.", g)
+            is False
+        )
+        assert hte._is_grounded("2 segments cleared zero.", g) is True
+        assert hte._is_grounded("3 segments cleared zero.", g) is False
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so

@@ -331,7 +331,8 @@ _SEG_COUNT_RE = re.compile(
 # "non-significant") does not make the clause a significance claim.
 _SIG_PREDICATE_RE = re.compile(
     r"(?<!not )(?<!non-)(?<!non )\bsignificant\b"
-    r"|CIs?\s+exclud\w*\s+zero|excludes?\s+zero|clears?\s+zero",
+    r"|CIs?\s+exclud\w*\s+zero|exclud(?:es|ed)?\s+zero|clear(?:s|ed)?\s+zero"
+    r"|(?<!not )\b(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b",
     re.IGNORECASE,
 )
 # ... but "2 of 3 segments have CIs excluding zero" is exempt: the fraction
@@ -357,26 +358,33 @@ _TOTAL_PREDICATE_RE = re.compile(
 # An elided-subject significance count ("3 are significant", "3 have 95%
 # CIs excluding zero", "3 clear zero" — noun understood from the previous
 # clause) binds directly: the affirmative form must be the significant
-# count, the negated form ("are not statistically significant", "do not
-# have CIs excluding zero", "have CIs that do not exclude zero") the
-# complement.
+# count, the negated form ("are not statistically significant", "do/did
+# not have CIs excluding zero", "have CIs that do not exclude zero",
+# "have CIs not excluding zero", "did not reach statistical significance")
+# the complement.
 _SIG_ELIDED_RE = re.compile(
     r"\b(\d[\d,]*)\s+(?:"
     r"(?:are|is|were|was|remained?)(?P<span>(?:\s+(?:not|statistically))*)\s+significant\b"
-    r"|(?:(?P<negdo>do(?:es)?\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
-    r"(?:(?P<negthat>that\s+do(?:es)?\s+not\s+)?exclud\w*)\s+zero"
-    r"|(?:(?P<negdo2>do(?:es)?\s+not)\s+)?clears?\s+zero"
+    r"|(?:(?P<negdo>(?:do(?:es)?|did)\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
+    r"(?:(?P<negthat>(?:that\s+(?:do(?:es)?|did)\s+not|not|without)\s+)?exclud\w*)\s+zero"
+    r"|(?:(?P<negdo2>(?:do(?:es)?|did)\s+not)\s+)?clear(?:s|ed)?\s+zero"
     r"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
+    r"|(?:(?:do(?:es)?|did|are|is|were|was)\s+)?(?P<negreach>not\s+)?"
+    r"(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b"
     r")",
     re.IGNORECASE,
 )
 # Negated significance in a fraction's tail ("2 of 3 segments do not have
 # 95% CIs excluding zero") flips the expected numerator to the complement.
+# Covers finite present/past ("do/does/did not have|exclude|reach|achieve"),
+# participial ("not excluding", "not reaching"), and prepositional
+# ("without excluding") negation.
 _FRACTION_NEGATION_RE = re.compile(
     r"\bnot\s+(?:statistically\s+)?significant\b|\bnon-?significant\b"
-    r"|\bdo(?:es)?\s+not\s+(?:have|clear|exclude|reach)\b"
-    r"|\bthat\s+do(?:es)?\s+not\s+exclud\w*\b"
-    r"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b",
+    r"|\b(?:do(?:es)?|did)\s+not\s+(?:have|clear|exclude|reach|achieve)\b"
+    r"|\bthat\s+(?:do(?:es)?|did)\s+not\s+exclud\w*\b"
+    r"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b"
+    r"|\b(?:not|without)\s+(?:excluding|reaching|clearing|achieving)\b",
     re.IGNORECASE,
 )
 # Where a segment count's negated predicate may live: after the noun, up to
@@ -404,6 +412,7 @@ def _sig_elided_negated(m: re.Match[str]) -> bool:
         or bool(m.group("negthat"))
         or bool(m.group("negdo2"))
         or bool(m.group("fail"))
+        or bool(m.group("negreach"))
     )
 
 
@@ -416,7 +425,7 @@ _SIG_COUNT_LABEL_RE = re.compile(
 # the total — each side must be true, not merely vouched.
 _FRACTION_SEG_CONTEXT_RE = re.compile(
     rf"\s*(?:[\w-]+\s+){{0,2}}(?:{_SEG_NOUNS}\b|(?<!not )\bsignificant\b"
-    rf"|CIs?\s+exclud\w*\s+zero|clears?\s+zero|excludes?\s+zero)",
+    rf"|CIs?\s+exclud\w*\s+zero|clear(?:s|ed)?\s+zero|exclud(?:es|ed)?\s+zero)",
     re.IGNORECASE,
 )
 
