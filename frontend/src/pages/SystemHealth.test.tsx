@@ -351,6 +351,118 @@ describe('SystemHealth', () => {
   });
 
   // ===========================================================================
+  // AGENT / PIPELINE PROVENANCE GATE (codex PR-4 round 4): the /agents and
+  // /pipelines wrappers also default provenance to "placeholder" fail-closed;
+  // their raw arrays are sample data unless the backend tagged them trusted.
+  // ===========================================================================
+
+  const placeholderAgent = {
+    agent_name: 'sample_orchestrator',
+    tier: 0,
+    available: true,
+    avg_latency_ms: 120,
+    success_rate: 0.99,
+    invocations_24h: 42,
+  };
+
+  const placeholderPipeline = {
+    pipeline_name: 'sample_etl_pipeline',
+    last_run: new Date().toISOString(),
+    last_success: new Date().toISOString(),
+    rows_processed: 10000,
+    freshness_hours: 0.5,
+    status: 'healthy',
+  };
+
+  it('suppresses untrusted (placeholder) agent health on the Agents tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useAgentHealth as MockFn).mockReturnValue({
+      data: {
+        agent_health_score: 1,
+        total_agents: 1,
+        available_count: 1,
+        unavailable_count: 0,
+        agents: [placeholderAgent],
+        by_tier: { '0': 1 },
+        check_latency_ms: 5,
+        data_provenance: 'placeholder',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Agents/i }));
+
+    expect(screen.queryByText('sample_orchestrator')).not.toBeInTheDocument();
+    expect(screen.getByText(/No agent health data/)).toBeInTheDocument();
+  });
+
+  it('renders trusted (partial) agent health on the Agents tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useAgentHealth as MockFn).mockReturnValue({
+      data: {
+        agent_health_score: 1,
+        total_agents: 1,
+        available_count: 1,
+        unavailable_count: 0,
+        agents: [placeholderAgent],
+        by_tier: { '0': 1 },
+        check_latency_ms: 5,
+        data_provenance: 'partial',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Agents/i }));
+
+    expect(screen.getByText('sample_orchestrator')).toBeInTheDocument();
+    expect(screen.queryByText(/No agent health data/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses untrusted (placeholder) pipeline health on the Pipelines tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (usePipelineHealth as MockFn).mockReturnValue({
+      data: {
+        pipeline_health_score: 1,
+        total_pipelines: 1,
+        healthy_count: 1,
+        stale_count: 0,
+        failed_count: 0,
+        pipelines: [placeholderPipeline],
+        check_latency_ms: 5,
+        data_provenance: 'placeholder',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Pipelines/i }));
+
+    expect(screen.queryByText('sample_etl_pipeline')).not.toBeInTheDocument();
+    expect(screen.getByText(/No pipeline health data/)).toBeInTheDocument();
+  });
+
+  it('renders trusted (measured) pipeline health on the Pipelines tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (usePipelineHealth as MockFn).mockReturnValue({
+      data: {
+        pipeline_health_score: 1,
+        total_pipelines: 1,
+        healthy_count: 1,
+        stale_count: 0,
+        failed_count: 0,
+        pipelines: [placeholderPipeline],
+        check_latency_ms: 5,
+        data_provenance: 'measured',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Pipelines/i }));
+
+    expect(screen.getByText('sample_etl_pipeline')).toBeInTheDocument();
+    expect(screen.queryByText(/No pipeline health data/)).not.toBeInTheDocument();
+  });
+
+  // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest
   // empty states (never fabricated values) when data is absent or placeholder.

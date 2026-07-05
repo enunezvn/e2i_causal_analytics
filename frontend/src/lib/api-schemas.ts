@@ -1171,8 +1171,10 @@ export const RAGHealthResponseWireSchema = z.object({
 //   GET /health-score/agents            -> AgentHealthResponse
 //   GET /health-score/history           -> HealthHistoryResponse
 //   GET /health-score/status            -> HealthServiceStatus
-// `data_provenance` is a backend-optional field (default "measured") absent
-// from the FE types; included as optional so a present value validates.
+// `data_provenance` is tagged by the backend on every wrapper and defaults to
+// an UNTRUSTED value (placeholder / unknown) so untagged paths fail closed —
+// see health_score.py response models. Mirrored as optional here (an absent
+// field, e.g. an older backend, is treated as untrusted by the pages' gate).
 
 /** Faithful mirror of `ComponentHealth` (health_score.py ComponentHealth). */
 export const ComponentHealthWireSchema = z.object({

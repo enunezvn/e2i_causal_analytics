@@ -107,7 +107,7 @@ describe('AIAgentInsights', () => {
   describe('Agents badge (honest count)', () => {
     it('renders the real available/total count when the health service reports it', () => {
       (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: { available_count: 19, total_agents: 21 },
+        data: { available_count: 19, total_agents: 21, data_provenance: 'measured' },
       });
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
       expect(screen.getByText('19/21 Agents Active')).toBeInTheDocument();
@@ -115,6 +115,14 @@ describe('AIAgentInsights', () => {
 
     it('omits the badge entirely when agent health has not loaded (no invented count)', () => {
       (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.queryByText(/Agents Active/i)).not.toBeInTheDocument();
+    });
+
+    it('omits the badge for untrusted (placeholder) provenance — sample counts are not live counts (codex PR-4 round 4)', () => {
+      (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { available_count: 19, total_agents: 21, data_provenance: 'placeholder' },
+      });
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
       expect(screen.queryByText(/Agents Active/i)).not.toBeInTheDocument();
     });

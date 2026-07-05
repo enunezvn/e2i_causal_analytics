@@ -59,6 +59,7 @@ import type {
   ComponentHealth as ApiComponentHealth,
   ModelHealth as ApiModelHealth,
 } from '@/types/health-score';
+import { isTrustedProvenance } from '@/lib/provenance';
 import { AlertList } from '@/components/visualizations/dashboard/AlertCard';
 import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import { ProgressRing } from '@/components/visualizations/dashboard/ProgressRing';
@@ -137,13 +138,8 @@ function mapHealthToStatus(health: string): StatusType {
   }
 }
 
-// A response's items are surfaced as real data only when the backend tagged the
-// wrapper with a trusted provenance. "measured" = live probe; "partial" = some
-// sub-fields unmeasured but the measured signals are real. "placeholder" /
-// "unknown" / absent are NOT trustworthy and degrade to the honest empty state.
-function isTrustedProvenance(provenance: string | undefined): boolean {
-  return provenance === 'measured' || provenance === 'partial';
-}
+// The provenance trust rule lives in @/lib/provenance so every page consuming
+// health-score payloads applies the same decision (codex PR-4 round 4).
 
 // Map the backend ComponentStatus enum (healthy | degraded | unhealthy |
 // unknown) to the Service Status card's status vocabulary.
@@ -319,8 +315,18 @@ function SystemHealth() {
   // retired /ai-insights card surfaced this as "Last Check"; without it a
   // stale health score is indistinguishable from a fresh one.
   const healthCheckedAt = trustedFullHealthData?.timestamp || null;
-  const agents = agentHealthData?.agents ?? [];
-  const pipelines = pipelineHealthData?.pipelines ?? [];
+  // Same trust boundary for the agent/pipeline payloads: their backend
+  // wrappers also default provenance to "placeholder" (fail-closed), so raw
+  // arrays from an untrusted response are sample data, not live status
+  // (codex PR-4 round 4).
+  const agents =
+    agentHealthData && isTrustedProvenance(agentHealthData.data_provenance)
+      ? agentHealthData.agents
+      : [];
+  const pipelines =
+    pipelineHealthData && isTrustedProvenance(pipelineHealthData.data_provenance)
+      ? pipelineHealthData.pipelines
+      : [];
   const healthHistory = healthHistoryData?.checks ?? [];
   // null = no history -> rendered as "Unknown", not a fabricated "stable".
   const healthTrend = healthHistoryData?.trend ?? null;
@@ -773,6 +779,12 @@ function SystemHealth() {
               <CardDescription>21-agent tiered orchestration system status</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {agents.length === 0 && (
+                <EmptyState
+                  title="No agent health data"
+                  description="No trusted agent health was reported. Agent availability appears here once measured."
+                />
+              )}
               {Object.entries(agentsByTier).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).map(([tier, tierAgents]) => (
                 <div key={tier}>
                   <div className="flex items-center gap-2 mb-3">
@@ -830,6 +842,12 @@ function SystemHealth() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
+                {pipelines.length === 0 && (
+                  <EmptyState
+                    title="No pipeline health data"
+                    description="No trusted pipeline health was reported. Pipeline status appears here once measured."
+                  />
+                )}
                 {pipelines.map(pipeline => (
                   <div
                     key={pipeline.pipeline_name}

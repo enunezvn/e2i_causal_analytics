@@ -41,6 +41,7 @@ import {
 } from '@/components/ui/select';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { useAgentHealth } from '@/hooks/api';
+import { isTrustedProvenance } from '@/lib/provenance';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { GOLDSTD_BRANDS } from '@/types/explain';
 
@@ -78,8 +79,12 @@ export function AIAgentInsights() {
   const brand = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
 
   // Real agent availability for the header badge. When the health-score
-  // service hasn't answered, the badge is simply absent — no invented count.
+  // service hasn't answered — or answered with untrusted (placeholder/unknown)
+  // provenance, i.e. sample data rather than a live probe — the badge is
+  // simply absent: no invented count (codex PR-4 round 4).
   const { data: agentHealth } = useAgentHealth();
+  const trustedAgentHealth =
+    agentHealth && isTrustedProvenance(agentHealth.data_provenance) ? agentHealth : null;
 
   return (
     <div className="space-y-6">
@@ -112,10 +117,10 @@ export function AIAgentInsights() {
               ))}
             </SelectContent>
           </Select>
-          {agentHealth && (
+          {trustedAgentHealth && (
             <Badge variant="outline" className="text-sm">
               <Sparkles className="h-4 w-4 mr-1" />
-              {agentHealth.available_count}/{agentHealth.total_agents} Agents Active
+              {trustedAgentHealth.available_count}/{trustedAgentHealth.total_agents} Agents Active
             </Badge>
           )}
         </div>
