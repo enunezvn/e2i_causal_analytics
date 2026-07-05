@@ -149,9 +149,9 @@ export function AIAgentInsights() {
           </ErrorBoundary>
         </div>
 
-        {/* Experiment Recommendations */}
+        {/* Experiment Health Monitor */}
         <div className="lg:col-span-1">
-          <ErrorBoundary sectionName="Experiment Recommendations">
+          <ErrorBoundary sectionName="Experiment Health Monitor">
             <ExperimentRecommendations />
           </ErrorBoundary>
         </div>
