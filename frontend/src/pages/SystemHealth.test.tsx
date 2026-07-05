@@ -216,6 +216,67 @@ describe('SystemHealth', () => {
   });
 
   // ===========================================================================
+  // OVERALL HEALTH CARD: consolidated home for the composer's summary +
+  // provenance flag (ported from the retired /ai-insights System Health Score
+  // card — /system-health is now the single system-health surface).
+  // ===========================================================================
+
+  const fullHealthBase = {
+    overall_health_score: 87.5,
+    health_grade: 'B',
+    critical_issues: [],
+    warnings: [],
+    recommendations: [],
+    check_latency_ms: 10,
+    timestamp: new Date().toISOString(),
+  };
+
+  it('renders the composer health_summary in the Overall Health card', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'All systems nominal\n4 of 4 dimensions measured',
+        data_provenance: 'measured',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/All systems nominal/)).toBeInTheDocument();
+    // A fully measured check needs no provenance caveat.
+    expect(screen.queryByText(/provenance:/)).not.toBeInTheDocument();
+  });
+
+  it('flags a partial (non-fully-measured) check with a provenance badge', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'Component + model measured; pipeline/agent skipped',
+        data_provenance: 'partial',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('provenance: partial')).toBeInTheDocument();
+  });
+
+  it('does not surface a summary from placeholder-provenance data', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'Dev placeholder summary',
+        data_provenance: 'placeholder',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText(/Dev placeholder summary/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Awaiting health check/)).toBeInTheDocument();
+  });
+
+  // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest
   // empty states (never fabricated values) when data is absent or placeholder.

@@ -5,10 +5,14 @@
  * Main page for AI-powered insights including executive briefs,
  * priority actions, predictive alerts, and more.
  *
- * Brand and model identifiers are sourced from the active dashboard
- * context (`E2ICopilotProvider`) with optional URL-query override.
+ * The brand is sourced from the active dashboard context
+ * (`E2ICopilotProvider`) with optional URL-query override.
  * Each insight is wrapped in an error boundary so a single failing
  * component does not blank the whole page (issue #304).
+ *
+ * System health lives on the dedicated /system-health page — the
+ * duplicate System Health Score card this page carried was consolidated
+ * there (same `useFullHealthCheck` source, one home).
  *
  * @module pages/AIAgentInsights
  */
@@ -23,7 +27,6 @@ import {
   ActiveCausalChains,
   ExperimentRecommendations,
   HeterogeneousTreatmentEffects,
-  SystemHealthScore,
 } from '@/components/insights';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -34,6 +37,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { useAgentHealth } from '@/hooks/api';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { GOLDSTD_BRANDS } from '@/types/explain';
 
@@ -70,16 +74,9 @@ export function AIAgentInsights() {
     : ALL_BRANDS;
   const brand = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
 
-  // Model id: URL query takes precedence, then a deploy-time env override
-  // (`VITE_DEFAULT_MODEL_ID`). When neither is set we hand `undefined`
-  // to `SystemHealthScore` and let its own documented default kick in —
-  // no model identifier is hard-coded on this page (issue #304).
-  const modelIdFromUrl = searchParams.get('modelId')?.trim();
-  const modelIdFromEnv =
-    typeof import.meta !== 'undefined'
-      ? (import.meta.env?.VITE_DEFAULT_MODEL_ID as string | undefined)?.trim()
-      : undefined;
-  const modelId = modelIdFromUrl || modelIdFromEnv || undefined;
+  // Real agent availability for the header badge. When the health-score
+  // service hasn't answered, the badge is simply absent — no invented count.
+  const { data: agentHealth } = useAgentHealth();
 
   return (
     <div className="space-y-6">
@@ -112,10 +109,12 @@ export function AIAgentInsights() {
               ))}
             </SelectContent>
           </Select>
-          <Badge variant="outline" className="text-sm">
-            <Sparkles className="h-4 w-4 mr-1" />
-            21 Agents Active
-          </Badge>
+          {agentHealth && (
+            <Badge variant="outline" className="text-sm">
+              <Sparkles className="h-4 w-4 mr-1" />
+              {agentHealth.available_count}/{agentHealth.total_agents} Agents Active
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -160,13 +159,6 @@ export function AIAgentInsights() {
         <div className="lg:col-span-1">
           <ErrorBoundary sectionName="Heterogeneous Treatment Effects">
             <HeterogeneousTreatmentEffects brand={brand} />
-          </ErrorBoundary>
-        </div>
-
-        {/* System Health Score - Full Width */}
-        <div className="lg:col-span-2">
-          <ErrorBoundary sectionName="System Health Score">
-            <SystemHealthScore modelId={modelId} />
           </ErrorBoundary>
         </div>
       </div>

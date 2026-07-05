@@ -301,6 +301,13 @@ function SystemHealth() {
     fullHealthData && !isHealthPlaceholder ? (fullHealthData.overall_health_score ?? null) : null;
   const healthGrade =
     fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_grade ?? null) : null;
+  // Ported from the retired /ai-insights System Health Score card: surface the
+  // composer's human-readable summary and flag a non-fully-measured check
+  // ("partial") instead of presenting it as indistinguishable from measured.
+  const healthSummary =
+    fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_summary || null) : null;
+  const healthProvenance =
+    fullHealthData && !isHealthPlaceholder ? (fullHealthData.data_provenance ?? null) : null;
   const agents = agentHealthData?.agents ?? [];
   const pipelines = pipelineHealthData?.pipelines ?? [];
   const healthHistory = healthHistoryData?.checks ?? [];
@@ -465,6 +472,19 @@ function SystemHealth() {
                   {healthTrend === 'stable' && <Minus className="h-4 w-4 text-slate-500" />}
                   {healthTrend ? healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1) : 'Unknown'}
                 </div>
+                {healthProvenance && healthProvenance !== 'measured' && (
+                  <Badge
+                    variant="outline"
+                    className="mt-2 text-xs text-amber-600 border-amber-300"
+                  >
+                    provenance: {healthProvenance}
+                  </Badge>
+                )}
+                {healthSummary && (
+                  <p className="mt-2 text-xs text-[var(--color-muted-foreground)] whitespace-pre-line">
+                    {healthSummary}
+                  </p>
+                )}
               </>
             )}
           </CardContent>
