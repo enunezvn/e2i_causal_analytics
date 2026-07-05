@@ -160,11 +160,36 @@ class TestGuard:
 
     def test_fraction_variants_all_checked(self):
         # codex round-1 HIGH: "3 out of 3" / "3-of-3" bypassed the fraction
-        # rule and passed on individually-vouched digits.
+        # rule; codex round-2 HIGH: so did hyphenated "3-out-of-3".
         g = hte.build_grounding(_record())
-        for wrong in ("3 of 3", "3/3", "3 out of 3", "3-of-3"):
+        for wrong in ("3 of 3", "3/3", "3 out of 3", "3-of-3", "3-out-of-3", "3 out-of 3"):
             assert hte._is_grounded(f"Fully {wrong} segments are significant.", g) is False
         assert hte._is_grounded("2 out of 3 segments are significant.", g) is True
+
+    def test_unit_bearing_number_not_vouched_bare(self):
+        # codex round-2 HIGH: "95" is rendered only as "95% CIs" — re-using it
+        # bare as a count ("95 segments") must reject; the %-form stays fine.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("95 segments have CIs excluding zero.", g) is False
+        assert hte._is_grounded("Reach out to 95 HCPs first.", g) is False
+        assert hte._is_grounded("At the 95% confidence level, 2 of 3 clear zero.", g) is True
+
+    def test_vouched_number_misattributed_as_segment_count_rejected(self):
+        # codex round-2 HIGH: a genuinely vouched unitless number (n=1,385)
+        # re-attributed as a segment count must reject; its true attribution
+        # (patients) still passes.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("There are 1,385 significant segments.", g) is False
+        assert hte._is_grounded("2 significant segments emerged from 3.", g) is True
+
+    def test_unanchored_range_phrase_is_a_quantity_claim(self):
+        # codex round-2 HIGH: "50 to 65 significant segments clear zero." used
+        # the age band's spelled-out range as a segment-count range. Anchored
+        # band mentions keep passing.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("50 to 65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("Patients 50 to 65 respond at +13.8pp.", g) is True
+        assert hte._is_grounded("The 50 to 65 band responds strongest.", g) is True
 
     def test_variable_name_digits_pass_only_in_context(self):
         # codex round-1 HIGH: "Treat 180 patients." re-used persistent_180d's

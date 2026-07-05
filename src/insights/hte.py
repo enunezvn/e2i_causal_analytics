@@ -4,8 +4,9 @@ Grounding contract (mirrors ``executive_brief``): the route derives EVERY figure
 SERVER-SIDE from the persisted segment-analysis record (``analysis_id`` is the
 only caller input), and the LM output passes a fail-closed numeric guard before
 it is served — any numeric claim the grounding cannot vouch for (including a
-flipped sign, a pp/% unit swap, or a name digit re-used out of context)
-downgrades the response to the deterministic factual fallback. Effects on the
+flipped sign, a pp/% unit swap, a unit-bearing figure re-used bare, a name
+digit re-used out of context, or a vouched number misattributed as a segment
+count) downgrades the response to the deterministic factual fallback. Effects on the
 binary clinical outcomes are probability deltas presented in PERCENTAGE POINTS
 (pp), matching the /ai-insights HTE card's display unit.
 
@@ -22,6 +23,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from src.insights.common import normalize_list, run_signature
@@ -107,30 +109,35 @@ def _fmt_int(value: Any) -> str | None:
 _UNIT_WORDS = {"d": "day", "w": "week", "m": "month", "y": "year"}
 
 
-def _phrase_variants(raw: Any) -> set[str]:
-    """A digit-bearing name plus its natural paraphrases.
+def _phrase_variants(raw: Any) -> tuple[set[str], set[str]]:
+    """A digit-bearing name plus its natural paraphrases, split by ambiguity.
 
-    These phrases are stripped from text BEFORE numeric-claim extraction, so
-    their internal digits pass the guard only in context: "persistent_180d"
-    and "180-day persistence" are fine, a bare re-use like "Treat 180
-    patients" still trips it.
+    Returns ``(safe, ambiguous)``. Safe phrases are stripped from text BEFORE
+    numeric-claim extraction, so their internal digits pass the guard only in
+    context: "persistent_180d" and "180-day persistence" are fine, a bare
+    re-use like "Treat 180 patients" still trips it. Spelled-out range forms
+    of a band value ("50 to 65", "50 - 65") are AMBIGUOUS — identical to a
+    quantity range in running text — and are stripped only when anchored by
+    band context (see ``_strip_phrases``).
     """
     s = str(raw or "").strip()
     if not s or not re.search(r"\d", s):
-        return set()
-    out = {s}
+        return set(), set()
+    safe = {s}
+    ambiguous: set[str] = set()
     for sep in (" ", "-", ""):
-        out.add(s.replace("_", sep))
+        safe.add(s.replace("_", sep))
     band = re.fullmatch(r"(\d+)\s*-\s*(\d+)", s)  # age bands like "50-65"
     if band:
         a, b = band.group(1), band.group(2)
-        out.update({f"{a}-{b}", f"{a}–{b}", f"{a}—{b}", f"{a} - {b}", f"{a} to {b}"})
+        safe.update({f"{a}-{b}", f"{a}–{b}", f"{a}—{b}"})
+        ambiguous.update({f"{a} - {b}", f"{a} to {b}"})
     for num, unit in re.findall(r"(\d+)([A-Za-z]+)", s):
-        out.update({f"{num}{unit}", f"{num} {unit}"})
+        safe.update({f"{num}{unit}", f"{num} {unit}"})
         word = _UNIT_WORDS.get(unit.lower())
         if word:
-            out.update({f"{num}-{word}", f"{num} {word}", f"{num}-{word}s", f"{num} {word}s"})
-    return out
+            safe.update({f"{num}-{word}", f"{num} {word}", f"{num}-{word}s", f"{num} {word}s"})
+    return safe, ambiguous
 
 
 # A vouched phrase immediately followed by a unit word is a numeric claim in
@@ -138,9 +145,26 @@ def _phrase_variants(raw: Any) -> set[str]:
 # leave it in place so its digits face the guard.
 _PHRASE_UNIT_LOOKAHEAD = r"(?!\s*(?:%|pp\b|percent\b|percentage\b|points?\b))"
 
+# Ambiguous range phrases are name mentions only in band context: preceded by
+# a band-ish noun ("patients 50 to 65", "band 50 to 65") or followed by one
+# ("the 50 to 65 age band"). Unanchored, "50 to 65 significant segments" is a
+# quantity claim and must face the guard.
+_AMBIG_BACK_ANCHOR = r"\b(aged?|ages|patients?|bands?|groups?|cohorts?)\s+"
+_AMBIG_FWD_ANCHOR = r"(?=\s+(?:age[\s-])?(?:bands?|groups?|cohorts?)\b)"
 
-def _strip_phrases(text: str, phrases: list[str]) -> str:
+
+def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] = ()) -> str:
     """Remove vouched phrases (longest first) so only bare numbers remain."""
+    for p in ambiguous:
+        if not p:
+            continue
+        text = re.sub(
+            _AMBIG_BACK_ANCHOR + re.escape(p) + _PHRASE_UNIT_LOOKAHEAD,
+            r"\1 ",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(re.escape(p) + _AMBIG_FWD_ANCHOR, " ", text, flags=re.IGNORECASE)
     for p in phrases:
         if p:
             text = re.sub(re.escape(p) + _PHRASE_UNIT_LOOKAHEAD, " ", text, flags=re.IGNORECASE)
@@ -160,8 +184,15 @@ _CLAIM_RE = re.compile(
     r"(?:\s*(pp\b|%|percentage[\s-]points?\b|percent\b))?",
     re.IGNORECASE,
 )
-# Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14".
-_FRACTION_RE = re.compile(r"\b(\d+)\s*(?:/|-?\s*(?:out\s+of|of)\s*-?)\s*(\d+)\b", re.IGNORECASE)
+# Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14",
+# "13-out-of-14" (any mix of spaces and hyphens around "of" / "out of").
+_FRACTION_RE = re.compile(
+    r"\b(\d+)(?:\s*/\s*|[-\s]+(?:out[-\s]+of|of)[-\s]+)(\d+)\b", re.IGNORECASE
+)
+# A number attributed to segments ("81 significant segments") is a
+# segment-count claim regardless of whether the number is vouched elsewhere —
+# it must be the true significant or total count.
+_SEG_COUNT_RE = re.compile(r"\b(\d(?:[\d,]*\d)?)\s+(?:[\w-]+\s+){0,2}segments?\b", re.IGNORECASE)
 
 
 def _extract_claims(text: str) -> list[tuple[str, str, str]]:
@@ -183,11 +214,12 @@ def _extract_claims(text: str) -> list[tuple[str, str, str]]:
 def _claim_vouched(
     sign: str, num: str, unit: str, vouched: dict[str, set[tuple[str, str]]]
 ) -> bool:
-    """True iff a grounded rendering of ``num`` exists that the claim does not
-    contradict: omitting the sign or unit is fine, flipping the sign or
-    swapping pp for % is not."""
+    """True iff a grounded rendering of ``num`` exists with the SAME unit that
+    the claim's sign does not contradict. Omitting the sign is fine; omitting
+    or swapping the unit is not — "95" rendered only as "95%" does not vouch
+    a bare "95", so unit-bearing figures cannot be re-used as counts."""
     for v_sign, v_unit in vouched.get(num, ()):
-        if (not sign or sign == v_sign) and (not unit or unit == v_unit):
+        if (not sign or sign == v_sign) and unit == v_unit:
             return True
     return False
 
@@ -199,10 +231,15 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     rounding, re-derived deltas, invented figures, flipped signs, swapped
     units, name digits re-used out of context) rejects the whole output.
     Count fractions whose denominator is the segment total must state the
-    true significant count.
+    true significant count, and any number attributed to segments must be
+    the true significant or total count.
     """
-    text = _strip_phrases(candidate, g["phrases"])
+    text = _strip_phrases(candidate, g["phrases"], g["ambiguous_phrases"])
     vouched: dict[str, set[tuple[str, str]]] = g["vouched"]
+    seg_counts = {str(g["sig_count"]), str(g["total_count"])}
+    for seg in _SEG_COUNT_RE.finditer(text):
+        if seg.group(1).replace(",", "") not in seg_counts:
+            return False
     for frac in _FRACTION_RE.finditer(text):
         m_str, k_str = frac.group(1), frac.group(2)
         if k_str == str(g["total_count"]):
@@ -312,15 +349,21 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
     # grounded as PHRASES, not free-floating numbers: their digits pass the
     # guard only in context.
     phrases: set[str] = set()
+    ambiguous: set[str] = set()
     for name_part in (treatment, outcome, brand, *dims):
-        phrases |= _phrase_variants(name_part)
+        safe_v, ambig_v = _phrase_variants(name_part)
+        phrases |= safe_v
+        ambiguous |= ambig_v
     for r in rows:
-        phrases |= _phrase_variants(r.get("segment_value"))
+        safe_v, ambig_v = _phrase_variants(r.get("segment_value"))
+        phrases |= safe_v
+        ambiguous |= ambig_v
     phrase_list = sorted(phrases, key=len, reverse=True)
+    ambiguous_list = sorted(ambiguous, key=len, reverse=True)
 
     vouched: dict[str, set[tuple[str, str]]] = {}
     grounded_text = _strip_phrases(
-        "\n".join([scope, effect_summary, *seg_lines, targeting]), phrase_list
+        "\n".join([scope, effect_summary, *seg_lines, targeting]), phrase_list, ambiguous_list
     )
     for sign, num, unit in _extract_claims(grounded_text):
         vouched.setdefault(num, set()).add((sign, unit))
@@ -332,6 +375,7 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         "targeting": targeting,
         "grounding": grounding_chips,
         "phrases": phrase_list,
+        "ambiguous_phrases": ambiguous_list,
         "vouched": vouched,
         "has_signal": has_signal,
         "sig_count": sig_count,
