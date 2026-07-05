@@ -325,14 +325,31 @@ _SEG_COUNT_RE = re.compile(
     rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
 )
+# A segment count inside a clause asserting significance ("All 3 segments
+# have 95% CIs excluding zero") is a SIGNIFICANT-segment count — the true
+# total cannot vouch it. Negated significance ("not significant") does not
+# make the clause a significance claim.
+_SIG_PREDICATE_RE = re.compile(
+    r"(?<!not )\bsignificant\b|CIs?\s+exclud\w*\s+zero|excludes?\s+zero|clears?\s+zero",
+    re.IGNORECASE,
+)
+# ... but "2 of 3 segments have CIs excluding zero" is exempt: the fraction
+# rule validates the numerator, so the denominator stays a total.
+_FRACTION_PRECEDER_RE = re.compile(r"\d\s*(?:of|out[-\s]+of|in|over|/)\s*$", re.IGNORECASE)
+# Chip-style reversed form: "Significant segments: 3".
+_SIG_COUNT_LABEL_RE = re.compile(rf"significant\s+{_SEG_NOUNS}\s*[:=]\s*(\d[\d,]*)", re.IGNORECASE)
 
 
 # A postpositive sign adjective after a unit-bearing figure ("an 11.1pp
-# negative effect", "11.1pp, a negative result") signs the claim. Allows one
-# appositive comma, an article, and one bridging word — never a sentence
+# negative effect", "11.1pp, a negative result", "11.1pp, indicating a
+# negative effect") signs the claim. Allows one appositive comma, a
+# discourse linker, an article, and one bridging word — never a sentence
 # boundary.
 _POSTPOSITIVE_SIGN_RE = re.compile(
-    r",? (?:(?:a|an|the) )?(?:[a-z][\w-]* )?(negative|positive)\b", re.IGNORECASE
+    r",? (?:(?:indicating|suggesting|implying|meaning|showing|reflecting"
+    r"|signaling|representing|therefore|thus|hence|i\.e\.) )?"
+    r"(?:(?:a|an|the) )?(?:[a-z][\w-]* )?(negative|positive)\b",
+    re.IGNORECASE,
 )
 
 
@@ -386,13 +403,16 @@ def _claim_vouched(
 _WINDOW_BREAK_RE = re.compile(r"[;\n]|[.!?](?=\s|$)")
 _SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?=\s|$)|\n+")
 # The lift anchor also covers targeting-benefit paraphrase families ("the
-# incremental gain from differential targeting", "targeting offers ...") —
-# any figure claimed as the value of targeting IS a lift claim.
+# incremental gain from differential targeting", "targeting offers ...",
+# "differential-targeting opportunity", "targeting improves ... by") — any
+# figure claimed as the value of targeting IS a lift claim.
 _LIFT_ANCHOR_RE = re.compile(
     r"\b(?:expected\s+)?(?:lift|uplift)\b"
     r"|\b(?:gains?|improvements?|benefits?|value|advantage|upside|impact)\s+"
     r"(?:from|of)\s+(?:[\w-]+\s+){0,2}?targeting\b"
-    r"|\btargeting\s+(?:offers?|yields?|delivers?|provides?|adds?|generates?|produces?)\b",
+    r"|\btargeting\s+(?:offers?|yields?|delivers?|provides?|adds?|generates?|produces?"
+    r"|improves?|boosts?|raises?|increases?|lifts?)\b"
+    r"|\b(?:differential[-\s])?targeting\s+opportunity\b",
     re.IGNORECASE,
 )
 _ATE_ANCHOR_RE = re.compile(
@@ -438,6 +458,12 @@ def _metric_misattributed(
                     after = after[: o.start()]
         after_claims = _metric_value_claims(after)
         if after_claims:
+            # An explicit comparison ("overall ATE: +17.7pp versus +11.1pp")
+            # names both sides — legal when the metric's value is one of them.
+            if value_num in after_claims and re.search(
+                r"\b(?:versus|vs\.?|compared|against)\b", after, re.IGNORECASE
+            ):
+                continue
             bound = after_claims[0]
         else:
             start = max(0, m.start() - 40)
@@ -508,7 +534,22 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     vouched: dict[str, set[tuple[str, str]]] = g["vouched"]
     seg_counts = {str(g["sig_count"]), str(g["total_count"])}
     for seg in _SEG_COUNT_RE.finditer(text):
-        if seg.group(1).replace(",", "") not in seg_counts:
+        num = seg.group(1).replace(",", "")
+        if num not in seg_counts:
+            return False
+        clause_start = 0
+        for b in _WINDOW_BREAK_RE.finditer(text, 0, seg.start()):
+            clause_start = b.end()
+        clause_end_m = _WINDOW_BREAK_RE.search(text, seg.end())
+        clause = text[clause_start : clause_end_m.start() if clause_end_m else len(text)]
+        if (
+            num != str(g["sig_count"])
+            and _SIG_PREDICATE_RE.search(clause)
+            and not _FRACTION_PRECEDER_RE.search(text[: seg.start(1)])
+        ):
+            return False
+    for label in _SIG_COUNT_LABEL_RE.finditer(text):
+        if label.group(1).replace(",", "") != str(g["sig_count"]):
             return False
     for frac in _FRACTION_RE.finditer(text):
         m_str, k_str = frac.group(1), frac.group(2)
@@ -725,7 +766,9 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
                 rf"\b{v_esc}[=,:\s-]+(?:[\w-]+[\s-]+)?{ctx_pat}\b"
                 rf"|\b{ctx_pat}[\w-]*[=,:\s-]+(?:[\w-]+[\s-]+)?{v_esc}\b"
                 rf"|\b{v_esc}\s+(?:responds?|shows?|leads?|gains?|performs?|lags?"
-                rf"|trails?|outperforms?|underperforms?|ranks?|sits?|clears?)\b"
+                rf"|trails?|outperforms?|underperforms?|ranks?|sits?|clears?"
+                rf"|has|have|had|delivers?|posts?|records?|achieves?|reaches?"
+                rf"|stands?|remains?)\b"
             )
         segment_rows.append({"mention": mention, "numbers": row_numbers})
 

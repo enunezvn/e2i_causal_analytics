@@ -506,6 +506,87 @@ class TestGuard:
         )
         assert hte._is_grounded("The overall ATE was 11.1pp, a positive effect.", g) is True
 
+    def test_total_count_cannot_vouch_significance_claims(self):
+        # codex round-9 HIGH: "All 3 segments have 95% CIs excluding zero."
+        # passed because the total count vouched any segment-count claim,
+        # even inside a significance predicate. Fraction forms stay exempt.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("All 3 segments have 95% CIs excluding zero.", g) is False
+        assert hte._is_grounded("There are 3 segments with 95% CIs excluding zero.", g) is False
+        assert hte._is_grounded("Significant segments: 3.", g) is False
+        assert hte._is_grounded("2 of 3 segments have 95% CIs excluding zero.", g) is True
+        assert hte._is_grounded("Only 2 segments are significant.", g) is True
+        assert hte._is_grounded("Significant segments: 2/3.", g) is True
+        assert hte._is_grounded("All 3 segments were tested; 2 are significant.", g) is True
+
+    def test_targeting_opportunity_and_improves_by_bound_to_lift(self):
+        # codex round-9 HIGH: "differential-targeting opportunity" (rendered
+        # verbatim in the grounding) and "targeting improves ... by" escaped
+        # the lift anchor.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The differential-targeting opportunity is +17.7pp.", g) is False
+        assert (
+            hte._is_grounded("There is a +17.7pp differential-targeting opportunity.", g) is False
+        )
+        assert hte._is_grounded("Differential targeting improves outcomes by +17.7pp.", g) is False
+        assert (
+            hte._is_grounded(
+                "There is no reliable differential-targeting opportunity, and the "
+                "expected lift is +0.0pp.",
+                g,
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded("No reliable differential-targeting opportunity (+0.0pp).", g) is True
+        )
+
+    def test_has_had_segment_predicates_and_sign_linkers(self):
+        # codex round-9 HIGH: "High has a +13.8pp effect" escaped the verb
+        # list, and "11.1pp, indicating a negative effect" escaped the
+        # postpositive sign binder.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "Disease severity separates the response. High has a +13.8pp effect "
+                "(n=2,015), while overall ATE is +11.1pp.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded("The overall ATE is 11.1pp, indicating a negative effect.", g) is False
+        )
+        assert (
+            hte._is_grounded("The high severity effect is 17.7pp, indicating a negative result.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "Disease severity separates the response. High has a +17.7pp effect (n=1,385).", g
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded("The overall ATE is 11.1pp, indicating a positive effect.", g) is True
+        )
+
+    def test_explicit_metric_comparison_stays_legal(self):
+        # round-9 over-rejection fix: "overall ATE: +17.7pp versus +11.1pp"
+        # names both sides of a comparison — legal when the metric's true
+        # value is one of them.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "The high severity segment is above the overall ATE: +17.7pp versus +11.1pp.", g
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded("The expected lift is +17.7pp versus the observed response.", g)
+            is False
+        )
+
     def test_postpositive_sign_words_bind_to_unit_figures(self):
         # codex round-6 HIGH: "an 11.1pp negative effect" read as unsigned.
         g = hte.build_grounding(_record())
