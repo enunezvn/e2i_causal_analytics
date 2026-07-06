@@ -1142,6 +1142,89 @@ describe('DataQuality — codex iter-5 metadata-vs-value error separation', () =
 });
 
 // =============================================================================
+// PR #1154 documented limitation, now fixed — a single-input Timeliness
+// average is PARTIAL, not stale. On a cold load where one input's metadata
+// (threshold target) or value never arrives, attainment() yields undefined
+// for that input and the dimension averages only the survivor. That fresh
+// partial score must not be worded as "showing last known values"; it gets
+// its own partial note. When NEITHER input computes there is no score at all
+// — no partial note, the card reads its error state.
+// =============================================================================
+
+describe('DataQuality — Timeliness partial average vs stale', () => {
+  it('cold-load metadata failure on one input renders the partial note, not the stale note', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-007') {
+        // Metadata NEVER loaded (no cached threshold target), value fresh:
+        // the lag attainment cannot compute; only TTR survives the average.
+        const err = new Error('metadata 500');
+        return { ...base, metadata: undefined, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/The Timeliness score is a partial average/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Some dimension scores could not be re-verified/i)
+    ).not.toBeInTheDocument();
+    // The partial score itself still renders as a number, not error chrome.
+    const timeliness = kpiCardCalls.find((c) => c.title === 'Timeliness');
+    expect(timeliness).toBeDefined();
+    expect(typeof timeliness!.value).toBe('number');
+  });
+
+  it('cold-load value failure on one input also reads partial, not stale', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-007') {
+        // Value never loaded: lag attainment cannot compute either way.
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/The Timeliness score is a partial average/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Some dimension scores could not be re-verified/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('no partial note when neither input computes — the card reads Error, not a score', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-007' || kpiId === 'WS1-DQ-009') {
+        const err = new Error('metadata 500');
+        return { ...base, metadata: undefined, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // A wholly absent score is neither partial nor stale — it is an error.
+    expect(
+      screen.queryByText(/The Timeliness score is a partial average/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Some dimension scores could not be re-verified/i)
+    ).not.toBeInTheDocument();
+    const timeliness = kpiCardCalls.find((c) => c.title === 'Timeliness');
+    expect(timeliness).toBeDefined();
+    expect(timeliness!.value).toBe('Error');
+  });
+});
+
+// =============================================================================
 // F3 — Brand / Region cut selectors.
 // The KPI calculators are brand/region-aware (mig 078) and the value endpoint
 // accepts both, but the page never passed either, so every rule value read the

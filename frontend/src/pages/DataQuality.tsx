@@ -587,6 +587,7 @@ function DataQuality() {
     accuracy: number | undefined;
     consistency: number | undefined;
     timeliness: number | undefined;
+    timelinessPartial: boolean;
     overall: number | undefined;
     statuses: {
       completeness: CardStatus;
@@ -662,7 +663,23 @@ function DataQuality() {
       ? worstCardStatus(...present.map((p) => p.s))
       : 'neutral';
 
-    return { completeness, accuracy, consistency, timeliness, overall, statuses };
+    // A single-input Timeliness average is PARTIAL, not stale: on a cold load
+    // where one input's value or threshold target never arrives, attainment()
+    // safely yields undefined for that input and the average covers only the
+    // survivor. Surfaced separately from dimensionStale so a fresh-but-
+    // incomplete score is not worded as an aging complete one.
+    const timelinessPartial =
+      timeliness !== undefined && timelinessParts.length < 2;
+
+    return {
+      completeness,
+      accuracy,
+      consistency,
+      timeliness,
+      timelinessPartial,
+      overall,
+      statuses,
+    };
   }, [
     completenessKpi.value,
     accuracyKpi.value,
@@ -705,7 +722,11 @@ function DataQuality() {
     (dimensionErrors.completeness && qualityScores.completeness !== undefined) ||
     (dimensionErrors.accuracy && qualityScores.accuracy !== undefined) ||
     (dimensionErrors.consistency && qualityScores.consistency !== undefined) ||
-    (dimensionErrors.timeliness && qualityScores.timeliness !== undefined);
+    // A partial Timeliness average is reported by its own note below — the
+    // "last known values" wording would misdescribe a fresh partial score.
+    (dimensionErrors.timeliness &&
+      qualityScores.timeliness !== undefined &&
+      !qualityScores.timelinessPartial);
 
   // ---------------------------------------------------------------------------
   // HANDLERS
@@ -862,6 +883,13 @@ function DataQuality() {
         <p className="text-sm text-amber-600 dark:text-amber-500 mb-2">
           Some dimension scores could not be re-verified on the latest refresh —
           showing last known values.
+        </p>
+      )}
+
+      {qualityScores.timelinessPartial && (
+        <p className="text-sm text-amber-600 dark:text-amber-500 mb-2">
+          The Timeliness score is a partial average — only one of its two inputs
+          (median data lag, time-to-release) could be computed.
         </p>
       )}
 
