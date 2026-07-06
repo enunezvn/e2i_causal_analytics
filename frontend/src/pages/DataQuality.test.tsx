@@ -706,6 +706,84 @@ describe('DataQuality honesty — backend rule status (no null→X)', () => {
 });
 
 // =============================================================================
+// CODEX ITER-1 MED FINDINGS — loading/error honesty in the rewritten render
+// logic.
+//  MED-1: the Quality Issues no-issues empty-state must not render while any
+//         row's detail query is still in flight (a slow /api/kpis/{id} would
+//         read as a clean bill of health seconds before a breach pops in).
+//  MED-2: a failed dimension-source fetch must read "Error", not "No data" —
+//         an API outage must be distinguishable from a genuine data gap.
+// =============================================================================
+
+describe('DataQuality — codex iter-1 loading/error honesty', () => {
+  it('MED-2: a dimension whose source fetch errors reads "Error" (rose), not "No data"', () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-003') {
+        return { ...base, value: undefined, error: new Error('500 Internal Server Error') };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const accuracy = kpiCardCalls.find((c) => c.title === 'Accuracy');
+    expect(accuracy).toBeDefined();
+    expect(accuracy!.value).toBe('Error');
+    expect(accuracy!.valueColor).toBe('text-rose-500');
+    // The other dimensions still render their measured values (one outage must
+    // not blank the whole grid).
+    expect(kpiCardCalls.find((c) => c.title === 'Completeness')!.value).toBeCloseTo(94, 1);
+    // Overall stays the honest mean of the still-measured dimensions.
+    expect(typeof kpiCardCalls.find((c) => c.title === 'Overall Quality')!.value).toBe(
+      'number'
+    );
+  });
+
+  it('MED-2: Overall reads "Error" when nothing measured and a source errored', () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (dimensionFixtures[kpiId]) {
+        return { ...base, value: undefined, error: new Error('boom') };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    for (const title of [
+      'Overall Quality',
+      'Completeness',
+      'Accuracy',
+      'Consistency',
+      'Timeliness',
+    ]) {
+      const call = kpiCardCalls.find((c) => c.title === title);
+      expect(call!.value, `${title} must read "Error" on a total outage`).toBe('Error');
+    }
+  });
+
+  it('MED-1: issues tab shows a checking indicator, NOT the no-issues empty-state, while a detail query is in flight', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        return { ...base, value: undefined, isLoading: true };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/Checking KPI thresholds/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
 // F3 — Brand / Region cut selectors.
 // The KPI calculators are brand/region-aware (mig 078) and the value endpoint
 // accepts both, but the page never passed either, so every rule value read the

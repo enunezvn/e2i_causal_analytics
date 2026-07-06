@@ -323,16 +323,19 @@ function KPIIssueRow({
   onStatusComputed,
 }: {
   kpi: KPIMetadata;
-  onStatusComputed?: (kpiId: string, status: RuleStatus) => void;
+  onStatusComputed?: (kpiId: string, status: RuleStatus | 'pending') => void;
 }) {
-  const { metadata, value } = useKPIDetail(kpi.id);
+  const { metadata, value, isLoading } = useKPIDetail(kpi.id);
   const effectiveMeta = metadata ?? kpi;
   const ruleStatus = ruleStatusFromKPI(value);
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
 
+  // Report 'pending' until the detail fetch settles: the parent's no-issues
+  // empty-state must wait for every row, or a slow /api/kpis/{id} response
+  // reads as a clean bill of health moments before a breach pops in.
   useEffect(() => {
-    onStatusComputed?.(kpi.id, ruleStatus);
-  }, [kpi.id, ruleStatus, onStatusComputed]);
+    onStatusComputed?.(kpi.id, isLoading ? 'pending' : ruleStatus);
+  }, [kpi.id, ruleStatus, isLoading, onStatusComputed]);
 
   if (ruleStatus !== 'warning' && ruleStatus !== 'fail') {
     return null;
@@ -384,14 +387,17 @@ function DataQuality() {
   // F3 — brand/region cut for the per-rule values. Default = portfolio aggregate.
   const [selectedBrand, setSelectedBrand] = useState<string>('All');
   const [selectedRegion, setSelectedRegion] = useState<string>('All US');
-  // #322 — per-row computed status reported up by each KPIDrilldownRow /
-  // KPIIssueRow. Lets us render the "No data quality KPIs match your filters"
-  // empty-state when the status filter hides every row, and the no-issues
-  // empty-state on the Quality Issues tab. NOTE: rules rows report the
-  // brand/region-cut status while issue rows report the portfolio status;
-  // only one tab's rows are mounted at a time, so each tab's empty-state reads
-  // statuses its own rows reported.
+  // #322 — per-row computed status reported up by each KPIDrilldownRow. Lets us
+  // render the "No data quality KPIs match your filters" empty-state when the
+  // status filter hides every row. Rules rows report the brand/region-cut
+  // status; the Quality Issues tab keeps its own portfolio-scoped map below so
+  // a cut status can never leak into the issues empty-state.
   const [kpiStatuses, setKpiStatuses] = useState<Record<string, RuleStatus>>({});
+  // Quality Issues rows report 'pending' until their detail fetch settles — the
+  // no-issues empty-state must not render from not-yet-loaded rows.
+  const [issueStatuses, setIssueStatuses] = useState<
+    Record<string, RuleStatus | 'pending'>
+  >({});
 
   const queryClient = useQueryClient();
 
@@ -453,13 +459,24 @@ function DataQuality() {
     }, 0);
   }, [filteredKpis, ruleStatusFilter, kpiStatuses]);
 
-  // Quality Issues tab — count of KPIs whose backend status breaches thresholds.
+  // Quality Issues tab — count of KPIs whose backend status breaches thresholds,
+  // plus whether every issue row's detail fetch has settled (rows report
+  // 'pending' while in flight; a row that hasn't mounted yet reports nothing).
   const issueCount = useMemo(
     () =>
       allKpis.filter(
-        (kpi) => kpiStatuses[kpi.id] === 'warning' || kpiStatuses[kpi.id] === 'fail'
+        (kpi) => issueStatuses[kpi.id] === 'warning' || issueStatuses[kpi.id] === 'fail'
       ).length,
-    [allKpis, kpiStatuses]
+    [allKpis, issueStatuses]
+  );
+  const issuesSettled = useMemo(
+    () =>
+      allKpis.length > 0 &&
+      allKpis.every((kpi) => {
+        const s = issueStatuses[kpi.id];
+        return s !== undefined && s !== 'pending';
+      }),
+    [allKpis, issueStatuses]
   );
 
   // Dimension scores, derived from MEASURED KPI values (see DIMENSION_KPI_IDS).
@@ -564,6 +581,18 @@ function DataQuality() {
     dataLagKpi.isLoading ||
     ttrKpi.isLoading;
 
+  // A failed dimension-source fetch must be distinguishable from a genuine
+  // no-data gap: a 500 on a /api/kpis/{id} read is an API outage, not missing
+  // data. Errored cards read a rose "Error" instead of the neutral "No data".
+  // (A dimension holding cached data keeps showing its value through a failed
+  // refetch — stale beats blank.)
+  const dimensionErrors = {
+    completeness: Boolean(completenessKpi.error),
+    accuracy: Boolean(accuracyKpi.error),
+    consistency: Boolean(consistencyKpi.error),
+    timeliness: Boolean(dataLagKpi.error || ttrKpi.error),
+  };
+
   // ---------------------------------------------------------------------------
   // HANDLERS
   // ---------------------------------------------------------------------------
@@ -649,24 +678,33 @@ function DataQuality() {
                   title: 'Overall Quality',
                   v: qualityScores.overall,
                   status: qualityScores.statuses.overall,
+                  // Overall reads "Error" only when NOTHING measured and at
+                  // least one source errored; with partial data it stays the
+                  // honest mean of the measured dimensions.
+                  error:
+                    qualityScores.overall === undefined &&
+                    Object.values(dimensionErrors).some(Boolean),
                   description: 'Mean of the measured dimension scores (status = worst dimension)',
                 },
                 {
                   title: 'Completeness',
                   v: qualityScores.completeness,
                   status: qualityScores.statuses.completeness,
+                  error: dimensionErrors.completeness,
                   description: 'Completeness pass rate across brand-critical fields (WS1-DQ-005)',
                 },
                 {
                   title: 'Accuracy',
                   v: qualityScores.accuracy,
                   status: qualityScores.statuses.accuracy,
+                  error: dimensionErrors.accuracy,
                   description: 'Cross-source match rate (WS1-DQ-003)',
                 },
                 {
                   title: 'Consistency',
                   v: qualityScores.consistency,
                   status: qualityScores.statuses.consistency,
+                  error: dimensionErrors.consistency,
                   description:
                     '100% minus the max regional share gap vs the reference universe (WS1-DQ-006)',
                 },
@@ -674,6 +712,7 @@ function DataQuality() {
                   title: 'Timeliness',
                   v: qualityScores.timeliness,
                   status: qualityScores.statuses.timeliness,
+                  error: dimensionErrors.timeliness,
                   description:
                     'Target attainment of data lag (WS1-DQ-007) and time-to-release (WS1-DQ-009)',
                 },
@@ -682,11 +721,20 @@ function DataQuality() {
               <KPICard
                 key={d.title}
                 title={d.title}
-                // Honest "No data" when the backing KPI has no value — never a
-                // fabricated healthy default (see qualityScores).
-                value={d.v === undefined ? 'No data' : Math.round(d.v * 10) / 10}
+                // Honest empties: a measured value renders (stale data beats
+                // blank through a failed refetch); otherwise a fetch error
+                // reads "Error" (rose) and a genuine gap reads "No data" —
+                // never a fabricated healthy default (see qualityScores).
+                value={
+                  d.v !== undefined
+                    ? Math.round(d.v * 10) / 10
+                    : d.error
+                      ? 'Error'
+                      : 'No data'
+                }
                 unit={d.v === undefined ? '' : '%'}
                 status={d.v === undefined ? 'neutral' : d.status}
+                valueColor={d.v === undefined && d.error ? 'text-rose-500' : undefined}
                 description={d.description}
                 sparklineData={[]}
                 higherIsBetter
@@ -973,7 +1021,15 @@ function DataQuality() {
                 </p>
               ) : (
                 <>
-                  {issueCount === 0 && (
+                  {/* The no-issues empty-state renders only after EVERY row's
+                      detail fetch has settled — a slow /api/kpis/{id} response
+                      must not read as a clean bill of health. */}
+                  {!issuesSettled ? (
+                    <div className="flex items-center gap-2 text-muted-foreground text-sm mb-3">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Checking KPI thresholds...</span>
+                    </div>
+                  ) : issueCount === 0 ? (
                     <p className="text-muted-foreground text-sm mb-3">
                       No data-quality KPIs are breaching their thresholds. Model and
                       data drift are monitored on the{' '}
@@ -985,14 +1041,14 @@ function DataQuality() {
                       </Link>{' '}
                       page.
                     </p>
-                  )}
+                  ) : null}
                   <ul className="space-y-3">
                     {allKpis.map((kpi) => (
                       <KPIIssueRow
                         key={kpi.id}
                         kpi={kpi}
                         onStatusComputed={(id, status) =>
-                          setKpiStatuses((prev) =>
+                          setIssueStatuses((prev) =>
                             prev[id] === status ? prev : { ...prev, [id]: status }
                           )
                         }
