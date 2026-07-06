@@ -851,9 +851,10 @@ describe('DataQuality — codex iter-2 background-refetch honesty', () => {
 // used to render identically to a healthy KPI — "No data-quality KPIs are
 // breaching" could show while a check silently 500'd. Fix: error-with-no-value
 // reports 'error', renders a visible failed-check row, and downgrades the
-// clean empty-state to a caveated one. A stale cached value still beats the
-// error (same policy as the dimension cards) — a transient refetch blip must
-// not flip real data into alarm.
+// clean empty-state to a caveated one. A stale cached value still drives the
+// row through the error (same policy as the dimension cards) — a transient
+// refetch blip must not flip real data into alarm — but per codex iter-4 the
+// unqualified clean CLAIM no longer stands on it (see the iter-4 block below).
 // =============================================================================
 
 describe('DataQuality — codex iter-3 failed-check honesty', () => {
@@ -885,12 +886,15 @@ describe('DataQuality — codex iter-3 failed-check honesty', () => {
     ).toBeInTheDocument();
   });
 
-  it('a stale cached value beats a failed refetch — no failed-check row, clean claim stands', async () => {
+  it('a stale cached value beats a failed refetch — no failed-check row, but the clean claim is qualified (iter-4)', async () => {
     (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
       const base = defaultKPIDetailImpl(kpiId);
       if (kpiId === 'WS1-DQ-002') {
         // Cached healthy value present; the refetch errored. The last real
-        // check said healthy — a transient blip must not read as a failure.
+        // check said healthy — a transient blip must not read as a FAILURE
+        // (no check-failed row, no alarm), but per codex iter-4 the strong
+        // "no issues" claim must not stand unqualified on a value that can't
+        // currently be re-verified.
         return { ...base, error: new Error('refetch blip') };
       }
       return base;
@@ -901,9 +905,111 @@ describe('DataQuality — codex iter-3 failed-check honesty', () => {
     await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
 
     expect(
-      await screen.findByText(/No data-quality KPIs are breaching their thresholds/i)
+      await screen.findByText(/1 check could not be re-verified on the latest refresh/i)
     ).toBeInTheDocument();
-    expect(screen.queryByText(/check failed/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+    // Still no alarm: the healthy row stays hidden and nothing reads "failed".
+    expect(screen.queryByText(/^check failed$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Latest recheck failed/i)).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-4 — stale verification must be visible, and combined states must
+// not hide each other. react-query keeps .data through a failed refetch, so a
+// cached-HEALTHY KPI whose rechecks keep failing never reaches 'error' — the
+// unqualified "no issues" claim could stand indefinitely after verification
+// silently stopped (the risky asymmetry: a stale BREACH aging preserves the
+// signal; a stale HEALTHY aging actively asserts all-clear). Fix: rows report
+// a staleError signal; the clean claim is qualified while any contributing
+// value can't be re-verified; stale breach rows and stale dimension cards get
+// a visible note. No data disappears and nothing flips to alarm.
+// =============================================================================
+
+describe('DataQuality — codex iter-4 stale-verification honesty', () => {
+  it('a stale BREACHING row stays visible with its badge plus a recheck-failed note', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Last settled value breaches; the latest refetch FAILED (settled
+        // error, not in flight). The breach must stay listed — stale beats
+        // blank — but flagged as no-longer-verified.
+        return {
+          ...base,
+          value: { ...base.value, value: 42.0, status: 'critical' },
+          error: new Error('refetch failed'),
+        };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Latest recheck failed — showing last known value/i)
+    ).toBeInTheDocument();
+    // Settled state: no checking spinner, and no empty-state of either kind.
+    expect(screen.queryByText(/Checking KPI thresholds/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No breaches detected/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('a breach and a failed check render side by side — neither empty-state appears', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        return {
+          ...base,
+          value: { ...base.value, value: 42.0, status: 'critical' },
+        };
+      }
+      if (kpiId === 'WS1-DQ-001') {
+        return { ...base, value: undefined, error: new Error('500 Internal Server Error') };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // Both the real breach and the unverifiable check are visible, named rows.
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+    expect(await screen.findByText(/\(WS1-DQ-001\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^check failed$/i)).toBeInTheDocument();
+    // With a breach present, no empty-state text (clean OR caveated) renders.
+    expect(screen.queryByText(/No breaches detected/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('a dimension card showing a cached score through a failed refetch surfaces the stale note', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-005') {
+        // Completeness source: cached fixture value present, refetch errored.
+        // The card keeps its score (stale beats blank) but the page must say
+        // the score is no longer verified.
+        return { ...base, error: new Error('refetch failed') };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/Some dimension scores could not be re-verified/i)
+    ).toBeInTheDocument();
   });
 });
 

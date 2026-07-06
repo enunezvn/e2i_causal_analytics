@@ -326,7 +326,8 @@ function KPIIssueRow({
   onStatusComputed?: (
     kpiId: string,
     status: RuleStatus | 'pending' | 'error',
-    fetching: boolean
+    fetching: boolean,
+    staleError: boolean
   ) => void;
 }) {
   const { metadata, value, isLoading, isFetching, error } = useKPIDetail(kpi.id);
@@ -340,6 +341,13 @@ function KPIIssueRow({
   // settled status wins — same stale-beats-blank policy as the dimension
   // cards; a transient refetch blip must not flip real data into alarm.
   const fetchFailed = Boolean(error) && value === undefined;
+  // A cached value whose LATEST recheck failed still drives the row (stale
+  // beats blank), but it is no longer a VERIFIED check: react-query keeps
+  // .data through a failed refetch, so a healthy KPI whose rechecks keep
+  // failing would otherwise assert "no issues" indefinitely. Report the
+  // staleness so the parent can qualify the clean claim, and note it on
+  // rendered breach rows.
+  const staleError = Boolean(error) && value !== undefined;
 
   // Report 'pending' until the detail fetch settles: the parent's no-issues
   // empty-state must wait for every row, or a slow /api/kpis/{id} response
@@ -353,9 +361,10 @@ function KPIIssueRow({
     onStatusComputed?.(
       kpi.id,
       isLoading ? 'pending' : fetchFailed ? 'error' : ruleStatus,
-      isLoading || isFetching
+      isLoading || isFetching,
+      staleError
     );
-  }, [kpi.id, ruleStatus, isLoading, isFetching, fetchFailed, onStatusComputed]);
+  }, [kpi.id, ruleStatus, isLoading, isFetching, fetchFailed, staleError, onStatusComputed]);
 
   if (fetchFailed) {
     return (
@@ -404,6 +413,11 @@ function KPIIssueRow({
             </>
           )}
         </p>
+        {staleError && (
+          <p className="text-xs text-amber-600 dark:text-amber-500 mt-0.5">
+            Latest recheck failed — showing last known value.
+          </p>
+        )}
       </div>
       <Badge
         variant={ruleStatus === 'fail' ? 'destructive' : 'secondary'}
@@ -435,9 +449,14 @@ function DataQuality() {
   // no-issues empty-state must not render from not-yet-loaded rows. `fetching`
   // is tracked separately from status: a background refetch keeps the last
   // settled status (issue rows/count stay stable) while still suppressing the
-  // "no issues" claim until the recheck lands.
+  // "no issues" claim until the recheck lands. `staleError` marks a cached
+  // value whose latest recheck FAILED — still settled, still driving the row,
+  // but no longer verified, so it must qualify the clean claim.
   const [issueStatuses, setIssueStatuses] = useState<
-    Record<string, { status: RuleStatus | 'pending' | 'error'; fetching: boolean }>
+    Record<
+      string,
+      { status: RuleStatus | 'pending' | 'error'; fetching: boolean; staleError: boolean }
+    >
   >({});
 
   const queryClient = useQueryClient();
@@ -518,6 +537,24 @@ function DataQuality() {
   // either — it must block the unqualified "no issues" claim.
   const issueErrorCount = useMemo(
     () => allKpis.filter((kpi) => issueStatuses[kpi.id]?.status === 'error').length,
+    [allKpis, issueStatuses]
+  );
+  // Checks whose cached value would count as CLEAN but whose latest recheck
+  // failed (react-query keeps .data through a failed refetch, so these never
+  // reach 'error'). They must qualify the "no issues" claim — an all-clear on
+  // a monitoring surface can't stand on values that can't currently be
+  // re-verified. Breaching stale rows are excluded: they stay visible with
+  // their own in-row stale note, and the clean claim doesn't render anyway.
+  const issueStaleCount = useMemo(
+    () =>
+      allKpis.filter((kpi) => {
+        const entry = issueStatuses[kpi.id];
+        return (
+          entry?.staleError === true &&
+          entry.status !== 'warning' &&
+          entry.status !== 'fail'
+        );
+      }).length,
     [allKpis, issueStatuses]
   );
   // Settled = every row has a non-pending status AND no fetch is in flight.
@@ -647,6 +684,15 @@ function DataQuality() {
     consistency: Boolean(consistencyKpi.error),
     timeliness: Boolean(dataLagKpi.error || ttrKpi.error),
   };
+  // A card showing a CACHED score whose latest refetch failed keeps its value
+  // (stale beats blank) but is no longer verified — same honesty rule as the
+  // issues tab's clean claim. Surfaced as a single note under the card grid
+  // rather than per-card chrome.
+  const dimensionStale =
+    (dimensionErrors.completeness && qualityScores.completeness !== undefined) ||
+    (dimensionErrors.accuracy && qualityScores.accuracy !== undefined) ||
+    (dimensionErrors.consistency && qualityScores.consistency !== undefined) ||
+    (dimensionErrors.timeliness && qualityScores.timeliness !== undefined);
 
   // ---------------------------------------------------------------------------
   // HANDLERS
@@ -798,6 +844,13 @@ function DataQuality() {
           </>
         )}
       </div>
+
+      {dimensionStale && (
+        <p className="text-sm text-amber-600 dark:text-amber-500 mb-2">
+          Some dimension scores could not be re-verified on the latest refresh —
+          showing last known values.
+        </p>
+      )}
 
       {/* Drift consolidation: model & data drift live on /monitoring, not here.
           The old per-page drift section read a `data_quality_pipeline` model id
@@ -1084,12 +1137,27 @@ function DataQuality() {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       <span>Checking KPI thresholds...</span>
                     </div>
-                  ) : issueCount === 0 && issueErrorCount > 0 ? (
+                  ) : issueCount === 0 && (issueErrorCount > 0 || issueStaleCount > 0) ? (
                     <p className="text-muted-foreground text-sm mb-3">
-                      No breaches detected among the KPIs that could be checked —
-                      but {issueErrorCount}{' '}
-                      {issueErrorCount === 1 ? 'quality check' : 'quality checks'}{' '}
-                      failed to load and could not be verified.
+                      No breaches detected among the KPIs that could be checked
+                      {issueErrorCount > 0 && (
+                        <>
+                          {' '}
+                          — {issueErrorCount}{' '}
+                          {issueErrorCount === 1 ? 'quality check' : 'quality checks'}{' '}
+                          failed to load and could not be verified
+                        </>
+                      )}
+                      {issueStaleCount > 0 && (
+                        <>
+                          {' '}
+                          — {issueStaleCount}{' '}
+                          {issueStaleCount === 1 ? 'check' : 'checks'} could not be
+                          re-verified on the latest refresh and{' '}
+                          {issueStaleCount === 1 ? 'shows' : 'show'} last known values
+                        </>
+                      )}
+                      .
                     </p>
                   ) : issueCount === 0 ? (
                     <p className="text-muted-foreground text-sm mb-3">
@@ -1109,12 +1177,15 @@ function DataQuality() {
                       <KPIIssueRow
                         key={kpi.id}
                         kpi={kpi}
-                        onStatusComputed={(id, status, fetching) =>
+                        onStatusComputed={(id, status, fetching, staleError) =>
                           setIssueStatuses((prev) => {
                             const cur = prev[id];
-                            return cur && cur.status === status && cur.fetching === fetching
+                            return cur &&
+                              cur.status === status &&
+                              cur.fetching === fetching &&
+                              cur.staleError === staleError
                               ? prev
-                              : { ...prev, [id]: { status, fetching } };
+                              : { ...prev, [id]: { status, fetching, staleError } };
                           })
                         }
                       />
