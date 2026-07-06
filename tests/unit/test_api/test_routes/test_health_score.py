@@ -1301,6 +1301,14 @@ class _FakeHistoryQuery:
         self._payload = payload
         return self
 
+    def upsert(self, payload: dict, **kwargs):
+        # Recorded into `inserted` too: for these tests an upsert IS the row
+        # write; the conflict kwargs are pinned separately via upsert_kwargs.
+        self._op = "insert"
+        self._payload = payload
+        self._db.upsert_kwargs.append((self._table, kwargs))
+        return self
+
     def delete(self):
         self._op = "delete"
         return self
@@ -1350,6 +1358,7 @@ class _FakeHistoryDB:
         self.deleted: list = []
         self.gte_args: list = []
         self.limit_args: list = []
+        self.upsert_kwargs: list = []
 
     def table(self, name: str) -> _FakeHistoryQuery:
         return _FakeHistoryQuery(self, name)
@@ -1522,6 +1531,24 @@ def test_record_full_check_writes_durable_row_and_prunes():
     assert payload["data_provenance"] == "partial"
     assert payload["check_scope"] == "full"
     assert db.deleted and db.deleted[0][0] == "health_check_history"
+
+
+def test_record_full_check_write_is_atomic_upsert_on_time_bucket():
+    """The write must be ON CONFLICT (time_bucket) DO NOTHING — the SELECT
+    probe is not atomic, so concurrent workers can all pass it; the UNIQUE
+    bucket is what guarantees one row per 10-min window (codex rounds 1-2)."""
+    db = _FakeHistoryDB(last_rows=[])
+    before = int(datetime.now(timezone.utc).timestamp()) // 600
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(_full_check_result())
+    after = int(datetime.now(timezone.utc).timestamp()) // 600
+
+    assert [t for t, _ in db.upsert_kwargs] == ["health_check_history"]
+    kwargs = db.upsert_kwargs[0][1]
+    assert kwargs == {"on_conflict": "time_bucket", "ignore_duplicates": True}
+    # Bucket derives from wall clock // rate-limit interval (600s); allow the
+    # test to straddle a boundary.
+    assert db.inserted[0][1]["time_bucket"] in {before, after}
 
 
 def test_record_full_check_rate_limited_by_fresh_row():

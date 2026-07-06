@@ -399,9 +399,12 @@ async def lifespan(app: FastAPI):
             async def _health_history_heartbeat() -> None:
                 # Initial settle delay so boot-time dependencies (Supabase et
                 # al.) are wired before the first check; then every 6h. The
-                # random spread keeps gunicorn workers (which all boot within
-                # the same second on deploy) from probing the write rate-limit
-                # simultaneously — first one in wins, the rest skip.
+                # random spread de-synchronizes gunicorn workers (which all
+                # boot within the same second on deploy) so the write
+                # rate-limit probe short-circuits the later ones cheaply.
+                # Correctness does not depend on it: the durable writer
+                # upserts against UNIQUE(time_bucket), so even workers that
+                # fire simultaneously yield exactly one row per bucket.
                 delay = 120.0 + random.uniform(0.0, 180.0)
                 while True:
                     await asyncio.sleep(delay)

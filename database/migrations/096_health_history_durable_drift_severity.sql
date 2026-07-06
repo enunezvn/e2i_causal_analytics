@@ -56,6 +56,14 @@ CREATE TABLE IF NOT EXISTS health_check_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     check_id TEXT NOT NULL,
     checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Atomic multi-worker dedup: writers compute epoch // 600 and upsert with
+    -- ON CONFLICT DO NOTHING, so concurrent workers that all pass the app-side
+    -- rate-limit probe still yield exactly one row per 10-min bucket. Two
+    -- instants in the same bucket are by definition <600s apart, so this can
+    -- never reject a legitimately spaced write. (A stored column, not
+    -- GENERATED: extract(epoch FROM timestamptz) is STABLE, not IMMUTABLE.)
+    time_bucket BIGINT NOT NULL
+        CONSTRAINT health_check_history_one_row_per_bucket UNIQUE,
     overall_health_score NUMERIC(5, 2) NOT NULL,
     health_grade TEXT NOT NULL,
     -- Dimension scores are 0-1 and NULLABLE: null means the dimension was not

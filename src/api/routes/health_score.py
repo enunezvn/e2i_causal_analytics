@@ -425,8 +425,10 @@ _health_history: List[HealthScoreResponse] = []
 # One durable row per 10 minutes at most: the dashboard polls /full every 60s
 # while open, and per-minute rows would bloat the table without adding trend
 # resolution. The 6h lifespan heartbeat (src/api/main.py) guarantees points
-# even when nobody has the page open; this gate also collapses the heartbeat's
-# multi-worker firings into a single row.
+# even when nobody has the page open. The probe below is only a cheap
+# short-circuit for the 60s polls — the dedup GUARANTEE is the table's
+# UNIQUE(time_bucket): the writer upserts with ON CONFLICT DO NOTHING, so
+# workers that pass the probe concurrently still yield one row per bucket.
 _HISTORY_WRITE_MIN_INTERVAL_S = 600
 _HISTORY_RETENTION_DAYS = 90
 
@@ -457,10 +459,18 @@ def _record_history_durable(result: HealthScoreResponse) -> None:
             < _HISTORY_WRITE_MIN_INTERVAL_S
         ):
             return
-        db.table("health_check_history").insert(
+        # ON CONFLICT (time_bucket) DO NOTHING makes the write itself atomic:
+        # the probe above is not (SELECT then INSERT are separate round-trips),
+        # so concurrent workers can all pass it — the UNIQUE bucket then keeps
+        # exactly one of their rows (codex rounds 1-2 LOW). Residual duplicates
+        # need two writes inside probe latency STRADDLING a 600s boundary —
+        # vanishingly rare and benign (a real check a few seconds early).
+        bucket = int(now.timestamp()) // _HISTORY_WRITE_MIN_INTERVAL_S
+        db.table("health_check_history").upsert(
             {
                 "check_id": result.check_id,
                 "checked_at": result.timestamp,
+                "time_bucket": bucket,
                 "overall_health_score": round(float(result.overall_health_score), 2),
                 "health_grade": str(result.health_grade.value),
                 "component_health_score": result.component_health_score,
@@ -471,7 +481,9 @@ def _record_history_durable(result: HealthScoreResponse) -> None:
                 "warnings_count": len(result.warnings),
                 "data_provenance": result.data_provenance,
                 "check_scope": result.check_scope.value,
-            }
+            },
+            on_conflict="time_bucket",
+            ignore_duplicates=True,
         ).execute()
         # Retention sweep piggybacks on the rate-limited write path (at most a
         # handful of deletes per day — no separate cleanup job needed).
