@@ -845,6 +845,69 @@ describe('DataQuality — codex iter-2 background-refetch honesty', () => {
 });
 
 // =============================================================================
+// Codex iter-3 — a FAILED per-KPI fetch must not read as a clean check.
+// ruleStatusFromKPI maps both no-data and errored to 'unknown', so an errored
+// detail query (no cached value, error settled, isLoading/isFetching false)
+// used to render identically to a healthy KPI — "No data-quality KPIs are
+// breaching" could show while a check silently 500'd. Fix: error-with-no-value
+// reports 'error', renders a visible failed-check row, and downgrades the
+// clean empty-state to a caveated one. A stale cached value still beats the
+// error (same policy as the dimension cards) — a transient refetch blip must
+// not flip real data into alarm.
+// =============================================================================
+
+describe('DataQuality — codex iter-3 failed-check honesty', () => {
+  it('renders a visible failed-check row and caveats the empty-state when a fetch errors with no data', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        return { ...base, value: undefined, error: new Error('500 Internal Server Error') };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // The failed check is visible, named, and labeled — never silently clean.
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^check failed$/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/thresholds could not be verified/i)
+    ).toBeInTheDocument();
+    // The unqualified clean claim is replaced by the caveated one.
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/1 quality check failed to load and could not be verified/i)
+    ).toBeInTheDocument();
+  });
+
+  it('a stale cached value beats a failed refetch — no failed-check row, clean claim stands', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Cached healthy value present; the refetch errored. The last real
+        // check said healthy — a transient blip must not read as a failure.
+        return { ...base, error: new Error('refetch blip') };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(
+      await screen.findByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/check failed/i)).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
 // F3 — Brand / Region cut selectors.
 // The KPI calculators are brand/region-aware (mig 078) and the value endpoint
 // accepts both, but the page never passed either, so every rule value read the

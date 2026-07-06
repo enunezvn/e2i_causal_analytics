@@ -323,12 +323,23 @@ function KPIIssueRow({
   onStatusComputed,
 }: {
   kpi: KPIMetadata;
-  onStatusComputed?: (kpiId: string, status: RuleStatus | 'pending', fetching: boolean) => void;
+  onStatusComputed?: (
+    kpiId: string,
+    status: RuleStatus | 'pending' | 'error',
+    fetching: boolean
+  ) => void;
 }) {
-  const { metadata, value, isLoading, isFetching } = useKPIDetail(kpi.id);
+  const { metadata, value, isLoading, isFetching, error } = useKPIDetail(kpi.id);
   const effectiveMeta = metadata ?? kpi;
   const ruleStatus = ruleStatusFromKPI(value);
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
+  // A failed fetch with NO cached value means the check itself never ran —
+  // report 'error' and render a visible failed-check row, or an errored KPI
+  // is indistinguishable from a healthy one (ruleStatusFromKPI maps both
+  // no-data and errored to 'unknown'). With a cached value present the stale
+  // settled status wins — same stale-beats-blank policy as the dimension
+  // cards; a transient refetch blip must not flip real data into alarm.
+  const fetchFailed = Boolean(error) && value === undefined;
 
   // Report 'pending' until the detail fetch settles: the parent's no-issues
   // empty-state must wait for every row, or a slow /api/kpis/{id} response
@@ -339,8 +350,30 @@ function KPIIssueRow({
   // the fetching flag tells the parent to hold the "no issues" claim until
   // the recheck lands.
   useEffect(() => {
-    onStatusComputed?.(kpi.id, isLoading ? 'pending' : ruleStatus, isLoading || isFetching);
-  }, [kpi.id, ruleStatus, isLoading, isFetching, onStatusComputed]);
+    onStatusComputed?.(
+      kpi.id,
+      isLoading ? 'pending' : fetchFailed ? 'error' : ruleStatus,
+      isLoading || isFetching
+    );
+  }, [kpi.id, ruleStatus, isLoading, isFetching, fetchFailed, onStatusComputed]);
+
+  if (fetchFailed) {
+    return (
+      <li className="p-3 rounded-lg border border-border bg-card flex items-start justify-between gap-3">
+        <div>
+          <p className="font-medium text-sm">
+            {effectiveMeta.name} <span className="text-muted-foreground">({kpi.id})</span>
+          </p>
+          <p className="text-xs text-rose-500 mt-0.5">
+            Quality check failed to load — thresholds could not be verified.
+          </p>
+        </div>
+        <Badge variant="outline" className="capitalize text-rose-500 border-rose-500">
+          check failed
+        </Badge>
+      </li>
+    );
+  }
 
   if (ruleStatus !== 'warning' && ruleStatus !== 'fail') {
     return null;
@@ -404,7 +437,7 @@ function DataQuality() {
   // settled status (issue rows/count stay stable) while still suppressing the
   // "no issues" claim until the recheck lands.
   const [issueStatuses, setIssueStatuses] = useState<
-    Record<string, { status: RuleStatus | 'pending'; fetching: boolean }>
+    Record<string, { status: RuleStatus | 'pending' | 'error'; fetching: boolean }>
   >({});
 
   const queryClient = useQueryClient();
@@ -480,9 +513,17 @@ function DataQuality() {
       }).length,
     [allKpis, issueStatuses]
   );
+  // Failed checks count separately from breaches: an errored fetch (no cached
+  // value) is NOT a breach, but an unverifiable check is not a passing check
+  // either — it must block the unqualified "no issues" claim.
+  const issueErrorCount = useMemo(
+    () => allKpis.filter((kpi) => issueStatuses[kpi.id]?.status === 'error').length,
+    [allKpis, issueStatuses]
+  );
   // Settled = every row has a non-pending status AND no fetch is in flight.
   // A background refetch un-settles this, downgrading the "no issues" claim
-  // to the checking indicator until the recheck lands.
+  // to the checking indicator until the recheck lands. 'error' IS settled —
+  // a failed check reports immediately and renders its own row.
   const issuesSettled = useMemo(
     () =>
       allKpis.length > 0 &&
@@ -1043,6 +1084,13 @@ function DataQuality() {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       <span>Checking KPI thresholds...</span>
                     </div>
+                  ) : issueCount === 0 && issueErrorCount > 0 ? (
+                    <p className="text-muted-foreground text-sm mb-3">
+                      No breaches detected among the KPIs that could be checked —
+                      but {issueErrorCount}{' '}
+                      {issueErrorCount === 1 ? 'quality check' : 'quality checks'}{' '}
+                      failed to load and could not be verified.
+                    </p>
                   ) : issueCount === 0 ? (
                     <p className="text-muted-foreground text-sm mb-3">
                       No data-quality KPIs are breaching their thresholds. Model and
