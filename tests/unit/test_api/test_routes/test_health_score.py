@@ -36,6 +36,8 @@ from src.api.routes.health_score import (
     _get_mock_pipeline_health,
     # Module-level storage
     _health_history,
+    _record_full_check,
+    _trend_from_scores,
     full_health_check,
     get_agent_health,
     get_component_health,
@@ -46,6 +48,7 @@ from src.api.routes.health_score import (
     quick_health_check,
     # Endpoints
     run_health_check,
+    run_scheduled_full_check,
 )
 
 # =============================================================================
@@ -1268,6 +1271,351 @@ async def test_get_health_history_trend_stable():
     result = await get_health_history(limit=20)
 
     assert result.trend == "stable"
+
+
+# =============================================================================
+# DURABLE HISTORY (migration 096) — write-through, windowed read, heartbeat
+# =============================================================================
+# The autouse _no_live_health_sources fixture keeps _health_source_client None,
+# so every test ABOVE exercises the in-memory fallback path unchanged. The
+# tests below patch in a fake Supabase-style client to pin the durable path.
+
+
+class _FakeHistoryQuery:
+    """Chained-builder fake for the two history relations."""
+
+    def __init__(self, db: "_FakeHistoryDB", table: str) -> None:
+        self._db = db
+        self._table = table
+        self._op = "select"
+        self._cols = ""
+        self._payload: dict | None = None
+
+    def select(self, cols: str):
+        self._op = "select"
+        self._cols = cols
+        return self
+
+    def insert(self, payload: dict):
+        self._op = "insert"
+        self._payload = payload
+        return self
+
+    def upsert(self, payload: dict, **kwargs):
+        # Recorded into `inserted` too: for these tests an upsert IS the row
+        # write; the conflict kwargs are pinned separately via upsert_kwargs.
+        self._op = "insert"
+        self._payload = payload
+        self._db.upsert_kwargs.append((self._table, kwargs))
+        return self
+
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def gte(self, col, value):
+        self._db.gte_args.append((self._table, col, value))
+        return self
+
+    def lt(self, _col, value):
+        self._payload = {"lt": value}
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, n):
+        self._db.limit_args.append((self._table, n))
+        return self
+
+    def execute(self):
+        if self._db.fail:
+            raise RuntimeError("db down")
+        if self._op == "insert":
+            self._db.inserted.append((self._table, self._payload))
+            return MagicMock(data=[self._payload])
+        if self._op == "delete":
+            self._db.deleted.append((self._table, self._payload))
+            return MagicMock(data=[])
+        if self._table == "health_check_history_daily":
+            return MagicMock(data=self._db.daily_rows)
+        # health_check_history: the rate-limit probe selects only checked_at;
+        # the windowed read selects the full column list.
+        if self._cols.strip() == "checked_at":
+            return MagicMock(data=self._db.last_rows)
+        return MagicMock(data=self._db.raw_rows)
+
+
+class _FakeHistoryDB:
+    """Records inserts/deletes; serves canned rows for the two reads."""
+
+    def __init__(self, last_rows=None, raw_rows=None, daily_rows=None, fail=False) -> None:
+        self.last_rows = last_rows or []
+        self.raw_rows = raw_rows or []
+        self.daily_rows = daily_rows or []
+        self.fail = fail
+        self.inserted: list = []
+        self.deleted: list = []
+        self.gte_args: list = []
+        self.limit_args: list = []
+        self.upsert_kwargs: list = []
+
+    def table(self, name: str) -> _FakeHistoryQuery:
+        return _FakeHistoryQuery(self, name)
+
+
+def _full_check_result(score: float = 85.0, provenance: str = "partial") -> MagicMock:
+    result = MagicMock(
+        check_id="hs_test123",
+        check_scope=CheckScope.FULL,
+        overall_health_score=score,
+        health_grade=HealthGrade.B,
+        component_health_score=0.9,
+        model_health_score=0.8,
+        pipeline_health_score=0.85,
+        agent_health_score=0.95,
+    )
+    result.critical_issues = []
+    result.warnings = []
+    result.timestamp = datetime.now(timezone.utc).isoformat()
+    result.data_provenance = provenance
+    return result
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_serves_durable_window():
+    """With a reachable DB, /history serves the durable table: raw checks come
+    back ASCENDING (chart contract), daily buckets ride along, the average is
+    weighted over the WHOLE window, and window_days flags the durable path."""
+    raw_desc = [
+        {
+            "check_id": f"hs_{d}",
+            "checked_at": f"2026-07-0{d}T12:00:00+00:00",
+            "overall_health_score": 80.0 + d,
+            "health_grade": "B",
+            "critical_issues_count": 0,
+            "data_provenance": "partial",
+        }
+        for d in (6, 5, 4)  # DB returns newest-first
+    ]
+    daily = [
+        {
+            "day": "2026-07-04",
+            "avg_score": 84.0,
+            "min_score": 83.0,
+            "max_score": 85.0,
+            "checks_count": 4,
+            "data_provenance": "partial",
+        },
+        {
+            "day": "2026-07-05",
+            "avg_score": 85.0,
+            "min_score": 84.0,
+            "max_score": 86.0,
+            "checks_count": 4,
+            "data_provenance": "partial",
+        },
+        {
+            "day": "2026-07-06",
+            "avg_score": 86.0,
+            "min_score": 86.0,
+            "max_score": 86.0,
+            "checks_count": 2,
+            "data_provenance": "measured",
+        },
+    ]
+    db = _FakeHistoryDB(raw_rows=raw_desc, daily_rows=daily)
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        result = await get_health_history(limit=20, days=30)
+
+    assert result.window_days == 30
+    assert [c.check_id for c in result.checks] == ["hs_4", "hs_5", "hs_6"]
+    assert [p.date for p in result.daily] == ["2026-07-04", "2026-07-05", "2026-07-06"]
+    assert result.total_checks == 10
+    expected_avg = (84.0 * 4 + 85.0 * 4 + 86.0 * 2) / 10
+    assert result.avg_health_score == pytest.approx(expected_avg)
+    # Exactly 3 daily points -> first-3 and last-3 coincide -> stable.
+    assert result.trend == "stable"
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_durable_trend_from_daily_averages():
+    """Trend comes from daily averages once >=3 days exist (not raw checks)."""
+    daily = [
+        {
+            "day": f"2026-07-0{i}",
+            "avg_score": s,
+            "min_score": s,
+            "max_score": s,
+            "checks_count": 1,
+            "data_provenance": "partial",
+        }
+        for i, s in enumerate([70.0, 70.0, 70.0, 90.0, 90.0, 90.0], start=1)
+    ]
+    db = _FakeHistoryDB(raw_rows=[], daily_rows=daily)
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        result = await get_health_history(limit=20, days=30)
+    assert result.trend == "improving"
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_daily_window_is_exactly_days_dates():
+    """days=N must never admit N+1 dates: the inclusive gte cutoff starts at
+    today-(N-1) UTC (today's partial bucket is day 1) and the daily read is
+    capped at N rows (codex round-2 LOW: days=30 previously spanned 31)."""
+    db = _FakeHistoryDB(raw_rows=[], daily_rows=[])
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        before = datetime.now(timezone.utc)
+        await get_health_history(limit=20, days=30)
+        after = datetime.now(timezone.utc)
+
+    daily_gtes = [(c, v) for (t, c, v) in db.gte_args if t == "health_check_history_daily"]
+    assert len(daily_gtes) == 1
+    col, cutoff = daily_gtes[0]
+    assert col == "day"
+    # Two candidates only in case the call straddled a UTC midnight.
+    expected = {
+        (before - timedelta(days=29)).date().isoformat(),
+        (after - timedelta(days=29)).date().isoformat(),
+    }
+    assert cutoff in expected
+    assert [n for (t, n) in db.limit_args if t == "health_check_history_daily"] == [30]
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_durable_read_failure_falls_back_to_memory():
+    """A failing durable read must fall back to the in-memory list (old
+    behavior), with daily EMPTY and window_days null — repackaging
+    minutes-scale process history as day buckets would fabricate a month."""
+    with patch("src.api.routes.health_score._execute_health_check") as mock_execute:
+        mock_execute.return_value = _full_check_result(score=88.0)
+        await run_health_check(scope=CheckScope.FULL)
+
+    db = _FakeHistoryDB(fail=True)
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        result = await get_health_history(limit=20, days=30)
+
+    assert result.window_days is None
+    assert result.daily == []
+    assert len(result.checks) == 1
+    assert result.checks[0].overall_health_score == 88.0
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_durable_empty_is_honest_empty():
+    """A reachable-but-empty table is an honest zero — no in-memory bleed-in,
+    no fabricated average/trend."""
+    db = _FakeHistoryDB(raw_rows=[], daily_rows=[])
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        result = await get_health_history(limit=20, days=30)
+    assert result.total_checks == 0
+    assert result.checks == []
+    assert result.daily == []
+    assert result.avg_health_score is None
+    assert result.trend == "unknown"
+
+
+def test_record_full_check_writes_durable_row_and_prunes():
+    """A trusted FULL check writes one durable row (faithful payload) and
+    piggybacks the 90-day retention sweep on the same path."""
+    db = _FakeHistoryDB(last_rows=[])
+    result = _full_check_result(score=85.5, provenance="partial")
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(result)
+
+    assert len(_health_history) == 1  # in-memory cache still fed
+    assert [t for t, _ in db.inserted] == ["health_check_history"]
+    payload = db.inserted[0][1]
+    assert payload["overall_health_score"] == 85.5
+    assert payload["health_grade"] == "B"
+    assert payload["data_provenance"] == "partial"
+    assert payload["check_scope"] == "full"
+    assert db.deleted and db.deleted[0][0] == "health_check_history"
+
+
+def test_record_full_check_write_is_atomic_upsert_on_time_bucket():
+    """The write must be ON CONFLICT (time_bucket) DO NOTHING — the SELECT
+    probe is not atomic, so concurrent workers can all pass it; the UNIQUE
+    bucket is what guarantees one row per 10-min window (codex rounds 1-2)."""
+    db = _FakeHistoryDB(last_rows=[])
+    before = int(datetime.now(timezone.utc).timestamp()) // 600
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(_full_check_result())
+    after = int(datetime.now(timezone.utc).timestamp()) // 600
+
+    assert [t for t, _ in db.upsert_kwargs] == ["health_check_history"]
+    kwargs = db.upsert_kwargs[0][1]
+    assert kwargs == {"on_conflict": "time_bucket", "ignore_duplicates": True}
+    # Bucket derives from wall clock // rate-limit interval (600s); allow the
+    # test to straddle a boundary.
+    assert db.inserted[0][1]["time_bucket"] in {before, after}
+
+
+def test_record_full_check_rate_limited_by_fresh_row():
+    """A durable row younger than the write interval suppresses the insert
+    (the dashboard polls /full every 60s — per-minute rows add no trend
+    resolution). The in-memory cache still records."""
+    fresh = datetime.now(timezone.utc).isoformat()
+    db = _FakeHistoryDB(last_rows=[{"checked_at": fresh}])
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(_full_check_result())
+
+    assert db.inserted == []
+    assert len(_health_history) == 1
+
+
+def test_record_full_check_stale_last_row_writes():
+    """A durable row older than the write interval does NOT suppress."""
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    db = _FakeHistoryDB(last_rows=[{"checked_at": stale}])
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(_full_check_result())
+    assert len(db.inserted) == 1
+
+
+def test_record_full_check_untrusted_never_reaches_durable():
+    """placeholder/unknown provenance is rejected before any storage — the DB
+    CHECK constraint is the backstop, this gate is the front door."""
+    db = _FakeHistoryDB()
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(_full_check_result(provenance="placeholder"))
+    assert db.inserted == []
+    assert len(_health_history) == 0
+
+
+def test_record_full_check_durable_write_failure_never_raises():
+    """Recording is best-effort: a DB failure must not fail the health check."""
+    db = _FakeHistoryDB(fail=True)
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        _record_full_check(_full_check_result())  # must not raise
+    assert len(_health_history) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_scheduled_full_check_records_like_the_endpoint():
+    """The lifespan heartbeat entry point runs a FULL check, assigns a check_id
+    and records through the exact same gate as GET /check?scope=full."""
+    db = _FakeHistoryDB(last_rows=[])
+    with (
+        patch("src.api.routes.health_score._execute_health_check") as mock_execute,
+        patch("src.api.routes.health_score._health_source_client", return_value=db),
+    ):
+        mock_execute.return_value = _full_check_result(score=91.0)
+        await run_scheduled_full_check()
+
+    assert len(_health_history) == 1
+    assert _health_history[0].check_id.startswith("hs_")
+    assert len(db.inserted) == 1
+    assert db.inserted[0][1]["overall_health_score"] == 91.0
+
+
+def test_trend_from_scores_thresholds():
+    """±5 dead band; 'unknown' below 3 points — never a fabricated 'stable'."""
+    assert _trend_from_scores([]) == "unknown"
+    assert _trend_from_scores([80.0, 90.0]) == "unknown"
+    assert _trend_from_scores([70.0, 70.0, 70.0, 90.0, 90.0, 90.0]) == "improving"
+    assert _trend_from_scores([90.0, 90.0, 90.0, 70.0, 70.0, 70.0]) == "declining"
+    assert _trend_from_scores([85.0, 84.0, 86.0, 85.0]) == "stable"
 
 
 # =============================================================================

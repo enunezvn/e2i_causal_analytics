@@ -358,6 +358,25 @@ class HealthHistoryItem(BaseModel):
     )
 
 
+class HealthHistoryDailyPoint(BaseModel):
+    """One UTC-day aggregate of recorded full health checks.
+
+    Aggregates carry their own provenance: 'measured' only when EVERY
+    contributing check was measured, else 'partial'. The durable table's CHECK
+    constraint means untrusted checks can never contribute at all.
+    """
+
+    date: str = Field(..., description="UTC day (YYYY-MM-DD)")
+    avg_score: float = Field(..., description="Mean overall health score that day")
+    min_score: float = Field(..., description="Lowest overall health score that day")
+    max_score: float = Field(..., description="Highest overall health score that day")
+    checks_count: int = Field(..., description="Recorded checks contributing to the day")
+    data_provenance: str = Field(
+        default="partial",
+        description="'measured' when every contributing check was measured, else 'partial'",
+    )
+
+
 class HealthHistoryResponse(BaseModel):
     """Response for health check history."""
 
@@ -369,6 +388,16 @@ class HealthHistoryResponse(BaseModel):
     trend: str = Field(
         default="unknown",
         description="Trend direction (improving, stable, declining, unknown)",
+    )
+    # Daily aggregates over the requested window, ascending by date. Empty when
+    # no durable history exists yet — the chart renders honestly empty rather
+    # than replotting the minutes-scale in-memory fallback as a month of data.
+    daily: List[HealthHistoryDailyPoint] = Field(
+        default_factory=list, description="Per-UTC-day aggregates over the window"
+    )
+    window_days: Optional[int] = Field(
+        default=None,
+        description="Days window served from durable history; null when serving the in-memory fallback",
     )
 
 
@@ -383,10 +412,215 @@ class HealthServiceStatus(BaseModel):
 
 
 # =============================================================================
-# IN-MEMORY STORAGE (replace with persistence in production)
+# HISTORY STORAGE
 # =============================================================================
+# Durable source of truth: the health_check_history table (migration 096).
+# The in-memory list remains as (a) the read fallback when the DB is
+# unreachable and (b) a per-process cache for /status; it is per-gunicorn-
+# worker and reset on restart, so it must never be presented as a multi-day
+# history — /history only serves it when the durable read fails.
 
 _health_history: List[HealthScoreResponse] = []
+
+# One durable row per 10 minutes at most: the dashboard polls /full every 60s
+# while open, and per-minute rows would bloat the table without adding trend
+# resolution. The 6h lifespan heartbeat (src/api/main.py) guarantees points
+# even when nobody has the page open. The probe below is only a cheap
+# short-circuit for the 60s polls — the dedup GUARANTEE is the table's
+# UNIQUE(time_bucket): the writer upserts with ON CONFLICT DO NOTHING, so
+# workers that pass the probe concurrently still yield one row per bucket.
+_HISTORY_WRITE_MIN_INTERVAL_S = 600
+_HISTORY_RETENTION_DAYS = 90
+
+
+def _record_history_durable(result: HealthScoreResponse) -> None:
+    """Best-effort durable write of a trusted full check (never raises).
+
+    Failures only log: recording history must never fail the health check
+    itself. The table's CHECK constraint re-enforces the trusted-provenance
+    gate at the DB layer, so no future writer can regress it.
+    """
+    db = _health_source_client()
+    if db is None:
+        return
+    try:
+        now = datetime.now(timezone.utc)
+        last = (
+            db.table("health_check_history")
+            .select("checked_at")
+            .order("checked_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if (
+            last
+            and _hours_since(last[0].get("checked_at"), now) * 3600.0
+            < _HISTORY_WRITE_MIN_INTERVAL_S
+        ):
+            return
+        # ON CONFLICT (time_bucket) DO NOTHING makes the write itself atomic:
+        # the probe above is not (SELECT then INSERT are separate round-trips),
+        # so concurrent workers can all pass it — the UNIQUE bucket then keeps
+        # exactly one of their rows (codex rounds 1-2 LOW). Residual duplicates
+        # need two writes inside probe latency STRADDLING a 600s boundary —
+        # vanishingly rare and benign (a real check a few seconds early).
+        bucket = int(now.timestamp()) // _HISTORY_WRITE_MIN_INTERVAL_S
+        db.table("health_check_history").upsert(
+            {
+                "check_id": result.check_id,
+                "checked_at": result.timestamp,
+                "time_bucket": bucket,
+                "overall_health_score": round(float(result.overall_health_score), 2),
+                "health_grade": str(result.health_grade.value),
+                "component_health_score": result.component_health_score,
+                "model_health_score": result.model_health_score,
+                "pipeline_health_score": result.pipeline_health_score,
+                "agent_health_score": result.agent_health_score,
+                "critical_issues_count": len(result.critical_issues),
+                "warnings_count": len(result.warnings),
+                "data_provenance": result.data_provenance,
+                "check_scope": result.check_scope.value,
+            },
+            on_conflict="time_bucket",
+            ignore_duplicates=True,
+        ).execute()
+        # Retention sweep piggybacks on the rate-limited write path (at most a
+        # handful of deletes per day — no separate cleanup job needed).
+        cutoff = (now - timedelta(days=_HISTORY_RETENTION_DAYS)).isoformat()
+        db.table("health_check_history").delete().lt("checked_at", cutoff).execute()
+    except Exception as e:
+        logger.warning(f"health history: durable write failed ({e})")
+
+
+def _record_full_check(result: HealthScoreResponse) -> None:
+    """Record a health check in history — ONLY trusted full-scope checks.
+
+    A QUICK check measures components only (model/pipeline/agent UNMEASURED),
+    so its overall score is component-only (e.g. 100/A) and would pollute the
+    health TREND with a misleadingly-rosy flat line; single-dimension scopes
+    (models/pipelines/agents) are not an overall measurement either. Only the
+    FULL all-dimension check is a faithful overall data point for the trend.
+
+    Provenance guard: a full check whose score is placeholder (dev mock
+    fallback) or unknown (fail-closed default) is a fabricated data point —
+    recording it would replot as historical truth the very score the live
+    dashboard refuses to render.
+    """
+    if result.check_scope != CheckScope.FULL:
+        return
+    if result.data_provenance not in (
+        DataProvenance.MEASURED.value,
+        DataProvenance.PARTIAL.value,
+    ):
+        return
+    _health_history.append(result)
+    # Keep only last 100 checks in the in-memory fallback
+    while len(_health_history) > 100:
+        _health_history.pop(0)
+    _record_history_durable(result)
+
+
+async def run_scheduled_full_check() -> None:
+    """Run a FULL health check and record it (lifespan heartbeat entry point).
+
+    Mirrors GET /check?scope=full's recording semantics exactly (same trusted-
+    provenance gate, same rate-limited durable write), so scheduled points are
+    indistinguishable from organic ones and multi-worker firings dedup.
+    """
+    result = await _execute_health_check(CheckScope.FULL)
+    result.check_id = f"hs_{uuid4().hex[:12]}"
+    _record_full_check(result)
+
+
+def _trend_from_scores(scores: List[float]) -> str:
+    """Trend over an ascending score series: last-3 avg vs first-3 avg.
+
+    "unknown" below 3 points — a default "stable" would fabricate a trend
+    from zero/one/two data points.
+    """
+    if len(scores) < 3:
+        return "unknown"
+    recent_avg = sum(scores[-3:]) / 3
+    earlier_avg = sum(scores[:3]) / 3
+    if recent_avg > earlier_avg + 5:
+        return "improving"
+    if recent_avg < earlier_avg - 5:
+        return "declining"
+    return "stable"
+
+
+def _read_history_durable(
+    days: int, limit: int
+) -> Optional[tuple[List[HealthHistoryItem], List[HealthHistoryDailyPoint]]]:
+    """Read recent checks + daily aggregates from the durable table.
+
+    Returns None on ANY failure (unreachable DB, malformed row) so the caller
+    falls back to the in-memory list — fail closed to the old behavior, never
+    500. Both lists come back ascending (oldest first), matching the
+    in-memory contract the frontend charts already consume.
+    """
+    db = _health_source_client()
+    if db is None:
+        return None
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        raw = (
+            db.table("health_check_history")
+            .select(
+                "check_id, checked_at, overall_health_score, health_grade, "
+                "critical_issues_count, data_provenance"
+            )
+            .gte("checked_at", cutoff)
+            .order("checked_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+            or []
+        )
+        checks = [
+            HealthHistoryItem(
+                check_id=str(r.get("check_id") or ""),
+                timestamp=str(r.get("checked_at") or ""),
+                overall_health_score=float(r["overall_health_score"]),
+                health_grade=HealthGrade(str(r.get("health_grade"))),
+                critical_issues_count=int(r.get("critical_issues_count") or 0),
+                data_provenance=str(r.get("data_provenance") or "unknown"),
+            )
+            for r in reversed(raw)
+        ]
+        # The daily view (migration 096) aggregates in SQL, so this reads at
+        # most `days` rows — no PostgREST row-cap concerns. days-1 because the
+        # gte cutoff is inclusive and today's partial bucket counts as day 1:
+        # days=30 must yield at most 30 dates (today plus the 29 before it),
+        # not 31 (codex round-2 LOW).
+        cutoff_day = (now - timedelta(days=days - 1)).date().isoformat()
+        daily_rows = (
+            db.table("health_check_history_daily")
+            .select("day, avg_score, min_score, max_score, checks_count, data_provenance")
+            .gte("day", cutoff_day)
+            .order("day", desc=False)
+            .limit(days)
+            .execute()
+            .data
+            or []
+        )
+        daily = [
+            HealthHistoryDailyPoint(
+                date=str(d.get("day")),
+                avg_score=float(d["avg_score"]),
+                min_score=float(d["min_score"]),
+                max_score=float(d["max_score"]),
+                checks_count=int(d.get("checks_count") or 0),
+                data_provenance=str(d.get("data_provenance") or "partial"),
+            )
+            for d in daily_rows
+        ]
+        return checks, daily
+    except Exception as e:
+        logger.warning(f"health history: durable read failed ({e})")
+        return None
 
 
 # =============================================================================
@@ -427,28 +661,10 @@ async def run_health_check(
         result.check_latency_ms = check_latency
         result.check_id = f"hs_{uuid4().hex[:12]}"
 
-        # Store in history — ONLY full-scope checks. A QUICK check measures
-        # components only (model/pipeline/agent UNMEASURED), so its overall score
-        # is component-only (e.g. 100/A) and would pollute the health TREND with a
-        # misleadingly-rosy flat line; single-dimension scopes (models/pipelines/
-        # agents) are not an overall measurement either. Only the FULL
-        # all-dimension check is a faithful overall data point for the trend.
-        # NOTE: _health_history is process-local + in-memory (per gunicorn worker,
-        # reset on restart) — a durable health-history table + a scheduled full
-        # check is a tracked follow-up; this guard at least keeps the recorded
-        # trend honest (real full scores, not a fabricated flat 100).
-        # Provenance guard: a full check whose score is placeholder (dev mock
-        # fallback) or unknown (fail-closed default) is a fabricated data point —
-        # recording it would replot as historical truth the very score the live
-        # dashboard refuses to render.
-        if scope == CheckScope.FULL and result.data_provenance in (
-            DataProvenance.MEASURED.value,
-            DataProvenance.PARTIAL.value,
-        ):
-            _health_history.append(result)
-            # Keep only last 100 checks
-            while len(_health_history) > 100:
-                _health_history.pop(0)
+        # Store in history (in-memory + durable table, migration 096) — the
+        # recorder enforces the full-scope + trusted-provenance gates and
+        # rate-limits the durable write; see _record_full_check.
+        _record_full_check(result)
 
         return result
 
@@ -726,18 +942,55 @@ async def get_agent_health() -> AgentHealthResponse:
 )
 async def get_health_history(
     limit: int = Query(default=20, description="Maximum records to return", ge=1, le=100),
+    days: int = Query(
+        default=30,
+        ge=1,
+        le=90,
+        description="Window in days for durable history and daily aggregates",
+    ),
 ) -> HealthHistoryResponse:
     """
     Get historical health check records.
 
-    Returns recent health check results with trend analysis.
+    Serves the durable health_check_history table (migration 096): the most
+    recent ``limit`` checks within the ``days`` window plus per-UTC-day
+    aggregates for trend charts. Falls back to the process-local in-memory
+    list ONLY when the durable read fails (DB unreachable) — flagged by
+    ``window_days`` being null so consumers can tell the two apart.
 
     Args:
-        limit: Maximum number of records to return
+        limit: Maximum number of raw check records to return
+        days: Window in days for the durable read and daily aggregates
 
     Returns:
-        Historical health check data
+        Historical health check data with trend analysis
     """
+    durable = _read_history_durable(days, limit)
+    if durable is not None:
+        checks, daily = durable
+        # Average over the WHOLE window (weighted by checks per day), not just
+        # the `limit` newest raw rows — it captions the daily trend chart.
+        total_n = sum(p.checks_count for p in daily)
+        avg_score = sum(p.avg_score * p.checks_count for p in daily) / total_n if total_n else None
+        # Trend from daily averages once 3 days exist; before that, from the
+        # raw checks (first hours after rollout); "unknown" below 3 points.
+        trend = (
+            _trend_from_scores([p.avg_score for p in daily])
+            if len(daily) >= 3
+            else _trend_from_scores([c.overall_health_score for c in checks])
+        )
+        return HealthHistoryResponse(
+            total_checks=total_n if total_n else len(checks),
+            checks=checks,
+            avg_health_score=avg_score,
+            trend=trend,
+            daily=daily,
+            window_days=days,
+        )
+
+    # Fallback: durable read failed — serve the in-memory list (per-worker,
+    # reset on restart). daily stays EMPTY and window_days null: repackaging
+    # minutes-scale process history as day buckets would fabricate a month.
     history = _health_history[-limit:] if _health_history else []
 
     checks = [
@@ -756,24 +1009,11 @@ async def get_health_history(
     # render as a real metric.
     avg_score = sum(h.overall_health_score for h in history) / len(history) if history else None
 
-    # Trend is "unknown" until there are enough checks (>=3) to compute one — a
-    # default "stable" would fabricate a trend from zero/one/two data points.
-    trend = "unknown"
-    if len(history) >= 3:
-        recent_avg = sum(h.overall_health_score for h in history[-3:]) / 3
-        earlier_avg = sum(h.overall_health_score for h in history[:3]) / 3
-        if recent_avg > earlier_avg + 5:
-            trend = "improving"
-        elif recent_avg < earlier_avg - 5:
-            trend = "declining"
-        else:
-            trend = "stable"
-
     return HealthHistoryResponse(
         total_checks=len(history),
         checks=checks,
         avg_health_score=avg_score,
-        trend=trend,
+        trend=_trend_from_scores([h.overall_health_score for h in history]),
     )
 
 
@@ -1377,8 +1617,11 @@ class _ModelMetricsStoreAdapter:
         # Carry the reader's authoritative status (mapped from the dashboard
         # health_status) so the node does NOT re-derive a divergent one. Sub-fields
         # that have no source remain null/absent — never fabricated.
+        # model_name rides along so composer-issued alerts can name the model
+        # instead of printing a bare registry UUID.
         return {
             "status": m.status.value,
+            "model_name": m.model_name,
             "accuracy": m.accuracy,
             "precision": m.precision,
             "recall": m.recall,

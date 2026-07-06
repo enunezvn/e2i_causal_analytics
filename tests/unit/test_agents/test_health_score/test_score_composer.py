@@ -308,6 +308,44 @@ class TestIssueIdentification:
         assert "Model 'model_1' is unhealthy" in result["critical_issues"]
 
     @pytest.mark.asyncio
+    async def test_model_alerts_prefer_registry_name_over_uuid(self):
+        """Alerts name the model when the store provides model_name — the
+        Alerts tab renders these strings verbatim and a bare registry UUID
+        tells a reader nothing. model_id stays the fallback (the plain-dict
+        test above pins that path)."""
+        state = {
+            "component_statuses": [],
+            "model_metrics": [
+                {
+                    "model_id": "2db8b0e0-1d9e-4e18-bf7a-576a4796610d",
+                    "model_name": "initiation_remibrutinib_goldstd_lr_v1",
+                    "status": "degraded",
+                },
+                {
+                    "model_id": "b933a5d0-cf0d-44cd-ac75-d34fab2259ea",
+                    "model_name": "discontinuation_fabhalta_goldstd_lr_v1",
+                    "status": "unhealthy",
+                },
+            ],
+            "pipeline_statuses": [],
+            "agent_statuses": [],
+            "total_latency_ms": 0,
+            "errors": [],
+            "status": "checking",
+        }
+
+        node = ScoreComposerNode()
+        result = await node.execute(state)
+
+        assert "Model 'initiation_remibrutinib_goldstd_lr_v1' is degraded" in result["warnings"]
+        assert (
+            "Model 'discontinuation_fabhalta_goldstd_lr_v1' is unhealthy"
+            in result["critical_issues"]
+        )
+        assert not any("2db8b0e0" in w for w in result["warnings"])
+        assert not any("b933a5d0" in c for c in result["critical_issues"])
+
+    @pytest.mark.asyncio
     async def test_identifies_failed_pipelines(self):
         """Test identification of failed pipelines"""
         state = {
