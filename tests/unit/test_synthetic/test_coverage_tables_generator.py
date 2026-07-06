@@ -58,8 +58,12 @@ def test_five_view_tables_fresh_and_tagged():
     # intent delta non-null for the BR-002 KPI
     assert out["hcp_intent_surveys"]["intent_to_prescribe_change"].notna().all()
     assert set(out["hcp_intent_surveys"]["brand"]).issubset({"Remibrutinib", "Kisqali", "Fabhalta"})
-    # etl_pipeline_metrics carries a non-null TTR (WS1-DQ-009)
+    # etl_pipeline_metrics carries a non-null TTR (WS1-DQ-009)...
     assert out["etl_pipeline_metrics"]["time_to_release_hours"].notna().all()
+    # ...on status='success' rows — the WS1-DQ-009 registry query (migration
+    # 095) averages TTR over status='success' only, so a revert to the old
+    # 'completed' literal would silently zero the KPI's row set again.
+    assert (out["etl_pipeline_metrics"]["status"] == "success").all()
     # ml_annotations carries an iaa_group_id (WS1-DQ-008) + categorical label
     # strings the label-quality KPI counts (positive/negative/uncertain, not 0/1).
     ann = out["ml_annotations"]

@@ -116,11 +116,12 @@ export class DataQualityPage extends BasePage {
   }
 
   /**
-   * Page-level drift-history error banner (#323) — hoisted out of Quality
-   * Issues tab so it's visible from the default Validation Rules tab.
+   * Drift-consolidation link — model & data drift are monitored on
+   * /monitoring; this page links there instead of a per-page drift section
+   * (the old section read a `data_quality_pipeline` model id nothing monitors).
    */
-  get driftHistoryErrorBanner(): Locator {
-    return this.page.getByText(/could not load 30-day drift history/i)
+  get monitoringLink(): Locator {
+    return this.page.getByRole('link', { name: /monitoring/i }).first()
   }
 
   // Actions

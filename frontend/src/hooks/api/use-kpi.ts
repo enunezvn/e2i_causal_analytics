@@ -507,7 +507,20 @@ export function useKPIDetail(kpiId: string, brand?: string, region?: string) {
     metadata: metadataQuery.data,
     value: valueQuery.data,
     isLoading: metadataQuery.isLoading || valueQuery.isLoading,
+    // True during background refetches of already-cached data (isLoading is
+    // not — it covers only the pre-first-data window). Consumers that make
+    // claims off settled values (e.g. a "no issues" empty-state) should hold
+    // those claims while this is true.
+    isFetching: metadataQuery.isFetching || valueQuery.isFetching,
     error: metadataQuery.error || valueQuery.error,
+    // The merged `error` above fires on a metadata-only failure even when the
+    // VALUE fetch — which alone carries the measured figure and its
+    // backend-authoritative status — succeeded fresh. Consumers making
+    // verification/staleness claims about the value should key them off
+    // `valueError`; `metadataError` matters only where metadata participates
+    // in the computed result (e.g. threshold targets).
+    metadataError: metadataQuery.error,
+    valueError: valueQuery.error,
     isMetadataLoading: metadataQuery.isLoading,
     isValueLoading: valueQuery.isLoading,
     refetch: () => {

@@ -19,8 +19,8 @@ synthetic data —
   ``data_source="synthetic"`` provenance so the UI badges the figures rather than
   passing them off as real-world data.
 
-Only the 36 query_ids that touch synthetic-taggable business tables HAVE a twin
-(see :data:`SYNTHETIC_TWINNED_QUERY_IDS`, sourced from migration 066). Every
+Only the 41 query_ids that touch synthetic-taggable business tables HAVE a twin
+(see :data:`SYNTHETIC_TWINNED_QUERY_IDS`, sourced from migrations 066/085/095). Every
 other registry statement reads a non-taggable view / reference / ops table and
 is therefore NOT synthetic-gated — its base id is already correct.
 :func:`resolve_kpi_query_id` swaps to the twin ONLY when one exists; otherwise it
@@ -39,19 +39,23 @@ _SYNTHETIC_SUFFIX = "_include_synthetic"
 #: ``src/api/routes/copilotkit.py``).
 _TRUTHY = ("1", "true", "yes")
 
-#: The 37 base ``kpi_query_registry`` ids that have an
+#: The 41 base ``kpi_query_registry`` ids that have an
 #: ``{id}_include_synthetic`` twin: 36 sourced verbatim from
-#: ``database/migrations/066_kpi_query_synthetic_exclusion.sql`` plus
+#: ``database/migrations/066_kpi_query_synthetic_exclusion.sql``, plus
 #: ``business_impact_patient_touch_rate`` from
 #: ``database/migrations/085_kpi_patient_touch_rate_include_synthetic.sql``
 #: (#1064 — the touch-rate KPI reads a VIEW that migration 067 made
 #: synthetic-excluding, so it was absent from 066's table-wrapping pass and
-#: needed a view-backed twin). The twins are the synthetic-taggable statements;
-#: everything else in the registry is not synthetic-gated. This literal is kept
-#: in lock-step with the migrations by ``tests/unit/test_kpi/test_synthetic_mode.py``
-#: (it parses 066 + 085 and asserts equality — drift fails CI), so a future twin
-#: added by a later migration is a one-line update guarded by a red test, never a
-#: silent miss.
+#: needed a view-backed twin), plus the four view-backed WS1 data-quality ids
+#: (cross_source_match / stacking_lift / data_lag / time_to_release) from
+#: ``database/migrations/095_kpi_dq_view_include_synthetic_twins.sql`` (the
+#: same 066 gap as #1064 — their views are synthetic-excluding per 067, so
+#: /data-quality read honest-empty on a synthetic-gold instance). The twins are
+#: the synthetic-taggable statements; everything else in the registry is not
+#: synthetic-gated. This literal is kept in lock-step with the migrations by
+#: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 + 085 + 095
+#: and asserts equality — drift fails CI), so a future twin added by a later
+#: migration is a one-line update guarded by a red test, never a silent miss.
 SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
     {
         "brand_specific_fabhalta_pnh_tested",
@@ -78,9 +82,13 @@ SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
         "causal_metrics_counterfactual",
         "causal_metrics_mediation",
         "data_quality_completeness_pass_rate",
+        "data_quality_cross_source_match",
+        "data_quality_data_lag",
         "data_quality_geographic_consistency",
         "data_quality_source_coverage_hcps",
         "data_quality_source_coverage_patients",
+        "data_quality_stacking_lift",
+        "data_quality_time_to_release",
         "model_performance_roc_auc",
         "model_performance_shap_coverage",
         "trigger_performance_acceptance_rate",

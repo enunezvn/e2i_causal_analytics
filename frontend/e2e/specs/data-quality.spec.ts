@@ -196,53 +196,38 @@ test.describe('Data Quality Page', () => {
       await expect(dataPage.noKpisMatchEmptyState).not.toBeVisible()
     })
 
-    test('#323 surfaces drift-history error banner on default (Validation Rules) tab', async ({ page }) => {
-      // Override the shared drift-history mock to a 5xx BEFORE navigating so
-      // the page mounts with an error state already populated. The banner is
-      // hoisted page-level (#323) so it's visible from the default tab.
-      //
-      // Using 4xx (404) rather than 5xx so the shared QueryClient's shouldRetry
-      // skips retries (4xx => no retry except 408/429); 5xx would trigger 3
-      // exponential-backoff retries (~7s) before the error state lands.
-      await page.route('**/api/monitoring/drift/history/**', async (route) => {
-        await route.fulfill({
-          status: 404,
-          contentType: 'application/json',
-          body: JSON.stringify({ detail: 'simulated drift-history failure' }),
-        })
-      })
-      // Re-navigate so the new route takes effect on the underlying query.
-      await dataPage.goto()
-      await expect(dataPage.driftHistoryErrorBanner).toBeVisible({ timeout: 15000 })
-      // And we are on the default (rules) tab, NOT Quality Issues.
-      await expect(dataPage.validationRulesTab).toHaveAttribute('data-state', 'active')
-    })
-
     test('#325 Export button becomes enabled once the datasets finish loading', async () => {
-      // isAnyLoading = kpiLoading || driftLoading || driftHistoryLoading. Once
-      // all three resolve via the shared mocks, the button must be enabled.
+      // isAnyLoading = kpiLoading || the five dimension-source KPI fetches.
+      // Once they resolve via the shared mocks, the button must be enabled.
       // This guards the disabled-while-loading wiring against a regression
       // where isAnyLoading is left "true" forever.
       await expect(dataPage.exportButton).toBeEnabled()
     })
 
-    test('#326 Refresh triggers drift detection with time_window=30d', async ({ page }) => {
-      // Issue #326 aligned the trigger window with the 30-day display window.
-      // Assert on the request payload to catch a silent revert to '7d'.
-      const requestPromise = page.waitForRequest(
-        (req) =>
-          req.url().includes('/api/monitoring/drift/detect') && req.method() === 'POST'
+    test('drift consolidation: links to /monitoring instead of a per-page drift section', async () => {
+      // The old drift section read a `data_quality_pipeline` model id that no
+      // sweep monitors — it could never show data. The page must link to
+      // /monitoring, where model & data drift actually live.
+      await expect(dataPage.monitoringLink).toBeVisible()
+      await expect(dataPage.monitoringLink).toHaveAttribute('href', '/monitoring')
+    })
+
+    test('drift consolidation: Refresh re-reads KPIs and does NOT POST drift detection', async ({ page }) => {
+      // The Refresh button previously queued a drift-detection task for the
+      // unmonitored `data_quality_pipeline` id — a CTA that could never light
+      // the page up. It now refetches the KPI queries instead.
+      let driftPosted = false
+      page.on('request', (req) => {
+        if (req.url().includes('/api/monitoring/drift/detect') && req.method() === 'POST') {
+          driftPosted = true
+        }
+      })
+      const kpiRefetch = page.waitForRequest(
+        (req) => req.url().includes('/api/kpis') && req.method() === 'GET'
       )
       await dataPage.clickRefresh()
-      const request = await requestPromise
-      const body = request.postDataJSON() as {
-        model_id?: string
-        time_window?: string
-        check_data_drift?: boolean
-      } | null
-      expect(body?.time_window).toBe('30d')
-      expect(body?.model_id).toBe('data_quality_pipeline')
-      expect(body?.check_data_drift).toBe(true)
+      await kpiRefetch
+      expect(driftPosted).toBe(false)
     })
   })
 })

@@ -3,17 +3,22 @@
  * ======================
  *
  * Tests for the Data Quality monitoring dashboard page.
- * Verifies live wiring to KPI workstream `ws1_data_quality` + drift detection backends
- * (issue #301) and preserves the tab/refresh DOM contract the Playwright spec expects
- * (issue #306: dataProfilingTab, qualityIssuesTab, validationRulesTab, refreshButton).
+ * Verifies live wiring to KPI workstream `ws1_data_quality` (issue #301) and
+ * preserves the tab/refresh DOM contract the Playwright spec expects (issue
+ * #306: dataProfilingTab, qualityIssuesTab, validationRulesTab, refreshButton).
+ *
+ * Dimension cards derive from MEASURED WS1-DQ KPI values (portfolio scope) —
+ * the old drift-based derivation read a `data_quality_pipeline` model id that
+ * no sweep monitors, so the cards could structurally never leave "No data".
+ * Model & data drift are consolidated on /monitoring (the page links there).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import type { KPIListResponse, KPIMetadata } from '@/types/kpi';
-import type { DriftDetectionResponse, DriftHistoryResponse } from '@/types/monitoring';
 import DataQuality from './DataQuality';
 
 // =============================================================================
@@ -25,20 +30,6 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIDetail: vi.fn(),
   useKPIMetadata: vi.fn(),
   useKPIValue: vi.fn(),
-}));
-
-vi.mock('@/hooks/api/use-monitoring', () => ({
-  useLatestDriftStatus: vi.fn(),
-  useDriftHistory: vi.fn(),
-  useTriggerDriftDetection: vi.fn(),
-}));
-
-// Toast mock for #324 (mutation success/error feedback). Captures every call
-// so assertions can check that triggerDrift's onSuccess/onError emit toasts.
-const toastMock = vi.fn();
-vi.mock('@/hooks/use-toast', () => ({
-  useToast: () => ({ toast: toastMock, toasts: [], dismiss: vi.fn() }),
-  toast: (...args: unknown[]) => toastMock(...args),
 }));
 
 // -----------------------------------------------------------------------------
@@ -63,11 +54,6 @@ vi.mock('@/components/visualizations', async () => {
 });
 
 import { useKPIList, useKPIDetail } from '@/hooks/api/use-kpi';
-import {
-  useLatestDriftStatus,
-  useDriftHistory,
-  useTriggerDriftDetection,
-} from '@/hooks/api/use-monitoring';
 
 // =============================================================================
 // FIXTURES
@@ -110,39 +96,96 @@ const kpiListResponse: KPIListResponse = {
   workstream: 'ws1_data_quality',
 };
 
-const driftResponse: DriftDetectionResponse = {
-  task_id: 'task-123',
-  model_id: 'data_quality_pipeline',
-  status: 'completed',
-  overall_drift_score: 0.12,
-  features_checked: 8,
-  features_with_drift: ['hcp_id', 'npi'],
-  results: [],
-  drift_summary: '2 features show drift',
-  recommended_actions: ['Investigate hcp_id'],
-  detection_latency_ms: 250,
-  timestamp: '2026-01-02T08:30:00Z',
+/**
+ * Dimension-source KPI fixtures (portfolio values the dimension cards derive
+ * from). Chosen to make each derivation's arithmetic assertable:
+ *   completeness = 0.94 × 100                       = 94    (status warning)
+ *   accuracy     = 0.80 × 100                       = 80    (status good/healthy —
+ *                  beats its 0.75 target; the OLD generic ≥85 client cut would
+ *                  have mispainted this healthy value as critical)
+ *   consistency  = (1 − 0.105) × 100                = 89.5  (status critical —
+ *                  DQ-006 is lower-is-better; backend status is authoritative)
+ *   timeliness   = mean(min(100, 3/1.25×100), min(100, 24/21×100)) = 100
+ *   overall      = (94 + 80 + 89.5 + 100) / 4       = 90.875 (status critical =
+ *                  worst measured dimension)
+ */
+const dimensionFixtures: Record<
+  string,
+  { value: number; status: string; target: number; name: string }
+> = {
+  'WS1-DQ-003': { value: 0.8, status: 'good', target: 0.75, name: 'Cross-source Match Rate' },
+  'WS1-DQ-005': { value: 0.94, status: 'warning', target: 0.95, name: 'Completeness Pass Rate' },
+  'WS1-DQ-006': { value: 0.105, status: 'critical', target: 0.05, name: 'Geographic Consistency' },
+  'WS1-DQ-007': { value: 1.25, status: 'good', target: 3, name: 'Data Lag (Median)' },
+  'WS1-DQ-009': { value: 21, status: 'good', target: 24, name: 'Time-to-Release (TTR)' },
 };
 
-const driftHistoryResponse: DriftHistoryResponse = {
-  model_id: 'data_quality_pipeline',
-  total_records: 1,
-  records: [
-    {
-      id: 'dh-1',
-      model_version: 'v1.0',
-      feature_name: 'hcp_id',
-      drift_type: 'data_drift',
-      drift_score: 0.18,
-      severity: 'medium',
-      detected_at: '2026-01-01T00:00:00Z',
-      baseline_start: '2025-12-25T00:00:00Z',
-      baseline_end: '2025-12-31T00:00:00Z',
-      current_start: '2026-01-01T00:00:00Z',
-      current_end: '2026-01-02T00:00:00Z',
+function dimensionMeta(kpiId: string): KPIMetadata {
+  const fx = dimensionFixtures[kpiId];
+  return {
+    id: kpiId,
+    name: fx?.name ?? kpiId,
+    definition: `${fx?.name ?? kpiId} definition`,
+    formula: 'x / y',
+    calculation_type: 'direct',
+    workstream: 'ws1_data_quality',
+    tables: ['patient_journeys'],
+    columns: ['patient_id'],
+    threshold: fx ? { target: fx.target } : undefined,
+    unit: undefined,
+    value_format: 'percent',
+    frequency: 'daily',
+    primary_causal_library: 'none',
+  } as KPIMetadata;
+}
+
+/** Default per-id useKPIDetail implementation: dimension ids resolve to the
+ * dimension fixtures; list-row ids resolve to their dqKpis metadata with a
+ * healthy value. */
+function defaultKPIDetailImpl(kpiId: string) {
+  const fx = dimensionFixtures[kpiId];
+  if (fx) {
+    return {
+      metadata: dimensionMeta(kpiId),
+      value: {
+        kpi_id: kpiId,
+        value: fx.value,
+        status: fx.status,
+        calculated_at: '2026-01-02T08:30:00Z',
+        cached: false,
+        metadata: {},
+      },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      metadataError: null,
+      valueError: null,
+      isMetadataLoading: false,
+      isValueLoading: false,
+      refetch: vi.fn(),
+    };
+  }
+  const meta = dqKpis.find((k) => k.id === kpiId) ?? dqKpis[0];
+  return {
+    metadata: meta,
+    value: {
+      kpi_id: meta.id,
+      value: 94.5,
+      status: 'good',
+      calculated_at: '2026-01-02T08:30:00Z',
+      cached: false,
+      metadata: {},
     },
-  ],
-};
+    isLoading: false,
+    isFetching: false,
+    error: null,
+    metadataError: null,
+    valueError: null,
+    isMetadataLoading: false,
+    isValueLoading: false,
+    refetch: vi.fn(),
+  };
+}
 
 // =============================================================================
 // SETUP
@@ -158,16 +201,17 @@ function createWrapper() {
     },
   });
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
   );
 }
 
-const mockMutate = vi.fn();
+const mockRefetchKpis = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
   kpiCardCalls.length = 0;
-  toastMock.mockClear();
   global.URL.createObjectURL = mockCreateObjectURL;
   global.URL.revokeObjectURL = mockRevokeObjectURL;
 
@@ -176,45 +220,11 @@ beforeEach(() => {
     data: kpiListResponse,
     isLoading: false,
     error: null,
-    refetch: vi.fn(),
+    refetch: mockRefetchKpis,
+    isRefetching: false,
   });
 
-  (useKPIDetail as ReturnType<typeof vi.fn>).mockReturnValue({
-    metadata: dqKpis[0],
-    value: {
-      kpi_id: 'WS1-DQ-001',
-      value: 94.5,
-      status: 'good',
-      calculated_at: '2026-01-02T08:30:00Z',
-      cached: false,
-      metadata: {},
-    },
-    isLoading: false,
-    error: null,
-    isMetadataLoading: false,
-    isValueLoading: false,
-    refetch: vi.fn(),
-  });
-
-  (useLatestDriftStatus as ReturnType<typeof vi.fn>).mockReturnValue({
-    data: driftResponse,
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  });
-
-  (useDriftHistory as ReturnType<typeof vi.fn>).mockReturnValue({
-    data: driftHistoryResponse,
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  });
-
-  (useTriggerDriftDetection as ReturnType<typeof vi.fn>).mockReturnValue({
-    mutate: mockMutate,
-    isPending: false,
-    error: null,
-  });
+  (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation(defaultKPIDetailImpl);
 });
 
 // =============================================================================
@@ -226,7 +236,7 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
   // Page chrome that the Playwright spec asserts (issue #306)
   // ===========================================================================
 
-  it('renders page header alongside live drift model id (Playwright: pageHeader + #301 wiring)', () => {
+  it('renders page header and the /monitoring consolidation link (drift lives on Monitoring)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     // h1 must include "Data Quality"
@@ -234,45 +244,29 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
       screen.getByRole('heading', { level: 1, name: /Data Quality/i })
     ).toBeInTheDocument();
 
-    // Vacuity gate (#327): live drift wiring renders the DQ_MODEL_ID in the
-    // Drift Status section's CardDescription ("Latest drift detection for the
-    // data quality pipeline (data_quality_pipeline)"). Pre-#320 baseline had
-    // no drift section at all and would trip this assertion.
-    expect(screen.getByText(/data_quality_pipeline/)).toBeInTheDocument();
+    // Vacuity gate: the page must NOT wire a per-page drift section for the
+    // unmonitored `data_quality_pipeline` id; instead it links to /monitoring
+    // where model & data drift actually live.
+    expect(screen.queryByText(/data_quality_pipeline/)).not.toBeInTheDocument();
+    const monitoringLinks = screen.getAllByRole('link', { name: /monitoring/i });
+    expect(monitoringLinks.length).toBeGreaterThanOrEqual(1);
+    expect(monitoringLinks[0]).toHaveAttribute('href', '/monitoring');
   });
 
   it('renders page description + live workstream id (Playwright regex + #301 wiring)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     // Spec (data-quality.page.ts): getByText(/profiling|completeness|accuracy|validation/i).first()
-    // The Playwright spec uses `.first()` because the regex matches multiple substrings
-    // (KPI card titles, descriptions, etc). We mirror that by asserting >= 1 match.
     const matches = screen.getAllByText(/profiling|completeness|accuracy|validation/i);
     expect(matches.length).toBeGreaterThanOrEqual(1);
 
     // Vacuity gate (#327): live KPI wiring surfaces the workstream name as a
     // <code>ws1_data_quality</code> token inside the Validation Rules
-    // CardDescription. Pre-#320 baseline had no workstream reference.
-    expect(screen.getByText('ws1_data_quality')).toBeInTheDocument();
+    // CardDescription.
+    expect(screen.getAllByText('ws1_data_quality').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders Validation Rules tab with live KPI rows (Playwright + #301 wiring)', () => {
-    // Override useKPIDetail to return per-kpi metadata so each row shows the
-    // KPI's own name (default `beforeEach` mock returns dqKpis[0] for every
-    // call, which would collapse both rows to the same name).
-    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
-      const meta = dqKpis.find((k) => k.id === kpiId) ?? dqKpis[0];
-      return {
-        metadata: meta,
-        value: { kpi_id: meta.id, value: 90, status: 'good', calculated_at: '', cached: false, metadata: {} },
-        isLoading: false,
-        error: null,
-        isMetadataLoading: false,
-        isValueLoading: false,
-        refetch: vi.fn(),
-      };
-    });
-
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(
@@ -280,9 +274,7 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     ).toBeInTheDocument();
 
     // Vacuity gate (#327): default tab is "rules" and the body renders a row
-    // per `kpiList.kpis`. Assert both fixture KPI names appear (pre-#320
-    // baseline rendered only SAMPLE_VALIDATION_RULES.name like "HCP ID Not Null"
-    // — neither fixture name would appear without the live useKPIList wiring).
+    // per `kpiList.kpis` (per-id metadata via the default useKPIDetail impl).
     expect(screen.getByText('Source Coverage - Patients')).toBeInTheDocument();
     expect(screen.getByText('Completeness - HCP Master')).toBeInTheDocument();
   });
@@ -294,11 +286,6 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     const profilingTab = screen.getByRole('tab', { name: /Data Profiling/i });
     expect(profilingTab).toBeInTheDocument();
 
-    // Vacuity gate (#327): switch to Data Profiling tab; the body renders one
-    // row per `kpiList.kpis` with the KPI id + table name + column name from
-    // the fixture. Pre-#320 used SAMPLE_COLUMN_PROFILES with names like
-    // "patient_id" *but never* an id like "WS1-DQ-002". The KPI id is the
-    // unique fixture-derived marker that proves wiring.
     await user.click(profilingTab);
 
     await waitFor(() => {
@@ -307,42 +294,54 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     expect(screen.getByText('hcp_master')).toBeInTheDocument();
   });
 
-  it('renders Quality Issues tab with live drift records (Playwright + #301 wiring)', async () => {
+  it('renders Quality Issues tab with KPI threshold breaches (drift consolidation)', async () => {
+    // WS1-DQ-002 breaches critical; WS1-DQ-001 is healthy. The issues tab must
+    // list ONLY the breaching KPI, sourced from the backend-authoritative
+    // status — no drift records involved.
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        return {
+          ...base,
+          value: { ...base.value, value: 55, status: 'critical' },
+        };
+      }
+      return base;
+    });
+
     const user = userEvent.setup();
     render(<DataQuality />, { wrapper: createWrapper() });
 
     const issuesTab = screen.getByRole('tab', { name: /Quality Issues/i });
-    expect(issuesTab).toBeInTheDocument();
-
-    // Vacuity gate (#327): switch to Quality Issues tab; body renders a row
-    // per `driftHistory.records`. Pre-#320 used SAMPLE_QUALITY_ISSUES (entirely
-    // different shape, no drift_type field) so asserting the drift_type from
-    // the fixture catches the regression.
     await user.click(issuesTab);
 
-    // drift_type 'data drift' from driftHistoryResponse fixture; pre-#320 had
-    // SAMPLE_QUALITY_ISSUES with no drift_type concept. Strong fixture-derived
-    // marker: the Quality Issues tab body renders "(data drift)" from
-    // rec.drift_type.replace(/_/g, ' ').
+    // The breaching KPI renders with a critical badge; the healthy one does not.
     await waitFor(() => {
-      expect(screen.getByText(/data drift/i)).toBeInTheDocument();
+      expect(screen.getByText('Completeness - HCP Master')).toBeInTheDocument();
     });
-    // feature_name 'hcp_id' appears both in latestDrift.features_with_drift
-    // (Drift Status section, top of page) AND in driftHistory.records[0]
-    // (Quality Issues tab body) — total >= 2 occurrences confirms BOTH
-    // hooks are wired.
-    expect(screen.getAllByText(/hcp_id/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('critical')).toBeInTheDocument();
+    expect(screen.queryByText('Source Coverage - Patients')).not.toBeInTheDocument();
   });
 
-  it('Refresh button reflects useTriggerDriftDetection.isPending (Playwright + #301 wiring)', () => {
-    // Vacuity gate (#327): pre-#320 used a local setTimeout `isRefreshing`
-    // useState that the test can't reach. Wiring the button's `disabled` prop
-    // to `isPending` from the mutation hook is a load-bearing wiring AC; assert
-    // the button trips disabled when the hook reports isPending=true.
-    (useTriggerDriftDetection as ReturnType<typeof vi.fn>).mockReturnValue({
-      mutate: mockMutate,
-      isPending: true,
+  it('Quality Issues tab renders the no-issues empty state with the /monitoring link', async () => {
+    // Default impl: both list KPIs are 'good' → zero issues.
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(
+      await screen.findByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).toBeInTheDocument();
+  });
+
+  it('Refresh button reflects the KPI list isRefetching state', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: kpiListResponse,
+      isLoading: false,
       error: null,
+      refetch: mockRefetchKpis,
+      isRefetching: true,
     });
 
     render(<DataQuality />, { wrapper: createWrapper() });
@@ -352,11 +351,21 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     expect(refreshBtn).toBeDisabled();
   });
 
+  it('Refresh button refetches the KPI list (no drift POST — drift lives on /monitoring)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
+    fireEvent.click(refreshBtn);
+
+    expect(mockRefetchKpis).toHaveBeenCalled();
+  });
+
   // ===========================================================================
-  // Dimension cards / KPI cards (Playwright: dimensionCards)
+  // Dimension cards / KPI cards (Playwright: dimensionCards) — derived from
+  // MEASURED WS1-DQ KPI values, statuses from the backend (direction-aware).
   // ===========================================================================
 
-  it('renders four dimension cards with values derived from live drift score (#301 wiring)', () => {
+  it('derives the four dimension cards from measured KPI values (not drift)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Completeness')).toBeInTheDocument();
@@ -364,36 +373,36 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     expect(screen.getByText('Consistency')).toBeInTheDocument();
     expect(screen.getByText('Timeliness')).toBeInTheDocument();
 
-    // Vacuity gate (#327): pre-#320 hardcoded consistency = 96.2 and derived
-    // accuracy from SAMPLE_VALIDATION_RULES pass rate. Wired production
-    // derives accuracy from latestDrift: (features_checked - features_with_drift) / features_checked
-    // = (8 - 2) / 8 * 100 = 75. Consistency = (1 - drift_score) * 100 = 88. Both differ from
-    // the pre-#320 baseline values. Capture KPICard props and assert.
-    const accuracyCall = kpiCardCalls.find((c) => c.title === 'Accuracy');
-    const consistencyCall = kpiCardCalls.find((c) => c.title === 'Consistency');
-    expect(accuracyCall).toBeDefined();
-    expect(consistencyCall).toBeDefined();
-    expect(accuracyCall!.value).toBeCloseTo(75, 1); // (8-2)/8 * 100
-    expect(consistencyCall!.value).toBeCloseTo(88, 1); // (1 - 0.12) * 100
+    const byTitle = (t: string) => kpiCardCalls.find((c) => c.title === t);
+
+    // Values — see dimensionFixtures docstring for the arithmetic.
+    expect(byTitle('Completeness')!.value).toBeCloseTo(94, 1);
+    expect(byTitle('Accuracy')!.value).toBeCloseTo(80, 1);
+    expect(byTitle('Consistency')!.value).toBeCloseTo(89.5, 1);
+    expect(byTitle('Timeliness')!.value).toBeCloseTo(100, 1);
+
+    // Statuses come from the backend's direction-aware KPI statuses — NOT a
+    // generic ≥95/≥85 client-side cut. An 80% match rate beating its 75%
+    // target is healthy; an 89.5% consistency complement of a critical
+    // geographic gap is critical.
+    expect(byTitle('Accuracy')!.status).toBe('healthy');
+    expect(byTitle('Completeness')!.status).toBe('warning');
+    expect(byTitle('Consistency')!.status).toBe('critical');
+    expect(byTitle('Timeliness')!.status).toBe('healthy');
   });
 
-  it('renders Overall Quality card with value composed from live signals (#301 wiring)', () => {
+  it('renders Overall Quality as the mean of measured dimensions, status = worst dimension', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Overall Quality')).toBeInTheDocument();
 
-    // Vacuity gate (#327): pre-#320 derived overall from SAMPLE_DATA_SOURCES /
-    // SAMPLE_VALIDATION_RULES → very different value. Wired production:
-    //   completeness = min(100, 70 + min(30, kpiCount*2)) where kpiCount=2 → 74
-    //   accuracy     = (features_checked - features_with_drift)/features_checked * 100 = 75
-    //   consistency  = (1 - drift_score) * 100 = 88
-    //   timeliness   = (1 - drift_score) * 100 = 88
-    //   overall      = (74 + 75 + 88 + 88) / 4 = 81.25
-    // Assert against this composite; pre-#320 produced ~average across mock
-    // data sources/rules with no awareness of drift.
     const overallCall = kpiCardCalls.find((c) => c.title === 'Overall Quality');
     expect(overallCall).toBeDefined();
-    expect(overallCall!.value).toBeCloseTo(81.25, 1);
+    // (94 + 80 + 89.5 + 100) / 4 = 90.875 → rounded to 90.9 for display
+    expect(overallCall!.value).toBeCloseTo(90.9, 1);
+    // Worst measured dimension is critical (Consistency) → the composite must
+    // not read healthy while a component dimension is critical.
+    expect(overallCall!.status).toBe('critical');
   });
 
   // ===========================================================================
@@ -404,7 +413,6 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(useKPIList).toHaveBeenCalled();
-    // First call's first arg must include workstream filter
     const calls = (useKPIList as ReturnType<typeof vi.fn>).mock.calls;
     const allParams = calls.map((c) => c[0]).filter(Boolean);
     expect(
@@ -417,11 +425,7 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
   it('renders KPI rows from useKPIList (NOT hard-coded HCP IDs / NPI mock blocks)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    // Live KPIs from useKPIList must render by name. The default tab (Validation
-    // Rules) renders a row per KPI from kpiList.kpis, each pulling metadata via
-    // useKPIDetail. Names from the kpiList fixture must appear in the DOM.
     expect(screen.getAllByText('Source Coverage - Patients').length).toBeGreaterThanOrEqual(1);
-    // Definition text also proves we're rendering from the live KPI metadata
     expect(
       screen.getAllByText(/Percentage of eligible patients present in source/i).length
     ).toBeGreaterThanOrEqual(1);
@@ -430,67 +434,11 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
   it('does NOT render the deleted hard-coded mock data (no SAMPLE_* identifiers in DOM)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    // None of the old mock-only validation rule names should appear
     expect(screen.queryByText('HCP ID Not Null')).not.toBeInTheDocument();
     expect(screen.queryByText('Valid NPI Format')).not.toBeInTheDocument();
     expect(screen.queryByText('Sales Amount Range')).not.toBeInTheDocument();
-    // None of the old fabricated HCP rows (with sample 125.4K, 2.5M etc.)
     expect(screen.queryByText('125.4K rows')).not.toBeInTheDocument();
     expect(screen.queryByText('2.5M rows')).not.toBeInTheDocument();
-  });
-
-  // ===========================================================================
-  // ISSUE #301 — Drift wiring
-  // ===========================================================================
-
-  it('wires drift section to useLatestDriftStatus and useDriftHistory (#301 AC)', () => {
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    expect(useLatestDriftStatus).toHaveBeenCalled();
-    expect(useDriftHistory).toHaveBeenCalled();
-  });
-
-  it('surfaces drift summary from the live drift response', () => {
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    // drift_summary or features_with_drift content visible at least once
-    expect(
-      screen.getAllByText(/2 features show drift|features with drift/i).length
-    ).toBeGreaterThanOrEqual(1);
-  });
-
-  it('Refresh button triggers useTriggerDriftDetection mutation', () => {
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
-    fireEvent.click(refreshBtn);
-
-    expect(mockMutate).toHaveBeenCalled();
-  });
-
-  it('Refresh button POSTs drift detection with model_id, time_window=30d, check_data_drift (#327 request-shape gate)', () => {
-    // Strengthens the weak `toHaveBeenCalled()` assertion above (issue #327
-    // section (b)). Asserts the exact request payload shape passed to the
-    // useTriggerDriftDetection mutation: {model_id, time_window, check_data_drift}.
-    //
-    // Coordination note: time_window value tracks Agent A's PR (#326) which
-    // changes the production call from '7d' → '30d' to match the 30-day
-    // useDriftHistory window. This assertion will be RED on this branch until
-    // #326 merges; intentional — see PR body.
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
-    fireEvent.click(refreshBtn);
-
-    expect(mockMutate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request: expect.objectContaining({
-          model_id: 'data_quality_pipeline',
-          time_window: '30d',
-          check_data_drift: true,
-        }),
-      })
-    );
   });
 
   // ===========================================================================
@@ -502,12 +450,12 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
       data: undefined,
       isLoading: false,
       error: new Error('KPI service unavailable'),
-      refetch: vi.fn(),
+      refetch: mockRefetchKpis,
+      isRefetching: false,
     });
 
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    // QueryErrorState renders the error message or a generic friendly title
     expect(
       screen.getByText(/Something went wrong|KPI service unavailable|unable to/i)
     ).toBeInTheDocument();
@@ -518,12 +466,12 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
       data: undefined,
       isLoading: true,
       error: null,
-      refetch: vi.fn(),
+      refetch: mockRefetchKpis,
+      isRefetching: false,
     });
 
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    // Loading indicator (skeleton / spinner / "Loading" text) — possibly multiple sections
     expect(
       screen.getAllByText(/Loading/i).length
     ).toBeGreaterThanOrEqual(1);
@@ -573,14 +521,11 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     const SAMPLE_SPARKLINE = [45, 52, 48, 55, 60, 58, 62, 65, 63, 68];
 
     for (const props of kpiCardCalls) {
-      // The prop MUST be defined (so KPICard's `??` fallback to SAMPLE_SPARKLINE
-      // never triggers).
       expect(
         props.sparklineData,
         `KPICard "${String(props.title)}" must pass sparklineData; got undefined (would fall back to SAMPLE_SPARKLINE)`
       ).toBeDefined();
 
-      // And the value must not be the fabricated SAMPLE_SPARKLINE constant.
       expect(
         props.sparklineData,
         `KPICard "${String(props.title)}" must not pass the fabricated SAMPLE_SPARKLINE array`
@@ -590,36 +535,13 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
 });
 
 // =============================================================================
-// PR #322-326,328 — adversarial-review fixes (additive describe block; left
-// existing blocks for #327 / Agent C). See issues #322 #323 #324 #325 #326 #328.
+// PR #322-328 — adversarial-review fixes that remain in the drift-free design.
+// (#323/#324/#326 were drift-section behaviors; the drift section moved to
+// /monitoring, so those tests moved out with it.)
 // =============================================================================
 
-describe('PR #322-326,328 — adversarial-review fixes', () => {
+describe('PR #322-328 — adversarial-review fixes', () => {
   it('#322 shows empty-state when status filter hides every row (codex MED-1)', async () => {
-    // Both KPIs compute to 'pass' (value above warning threshold). Select 'fail'
-    // -> 0 rows visible -> empty-state must render. Codex iter-1 flagged that
-    // the original filteredKpis.length-based empty-state would NOT fire here.
-    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
-    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
-      const idx = kpiId === 'WS1-DQ-002' ? 1 : 0;
-      return {
-        metadata: dqKpis[idx],
-        value: {
-          kpi_id: kpiId,
-          value: 99,
-          status: 'good',
-          calculated_at: '2026-01-02T08:30:00Z',
-          cached: false,
-          metadata: {},
-        },
-        isLoading: false,
-        error: null,
-        isMetadataLoading: false,
-        isValueLoading: false,
-        refetch: vi.fn(),
-      };
-    });
-
     render(<DataQuality />, { wrapper: createWrapper() });
 
     const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
@@ -634,45 +556,12 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
   });
 
   it('#322 wires status filter to rule.status field', async () => {
-    // Override useKPIDetail so the two KPIs produce DIFFERENT computed statuses:
-    //   WS1-DQ-001 -> value=94.5 vs threshold {target:85, warning:70, critical:50} = 'pass'
-    //   WS1-DQ-002 -> value=85   vs threshold {target:98, warning:90, critical:80} = 'warning'
-    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
     (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
       if (kpiId === 'WS1-DQ-002') {
-        return {
-          metadata: dqKpis[1],
-          value: {
-            kpi_id: 'WS1-DQ-002',
-            value: 85,
-            status: 'warning',
-            calculated_at: '2026-01-02T08:30:00Z',
-            cached: false,
-            metadata: {},
-          },
-          isLoading: false,
-          error: null,
-          isMetadataLoading: false,
-          isValueLoading: false,
-          refetch: vi.fn(),
-        };
+        return { ...base, value: { ...base.value, value: 85, status: 'warning' } };
       }
-      return {
-        metadata: dqKpis[0],
-        value: {
-          kpi_id: 'WS1-DQ-001',
-          value: 94.5,
-          status: 'good',
-          calculated_at: '2026-01-02T08:30:00Z',
-          cached: false,
-          metadata: {},
-        },
-        isLoading: false,
-        error: null,
-        isMetadataLoading: false,
-        isValueLoading: false,
-        refetch: vi.fn(),
-      };
+      return base;
     });
 
     render(<DataQuality />, { wrapper: createWrapper() });
@@ -692,68 +581,13 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
     expect(screen.getAllByText('Completeness - HCP Master').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('#323 surfaces driftHistoryError on default tab (rules)', () => {
-    (useDriftHistory as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: new Error('drift history 503'),
-      refetch: vi.fn(),
-    });
-
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    // Default tab is 'rules'. The driftHistoryError banner must render at the
-    // page level (NOT only inside the Quality Issues tab), so it's visible from
-    // the default tab. There may also be an in-tab banner; getAllByText covers
-    // both. The page-level banner must specifically use the "30-day" title to
-    // distinguish from the latest-status `driftError` banner above.
-    const matches = screen.getAllByText(/Could not load 30-day drift history/i);
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('#324 toasts on triggerDrift success and error', () => {
-    let capturedOptions:
-      | { onSuccess?: (data: unknown) => void; onError?: (err: unknown) => void }
-      | undefined;
-    (useTriggerDriftDetection as ReturnType<typeof vi.fn>).mockImplementation((opts) => {
-      capturedOptions = opts;
-      return { mutate: mockMutate, isPending: false, error: null };
-    });
-
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    // Production code must pass onSuccess + onError callbacks
-    expect(capturedOptions).toBeDefined();
-    expect(typeof capturedOptions?.onSuccess).toBe('function');
-    expect(typeof capturedOptions?.onError).toBe('function');
-
-    // Invoke onSuccess -> a toast fires
-    capturedOptions!.onSuccess!({ task_id: 'task-xyz' });
-    expect(toastMock).toHaveBeenCalled();
-    const successCalls = toastMock.mock.calls;
-    const successCall = successCalls[successCalls.length - 1]?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(JSON.stringify(successCall).toLowerCase()).toMatch(/drift|trigger|success|task-xyz/);
-
-    toastMock.mockClear();
-
-    // Invoke onError -> a (destructive) toast fires
-    capturedOptions!.onError!({ message: 'queue full' });
-    expect(toastMock).toHaveBeenCalled();
-    const errorCalls = toastMock.mock.calls;
-    const errorCall = errorCalls[errorCalls.length - 1]?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(JSON.stringify(errorCall).toLowerCase()).toMatch(/fail|error|queue full/);
-  });
-
   it('#325 disables Export button while data is loading', () => {
     (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       isLoading: true,
       error: null,
-      refetch: vi.fn(),
+      refetch: mockRefetchKpis,
+      isRefetching: false,
     });
 
     render(<DataQuality />, { wrapper: createWrapper() });
@@ -762,124 +596,91 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
     expect(exportBtn).toBeDisabled();
   });
 
-  it('#326 triggerDrift sends time_window=30d', () => {
-    render(<DataQuality />, { wrapper: createWrapper() });
-
-    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
-    fireEvent.click(refreshBtn);
-
-    expect(mockMutate).toHaveBeenCalled();
-    const mutateCalls = mockMutate.mock.calls;
-    const callArg = mutateCalls[mutateCalls.length - 1]?.[0] as
-      | { request?: { time_window?: string } }
-      | undefined;
-    expect(callArg?.request?.time_window).toBe('30d');
-  });
-
   it('#328 has aria-label / label on search input and status select', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    // Search input must be reachable by accessible name "Search validation rules"
-    // (either via <Label htmlFor> association or aria-label on the input).
     const searchInput = screen.getByRole('textbox', {
       name: /search.*(rules|validation)/i,
     });
     expect(searchInput).toBeInTheDocument();
 
-    // Status select trigger must carry an aria-label
     const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
     expect(statusTrigger).toBeInTheDocument();
   });
 });
 
 // =============================================================================
-// HONESTY — drift-empty dimension cards + drift card.
-// `data_quality_pipeline` has NO drift monitoring in prod (0 records, confirmed
-// live). The cards must read "No data", NOT a fabricated ~100% from a `1 - 0`
-// default that contradicts the failing validation rules.
+// HONESTY — a dimension whose source KPI has no value must read "No data",
+// never a fabricated healthy default. (The pre-095 prod reality: 4 of 8 WS1-DQ
+// KPIs were blocked by the synthetic-exclusion gate → unknown/no value.)
 // =============================================================================
 
-describe('DataQuality honesty — empty drift signal', () => {
-  const emptyDrift: DriftDetectionResponse = {
-    task_id: 'history',
-    model_id: 'data_quality_pipeline',
-    status: 'retrieved',
-    overall_drift_score: 0,
-    features_checked: 0,
-    features_with_drift: [],
-    results: [],
-    drift_summary: 'Retrieved 0 drift records',
-    recommended_actions: [],
-    detection_latency_ms: 0,
-    timestamp: '2026-06-16T00:00:00Z',
-  };
-
+describe('DataQuality honesty — missing KPI values', () => {
   beforeEach(() => {
-    (useLatestDriftStatus as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: emptyDrift,
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => ({
+      metadata: dimensionFixtures[kpiId] ? dimensionMeta(kpiId) : (dqKpis[0] as KPIMetadata),
+      value: {
+        kpi_id: kpiId,
+        value: undefined,
+        status: 'unknown',
+        error: 'KPI unavailable: no data',
+        calculated_at: '2026-01-02T08:30:00Z',
+        cached: false,
+        metadata: {},
+      },
       isLoading: false,
       error: null,
+      isMetadataLoading: false,
+      isValueLoading: false,
       refetch: vi.fn(),
-    });
-    (useDriftHistory as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { model_id: 'data_quality_pipeline', total_records: 0, records: [] },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+    }));
   });
 
-  it('shows "No data" (not a fabricated 100%) for the drift-derived dimension cards', () => {
+  it('shows "No data" (not a fabricated score) on every dimension card when values are absent', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
-    for (const title of ['Accuracy', 'Consistency', 'Timeliness', 'Overall Quality']) {
+    for (const title of [
+      'Overall Quality',
+      'Completeness',
+      'Accuracy',
+      'Consistency',
+      'Timeliness',
+    ]) {
       const call = kpiCardCalls.find((c) => c.title === title);
       expect(call, `${title} card must render`).toBeDefined();
-      expect(call!.value, `${title} must read "No data" when no drift records exist`).toBe(
+      expect(call!.value, `${title} must read "No data" when its source KPI has no value`).toBe(
         'No data'
       );
-      // Must NOT be a number masquerading as a healthy score.
       expect(typeof call!.value).not.toBe('number');
+      expect(call!.status).toBe('neutral');
     }
-  });
-
-  it('drift status card honestly states no monitoring has run (not "0.0% / 0 of 0 features")', () => {
-    render(<DataQuality />, { wrapper: createWrapper() });
-    expect(
-      screen.getByText(/No drift monitoring has run for the data quality pipeline/i)
-    ).toBeInTheDocument();
   });
 });
 
 // =============================================================================
 // HONESTY — validation rule status comes from the backend `value.status`
 // (good/warning/critical/unknown), NOT a naive client-side higher-is-better
-// recompute. A null/UNKNOWN value is "No data", NOT a fail-X. (Live: 4/9
-// ws1_data_quality KPIs return null → were rendering as X's.)
+// recompute. A null/UNKNOWN value is "No data", NOT a fail-X.
 // =============================================================================
 
 describe('DataQuality honesty — backend rule status (no null→X)', () => {
   function mockDetail(unknownId: string) {
-    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
     (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
-      const meta = dqKpis.find((k) => k.id === kpiId) ?? dqKpis[0];
-      const isUnknown = kpiId === unknownId;
-      return {
-        metadata: meta,
-        value: {
-          kpi_id: meta.id,
-          value: isUnknown ? undefined : 90,
-          status: isUnknown ? 'unknown' : 'good',
-          error: isUnknown ? 'KPI unavailable: no data for cross-source match' : undefined,
-          calculated_at: '2026-01-02T08:30:00Z',
-          cached: false,
-          metadata: {},
-        },
-        isLoading: false,
-        error: null,
-        isMetadataLoading: false,
-        isValueLoading: false,
-        refetch: vi.fn(),
-      };
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === unknownId) {
+        return {
+          ...base,
+          value: {
+            kpi_id: kpiId,
+            value: undefined,
+            status: 'unknown',
+            error: 'KPI unavailable: no data for cross-source match',
+            calculated_at: '2026-01-02T08:30:00Z',
+            cached: false,
+            metadata: {},
+          },
+        };
+      }
+      return base;
     });
   }
 
@@ -887,8 +688,8 @@ describe('DataQuality honesty — backend rule status (no null→X)', () => {
     mockDetail('WS1-DQ-002');
     render(<DataQuality />, { wrapper: createWrapper() });
     // KPICard is stubbed to render only its title, so "No data" here is
-    // unambiguously the unknown rule row's value cell (drift has data → cards
-    // show numbers).
+    // unambiguously the unknown rule row's value cell (the dimension-source
+    // KPIs have values → cards pass numbers to the stub).
     expect(screen.getByText('No data')).toBeInTheDocument();
   });
 
@@ -907,6 +708,436 @@ describe('DataQuality honesty — backend rule status (no null→X)', () => {
       await screen.findByText(/No data quality KPIs match your filters/i)
     ).toBeInTheDocument();
     expect(screen.queryByText('Completeness - HCP Master')).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// CODEX ITER-1 MED FINDINGS — loading/error honesty in the rewritten render
+// logic.
+//  MED-1: the Quality Issues no-issues empty-state must not render while any
+//         row's detail query is still in flight (a slow /api/kpis/{id} would
+//         read as a clean bill of health seconds before a breach pops in).
+//  MED-2: a failed dimension-source fetch must read "Error", not "No data" —
+//         an API outage must be distinguishable from a genuine data gap.
+// =============================================================================
+
+describe('DataQuality — codex iter-1 loading/error honesty', () => {
+  it('MED-2: a dimension whose source fetch errors reads "Error" (rose), not "No data"', () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-003') {
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const accuracy = kpiCardCalls.find((c) => c.title === 'Accuracy');
+    expect(accuracy).toBeDefined();
+    expect(accuracy!.value).toBe('Error');
+    expect(accuracy!.valueColor).toBe('text-rose-500');
+    // The other dimensions still render their measured values (one outage must
+    // not blank the whole grid).
+    expect(kpiCardCalls.find((c) => c.title === 'Completeness')!.value).toBeCloseTo(94, 1);
+    // Overall stays the honest mean of the still-measured dimensions.
+    expect(typeof kpiCardCalls.find((c) => c.title === 'Overall Quality')!.value).toBe(
+      'number'
+    );
+  });
+
+  it('MED-2: Overall reads "Error" when nothing measured and a source errored', () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (dimensionFixtures[kpiId]) {
+        const err = new Error('boom');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    for (const title of [
+      'Overall Quality',
+      'Completeness',
+      'Accuracy',
+      'Consistency',
+      'Timeliness',
+    ]) {
+      const call = kpiCardCalls.find((c) => c.title === title);
+      expect(call!.value, `${title} must read "Error" on a total outage`).toBe('Error');
+    }
+  });
+
+  it('MED-1: issues tab shows a checking indicator, NOT the no-issues empty-state, while a detail query is in flight', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        return { ...base, value: undefined, isLoading: true };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/Checking KPI thresholds/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-2 — background-refetch honesty on the Quality Issues tab.
+// In react-query v5, isLoading = isPending && isFetching: it covers only the
+// pre-first-data window. A background refetch of cached data (Refresh click,
+// prod window-focus refetch — query-client.ts sets refetchOnWindowFocus in
+// prod) keeps isLoading false, so gating only on it let a stale "no issues"
+// claim stand while a recheck was in flight. Fix: rows report a separate
+// fetching flag; the last settled status keeps driving rows/count (stale
+// real data beats a blank — real issues must never blink out on refetch),
+// while the "no issues" empty-state downgrades to the checking indicator.
+// =============================================================================
+
+describe('DataQuality — codex iter-2 background-refetch honesty', () => {
+  it('downgrades "no issues" to the checking indicator while a cached row background-refetches', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Cached healthy value present; refetch in flight (isLoading false).
+        return { ...base, isFetching: true };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/Checking KPI thresholds/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps a breaching row visible with its stale status during a background refetch', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Last settled value breaches; refetch in flight. The row and its
+        // critical badge must stay rendered — never blank mid-recheck.
+        return {
+          ...base,
+          value: { ...base.value, value: 42.0, status: 'critical' },
+          isFetching: true,
+        };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+    // The recheck indicator shows alongside the stale-listed issue.
+    expect(screen.getByText(/Checking KPI thresholds/i)).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-3 — a FAILED per-KPI fetch must not read as a clean check.
+// ruleStatusFromKPI maps both no-data and errored to 'unknown', so an errored
+// detail query (no cached value, error settled, isLoading/isFetching false)
+// used to render identically to a healthy KPI — "No data-quality KPIs are
+// breaching" could show while a check silently 500'd. Fix: error-with-no-value
+// reports 'error', renders a visible failed-check row, and downgrades the
+// clean empty-state to a caveated one. A stale cached value still drives the
+// row through the error (same policy as the dimension cards) — a transient
+// refetch blip must not flip real data into alarm — but per codex iter-4 the
+// unqualified clean CLAIM no longer stands on it (see the iter-4 block below).
+// =============================================================================
+
+describe('DataQuality — codex iter-3 failed-check honesty', () => {
+  it('renders a visible failed-check row and caveats the empty-state when a fetch errors with no data', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // The failed check is visible, named, and labeled — never silently clean.
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^check failed$/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/thresholds could not be verified/i)
+    ).toBeInTheDocument();
+    // The unqualified clean claim is replaced by the caveated one.
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/1 quality check failed to load and could not be verified/i)
+    ).toBeInTheDocument();
+  });
+
+  it('a stale cached value beats a failed refetch — no failed-check row, but the clean claim is qualified (iter-4)', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Cached healthy value present; the refetch errored. The last real
+        // check said healthy — a transient blip must not read as a FAILURE
+        // (no check-failed row, no alarm), but per codex iter-4 the strong
+        // "no issues" claim must not stand unqualified on a value that can't
+        // currently be re-verified.
+        const err = new Error('refetch blip');
+        return { ...base, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(
+      await screen.findByText(/1 check could not be re-verified on the latest refresh/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+    // Still no alarm: the healthy row stays hidden and nothing reads "failed".
+    expect(screen.queryByText(/^check failed$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Latest recheck failed/i)).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-4 — stale verification must be visible, and combined states must
+// not hide each other. react-query keeps .data through a failed refetch, so a
+// cached-HEALTHY KPI whose rechecks keep failing never reaches 'error' — the
+// unqualified "no issues" claim could stand indefinitely after verification
+// silently stopped (the risky asymmetry: a stale BREACH aging preserves the
+// signal; a stale HEALTHY aging actively asserts all-clear). Fix: rows report
+// a staleError signal; the clean claim is qualified while any contributing
+// value can't be re-verified; stale breach rows and stale dimension cards get
+// a visible note. No data disappears and nothing flips to alarm.
+// =============================================================================
+
+describe('DataQuality — codex iter-4 stale-verification honesty', () => {
+  it('a stale BREACHING row stays visible with its badge plus a recheck-failed note', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Last settled value breaches; the latest refetch FAILED (settled
+        // error, not in flight). The breach must stay listed — stale beats
+        // blank — but flagged as no-longer-verified.
+        const err = new Error('refetch failed');
+        return {
+          ...base,
+          value: { ...base.value, value: 42.0, status: 'critical' },
+          error: err,
+          valueError: err,
+        };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Latest recheck failed — showing last known value/i)
+    ).toBeInTheDocument();
+    // Settled state: no checking spinner, and no empty-state of either kind.
+    expect(screen.queryByText(/Checking KPI thresholds/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No breaches detected/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('a breach and a failed check render side by side — neither empty-state appears', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        return {
+          ...base,
+          value: { ...base.value, value: 42.0, status: 'critical' },
+        };
+      }
+      if (kpiId === 'WS1-DQ-001') {
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // Both the real breach and the unverifiable check are visible, named rows.
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+    expect(await screen.findByText(/\(WS1-DQ-001\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^check failed$/i)).toBeInTheDocument();
+    // With a breach present, no empty-state text (clean OR caveated) renders.
+    expect(screen.queryByText(/No breaches detected/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('a dimension card showing a cached score through a failed refetch surfaces the stale note', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-005') {
+        // Completeness source: cached fixture value present, refetch errored.
+        // The card keeps its score (stale beats blank) but the page must say
+        // the score is no longer verified.
+        const err = new Error('refetch failed');
+        return { ...base, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/Some dimension scores could not be re-verified/i)
+    ).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-5 — staleness/failure signals must key off the VALUE query only.
+// useKPIDetail().error merges metadataQuery.error || valueQuery.error, but the
+// issues tab's verification claim IS the value fetch (ruleStatusFromKPI reads
+// value.status; metadata is display-only with a static list fallback). A
+// metadata-only failure alongside a fresh, successful value fetch must not
+// fire the INVERSE false alarm — a genuinely verified check reading "could
+// not be re-verified". Exception: the Timeliness dimension score is
+// attainment vs the METADATA threshold target, so metadata errors still count
+// there. Also pins the combined dual-clause caveat (failed + stale, zero
+// breaches), which no earlier test exercised.
+// =============================================================================
+
+describe('DataQuality — codex iter-5 metadata-vs-value error separation', () => {
+  it('a metadata-only failure with a fresh healthy value does NOT qualify the clean claim', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // The value fetch — the actual threshold check — succeeded fresh;
+        // only the metadata read failed. The check DID verify this cycle.
+        const err = new Error('metadata 500');
+        return { ...base, metadata: undefined, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // The unqualified clean claim stands — nothing is stale or failed.
+    expect(
+      await screen.findByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/could not be re-verified/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^check failed$/i)).not.toBeInTheDocument();
+  });
+
+  it('a metadata-only failure does not mark a value-computed dimension stale or errored', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-005') {
+        // Completeness computes from the value payload only; its metadata
+        // read failing must not flag the card.
+        const err = new Error('metadata 500');
+        return { ...base, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // The card still shows its measured value (positive control), with no
+    // error chrome and no page-level stale note.
+    const completeness = kpiCardCalls.find((c) => c.title === 'Completeness');
+    expect(completeness).toBeDefined();
+    expect(typeof completeness!.value).toBe('number');
+    expect(
+      screen.queryByText(/Some dimension scores could not be re-verified/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('a metadata-only failure DOES mark Timeliness stale — its target is a score input', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-007') {
+        // Data-lag source: cached metadata (with the threshold target the
+        // attainment score divides by) whose refetch failed. The score still
+        // computes from the cached target, but that input is unverified.
+        const err = new Error('metadata 500');
+        return { ...base, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/Some dimension scores could not be re-verified/i)
+    ).toBeInTheDocument();
+  });
+
+  it('renders BOTH caveat clauses when a failed check and a stale check coexist with zero breaches', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-001') {
+        // Never loaded: failed with no cached value.
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      if (kpiId === 'WS1-DQ-002') {
+        // Cached healthy value whose recheck failed.
+        const err = new Error('refetch failed');
+        return { ...base, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // Full assembled sentence: both clauses, em-dash joins, independent
+    // singular pluralization, one terminal period.
+    const caveat = await screen.findByText(
+      /No breaches detected among the KPIs that could be checked/i
+    );
+    expect(caveat).toHaveTextContent(
+      'No breaches detected among the KPIs that could be checked — 1 quality check failed to load and could not be verified — 1 check could not be re-verified on the latest refresh and shows last known values.'
+    );
+    // The failed check still renders as its own visible row.
+    expect(screen.getByText(/\(WS1-DQ-001\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^check failed$/i)).toBeInTheDocument();
   });
 });
 
@@ -980,32 +1211,26 @@ describe('DataQuality — F3 brand/region cut selectors', () => {
 // value_format='percent' — ratio KPIs (value is 0-1) must render as NN.N%, not
 // a raw fraction. toFixed(1) on a fraction collapses 0.87 -> "0.9" AND hides the
 // per-cut differences F3 exposes (DQ-006 0.1053 vs 0.1095 both -> "0.1"). The
-// backend now stamps value_format='percent' (mig: kpi_definitions.yaml); the row
-// must honor it.
+// backend stamps value_format='percent'; the row must honor it.
 // =============================================================================
 
 describe('DataQuality — value_format=percent rendering', () => {
   it('renders a percent KPI as NN.N% (value*100), not the raw 0-1 fraction', () => {
-    (useKPIDetail as ReturnType<typeof vi.fn>).mockReturnValue({
-      metadata: {
-        ...dqKpis[0],
-        unit: undefined,
-        value_format: 'percent',
-        threshold: { target: 0.85, warning: 0.7, critical: 0.5 },
-      },
-      value: {
-        kpi_id: 'WS1-DQ-001',
-        value: 0.870049,
-        status: 'good',
-        calculated_at: '2026-01-02T08:30:00Z',
-        cached: false,
-        metadata: {},
-      },
-      isLoading: false,
-      error: null,
-      isMetadataLoading: false,
-      isValueLoading: false,
-      refetch: vi.fn(),
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-001') {
+        return {
+          ...base,
+          metadata: {
+            ...dqKpis[0],
+            unit: undefined,
+            value_format: 'percent',
+            threshold: { target: 0.85, warning: 0.7, critical: 0.5 },
+          },
+          value: { ...base.value, value: 0.870049, status: 'good' },
+        };
+      }
+      return base;
     });
 
     render(<DataQuality />, { wrapper: createWrapper() });
