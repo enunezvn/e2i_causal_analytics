@@ -24,10 +24,13 @@ _FLAG = "E2I_KPI_INCLUDE_SYNTHETIC"
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database/migrations"
 # Migrations that register `*_include_synthetic` twins. 066 is the original M-family
 # bulk; 085 adds the view-backed WS3-BI-003 patient_touch_rate twin (#1064 — the
-# touch-rate KPI reads a view, so it was absent from 066's table-wrapping pass).
+# touch-rate KPI reads a view, so it was absent from 066's table-wrapping pass);
+# 095 adds the four view-backed WS1 data-quality twins (cross_source_match /
+# stacking_lift / data_lag / time_to_release — the same 066 gap as #1064).
 _TWIN_MIGRATIONS = (
     _MIGRATIONS_DIR / "066_kpi_query_synthetic_exclusion.sql",
     _MIGRATIONS_DIR / "085_kpi_patient_touch_rate_include_synthetic.sql",
+    _MIGRATIONS_DIR / "095_kpi_dq_view_include_synthetic_twins.sql",
 )
 
 
@@ -75,6 +78,10 @@ def test_unified_deployment_flag_flips_kpi_reads(monkeypatch):
 
 def test_resolver_passthrough_when_flag_off(monkeypatch):
     monkeypatch.delenv(_FLAG, raising=False)
+    # Hermetic: the deployment-wide showcase switch also flips the resolver, and
+    # it IS set on the synthetic-gold droplet — delete it so this test asserts
+    # the flag-off gate everywhere, not just in CI's unset environment.
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
     # Even a twinned id is untouched while the flag is off (production gate intact).
     assert resolve_kpi_query_id("business_impact_trx") == "business_impact_trx"
     assert resolve_kpi_query_id("model_performance_roc_auc") == "model_performance_roc_auc"
@@ -103,16 +110,33 @@ def test_resolver_swaps_patient_touch_rate_when_flag_on(monkeypatch):
 
 def test_resolver_passes_through_twinless_when_flag_on(monkeypatch):
     """A registry id that touches no synthetic-taggable table has no twin and is
-    not synthetic-gated -> base id is returned even in demo mode (no 404 twin)."""
+    not synthetic-gated -> base id is returned even in demo mode (no 404 twin).
+    (data_quality_data_lag left this list when migration 095 twinned it.)"""
     monkeypatch.setenv(_FLAG, "1")
     for twinless in (
         "active_experiments_count",
-        "data_quality_data_lag",
+        "data_quality_label_quality",
         "model_performance_feature_drift",
         "business_impact_mau_view",
     ):
         assert twinless not in SYNTHETIC_TWINNED_QUERY_IDS
         assert resolve_kpi_query_id(twinless) == twinless
+
+
+def test_resolver_swaps_dq_view_backed_ids_when_flag_on(monkeypatch):
+    """Migration 095: the four view-backed WS1 data-quality KPIs read views that
+    migration 067 made synthetic-excluding and were absent from the 066
+    table-wrapping pass (same gap as #1064's patient_touch_rate). Their twins
+    must be reachable so a synthetic-gold instance computes real values instead
+    of rendering /data-quality rows as "No data"."""
+    monkeypatch.setenv(_FLAG, "true")
+    for base in (
+        "data_quality_cross_source_match",
+        "data_quality_stacking_lift",
+        "data_quality_data_lag",
+        "data_quality_time_to_release",
+    ):
+        assert resolve_kpi_query_id(base) == f"{base}_include_synthetic"
 
 
 def test_resolver_is_idempotent_on_a_twin_id(monkeypatch):
@@ -132,6 +156,7 @@ def test_twinned_set_matches_migrations():
     # Non-vacuous guard on the PARSED set first: a partial/empty regex match
     # would make the equality below pass for the wrong reason, so assert the
     # migrations actually yielded the expected twin count before comparing.
-    # 36 from 066 + 1 (business_impact_patient_touch_rate) from 085 = 37.
-    assert len(parsed) == 37, f"twin-migration parse found {len(parsed)} twins, expected 37"
+    # 36 from 066 + 1 (business_impact_patient_touch_rate) from 085 + 4
+    # (the view-backed WS1 data-quality ids) from 095 = 41.
+    assert len(parsed) == 41, f"twin-migration parse found {len(parsed)} twins, expected 41"
     assert parsed == SYNTHETIC_TWINNED_QUERY_IDS

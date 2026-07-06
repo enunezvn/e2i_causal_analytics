@@ -267,7 +267,12 @@ class CoverageTablesGenerator(BaseGenerator[pd.DataFrame]):
                     "time_to_release_hours": round(ttr_h, 2),
                     "records_processed": int(self._rng.integers(1000, 50000)),
                     "records_failed": int(self._rng.integers(0, 50)),
-                    "status": "completed",
+                    # 'success' per the e2i_ml_complete_v3_schema.sql status
+                    # contract ('success'|'partial'|'failed') — v_kpi_time_to_release
+                    # and the WS1-DQ-009 registry queries filter status='success',
+                    # so any other spelling zeroes the TTR KPI (migration 095
+                    # backfilled the pre-fix 'completed' rows).
+                    "status": "success",
                     "quality_checks_passed": int(self._rng.integers(8, 12)),
                     "quality_checks_failed": int(self._rng.integers(0, 2)),
                     "created_at": now.isoformat(),
