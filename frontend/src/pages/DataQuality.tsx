@@ -323,9 +323,9 @@ function KPIIssueRow({
   onStatusComputed,
 }: {
   kpi: KPIMetadata;
-  onStatusComputed?: (kpiId: string, status: RuleStatus | 'pending') => void;
+  onStatusComputed?: (kpiId: string, status: RuleStatus | 'pending', fetching: boolean) => void;
 }) {
-  const { metadata, value, isLoading } = useKPIDetail(kpi.id);
+  const { metadata, value, isLoading, isFetching } = useKPIDetail(kpi.id);
   const effectiveMeta = metadata ?? kpi;
   const ruleStatus = ruleStatusFromKPI(value);
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
@@ -333,9 +333,14 @@ function KPIIssueRow({
   // Report 'pending' until the detail fetch settles: the parent's no-issues
   // empty-state must wait for every row, or a slow /api/kpis/{id} response
   // reads as a clean bill of health moments before a breach pops in.
+  // During a BACKGROUND refetch of cached data (Refresh click, prod
+  // window-focus refetch) isLoading stays false — the last settled status
+  // keeps being reported so listed issues and the count never flicker — but
+  // the fetching flag tells the parent to hold the "no issues" claim until
+  // the recheck lands.
   useEffect(() => {
-    onStatusComputed?.(kpi.id, isLoading ? 'pending' : ruleStatus);
-  }, [kpi.id, ruleStatus, isLoading, onStatusComputed]);
+    onStatusComputed?.(kpi.id, isLoading ? 'pending' : ruleStatus, isLoading || isFetching);
+  }, [kpi.id, ruleStatus, isLoading, isFetching, onStatusComputed]);
 
   if (ruleStatus !== 'warning' && ruleStatus !== 'fail') {
     return null;
@@ -394,9 +399,12 @@ function DataQuality() {
   // a cut status can never leak into the issues empty-state.
   const [kpiStatuses, setKpiStatuses] = useState<Record<string, RuleStatus>>({});
   // Quality Issues rows report 'pending' until their detail fetch settles — the
-  // no-issues empty-state must not render from not-yet-loaded rows.
+  // no-issues empty-state must not render from not-yet-loaded rows. `fetching`
+  // is tracked separately from status: a background refetch keeps the last
+  // settled status (issue rows/count stay stable) while still suppressing the
+  // "no issues" claim until the recheck lands.
   const [issueStatuses, setIssueStatuses] = useState<
-    Record<string, RuleStatus | 'pending'>
+    Record<string, { status: RuleStatus | 'pending'; fetching: boolean }>
   >({});
 
   const queryClient = useQueryClient();
@@ -462,19 +470,25 @@ function DataQuality() {
   // Quality Issues tab — count of KPIs whose backend status breaches thresholds,
   // plus whether every issue row's detail fetch has settled (rows report
   // 'pending' while in flight; a row that hasn't mounted yet reports nothing).
+  // issueCount deliberately ignores the fetching flag — it reads the last
+  // settled statuses so real issues never blink out during a refetch.
   const issueCount = useMemo(
     () =>
-      allKpis.filter(
-        (kpi) => issueStatuses[kpi.id] === 'warning' || issueStatuses[kpi.id] === 'fail'
-      ).length,
+      allKpis.filter((kpi) => {
+        const s = issueStatuses[kpi.id]?.status;
+        return s === 'warning' || s === 'fail';
+      }).length,
     [allKpis, issueStatuses]
   );
+  // Settled = every row has a non-pending status AND no fetch is in flight.
+  // A background refetch un-settles this, downgrading the "no issues" claim
+  // to the checking indicator until the recheck lands.
   const issuesSettled = useMemo(
     () =>
       allKpis.length > 0 &&
       allKpis.every((kpi) => {
-        const s = issueStatuses[kpi.id];
-        return s !== undefined && s !== 'pending';
+        const entry = issueStatuses[kpi.id];
+        return entry !== undefined && entry.status !== 'pending' && !entry.fetching;
       }),
     [allKpis, issueStatuses]
   );
@@ -1047,10 +1061,13 @@ function DataQuality() {
                       <KPIIssueRow
                         key={kpi.id}
                         kpi={kpi}
-                        onStatusComputed={(id, status) =>
-                          setIssueStatuses((prev) =>
-                            prev[id] === status ? prev : { ...prev, [id]: status }
-                          )
+                        onStatusComputed={(id, status, fetching) =>
+                          setIssueStatuses((prev) => {
+                            const cur = prev[id];
+                            return cur && cur.status === status && cur.fetching === fetching
+                              ? prev
+                              : { ...prev, [id]: { status, fetching } };
+                          })
                         }
                       />
                     ))}

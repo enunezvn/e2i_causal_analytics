@@ -156,6 +156,7 @@ function defaultKPIDetailImpl(kpiId: string) {
         metadata: {},
       },
       isLoading: false,
+      isFetching: false,
       error: null,
       isMetadataLoading: false,
       isValueLoading: false,
@@ -174,6 +175,7 @@ function defaultKPIDetailImpl(kpiId: string) {
       metadata: {},
     },
     isLoading: false,
+    isFetching: false,
     error: null,
     isMetadataLoading: false,
     isValueLoading: false,
@@ -780,6 +782,65 @@ describe('DataQuality — codex iter-1 loading/error honesty', () => {
     expect(
       screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
     ).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-2 — background-refetch honesty on the Quality Issues tab.
+// In react-query v5, isLoading = isPending && isFetching: it covers only the
+// pre-first-data window. A background refetch of cached data (Refresh click,
+// prod window-focus refetch — query-client.ts sets refetchOnWindowFocus in
+// prod) keeps isLoading false, so gating only on it let a stale "no issues"
+// claim stand while a recheck was in flight. Fix: rows report a separate
+// fetching flag; the last settled status keeps driving rows/count (stale
+// real data beats a blank — real issues must never blink out on refetch),
+// while the "no issues" empty-state downgrades to the checking indicator.
+// =============================================================================
+
+describe('DataQuality — codex iter-2 background-refetch honesty', () => {
+  it('downgrades "no issues" to the checking indicator while a cached row background-refetches', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Cached healthy value present; refetch in flight (isLoading false).
+        return { ...base, isFetching: true };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/Checking KPI thresholds/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps a breaching row visible with its stale status during a background refetch', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // Last settled value breaches; refetch in flight. The row and its
+        // critical badge must stay rendered — never blank mid-recheck.
+        return {
+          ...base,
+          value: { ...base.value, value: 42.0, status: 'critical' },
+          isFetching: true,
+        };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    expect(await screen.findByText(/\(WS1-DQ-002\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+    // The recheck indicator shows alongside the stale-listed issue.
+    expect(screen.getByText(/Checking KPI thresholds/i)).toBeInTheDocument();
   });
 });
 

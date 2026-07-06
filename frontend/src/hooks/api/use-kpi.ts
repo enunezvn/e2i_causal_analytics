@@ -507,6 +507,11 @@ export function useKPIDetail(kpiId: string, brand?: string, region?: string) {
     metadata: metadataQuery.data,
     value: valueQuery.data,
     isLoading: metadataQuery.isLoading || valueQuery.isLoading,
+    // True during background refetches of already-cached data (isLoading is
+    // not — it covers only the pre-first-data window). Consumers that make
+    // claims off settled values (e.g. a "no issues" empty-state) should hold
+    // those claims while this is true.
+    isFetching: metadataQuery.isFetching || valueQuery.isFetching,
     error: metadataQuery.error || valueQuery.error,
     isMetadataLoading: metadataQuery.isLoading,
     isValueLoading: valueQuery.isLoading,
