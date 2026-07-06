@@ -8,9 +8,15 @@
  * Wires to backend surfaces:
  *   - `useKPIList({ workstream: 'ws1_data_quality' })` (KPI list)
  *   - `useKPIDetail(kpi_id)`                           (per-KPI drill-down: metadata + current value)
- *   - `useLatestDriftStatus(model_id)`                 (live drift status)
- *   - `useDriftHistory({ model_id })`                  (drift history)
- *   - `useTriggerDriftDetection`                       (refresh button mutation)
+ *   - `useKPIDetail` on the five dimension-source KPIs (dimension cards, portfolio scope)
+ *
+ * The quality dimension cards derive from MEASURED WS1 data-quality KPI values
+ * (see `DIMENSION_KPI_IDS`), not from drift monitoring: the page previously read
+ * drift for a `data_quality_pipeline` model id that is not a registered model —
+ * no sweep enumerates it and no `ml_predictions` rows exist for it, so the
+ * cards could structurally never leave "No data". Model & data drift are
+ * monitored on the Monitoring page (`/monitoring`); this page links there
+ * instead of duplicating a permanently-empty drift section.
  *
  * Issues addressed:
  *   - #301 (replace mock with live wiring)
@@ -21,6 +27,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Database,
   RefreshCw,
@@ -35,7 +43,6 @@ import {
   BarChart3,
   FileText,
   Loader2,
-  Activity,
 } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -55,12 +62,7 @@ import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { useKPIList, useKPIDetail } from '@/hooks/api/use-kpi';
 import { formatKpiValue } from '@/lib/kpi-format';
-import {
-  useLatestDriftStatus,
-  useDriftHistory,
-  useTriggerDriftDetection,
-} from '@/hooks/api/use-monitoring';
-import { toast } from '@/hooks/use-toast';
+import { queryKeys } from '@/lib/query-client';
 import { Workstream } from '@/types/kpi';
 import type { KPIMetadata } from '@/types/kpi';
 
@@ -69,14 +71,25 @@ import type { KPIMetadata } from '@/types/kpi';
 // =============================================================================
 
 /**
- * Source model whose drift drives the Data Quality view.
+ * WS1 KPI ids each quality dimension card derives from (portfolio scope).
  *
- * Data-quality KPIs feed into the data ingestion / preprocessing pipeline;
- * drift in that pipeline is the canonical "DQ drift" signal we surface here.
- * Page-local (NOT exported) — sibling agents wiring other pages should pick
- * their own model id.
+ * Completeness = DQ-005 completeness pass rate (a real measured fraction — NOT
+ * the old `70 + 2×KPI-count` registry-size proxy). Accuracy = DQ-003
+ * cross-source match rate. Consistency = 1 − DQ-006 max regional share gap
+ * (DQ-006 is lower-is-better, so the card shows the agreement complement).
+ * Timeliness = mean target-attainment of DQ-007 data lag and DQ-009
+ * time-to-release (both lower-is-better; attainment = target/actual, capped
+ * at 100%). Card STATUS comes from each KPI's backend-authoritative,
+ * direction-aware status — never re-scored client-side (an 80% match rate
+ * beating its 75% target is healthy, not "below 85%").
  */
-const DQ_MODEL_ID = 'data_quality_pipeline';
+const DIMENSION_KPI_IDS = {
+  completeness: 'WS1-DQ-005',
+  accuracy: 'WS1-DQ-003',
+  consistency: 'WS1-DQ-006',
+  dataLag: 'WS1-DQ-007',
+  timeToRelease: 'WS1-DQ-009',
+} as const;
 
 /**
  * Brand / region cuts the DQ rule values can be sliced by.
@@ -89,9 +102,8 @@ const DQ_MODEL_ID = 'data_quality_pipeline';
  * lowercase) — mirrors Home.tsx's `regionToParam`.
  *
  * SCOPE (honest): only the per-rule values in the Validation Rules table are
- * brand/region-aware. The drift-derived dimension cards and the Drift Status
- * section reflect the `data_quality_pipeline` model, which is NOT brand-scoped,
- * so they intentionally stay portfolio-level regardless of these selectors.
+ * brand/region-aware. The dimension cards read the portfolio aggregate
+ * regardless of these selectors (their source KPIs are portfolio-scoped).
  */
 const DQ_BRAND_OPTIONS = [
   { value: 'All', label: 'All Brands' },
@@ -111,13 +123,6 @@ const DQ_REGION_OPTIONS = [
 // =============================================================================
 // HELPERS
 // =============================================================================
-
-function getStatusFromScore(score: number | undefined): 'healthy' | 'warning' | 'critical' {
-  if (score === undefined || Number.isNaN(score)) return 'critical';
-  if (score >= 95) return 'healthy';
-  if (score >= 85) return 'warning';
-  return 'critical';
-}
 
 function formatTimestamp(timestamp: string | undefined): string {
   if (!timestamp) return '—';
@@ -152,6 +157,31 @@ function ruleStatusFromKPI(value?: { status?: string | null }): RuleStatus {
   }
 }
 
+/** Dimension-card status, mapped from the backend KPI status (same authority
+ * as `ruleStatusFromKPI`); `neutral` = no data. */
+type CardStatus = 'healthy' | 'warning' | 'critical' | 'neutral';
+
+function cardStatusFromKPI(value?: { status?: string | null }): CardStatus {
+  switch ((value?.status ?? '').toString().toLowerCase()) {
+    case 'good':
+      return 'healthy';
+    case 'warning':
+      return 'warning';
+    case 'critical':
+      return 'critical';
+    default:
+      return 'neutral';
+  }
+}
+
+/** Worst-of composition for multi-KPI dimensions (critical > warning > healthy). */
+function worstCardStatus(...statuses: CardStatus[]): CardStatus {
+  if (statuses.includes('critical')) return 'critical';
+  if (statuses.includes('warning')) return 'warning';
+  if (statuses.includes('healthy')) return 'healthy';
+  return 'neutral';
+}
+
 function statusIcon(status: RuleStatus) {
   switch (status) {
     case 'pass':
@@ -163,15 +193,6 @@ function statusIcon(status: RuleStatus) {
     case 'unknown':
       return <MinusCircle className="h-4 w-4 text-muted-foreground" />;
   }
-}
-
-function severityBadgeVariant(
-  severity: string | undefined
-): 'destructive' | 'secondary' | 'outline' {
-  const s = (severity ?? '').toLowerCase();
-  if (s === 'critical' || s === 'high') return 'destructive';
-  if (s === 'medium' || s === 'warning') return 'secondary';
-  return 'outline';
 }
 
 // =============================================================================
@@ -288,6 +309,72 @@ function KPIDrilldownRow({
 }
 
 // =============================================================================
+// SUB-COMPONENT — QUALITY ISSUE ROW
+// =============================================================================
+
+/**
+ * Quality Issues entry for a single KPI: renders ONLY when the KPI's
+ * backend-authoritative status is warning/critical (a real threshold breach).
+ * Portfolio scope — an issue is an issue regardless of the rules-table cut.
+ * Reports its status up so the parent can render the no-issues empty-state.
+ */
+function KPIIssueRow({
+  kpi,
+  onStatusComputed,
+}: {
+  kpi: KPIMetadata;
+  onStatusComputed?: (kpiId: string, status: RuleStatus) => void;
+}) {
+  const { metadata, value } = useKPIDetail(kpi.id);
+  const effectiveMeta = metadata ?? kpi;
+  const ruleStatus = ruleStatusFromKPI(value);
+  const numericValue = typeof value?.value === 'number' ? value.value : undefined;
+
+  useEffect(() => {
+    onStatusComputed?.(kpi.id, ruleStatus);
+  }, [kpi.id, ruleStatus, onStatusComputed]);
+
+  if (ruleStatus !== 'warning' && ruleStatus !== 'fail') {
+    return null;
+  }
+
+  return (
+    <li className="p-3 rounded-lg border border-border bg-card flex items-start justify-between gap-3">
+      <div>
+        <p className="font-medium text-sm">
+          {effectiveMeta.name} <span className="text-muted-foreground">({kpi.id})</span>
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Current{' '}
+          {numericValue !== undefined
+            ? formatKpiValue(numericValue, {
+                unit: effectiveMeta.unit,
+                valueFormat: effectiveMeta.value_format,
+              })
+            : '—'}
+          {effectiveMeta.threshold?.target !== undefined && (
+            <>
+              {' '}
+              vs target{' '}
+              {formatKpiValue(effectiveMeta.threshold.target, {
+                unit: effectiveMeta.unit,
+                valueFormat: effectiveMeta.value_format,
+              })}
+            </>
+          )}
+        </p>
+      </div>
+      <Badge
+        variant={ruleStatus === 'fail' ? 'destructive' : 'secondary'}
+        className="capitalize"
+      >
+        {ruleStatus === 'fail' ? 'critical' : 'warning'}
+      </Badge>
+    </li>
+  );
+}
+
+// =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
@@ -297,10 +384,16 @@ function DataQuality() {
   // F3 — brand/region cut for the per-rule values. Default = portfolio aggregate.
   const [selectedBrand, setSelectedBrand] = useState<string>('All');
   const [selectedRegion, setSelectedRegion] = useState<string>('All US');
-  // #322 — per-row computed status reported up by each KPIDrilldownRow.
-  // Lets us render the "No data quality KPIs match your filters" empty-state
-  // when the status filter hides every row.
+  // #322 — per-row computed status reported up by each KPIDrilldownRow /
+  // KPIIssueRow. Lets us render the "No data quality KPIs match your filters"
+  // empty-state when the status filter hides every row, and the no-issues
+  // empty-state on the Quality Issues tab. NOTE: rules rows report the
+  // brand/region-cut status while issue rows report the portfolio status;
+  // only one tab's rows are mounted at a time, so each tab's empty-state reads
+  // statuses its own rows reported.
   const [kpiStatuses, setKpiStatuses] = useState<Record<string, RuleStatus>>({});
+
+  const queryClient = useQueryClient();
 
   // ---------------------------------------------------------------------------
   // LIVE DATA — KPI workstream ws1_data_quality
@@ -314,36 +407,13 @@ function DataQuality() {
   } = useKPIList({ workstream: Workstream.WS1_DATA_QUALITY });
 
   // ---------------------------------------------------------------------------
-  // LIVE DATA — Drift detection for the DQ pipeline
+  // LIVE DATA — dimension-source KPIs (portfolio scope; see DIMENSION_KPI_IDS)
   // ---------------------------------------------------------------------------
-  const {
-    data: latestDrift,
-    isLoading: driftLoading,
-    error: driftError,
-  } = useLatestDriftStatus(DQ_MODEL_ID);
-
-  const {
-    data: driftHistory,
-    isLoading: driftHistoryLoading,
-    error: driftHistoryError,
-  } = useDriftHistory({ model_id: DQ_MODEL_ID, days: 30 });
-
-  // #324 — surface mutation result via toast (was silent on success + error).
-  const { mutate: triggerDrift, isPending: driftRefreshing } = useTriggerDriftDetection({
-    onSuccess: (data) => {
-      toast({
-        title: 'Drift detection triggered',
-        description: `Task ${data.task_id} queued for ${DQ_MODEL_ID}.`,
-      });
-    },
-    onError: (error) => {
-      toast({
-        variant: 'destructive',
-        title: 'Drift detection failed',
-        description: error?.message ?? 'Unknown error triggering drift detection.',
-      });
-    },
-  });
+  const completenessKpi = useKPIDetail(DIMENSION_KPI_IDS.completeness);
+  const accuracyKpi = useKPIDetail(DIMENSION_KPI_IDS.accuracy);
+  const consistencyKpi = useKPIDetail(DIMENSION_KPI_IDS.consistency);
+  const dataLagKpi = useKPIDetail(DIMENSION_KPI_IDS.dataLag);
+  const ttrKpi = useKPIDetail(DIMENSION_KPI_IDS.timeToRelease);
 
   // ---------------------------------------------------------------------------
   // DERIVED VALUES
@@ -383,75 +453,125 @@ function DataQuality() {
     }, 0);
   }, [filteredKpis, ruleStatusFilter, kpiStatuses]);
 
-  // The drift-derived dimensions (accuracy/consistency/timeliness) are only
-  // meaningful when real drift monitoring has actually run for the DQ pipeline.
-  // When NO drift records exist (features_checked === 0 and no results — the
-  // prod reality for `data_quality_pipeline`, which nothing currently monitors),
-  // the old `1 - (driftScore ?? 0) = 100%` default manufactured a fake-healthy
-  // score that contradicted the failing validation rules below. Treat "no
-  // monitoring" as honestly UNKNOWN (undefined → "No data") instead of green.
-  const hasDriftData =
-    !!latestDrift &&
-    ((latestDrift.features_checked ?? 0) > 0 || (latestDrift.results?.length ?? 0) > 0);
+  // Quality Issues tab — count of KPIs whose backend status breaches thresholds.
+  const issueCount = useMemo(
+    () =>
+      allKpis.filter(
+        (kpi) => kpiStatuses[kpi.id] === 'warning' || kpiStatuses[kpi.id] === 'fail'
+      ).length,
+    [allKpis, kpiStatuses]
+  );
 
+  // Dimension scores, derived from MEASURED KPI values (see DIMENSION_KPI_IDS).
+  // A dimension whose source KPI has no value stays undefined → the card reads
+  // an honest "No data" — never a fabricated healthy default.
   const qualityScores = useMemo<{
     completeness: number | undefined;
     accuracy: number | undefined;
     consistency: number | undefined;
     timeliness: number | undefined;
     overall: number | undefined;
+    statuses: {
+      completeness: CardStatus;
+      accuracy: CardStatus;
+      consistency: CardStatus;
+      timeliness: CardStatus;
+      overall: CardStatus;
+    };
   }>(() => {
-    const kpiCount = allKpis.length;
-    // Monitoring-coverage proxy (registry size) — independent of drift, so it
-    // stays available even when drift hasn't run.
-    const completeness =
-      kpiCount > 0 ? Math.min(100, 70 + Math.min(30, kpiCount * 2)) : undefined;
+    const clampPct = (n: number) => Math.max(0, Math.min(100, n));
+    const fraction = (v: unknown): number | undefined =>
+      typeof v === 'number' ? clampPct(v * 100) : undefined;
 
-    if (!hasDriftData) {
-      return {
-        completeness,
-        accuracy: undefined,
-        consistency: undefined,
-        timeliness: undefined,
-        overall: undefined,
-      };
-    }
+    // DQ-005 completeness pass rate and DQ-003 cross-source match rate are 0-1
+    // fractions of records; the card shows them directly as percentages.
+    const completeness = fraction(completenessKpi.value?.value);
+    const accuracy = fraction(accuracyKpi.value?.value);
 
-    const driftScore = latestDrift?.overall_drift_score ?? 0;
-    const driftHealth = Math.max(0, Math.min(100, (1 - driftScore) * 100));
-    const featuresChecked = latestDrift?.features_checked ?? 0;
-    const driftedFeatures = latestDrift?.features_with_drift?.length ?? 0;
-    const accuracy =
-      featuresChecked > 0
-        ? Math.max(0, Math.min(100, ((featuresChecked - driftedFeatures) / featuresChecked) * 100))
-        : driftHealth;
-    const consistency = driftHealth;
-    const timeliness = driftHealth;
-    const overall =
-      completeness !== undefined
-        ? (completeness + accuracy + consistency + timeliness) / 4
-        : (accuracy + consistency + timeliness) / 3;
+    // DQ-006 is the MAX regional share gap vs the reference universe (lower is
+    // better); the card shows the agreement complement (1 − gap).
+    const gap = consistencyKpi.value?.value;
+    const consistency =
+      typeof gap === 'number' ? clampPct((1 - gap) * 100) : undefined;
 
-    return { completeness, accuracy, consistency, timeliness, overall };
-  }, [latestDrift, allKpis.length, hasDriftData]);
+    // DQ-007 (median lag, days) and DQ-009 (time-to-release, hours) are
+    // lower-is-better vs their configured targets; attainment = target/actual,
+    // capped at 100% (beating the target is full attainment, not >100%).
+    const attainment = (v: unknown, target: unknown): number | undefined => {
+      if (typeof v !== 'number' || typeof target !== 'number' || target <= 0) {
+        return undefined;
+      }
+      if (v <= 0) return 100; // instantaneous is full attainment
+      return clampPct((target / v) * 100);
+    };
+    const lagScore = attainment(
+      dataLagKpi.value?.value,
+      dataLagKpi.metadata?.threshold?.target
+    );
+    const ttrScore = attainment(ttrKpi.value?.value, ttrKpi.metadata?.threshold?.target);
+    const timelinessParts = [lagScore, ttrScore].filter(
+      (x): x is number => x !== undefined
+    );
+    const timeliness = timelinessParts.length
+      ? timelinessParts.reduce((a, b) => a + b, 0) / timelinessParts.length
+      : undefined;
 
-  const dimensionsLoading = kpiLoading || driftLoading;
+    // Card statuses come from the backend's direction-aware KPI statuses.
+    const statuses = {
+      completeness: cardStatusFromKPI(completenessKpi.value),
+      accuracy: cardStatusFromKPI(accuracyKpi.value),
+      consistency: cardStatusFromKPI(consistencyKpi.value),
+      timeliness: worstCardStatus(
+        cardStatusFromKPI(dataLagKpi.value),
+        cardStatusFromKPI(ttrKpi.value)
+      ),
+      overall: 'neutral' as CardStatus,
+    };
+
+    const present = (
+      [
+        { v: completeness, s: statuses.completeness },
+        { v: accuracy, s: statuses.accuracy },
+        { v: consistency, s: statuses.consistency },
+        { v: timeliness, s: statuses.timeliness },
+      ] as const
+    ).filter((p): p is { v: number; s: CardStatus } => p.v !== undefined);
+    const overall = present.length
+      ? present.reduce((a, p) => a + p.v, 0) / present.length
+      : undefined;
+    // Overall status = worst of the measured dimensions (a quality composite
+    // must not read healthy while a component dimension is critical).
+    statuses.overall = present.length
+      ? worstCardStatus(...present.map((p) => p.s))
+      : 'neutral';
+
+    return { completeness, accuracy, consistency, timeliness, overall, statuses };
+  }, [
+    completenessKpi.value,
+    accuracyKpi.value,
+    consistencyKpi.value,
+    dataLagKpi.value,
+    dataLagKpi.metadata,
+    ttrKpi.value,
+    ttrKpi.metadata,
+  ]);
+
+  const dimensionsLoading =
+    kpiLoading ||
+    completenessKpi.isLoading ||
+    accuracyKpi.isLoading ||
+    consistencyKpi.isLoading ||
+    dataLagKpi.isLoading ||
+    ttrKpi.isLoading;
 
   // ---------------------------------------------------------------------------
   // HANDLERS
   // ---------------------------------------------------------------------------
   const handleRefresh = () => {
-    // 1) Re-fetch the KPI list
-    refetchKpis();
-    // 2) Trigger a new drift-detection task for the DQ pipeline
-    // #326 — align trigger window with display window (30d history view)
-    triggerDrift({
-      request: {
-        model_id: DQ_MODEL_ID,
-        time_window: '30d',
-        check_data_drift: true,
-      },
-    });
+    // Invalidate every KPI query (list + per-KPI metadata/value) so the
+    // dimension cards, rules table, and issues tab all refetch live values.
+    void queryClient.invalidateQueries({ queryKey: queryKeys.kpi.all() });
+    void refetchKpis();
   };
 
   const handleExport = () => {
@@ -459,8 +579,6 @@ function DataQuality() {
       generatedAt: new Date().toISOString(),
       qualityScores,
       kpis: allKpis,
-      latestDrift,
-      driftHistory,
     };
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -471,10 +589,10 @@ function DataQuality() {
     URL.revokeObjectURL(url);
   };
 
-  const isRefreshing = kpiRefetching || driftRefreshing;
+  const isRefreshing = kpiRefetching;
   // #325 — Export button disabled while any underlying dataset is still loading.
-  // Prevents partial JSON export (undefined latestDrift / driftHistory / [] kpis).
-  const isAnyLoading = kpiLoading || driftLoading || driftHistoryLoading;
+  // Prevents partial JSON export (undefined dimension scores / [] kpis).
+  const isAnyLoading = dimensionsLoading;
 
   // ---------------------------------------------------------------------------
   // RENDER
@@ -516,19 +634,8 @@ function DataQuality() {
         </div>
       )}
 
-      {/* #323 — surface drift-history error page-level so it's visible from the
-          default Validation Rules tab (used to be hidden inside Quality Issues). */}
-      {driftHistoryError && (
-        <div className="mb-6">
-          <QueryErrorState
-            error={driftHistoryError}
-            title="Could not load 30-day drift history"
-          />
-        </div>
-      )}
-
       {/* Quality Score Overview (dimension cards — names preserved for spec) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-2">
         {dimensionsLoading ? (
           <div className="col-span-full flex items-center gap-2 text-muted-foreground py-6">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -541,38 +648,45 @@ function DataQuality() {
                 {
                   title: 'Overall Quality',
                   v: qualityScores.overall,
-                  description: 'Composite score across the available DQ dimensions',
+                  status: qualityScores.statuses.overall,
+                  description: 'Mean of the measured dimension scores (status = worst dimension)',
                 },
                 {
                   title: 'Completeness',
                   v: qualityScores.completeness,
-                  description: 'Monitoring coverage across registered DQ KPIs',
+                  status: qualityScores.statuses.completeness,
+                  description: 'Completeness pass rate across brand-critical fields (WS1-DQ-005)',
                 },
                 {
                   title: 'Accuracy',
                   v: qualityScores.accuracy,
-                  description: 'Drift-free feature share (requires drift monitoring)',
+                  status: qualityScores.statuses.accuracy,
+                  description: 'Cross-source match rate (WS1-DQ-003)',
                 },
                 {
                   title: 'Consistency',
                   v: qualityScores.consistency,
-                  description: 'Inverse of overall drift severity (requires drift monitoring)',
+                  status: qualityScores.statuses.consistency,
+                  description:
+                    '100% minus the max regional share gap vs the reference universe (WS1-DQ-006)',
                 },
                 {
                   title: 'Timeliness',
                   v: qualityScores.timeliness,
-                  description: 'Drift-stability of the pipeline vs baseline (requires drift monitoring)',
+                  status: qualityScores.statuses.timeliness,
+                  description:
+                    'Target attainment of data lag (WS1-DQ-007) and time-to-release (WS1-DQ-009)',
                 },
               ] as const
             ).map((d) => (
               <KPICard
                 key={d.title}
                 title={d.title}
-                // Honest "No data" when the backing signal is absent — never a
-                // fabricated 100% from a `1 - 0` default (see qualityScores).
-                value={d.v === undefined ? 'No data' : d.v}
+                // Honest "No data" when the backing KPI has no value — never a
+                // fabricated healthy default (see qualityScores).
+                value={d.v === undefined ? 'No data' : Math.round(d.v * 10) / 10}
                 unit={d.v === undefined ? '' : '%'}
-                status={d.v === undefined ? 'neutral' : getStatusFromScore(d.v)}
+                status={d.v === undefined ? 'neutral' : d.status}
                 description={d.description}
                 sparklineData={[]}
                 higherIsBetter
@@ -582,73 +696,17 @@ function DataQuality() {
         )}
       </div>
 
-      {/* Drift status section (live) */}
-      <Card className="mb-8">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5" />
-            Drift Status
-          </CardTitle>
-          <CardDescription>
-            Latest drift detection for the data quality pipeline ({DQ_MODEL_ID})
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {driftError ? (
-            <QueryErrorState error={driftError} title="Could not load drift status" />
-          ) : driftLoading ? (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Loading drift status...</span>
-            </div>
-          ) : !latestDrift || !hasDriftData ? (
-            <p className="text-muted-foreground text-sm">
-              No drift monitoring has run for the data quality pipeline yet
-              {latestDrift?.drift_summary ? ` (${latestDrift.drift_summary})` : ''}. The
-              quality dimensions above read <strong>No data</strong> until a run records
-              drift. Click <strong>Refresh</strong> to trigger detection.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <p className="text-xs uppercase text-muted-foreground mb-1">
-                  Overall drift score
-                </p>
-                <p className="text-2xl font-semibold">
-                  {(latestDrift.overall_drift_score * 100).toFixed(1)}%
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {latestDrift.features_with_drift.length} of {latestDrift.features_checked}{' '}
-                  features with drift
-                </p>
-              </div>
-              <div>
-                <p className="text-xs uppercase text-muted-foreground mb-1">Summary</p>
-                <p className="text-sm">{latestDrift.drift_summary}</p>
-                {latestDrift.features_with_drift.length > 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Features with drift: {latestDrift.features_with_drift.join(', ')}
-                  </p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs uppercase text-muted-foreground mb-1">
-                  Recommended actions
-                </p>
-                {latestDrift.recommended_actions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">None</p>
-                ) : (
-                  <ul className="text-sm list-disc ml-4 space-y-1">
-                    {latestDrift.recommended_actions.map((a, i) => (
-                      <li key={i}>{a}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Drift consolidation: model & data drift live on /monitoring, not here.
+          The old per-page drift section read a `data_quality_pipeline` model id
+          that no sweep monitors — it could never show data. */}
+      <p className="text-sm text-muted-foreground mb-8">
+        Dimension scores are derived from the measured WS1 data-quality KPIs in the
+        table below. Model and data drift are monitored on the{' '}
+        <Link to="/monitoring" className="underline underline-offset-2 hover:text-foreground">
+          Monitoring
+        </Link>{' '}
+        page.
+      </p>
 
       {/* Tabs: Validation Rules, Data Profiling, Quality Issues — names preserved for spec */}
       <Tabs defaultValue="rules" className="space-y-4">
@@ -699,7 +757,7 @@ function DataQuality() {
                   </div>
                   {/* F3 — brand/region cut selectors. Scoped here (Validation
                       Rules header) because only these per-rule values are
-                      brand/region-aware; the dimension/drift cards are not. */}
+                      brand/region-aware; the dimension cards are not. */}
                   <Select value={selectedBrand} onValueChange={setSelectedBrand}>
                     <SelectTrigger className="w-40" aria-label="Filter rules by brand">
                       <SelectValue placeholder="Brand" />
@@ -893,52 +951,55 @@ function DataQuality() {
           </Card>
         </TabsContent>
 
-        {/* Quality Issues: derived from drift history */}
+        {/* Quality Issues: KPIs breaching their thresholds (backend status) */}
         <TabsContent value="issues">
           <Card>
             <CardHeader>
               <CardTitle>Quality Issues</CardTitle>
               <CardDescription>
-                Drift events from the past 30 days for the DQ pipeline
+                Data-quality KPIs currently breaching their warning or critical
+                thresholds (portfolio scope)
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {driftHistoryError ? (
-                <QueryErrorState error={driftHistoryError} title="Could not load drift history" />
-              ) : driftHistoryLoading ? (
+              {kpiLoading ? (
                 <div className="flex items-center gap-2 text-muted-foreground py-4">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Loading drift history...</span>
+                  <span>Loading quality issues...</span>
                 </div>
-              ) : !driftHistory?.records || driftHistory.records.length === 0 ? (
+              ) : allKpis.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  No drift events recorded in the past 30 days. (No quality issues detected.)
+                  No KPIs registered for workstream <code>ws1_data_quality</code>.
                 </p>
               ) : (
-                <ul className="space-y-3">
-                  {driftHistory.records.map((rec) => (
-                    <li
-                      key={rec.id}
-                      className="p-3 rounded-lg border border-border bg-card flex items-start justify-between gap-3"
-                    >
-                      <div>
-                        <p className="font-medium text-sm">
-                          {rec.feature_name}{' '}
-                          <span className="text-muted-foreground">
-                            ({rec.drift_type.replace(/_/g, ' ')})
-                          </span>
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Detected {formatTimestamp(rec.detected_at)} · score{' '}
-                          {(rec.drift_score * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                      <Badge variant={severityBadgeVariant(rec.severity)} className="capitalize">
-                        {rec.severity}
-                      </Badge>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  {issueCount === 0 && (
+                    <p className="text-muted-foreground text-sm mb-3">
+                      No data-quality KPIs are breaching their thresholds. Model and
+                      data drift are monitored on the{' '}
+                      <Link
+                        to="/monitoring"
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        Monitoring
+                      </Link>{' '}
+                      page.
+                    </p>
+                  )}
+                  <ul className="space-y-3">
+                    {allKpis.map((kpi) => (
+                      <KPIIssueRow
+                        key={kpi.id}
+                        kpi={kpi}
+                        onStatusComputed={(id, status) =>
+                          setKpiStatuses((prev) =>
+                            prev[id] === status ? prev : { ...prev, [id]: status }
+                          )
+                        }
+                      />
+                    ))}
+                  </ul>
+                </>
               )}
             </CardContent>
           </Card>
