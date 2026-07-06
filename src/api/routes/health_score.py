@@ -579,14 +579,17 @@ def _read_history_durable(
             for r in reversed(raw)
         ]
         # The daily view (migration 096) aggregates in SQL, so this reads at
-        # most `days` rows — no PostgREST row-cap concerns.
-        cutoff_day = (now - timedelta(days=days)).date().isoformat()
+        # most `days` rows — no PostgREST row-cap concerns. days-1 because the
+        # gte cutoff is inclusive and today's partial bucket counts as day 1:
+        # days=30 must yield at most 30 dates (today plus the 29 before it),
+        # not 31 (codex round-2 LOW).
+        cutoff_day = (now - timedelta(days=days - 1)).date().isoformat()
         daily_rows = (
             db.table("health_check_history_daily")
             .select("day, avg_score, min_score, max_score, checks_count, data_provenance")
             .gte("day", cutoff_day)
             .order("day", desc=False)
-            .limit(days + 1)
+            .limit(days)
             .execute()
             .data
             or []

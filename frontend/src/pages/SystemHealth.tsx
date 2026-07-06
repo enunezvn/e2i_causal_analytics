@@ -189,6 +189,18 @@ function formatDate(date: Date | string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// Mirrors the backend's _trend_from_scores heuristic (last-3 avg vs first-3
+// avg, ±5 band) so the History tab can state a trend for exactly the checks
+// it plots. null below 3 points — a default 'stable' would fabricate a trend.
+function trendFromScores(scores: number[]): 'improving' | 'declining' | 'stable' | null {
+  if (scores.length < 3) return null;
+  const recentAvg = (scores[scores.length - 1] + scores[scores.length - 2] + scores[scores.length - 3]) / 3;
+  const earlierAvg = (scores[0] + scores[1] + scores[2]) / 3;
+  if (recentAvg > earlierAvg + 5) return 'improving';
+  if (recentAvg < earlierAvg - 5) return 'declining';
+  return 'stable';
+}
+
 function formatRelativeTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   const now = new Date();
@@ -341,17 +353,16 @@ function SystemHealth() {
   // fail open through a vacuously-true "all rows trusted" (codex PR-4 round 7).
   const historyFullyTrusted =
     healthHistory.length > 0 && healthHistory.length === allHistoryChecks.length;
-  // null = no quotable trend -> rendered as "Unknown", not a fabricated
-  // "stable". The backend computes trend over EVERY stored check, so it is
-  // only quotable when every stored check passed the trust gate.
-  const healthTrend = historyFullyTrusted ? (healthHistoryData?.trend ?? null) : null;
-  // Same rule for the average: recompute over the trusted rows whenever any
-  // row was suppressed (matches the backend value exactly when none were).
-  const healthAvgScore = historyFullyTrusted
-    ? (healthHistoryData?.avg_health_score ?? null)
-    : healthHistory.length > 0
-      ? healthHistory.reduce((sum, c) => sum + c.overall_health_score, 0) / healthHistory.length
-      : null;
+  // On the durable path the backend trend describes the whole `days` window
+  // (daily averages), which can cover buckets the capped raw `checks` list no
+  // longer reaches — so its trust gate must ALSO clear every daily bucket,
+  // not just every raw row. null = no quotable trend -> rendered as
+  // "Unknown", never a fabricated "stable".
+  const anyUntrustedDaily = (healthHistoryData?.daily ?? []).some(
+    (d) => !isTrustedProvenance(d.data_provenance)
+  );
+  const healthTrend =
+    historyFullyTrusted && !anyUntrustedDaily ? (healthHistoryData?.trend ?? null) : null;
 
   // Group agents by tier
   const agentsByTier = useMemo(() => {
@@ -380,6 +391,18 @@ function SystemHealth() {
       grade: item.health_grade,
     }));
   }, [healthHistory]);
+
+  // History-tab stats describe exactly the checks the chart above them draws
+  // (the newest `limit` trusted rows) — NOT the full `days` window the
+  // backend aggregates cover. On the durable path those differ: mixing them
+  // rendered a last-20 chart under a 30-day average/trend (codex round-2
+  // MED). The window-scoped view lives on the Overview daily chart.
+  const shownScores = healthHistory.map((c) => c.overall_health_score);
+  const shownAvgScore =
+    shownScores.length > 0
+      ? shownScores.reduce((sum, s) => sum + s, 0) / shownScores.length
+      : null;
+  const shownTrend = trendFromScores(shownScores);
 
   const dailyChartData = useMemo(() => {
     return dailyHistory.map((d) => ({
@@ -943,7 +966,10 @@ function SystemHealth() {
                 <Activity className="h-5 w-5" />
                 Health Score History
               </CardTitle>
-              <CardDescription>Historical health check records</CardDescription>
+              <CardDescription>
+                Most recent recorded health checks — the stats below describe the plotted
+                series; the 30-day view lives on the Overview tab
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
@@ -965,25 +991,26 @@ function SystemHealth() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+              {/* All three stats are computed over healthHistory — the same
+                  trusted rows the chart plots — never the backend's
+                  window-wide aggregates, which on the durable path describe
+                  up to `days` of checks the capped list doesn't show. */}
               <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Average</p>
-                  <p className="text-2xl font-bold">{healthAvgScore?.toFixed(1) ?? '—'}</p>
+                  <p className="text-2xl font-bold">{shownAvgScore?.toFixed(1) ?? '—'}</p>
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Trend</p>
                   <p className="text-2xl font-bold flex items-center justify-center gap-1">
-                    {healthTrend === 'improving' && <TrendingUp className="h-5 w-5 text-emerald-500" />}
-                    {healthTrend === 'declining' && <TrendingDown className="h-5 w-5 text-rose-500" />}
-                    {healthTrend === 'stable' && <Minus className="h-5 w-5 text-slate-500" />}
-                    {healthTrend ? healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1) : 'Unknown'}
+                    {shownTrend === 'improving' && <TrendingUp className="h-5 w-5 text-emerald-500" />}
+                    {shownTrend === 'declining' && <TrendingDown className="h-5 w-5 text-rose-500" />}
+                    {shownTrend === 'stable' && <Minus className="h-5 w-5 text-slate-500" />}
+                    {shownTrend ? shownTrend.charAt(0).toUpperCase() + shownTrend.slice(1) : 'Unknown'}
                   </p>
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
-                  <p className="text-sm text-[var(--color-muted-foreground)]">Total Checks</p>
-                  {/* Trusted-row count: the backend total equals checks.length,
-                      so counting the filtered rows stays exact when nothing was
-                      suppressed and honest when something was. */}
+                  <p className="text-sm text-[var(--color-muted-foreground)]">Checks Shown</p>
                   <p className="text-2xl font-bold">{healthHistory.length}</p>
                 </div>
               </div>

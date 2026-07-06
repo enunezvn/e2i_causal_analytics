@@ -18,6 +18,7 @@ Version: 4.2.0
 import asyncio
 import logging
 import os
+import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -381,8 +382,11 @@ async def lifespan(app: FastAPI):
     # the durable 30-day trend (migration 096) fills even when nobody has the
     # /system-health page open. In-process because /api/health-score/* is
     # JWT-gated (an external cron would need token plumbing) and it rides
-    # deploys automatically. Multi-worker safe: the durable writer rate-limits
-    # inserts, so concurrent worker firings collapse to a single row.
+    # deploys automatically. The durable writer's probe-then-insert rate limit
+    # is not atomic, so workers firing at the SAME instant could each insert a
+    # row; the jittered start below de-synchronizes them so the probe sees the
+    # first worker's row. Residual duplicates (two firings inside the probe
+    # latency) are benign — consumers aggregate by day (codex round-2 LOW).
     health_history_task = None
     if os.environ.get("HEALTH_HISTORY_HEARTBEAT", "true").strip().lower() in (
         "1",
@@ -394,8 +398,11 @@ async def lifespan(app: FastAPI):
 
             async def _health_history_heartbeat() -> None:
                 # Initial settle delay so boot-time dependencies (Supabase et
-                # al.) are wired before the first check; then every 6h.
-                delay = 120.0
+                # al.) are wired before the first check; then every 6h. The
+                # random spread keeps gunicorn workers (which all boot within
+                # the same second on deploy) from probing the write rate-limit
+                # simultaneously — first one in wins, the rest skip.
+                delay = 120.0 + random.uniform(0.0, 180.0)
                 while True:
                     await asyncio.sleep(delay)
                     delay = 6 * 3600.0

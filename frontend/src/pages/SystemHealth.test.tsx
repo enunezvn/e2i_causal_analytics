@@ -503,34 +503,46 @@ describe('SystemHealth', () => {
 
     await user.click(screen.getByRole('tab', { name: /History/i }));
 
-    // Average recomputed over the one trusted row, not the backend's mixed 80.0.
+    // Average computed over the one trusted row, not the backend's mixed 80.0.
     expect(screen.getByText('90.0')).toBeInTheDocument();
     expect(screen.queryByText('80.0')).not.toBeInTheDocument();
-    // The backend trend included the untrusted row — honest "Unknown" instead.
+    // A single plotted row is no quotable trend — honest "Unknown".
     expect(screen.queryByText('Declining')).not.toBeInTheDocument();
     expect(screen.getByText('Unknown')).toBeInTheDocument();
   });
 
-  it('renders fully trusted history — backend trend and average quoted as-is', async () => {
+  it('History-tab stats describe the plotted checks, never the backend window aggregates (codex round-2 MED)', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     (useHealthHistory as MockFn).mockReturnValue({
       data: {
-        total_checks: 2,
-        checks: [
-          historyRow({ check_id: 'h1', overall_health_score: 82 }),
-          historyRow({ check_id: 'h2', overall_health_score: 88, data_provenance: 'partial' }),
-        ],
-        avg_health_score: 85.0,
-        trend: 'improving',
+        // Durable path: the backend aggregates cover the whole 30-day window,
+        // which the capped `checks` list doesn't show. Quoting them under a
+        // last-N chart mislabels the panel — every stat below the chart must
+        // be recomputed over exactly the plotted rows.
+        total_checks: 120,
+        checks: [70, 70, 70, 90, 90, 90].map((score, i) =>
+          historyRow({ check_id: `h${i}`, overall_health_score: score })
+        ),
+        avg_health_score: 55.5,
+        trend: 'declining',
+        window_days: 30,
       },
     });
     render(<SystemHealth />, { wrapper: createWrapper() });
 
     await user.click(screen.getByRole('tab', { name: /History/i }));
 
-    expect(screen.getByText('85.0')).toBeInTheDocument();
+    // Average over the six plotted rows, never the window's 55.5.
+    expect(screen.getByText('80.0')).toBeInTheDocument();
+    expect(screen.queryByText('55.5')).not.toBeInTheDocument();
+    // Trend over the plotted series (last-3 avg 90 vs first-3 avg 70), not
+    // the window's Declining.
     expect(screen.getByText('Improving')).toBeInTheDocument();
-    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+    expect(screen.queryByText('Declining')).not.toBeInTheDocument();
+    // The count says what it is — rows shown, not the window total.
+    expect(screen.getByText('Checks Shown')).toBeInTheDocument();
+    expect(screen.getByText('6')).toBeInTheDocument();
+    expect(screen.queryByText('120')).not.toBeInTheDocument();
   });
 
   it('suppresses wrapper aggregates on a zero-row history — fabricated trend/average never fail open (codex PR-4 round 7)', async () => {
@@ -602,6 +614,33 @@ describe('SystemHealth', () => {
     render(<SystemHealth />, { wrapper: createWrapper() });
 
     expect(screen.queryByText('No recorded checks yet')).not.toBeInTheDocument();
+  });
+
+  it('suppresses the Overview trend chip when any daily bucket is untrusted, even with all raw rows trusted', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: { ...fullHealthBase, data_provenance: 'measured' },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 12,
+        checks: [
+          historyRow({ check_id: 'h1' }),
+          historyRow({ check_id: 'h2' }),
+          historyRow({ check_id: 'h3' }),
+        ],
+        // Durable-path trend is computed over the daily averages, so an
+        // untrusted bucket poisons it even when every raw row passed the
+        // gate — the chip must fall back to Unknown, not quote Improving.
+        avg_health_score: 90.0,
+        trend: 'improving',
+        daily: [dailyPoint({ data_provenance: 'placeholder' })],
+        window_days: 30,
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText('Improving')).not.toBeInTheDocument();
   });
 
   it('suppresses untrusted daily buckets — an all-untrusted daily series renders the empty state, not a chart', () => {

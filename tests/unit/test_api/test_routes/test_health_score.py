@@ -1305,7 +1305,8 @@ class _FakeHistoryQuery:
         self._op = "delete"
         return self
 
-    def gte(self, *_args):
+    def gte(self, col, value):
+        self._db.gte_args.append((self._table, col, value))
         return self
 
     def lt(self, _col, value):
@@ -1315,7 +1316,8 @@ class _FakeHistoryQuery:
     def order(self, *_args, **_kwargs):
         return self
 
-    def limit(self, *_args):
+    def limit(self, n):
+        self._db.limit_args.append((self._table, n))
         return self
 
     def execute(self):
@@ -1346,6 +1348,8 @@ class _FakeHistoryDB:
         self.fail = fail
         self.inserted: list = []
         self.deleted: list = []
+        self.gte_args: list = []
+        self.limit_args: list = []
 
     def table(self, name: str) -> _FakeHistoryQuery:
         return _FakeHistoryQuery(self, name)
@@ -1443,6 +1447,30 @@ async def test_get_health_history_durable_trend_from_daily_averages():
     with patch("src.api.routes.health_score._health_source_client", return_value=db):
         result = await get_health_history(limit=20, days=30)
     assert result.trend == "improving"
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_daily_window_is_exactly_days_dates():
+    """days=N must never admit N+1 dates: the inclusive gte cutoff starts at
+    today-(N-1) UTC (today's partial bucket is day 1) and the daily read is
+    capped at N rows (codex round-2 LOW: days=30 previously spanned 31)."""
+    db = _FakeHistoryDB(raw_rows=[], daily_rows=[])
+    with patch("src.api.routes.health_score._health_source_client", return_value=db):
+        before = datetime.now(timezone.utc)
+        await get_health_history(limit=20, days=30)
+        after = datetime.now(timezone.utc)
+
+    daily_gtes = [(c, v) for (t, c, v) in db.gte_args if t == "health_check_history_daily"]
+    assert len(daily_gtes) == 1
+    col, cutoff = daily_gtes[0]
+    assert col == "day"
+    # Two candidates only in case the call straddled a UTC midnight.
+    expected = {
+        (before - timedelta(days=29)).date().isoformat(),
+        (after - timedelta(days=29)).date().isoformat(),
+    }
+    assert cutoff in expected
+    assert [n for (t, n) in db.limit_args if t == "health_check_history_daily"] == [30]
 
 
 @pytest.mark.asyncio
