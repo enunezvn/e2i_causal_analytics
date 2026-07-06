@@ -221,27 +221,30 @@ export async function getAgentHealth(): Promise<AgentHealthResponse> {
 /**
  * Get historical health check records.
  *
- * Returns recent health check results with trend analysis.
+ * Returns recent health check results with trend analysis and per-UTC-day
+ * aggregates over the requested window (durable history, migration 096).
  *
- * @param limit - Maximum number of records to return (default: 20)
+ * @param limit - Maximum number of raw check records to return (default: 20)
+ * @param days - Window in days for durable history and daily aggregates (default: 30)
  * @returns Historical health check data
  *
  * @example
  * ```typescript
- * const history = await getHealthHistory(10);
+ * const history = await getHealthHistory(10, 30);
  * console.log(`Trend: ${history.trend}`);
  * console.log(`Average score: ${history.avg_health_score.toFixed(1)}`);
- * history.checks.forEach(c => {
- *   console.log(`${c.timestamp}: ${c.health_grade} (${c.overall_health_score})`);
+ * (history.daily ?? []).forEach(d => {
+ *   console.log(`${d.date}: avg ${d.avg_score} over ${d.checks_count} checks`);
  * });
  * ```
  */
 export async function getHealthHistory(
-  limit: number = 20
+  limit: number = 20,
+  days: number = 30
 ): Promise<HealthHistoryResponse> {
   return get<HealthHistoryResponse>(
     `${HEALTH_SCORE_BASE}/history`,
-    { limit },
+    { limit, days },
     { schema: HealthHistoryResponseWireSchema }
   );
 }

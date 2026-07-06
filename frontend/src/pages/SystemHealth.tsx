@@ -240,7 +240,7 @@ function SystemHealth() {
 
   const { data: agentHealthData } = useAgentHealth({ refetchInterval: 60000 });
   const { data: pipelineHealthData } = usePipelineHealth({ refetchInterval: 60000 });
-  const { data: healthHistoryData } = useHealthHistory(20, { refetchInterval: 120000 });
+  const { data: healthHistoryData } = useHealthHistory(20, 30, { refetchInterval: 120000 });
 
   // Service Status + Model Health are now wired to the real backend endpoints
   // (GET /health-score/components, GET /health-score/models). #927 built these
@@ -363,6 +363,15 @@ function SystemHealth() {
     return grouped;
   }, [agents]);
 
+  // Daily aggregates (durable history, migration 096) drive the Overview
+  // 30-day trend chart. Same trust gate as the raw rows: the durable table's
+  // CHECK constraint only admits measured/partial checks, but any bucket that
+  // still arrives untrusted is suppressed, never replotted as history.
+  const dailyHistory = useMemo(
+    () => (healthHistoryData?.daily ?? []).filter((d) => isTrustedProvenance(d.data_provenance)),
+    [healthHistoryData]
+  );
+
   // Prepare chart data
   const historyChartData = useMemo(() => {
     return healthHistory.map(item => ({
@@ -371,6 +380,20 @@ function SystemHealth() {
       grade: item.health_grade,
     }));
   }, [healthHistory]);
+
+  const dailyChartData = useMemo(() => {
+    return dailyHistory.map((d) => ({
+      // "Jul 3" style labels — absolute dates read better than relative ones
+      // across a 30-day axis.
+      date: new Date(`${d.date}T00:00:00Z`).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        timeZone: 'UTC',
+      }),
+      score: d.avg_score,
+      checks: d.checks_count,
+    }));
+  }, [dailyHistory]);
 
   const componentScoreData = useMemo(() => {
     // No fabricated scores: show no bars until a real health check loads, and
@@ -651,24 +674,31 @@ function SystemHealth() {
                   <Activity className="h-5 w-5" />
                   Health Trend
                 </CardTitle>
-                <CardDescription>7-day health score history</CardDescription>
+                <CardDescription>30-day health score history (daily averages)</CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={200}>
-                  <LineChart data={historyChartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" />
-                    <YAxis domain={[60, 100]} />
-                    <Tooltip formatter={(value) => [`${value ?? 0}`, 'Health Score']} />
-                    <Line
-                      type="monotone"
-                      dataKey="score"
-                      stroke="#10b981"
-                      strokeWidth={2}
-                      dot={{ fill: '#10b981', strokeWidth: 2 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                {dailyChartData.length === 0 ? (
+                  <EmptyState
+                    title="No recorded checks yet"
+                    description="Durable health history accumulates as full checks run (a scheduled check fires every 6 hours). The 30-day trend fills in from today forward."
+                  />
+                ) : (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={dailyChartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="date" />
+                      <YAxis domain={[60, 100]} />
+                      <Tooltip formatter={(value) => [`${value ?? 0}`, 'Avg Health Score']} />
+                      <Line
+                        type="monotone"
+                        dataKey="score"
+                        stroke="#10b981"
+                        strokeWidth={2}
+                        dot={{ fill: '#10b981', strokeWidth: 2 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
           </div>

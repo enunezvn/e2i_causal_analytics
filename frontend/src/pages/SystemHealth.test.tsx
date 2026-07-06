@@ -557,6 +557,70 @@ describe('SystemHealth', () => {
   });
 
   // ===========================================================================
+  // 30-DAY DAILY TREND (durable history, migration 096): the Overview chart
+  // plots per-UTC-day averages from `daily`. The old "7-day" copy described a
+  // per-worker in-memory list that reset on every deploy — it was never true.
+  // Daily buckets carry provenance and get the same trust gate as raw rows.
+  // ===========================================================================
+
+  const dailyPoint = (overrides: Record<string, unknown>) => ({
+    date: '2026-07-04',
+    avg_score: 88,
+    min_score: 86,
+    max_score: 90,
+    checks_count: 4,
+    data_provenance: 'measured',
+    ...overrides,
+  });
+
+  it('labels the Overview trend as 30-day daily averages with an honest empty state before history accumulates', () => {
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByText('30-day health score history (daily averages)')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/7-day/)).not.toBeInTheDocument();
+    // Default mock has no daily buckets -> the chart must NOT render an empty
+    // axis frame that reads as "measured a flat month"; it says why it's empty.
+    expect(screen.getByText('No recorded checks yet')).toBeInTheDocument();
+  });
+
+  it('renders the daily trend chart once trusted daily buckets exist', () => {
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 8,
+        checks: [historyRow({})],
+        avg_health_score: 88.0,
+        trend: 'stable',
+        daily: [
+          dailyPoint({ date: '2026-07-04', avg_score: 87 }),
+          dailyPoint({ date: '2026-07-05', avg_score: 89 }),
+        ],
+        window_days: 30,
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText('No recorded checks yet')).not.toBeInTheDocument();
+  });
+
+  it('suppresses untrusted daily buckets — an all-untrusted daily series renders the empty state, not a chart', () => {
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 4,
+        checks: [],
+        avg_health_score: null,
+        trend: 'unknown',
+        daily: [dailyPoint({ data_provenance: 'placeholder' })],
+        window_days: 30,
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('No recorded checks yet')).toBeInTheDocument();
+  });
+
+  // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest
   // empty states (never fabricated values) when data is absent or placeholder.

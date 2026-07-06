@@ -532,8 +532,8 @@ export const queryKeys = {
     models: () => [...queryKeys.healthScore.all(), 'models'] as const,
     pipelines: () => [...queryKeys.healthScore.all(), 'pipelines'] as const,
     agents: () => [...queryKeys.healthScore.all(), 'agents'] as const,
-    history: (limit?: number) =>
-      [...queryKeys.healthScore.all(), 'history', limit ?? 20] as const,
+    history: (limit?: number, days?: number) =>
+      [...queryKeys.healthScore.all(), 'history', limit ?? 20, days ?? 30] as const,
     status: () => [...queryKeys.healthScore.all(), 'status'] as const,
   },
 

@@ -153,6 +153,9 @@ class ModelHealthNode:
 
             return ModelMetrics(
                 model_id=model_id,
+                # Registry name when the store carries one (the route adapter
+                # does) — lets the composer name models in alerts, not UUIDs.
+                model_name=metrics.get("model_name"),
                 accuracy=metrics.get("accuracy"),
                 precision=metrics.get("precision"),
                 recall=metrics.get("recall"),
@@ -170,6 +173,7 @@ class ModelHealthNode:
             logger.warning(f"Failed to get metrics for model {model_id}: {e}")
             return ModelMetrics(
                 model_id=model_id,
+                model_name=None,
                 accuracy=None,
                 precision=None,
                 recall=None,

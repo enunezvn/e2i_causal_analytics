@@ -225,12 +225,15 @@ class ScoreComposerNode:
             elif comp["status"] == "unknown":
                 warnings.append(f"Component '{comp['component_name']}' status is unknown")
 
-        # Check models
+        # Check models. Prefer the registry name over the UUID — the Alerts tab
+        # renders these strings verbatim and "Model '2db8b0e0-...' is degraded"
+        # tells a reader nothing.
         for model in state.get("model_metrics") or []:
+            model_label = model.get("model_name") or model["model_id"]
             if model["status"] == "unhealthy":
-                critical.append(f"Model '{model['model_id']}' is unhealthy")
+                critical.append(f"Model '{model_label}' is unhealthy")
             elif model["status"] == "degraded":
-                warnings.append(f"Model '{model['model_id']}' is degraded")
+                warnings.append(f"Model '{model_label}' is degraded")
 
         # Check pipelines
         for pipeline in state.get("pipeline_statuses") or []:
@@ -431,7 +434,7 @@ class ScoreComposerNode:
 
                     issue = {
                         "dimension": "model",
-                        "component": model["model_id"],
+                        "component": model.get("model_name") or model["model_id"],
                         "status": model["status"],
                         "root_cause": root_cause,
                         "metrics": {

@@ -15,6 +15,7 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -376,6 +377,38 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001 - never block startup on this
         logger.warning("Prompt bundle install at startup failed: %s", e)
 
+    # Health-history heartbeat: record a trusted FULL health check every 6h so
+    # the durable 30-day trend (migration 096) fills even when nobody has the
+    # /system-health page open. In-process because /api/health-score/* is
+    # JWT-gated (an external cron would need token plumbing) and it rides
+    # deploys automatically. Multi-worker safe: the durable writer rate-limits
+    # inserts, so concurrent worker firings collapse to a single row.
+    health_history_task = None
+    if os.environ.get("HEALTH_HISTORY_HEARTBEAT", "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        try:
+            from src.api.routes.health_score import run_scheduled_full_check
+
+            async def _health_history_heartbeat() -> None:
+                # Initial settle delay so boot-time dependencies (Supabase et
+                # al.) are wired before the first check; then every 6h.
+                delay = 120.0
+                while True:
+                    await asyncio.sleep(delay)
+                    delay = 6 * 3600.0
+                    try:
+                        await run_scheduled_full_check()
+                    except Exception as e:  # noqa: BLE001 - heartbeat must survive
+                        logger.warning(f"Health-history heartbeat check failed: {e}")
+
+            health_history_task = asyncio.create_task(_health_history_heartbeat())
+            logger.info("Health-history heartbeat started (6h interval)")
+        except Exception as e:  # noqa: BLE001 - never block startup on this
+            logger.warning(f"Health-history heartbeat not started: {e}")
+
     logger.info("API server ready to accept connections")
 
     # Run the application, then ALWAYS run shutdown cleanup — on normal AND on
@@ -388,6 +421,16 @@ async def lifespan(app: FastAPI):
     try:
         yield  # Application runs here
     finally:
+        # Stop the health-history heartbeat first so no check fires against
+        # connections the cleanup below is about to close.
+        if health_history_task is not None:
+            health_history_task.cancel()
+            try:
+                await health_history_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            logger.info("Health-history heartbeat stopped")
+
         # #609: reset the audit-chain global first so it is cleared even on
         # EXCEPTIONAL shutdown and never leaks into a subsequent same-process
         # lifespan (uvicorn --reload, tests).

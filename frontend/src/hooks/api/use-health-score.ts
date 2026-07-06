@@ -219,24 +219,26 @@ export function useAgentHealth(
 /**
  * Hook to get health check history.
  *
- * @param limit - Maximum number of records (default: 20)
+ * @param limit - Maximum number of raw check records (default: 20)
+ * @param days - Window in days for durable history / daily aggregates (default: 30)
  * @param options - Additional query options
  * @returns Query result with health history data
  *
  * @example
  * ```tsx
- * const { data } = useHealthHistory(10);
+ * const { data } = useHealthHistory(10, 30);
  * console.log(`Trend: ${data?.trend}`);
  * console.log(`Average: ${data?.avg_health_score.toFixed(1)}`);
  * ```
  */
 export function useHealthHistory(
   limit: number = 20,
+  days: number = 30,
   options?: Omit<UseQueryOptions<HealthHistoryResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<HealthHistoryResponse, ApiError>({
-    queryKey: queryKeys.healthScore.history(limit),
-    queryFn: () => getHealthHistory(limit),
+    queryKey: queryKeys.healthScore.history(limit, days),
+    queryFn: () => getHealthHistory(limit, days),
     staleTime: 60 * 1000,
     ...options,
   });

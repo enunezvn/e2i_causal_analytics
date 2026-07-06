@@ -325,6 +325,24 @@ export interface HealthHistoryItem {
 }
 
 /**
+ * One UTC-day aggregate of recorded full health checks (durable history)
+ */
+export interface HealthHistoryDailyPoint {
+  /** UTC day (YYYY-MM-DD) */
+  date: string;
+  /** Mean overall health score that day */
+  avg_score: number;
+  /** Lowest overall health score that day */
+  min_score: number;
+  /** Highest overall health score that day */
+  max_score: number;
+  /** Recorded checks contributing to the day */
+  checks_count: number;
+  /** 'measured' only when every contributing check was measured, else 'partial' */
+  data_provenance?: string;
+}
+
+/**
  * Response for health check history
  */
 export interface HealthHistoryResponse {
@@ -336,6 +354,14 @@ export interface HealthHistoryResponse {
   avg_health_score: number | null;
   /** Trend direction; 'unknown' when there are too few checks to compute one */
   trend: 'improving' | 'stable' | 'declining' | 'unknown';
+  /**
+   * Per-UTC-day aggregates over the requested window, ascending. Empty until
+   * durable history accumulates (it starts recording at rollout — there is no
+   * retroactive backfill).
+   */
+  daily?: HealthHistoryDailyPoint[];
+  /** Days window served from durable history; null on the in-memory fallback */
+  window_days?: number | null;
 }
 
 /**

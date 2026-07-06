@@ -31,6 +31,9 @@ class ModelMetrics(TypedDict):
     """
 
     model_id: str
+    # Human-readable registry name; None when the store doesn't provide one.
+    # Consumers fall back to model_id (alerts previously printed bare UUIDs).
+    model_name: Optional[str]
     accuracy: Optional[float]
     precision: Optional[float]
     recall: Optional[float]

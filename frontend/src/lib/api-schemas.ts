@@ -1314,6 +1314,18 @@ export const HealthHistoryItemWireSchema = z.object({
   data_provenance: z.string().optional(),
 });
 
+/** Faithful mirror of `HealthHistoryDailyPoint` (health_score.py, migration 096). */
+export const HealthHistoryDailyPointWireSchema = z.object({
+  date: z.string(),
+  avg_score: z.number(),
+  min_score: z.number(),
+  max_score: z.number(),
+  checks_count: z.number().int().nonnegative(),
+  // Day-bucket provenance; must be mirrored or z.object() strips it before
+  // the trend chart's trust gate can read it (same lesson as the item schema).
+  data_provenance: z.string().optional(),
+});
+
 /** Faithful mirror of `HealthHistoryResponse` (health_score.py HealthHistoryResponse). */
 export const HealthHistoryResponseWireSchema = z.object({
   total_checks: z.number().int().nonnegative(),
@@ -1321,6 +1333,10 @@ export const HealthHistoryResponseWireSchema = z.object({
   // null when there is no history (not a fabricated 0.0).
   avg_health_score: z.number().nullable(),
   trend: z.string(),
+  // Optional: absent from pre-096 backends (deploy skew) — treated as empty.
+  daily: z.array(HealthHistoryDailyPointWireSchema).optional(),
+  // null/absent signals the in-memory fallback (no durable window served).
+  window_days: z.number().int().nullable().optional(),
 });
 
 /** Faithful mirror of `HealthServiceStatus` (health_score.py HealthServiceStatus). */
