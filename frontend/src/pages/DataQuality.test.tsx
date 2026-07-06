@@ -158,6 +158,8 @@ function defaultKPIDetailImpl(kpiId: string) {
       isLoading: false,
       isFetching: false,
       error: null,
+      metadataError: null,
+      valueError: null,
       isMetadataLoading: false,
       isValueLoading: false,
       refetch: vi.fn(),
@@ -177,6 +179,8 @@ function defaultKPIDetailImpl(kpiId: string) {
     isLoading: false,
     isFetching: false,
     error: null,
+    metadataError: null,
+    valueError: null,
     isMetadataLoading: false,
     isValueLoading: false,
     refetch: vi.fn(),
@@ -722,7 +726,8 @@ describe('DataQuality — codex iter-1 loading/error honesty', () => {
     (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
       const base = defaultKPIDetailImpl(kpiId);
       if (kpiId === 'WS1-DQ-003') {
-        return { ...base, value: undefined, error: new Error('500 Internal Server Error') };
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
       }
       return base;
     });
@@ -746,7 +751,8 @@ describe('DataQuality — codex iter-1 loading/error honesty', () => {
     (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
       const base = defaultKPIDetailImpl(kpiId);
       if (dimensionFixtures[kpiId]) {
-        return { ...base, value: undefined, error: new Error('boom') };
+        const err = new Error('boom');
+        return { ...base, value: undefined, error: err, valueError: err };
       }
       return base;
     });
@@ -862,7 +868,8 @@ describe('DataQuality — codex iter-3 failed-check honesty', () => {
     (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
       const base = defaultKPIDetailImpl(kpiId);
       if (kpiId === 'WS1-DQ-002') {
-        return { ...base, value: undefined, error: new Error('500 Internal Server Error') };
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
       }
       return base;
     });
@@ -895,7 +902,8 @@ describe('DataQuality — codex iter-3 failed-check honesty', () => {
         // (no check-failed row, no alarm), but per codex iter-4 the strong
         // "no issues" claim must not stand unqualified on a value that can't
         // currently be re-verified.
-        return { ...base, error: new Error('refetch blip') };
+        const err = new Error('refetch blip');
+        return { ...base, error: err, valueError: err };
       }
       return base;
     });
@@ -936,10 +944,12 @@ describe('DataQuality — codex iter-4 stale-verification honesty', () => {
         // Last settled value breaches; the latest refetch FAILED (settled
         // error, not in flight). The breach must stay listed — stale beats
         // blank — but flagged as no-longer-verified.
+        const err = new Error('refetch failed');
         return {
           ...base,
           value: { ...base.value, value: 42.0, status: 'critical' },
-          error: new Error('refetch failed'),
+          error: err,
+          valueError: err,
         };
       }
       return base;
@@ -972,7 +982,8 @@ describe('DataQuality — codex iter-4 stale-verification honesty', () => {
         };
       }
       if (kpiId === 'WS1-DQ-001') {
-        return { ...base, value: undefined, error: new Error('500 Internal Server Error') };
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
       }
       return base;
     });
@@ -1000,7 +1011,8 @@ describe('DataQuality — codex iter-4 stale-verification honesty', () => {
         // Completeness source: cached fixture value present, refetch errored.
         // The card keeps its score (stale beats blank) but the page must say
         // the score is no longer verified.
-        return { ...base, error: new Error('refetch failed') };
+        const err = new Error('refetch failed');
+        return { ...base, error: err, valueError: err };
       }
       return base;
     });
@@ -1010,6 +1022,122 @@ describe('DataQuality — codex iter-4 stale-verification honesty', () => {
     expect(
       await screen.findByText(/Some dimension scores could not be re-verified/i)
     ).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Codex iter-5 — staleness/failure signals must key off the VALUE query only.
+// useKPIDetail().error merges metadataQuery.error || valueQuery.error, but the
+// issues tab's verification claim IS the value fetch (ruleStatusFromKPI reads
+// value.status; metadata is display-only with a static list fallback). A
+// metadata-only failure alongside a fresh, successful value fetch must not
+// fire the INVERSE false alarm — a genuinely verified check reading "could
+// not be re-verified". Exception: the Timeliness dimension score is
+// attainment vs the METADATA threshold target, so metadata errors still count
+// there. Also pins the combined dual-clause caveat (failed + stale, zero
+// breaches), which no earlier test exercised.
+// =============================================================================
+
+describe('DataQuality — codex iter-5 metadata-vs-value error separation', () => {
+  it('a metadata-only failure with a fresh healthy value does NOT qualify the clean claim', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-002') {
+        // The value fetch — the actual threshold check — succeeded fresh;
+        // only the metadata read failed. The check DID verify this cycle.
+        const err = new Error('metadata 500');
+        return { ...base, metadata: undefined, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // The unqualified clean claim stands — nothing is stale or failed.
+    expect(
+      await screen.findByText(/No data-quality KPIs are breaching their thresholds/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/could not be re-verified/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^check failed$/i)).not.toBeInTheDocument();
+  });
+
+  it('a metadata-only failure does not mark a value-computed dimension stale or errored', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-005') {
+        // Completeness computes from the value payload only; its metadata
+        // read failing must not flag the card.
+        const err = new Error('metadata 500');
+        return { ...base, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // The card still shows its measured value (positive control), with no
+    // error chrome and no page-level stale note.
+    const completeness = kpiCardCalls.find((c) => c.title === 'Completeness');
+    expect(completeness).toBeDefined();
+    expect(typeof completeness!.value).toBe('number');
+    expect(
+      screen.queryByText(/Some dimension scores could not be re-verified/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('a metadata-only failure DOES mark Timeliness stale — its target is a score input', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-007') {
+        // Data-lag source: cached metadata (with the threshold target the
+        // attainment score divides by) whose refetch failed. The score still
+        // computes from the cached target, but that input is unverified.
+        const err = new Error('metadata 500');
+        return { ...base, error: err, metadataError: err, valueError: null };
+      }
+      return base;
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/Some dimension scores could not be re-verified/i)
+    ).toBeInTheDocument();
+  });
+
+  it('renders BOTH caveat clauses when a failed check and a stale check coexist with zero breaches', async () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const base = defaultKPIDetailImpl(kpiId);
+      if (kpiId === 'WS1-DQ-001') {
+        // Never loaded: failed with no cached value.
+        const err = new Error('500 Internal Server Error');
+        return { ...base, value: undefined, error: err, valueError: err };
+      }
+      if (kpiId === 'WS1-DQ-002') {
+        // Cached healthy value whose recheck failed.
+        const err = new Error('refetch failed');
+        return { ...base, error: err, valueError: err };
+      }
+      return base;
+    });
+
+    const user = userEvent.setup();
+    render(<DataQuality />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Quality Issues/i }));
+
+    // Full assembled sentence: both clauses, em-dash joins, independent
+    // singular pluralization, one terminal period.
+    const caveat = await screen.findByText(
+      /No breaches detected among the KPIs that could be checked/i
+    );
+    expect(caveat).toHaveTextContent(
+      'No breaches detected among the KPIs that could be checked — 1 quality check failed to load and could not be verified — 1 check could not be re-verified on the latest refresh and shows last known values.'
+    );
+    // The failed check still renders as its own visible row.
+    expect(screen.getByText(/\(WS1-DQ-001\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^check failed$/i)).toBeInTheDocument();
   });
 });
 

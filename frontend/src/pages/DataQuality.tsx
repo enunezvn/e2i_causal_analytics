@@ -218,7 +218,7 @@ function KPIDrilldownRow({
   brand?: string;
   region?: string;
 }) {
-  const { metadata, value, isLoading, error } = useKPIDetail(kpi.id, brand, region);
+  const { metadata, value, isLoading, valueError } = useKPIDetail(kpi.id, brand, region);
 
   // Prefer freshly fetched metadata; fall back to the list item to avoid a flash
   const effectiveMeta = metadata ?? kpi;
@@ -267,7 +267,9 @@ function KPIDrilldownRow({
           <span className="text-muted-foreground inline-flex items-center gap-1">
             <Loader2 className="h-3 w-3 animate-spin" /> Loading
           </span>
-        ) : error ? (
+        ) : valueError ? (
+          // Value-fetch error only: this cell reports the CURRENT VALUE, so a
+          // metadata-only failure must not paint a fresh figure as errored.
           <span className="text-rose-500 text-sm">error</span>
         ) : numericValue !== undefined ? (
           <span className="font-medium">
@@ -330,24 +332,30 @@ function KPIIssueRow({
     staleError: boolean
   ) => void;
 }) {
-  const { metadata, value, isLoading, isFetching, error } = useKPIDetail(kpi.id);
+  const { metadata, value, isLoading, isFetching, valueError } = useKPIDetail(kpi.id);
   const effectiveMeta = metadata ?? kpi;
   const ruleStatus = ruleStatusFromKPI(value);
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
-  // A failed fetch with NO cached value means the check itself never ran —
-  // report 'error' and render a visible failed-check row, or an errored KPI
-  // is indistinguishable from a healthy one (ruleStatusFromKPI maps both
+  // Both failure signals key off the VALUE query's error only: the check this
+  // row makes claims about IS the value fetch (ruleStatusFromKPI reads
+  // value.status), while metadata is display-only here with a static list
+  // fallback — a metadata-only failure alongside a fresh value must not read
+  // as an unverified check.
+  //
+  // A failed VALUE fetch with NO cached value means the check itself never
+  // ran — report 'error' and render a visible failed-check row, or an errored
+  // KPI is indistinguishable from a healthy one (ruleStatusFromKPI maps both
   // no-data and errored to 'unknown'). With a cached value present the stale
   // settled status wins — same stale-beats-blank policy as the dimension
   // cards; a transient refetch blip must not flip real data into alarm.
-  const fetchFailed = Boolean(error) && value === undefined;
+  const fetchFailed = Boolean(valueError) && value === undefined;
   // A cached value whose LATEST recheck failed still drives the row (stale
   // beats blank), but it is no longer a VERIFIED check: react-query keeps
   // .data through a failed refetch, so a healthy KPI whose rechecks keep
   // failing would otherwise assert "no issues" indefinitely. Report the
   // staleness so the parent can qualify the clean claim, and note it on
   // rendered breach rows.
-  const staleError = Boolean(error) && value !== undefined;
+  const staleError = Boolean(valueError) && value !== undefined;
 
   // Report 'pending' until the detail fetch settles: the parent's no-issues
   // empty-state must wait for every row, or a slow /api/kpis/{id} response
@@ -679,9 +687,14 @@ function DataQuality() {
   // (A dimension holding cached data keeps showing its value through a failed
   // refetch — stale beats blank.)
   const dimensionErrors = {
-    completeness: Boolean(completenessKpi.error),
-    accuracy: Boolean(accuracyKpi.error),
-    consistency: Boolean(consistencyKpi.error),
+    completeness: Boolean(completenessKpi.valueError),
+    accuracy: Boolean(accuracyKpi.valueError),
+    consistency: Boolean(consistencyKpi.valueError),
+    // Timeliness alone keeps the metadata error in scope: its score is
+    // attainment vs the METADATA threshold target, so a failed metadata fetch
+    // genuinely leaves the score unverifiable. The other dimensions compute
+    // from the value payload only — a metadata-only failure must not read as
+    // an error or staleness there.
     timeliness: Boolean(dataLagKpi.error || ttrKpi.error),
   };
   // A card showing a CACHED score whose latest refetch failed keeps its value
