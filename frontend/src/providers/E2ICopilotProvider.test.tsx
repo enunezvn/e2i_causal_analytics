@@ -25,6 +25,12 @@ vi.mock('react-router-dom', () => ({
   useLocation: () => mockLocation,
 }));
 
+// Mock the KPI api so renderKpiTrend handler tests can assert what it fetches
+const mockGetKPIHistory = vi.fn();
+vi.mock('@/api/kpi', () => ({
+  getKPIHistory: (...args: unknown[]) => mockGetKPIHistory(...args),
+}));
+
 // Override the global CopilotKit mock for this test file
 vi.mock('@copilotkit/react-core', () => ({
   CopilotKit: ({ children }: { children: React.ReactNode }) => (
@@ -646,6 +652,57 @@ describe('Action Handlers', () => {
       });
 
       expect(result!).toBe('Chat opened');
+    });
+  });
+
+  describe('renderKpiTrend', () => {
+    // Why: the substrate (kpi_history via /api/kpis/{id}/history) keys on
+    // registry codes (NRx = WS3-BI-006), but the model passes the friendly
+    // ids the action description teaches. Without the alias hop, "plot NRX
+    // trends" fetched the nonexistent id "nrx" and charted honest-empty
+    // despite 35 stored monthly points.
+    beforeEach(() => {
+      mockGetKPIHistory.mockClear();
+      mockGetKPIHistory.mockResolvedValue({
+        kpi_id: 'WS3-BI-006',
+        brand: '',
+        region: '',
+        count: 0,
+        points: [],
+      });
+    });
+
+    it('resolves friendly kpiId aliases to registry codes', async () => {
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'nrx' });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-006', undefined);
+    });
+
+    it('passes a canonicalized brand for per-brand KPIs', async () => {
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'nbrx', brand: 'remibrutinib' });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Remibrutinib');
+    });
+
+    it('declares the brand parameter so the model can pass it', () => {
+      getActionHandler('renderKpiTrend');
+      const actionCall = mockUseCopilotAction.mock.calls.find(
+        (call) => call[0]?.name === 'renderKpiTrend'
+      );
+      const paramNames = (
+        actionCall![0].parameters as Array<{ name: string }>
+      ).map((p) => p.name);
+      expect(paramNames).toContain('brand');
     });
   });
 });

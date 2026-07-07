@@ -20,6 +20,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAccessToken } from '@/stores/auth-store';
 import { getKPIHistory } from '@/api/kpi';
+import { resolveBrand, resolveKpiId } from '@/lib/kpi-alias';
 import { KpiTrendChart } from '@/components/chat/KpiTrendChart';
 import type { KPIHistoryResponse } from '@/types/kpi';
 
@@ -835,13 +836,24 @@ const CopilotHooksInner: React.FC = () => {
     description:
       'Render an inline line chart of a KPI\'s monthly historical trend. Use when the user asks to ' +
       'visualize, plot, chart, or graph a KPI over time (e.g. "chart TRx", "show the market share trend"). ' +
-      'kpiId should be a KPI identifier such as trx, nrx, or market_share.',
+      'kpiId accepts trx, nrx, nbrx, trx_share (aka market_share), conversion_rate, roi, or a registry ' +
+      'code like WS3-BI-005. nbrx and trx_share are tracked per brand only — pass brand for them.',
     parameters: [
       {
         name: 'kpiId',
         type: 'string',
-        description: 'KPI identifier to chart (e.g., trx, nrx, market_share)',
+        description:
+          'KPI to chart: trx, nrx, nbrx, trx_share, market_share, conversion_rate, roi, ' +
+          'or a registry code (e.g. WS3-BI-005, BR-001)',
         required: true,
+      },
+      {
+        name: 'brand',
+        type: 'string',
+        description:
+          'Brand (Remibrutinib, Fabhalta, or Kisqali). Required for nbrx and trx_share, ' +
+          'which are tracked per brand only; omit elsewhere for the global series.',
+        required: false,
       },
       {
         name: 'title',
@@ -850,10 +862,12 @@ const CopilotHooksInner: React.FC = () => {
         required: false,
       },
     ],
-    handler: async ({ kpiId }: { kpiId: string; title?: string }) => {
+    handler: async ({ kpiId, brand }: { kpiId: string; brand?: string; title?: string }) => {
       // Fetch REAL history. Returns { points: [] } when no series exists; the
       // chart renders an honest empty state rather than fabricating data.
-      return await getKPIHistory(kpiId);
+      // resolveKpiId translates the friendly ids this action teaches the model
+      // into the registry codes kpi_history speaks (nrx → WS3-BI-006).
+      return await getKPIHistory(resolveKpiId(kpiId), resolveBrand(brand));
     },
     render: ({ status, args, result }) => {
       // 'inProgress' = the LLM is still streaming the arguments, so kpiId may be
