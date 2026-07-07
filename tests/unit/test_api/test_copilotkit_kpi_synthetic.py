@@ -64,6 +64,11 @@ def recording_client(monkeypatch):
 
 async def test_flag_off_uses_base_ids_and_database_source(recording_client, monkeypatch):
     monkeypatch.delenv("E2I_KPI_INCLUDE_SYNTHETIC", raising=False)
+    # kpi_include_synthetic() ALSO honors the deployment-wide showcase switch;
+    # without clearing it too, "flag off" isn't actually off on a host that
+    # exports E2I_INCLUDE_SYNTHETIC=true (this droplet does) — the test only
+    # ran hermetically in CI by accident of its clean env.
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
     result = await get_kpi_summary("All")
 
     assert result["data_source"] == "database"
