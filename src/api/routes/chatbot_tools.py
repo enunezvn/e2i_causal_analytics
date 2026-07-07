@@ -697,7 +697,9 @@ async def causal_analysis_tool(
 
     SUBSTRATE COVERAGE — read this before answering: the registry models
     patient-journey outcomes (treatment_initiated, persistent_180d,
-    conversion_flag, adherence …), NOT commercial volume KPIs like TRx/NRx.
+    conversion_flag …) AND, since the 2026-07-07 commercial grain, the core
+    commercial KPIs — TRx / NRx / NBRx / TRx market share / ROI /
+    intent-to-prescribe (curated synthetic chains, surfaced provenance-labeled).
     When the response carries ``causal_chains_found: 0`` with
     ``substrate_coverage``, tell the user plainly that the causal registry
     does not cover that KPI, and offer the ``outcomes_covered`` it does model
@@ -754,10 +756,10 @@ async def causal_analysis_tool(
             response["substrate_coverage"] = {
                 "outcomes_covered": outcomes,
                 "note": (
-                    f"The causal-path registry does not cover '{kpi_name}': it models "
-                    "patient-journey outcomes (see outcomes_covered), not commercial "
-                    "volume KPIs. This is a substrate coverage gap — it is NOT "
-                    "evidence that no causal drivers exist for this KPI."
+                    f"The causal-path registry does not cover '{kpi_name}' — see "
+                    "outcomes_covered for what it does model (patient-journey and "
+                    "commercial-KPI outcomes). This is a substrate coverage gap — "
+                    "it is NOT evidence that no causal drivers exist for this KPI."
                 ),
             }
         return response
