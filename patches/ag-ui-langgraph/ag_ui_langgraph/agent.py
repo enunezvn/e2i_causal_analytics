@@ -402,7 +402,11 @@ class LangGraphAgent:
         return self.messages_in_process.get(run_id)
 
     def set_message_in_progress(self, run_id: str, data: MessageInProgress):
-        current_message_in_progress = self.messages_in_process.get(run_id, {})
+        # The TEXT_MESSAGE_END paths store None under run_id as an
+        # "ended" marker, so .get(run_id, {}) can still return None and
+        # {**None} raises TypeError — e.g. when the model streams an ack
+        # text and THEN starts a tool call in the same run.
+        current_message_in_progress = self.messages_in_process.get(run_id) or {}
         self.messages_in_process[run_id] = {
             **current_message_in_progress,
             **data,
