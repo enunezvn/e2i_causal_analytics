@@ -1566,11 +1566,127 @@ async def kpi_calculate_tool(
     return _kpi_result_to_response(kpi, result, brand=brand, region=region)
 
 
+# =============================================================================
+# CLINICAL CONTEXT TOOL (FDA-label / mechanism / competitor landscape)
+# =============================================================================
+
+# Lazily-built shared ClinicalContextService (real ChEMBL / ClinicalTrials.gov /
+# PubMed / OpenFDA clients). Its fragment cache is a module-level global, so a
+# single instance reuses live-API results across chatbot calls. Built on first
+# use to keep the chatbot_tools import graph cheap (the ChEMBL kg client is a
+# lazy import inside the service).
+_clinical_context_service: Optional[Any] = None
+
+
+def _get_clinical_context_service() -> Any:
+    """Return the shared ClinicalContextService, building it on first use."""
+    global _clinical_context_service
+    if _clinical_context_service is None:
+        from src.services.clinical_context import ClinicalContextService
+
+        _clinical_context_service = ClinicalContextService()
+    return _clinical_context_service
+
+
+class ClinicalContextInput(BaseModel):
+    """Input schema for clinical_context_tool."""
+
+    brand: str = Field(
+        description="Brand to fetch label/clinical context for (Kisqali, Fabhalta, or Remibrutinib)"
+    )
+    outcome: Optional[str] = Field(
+        default="treatment_initiated",
+        description=(
+            "Optional synthetic outcome to frame against the brand's real pivotal "
+            "endpoint (e.g. treatment_initiated, persistent_180d). Only affects the "
+            "mapped-endpoint framing; the FDA-label indications, mechanism, and "
+            "competitor landscape do NOT depend on it."
+        ),
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"brand": "Fabhalta", "outcome": "treatment_initiated"}}
+    )
+
+
+@tool(args_schema=ClinicalContextInput)
+async def clinical_context_tool(
+    brand: str,
+    outcome: Optional[str] = "treatment_initiated",
+) -> Dict[str, Any]:
+    """
+    Fetch REAL, source-attributed clinical/regulatory context for a Novartis brand
+    to GROUND and TAILOR commercial and causal/strategic insight.
+
+    Returns the FDA-label approved indications, limitations of use, and boxed
+    warning (OpenFDA); the drug's mechanism of action (ChEMBL); the disease's
+    pivotal trial endpoints (ClinicalTrials.gov); a real-world-evidence citation
+    (PubMed); and the competitor landscape within the indication (curated
+    reference). Every item carries its own source label plus an honesty label
+    stating the synthetic-estimate / real-context boundary.
+
+    Use this whenever a user asks about a brand's label indications, approved use,
+    mechanism of action, on-/off-label boundaries, or the competitive/therapeutic
+    landscape — and to anchor commercial/causal recommendations in the regulatory
+    reality (e.g. on-label HCP targeting, competitive density within an
+    indication, how the label boundary shapes causal drivers). This surfaces
+    FACTUAL regulatory/biomedical context; it is NOT individualized prescribing or
+    medical advice.
+
+    Args:
+        brand: Kisqali, Fabhalta, or Remibrutinib
+        outcome: Optional synthetic outcome to frame against the real pivotal
+            endpoint; does not affect the label indications themselves.
+
+    Returns:
+        Dict with success status, the clinical-context payload (approved
+        indications, mechanism, pivotal endpoints, real-world evidence, competitor
+        landscape), and the honesty label.
+    """
+    logger.info(f"Clinical context: brand={brand}, outcome={outcome}")
+
+    try:
+        service = _get_clinical_context_service()
+        # get_context fans out synchronous httpx calls (ChEMBL + CT.gov + PubMed +
+        # OpenFDA); off-load to a worker thread so a slow / rate-limited upstream
+        # cannot block the chatbot event loop (mirrors the kpi_calculate_tool fix).
+        payload = await asyncio.to_thread(
+            service.get_context, brand, outcome or "treatment_initiated"
+        )
+    except KeyError:
+        # brand_map has no profile for this brand (no enrichment facts).
+        return {
+            "success": False,
+            "query_type": "clinical_context",
+            "brand": brand,
+            "error": (
+                f"No clinical-context profile for brand '{brand}'. "
+                "Known brands: Kisqali, Fabhalta, Remibrutinib."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 - surface as a tool error, never fabricate
+        logger.error("clinical_context_tool: fetch failed for %s: %s", brand, exc)
+        return {
+            "success": False,
+            "query_type": "clinical_context",
+            "brand": brand,
+            "error": str(exc),
+        }
+
+    return {
+        "success": True,
+        "query_type": "clinical_context",
+        "brand": payload.get("brand", brand),
+        "clinical_context": payload,
+    }
+
+
 # List of all E2I chatbot tools for use in LangGraph ToolNode
 E2I_CHATBOT_TOOLS = [
     e2i_data_query_tool,
     kpi_calculate_tool,
     causal_analysis_tool,
+    clinical_context_tool,
     agent_routing_tool,
     conversation_memory_tool,
     document_retrieval_tool,
@@ -1583,6 +1699,7 @@ E2I_TOOL_MAP = {
     "e2i_data_query_tool": e2i_data_query_tool,
     "kpi_calculate_tool": kpi_calculate_tool,
     "causal_analysis_tool": causal_analysis_tool,
+    "clinical_context_tool": clinical_context_tool,
     "agent_routing_tool": agent_routing_tool,
     "conversation_memory_tool": conversation_memory_tool,
     "document_retrieval_tool": document_retrieval_tool,

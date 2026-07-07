@@ -16,6 +16,7 @@ from src.api.routes.chatbot_tools import (
     E2IQueryType,
     agent_routing_tool,
     causal_analysis_tool,
+    clinical_context_tool,
     conversation_memory_tool,
     document_retrieval_tool,
     e2i_data_query_tool,
@@ -822,6 +823,115 @@ class TestMultiFacetedQueryDetection:
         assert intent == IntentType.KPI_QUERY
 
 
+class TestClinicalContextTool:
+    """Tests for clinical_context_tool (FDA-label / mechanism / competitor context)."""
+
+    _FABHALTA_PAYLOAD = {
+        "brand": "Fabhalta",
+        "drug_name": "iptacopan",
+        "disease": "paroxysmal nocturnal hemoglobinuria",
+        "our_outcome": "treatment_initiated",
+        "mapped_endpoint": "Treatment initiation (complement-inhibitor start/switch)",
+        "mechanism": {
+            "mechanism_of_action": "complement Factor B inhibitor",
+            "source": "chembl",
+        },
+        "pivotal_endpoints": {
+            "endpoints": ["Transfusion avoidance"],
+            "source": "clinicaltrials.gov",
+        },
+        "real_world_evidence": None,
+        "approved_indications": {
+            "indications": [
+                "Paroxysmal nocturnal hemoglobinuria (PNH)",
+                "Primary IgA nephropathy (IgAN), to reduce proteinuria",
+            ],
+            "limitations_of_use": None,
+            "boxed_warning": "Serious infections caused by encapsulated bacteria can occur.",
+            "source": "openfda",
+        },
+        "competitor_landscape": {
+            "competitors": ["Soliris (eculizumab)", "Ultomiris (ravulizumab)"],
+            "count": 2,
+            "source": "curated",
+        },
+        "honesty_label": "Effect estimate = a SYNTHETIC patient cohort ...",
+    }
+
+    @pytest.mark.asyncio
+    async def test_returns_openfda_label_indications(self):
+        """Tool surfaces the real OpenFDA approved indications for a brand."""
+        mock_service = MagicMock()
+        mock_service.get_context = MagicMock(return_value=self._FABHALTA_PAYLOAD)
+
+        with patch(
+            "src.api.routes.chatbot_tools._get_clinical_context_service",
+            return_value=mock_service,
+        ):
+            result = await clinical_context_tool.ainvoke({"brand": "Fabhalta"})
+
+        assert result["success"] is True
+        assert result["query_type"] == "clinical_context"
+        assert result["brand"] == "Fabhalta"
+        indications = result["clinical_context"]["approved_indications"]
+        assert "Paroxysmal nocturnal hemoglobinuria (PNH)" in indications["indications"]
+        assert indications["source"] == "openfda"
+        # The bare "what's on the label" question defaults the outcome mapping.
+        mock_service.get_context.assert_called_once_with("Fabhalta", "treatment_initiated")
+
+    @pytest.mark.asyncio
+    async def test_passes_through_explicit_outcome(self):
+        """An explicit outcome is forwarded to the service for endpoint framing."""
+        mock_service = MagicMock()
+        mock_service.get_context = MagicMock(return_value=self._FABHALTA_PAYLOAD)
+
+        with patch(
+            "src.api.routes.chatbot_tools._get_clinical_context_service",
+            return_value=mock_service,
+        ):
+            await clinical_context_tool.ainvoke({"brand": "Fabhalta", "outcome": "persistent_180d"})
+
+        mock_service.get_context.assert_called_once_with("Fabhalta", "persistent_180d")
+
+    @pytest.mark.asyncio
+    async def test_unknown_brand_returns_error_without_raising(self):
+        """A brand with no profile fails closed (success False), never raises."""
+        mock_service = MagicMock()
+        mock_service.get_context = MagicMock(side_effect=KeyError("Aspirin"))
+
+        with patch(
+            "src.api.routes.chatbot_tools._get_clinical_context_service",
+            return_value=mock_service,
+        ):
+            result = await clinical_context_tool.ainvoke({"brand": "Aspirin"})
+
+        assert result["success"] is False
+        assert "Aspirin" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_upstream_failure_surfaced_not_fabricated(self):
+        """A provider/exception surfaces as a tool error, never fake data."""
+        mock_service = MagicMock()
+        mock_service.get_context = MagicMock(side_effect=RuntimeError("openfda 503"))
+
+        with patch(
+            "src.api.routes.chatbot_tools._get_clinical_context_service",
+            return_value=mock_service,
+        ):
+            result = await clinical_context_tool.ainvoke({"brand": "Fabhalta"})
+
+        assert result["success"] is False
+        assert "clinical_context" not in result
+        assert "openfda 503" in result["error"]
+
+    def test_registered_in_tool_list_and_map(self):
+        """Tool is bound to the chatbot so the LLM can actually call it."""
+        from src.api.routes.chatbot_tools import E2I_TOOL_MAP
+
+        assert clinical_context_tool in E2I_CHATBOT_TOOLS
+        assert E2I_TOOL_MAP["clinical_context_tool"] is clinical_context_tool
+
+
 class TestToolExports:
     """Tests for tool exports."""
 
@@ -830,7 +940,9 @@ class TestToolExports:
         tool_names = [tool.name for tool in E2I_CHATBOT_TOOLS]
 
         assert "e2i_data_query_tool" in tool_names
+        assert "kpi_calculate_tool" in tool_names
         assert "causal_analysis_tool" in tool_names
+        assert "clinical_context_tool" in tool_names
         assert "agent_routing_tool" in tool_names
         assert "conversation_memory_tool" in tool_names
         assert "document_retrieval_tool" in tool_names
@@ -845,4 +957,4 @@ class TestToolExports:
 
     def test_tool_count(self):
         """Test expected number of tools."""
-        assert len(E2I_CHATBOT_TOOLS) == 7
+        assert len(E2I_CHATBOT_TOOLS) == 9
