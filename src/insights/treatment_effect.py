@@ -22,13 +22,19 @@ try:
         straddles 0 (not distinguishable from no effect), using p-value and n as
         supporting evidence; name the confounders adjusted for; and ALWAYS close with
         the caveat that this is a single model-based estimate whose robustness was NOT
-        validated (refutation tests were not run)."""
+        validated (refutation tests were not run). The registry context lists curated
+        directional chains related to this pair — SEPARATE knowledge, not evidence for
+        or against this estimate: you may use it qualitatively to situate the effect,
+        but NEVER present it as corroboration and NEVER attribute numbers to it."""
 
         scope: str = dspy.InputField(desc="Cohort + brand for this estimate")
         estimate: str = dspy.InputField(
             desc="ATE [95% CI], p-value, n, estimator, and CI-vs-0 verdict"
         )
         design: str = dspy.InputField(desc="Treatment -> outcome and the confounders adjusted for")
+        registry_context: str = dspy.InputField(
+            desc="Curated registry chains related to this pair (directional, no figures)"
+        )
 
         interpretation: str = dspy.OutputField(
             desc="Grounded read of the effect, its actionability, and the robustness caveat"
@@ -93,6 +99,7 @@ def build_grounding(
     p_value: float | None,
     n: int,
     estimator: str | None,
+    causal_drivers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     excludes = _ci_excludes_zero(ci_lower, ci_upper)
     if excludes is None:
@@ -106,17 +113,31 @@ def build_grounding(
         f"p={_p_str(p_value)}, n={n}, estimator={estimator or '—'}; {verdict}"
     )
     design = f"{treatment_var} -> {outcome_var}; adjusted for {', '.join(confounders) or 'none'}"
+    # Registry context is digit-free BY DESIGN (format_qualitative_context): a
+    # curated effect size rendered next to the fitted ATE would read as an
+    # estimate. Kept a separate grounding key so the cache key and fallback
+    # treat it as its own dimension.
+    from src.insights.causal_context import format_driver_names, format_qualitative_context
+
+    drivers = causal_drivers or []
+    registry_context = format_qualitative_context(drivers)
+    chips = [
+        {"label": "ATE", "value": _fmt_num(ate)},
+        {"label": "95% CI", "value": _ci_str(ci_lower, ci_upper)},
+        {"label": "p", "value": _p_str(p_value)},
+        {"label": "n", "value": str(n)},
+    ]
+    named = format_driver_names(drivers)
+    if named:
+        chips.append({"label": "Registry chains", "value": str(len(named))})
     return {
         "scope": f"{cohort} / {brand}",
         "estimate": estimate,
         "design": design,
         "verdict": verdict,
-        "grounding": [
-            {"label": "ATE", "value": _fmt_num(ate)},
-            {"label": "95% CI", "value": _ci_str(ci_lower, ci_upper)},
-            {"label": "p", "value": _p_str(p_value)},
-            {"label": "n", "value": str(n)},
-        ],
+        "registry_context": registry_context,
+        "has_registry_context": bool(named),
+        "grounding": chips,
     }
 
 
@@ -125,7 +146,8 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
         f"For {g['scope']}: {g['estimate']}. Design: {g['design']}. "
         "This is a single model-based estimate; its robustness was NOT validated "
         "(refutation tests were not run). "
-        "(Factual summary — LLM interpretation unavailable.)"
+        + (f"{g['registry_context']} " if g.get("has_registry_context") else "")
+        + "(Factual summary — LLM interpretation unavailable.)"
     )
     return {
         "insight": insight,
@@ -141,6 +163,7 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
         scope=g["scope"],
         estimate=g["estimate"],
         design=g["design"],
+        registry_context=g["registry_context"],
     )
     if pred is None:
         return _fallback(g)

@@ -52,7 +52,13 @@ try:
         Name the strongest and weakest segments with their pp effects, state
         the single most decision-relevant implication, and ALWAYS close with
         the caveat that these are model-based estimates from one causal-forest
-        analysis on an observational cohort."""
+        analysis on an observational cohort.
+
+        The commercial context lists brand levers modeled in the causal-path
+        registry (curated, directional, no figures): optional qualitative color
+        for the targeting recommendation — never attribute numbers to these,
+        never count them, and never present them as findings of this
+        analysis."""
 
         scope: str = dspy.InputField(desc="Treatment -> outcome, brand filter, cohort size")
         effect_summary: str = dspy.InputField(
@@ -63,6 +69,9 @@ try:
         )
         targeting: str = dspy.InputField(
             desc="Differential-targeting verdict (expected lift, allocation summary)"
+        )
+        commercial_context: str = dspy.InputField(
+            desc="Registry-modeled commercial levers (directional, no figures)"
         )
 
         interpretation: str = dspy.OutputField(
@@ -850,13 +859,19 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
+def build_grounding(
+    record: dict[str, Any], causal_drivers: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Build the grounded prompt inputs + the guard's vouched vocabulary.
 
     ``record`` is a plain-dict projection of the persisted
     ``SegmentAnalysisResponse`` (see the /insights/hte route). The guard
     vocabulary is EXTRACTED from the exact strings rendered into the prompt —
     sign and unit included — so the LM can only echo figures as given.
+
+    ``causal_drivers`` (registry commercial levers) render DIGIT-FREE and are
+    deliberately excluded from the vouched vocabulary: the context can add no
+    numbers for the LM to echo, so the fail-closed guard is untouched.
     """
     treatment = record.get("treatment_var") or "the treatment"
     outcome = record.get("outcome_var") or "the outcome"
@@ -928,12 +943,20 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         allocation if allocation else "No allocation summary available."
     )
 
+    from src.insights.causal_context import format_driver_names, format_qualitative_context
+
+    drivers = causal_drivers or []
+    named_levers = format_driver_names(drivers)
+    commercial_context = format_qualitative_context(drivers)
+
     grounding_chips = [
         {"label": "Overall ATE", "value": ate_pp or "—"},
         {"label": "Significant segments", "value": f"{sig_count}/{total_count}"},
         {"label": "Heterogeneity", "value": het_str or "—"},
         {"label": "n", "value": _fmt_int(n_total) or "—"},
     ]
+    if named_levers:
+        grounding_chips.append({"label": "Commercial levers", "value": str(len(named_levers))})
 
     # Digit-bearing NAMES (variables, brand, dimensions, segment values) are
     # grounded as PHRASES, not free-floating numbers: their digits pass the
@@ -1066,6 +1089,8 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         "effect_summary": effect_summary,
         "segments": "\n".join(seg_lines),
         "targeting": targeting,
+        "commercial_context": commercial_context,
+        "has_commercial_context": bool(named_levers),
         "grounding": grounding_chips,
         "phrases": phrase_list,
         "ambiguous_phrases": ambiguous_list,
@@ -1105,7 +1130,9 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
     insight = (
         f"For {g['scope']}: {g['effect_summary']}. {g['targeting']} "
         "These are model-based estimates from one causal-forest analysis on an "
-        "observational cohort. (Factual summary — LLM interpretation unavailable.)"
+        "observational cohort. "
+        + (f"{g['commercial_context']} " if g.get("has_commercial_context") else "")
+        + "(Factual summary — LLM interpretation unavailable.)"
     )
     return {
         "insight": insight,
@@ -1131,6 +1158,7 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
             effect_summary=g["effect_summary"],
             segments=g["segments"],
             targeting=g["targeting"],
+            commercial_context=g["commercial_context"],
         )
         if pred is None:
             # LM unavailable/errored (not a guard rejection): a second

@@ -18,13 +18,20 @@ try:
         analyst, STRICTLY grounded in the provided effects. Use ONLY the treatments,
         outcomes, ATEs, CIs, gate statuses, and estimators given; NEVER invent effects
         or numbers. Emphasise which effects are robust and ACTIONABLE (gate=proceed,
-        CI excludes 0) vs which need review; if none are robust, say so plainly."""
+        CI excludes 0) vs which need review; if none are robust, say so plainly.
+        The registry context lists commercial chains modeled OUTSIDE this
+        leaderboard's estimation scope (curated, directional): you may mention them
+        as additional modeled coverage, but NEVER present them as discovered
+        effects and NEVER attribute numbers to them."""
 
         scope: str = dspy.InputField(desc="Brand + analysis grain")
         effects_table: str = dspy.InputField(
             desc="Ranked effects: treatment->outcome, ATE [CI], gate, estimator"
         )
         gate_summary: str = dspy.InputField(desc="Counts by gate status")
+        registry_context: str = dspy.InputField(
+            desc="Commercial chains modeled in the registry, outside estimation scope (no figures)"
+        )
 
         interpretation: str = dspy.OutputField(
             desc="Which effects to act on and why, grounded in ATE/CI/gate"
@@ -37,7 +44,12 @@ except ImportError:
     CausalDiscoveryInsightSignature = None  # type: ignore[assignment,misc]
 
 
-def build_grounding(brand: str, grain: str, effects: list[dict[str, Any]]) -> dict[str, Any]:
+def build_grounding(
+    brand: str,
+    grain: str,
+    effects: list[dict[str, Any]],
+    causal_drivers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     def _rank(e: dict[str, Any]) -> float:
         return abs(float(e.get("ate") or 0))
 
@@ -53,15 +65,27 @@ def build_grounding(brand: str, grain: str, effects: list[dict[str, Any]]) -> di
     effects_table = "\n".join(rows) or "no effects discovered"
     gates: Counter = Counter(e.get("status", "unknown") for e in effects)
     gate_summary = ", ".join(f"{g}={c}" for g, c in gates.most_common()) or "none"
+    # Commercial chains live OUTSIDE the leaderboard's estimation scope (the
+    # dataset-spec grain guard excludes commercial nodes from runs) — digit-free
+    # so curated values can never pose as discovered ATEs.
+    from src.insights.causal_context import format_driver_names, format_qualitative_context
+
+    drivers = causal_drivers or []
+    named = format_driver_names(drivers)
+    chips = [
+        {"label": "Effects", "value": str(len(effects))},
+        {"label": "Proceed", "value": str(gates.get("proceed", 0))},
+        {"label": "Review", "value": str(gates.get("review", 0))},
+    ]
+    if named:
+        chips.append({"label": "Registry chains", "value": str(len(named))})
     return {
         "scope": f"{brand} / {grain}",
         "effects_table": effects_table,
         "gate_summary": gate_summary,
-        "grounding": [
-            {"label": "Effects", "value": str(len(effects))},
-            {"label": "Proceed", "value": str(gates.get("proceed", 0))},
-            {"label": "Review", "value": str(gates.get("review", 0))},
-        ],
+        "registry_context": format_qualitative_context(drivers),
+        "has_registry_context": bool(named),
+        "grounding": chips,
     }
 
 
@@ -69,7 +93,8 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
     insight = (
         f"For {g['scope']}, discovered effects (by |ATE|):\n{g['effects_table']}\n"
         f"Gate distribution: {g['gate_summary']}. "
-        "(Factual summary — LLM interpretation unavailable.)"
+        + (f"{g['registry_context']} " if g.get("has_registry_context") else "")
+        + "(Factual summary — LLM interpretation unavailable.)"
     )
     first_line = g["effects_table"].splitlines()[0] if g["effects_table"] else g["gate_summary"]
     return {
@@ -86,6 +111,7 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
         scope=g["scope"],
         effects_table=g["effects_table"],
         gate_summary=g["gate_summary"],
+        registry_context=g["registry_context"],
     )
     if pred is None:
         return _fallback(g)

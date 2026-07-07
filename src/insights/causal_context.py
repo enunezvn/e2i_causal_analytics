@@ -137,3 +137,22 @@ def format_driver_names(drivers: list[dict[str, Any]]) -> list[str]:
             continue
         names.append(name)
     return names
+
+
+def format_qualitative_context(drivers: list[dict[str, Any]]) -> str:
+    """Digit-free one-liner for ESTIMATION surfaces (treatment-effect,
+    causal-discovery, HTE, predictive-cohort).
+
+    Those narratives interpret fitted estimates; a curated effect size in the
+    prompt invites the LM to launder registry figures as estimated ones (and
+    HTE's fail-closed numeric guard would reject any echoed figure). Built on
+    :func:`format_driver_names`, so the no-numeric-character guarantee holds.
+    """
+    names = format_driver_names(drivers)
+    if not names:
+        return "No modeled causal drivers are available for this scope."
+    return (
+        "Registry-modeled causal chains (curated synthetic knowledge, "
+        "provenance-labeled; directional domain context, NOT estimated from "
+        "this data): " + "; ".join(names) + "."
+    )

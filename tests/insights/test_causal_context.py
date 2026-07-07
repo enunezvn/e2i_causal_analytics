@@ -110,3 +110,43 @@ async def test_fetch_swallows_errors_returns_empty():
     repo.search_paths_for_outcome = AsyncMock(side_effect=RuntimeError("db down"))
     drivers = await fetch_commercial_drivers("Kisqali", repo=repo, include_synthetic=True)
     assert drivers == []
+
+
+# ---------------------------------------------------------------------------
+# format_qualitative_context (2026-07-07 follow-up: estimation surfaces)
+# ---------------------------------------------------------------------------
+
+
+def test_format_qualitative_context_is_digit_free_and_provenance_labeled():
+    """Estimation surfaces (treatment-effect, discovery, HTE, predictive) must
+    receive registry knowledge WITHOUT figures: their narratives interpret
+    real estimates, and a registry effect size in the prompt invites the LM
+    to launder curated numbers as estimated ones (HTE's numeric guard would
+    also reject any echoed figure)."""
+    from src.insights.causal_context import format_qualitative_context
+
+    ctx = format_qualitative_context(DRIVERS)
+    assert "rep detailing frequency → TRx volume" in ctx
+    assert "curated synthetic" in ctx
+    assert "NOT estimated" in ctx
+    assert not any(ch.isnumeric() for ch in ctx)
+
+
+def test_format_qualitative_context_empty_is_honest():
+    from src.insights.causal_context import format_qualitative_context
+
+    ctx = format_qualitative_context([])
+    assert "no modeled causal drivers" in ctx.lower()
+    assert not any(ch.isnumeric() for ch in ctx)
+
+
+def test_format_qualitative_context_drops_digit_bearing_names():
+    from src.insights.causal_context import format_qualitative_context
+
+    drivers = [
+        {"start": "unmapped_90d_flag", "end": "trx_volume", "synthetic": True},
+        {"start": "hcp_coverage", "end": "nbrx_volume", "synthetic": True},
+    ]
+    ctx = format_qualitative_context(drivers)
+    assert "HCP coverage → NBRx volume" in ctx
+    assert "90" not in ctx
