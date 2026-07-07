@@ -401,19 +401,27 @@ class TestGetTimeFilter:
 
 
 class TestQueryKpis:
-    """Tests for _query_kpis helper."""
+    """Tests for _query_kpis helper.
+
+    business_metrics stores metric_name as lowercase snake_case (trx, nrx,
+    market_share, ...). LLM tool calls pass display forms ("TRx", "Market
+    Share") — an exact-match filter on those returns 0 rows (the live
+    'baseline returned no results' bug), so the helper must normalize. It must
+    also actually apply the ``since`` window (previously accepted and ignored)
+    and label data_source honestly on showcase deployments.
+    """
 
     @pytest.mark.asyncio
     async def test_query_kpis_success(self):
         """Test successful KPI query."""
         mock_metrics = [
-            {"metric_name": "TRx", "value": 100, "brand": "Kisqali"},
-            {"metric_name": "TRx", "value": 150, "brand": "Kisqali"},
+            {"metric_name": "trx", "value": 100, "brand": "Kisqali"},
+            {"metric_name": "trx", "value": 150, "brand": "Kisqali"},
         ]
 
         with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
-            mock_repo.get_many.return_value = mock_metrics
+            mock_repo.query_metrics.return_value = mock_metrics
             mock_client.return_value = MagicMock()
 
             with patch(
@@ -434,32 +442,95 @@ class TestQueryKpis:
         assert result["data"] == mock_metrics
 
     @pytest.mark.asyncio
-    async def test_query_kpis_with_filters(self):
-        """Test KPI query applies filters correctly."""
+    async def test_query_kpis_normalizes_metric_name_and_applies_since(self):
+        """Display-form KPI names match stored lowercase rows; since is applied."""
+        since = datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc)
+
         with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
-            mock_repo.get_many.return_value = []
+            mock_repo.query_metrics.return_value = []
             mock_client.return_value = MagicMock()
 
             with patch(
                 "src.api.routes.chatbot_tools.BusinessMetricRepository",
                 return_value=mock_repo,
             ):
-                await _query_kpis(
+                result = await _query_kpis(
                     brand="Fabhalta",
                     region="EU",
-                    kpi_name="NRx",
-                    since=datetime.now(timezone.utc),
+                    kpi_name="TRx",
+                    since=since,
                     limit=5,
                 )
 
-        # Verify filters were passed
-        mock_repo.get_many.assert_called_once()
-        call_kwargs = mock_repo.get_many.call_args[1]
+        mock_repo.query_metrics.assert_called_once()
+        call_kwargs = mock_repo.query_metrics.call_args[1]
         assert call_kwargs["filters"]["brand"] == "Fabhalta"
         assert call_kwargs["filters"]["region"] == "EU"
-        assert call_kwargs["filters"]["metric_name"] == "NRx"
+        assert call_kwargs["filters"]["metric_name"] == "trx"
+        assert call_kwargs["since"] == "2026-04-08"
         assert call_kwargs["limit"] == 5
+        # The response reports what was actually queried
+        assert result["filters_applied"]["metric_name"] == "trx"
+        assert result["window_start"] == "2026-04-08"
+
+    @pytest.mark.asyncio
+    async def test_query_kpis_normalizes_display_variants(self):
+        """'Market Share' / 'conversion-rate' style names match stored rows."""
+        for display, stored in [
+            ("Market Share", "market_share"),
+            ("conversion-rate", "conversion_rate"),
+            ("  NRx ", "nrx"),
+        ]:
+            with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+                mock_repo = AsyncMock()
+                mock_repo.query_metrics.return_value = []
+                mock_client.return_value = MagicMock()
+
+                with patch(
+                    "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                    return_value=mock_repo,
+                ):
+                    await _query_kpis(
+                        brand=None,
+                        region=None,
+                        kpi_name=display,
+                        since=datetime.now(timezone.utc),
+                        limit=5,
+                    )
+
+            call_kwargs = mock_repo.query_metrics.call_args[1]
+            assert call_kwargs["filters"]["metric_name"] == stored, display
+
+    @pytest.mark.asyncio
+    async def test_query_kpis_labels_data_source(self):
+        """Showcase deployments badge results as synthetic (kpi_calculate
+        precedent); real-mode deployments say database."""
+        for flag, expected in [(True, "synthetic"), (False, "database")]:
+            with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+                mock_repo = AsyncMock()
+                mock_repo.query_metrics.return_value = []
+                mock_client.return_value = MagicMock()
+
+                with (
+                    patch(
+                        "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                        return_value=mock_repo,
+                    ),
+                    patch(
+                        "src.api.routes.chatbot_tools.kpi_include_synthetic",
+                        return_value=flag,
+                    ),
+                ):
+                    result = await _query_kpis(
+                        brand="Fabhalta",
+                        region=None,
+                        kpi_name="TRx",
+                        since=datetime.now(timezone.utc),
+                        limit=5,
+                    )
+
+            assert result["data_source"] == expected
 
     @pytest.mark.asyncio
     async def test_query_kpis_error_handling(self):

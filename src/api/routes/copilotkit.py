@@ -10,6 +10,15 @@ Author: E2I Causal Analytics Team
 Version: 1.27.0
 
 Changelog:
+    1.28.0 - Fixed follow-up questions losing conversation context in tool-using turns.
+             Root cause: synthesize_node is a separate LLM call from chat_node and its
+             prompt contained only the current question + tool artifacts — no prior
+             turns. chat_node (full history) picked the right tool args for follow-ups
+             like "is that above baseline?", but the synthesizer then answered
+             "I'm missing the preceding conversation". Fix: _extract_synthesis_history
+             rebuilds the text-only transcript before the current question (capped at
+             12 turns / 2000 chars each) and build_synthesis_prompt frames it ahead of
+             the question with an explicit resolve-references instruction.
     1.27.0 - FIXED ROOT CAUSE of duplicate messages in tool-using queries.
              Problem: ag_ui_langgraph automatically emits TEXT_MESSAGE_* events when
              it detects LLM streaming from synthesize_node. Our code ALSO converted
@@ -2063,19 +2072,84 @@ COPILOT_ACTIONS = [
 # =============================================================================
 
 
+# Caps for the synthesis transcript: keep the most recent prior turns and
+# truncate long messages so the synthesis prompt cannot grow unbounded.
+_SYNTHESIS_HISTORY_MAX_MESSAGES = 12
+_SYNTHESIS_HISTORY_MAX_CHARS = 2000
+
+
+def _extract_synthesis_history(messages: Sequence[Any]) -> List[Dict[str, str]]:
+    """Prior conversation turns as ``[{role, content}]`` for the synthesizer.
+
+    synthesize_node is a SEPARATE LLM call from chat_node: chat_node sees the
+    full message history (so it picks the right tool args for follow-ups),
+    but the synthesizer previously saw only the current question + tool
+    artifacts — it answered follow-ups like "is that above baseline?" with
+    "I'm missing the preceding conversation". This rebuilds the text-only
+    transcript BEFORE the current question; tool messages and tool-call stub
+    AIMessages (empty content) are plumbing, not conversation.
+    """
+    turns: List[Dict[str, str]] = []
+    for msg in messages:
+        role: Optional[str] = None
+        content: Any = None
+        if isinstance(msg, HumanMessage):
+            role, content = "user", msg.content
+        elif isinstance(msg, AIMessage):
+            role, content = "assistant", msg.content
+        elif isinstance(msg, dict) and msg.get("role") in ("user", "assistant"):
+            role, content = msg["role"], msg.get("content")
+        if role is None:
+            continue
+        if isinstance(content, list):
+            # Anthropic content blocks
+            content = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        if not isinstance(content, str) or not content.strip():
+            continue
+        turns.append({"role": role, "content": content.strip()[:_SYNTHESIS_HISTORY_MAX_CHARS]})
+
+    # Everything from the last user turn onward is the CURRENT question, not history
+    last_user_idx = None
+    for i in range(len(turns) - 1, -1, -1):
+        if turns[i]["role"] == "user":
+            last_user_idx = i
+            break
+    if last_user_idx is None:
+        return []
+    return turns[:last_user_idx][-_SYNTHESIS_HISTORY_MAX_MESSAGES:]
+
+
 # System prompt for the CopilotKit chat agent
 def build_synthesis_prompt(
-    original_query: str, tool_calls: list[dict], tool_results: list[dict]
+    original_query: str,
+    tool_calls: list[dict],
+    tool_results: list[dict],
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    """Frame the user's question + the tool calls (with args) + the tool results so the
-    synthesizer answers the ACTUAL question, names the brand/period it used, and is honest
-    about any window limitation. Fixes the 'asks for a brand it already used' bug."""
+    """Frame the prior conversation + the user's question + the tool calls (with args)
+    + the tool results so the synthesizer answers the ACTUAL question, resolves
+    follow-up references ("is that above baseline?") against earlier turns, names the
+    brand/period it used, and is honest about any window limitation. Fixes the 'asks
+    for a brand it already used' and 'missing the preceding conversation' bugs."""
     import json as _json
 
     calls = _json.dumps(tool_calls, indent=2, default=str)
     results = _json.dumps(tool_results, indent=2, default=str)
+    history_block = ""
+    if history:
+        transcript = "\n".join(
+            f"{'User' if turn['role'] == 'user' else 'Assistant'}: {turn['content']}"
+            for turn in history
+        )
+        history_block = (
+            "Conversation so far (earlier turns; the question below may refer to values "
+            "established here):\n" + transcript + "\n\n"
+        )
     return (
-        "User question:\n" + (original_query or "(none)") + "\n\n"
+        history_block + "User question:\n" + (original_query or "(none)") + "\n\n"
         "Tool calls the assistant made (note the brand/window/args already chosen):\n"
         + calls
         + "\n\n"
@@ -2084,7 +2158,10 @@ def build_synthesis_prompt(
         "State which brand and time period the figure covers (from the tool args/results). "
         "If a result's window_status is 'not_applicable' or 'default' while the user asked for a "
         "specific period, say plainly that the figure covers the engine's reporting window, not the "
-        "requested one. Do NOT ask the user to re-specify a brand or period they already provided."
+        "requested one. Do NOT ask the user to re-specify a brand or period they already provided. "
+        "If the question refers to something from the conversation ('that', 'it', 'compared to "
+        "before'), resolve the reference from the conversation above — do NOT claim missing "
+        "context when the referenced value appears there."
     )
 
 
@@ -2731,10 +2808,16 @@ def create_e2i_chat_agent():
             provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for synthesis")
 
-            # Ask LLM to synthesize the results — frame the user's question and
-            # the tool-call args (brand/window) so the synthesizer answers the
-            # actual question and never re-asks for a brand it already used.
-            synthesis_prompt = build_synthesis_prompt(original_query, tool_calls, tool_results)
+            # Ask LLM to synthesize the results — frame the prior conversation,
+            # the user's question, and the tool-call args (brand/window) so the
+            # synthesizer answers the actual question, resolves follow-up
+            # references, and never re-asks for a brand it already used.
+            synthesis_prompt = build_synthesis_prompt(
+                original_query,
+                tool_calls,
+                tool_results,
+                history=_extract_synthesis_history(messages),
+            )
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
             full_content = ""

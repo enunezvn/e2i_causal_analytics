@@ -31,6 +31,7 @@ from src.api.routes.chatbot_dspy import (
     route_agent_hardcoded,
 )
 from src.api.routes.cognitive import get_orchestrator
+from src.kpi.synthetic_mode import kpi_include_synthetic
 from src.memory.services.factories import get_async_supabase_client
 from src.rag.retriever import hybrid_search
 from src.repositories import (
@@ -364,6 +365,17 @@ def _get_time_filter(time_range: TimeRange) -> datetime:
         return datetime(2020, 1, 1)
 
 
+def _normalize_metric_name(kpi_name: str) -> str:
+    """Map a display-form KPI name to the stored metric_name key.
+
+    business_metrics.metric_name values are lowercase snake_case (trx, nrx,
+    market_share, conversion_rate, hcp_engagement_score) while LLM tool calls
+    pass display forms ("TRx", "Market Share") — an exact-match filter on
+    those returns 0 rows.
+    """
+    return kpi_name.strip().lower().replace("-", "_").replace(" ", "_")
+
+
 async def _query_kpis(
     brand: Optional[str],
     region: Optional[str],
@@ -371,7 +383,13 @@ async def _query_kpis(
     since: datetime,
     limit: int,
 ) -> Dict[str, Any]:
-    """Query KPI metrics from business_metrics table."""
+    """Query KPI metrics from business_metrics table (newest first, windowed).
+
+    Synthetic provenance rides the SSOT deployment gate inside
+    ``apply_provenance_filter`` (showcase instances include synthetic rows,
+    real-mode deployments exclude them); ``data_source`` labels the answer
+    honestly either way (kpi_calculate_tool precedent).
+    """
     try:
         client = await get_async_supabase_client()
         repo = BusinessMetricRepository(client)
@@ -383,10 +401,14 @@ async def _query_kpis(
             filters["region"] = region
         if kpi_name:
             # business_metrics uses 'metric_name' column, not 'kpi_name'
-            filters["metric_name"] = kpi_name
+            filters["metric_name"] = _normalize_metric_name(kpi_name)
 
-        # Get metrics with filters
-        metrics = await repo.get_many(filters=filters, limit=limit)
+        window_start = since.date().isoformat()
+        metrics = await repo.query_metrics(
+            filters=filters,
+            since=window_start,
+            limit=limit,
+        )
 
         return {
             "success": True,
@@ -394,6 +416,8 @@ async def _query_kpis(
             "count": len(metrics),
             "data": metrics,
             "filters_applied": filters,
+            "window_start": window_start,
+            "data_source": "synthetic" if kpi_include_synthetic() else "database",
         }
     except Exception as e:
         logger.error(f"KPI query failed: {e}")

@@ -36,7 +36,7 @@ class TestE2IDataQueryTool:
         mock_get_client.return_value = mock_client
 
         mock_repo = MagicMock()
-        mock_repo.get_many = AsyncMock(
+        mock_repo.query_metrics = AsyncMock(
             return_value=[
                 {"kpi_name": "trx", "value": 1500, "brand": "Kisqali"},
                 {"kpi_name": "trx", "value": 1600, "brand": "Kisqali"},
