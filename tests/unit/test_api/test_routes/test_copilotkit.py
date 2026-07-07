@@ -752,14 +752,15 @@ class TestFeedbackEndpoint:
         assert "configuration error" in data["error"]
 
     @staticmethod
-    def _chain_client(rows):
+    def _chain_client(rows, uuid_raises=False):
         """Supabase client fake that honors the pass-0 resolution filter.
 
         The route now runs a metadata->>frontend_message_id eq-query BEFORE
         content matching; a fake that returned the same rows for every query
         would make pass 0 spuriously match the newest row and hide content-
         resolution behavior from the tests. Other filters (session_id, role)
-        are ignored — rows are already scoped per test.
+        are ignored — rows are already scoped per test. uuid_raises simulates
+        a pass-0 query failure (the guard must fall back to content passes).
         """
 
         class _Query:
@@ -786,6 +787,8 @@ class TestFeedbackEndpoint:
             def execute(self):
                 result = self._rows
                 if self._uuid_filter is not None:
+                    if uuid_raises:
+                        raise RuntimeError("jsonb filter rejected")
                     result = [
                         r
                         for r in result
@@ -799,7 +802,7 @@ class TestFeedbackEndpoint:
         client.table.side_effect = lambda _name: _Query(rows)
         return client
 
-    def _post_resolution(self, test_client, rows, payload):
+    def _post_resolution(self, test_client, rows, payload, uuid_raises=False):
         with (
             patch.dict(
                 "os.environ",
@@ -808,7 +811,10 @@ class TestFeedbackEndpoint:
                     "SUPABASE_SERVICE_KEY": "test-key",
                 },
             ),
-            patch("supabase.create_client", return_value=self._chain_client(rows)),
+            patch(
+                "supabase.create_client",
+                return_value=self._chain_client(rows, uuid_raises=uuid_raises),
+            ),
             patch(
                 "src.memory.services.factories.get_async_supabase_client",
                 new_callable=AsyncMock,
@@ -1015,6 +1021,54 @@ class TestFeedbackEndpoint:
         assert response.json()["success"] is True
         assert repo.add_feedback.call_args.kwargs["tools_used"] == ["run_causal_analysis"]
 
+    def test_feedback_tool_name_shape_resolved_from_row_tool_calls(self, test_client):
+        """chatbot_graph.finalize_node persists top-level tool_calls entries
+        keyed "tool_name" — when tool_results is empty, that shape is the only
+        authoritative source and must be extracted."""
+        content = "Query answered via data tool."
+        rows = [
+            {
+                "id": 5,
+                "session_id": "thread-1",
+                "content": content,
+                "agent_name": "orchestrator",
+                "tool_results": [],
+                "tool_calls": [{"tool_name": "e2i_data_query_tool", "args": {}}],
+            }
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_text": content,
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["tools_used"] == ["e2i_data_query_tool"]
+
+    def test_feedback_pass0_error_falls_back_to_content(self, test_client):
+        """A pass-0 (stamped-id) query failure must degrade to content
+        matching, not abort resolution."""
+        content = "Resolved despite pass-0 failure."
+        rows = [{"id": 6, "session_id": "thread-1", "content": content}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "message_uuid": "uuid-whose-query-breaks",
+                "response_text": content,
+                "rating": "thumbs_up",
+            },
+            uuid_raises=True,
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 6
+
     def test_feedback_requires_id_or_session_preview(self, test_client):
         """Neither message_id nor (session_id + response_preview) → honest error."""
         response, repo = self._post_resolution(
@@ -1072,13 +1126,15 @@ class TestFrontendMessageIdStamping:
         assert completed == {}
 
     def _stamp_client(self, rows):
-        """Sync-client fake recording metadata updates."""
+        """Sync-client fake recording metadata updates and honoring the
+        metadata->>run_id filter (run-scoped stamping)."""
         updates = []
 
         class _Query:
             def __init__(self):
                 self._update_payload = None
                 self._update_id = None
+                self._run_id_filter = None
 
             def select(self, *_a, **_k):
                 return self
@@ -1086,6 +1142,8 @@ class TestFrontendMessageIdStamping:
             def eq(self, key, value):
                 if self._update_payload is not None and key == "id":
                     self._update_id = value
+                if key == "metadata->>run_id":
+                    self._run_id_filter = value
                 return self
 
             def order(self, *_a, **_k):
@@ -1102,7 +1160,14 @@ class TestFrontendMessageIdStamping:
                 if self._update_payload is not None:
                     updates.append((self._update_id, self._update_payload))
                     return MagicMock(data=[])
-                return MagicMock(data=rows)
+                data = rows
+                if self._run_id_filter is not None:
+                    data = [
+                        r
+                        for r in rows
+                        if (r.get("metadata") or {}).get("run_id") == self._run_id_filter
+                    ]
+                return MagicMock(data=data)
 
         client = MagicMock()
         client.table.side_effect = lambda _name: _Query()
@@ -1133,6 +1198,78 @@ class TestFrontendMessageIdStamping:
         with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
             _stamp_frontend_message_ids("thread-1", {"m-new": "Same."})
         assert updates == [(7, {"metadata": {"frontend_message_id": "m-new"}})]
+
+    def test_stamping_is_run_scoped(self):
+        """Two overlapping same-session runs with identical final content
+        must not cross-stamp: the run_id filter scopes the content match to
+        rows this run persisted, so run A cannot take run B's newer row."""
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        rows = [
+            {"id": 9, "content": "Same.", "metadata": {"run_id": "run-B"}},
+            {"id": 7, "content": "Same.", "metadata": {"run_id": "run-A"}},
+        ]
+        client, updates = self._stamp_client(rows)
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+            _stamp_frontend_message_ids("thread-1", {"m-a": "Same."}, run_id="run-A")
+        assert updates == [(7, {"metadata": {"run_id": "run-A", "frontend_message_id": "m-a"}})]
+
+    def test_persist_message_sync_attaches_run_id(self):
+        """Assistant rows persisted during a run must carry metadata.run_id
+        (from the run contextvar) so stamping can scope to them; the caller's
+        metadata dict must not be mutated."""
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        caller_metadata = {"source": "copilotkit"}
+        token = _run_id_context.set("run-X")
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync(
+                    "thread-1",
+                    "assistant",
+                    "hi",
+                    agent_name="copilotkit",
+                    metadata=caller_metadata,
+                )
+        finally:
+            _run_id_context.reset(token)
+        assert inserted[0]["metadata"] == {"source": "copilotkit", "run_id": "run-X"}
+        assert caller_metadata == {"source": "copilotkit"}
+
+    def test_persist_message_sync_no_run_id_outside_run(self):
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        token = _run_id_context.set(None)
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync("thread-1", "assistant", "hi", metadata={})
+        finally:
+            _run_id_context.reset(token)
+        assert "run_id" not in inserted[0]["metadata"]
 
     def test_stamping_failure_is_swallowed(self):
         """Stamping is best-effort: a DB failure must never propagate into the

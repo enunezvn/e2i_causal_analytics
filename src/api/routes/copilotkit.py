@@ -272,6 +272,13 @@ _session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.Context
     "copilotkit_session_id", default=None
 )
 
+# Per-run discriminator for frontend_message_id stamping: the session key is
+# the conversation threadId, so overlapping streams in the same conversation
+# could otherwise cross-stamp identical-content assistant rows.
+_run_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "copilotkit_run_id", default=None
+)
+
 
 # =============================================================================
 # EVENT TYPE CONVERSION (DEPRECATED - v1.16.0)
@@ -595,6 +602,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # CRITICAL (v1.21.1): Also set session_id in context var for reliable cross-async access
         # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
         _session_id_context.set(persistent_session_id)
+        _run_id_context.set(run_id)
         dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
 
         run_input = RunAgentInput(
@@ -947,7 +955,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # time the terminal event flowed through. Best-effort; the response
         # already reached the client.
         if completed_text_messages and persistent_session_id:
-            _stamp_frontend_message_ids(persistent_session_id, completed_text_messages)
+            _stamp_frontend_message_ids(
+                persistent_session_id, completed_text_messages, run_id=run_id
+            )
 
         dbg(f"Finished yielding {event_count} events")
 
@@ -1028,12 +1038,20 @@ def _persist_message_sync(
             logger.warning("[CopilotKit] No Supabase client for message persistence")
             return None
 
+        row_metadata = dict(metadata or {})
+        run_id = _run_id_context.get()
+        if run_id and "run_id" not in row_metadata:
+            # Run discriminator so post-stream stamping can scope its
+            # content match to this run's rows (see
+            # _stamp_frontend_message_ids).
+            row_metadata["run_id"] = run_id
+
         message_data = {
             "session_id": session_id,
             "role": role,
             "content": content,
             "agent_name": agent_name,
-            "metadata": metadata or {},
+            "metadata": row_metadata,
         }
 
         result = client.table("chatbot_messages").insert(message_data).execute()
@@ -1083,16 +1101,23 @@ def _track_text_message_event(
         pass
 
 
-def _stamp_frontend_message_ids(session_id: str, messages: Dict[str, str]) -> None:
+def _stamp_frontend_message_ids(
+    session_id: str, messages: Dict[str, str], run_id: Optional[str] = None
+) -> None:
     """Stamp metadata.frontend_message_id onto the persisted assistant rows.
 
     Runs after an SSE stream completes. Write-time matching is deterministic:
     the row carrying each completed message's text was written moments ago by
     this very run, so the newest unstamped exact-content match IS that row —
     older identical-content rows (already stamped or from prior runs) rank
-    later. The stamp gives /copilotkit/feedback a stable resolution key (the
-    client's message_uuid) instead of content heuristics. Best-effort: any
-    failure leaves feedback on its content-matching fallback.
+    later. When run_id is given the match is additionally scoped to rows
+    persisted by this run (metadata.run_id, attached in
+    _persist_message_sync): the session key is the conversation threadId, so
+    two overlapping streams in the same conversation could otherwise
+    cross-stamp identical-content rows. The stamp gives /copilotkit/feedback
+    a stable resolution key (the client's message_uuid) instead of content
+    heuristics. Best-effort: any failure leaves feedback on its
+    content-matching fallback.
     """
     try:
         from src.api.dependencies.supabase_client import get_supabase
@@ -1100,15 +1125,15 @@ def _stamp_frontend_message_ids(session_id: str, messages: Dict[str, str]) -> No
         client = get_supabase()
         if not client:
             return
-        result = (
+        query = (
             client.table("chatbot_messages")
             .select("id, content, metadata")
             .eq("session_id", session_id)
             .eq("role", "assistant")
-            .order("created_at", desc=True)
-            .limit(20)
-            .execute()
         )
+        if run_id:
+            query = query.eq("metadata->>run_id", run_id)
+        result = query.order("created_at", desc=True).limit(20).execute()
         rows = result.data or []
         for message_id, content in messages.items():
             if not content:
@@ -1134,18 +1159,22 @@ def _stamp_frontend_message_ids(session_id: str, messages: Dict[str, str]) -> No
 def _tool_names_from(entries: Any) -> List[str]:
     """Extract tool names from a persisted tool_calls/tool_results list.
 
-    Both shapes appear in chatbot_messages: orchestrator-flow rows store
-    top-level tool_calls/tool_results columns (entries keyed "name" or
-    "tool"), sidebar synthesis rows store metadata.tool_results (keyed
-    "tool"). Non-list input and nameless entries yield nothing.
+    Three shapes appear in chatbot_messages: orchestrator-flow rows store
+    top-level tool_calls keyed "tool_name" (chatbot_graph finalize_node) and
+    tool_results keyed "tool"/"name", sidebar rows store metadata
+    tool_results keyed "tool" and tool_calls keyed "name". Non-list input
+    and nameless entries yield nothing.
     """
     if not isinstance(entries, list):
         return []
-    return [
-        str(entry.get("tool") or entry.get("name"))
-        for entry in entries
-        if isinstance(entry, dict) and (entry.get("tool") or entry.get("name"))
-    ]
+    names: List[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("tool") or entry.get("name") or entry.get("tool_name")
+        if name:
+            names.append(str(name))
+    return names
 
 
 def _classify_query_type(query: str) -> str:
@@ -4013,21 +4042,30 @@ async def submit_feedback(
                 # _stamp_frontend_message_ids), so the client's message_uuid
                 # resolves the row directly, no content heuristics.
                 if request.message_uuid:
-                    uuid_result = (
-                        service_client.table("chatbot_messages")
-                        .select(
-                            "id, session_id, content, agent_name, metadata, "
-                            "tool_calls, tool_results"
+                    try:
+                        uuid_result = (
+                            service_client.table("chatbot_messages")
+                            .select(
+                                "id, session_id, content, agent_name, metadata, "
+                                "tool_calls, tool_results"
+                            )
+                            .eq("session_id", request.session_id)
+                            .eq("role", "assistant")
+                            .eq("metadata->>frontend_message_id", request.message_uuid)
+                            .order("created_at", desc=True)
+                            .limit(1)
+                            .execute()
                         )
-                        .eq("session_id", request.session_id)
-                        .eq("role", "assistant")
-                        .eq("metadata->>frontend_message_id", request.message_uuid)
-                        .order("created_at", desc=True)
-                        .limit(1)
-                        .execute()
-                    )
-                    if uuid_result.data:
-                        matched_row = cast(Dict[str, Any], uuid_result.data[0])
+                        if uuid_result.data:
+                            matched_row = cast(Dict[str, Any], uuid_result.data[0])
+                    except Exception as pass0_error:  # noqa: BLE001
+                        # A pass-0 failure must degrade to content matching,
+                        # not abort resolution (the enclosing try also covers
+                        # passes 1-2).
+                        logger.debug(
+                            f"[Feedback] stamped-id lookup failed, "
+                            f"falling back to content: {pass0_error}"
+                        )
                 if matched_row is None and (full_text or preview):
                     candidates = (
                         service_client.table("chatbot_messages")
