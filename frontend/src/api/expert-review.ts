@@ -15,6 +15,7 @@
 
 import { get, post } from '@/lib/api-client';
 import type {
+  AgentAssessmentResponse,
   PendingReviewsResponse,
   ResolveReviewRequest,
   ResolveReviewResponse,
@@ -64,4 +65,22 @@ export async function getReviewSummary(params?: {
   brand?: string;
 }): Promise<ReviewSummaryResponse> {
   return get<ReviewSummaryResponse>(`${EXPERT_REVIEW_BASE}/summary`, params);
+}
+
+/**
+ * Generate (or fetch cached) the advisory agent assessment for a review.
+ *
+ * @param reviewId - The review identifier
+ * @param force - Regenerate even when a cached assessment exists
+ * @returns The assessment plus cached/persisted honesty flags
+ */
+export async function generateReviewAssessment(
+  reviewId: string,
+  force = false
+): Promise<AgentAssessmentResponse> {
+  return post<AgentAssessmentResponse>(
+    `${EXPERT_REVIEW_BASE}/${reviewId}/assessment`,
+    undefined,
+    force ? { params: { force: true } } : undefined
+  );
 }

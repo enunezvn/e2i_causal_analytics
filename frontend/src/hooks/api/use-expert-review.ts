@@ -16,11 +16,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-client';
 import {
+  generateReviewAssessment,
   getPendingReviews,
   getReviewSummary,
   resolveReview,
 } from '@/api/expert-review';
 import type {
+  AgentAssessmentResponse,
   PendingReviewsResponse,
   ResolveReviewRequest,
   ResolveReviewResponse,
@@ -101,6 +103,40 @@ export function useResolveReview(
       });
       queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'summary'],
+      });
+    },
+    ...options,
+  });
+}
+
+/** Variables for the assessment mutation. */
+export interface ReviewAssessmentVariables {
+  reviewId: string;
+  /** Regenerate even when a cached assessment exists. */
+  force?: boolean;
+}
+
+/**
+ * Hook to generate (or fetch cached) the advisory agent assessment.
+ *
+ * On success, invalidates the pending queue so the row's cached
+ * `agent_assessment_json` stays in sync on the next refetch.
+ *
+ * @param options - Additional TanStack mutation options
+ */
+export function useReviewAssessment(
+  options?: Omit<
+    UseMutationOptions<AgentAssessmentResponse, ApiError, ReviewAssessmentVariables>,
+    'mutationFn'
+  >
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation<AgentAssessmentResponse, ApiError, ReviewAssessmentVariables>({
+    mutationFn: ({ reviewId, force }) => generateReviewAssessment(reviewId, force),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.expertReviews.all(), 'pending'],
       });
     },
     ...options,
