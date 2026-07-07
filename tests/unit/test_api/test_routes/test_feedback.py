@@ -1059,3 +1059,104 @@ def test_generate_mock_learning_response(sample_run_learning_request):
     assert result.patterns_detected > 0
     assert result.recommendations_generated > 0
     assert len(result.warnings) > 0  # Should warn about mock data
+
+
+# =============================================================================
+# persist_learning_cycle_output (shared by the 6h Celery beat)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_persist_learning_cycle_output_converts_and_persists():
+    """The beat's persistence entry point must convert the agent output to a
+    LearningResponse (incl. the applied_updates rehydration from string IDs)
+    and persist BOTH the batch and its artifacts — this is what fills the
+    tables the /feedback-learning page reads."""
+    from types import SimpleNamespace
+
+    from src.api.routes import feedback as feedback_mod
+
+    update = {
+        "update_id": "U1",
+        "update_type": "prompt_refinement",
+        "status": "proposed",
+        "target_agent": "gap_analyzer",
+        "target_component": "prompt",
+        "proposed_value": "New value",
+        "rationale": "Better",
+        "expected_improvement": "10%",
+    }
+    output = SimpleNamespace(
+        status="completed",
+        detected_patterns=[
+            {
+                "pattern_id": "P1",
+                "pattern_type": "accuracy_issue",
+                "description": "low reward on gap_analyzer",
+                "frequency": 3,
+                "severity": "high",
+                "affected_agents": ["gap_analyzer"],
+                "example_feedback_ids": [],
+                "root_cause_hypothesis": "",
+                "confidence": 0.8,
+            }
+        ],
+        learning_recommendations=[],
+        priority_improvements=["fix X"],
+        proposed_updates=[update, {**update, "update_id": "U2"}],
+        applied_updates=["U1"],
+        learning_summary="cycle summary",
+        total_latency_ms=123,
+        errors=[],
+        warnings=["No feedback items collected"],
+    )
+
+    with (
+        patch.object(feedback_mod, "_persist_batch", new_callable=AsyncMock) as mock_batch,
+        patch.object(
+            feedback_mod, "_persist_cycle_artifacts", new_callable=AsyncMock
+        ) as mock_artifacts,
+    ):
+        resp = await feedback_mod.persist_learning_cycle_output(output, "beat_task12345")
+
+    assert resp.batch_id == "beat_task12345"
+    assert resp.status.value == "completed"
+    assert resp.patterns_detected == 1
+    assert resp.detected_patterns[0].pattern_id == "P1"
+    assert resp.updates_proposed == 2
+    # applied_updates rehydrated from the string IDs (mirrors _execute_learning_cycle)
+    assert resp.updates_applied == 1
+    assert [u.update_id for u in resp.applied_updates] == ["U1"]
+    assert resp.warnings == ["No feedback items collected"]
+    mock_artifacts.assert_awaited_once_with(resp)
+    mock_batch.assert_awaited_once_with(resp)
+
+
+@pytest.mark.asyncio
+async def test_persist_learning_cycle_output_failed_status():
+    """Non-completed agent status maps to FAILED, and dict errors are stringified
+    (LearningResponse.errors is List[str])."""
+    from types import SimpleNamespace
+
+    from src.api.routes import feedback as feedback_mod
+
+    output = SimpleNamespace(
+        status="failed",
+        detected_patterns=[],
+        learning_recommendations=[],
+        priority_improvements=[],
+        proposed_updates=[],
+        applied_updates=[],
+        learning_summary="",
+        total_latency_ms=5,
+        errors=[{"node": "feedback_collector", "error": "boom"}],
+        warnings=[],
+    )
+    with (
+        patch.object(feedback_mod, "_persist_batch", new_callable=AsyncMock),
+        patch.object(feedback_mod, "_persist_cycle_artifacts", new_callable=AsyncMock),
+    ):
+        resp = await feedback_mod.persist_learning_cycle_output(output, "beat_x")
+
+    assert resp.status.value == "failed"
+    assert resp.errors and isinstance(resp.errors[0], str)

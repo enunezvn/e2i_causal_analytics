@@ -12,6 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, cast
 
+from ..rating_utils import rating_to_numeric
 from ..state import DetectedPattern, FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
@@ -31,34 +32,10 @@ def _get_opik_connector():
         return None
 
 
-def _rating_to_numeric(value: Any) -> Optional[float]:
-    """Normalize a user rating to a 1-5 numeric scale.
-
-    F15 (audit): the real feedback source (``chatbot_message_feedback``) stores
-    ratings as enum STRINGS (``thumbs_up``/``thumbs_down``), but the low-rating
-    pattern detector previously accepted only ``int``/``float`` — silently
-    dropping every real string rating, so collected feedback produced zero
-    patterns and ``update_effectiveness`` stayed pinned at 0.0. Handle both
-    numeric ratings and the string forms; return None for genuinely unknown
-    values (excluded, not coerced).
-    """
-    if isinstance(value, bool):
-        return 5.0 if value else 1.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        v = value.strip().lower()
-        positive = {"thumbs_up", "thumbsup", "up", "positive", "good", "helpful", "yes", "👍"}
-        negative = {"thumbs_down", "thumbsdown", "down", "negative", "bad", "unhelpful", "no", "👎"}
-        if v in positive:
-            return 5.0
-        if v in negative:
-            return 1.0
-        try:
-            return float(v)  # numeric-as-string (e.g. "4")
-        except ValueError:
-            return None
-    return None
+# Shared normalizer (rating_utils): thumbs strings and numerics on one 1-5
+# scale. Kept under the old private name — this module's detectors and its
+# tests reference it directly.
+_rating_to_numeric = rating_to_numeric
 
 
 # Mirror of the ``DetectedPattern`` TypedDict Literals (state.py). The
@@ -299,6 +276,9 @@ class PatternAnalyzerNode:
         # Check for agent-specific issues
         for agent, count in by_agent.items():
             agent_feedback = [fb for fb in feedback_items if fb["source_agent"] == agent]
+            # Normalize through _rating_to_numeric like the overall low-rating
+            # detector — a bare isinstance gate here silently dropped every
+            # thumbs_down string, hiding per-agent negative streaks.
             agent_negative = len(
                 [
                     fb
@@ -307,8 +287,8 @@ class PatternAnalyzerNode:
                         fb["feedback_type"] == "correction"
                         or (
                             fb["feedback_type"] == "rating"
-                            and isinstance(fb["user_feedback"], (int, float))
-                            and fb["user_feedback"] < 3
+                            and (num := _rating_to_numeric(fb["user_feedback"])) is not None
+                            and num < 3
                         )
                     )
                 ]

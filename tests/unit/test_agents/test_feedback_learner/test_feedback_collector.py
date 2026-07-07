@@ -177,6 +177,49 @@ class TestFeedbackCollectorNode:
         assert result["feedback_summary"]["average_rating"] == 4.0
 
     @pytest.mark.asyncio
+    async def test_summary_counts_thumbs_string_ratings(self, base_state):
+        """Explicit thumbs arrive as enum STRINGS — the summary must map them
+        onto the shared 1-5 scale (up→5, down→1), not silently exclude them
+        from average_rating/rating_count (codex round-1 MED: only numeric
+        reward-derived ratings were being counted)."""
+        raw_feedback = [
+            {
+                "id": "F1",
+                "agent": "copilotkit",
+                "query": "q1",
+                "response": "r1",
+                "rating": "thumbs_up",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+            {
+                "id": "F2",
+                "agent": "copilotkit",
+                "query": "q2",
+                "response": "r2",
+                "rating": "thumbs_down",
+                "timestamp": "2024-01-01T01:00:00Z",
+            },
+            {
+                "id": "F3",
+                "agent": "gap_analyzer",
+                "query": "q3",
+                "response": "r3",
+                "rating": 4.2,
+                "timestamp": "2024-01-01T02:00:00Z",
+            },
+        ]
+
+        mock_store = AsyncMock()
+        mock_store.get_feedback = AsyncMock(return_value=raw_feedback)
+        node = FeedbackCollectorNode(feedback_store=mock_store, outcome_store=None)
+
+        result = await node.execute(base_state)
+
+        summary = result["feedback_summary"]
+        assert summary["rating_count"] == 3
+        assert summary["average_rating"] == pytest.approx((5.0 + 1.0 + 4.2) / 3)
+
+    @pytest.mark.asyncio
     async def test_skip_if_already_failed(self, base_state):
         """Test that node skips execution if already failed."""
         state = {**base_state, "status": "failed"}

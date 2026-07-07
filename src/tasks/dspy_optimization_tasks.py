@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -199,10 +200,28 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
         time_range_end=end_time.isoformat(),
         focus_agents=focus_agents,
     )
+
+    # Persist the cycle's artifacts to the tables the /feedback-learning page
+    # reads (feedback_learning_batches / feedback_patterns /
+    # feedback_knowledge_updates). Without this the beat persisted ONLY dspy
+    # training signals, so the page stayed empty (0 cycles / 0 patterns /
+    # 0 updates) despite this loop running 4×/day. Non-fatal: the training
+    # signal — this task's primary product — is already persisted by the
+    # agent's finalize node.
+    batch_id = f"beat_{(task_id or uuid.uuid4().hex)[:12]}"
+    try:
+        from src.api.routes.feedback import persist_learning_cycle_output
+
+        await persist_learning_cycle_output(output, batch_id)
+    except Exception as exc:  # noqa: BLE001 — artifact persistence is best-effort
+        logger.warning("Learning-cycle artifact persistence failed (batch %s): %s", batch_id, exc)
+
     return {
         "status": output.status,
         "feedback_count": output.feedback_count,
         "training_reward": output.training_reward,
+        "patterns_detected": output.pattern_count,
+        "batch_id": batch_id,
         "task_id": task_id,
     }
 

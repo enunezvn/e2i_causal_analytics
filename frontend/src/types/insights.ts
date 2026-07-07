@@ -100,3 +100,12 @@ export interface HTEInsightRequest {
    */
   analysis_id: string;
 }
+
+export interface FeedbackLearningInsightRequest {
+  /**
+   * Days only: all grounding (persisted cycles/patterns/updates + real
+   * feedback inflow) is derived SERVER-SIDE — caller-posted figures are not
+   * accepted (same trust boundary as ExecutiveBriefInsightRequest).
+   */
+  days?: number;
+}

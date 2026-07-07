@@ -851,7 +851,25 @@ class ReflectorModule(dspy.Module):
             if state.evidence_board
             else 0.0
         )
-        agent_reward = 0.8 if state.response else 0.0
+        # Synthesis reward graded by observable outcome quality, mirroring how
+        # the two rewards above are derived. The previous constant
+        # ``0.8 if state.response`` had zero variance, so every downstream
+        # consumer (GEPA gating, feedback-learner pattern analysis) learned
+        # nothing from it. Base 0.5 for producing any response keeps completed
+        # turns inside the GEPA fuel band (reward >= 0.5), as before.
+        if state.response:
+            agent_reward = 0.5
+            # Grounded in retrieved evidence (same 4-item scale as summarizer)
+            agent_reward += 0.2 * min(1.0, len(state.evidence_board) / 4.0)
+            # Substantive answer, not a one-liner
+            agent_reward += 0.1 if len(state.response) >= 200 else 0.0
+            # Investigation deemed its evidence sufficient
+            agent_reward += 0.1 if state.sufficient_evidence else 0.0
+            # Produced an actionable artifact alongside the text
+            agent_reward += 0.1 if state.visualization_config else 0.0
+            agent_reward = min(1.0, agent_reward)
+        else:
+            agent_reward = 0.0
 
         # Adjust rewards based on user feedback if provided
         if user_feedback:

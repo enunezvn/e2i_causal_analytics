@@ -15,6 +15,7 @@ from src.api.dependencies.auth import require_analyst
 from src.insights import (
     causal_discovery,
     executive_brief,
+    feedback_learning,
     hte,
     knowledge_graph,
     model_performance,
@@ -493,3 +494,101 @@ async def resource_optimization_insight(
         payload = await asyncio.to_thread(resource_optimization.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Resource optimizer solver result (LLM interpretation)")
+
+
+class FeedbackLearningInsightRequest(BaseModel):
+    """All grounding is server-derived (persisted cycles/patterns/updates + real
+    feedback inflow); the caller only picks the inflow window."""
+
+    days: int = Field(default=7, ge=1, le=30)
+
+
+@router.post("/feedback-learning", response_model=StrategicInsightResponse)
+async def feedback_learning_insight(
+    req: FeedbackLearningInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Strategic interpretation of the Tier-5 feedback-learning loop, grounded in
+    persisted learning cycles, detected patterns, knowledge updates, and the real
+    feedback inflow (chat thumbs + cognitive reward signals)."""
+    from datetime import timedelta
+
+    from src.api.repositories.feedback_repository import FeedbackRepository
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
+    from src.repositories.learning_signals_feedback import (
+        get_learning_signals_feedback_store,
+    )
+
+    try:
+        repo = FeedbackRepository()
+        batches = await repo.count_recent_and_last()
+        patterns = await repo.list_patterns()
+        updates = await repo.list_updates()
+
+        now = datetime.now(timezone.utc)
+        cycles_24h = sum(1 for b in batches if (now - b.timestamp).total_seconds() < 86400)
+        last_cycle_at = max((b.timestamp for b in batches), default=None)
+
+        client = await get_async_supabase_client()
+        thumbs = await get_chatbot_feedback_repository(supabase_client=client).get_feedback_summary(
+            days=req.days
+        )
+        window_start = (now - timedelta(days=req.days)).isoformat()
+        signals = await get_learning_signals_feedback_store(supabase_client=client).get_feedback(
+            start_time=window_start
+        )
+
+        # metadata.reward is the RAW 0..1 workflow reward; the item's "rating"
+        # is that reward remapped to the analyzer's 1-5 scale — insight math
+        # stays on the raw scale.
+        rewards = [float(s["metadata"]["reward"]) for s in signals]
+        avg_reward = sum(rewards) / len(rewards) if rewards else None
+        per_agent: dict[str, list[float]] = {}
+        for s in signals:
+            per_agent.setdefault(str(s["agent"]), []).append(float(s["metadata"]["reward"]))
+        low_reward_agents = sorted(
+            ((agent, sum(v) / len(v)) for agent, v in per_agent.items() if sum(v) / len(v) < 0.5),
+            key=lambda t: t[1],
+        )
+
+        g = feedback_learning.build_grounding(
+            cycles_24h=cycles_24h,
+            last_cycle_at=(last_cycle_at.isoformat() if last_cycle_at else None),
+            thumbs_7d=int(thumbs.get("total_feedback", 0) or 0),
+            signals_7d=len(signals),
+            avg_reward_7d=avg_reward,
+            patterns=[p.model_dump(mode="json") for p in patterns],
+            updates=[u.model_dump(mode="json") for u in updates],
+            low_reward_agents=low_reward_agents,
+        )
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("feedback-learning insight data unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": "Feedback-learning loop data is currently unavailable, so no "
+                "grounded interpretation can be produced.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Live feedback-learning loop data (unavailable)",
+        )
+    key = cache_key(
+        "feedback-learning",
+        str(req.days),
+        {
+            "a": g["activity_summary"],
+            "p": g["patterns_summary"],
+            "u": g["updates_summary"],
+            # signal_quality feeds the LM too — omitting it served stale
+            # low-reward-agent narratives when only the reward stats changed
+            "q": g["signal_quality_summary"],
+        },
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(feedback_learning.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Live feedback-learning loop data (server-derived)")

@@ -462,6 +462,47 @@ async def _persist_cycle_artifacts(result: LearningResponse) -> None:
         await _persist_update(update)
 
 
+async def persist_learning_cycle_output(output: Any, batch_id: str) -> "LearningResponse":
+    """Convert a ``FeedbackLearnerAgent`` output into a ``LearningResponse``
+    and persist the batch + its artifacts (the tables the /feedback-learning
+    page reads).
+
+    Shared entry point for out-of-band cycle triggers — concretely the 6h
+    Celery beat (``src.tasks.run_feedback_learning_cycle``), which previously
+    persisted ONLY dspy training signals: the page tables stayed empty despite
+    a live learning loop running 4×/day. Mirrors the ``applied_updates``
+    re-hydration in ``_execute_learning_cycle`` (state carries applied update
+    IDs as strings; the records live in ``proposed_updates``).
+    """
+    proposed = [dict(u) for u in (output.proposed_updates or [])]
+    applied_ids = set(output.applied_updates or [])
+    applied_records = [u for u in proposed if u.get("update_id") in applied_ids]
+    response = LearningResponse(
+        batch_id=batch_id,
+        status=(
+            LearningStatus.COMPLETED if output.status == "completed" else LearningStatus.FAILED
+        ),
+        detected_patterns=_convert_patterns([dict(p) for p in output.detected_patterns or []]),
+        learning_recommendations=_convert_recommendations(
+            [dict(r) for r in output.learning_recommendations or []]
+        ),
+        priority_improvements=list(output.priority_improvements or []),
+        proposed_updates=_convert_updates(proposed),
+        applied_updates=_convert_updates(applied_records),
+        learning_summary=output.learning_summary or "",
+        patterns_detected=len(output.detected_patterns or []),
+        recommendations_generated=len(output.learning_recommendations or []),
+        updates_proposed=len(proposed),
+        updates_applied=len(applied_ids),
+        total_latency_ms=int(output.total_latency_ms or 0),
+        errors=[str(e) for e in (output.errors or [])],
+        warnings=list(output.warnings or []),
+    )
+    await _persist_cycle_artifacts(response)
+    await _persist_batch(response)
+    return response
+
+
 async def _persist_item(item: FeedbackItem) -> None:
     if _use_inmemory_fallback():
         _feedback_store.append(item)

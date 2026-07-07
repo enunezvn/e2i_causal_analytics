@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from ..rating_utils import rating_to_numeric
 from ..state import FeedbackItem, FeedbackLearnerState, FeedbackSummary
 
 logger = logging.getLogger(__name__)
@@ -224,9 +225,14 @@ class FeedbackCollectorNode:
             agent = item["source_agent"]
             by_agent[agent] = by_agent.get(agent, 0) + 1
 
-            # Ratings
-            if fb_type == "rating" and isinstance(item["user_feedback"], (int, float)):
-                ratings.append(float(item["user_feedback"]))
+            # Ratings — normalize through the shared 1-5 mapper so thumbs
+            # strings count toward average_rating/rating_count alongside the
+            # numeric reward-derived ratings (an isinstance gate here silently
+            # excluded every explicit thumb from the summary).
+            if fb_type == "rating":
+                num = rating_to_numeric(item["user_feedback"])
+                if num is not None:
+                    ratings.append(num)
 
         return FeedbackSummary(
             total_count=len(feedback),

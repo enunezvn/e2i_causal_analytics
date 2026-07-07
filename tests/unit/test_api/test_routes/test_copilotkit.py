@@ -295,10 +295,20 @@ class TestFeedbackRequest:
         assert request.agent_name is None
         assert request.tools_used is None
 
-    def test_feedback_requires_message_id(self):
-        """Test that message_id is required."""
-        with pytest.raises(ValueError):
-            FeedbackRequest(rating="thumbs_up")
+    def test_feedback_message_id_now_optional(self):
+        """message_id is optional: the live CopilotKit stream only knows its
+        AG-UI uuid, so the server resolves the DB row from session_id +
+        response_preview instead (the old client fabricated ids via
+        parseInt(uuid)||Date.now(), which could attach feedback to a row from a
+        DIFFERENT session)."""
+        request = FeedbackRequest(
+            rating="thumbs_up",
+            session_id="thread-uuid",
+            response_preview="The TRx for...",
+            message_uuid="ag-ui-uuid",
+        )
+        assert request.message_id is None
+        assert request.message_uuid == "ag-ui-uuid"
 
     def test_feedback_requires_rating(self):
         """Test that rating is required."""
@@ -740,6 +750,593 @@ class TestFeedbackEndpoint:
         data = response.json()
         assert data["success"] is False
         assert "configuration error" in data["error"]
+
+    @staticmethod
+    def _chain_client(rows, uuid_raises=False):
+        """Supabase client fake that honors the pass-0 resolution filter.
+
+        The route now runs a metadata->>frontend_message_id eq-query BEFORE
+        content matching; a fake that returned the same rows for every query
+        would make pass 0 spuriously match the newest row and hide content-
+        resolution behavior from the tests. Other filters (session_id, role)
+        are ignored — rows are already scoped per test. uuid_raises simulates
+        a pass-0 query failure (the guard must fall back to content passes).
+        """
+
+        class _Query:
+            def __init__(self, all_rows):
+                self._rows = all_rows
+                self._uuid_filter = None
+                self._limit = None
+
+            def select(self, *_args, **_kwargs):
+                return self
+
+            def order(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, n):
+                self._limit = n
+                return self
+
+            def eq(self, key, value):
+                if key == "metadata->>frontend_message_id":
+                    self._uuid_filter = value
+                return self
+
+            def execute(self):
+                result = self._rows
+                if self._uuid_filter is not None:
+                    if uuid_raises:
+                        raise RuntimeError("jsonb filter rejected")
+                    result = [
+                        r
+                        for r in result
+                        if (r.get("metadata") or {}).get("frontend_message_id") == self._uuid_filter
+                    ]
+                if self._limit is not None:
+                    result = result[: self._limit]
+                return MagicMock(data=result)
+
+        client = MagicMock()
+        client.table.side_effect = lambda _name: _Query(rows)
+        return client
+
+    def _post_resolution(self, test_client, rows, payload, uuid_raises=False):
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "SUPABASE_URL": "https://test.supabase.co",
+                    "SUPABASE_SERVICE_KEY": "test-key",
+                },
+            ),
+            patch(
+                "supabase.create_client",
+                return_value=self._chain_client(rows, uuid_raises=uuid_raises),
+            ),
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new_callable=AsyncMock,
+            ),
+            patch("src.repositories.get_chatbot_feedback_repository") as mock_repo,
+        ):
+            repo = MagicMock()
+            repo.add_feedback = AsyncMock(return_value={"id": 42})
+            mock_repo.return_value = repo
+            response = test_client.post("/copilotkit/feedback", json=payload)
+        return response, repo
+
+    def test_feedback_resolves_by_session_and_preview(self, test_client):
+        """Without a DB message_id, the server must resolve the rated message by
+        exact response-prefix match within the session — the live CopilotKit
+        stream only knows its AG-UI uuid, never the DB id."""
+        preview = "The TRx performance for Remibrutinib is strong"
+        rows = [
+            {"id": 9, "session_id": "thread-1", "content": "A different, newer response"},
+            {"id": 7, "session_id": "thread-1", "content": preview + " across all regions."},
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": preview,
+                "message_uuid": "ag-ui-uuid-1",
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        kwargs = repo.add_feedback.call_args.kwargs
+        assert kwargs["message_id"] == 7
+        assert kwargs["session_id"] == "thread-1"
+        assert kwargs["metadata"] == {"message_uuid": "ag-ui-uuid-1"}
+
+    def test_feedback_resolution_no_match_fails_closed(self, test_client):
+        """A preview matching NO persisted assistant message must fail honestly —
+        never fall back to 'newest row' (that would attach the rating to the
+        wrong message)."""
+        rows = [{"id": 9, "session_id": "thread-1", "content": "Entirely different content"}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": "The TRx performance...",
+                "rating": "thumbs_down",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "No persisted assistant message" in data["error"]
+        repo.add_feedback.assert_not_called()
+
+    def test_feedback_exact_content_match_beats_shared_prefix(self, test_client):
+        """Two responses sharing the same 500-char prefix are indistinguishable
+        to prefix matching — response_text (full content) must resolve the
+        exact row, not the newest prefix match."""
+        shared = "x" * 500
+        rows = [
+            {"id": 9, "session_id": "thread-1", "content": shared + " newer tail"},
+            {"id": 7, "session_id": "thread-1", "content": shared + " the rated tail"},
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": shared,
+                "response_text": shared + " the rated tail",
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 7
+
+    def test_feedback_attribution_derived_from_matched_row(self, test_client):
+        """The persisted row is the authority on who responded: a client-sent
+        agent_name (the old sidebar hardcoded 'copilotkit') must NOT override
+        the row's agent_name, and tools come from the row's tool_results."""
+        content = "The gap analysis shows Kisqali underperforming in the West."
+        rows = [
+            {
+                "id": 5,
+                "session_id": "thread-1",
+                "content": content,
+                "agent_name": "gap_analyzer",
+                "metadata": {"tool_results": [{"tool": "run_gap_analysis", "result": "..."}]},
+            }
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": content[:500],
+                "response_text": content,
+                "agent_name": "copilotkit",
+                "rating": "thumbs_down",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        kwargs = repo.add_feedback.call_args.kwargs
+        assert kwargs["agent_name"] == "gap_analyzer"
+        assert kwargs["tools_used"] == ["run_gap_analysis"]
+
+    def test_feedback_client_agent_hint_is_fallback_only(self, test_client):
+        """When the matched row has no agent_name, the client hint survives."""
+        content = "A response persisted without attribution."
+        rows = [{"id": 6, "session_id": "thread-1", "content": content}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_text": content,
+                "agent_name": "orchestrator",
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["agent_name"] == "orchestrator"
+
+    def test_feedback_resolves_by_stamped_frontend_message_id(self, test_client):
+        """Pass 0: the SSE layer stamps metadata.frontend_message_id on the
+        persisted row, so the client's message_uuid resolves the exact row
+        even when content matching would pick a different (newer) one."""
+        preview = "Identical preview text for both rows"
+        rows = [
+            {"id": 9, "session_id": "thread-1", "content": preview + " newer"},
+            {
+                "id": 7,
+                "session_id": "thread-1",
+                "content": preview + " rated",
+                "agent_name": "copilotkit",
+                "metadata": {"frontend_message_id": "ag-ui-uuid-7"},
+            },
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "message_uuid": "ag-ui-uuid-7",
+                "response_preview": preview,
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 7
+
+    def test_feedback_unstamped_uuid_falls_back_to_content(self, test_client):
+        """A message_uuid with no stamped row (stamping is best-effort) must
+        fall through to content matching, not fail."""
+        content = "Fallback-resolved response."
+        rows = [{"id": 4, "session_id": "thread-1", "content": content}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "message_uuid": "never-stamped",
+                "response_text": content,
+                "rating": "thumbs_down",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 4
+
+    def test_feedback_row_tool_columns_beat_client_hint(self, test_client):
+        """Orchestrator-flow rows store tools in top-level tool_results/
+        tool_calls columns (not metadata); those must be selected and must
+        win over a client-supplied tools_used hint."""
+        content = "Causal analysis complete."
+        rows = [
+            {
+                "id": 3,
+                "session_id": "thread-1",
+                "content": content,
+                "agent_name": "causal_impact",
+                "tool_results": [{"tool": "run_causal_analysis", "result": "..."}],
+            }
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_text": content,
+                "tools_used": ["client-invented-tool"],
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["tools_used"] == ["run_causal_analysis"]
+
+    def test_feedback_tool_name_shape_resolved_from_row_tool_calls(self, test_client):
+        """chatbot_graph.finalize_node persists top-level tool_calls entries
+        keyed "tool_name" — when tool_results is empty, that shape is the only
+        authoritative source and must be extracted."""
+        content = "Query answered via data tool."
+        rows = [
+            {
+                "id": 5,
+                "session_id": "thread-1",
+                "content": content,
+                "agent_name": "orchestrator",
+                "tool_results": [],
+                "tool_calls": [{"tool_name": "e2i_data_query_tool", "args": {}}],
+            }
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_text": content,
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["tools_used"] == ["e2i_data_query_tool"]
+
+    def test_feedback_pass0_error_falls_back_to_content(self, test_client):
+        """A pass-0 (stamped-id) query failure must degrade to content
+        matching, not abort resolution."""
+        content = "Resolved despite pass-0 failure."
+        rows = [{"id": 6, "session_id": "thread-1", "content": content}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "message_uuid": "uuid-whose-query-breaks",
+                "response_text": content,
+                "rating": "thumbs_up",
+            },
+            uuid_raises=True,
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 6
+
+    def test_feedback_requires_id_or_session_preview(self, test_client):
+        """Neither message_id nor (session_id + response_preview) → honest error."""
+        response, repo = self._post_resolution(
+            test_client,
+            [],
+            {"rating": "thumbs_up"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "message_id or (session_id + response_preview)" in data["error"]
+        repo.add_feedback.assert_not_called()
+
+
+# =============================================================================
+# Frontend messageId tracking + stamping (feedback resolution pass-0 key)
+# =============================================================================
+
+
+class TestFrontendMessageIdStamping:
+    """The SSE layer rebuilds (messageId -> text) from TEXT_MESSAGE_* events
+    and stamps metadata.frontend_message_id onto the persisted rows — the
+    stable key /copilotkit/feedback resolves by before content matching."""
+
+    def test_tracker_accumulates_lifecycle(self):
+        from src.api.routes.copilotkit import _track_text_message_event
+
+        deltas: dict = {}
+        completed: dict = {}
+        events = [
+            {"type": "TEXT_MESSAGE_START", "messageId": "m1"},
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m1", "delta": "Hello "},
+            # snake_case key — native ag_ui events serialize by alias, but
+            # defensive handling covers both spellings
+            {"type": "TEXT_MESSAGE_CONTENT", "message_id": "m1", "delta": "world"},
+            {"type": "TEXT_MESSAGE_END", "messageId": "m1"},
+        ]
+        for event in events:
+            _track_text_message_event(event, deltas, completed)
+        assert completed == {"m1": "Hello world"}
+        assert deltas == {}
+
+    def test_tracker_ignores_malformed_events(self):
+        from src.api.routes.copilotkit import _track_text_message_event
+
+        deltas: dict = {}
+        completed: dict = {}
+        for event in [
+            {"type": "TEXT_MESSAGE_CONTENT", "delta": "no message id"},
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m2", "delta": 42},
+            {"type": "TEXT_MESSAGE_END", "messageId": "m2"},  # no content accumulated
+            {"type": "RUN_FINISHED"},
+        ]:
+            _track_text_message_event(event, deltas, completed)
+        assert completed == {}
+
+    def _stamp_client(self, rows):
+        """Sync-client fake recording metadata updates and honoring the
+        metadata->>run_id filter (run-scoped stamping)."""
+        updates = []
+
+        class _Query:
+            def __init__(self):
+                self._update_payload = None
+                self._update_id = None
+                self._run_id_filter = None
+
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, key, value):
+                if self._update_payload is not None and key == "id":
+                    self._update_id = value
+                if key == "metadata->>run_id":
+                    self._run_id_filter = value
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def limit(self, *_a):
+                return self
+
+            def update(self, payload):
+                self._update_payload = payload
+                return self
+
+            def execute(self):
+                if self._update_payload is not None:
+                    updates.append((self._update_id, self._update_payload))
+                    return MagicMock(data=[])
+                data = rows
+                if self._run_id_filter is not None:
+                    data = [
+                        r
+                        for r in rows
+                        if (r.get("metadata") or {}).get("run_id") == self._run_id_filter
+                    ]
+                return MagicMock(data=data)
+
+        client = MagicMock()
+        client.table.side_effect = lambda _name: _Query()
+        return client, updates
+
+    def test_stamps_newest_matching_row(self):
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        rows = [
+            {"id": 9, "content": "The answer.", "metadata": {"source": "copilotkit"}},
+            {"id": 7, "content": "The answer.", "metadata": {}},  # older duplicate
+        ]
+        client, updates = self._stamp_client(rows)
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+            _stamp_frontend_message_ids("thread-1", {"m1": "The answer."})
+        assert updates == [(9, {"metadata": {"source": "copilotkit", "frontend_message_id": "m1"}})]
+
+    def test_already_stamped_row_skipped_for_next_match(self):
+        """An identical-content row already mapped to another messageId must
+        not be re-stamped — the next-newest matching row takes the id."""
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        rows = [
+            {"id": 9, "content": "Same.", "metadata": {"frontend_message_id": "m-old"}},
+            {"id": 7, "content": "Same.", "metadata": {}},
+        ]
+        client, updates = self._stamp_client(rows)
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+            _stamp_frontend_message_ids("thread-1", {"m-new": "Same."})
+        assert updates == [(7, {"metadata": {"frontend_message_id": "m-new"}})]
+
+    def test_stamping_is_run_scoped(self):
+        """Two overlapping same-session runs with identical final content
+        must not cross-stamp: the run_id filter scopes the content match to
+        rows this run persisted, so run A cannot take run B's newer row."""
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        rows = [
+            {"id": 9, "content": "Same.", "metadata": {"run_id": "run-B"}},
+            {"id": 7, "content": "Same.", "metadata": {"run_id": "run-A"}},
+        ]
+        client, updates = self._stamp_client(rows)
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+            _stamp_frontend_message_ids("thread-1", {"m-a": "Same."}, run_id="run-A")
+        assert updates == [(7, {"metadata": {"run_id": "run-A", "frontend_message_id": "m-a"}})]
+
+    def test_persist_message_sync_attaches_run_id(self):
+        """Assistant rows persisted during a run must carry metadata.run_id
+        (from the run contextvar) so stamping can scope to them; the caller's
+        metadata dict must not be mutated."""
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        caller_metadata = {"source": "copilotkit"}
+        token = _run_id_context.set("run-X")
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync(
+                    "thread-1",
+                    "assistant",
+                    "hi",
+                    agent_name="copilotkit",
+                    metadata=caller_metadata,
+                )
+        finally:
+            _run_id_context.reset(token)
+        assert inserted[0]["metadata"] == {"source": "copilotkit", "run_id": "run-X"}
+        assert caller_metadata == {"source": "copilotkit"}
+
+    def test_persist_message_sync_no_run_id_outside_run(self):
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        token = _run_id_context.set(None)
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync("thread-1", "assistant", "hi", metadata={})
+        finally:
+            _run_id_context.reset(token)
+        assert "run_id" not in inserted[0]["metadata"]
+
+    def test_persist_message_sync_state_run_id_when_context_lost(self):
+        """run_id must ride the same two-channel ladder as session_id: when
+        the contextvar is lost but the node still has state's run_id, the row
+        must carry it — otherwise the stamp filter hides the row forever and
+        feedback degrades to content heuristics (codex round-4 MED)."""
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        token = _run_id_context.set(None)
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync(
+                    "thread-1", "assistant", "hi", metadata={}, run_id="run-from-state"
+                )
+        finally:
+            _run_id_context.reset(token)
+        assert inserted[0]["metadata"]["run_id"] == "run-from-state"
+
+    def test_persist_message_sync_context_var_wins_over_state_param(self):
+        """Ladder order mirrors session_id: context var preferred, state
+        param is the fallback."""
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        token = _run_id_context.set("run-ctx")
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync(
+                    "thread-1", "assistant", "hi", metadata={}, run_id="run-stale"
+                )
+        finally:
+            _run_id_context.reset(token)
+        assert inserted[0]["metadata"]["run_id"] == "run-ctx"
+
+    def test_stamping_failure_is_swallowed(self):
+        """Stamping is best-effort: a DB failure must never propagate into the
+        SSE generator (feedback falls back to content matching)."""
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        with patch(
+            "src.api.dependencies.supabase_client.get_supabase",
+            side_effect=RuntimeError("db down"),
+        ):
+            _stamp_frontend_message_ids("thread-1", {"m1": "text"})  # no raise
 
 
 # =============================================================================

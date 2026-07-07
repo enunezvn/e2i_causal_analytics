@@ -15,6 +15,7 @@
  */
 
 import * as React from 'react';
+import { CopilotContext } from '@copilotkit/react-core';
 import { CopilotChat } from '@copilotkit/react-ui';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -129,65 +130,63 @@ export function E2IChatSidebar({
   // Feedback handlers for CopilotKit thumbs up/down buttons.
   // (Removed a per-render console.log here that ran on every render and leaked
   //  to the production console — #18 console hygiene.)
+  //
+  // The rated message is identified server-side by (threadId, response prefix):
+  // message persistence stores the CopilotKit threadId as the session key, and
+  // the AG-UI message uuid the client holds is unrelated to the DB row id.
+  // Read the raw context (not useCopilotContext(), which THROWS outside the
+  // provider — this sidebar also renders with copilot disabled).
+  const { threadId } = React.useContext(CopilotContext);
 
-  const handleThumbsUp = React.useCallback(
+  const rateMessage = React.useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (message: any) => {
-      logger.debug('[E2IChatSidebar] handleThumbsUp CALLED with message:', message);
+    (message: any, rating: FeedbackRating) => {
+      logger.debug(`[E2IChatSidebar] ${rating} CALLED with message:`, message);
 
       try {
-        const messageId = message.id ? parseInt(message.id, 10) || Date.now() : Date.now();
+        const messageUuid = typeof message.id === 'string' ? message.id : undefined;
         const content = typeof message.content === 'string'
           ? message.content
           : JSON.stringify(message.content || '');
 
-        // Fire and forget - don't await to avoid blocking the UI
+        // Fire and forget - don't await to avoid blocking the UI.
+        // No agentName: the server derives attribution from the matched
+        // message row (the client is not the authority on who responded).
+        // responseText enables exact full-content resolution; the 500-char
+        // preview is what gets stored on the feedback row.
         submitFeedback({
-          messageId,
-          sessionId: sessionIdRef.current,
-          rating: 'thumbs_up' as FeedbackRating,
+          messageKey: messageUuid ?? String(Date.now()),
+          messageUuid,
+          sessionId: threadId,
+          rating,
           responsePreview: content.substring(0, 500),
-          agentName: 'copilotkit',
-        }).then(() => {
-          logger.debug('[E2IChatSidebar] Thumbs up feedback submitted for message:', messageId);
+          responseText: content.substring(0, 20000),
+        }).then((result) => {
+          if (result.success) {
+            logger.debug(`[E2IChatSidebar] ${rating} feedback submitted for message:`, messageUuid);
+          } else {
+            console.error(`[E2IChatSidebar] ${rating} feedback rejected:`, result.error);
+          }
         }).catch((error) => {
-          console.error('[E2IChatSidebar] Failed to submit thumbs up feedback:', error);
+          console.error(`[E2IChatSidebar] Failed to submit ${rating} feedback:`, error);
         });
       } catch (error) {
-        console.error('[E2IChatSidebar] Error in handleThumbsUp:', error);
+        console.error(`[E2IChatSidebar] Error in ${rating} handler:`, error);
       }
     },
-    [submitFeedback]
+    [submitFeedback, threadId]
+  );
+
+  const handleThumbsUp = React.useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (message: any) => rateMessage(message, 'thumbs_up'),
+    [rateMessage]
   );
 
   const handleThumbsDown = React.useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (message: any) => {
-      logger.debug('[E2IChatSidebar] handleThumbsDown CALLED with message:', message);
-
-      try {
-        const messageId = message.id ? parseInt(message.id, 10) || Date.now() : Date.now();
-        const content = typeof message.content === 'string'
-          ? message.content
-          : JSON.stringify(message.content || '');
-
-        // Fire and forget - don't await to avoid blocking the UI
-        submitFeedback({
-          messageId,
-          sessionId: sessionIdRef.current,
-          rating: 'thumbs_down' as FeedbackRating,
-          responsePreview: content.substring(0, 500),
-          agentName: 'copilotkit',
-        }).then(() => {
-          logger.debug('[E2IChatSidebar] Thumbs down feedback submitted for message:', messageId);
-        }).catch((error) => {
-          console.error('[E2IChatSidebar] Failed to submit thumbs down feedback:', error);
-        });
-      } catch (error) {
-        console.error('[E2IChatSidebar] Error in handleThumbsDown:', error);
-      }
-    },
-    [submitFeedback]
+    (message: any) => rateMessage(message, 'thumbs_down'),
+    [rateMessage]
   );
 
   // Initialize with defaultOpen

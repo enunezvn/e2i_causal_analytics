@@ -52,7 +52,9 @@ import {
   useQuickLearningCycle,
   useApplyUpdate,
   useRollbackUpdate,
+  useFeedbackLearningInsight,
 } from '@/hooks/api';
+import { StrategicInsightCard } from '@/components/insights';
 import { StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import type { StatusType } from '@/components/visualizations/dashboard/StatusBadge';
 import { PatternSeverity, UpdateStatus, UpdateType } from '@/types/feedback';
@@ -208,6 +210,9 @@ function FeedbackLearning() {
   const { mutate: runQuickCycle, isPending: isRunningCycle } = useQuickLearningCycle();
   const { mutate: applyUpdate, isPending: isApplying } = useApplyUpdate();
   const { mutate: rollbackUpdate, isPending: isRollingBack } = useRollbackUpdate();
+
+  // Strategic interpretation (server-derived grounding; on-demand)
+  const flInsight = useFeedbackLearningInsight();
 
   // F-002 fix: no fabricated `SAMPLE_PATTERNS`/`SAMPLE_UPDATES` fallback.
   // Data comes strictly from API; the page renders empty states when the
@@ -455,6 +460,22 @@ function FeedbackLearning() {
             </p>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Strategic Interpretation — grounded in persisted cycles/patterns/updates
+          and the real feedback inflow (server-derived) */}
+      <div className="mb-6">
+        <StrategicInsightCard
+          onGenerate={() => flInsight.mutate({ days: 7 })}
+          isLoading={flInsight.isPending}
+          error={flInsight.error?.message ?? null}
+          insight={flInsight.data?.insight}
+          keyTakeaways={flInsight.data?.key_takeaways}
+          grounding={flInsight.data?.grounding}
+          isFallback={flInsight.data?.is_fallback}
+          provenance={flInsight.data?.provenance}
+          generatedAt={flInsight.data?.generated_at}
+        />
       </div>
 
       {/* Main Content */}
