@@ -207,7 +207,8 @@ def commercial_rows_for_upsert() -> List[dict]:
     cols = [c for c in TABLE_COLUMNS["causal_paths"] if c in com.columns]
     # json round-trip strips the numpy scalars a DataFrame leaves in records
     # (np.int64/np.bool_ break postgrest's stdlib-json serializer, PR #1098).
-    return json.loads(com[cols].to_json(orient="records"))
+    records: List[dict] = json.loads(com[cols].to_json(orient="records"))
+    return records
 
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
@@ -343,7 +344,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
         # Commercial-KPI grain — ADDITIVE fixed block (15 edges x 3 brands),
         # content-addressed (see _COMMERCIAL_EDGES contract comment above).
         for brand in _BRANDS:
-            for start_node, end_node, mediator, confounders, lo, hi in _COMMERCIAL_EDGES:
+            for start_node, end_node, mediator, edge_confounders, lo, hi in _COMMERCIAL_EDGES:
                 rng = _commercial_edge_rng(brand, start_node, end_node)
                 effect = round(float(rng.uniform(lo, hi)), 4)
                 direct = round(effect * float(rng.uniform(0.4, 0.8)), 4)
@@ -361,7 +362,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                         "causal_effect_size": effect,
                         "confidence_level": round(float(rng.uniform(0.75, 0.92)), 3),
                         "method_used": "backdoor.linear_regression",
-                        "confounders_controlled": list(confounders),
+                        "confounders_controlled": list(edge_confounders),
                         "mediators_identified": [mediator],
                         "time_lag_days": int(rng.integers(14, 90)),
                         "validation_status": "validated",
