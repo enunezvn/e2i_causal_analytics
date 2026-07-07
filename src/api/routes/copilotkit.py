@@ -7,9 +7,25 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.29.0
+Version: 1.30.0
 
 Changelog:
+    1.30.0 - Wired frontend actions (CopilotKit generative UI) into the chat agent —
+             inline KPI trend charts now work end-to-end. The frontend has had the
+             complete chart pipeline since renderKpiTrend shipped (useCopilotAction +
+             Recharts KpiTrendChart + CustomAssistantMessage.generativeUI()), and the
+             delivery chain (agent/run body tools → execute(actions=...) →
+             RunAgentInput.tools → langgraph_default_merge_state →
+             state["copilotkit"]["actions"]) was verified intact in the SDK source —
+             but E2IAgentState had no "copilotkit" channel, so LangGraph dropped the
+             key and chat_node bound only the backend tools: the model could never
+             see the action. Fix: declare the channel, bind the riding actions
+             (_frontend_action_schemas — accepts JSON-schema or CopilotKit
+             parameter-array formats, skips backend-shadowing names), route
+             frontend-action-only turns to END for client-side execution
+             (_route_after_chat), strip frontend calls from mixed turns so ToolNode
+             never sees an unknown tool (_strip_frontend_calls_when_mixed), and teach
+             the system prompt when to call renderKpiTrend.
     1.29.0 - Fixed ghost empty-args tool calls minted by the streaming accumulator.
              Root cause: Anthropic streams messages as content blocks, so leading
              text shifts the first tool_use block to index 1. tool_call_chunks carry
@@ -246,6 +262,7 @@ from typing import (
     AsyncGenerator,
     Dict,
     List,
+    Mapping,
     Optional,
     Sequence,
     TypedDict,
@@ -2266,6 +2283,160 @@ def _finalize_tool_calls(accumulated: list[dict[str, Any]]) -> list[dict[str, An
     return [deduped[cid] for cid in order]
 
 
+# ---------------------------------------------------------------------------
+# Frontend actions (CopilotKit generative UI) — v1.30.0
+#
+# The frontend registers actions via useCopilotAction (renderKpiTrend,
+# navigateTo, …) and the CopilotKit runtime forwards them as ``tools`` in every
+# agent/run body. Our execute() bridge maps them into RunAgentInput.tools, and
+# LangGraphAGUIAgent.langgraph_default_merge_state injects them into graph
+# input as state["copilotkit"]["actions"]. The chain then BROKE here:
+# E2IAgentState had no ``copilotkit`` channel (LangGraph drops unknown input
+# keys) and chat_node bound only the backend E2I_CHATBOT_TOOLS — so the model
+# could never see, let alone call, the chart action. These helpers close that
+# last mile: convert the riding actions into bind-able tool schemas, route
+# frontend-action calls to END (the client executes the handler and renders
+# the generative UI — ToolNode has no implementation for them), and drop
+# frontend calls from prompt-discouraged mixed turns so ToolNode never sees an
+# unknown tool name.
+# ---------------------------------------------------------------------------
+
+#: CopilotKit action parameter types → JSON-schema types (the frontend may
+#: send parameters in CopilotKit's array-of-parameters format rather than a
+#: prebuilt JSON schema; both shapes are accepted by _frontend_action_schemas).
+_CK_PARAM_TYPES = {
+    "string": "string",
+    "number": "number",
+    "boolean": "boolean",
+    "object": "object",
+}
+
+
+def _frontend_action_names(state: Mapping[str, Any]) -> set[str]:
+    """Names of the frontend actions riding this run's state (empty set when
+    the surface forwarded none)."""
+    copilotkit_state = state.get("copilotkit") or {}
+    actions = copilotkit_state.get("actions") or []
+    return {action["name"] for action in actions if isinstance(action, dict) and action.get("name")}
+
+
+def _ck_param_array_to_json_schema(parameters: list) -> dict[str, Any]:
+    """Convert CopilotKit's array-of-parameters action format to JSON schema."""
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for param in parameters:
+        if not isinstance(param, dict) or not param.get("name"):
+            continue
+        raw_type = str(param.get("type") or "string")
+        if raw_type.endswith("[]"):
+            schema: dict[str, Any] = {
+                "type": "array",
+                "items": {"type": _CK_PARAM_TYPES.get(raw_type[:-2], "string")},
+            }
+        else:
+            schema = {"type": _CK_PARAM_TYPES.get(raw_type, "string")}
+        if param.get("description"):
+            schema["description"] = param["description"]
+        properties[param["name"]] = schema
+        if param.get("required"):
+            required.append(param["name"])
+    json_schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        json_schema["required"] = required
+    return json_schema
+
+
+def _frontend_action_schemas(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Bind-able OpenAI-style tool schemas for the frontend actions in state.
+
+    Skips malformed entries, duplicate names, and names shadowing a backend
+    tool (backend implementations win — a frontend action must never hijack
+    kpi_calculate_tool etc.). Parameters are accepted either as a JSON-schema
+    object or as CopilotKit's array-of-parameters format; anything else
+    degrades to an empty-object schema.
+    """
+    copilotkit_state = state.get("copilotkit") or {}
+    raw_actions = copilotkit_state.get("actions") or []
+    backend_names = {tool.name for tool in E2I_CHATBOT_TOOLS}
+    schemas: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for action in raw_actions:
+        if not isinstance(action, dict):
+            continue
+        name = action.get("name")
+        if not name or name in backend_names or name in seen:
+            continue
+        seen.add(name)
+        parameters = action.get("parameters")
+        if isinstance(parameters, dict) and parameters.get("type") == "object":
+            json_schema = parameters
+        elif isinstance(parameters, list):
+            json_schema = _ck_param_array_to_json_schema(parameters)
+        else:
+            json_schema = {"type": "object", "properties": {}}
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": action.get("description") or "",
+                    "parameters": json_schema,
+                },
+            }
+        )
+    return schemas
+
+
+def _strip_frontend_calls_when_mixed(
+    tool_calls: list[dict[str, Any]], frontend_names: set[str]
+) -> list[dict[str, Any]]:
+    """In a mixed backend+frontend turn keep only the backend calls.
+
+    The prompt tells the model to call frontend actions on their own; if it
+    mixes anyway, ToolNode would choke on the unknown frontend name. Dropping
+    the frontend call (and keeping the data flow) is the graceful degradation
+    — the user can re-ask for the chart. Homogeneous turns pass through
+    unchanged.
+    """
+    if not frontend_names or not tool_calls:
+        return tool_calls
+    backend_calls = [tc for tc in tool_calls if tc.get("name") not in frontend_names]
+    if backend_calls and len(backend_calls) < len(tool_calls):
+        dropped = [tc.get("name") for tc in tool_calls if tc.get("name") in frontend_names]
+        logger.warning(
+            f"[CopilotKit] Mixed tool turn: dropping frontend action call(s) {dropped} "
+            f"so ToolNode only receives backend tools"
+        )
+        return backend_calls
+    return tool_calls
+
+
+def _route_after_chat(state: Mapping[str, Any]) -> str:
+    """Post-chat routing: backend tool calls → "tools"; everything else ends.
+
+    A turn whose calls are ALL frontend actions must END the run: the client
+    executes the action handler and renders the generative UI (e.g. the
+    KpiTrendChart), then reports the result back in a follow-up run. Sending
+    those calls to ToolNode would fail — there is no backend implementation.
+    """
+    messages = state.get("messages", [])
+    if not messages:
+        return "end"
+    last_message = messages[-1]
+    if not (isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None)):
+        return "end"
+    call_names = [tc.get("name") for tc in last_message.tool_calls]
+    frontend_names = _frontend_action_names(state)
+    if frontend_names and all(name in frontend_names for name in call_names):
+        logger.info(
+            f"[CopilotKit] Frontend action call(s) {call_names} — ending run for "
+            f"client-side execution (generative UI)"
+        )
+        return "end"
+    logger.info(f"[CopilotKit] Claude requested {len(call_names)} tool call(s)")
+    return "tools"
+
+
 def build_synthesis_prompt(
     original_query: str,
     tool_calls: list[dict],
@@ -2354,6 +2525,10 @@ You MUST use tools proactively when users ask about data:
 
 DO NOT just describe what tools can do - actually CALL them to get data!
 
+## Inline Charts (generative UI)
+
+When the user asks to chart / plot / graph / visualize a KPI's trend over time AND a `renderKpiTrend` tool is available, call `renderKpiTrend` (kpiId such as `trx`, `nrx`, or `market_share`) — the UI renders a real line chart from stored KPI history directly inside your reply. Call it on its OWN, never combined with other tool calls in the same turn (combined turns drop the chart). If `renderKpiTrend` is not in your tool list, answer with data from the other tools and say inline charts aren't available in this surface — do NOT describe a chart you cannot render.
+
 ## Response Format
 
 - Be concise but comprehensive
@@ -2385,6 +2560,13 @@ class E2IAgentState(TypedDict, total=False):
     agent_status: str  # Agent status: "processing", "waiting", "complete", "error"
     error_message: Optional[str]  # Error message if agent_status is "error"
 
+    # CoAgents channel injected by LangGraphAGUIAgent.langgraph_default_merge_state:
+    # {"actions": [<frontend useCopilotAction schemas>], "context": [...]}. This key
+    # MUST be declared here — LangGraph drops input keys that aren't state channels,
+    # and without it chat_node can never see (or bind) the frontend actions that
+    # power generative UI like the inline KPI trend chart (v1.30.0).
+    copilotkit: Dict[str, Any]
+
 
 def create_e2i_chat_agent():
     """
@@ -2400,21 +2582,13 @@ def create_e2i_chat_agent():
     """
 
     def should_continue(state: E2IAgentState) -> str:
-        """Determine if we should continue to tools or end."""
-        messages = state.get("messages", [])
-        if not messages:
-            return "end"
+        """Determine if we should continue to tools or end.
 
-        last_message = messages[-1]
-
-        # If the last message has tool calls, go to tools node
-        if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
-            logger.info(
-                f"[CopilotKit] Claude requested {len(last_message.tool_calls)} tool call(s)"
-            )
-            return "tools"
-
-        return "end"
+        Delegates to module-level _route_after_chat (v1.30.0): frontend-action
+        calls end the run for client-side execution (generative UI); backend
+        tool calls go to ToolNode as before.
+        """
+        return _route_after_chat(state)
 
     async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Process chat messages using Claude with bound tools."""
@@ -2528,8 +2702,19 @@ def create_e2i_chat_agent():
             provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for chat")
 
-            # Bind E2I tools to LLM with tool_choice="auto" to encourage tool use
-            llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS, tool_choice="auto")
+            # Bind E2I tools to LLM with tool_choice="auto" to encourage tool use.
+            # v1.30.0: also bind the frontend actions riding state (generative UI —
+            # renderKpiTrend etc.); without this the model can never call them.
+            frontend_action_schemas = _frontend_action_schemas(state)
+            if frontend_action_schemas:
+                bound_action_names = [s["function"]["name"] for s in frontend_action_schemas]
+                logger.info(
+                    f"[CopilotKit] Binding {len(frontend_action_schemas)} frontend "
+                    f"action(s): {bound_action_names}"
+                )
+            llm_with_tools = llm.bind_tools(
+                [*E2I_CHATBOT_TOOLS, *frontend_action_schemas], tool_choice="auto"
+            )
 
             # Build messages for LLM
             system_msg = SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT)
@@ -2606,6 +2791,12 @@ def create_e2i_chat_agent():
                 # Parse accumulated entries into executable calls (args_str preferred,
                 # nameless dropped, duplicate ids collapsed — v1.29.0 ghost-call fix).
                 parsed_tool_calls = _finalize_tool_calls(accumulated_tool_calls)
+
+                # v1.30.0: a prompt-discouraged mixed backend+frontend turn keeps
+                # only the backend calls — ToolNode has no frontend implementations.
+                parsed_tool_calls = _strip_frontend_calls_when_mixed(
+                    parsed_tool_calls, _frontend_action_names(state)
+                )
 
                 response = AIMessage(
                     content=full_content,
