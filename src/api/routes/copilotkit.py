@@ -598,6 +598,11 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         state_with_session = dict(state) if state else {}
         persistent_session_id = original_thread_id or thread_id
         state_with_session["session_id"] = persistent_session_id
+        # run_id rides state for the same reason session_id does: neither
+        # channel is trusted alone (AG-UI may drop custom state fields; the
+        # context var may be lost across execution boundaries). Nodes pass
+        # state's run_id into _persist_message_sync as the fallback.
+        state_with_session["run_id"] = run_id
 
         # CRITICAL (v1.21.1): Also set session_id in context var for reliable cross-async access
         # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
@@ -1023,12 +1028,19 @@ def _persist_message_sync(
     content: str,
     agent_name: Optional[str] = None,
     metadata: Optional[dict] = None,
+    run_id: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Persist a message to the database using synchronous Supabase client.
 
     NOTE: This bypasses the async repository method because supabase-py
     uses synchronous HTTP calls internally, making 'await' incompatible.
+
+    run_id follows the same two-channel resilience ladder as session_id
+    (context var preferred, state-sourced parameter as fallback): a row
+    persisted without metadata.run_id can never be stamped with its
+    frontend_message_id, because _stamp_frontend_message_ids filters on
+    metadata->>run_id.
     """
     try:
         from src.api.dependencies.supabase_client import get_supabase
@@ -1039,7 +1051,7 @@ def _persist_message_sync(
             return None
 
         row_metadata = dict(metadata or {})
-        run_id = _run_id_context.get()
+        run_id = _run_id_context.get() or run_id
         if run_id and "run_id" not in row_metadata:
             # Run discriminator so post-stream stamping can scope its
             # content match to this run's rows (see
@@ -2136,6 +2148,7 @@ class E2IAgentState(TypedDict, total=False):
     # Core message state
     messages: Annotated[Sequence[BaseMessage], operator.add]
     session_id: str  # Persistent session ID for message storage (optional)
+    run_id: str  # Per-run stamping discriminator; rides state as the fallback channel to _run_id_context, mirroring session_id's redundancy
 
     # Observable state for CoAgent sync (Phase 1 of state sync implementation)
     current_node: str  # Current processing node: "chat", "tools", "synthesize", "idle"
@@ -2248,6 +2261,7 @@ def create_e2i_chat_agent():
                         role="user",
                         content=last_human_message,  # type: ignore[arg-type]
                         metadata={"source": "copilotkit"},
+                        run_id=state.get("run_id"),
                     )
                     if result:
                         user_message_id = result.get("id")
@@ -2270,6 +2284,7 @@ def create_e2i_chat_agent():
                             content=greeting,
                             agent_name="copilotkit",
                             metadata={"source": "copilotkit", "type": "greeting"},
+                            run_id=state.get("run_id"),
                         )
                 except Exception as e:
                     logger.warning(f"[CopilotKit] Failed to persist greeting: {e}")
@@ -2532,6 +2547,7 @@ def create_e2i_chat_agent():
                                 ],
                                 "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                             },
+                            run_id=state.get("run_id"),
                         )
                     except Exception as e:
                         logger.warning(f"[CopilotKit] Failed to persist tool call: {e}")
@@ -2562,6 +2578,7 @@ def create_e2i_chat_agent():
                                 "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                                 "latency_ms": elapsed_ms,
                             },
+                            run_id=state.get("run_id"),
                         )
                         logger.info("[CopilotKit] Persisted assistant message")
                     except Exception as e:
@@ -2624,6 +2641,7 @@ def create_e2i_chat_agent():
                         content=fallback,
                         agent_name="copilotkit",
                         metadata={"source": "copilotkit", "type": "fallback", "error": str(e)},
+                        run_id=state.get("run_id"),
                     )
                 except Exception as persist_err:
                     logger.warning(f"[CopilotKit] Failed to persist fallback: {persist_err}")
@@ -2697,6 +2715,7 @@ def create_e2i_chat_agent():
                         "type": "tool_results",
                         "tool_results": tool_results,
                     },
+                    run_id=state.get("run_id"),
                 )
             except Exception as e:
                 logger.warning(f"[CopilotKit] Failed to persist tool results: {e}")
@@ -2757,6 +2776,7 @@ def create_e2i_chat_agent():
                             "tool_results": tool_results,
                             "latency_ms": elapsed_ms,
                         },
+                        run_id=state.get("run_id"),
                     )
                     logger.info("[CopilotKit] Persisted synthesized message")
                 except Exception as e:
@@ -2807,6 +2827,7 @@ def create_e2i_chat_agent():
                             "error": str(e),
                             "tool_results": tool_results,
                         },
+                        run_id=state.get("run_id"),
                     )
                 except Exception as persist_err:
                     logger.warning(f"[CopilotKit] Failed to persist error fallback: {persist_err}")

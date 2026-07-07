@@ -1271,6 +1271,62 @@ class TestFrontendMessageIdStamping:
             _run_id_context.reset(token)
         assert "run_id" not in inserted[0]["metadata"]
 
+    def test_persist_message_sync_state_run_id_when_context_lost(self):
+        """run_id must ride the same two-channel ladder as session_id: when
+        the contextvar is lost but the node still has state's run_id, the row
+        must carry it — otherwise the stamp filter hides the row forever and
+        feedback degrades to content heuristics (codex round-4 MED)."""
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        token = _run_id_context.set(None)
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync(
+                    "thread-1", "assistant", "hi", metadata={}, run_id="run-from-state"
+                )
+        finally:
+            _run_id_context.reset(token)
+        assert inserted[0]["metadata"]["run_id"] == "run-from-state"
+
+    def test_persist_message_sync_context_var_wins_over_state_param(self):
+        """Ladder order mirrors session_id: context var preferred, state
+        param is the fallback."""
+        from src.api.routes.copilotkit import _persist_message_sync, _run_id_context
+
+        inserted = []
+
+        class _Insert:
+            def insert(self, payload):
+                inserted.append(payload)
+                return self
+
+            def execute(self):
+                return MagicMock(data=[{"id": 1}])
+
+        client = MagicMock()
+        client.table.return_value = _Insert()
+        token = _run_id_context.set("run-ctx")
+        try:
+            with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+                _persist_message_sync(
+                    "thread-1", "assistant", "hi", metadata={}, run_id="run-stale"
+                )
+        finally:
+            _run_id_context.reset(token)
+        assert inserted[0]["metadata"]["run_id"] == "run-ctx"
+
     def test_stamping_failure_is_swallowed(self):
         """Stamping is best-effort: a DB failure must never propagate into the
         SSE generator (feedback falls back to content matching)."""
