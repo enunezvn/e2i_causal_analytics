@@ -176,14 +176,16 @@ N_COMMERCIAL_ROWS = len(_COMMERCIAL_EDGES) * len(_BRANDS)
 
 def _commercial_edge_rng(brand: str, start: str, end: str) -> np.random.Generator:
     """Per-edge rng keyed on content, so every value is reproducible from the
-    edge identity alone (idempotent apply; stable across reseeds)."""
-    digest = hashlib.sha1(f"{brand}|{start}|{end}".encode()).digest()
+    edge identity alone (idempotent apply; stable across reseeds). sha1 is
+    content addressing, not security (usedforsecurity=False, Bandit B324)."""
+    digest = hashlib.sha1(f"{brand}|{start}|{end}".encode(), usedforsecurity=False).digest()
     return np.random.default_rng(int.from_bytes(digest[:8], "big"))
 
 
 def _commercial_path_id(brand: str, start: str, end: str) -> str:
     """Content-addressed id, namespaced scp_c*, 16 chars (varchar(20) cap)."""
-    return "scp_c" + hashlib.sha1(f"{brand}|{start}|{end}".encode()).hexdigest()[:11]
+    digest = hashlib.sha1(f"{brand}|{start}|{end}".encode(), usedforsecurity=False)
+    return "scp_c" + digest.hexdigest()[:11]
 
 
 def commercial_rows_for_upsert() -> List[dict]:
