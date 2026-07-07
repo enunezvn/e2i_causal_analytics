@@ -358,6 +358,15 @@ async def executive_brief_insight(
             },
             provenance="Gap-analyzer ROI opportunities (unavailable)",
         )
+    # Causal levers (commercial grain, 2026-07-07): server-derived through the
+    # chatbot's exact registry read path + provenance gate; names-only,
+    # digit-free (the brief's placeholder guard rejects any digit the LM
+    # emits). fetch fails soft to [] — a registry hiccup never blocks a brief.
+    from src.insights.causal_context import fetch_commercial_drivers, format_driver_names
+
+    levers = format_driver_names(
+        await fetch_commercial_drivers(req.brand, outcomes=("TRx", "NRx", "market share", "ROI"))
+    )
     g = executive_brief.build_grounding(
         brand=req.brand,
         total_addressable_value=feed.total_addressable_value,
@@ -378,13 +387,19 @@ async def executive_brief_insight(
             }
             for o in feed.opportunities
         ],
+        causal_drivers=levers,
     )
-    # Key on the derived grounding strings (scope + opportunities + caveats) so
-    # two portfolios that differ in any figure never collide.
+    # Key on the derived grounding strings (scope + opportunities + caveats +
+    # causal levers) so two portfolios that differ in any figure never collide.
     key = cache_key(
         "executive-brief",
         req.brand,
-        {"s": g["scope"], "o": g["opportunities"], "c": g["caveats"]},
+        {
+            "s": g["scope"],
+            "o": g["opportunities"],
+            "c": g["caveats"],
+            "cc": g["lm_causal_context"],
+        },
     )
     cached = await cache_get(key)
     if cached is not None:
@@ -465,6 +480,13 @@ async def resource_optimization_insight(
     req: ResourceInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
     """Business interpretation (DSPy) of a resource-optimization run's allocation moves."""
+    # Causal drivers (commercial grain, 2026-07-07): server-derived through the
+    # chatbot's exact registry read path + provenance gate, so the insight can
+    # ground the WHY behind the moves. fetch fails soft to [] — a registry
+    # hiccup never blocks the insight.
+    from src.insights.causal_context import fetch_commercial_drivers
+
+    causal_drivers = await fetch_commercial_drivers(req.brand, outcomes=("TRx", "ROI"))
     g = resource_optimization.build_grounding(
         objective=req.objective or "",
         brand=req.brand,
@@ -479,13 +501,14 @@ async def resource_optimization_insight(
         optimization_summary=req.optimization_summary,
         recommendations=req.recommendations,
         total_spend=req.total_spend,
+        causal_drivers=causal_drivers,
     )
-    # Key on the derived grounding strings (scope + moves + outcome) so two runs
-    # that differ in any move or in the projected lift never collide.
+    # Key on the derived grounding strings (scope + moves + outcome + causal
+    # context) so two runs that differ in any input never collide.
     key = cache_key(
         "resource-optimization",
         f"{req.brand or 'All'}/{req.objective or ''}",
-        {"s": g["scope"], "m": g["moves"], "o": g["outcome"]},
+        {"s": g["scope"], "m": g["moves"], "o": g["outcome"], "cc": g["causal_context"]},
     )
     cached = await cache_get(key)
     if cached is not None:

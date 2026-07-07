@@ -21,12 +21,15 @@ try:
     class ResourceOptimizationInsightSignature(dspy.Signature):
         """Interpret a resource-allocation optimization for a commercial pharma
         strategist, STRICTLY grounded in the provided numbers. Use ONLY the
-        moves, lift, budget, and solver facts given; NEVER invent dollar
-        amounts, territory names, or outcomes. Explain the reallocation
-        STRATEGY (where resources move and the productivity logic driving it —
-        money flows toward territories with higher marginal returns until
-        diminishing returns equalize them), quantify what the projected outcome
-        lift means relative to the current allocation, and judge actionability.
+        moves, lift, budget, solver facts, and causal context given; NEVER
+        invent dollar amounts, territory names, or outcomes. Explain the
+        reallocation STRATEGY (where resources move and the productivity logic
+        driving it — money flows toward territories with higher marginal
+        returns until diminishing returns equalize them), quantify what the
+        projected outcome lift means relative to the current allocation, and
+        judge actionability. Where `causal_context` lists modeled drivers,
+        connect the moves to those levers QUALITATIVELY with their stated
+        provenance — do not treat them as estimated effects of this run.
         ALWAYS close with the caveat given in `caveats` (the run is on
         clearly-labelled synthetic data: directionally meaningful, but the
         dollar values are illustrative, so validate against real budget data
@@ -40,6 +43,14 @@ try:
         )
         outcome: str = dspy.InputField(
             desc="Projected outcome lift vs current allocation, and total budget"
+        )
+        causal_context: str = dspy.InputField(
+            desc=(
+                "Registry-modeled causal drivers of the commercial outcome KPIs "
+                "(may say none are available). Cite only drivers listed here, "
+                "qualitatively, with their stated provenance; NEVER invent "
+                "effects or figures beyond those given."
+            )
         )
         caveats: str = dspy.InputField(desc="Data-provenance caveats that MUST be stated")
 
@@ -86,6 +97,7 @@ def build_grounding(
     optimization_summary: str = "",
     recommendations: list[str] | None = None,
     total_spend: float | None = None,
+    causal_drivers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     brand_label = brand or "All brands"
     scope = (
@@ -150,11 +162,23 @@ def build_grounding(
     ]
     if underspend:
         grounding.insert(4, {"label": "Deployed", "value": f"${spend_f:,.0f}"})
+    # Causal-registry context (commercial grain, 2026-07-07): modeled drivers
+    # of the outcome KPIs give the WHY behind the moves. Server-derived by the
+    # route (same read path + provenance gate as the chatbot); absent/empty
+    # degrades to an honest "none available" line, never silence-as-coverage.
+    from src.insights.causal_context import format_causal_context
+
+    drivers = causal_drivers or []
+    causal_context = format_causal_context(drivers)
+    if drivers:
+        grounding.append({"label": "Modeled drivers", "value": f"{len(drivers)} registry chain(s)"})
     return {
         "scope": scope,
         "moves": moves,
         "outcome": outcome,
         "caveats": caveats,
+        "causal_context": causal_context,
+        "has_causal_context": bool(drivers),
         "grounding": grounding,
         "optimization_summary": (optimization_summary or "").strip(),
         "recommendations": normalize_list(recommendations or []),
@@ -171,8 +195,9 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
             "grounding": g["grounding"],
             "is_fallback": True,
         }
+    causal_line = f" {g['causal_context']}" if g.get("has_causal_context") else ""
     insight = (
-        f"{summary} Scope: {g['scope']}. {g['outcome']} {g['caveats']} "
+        f"{summary} Scope: {g['scope']}. {g['outcome']}{causal_line} {g['caveats']} "
         "(Factual summary — LLM interpretation unavailable.)"
     )
     return {
@@ -189,6 +214,9 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
         scope=g["scope"],
         moves=g["moves"],
         outcome=g["outcome"],
+        causal_context=g.get(
+            "causal_context", "No modeled causal drivers are available for this scope."
+        ),
         caveats=g["caveats"],
     )
     if pred is None:

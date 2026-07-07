@@ -116,3 +116,52 @@ def test_no_spend_info_keeps_budget_phrase():
     g = _grounding()
     assert "total budget under optimization" in g["outcome"]
     assert not any(c["label"] == "Deployed" for c in g["grounding"])
+
+
+# ---- Causal-registry context (commercial grain, 2026-07-07) ---------------------
+CAUSAL_DRIVERS = [
+    {
+        "start": "rep_detailing_frequency",
+        "end": "trx_volume",
+        "effect": 0.2977,
+        "confidence": 0.87,
+        "synthetic": True,
+    },
+    {
+        "start": "copay_support_program",
+        "end": "roi",
+        "effect": 0.11,
+        "confidence": 0.8,
+        "synthetic": True,
+    },
+]
+
+
+def test_build_grounding_carries_causal_context_and_chip():
+    """Registry-modeled drivers ground the WHY behind allocation moves: the
+    causal_context string carries humanized driver chains + provenance, and a
+    grounding chip discloses how many modeled chains inform the read."""
+    g = _grounding(causal_drivers=CAUSAL_DRIVERS)
+    assert "rep detailing frequency" in g["causal_context"]
+    assert "TRx volume" in g["causal_context"]
+    assert "synthetic" in g["causal_context"].lower()
+    assert any(c["label"] == "Modeled drivers" and "2" in c["value"] for c in g["grounding"])
+
+
+def test_build_grounding_without_drivers_says_none():
+    g = _grounding()  # no causal_drivers argument at all
+    assert "no modeled causal drivers" in g["causal_context"].lower()
+    assert not any(c["label"] == "Modeled drivers" for c in g["grounding"])
+
+
+def test_fallback_appends_causal_context_when_present():
+    g = _grounding(causal_drivers=CAUSAL_DRIVERS)
+    out = generate_insight(g)  # LM off in tests -> deterministic fallback
+    assert out["is_fallback"] is True
+    assert "rep detailing frequency" in out["insight"]
+
+
+def test_fallback_stays_silent_without_drivers():
+    g = _grounding()
+    out = generate_insight(g)
+    assert "causal" not in out["insight"].lower()
