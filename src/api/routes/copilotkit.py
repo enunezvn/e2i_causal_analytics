@@ -7,9 +7,22 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.27.0
+Version: 1.29.0
 
 Changelog:
+    1.29.0 - Fixed ghost empty-args tool calls minted by the streaming accumulator.
+             Root cause: Anthropic streams messages as content blocks, so leading
+             text shifts the first tool_use block to index 1. tool_call_chunks carry
+             that provider index, but the parallel chunk.tool_calls entries carry NO
+             index — the accumulator invented one from list position (0), the args
+             merge then missed, and a duplicate entry shipped to ToolNode with {}
+             args ("Error invoking tool 'kpi_calculate_tool' with kwargs {}" rendered
+             raw in chat). Fix: _accumulate_tool_call_event treats tool_call_chunks
+             as authoritative (chunk.tool_calls is a fallback merged by id) and
+             _finalize_tool_calls collapses duplicate ids, preferring the entry that
+             actually received args. Also: build_synthesis_prompt now forbids
+             deriving baselines from overlapping windows and surfaces
+             coverage_warning fields (2026-07-07 session review).
     1.28.0 - Fixed follow-up questions losing conversation context in tool-using turns.
              Root cause: synthesize_node is a separate LLM call from chat_node and its
              prompt contained only the current question + tool artifacts — no prior
@@ -2123,6 +2136,136 @@ def _extract_synthesis_history(messages: Sequence[Any]) -> List[Dict[str, str]]:
 
 
 # System prompt for the CopilotKit chat agent
+def _accumulate_tool_call_event(accumulated: list[dict[str, Any]], chunk: Any) -> None:
+    """Merge one streamed chunk's tool-call data into ``accumulated``.
+
+    ``tool_call_chunks`` is the AUTHORITATIVE channel: it carries the provider's
+    index (Anthropic: content-block index; OpenAI: tool-call ordinal) plus
+    name/id on the start chunk, then args deltas. The parallel
+    ``chunk.tool_calls`` entries are a best-effort parse of the SAME event and
+    carry NO index — reconciling the two by list position minted a ghost entry
+    whose args never arrived whenever leading text shifted Anthropic's block
+    indices; the ghost reached ToolNode as ``{}`` and its validation error
+    rendered raw in the chat (2026-07-07 session review). ``chunk.tool_calls``
+    is therefore only a fallback for chunks that carry no tool_call_chunks,
+    merged by id so re-emissions never duplicate.
+    """
+    tool_call_chunks = getattr(chunk, "tool_call_chunks", None) or []
+    if tool_call_chunks:
+        for tc_chunk in tool_call_chunks:
+            tc_index = tc_chunk.get("index")
+            tc_index = 0 if tc_index is None else tc_index
+            tc_id = tc_chunk.get("id")
+            tc_name = tc_chunk.get("name")
+            tc_args = tc_chunk.get("args", "")
+
+            existing = None
+            for entry in accumulated:
+                if entry.get("index") == tc_index:
+                    existing = entry
+                    break
+            if existing is None:
+                existing = {
+                    "index": tc_index,
+                    "id": tc_id,
+                    "name": tc_name or "",
+                    "args": {},
+                    "args_str": "",
+                }
+                accumulated.append(existing)
+            if tc_id and not existing.get("id"):
+                existing["id"] = tc_id
+            if tc_name and not existing.get("name"):
+                existing["name"] = tc_name
+            if tc_args:
+                existing["args_str"] = existing.get("args_str", "") + tc_args
+        return
+
+    for tc in getattr(chunk, "tool_calls", None) or []:
+        if not tc.get("name") and not tc.get("id"):
+            continue
+        tc_id = tc.get("id")
+        existing = None
+        if tc_id:
+            for entry in accumulated:
+                if entry.get("id") == tc_id:
+                    existing = entry
+                    break
+        if existing is not None:
+            if tc.get("name") and not existing.get("name"):
+                existing["name"] = tc["name"]
+            if tc.get("args") and not existing.get("args_str"):
+                existing["args"] = tc["args"]
+            continue
+        accumulated.append(
+            {
+                # Negative ordinal keyspace: a fallback entry must never collide
+                # with a provider chunk index in a mixed stream.
+                "index": -1 - len(accumulated),
+                "id": tc_id,
+                "name": tc.get("name") or "",
+                "args": tc.get("args") or {},
+                "args_str": "",
+            }
+        )
+
+
+def _finalize_tool_calls(accumulated: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse accumulated stream entries into executable tool calls.
+
+    Prefers the streamed ``args_str`` (accumulated from chunks) over the
+    often-empty parsed ``args``, repairs braces for args that started mid-JSON,
+    drops nameless entries, and collapses duplicate ids keeping the entry that
+    actually received args — defense-in-depth so a ghost duplicate can never
+    reach ToolNode with ``{}`` args. Dedup is strictly by id: two DISTINCT
+    calls to the same tool (different ids) both survive, even arg-less ones.
+    """
+    import json as json_mod
+
+    parsed: list[dict[str, Any]] = []
+    for tc in accumulated:
+        if not tc.get("name"):
+            continue
+        args_str = tc.get("args_str", "")
+        args = tc.get("args", {})
+        if args_str:
+            # The args_str might be missing outer braces if it started mid-JSON
+            args_str_stripped = args_str.strip()
+            if args_str_stripped and not args_str_stripped.startswith("{"):
+                args_str_stripped = "{" + args_str_stripped
+            if args_str_stripped and not args_str_stripped.endswith("}"):
+                args_str_stripped = args_str_stripped + "}"
+            try:
+                args = json_mod.loads(args_str_stripped) if args_str_stripped else {}
+            except json_mod.JSONDecodeError as e:
+                logger.error(f"[CopilotKit] Failed to parse args_str for {tc.get('name')}: {e}")
+                logger.error(f"[CopilotKit] Raw args_str: {args_str[:500]}")
+                # Fall back to original args if parsing fails
+                if isinstance(args, str):
+                    try:
+                        args = json_mod.loads(args) if args else {}
+                    except (json_mod.JSONDecodeError, ValueError):
+                        args = {}
+        elif isinstance(args, str):
+            try:
+                args = json_mod.loads(args) if args else {}
+            except json_mod.JSONDecodeError:
+                args = {}
+        parsed.append({"id": tc.get("id") or str(uuid.uuid4()), "name": tc["name"], "args": args})
+
+    deduped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for call in parsed:
+        cid = call["id"]
+        if cid in deduped:
+            if not deduped[cid]["args"] and call["args"]:
+                deduped[cid] = call
+            continue
+        deduped[cid] = call
+        order.append(cid)
+    return [deduped[cid] for cid in order]
+
+
 def build_synthesis_prompt(
     original_query: str,
     tool_calls: list[dict],
@@ -2161,7 +2304,13 @@ def build_synthesis_prompt(
         "requested one. Do NOT ask the user to re-specify a brand or period they already provided. "
         "If the question refers to something from the conversation ('that', 'it', 'compared to "
         "before'), resolve the reference from the conversation above — do NOT claim missing "
-        "context when the referenced value appears there."
+        "context when the referenced value appears there. "
+        "BASELINE MATH: never derive a baseline or trend by comparing a shorter window against a "
+        "longer window that overlaps it (e.g. last 30 days vs last 90 days — the 90-day figure "
+        "CONTAINS those same 30 days); a valid baseline is a prior non-overlapping period of the "
+        "same length. If no non-overlapping comparison figure is available in the tool results, "
+        "say so instead of manufacturing one. If any tool result carries a coverage_warning, "
+        "quote it and do not draw trend conclusions from that figure."
     )
 
 
@@ -2436,64 +2585,10 @@ def create_e2i_chat_agent():
                     content_chunks.append(chunk_text)
                     logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk_text)} chars")
 
-                # Accumulate tool calls (they may come in chunks)
-                # STREAMING PATTERN: Anthropic/LangChain sends tool calls in two parts:
-                # 1. First, a "complete" tool_calls entry with name+id but EMPTY args {}
-                # 2. Then, tool_call_chunks with the args streamed character by character
-                # We need to MERGE these: use tool_calls for name/id, tool_call_chunks for args
-
-                if hasattr(chunk, "tool_calls") and chunk.tool_calls:
-                    logger.debug(f"[CopilotKit] Got complete tool_calls: {chunk.tool_calls}")
-                    for _i, tc in enumerate(chunk.tool_calls):
-                        # Skip empty/invalid entries (these sometimes come through)
-                        if not tc.get("name") and not tc.get("id"):
-                            continue
-                        # Add index for later matching with tool_call_chunks
-                        # Also initialize args_str for streaming accumulation
-                        tc_entry = dict(tc)  # Copy to avoid mutating original
-                        tc_entry["index"] = tc_entry.get("index", len(accumulated_tool_calls))
-                        tc_entry["args_str"] = ""  # For accumulating streamed args
-                        accumulated_tool_calls.append(tc_entry)
-
-                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                    # LangChain/Anthropic streams tool call args as chunks
-                    for tc_chunk in chunk.tool_call_chunks:
-                        tc_index = tc_chunk.get("index", 0)
-                        tc_id = tc_chunk.get("id")
-                        tc_name = tc_chunk.get("name")
-                        tc_args = tc_chunk.get("args", "")
-
-                        logger.debug(
-                            f"[CopilotKit] Tool chunk: index={tc_index}, id={tc_id}, name={tc_name}, args_len={len(tc_args) if tc_args else 0}"
-                        )
-
-                        # Find existing tool call by index (matches order from tool_calls)
-                        existing = None
-                        for tc in accumulated_tool_calls:
-                            if tc.get("index") == tc_index:
-                                existing = tc
-                                break
-
-                        if existing:
-                            # Update with any new info from chunk
-                            if tc_id and not existing.get("id"):
-                                existing["id"] = tc_id
-                            if tc_name and not existing.get("name"):
-                                existing["name"] = tc_name
-                            # CRITICAL: Accumulate args as string for later JSON parsing
-                            if tc_args:
-                                existing["args_str"] = existing.get("args_str", "") + tc_args
-                        else:
-                            # No existing entry - create one (shouldn't happen normally)
-                            accumulated_tool_calls.append(
-                                {
-                                    "index": tc_index,
-                                    "id": tc_id or str(uuid.uuid4()),
-                                    "name": tc_name or "",
-                                    "args": {},
-                                    "args_str": tc_args or "",
-                                }
-                            )
+                # Accumulate tool calls (they may come in chunks) — tool_call_chunks
+                # is authoritative, chunk.tool_calls is a merge-by-id fallback; see
+                # _accumulate_tool_call_event for why (v1.29.0 ghost-call fix).
+                _accumulate_tool_call_event(accumulated_tool_calls, chunk)
 
                 # Keep last chunk as final response
                 response = chunk
@@ -2508,68 +2603,9 @@ def create_e2i_chat_agent():
                     f"[CopilotKit] Accumulated tool calls before parsing: {accumulated_tool_calls}"
                 )
 
-                # Parse tool call args from JSON strings
-                # STREAMING FIX: Use args_str (accumulated from chunks) preferentially over args
-                # The original args from tool_calls is often empty {}, while args_str has the real data
-                parsed_tool_calls = []
-                for tc in accumulated_tool_calls:
-                    if tc.get("name"):  # Only include valid tool calls with names
-                        # Prefer args_str (from streaming chunks) over args (often empty)
-                        args_str = tc.get("args_str", "")
-                        args = tc.get("args", {})
-
-                        logger.debug(
-                            f"[CopilotKit] Tool {tc.get('name')} args={args}, args_str_len={len(args_str) if args_str else 0}"
-                        )
-
-                        # If we have streamed args, parse them
-                        if args_str:
-                            # The args_str might be missing outer braces if it started mid-JSON
-                            # Check if it looks like it needs wrapping
-                            args_str_stripped = args_str.strip()
-                            if args_str_stripped and not args_str_stripped.startswith("{"):
-                                args_str_stripped = "{" + args_str_stripped
-                            if args_str_stripped and not args_str_stripped.endswith("}"):
-                                args_str_stripped = args_str_stripped + "}"
-
-                            try:
-                                import json as json_mod
-
-                                args = (
-                                    json_mod.loads(args_str_stripped) if args_str_stripped else {}
-                                )
-                                logger.debug(
-                                    f"[CopilotKit] Parsed args_str for {tc.get('name')}: {args}"
-                                )
-                            except json_mod.JSONDecodeError as e:
-                                logger.error(
-                                    f"[CopilotKit] Failed to parse args_str for {tc.get('name')}: {e}"
-                                )
-                                logger.error(
-                                    f"[CopilotKit] Raw args_str: {args_str[:500] if args_str else 'empty'}"
-                                )
-                                # Fall back to original args if parsing fails
-                                if isinstance(args, str):
-                                    try:
-                                        args = json_mod.loads(args) if args else {}
-                                    except:  # noqa: E722
-                                        args = {}
-                        elif isinstance(args, str):
-                            # No streamed args, try to parse args if it's a string
-                            try:
-                                import json as json_mod
-
-                                args = json_mod.loads(args) if args else {}
-                            except json_mod.JSONDecodeError:
-                                args = {}
-
-                        parsed_tool_calls.append(
-                            {
-                                "id": tc.get("id", str(uuid.uuid4())),
-                                "name": tc["name"],
-                                "args": args,
-                            }
-                        )
+                # Parse accumulated entries into executable calls (args_str preferred,
+                # nameless dropped, duplicate ids collapsed — v1.29.0 ghost-call fix).
+                parsed_tool_calls = _finalize_tool_calls(accumulated_tool_calls)
 
                 response = AIMessage(
                     content=full_content,

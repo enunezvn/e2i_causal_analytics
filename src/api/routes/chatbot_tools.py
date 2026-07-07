@@ -424,55 +424,76 @@ async def _query_kpis(
         return {"success": False, "error": str(e), "query_type": "kpi"}
 
 
+def _format_causal_path(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a ``causal_paths`` registry row onto the chat-facing chain shape.
+
+    ``confidence`` here is the registry's method-attributed ``confidence_level``
+    (a real 0-1 causal confidence) — never a retrieval similarity score.
+    """
+    return {
+        "path_id": row.get("path_id"),
+        "cause": row.get("start_node"),
+        "effect": row.get("end_node"),
+        "via": list(row.get("intermediate_nodes") or []),
+        "effect_size": row.get("causal_effect_size"),
+        "confidence": row.get("confidence_level"),
+        "method": row.get("method_used"),
+        "time_lag_days": row.get("time_lag_days"),
+        "business_impact_estimate": row.get("business_impact_estimate"),
+        "brand": row.get("brand"),
+    }
+
+
 async def _query_causal_chains(
     brand: Optional[str],
     kpi_name: Optional[str],
     since: datetime,
     limit: int,
     min_confidence: float = 0.5,
-    include_synthetic: bool = False,
+    include_synthetic: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Query causal relationships from causal_paths table.
+    """Query causal relationships from the ``causal_paths`` registry.
 
-    Chat is an end-user real-mode surface: ``include_synthetic`` defaults to
-    False so synthetic causal paths (planted ground-truth validation data,
-    migration 063 provenance) never surface as real insight (#893). The opt-in
-    exists for agent-context/validation callers only and is deliberately NOT
-    exposed in the LLM tool schema. On an all-synthetic substrate the honest
-    real-mode answer is empty (same fail-closed semantics as #872).
+    Provenance (#893): synthetic causal paths must never surface AS REAL
+    insight. ``include_synthetic=None`` (the chat default) resolves to the
+    platform gate ``kpi_include_synthetic()`` — the same convention as the KPI
+    tools: in synthetic-showcase mode paths surface labeled
+    ``data_source: "synthetic"``; in real mode the filter fails closed (same
+    semantics as #872). The explicit True/False override exists for
+    agent-context/validation callers only and is deliberately NOT exposed in
+    the LLM tool schema.
+
+    2026-07-07 rewire: the ``kpi_name`` branch previously detoured into
+    ``hybrid_search`` and returned RRF-scored RAG documents as "causal chains".
+    It now queries the registry (real ``confidence_level``) like everything
+    else. ``since`` is not applied: registry paths are current modeled
+    knowledge, not dated events.
     """
     try:
         client = await get_async_supabase_client()
         repo = CausalPathRepository(client)
+        if include_synthetic is None:
+            include_synthetic = kpi_include_synthetic()
+        data_source = "synthetic" if include_synthetic else "database"
 
-        # Note: causal_paths table does not have 'brand' column
-        # Brand filtering is only available via hybrid_search (RAG index)
-        filters: dict[str, str] = {}
-
-        # Use RAG retriever for semantic search if kpi_name provided
         if kpi_name:
-            results = await hybrid_search(
-                query=f"causal paths affecting {kpi_name}",
-                k=limit,
-                kpi_name=kpi_name,
-                filters={"brand": brand} if brand else None,
+            paths = await repo.search_paths_for_outcome(
+                kpi_name,
+                brand=brand,
+                min_confidence=min_confidence,
+                limit=limit,
+                include_synthetic=include_synthetic,
             )
             return {
                 "success": True,
                 "query_type": "causal_chain",
-                "count": len(results),
-                "data": [
-                    {
-                        "source_id": r.source_id,
-                        "content": r.content,
-                        "score": r.score,
-                        "metadata": r.metadata,
-                    }
-                    for r in results
-                ],
+                "count": len(paths),
+                "data": [_format_causal_path(p) for p in paths],
                 "kpi_analyzed": kpi_name,
+                "data_source": data_source,
             }
 
+        filters: dict[str, str] = {"brand": brand} if brand else {}
         paths = await repo.get_many(
             filters=filters, limit=limit, include_synthetic=include_synthetic
         )
@@ -481,6 +502,7 @@ async def _query_causal_chains(
             "query_type": "causal_chain",
             "count": len(paths),
             "data": paths,
+            "data_source": data_source,
         }
     except Exception as e:
         logger.error(f"Causal chain query failed: {e}")
@@ -664,64 +686,81 @@ async def causal_analysis_tool(
     min_confidence: float = 0.7,
 ) -> Dict[str, Any]:
     """
-    Run causal analysis to identify factors affecting a KPI.
+    Find modeled causal drivers for an outcome in the causal-path registry.
 
-    This tool performs causal inference analysis to find:
-    - Direct causes of KPI changes
-    - Indirect causal chains
-    - Estimated effect magnitudes
-    - Confidence scores for relationships
+    Queries the ``causal_paths`` registry — method-attributed causal
+    relationships (DoWhy/EconML style) with REAL 0-1 ``confidence_level``
+    values — for chains whose cause/effect nodes match the requested outcome.
+    (2026-07-07 rewire: the previous implementation filtered RAG rank-fusion
+    scores, ceiling ~0.03, against this 0-1 threshold — it could never return
+    a chain for any query.)
 
-    Use this tool when users want to understand WHY a metric changed
-    or what factors are driving performance.
+    SUBSTRATE COVERAGE — read this before answering: the registry models
+    patient-journey outcomes (treatment_initiated, persistent_180d,
+    conversion_flag, adherence …), NOT commercial volume KPIs like TRx/NRx.
+    When the response carries ``causal_chains_found: 0`` with
+    ``substrate_coverage``, tell the user plainly that the causal registry
+    does not cover that KPI, and offer the ``outcomes_covered`` it does model
+    — do NOT imply an analysis ran and found nothing above the confidence
+    threshold, and do NOT dress other tools' correlational data up as causal
+    drivers.
 
     Args:
-        kpi_name: KPI to analyze (TRx, NRx, conversion_rate, market_share)
-        brand: Brand filter, resolved case-insensitively against the actual data values
-        region: Region filter, resolved case-insensitively against the actual data values
-        time_period: Time period for analysis
-        min_confidence: Minimum confidence threshold (0-1)
+        kpi_name: Outcome to analyze; matched (tokenized, case-insensitive)
+            against the registry's cause/effect node names.
+        brand: Brand filter, matched case-insensitively.
+        region: Echoed back for context; the registry has no region dimension,
+            so it is NOT a filter.
+        time_period: Echoed back for context; registry paths are current
+            modeled knowledge, not dated events, so it is NOT a filter.
+        min_confidence: Minimum ``confidence_level`` (0-1).
 
     Returns:
-        Dict with causal analysis results including chains and effects
+        Dict with success, causal_chains_found, results (cause/effect/via/
+        effect_size/confidence/method), data_source provenance label, and —
+        when the registry doesn't cover the outcome — substrate_coverage.
     """
     logger.info(f"Causal analysis: kpi={kpi_name}, brand={brand}, confidence>={min_confidence}")
 
     try:
-        # Use hybrid search with KPI-focused retrieval
-        results = await hybrid_search(
-            query=f"causal analysis of {kpi_name} drivers and effects",
-            k=15,
-            kpi_name=kpi_name,
-            filters={"brand": brand} if brand else None,
+        client = await get_async_supabase_client()
+        repo = CausalPathRepository(client)
+        # Provenance (#893): same platform gate as the KPI tools — synthetic
+        # paths surface only in showcase mode, labeled; real mode fails closed.
+        include_synthetic = kpi_include_synthetic()
+        data_source = "synthetic" if include_synthetic else "database"
+
+        paths = await repo.search_paths_for_outcome(
+            kpi_name,
+            brand=brand,
+            min_confidence=min_confidence,
+            limit=15,
+            include_synthetic=include_synthetic,
         )
 
-        # Filter by confidence if metadata available
-        filtered_results = []
-        for r in results:
-            confidence = r.metadata.get("confidence", r.score)
-            if confidence >= min_confidence:
-                filtered_results.append(
-                    {
-                        "source_id": r.source_id,
-                        "content": r.content,
-                        "confidence": confidence,
-                        "effect_magnitude": r.metadata.get("effect_magnitude"),
-                        "causal_direction": r.metadata.get("causal_direction"),
-                        "metadata": r.metadata,
-                    }
-                )
-
-        return {
+        response: Dict[str, Any] = {
             "success": True,
             "kpi_analyzed": kpi_name,
             "brand": brand,
             "region": region,
-            "causal_chains_found": len(filtered_results),
+            "causal_chains_found": len(paths),
             "min_confidence_applied": min_confidence,
-            "results": filtered_results,
-            "analysis_type": "hybrid_causal_retrieval",
+            "results": [_format_causal_path(p) for p in paths],
+            "analysis_type": "causal_paths_registry",
+            "data_source": data_source,
         }
+        if not paths:
+            outcomes = await repo.get_distinct_outcomes(include_synthetic=include_synthetic)
+            response["substrate_coverage"] = {
+                "outcomes_covered": outcomes,
+                "note": (
+                    f"The causal-path registry does not cover '{kpi_name}': it models "
+                    "patient-journey outcomes (see outcomes_covered), not commercial "
+                    "volume KPIs. This is a substrate coverage gap — it is NOT "
+                    "evidence that no causal drivers exist for this KPI."
+                ),
+            }
+        return response
 
     except Exception as e:
         logger.error(f"Causal analysis failed: {e}")
@@ -1461,6 +1500,80 @@ def _kpi_result_to_response(
     return response
 
 
+# Cumulative prescription-volume KPIs (event counts over a window). ONLY these
+# get the trailing-30d coverage probe below: for a ratio/share KPI (e.g.
+# WS3-BI-008 TRx Share) the trailing value is not additive, so the share math
+# would fire false warnings.
+_VOLUME_KPI_IDS = frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"})
+
+_COVERAGE_MIN_WINDOW_DAYS = 45  # a window this short IS its own trailing period
+_COVERAGE_WARN_FACTOR = 2.0  # warn when trailing share > 2x the uniform share
+
+
+async def _window_coverage_probe(
+    kpi: Any,
+    result: Any,
+    window: Any,
+    calculator: Any,
+    context: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Disclose intra-window data-density asymmetry for volume KPIs.
+
+    2026-07-07 session review: a "90-day baseline" (15,767) was 96% composed of
+    the same most-recent-30-days it was compared against (15,239), because the
+    substrate is dense only in the recent window — the requested window was
+    honestly "applied", but nothing disclosed the asymmetry, and the chatbot
+    concluded a fabricated "softening". For cumulative volume KPIs with an
+    applied window longer than 45 days, compute the same KPI over the window's
+    trailing 30 days and report its share of the total; attach
+    ``coverage_warning`` when that share exceeds 2x the uniform expectation.
+    Probe failures degrade silently — the main figure must never be blocked or
+    altered by the probe.
+    """
+    try:
+        if window is None or kpi.id not in _VOLUME_KPI_IDS:
+            return None
+        if getattr(result, "window_status", None) != "applied":
+            return None
+        window_value = getattr(result, "value", None)
+        if not isinstance(window_value, (int, float)) or window_value <= 0:
+            return None
+        window_days = (window.end - window.start).days
+        if window_days <= _COVERAGE_MIN_WINDOW_DAYS:
+            return None
+
+        trailing_window = {
+            "start": (window.end - timedelta(days=30)).isoformat(),
+            "end": window.end.isoformat(),
+        }
+        trailing_result = await asyncio.to_thread(
+            calculator.calculate, kpi.id, context={**context, "window": trailing_window}
+        )
+        trailing_value = getattr(trailing_result, "value", None)
+        if not isinstance(trailing_value, (int, float)):
+            return None
+
+        share = trailing_value / window_value
+        expected = 30.0 / window_days
+        coverage: Dict[str, Any] = {
+            "window_days": window_days,
+            "trailing_30d_value": trailing_value,
+            "trailing_30d_share": round(share, 4),
+            "uniform_expected_share": round(expected, 4),
+        }
+        if share > _COVERAGE_WARN_FACTOR * expected:
+            coverage["coverage_warning"] = (
+                f"{share:.0%} of this {window_days}-day total falls in its most recent "
+                "30 days — the data is not evenly distributed across the window. Do NOT "
+                "treat the full-window figure as a baseline for the recent period; "
+                "compare against a prior non-overlapping window instead."
+            )
+        return coverage
+    except Exception as exc:  # noqa: BLE001 - the probe must never break the main figure
+        logger.warning("kpi_calculate_tool: window coverage probe failed: %s", exc)
+        return None
+
+
 @tool(args_schema=KpiCalculateInput)
 async def kpi_calculate_tool(
     kpi_name: str,
@@ -1482,7 +1595,15 @@ async def kpi_calculate_tool(
     that period. The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
-    and ``window_applied``. When no custom window applies, the engine's default
+    and ``window_applied``. BASELINE COMPARISONS: to compare a recent period
+    against a baseline, request a PRIOR NON-OVERLAPPING window of the same
+    length (e.g. "2026-05-08 to 2026-06-07" as the baseline for "2026-06-07 to
+    2026-07-07") — never a longer window that CONTAINS the recent period. For
+    volume KPIs over windows longer than 45 days the response may carry
+    ``window_coverage`` (the trailing-30d share of the window total); when it
+    includes a ``coverage_warning``, the data is unevenly distributed across
+    the window and the figure must NOT be used as a baseline. When no custom
+    window applies, the engine's default
     window is disclosed via ``reporting_window`` — it is FRONTIER-ANCHORED
     (migration 089): "the most recent 30 days of data", ending at the domain's
     latest data date (``data_through``), NOT the last 30 calendar days. State
@@ -1563,7 +1684,11 @@ async def kpi_calculate_tool(
             "error": str(exc),
         }
 
-    return _kpi_result_to_response(kpi, result, brand=brand, region=region)
+    response = _kpi_result_to_response(kpi, result, brand=brand, region=region)
+    coverage = await _window_coverage_probe(kpi, result, parsed, calculator, context)
+    if coverage is not None:
+        response["window_coverage"] = coverage
+    return response
 
 
 # =============================================================================

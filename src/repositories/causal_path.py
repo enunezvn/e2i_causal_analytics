@@ -4,9 +4,35 @@ Causal Path Repository.
 Handles discovered causal relationships.
 """
 
+import re
 from typing import List, Optional
 
 from src.repositories.base import BaseRepository
+from src.utils.type_helpers import parse_supabase_rows
+
+
+def outcome_match_tokens(term: str) -> List[str]:
+    """Normalize a chat-supplied KPI/outcome term into node-match prefixes.
+
+    Node names are snake_case (``treatment_initiated``); chat terms are free
+    text ("treatment initiation"). Lowercase, split on non-alphanumeric
+    boundaries, drop tokens under 3 chars, truncate longer tokens to a 6-char
+    stem-ish prefix (so morphology bridges: "persistence" -> "persis" matches
+    ``persistent_180d``; "initiation" -> "initia" matches
+    ``treatment_initiated``), and dedupe — each surviving prefix becomes a
+    case-insensitive substring match against ``start_node``/``end_node``.
+    Prefix matching strictly widens the whole-token match it replaced. A term
+    with no hit (e.g. "TRx" against a patient-journey registry) is a genuine
+    substrate-coverage miss, not an error.
+    """
+    seen: dict[str, None] = {}
+    for token in re.split(r"[^a-z0-9]+", term.lower()):
+        if len(token) < 3:
+            continue
+        prefix = token[:6]
+        if prefix not in seen:
+            seen[prefix] = None
+    return list(seen)
 
 
 class CausalPathRepository(BaseRepository):
@@ -129,6 +155,76 @@ class CausalPathRepository(BaseRepository):
             limit=limit,
             include_synthetic=include_synthetic,
         )
+
+    async def search_paths_for_outcome(
+        self,
+        outcome_term: str,
+        *,
+        brand: Optional[str] = None,
+        min_confidence: float = 0.0,
+        limit: int = 15,
+        include_synthetic: bool = False,
+    ) -> List[dict]:
+        """Highest-confidence causal paths whose cause/effect nodes match a term.
+
+        This is the chat-facing registry query (2026-07-07 causal_analysis_tool
+        rewire): ``confidence_level`` here is a REAL causal-confidence value
+        (0-1, method-attributed), unlike the RAG layer's RRF rank-fusion score
+        (ceiling ~0.03) the old tool compared against 0.7 — a filter that could
+        never pass. An empty return for an unmatched term means the registry
+        does not model that outcome (substrate-coverage gap), not "no causal
+        drivers exist".
+
+        Args:
+            outcome_term: Free-text KPI/outcome name; tokenized via
+                :func:`outcome_match_tokens` against ``start_node``/``end_node``.
+            brand: Optional brand, matched case-insensitively.
+            min_confidence: Floor on ``confidence_level``.
+            limit: Maximum paths, highest confidence first.
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
+        """
+        if not self.client:
+            return []
+        tokens = outcome_match_tokens(outcome_term)
+        if not tokens:
+            return []
+
+        query = self.client.table(self.table_name).select("*")
+        query = query.or_(
+            ",".join(
+                f"{col}.ilike.%{token}%" for token in tokens for col in ("start_node", "end_node")
+            )
+        )
+        if brand:
+            query = query.ilike("brand", brand)
+        query = query.gte("confidence_level", min_confidence)
+        if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
+
+        result = await query.order("confidence_level", desc=True).limit(limit).execute()
+        return parse_supabase_rows(result.data)
+
+    async def get_distinct_outcomes(
+        self,
+        *,
+        limit: int = 1000,
+        include_synthetic: bool = False,
+    ) -> List[str]:
+        """Distinct ``end_node`` outcome names the registry actually models.
+
+        Chat uses this to disclose substrate coverage honestly when a requested
+        KPI has no matching paths (instead of implying an analysis ran and
+        found nothing above threshold).
+        """
+        rows = await self.get_many(filters={}, limit=limit, include_synthetic=include_synthetic)
+        seen: dict[str, None] = {}
+        for row in rows:
+            node = (row or {}).get("end_node") if isinstance(row, dict) else None
+            if node and node not in seen:
+                seen[node] = None
+        return sorted(seen)
 
     async def get_distinct_questions(
         self,
