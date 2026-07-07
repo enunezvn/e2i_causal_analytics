@@ -10,13 +10,15 @@ NOT-NULL columns verified on the faithful DB: path_id, discovery_date, causal_ch
 is enum-exact (data_split_type: train/validation/test/holdout/unassigned).
 """
 
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator
+from .base import BaseGenerator, GeneratorConfig
 
 _BRANDS = ["Remibrutinib", "Kisqali", "Fabhalta"]
 _REGIONS = ["northeast", "south", "midwest", "west"]
@@ -66,6 +68,144 @@ _TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
     ("control_group_flag", "action_taken", []),
     ("acceptance_status", "conversion_flag", []),
 )
+
+# Commercial-KPI grain (2026-07-07). The registry modeled patient/HCP/trigger
+# outcomes only, so "what drives TRx?" was a genuine substrate-coverage gap in
+# chat and on every strategic-insight surface. These are CURATED synthetic
+# driver chains (not estimated effects) for the most impactful commercial KPIs
+# — TRx/NRx/NBRx/TRx Share (WS3-BI-005..008), ROI (WS3-BI-010) and
+# intent-to-prescribe (BR-002's leading indicator) — surfaced only behind the
+# platform provenance gate, labeled data_source="synthetic".
+#
+# Two contracts:
+# * TOKEN MATCH — the chat read path matches 6-char token prefixes as ILIKE
+#   substrings on start_node/end_node (outcome_match_tokens), so every
+#   end_node carries its KPI's searchable token (trx/nrx/nbrx/share/roi/
+#   intent). Pinned by tests/unit/test_synthetic/test_causal_paths_commercial.
+# * CONTENT-ADDRESSED — path_id and every numeric value derive from
+#   (brand, start, end) via a per-edge rng, independent of the generator seed
+#   and n_records, so the targeted apply script upserts idempotently and a
+#   later full reseed cannot silently rewrite the values (PR #1105/#1106
+#   reseed-idempotency lesson).
+#
+# Driver vocabulary aligns with the causal_impact agent's DAG builder
+# (rep detailing, formulary status, competitor activity) and the DGP
+# commercial-arms spec (copay support, PSP/samples); persistent_180d and
+# treatment_initiated link the patient-journey grain into volume so the
+# registry tells one story. competitor_activity bands are NEGATIVE (pressure,
+# not uplift). The leaderboard's grain-scope guard (causal.py
+# _discover_candidate_questions) keeps these out of estimation runs because
+# the nodes are not in any dataset spec's allowlists.
+_COMMERCIAL_EDGES: Tuple[Tuple[str, str, str, Tuple[str, ...], float, float], ...] = (
+    # (start_node, end_node, mediator, confounders_controlled, band_lo, band_hi)
+    (
+        "rep_detailing_frequency",
+        "trx_volume",
+        "hcp_engagement",
+        ("academic_hcp", "geographic_region"),
+        0.10,
+        0.30,
+    ),
+    ("formulary_status", "trx_volume", "patient_access", ("payer_mix",), 0.15, 0.40),
+    ("copay_support_program", "trx_volume", "adherence", ("disease_severity",), 0.08, 0.25),
+    (
+        "persistent_180d",
+        "trx_volume",
+        "refill_continuity",
+        ("disease_severity", "academic_hcp", "geographic_region"),
+        0.20,
+        0.45,
+    ),
+    ("intent_to_prescribe", "nrx_volume", "new_patient_starts", ("academic_hcp",), 0.15, 0.40),
+    (
+        "sample_dropped",
+        "nrx_volume",
+        "trial_experience",
+        ("academic_hcp", "geographic_region"),
+        0.05,
+        0.20,
+    ),
+    (
+        "treatment_initiated",
+        "nrx_volume",
+        "patient_onboarding",
+        ("disease_severity", "age_at_diagnosis"),
+        0.20,
+        0.45,
+    ),
+    ("hcp_coverage", "nbrx_volume", "prescriber_breadth", ("geographic_region",), 0.10, 0.30),
+    ("competitor_activity", "nbrx_volume", "switch_pressure", ("geographic_region",), -0.30, -0.08),
+    (
+        "competitor_activity",
+        "trx_market_share",
+        "share_of_voice",
+        ("geographic_region",),
+        -0.25,
+        -0.05,
+    ),
+    (
+        "hcp_coverage",
+        "trx_market_share",
+        "prescriber_base",
+        ("academic_hcp", "geographic_region"),
+        0.08,
+        0.25,
+    ),
+    ("rep_detailing_frequency", "roi", "trx_volume", ("academic_hcp",), 0.05, 0.20),
+    ("copay_support_program", "roi", "adherence", ("disease_severity",), 0.05, 0.18),
+    (
+        "rep_detailing_frequency",
+        "intent_to_prescribe",
+        "message_recall",
+        ("academic_hcp",),
+        0.10,
+        0.35,
+    ),
+    (
+        "speaker_program_attendance",
+        "intent_to_prescribe",
+        "peer_validation",
+        ("academic_hcp",),
+        0.08,
+        0.30,
+    ),
+)
+
+N_COMMERCIAL_ROWS = len(_COMMERCIAL_EDGES) * len(_BRANDS)
+
+
+def _commercial_edge_rng(brand: str, start: str, end: str) -> np.random.Generator:
+    """Per-edge rng keyed on content, so every value is reproducible from the
+    edge identity alone (idempotent apply; stable across reseeds)."""
+    digest = hashlib.sha1(f"{brand}|{start}|{end}".encode()).digest()
+    return np.random.default_rng(int.from_bytes(digest[:8], "big"))
+
+
+def _commercial_path_id(brand: str, start: str, end: str) -> str:
+    """Content-addressed id, namespaced scp_c*, 16 chars (varchar(20) cap)."""
+    return "scp_c" + hashlib.sha1(f"{brand}|{start}|{end}".encode()).hexdigest()[:11]
+
+
+def commercial_rows_for_upsert() -> List[dict]:
+    """The commercial grain as DB-shaped records for the targeted apply script
+    (scripts/seed_commercial_causal_paths.py).
+
+    Projected to the loader's causal_paths column list (the generator-only
+    'grain' column would 400 the insert — the DB has no such column) and safe
+    to upsert on path_id: every id and value is content-addressed, so re-runs
+    are no-ops apart from the discovery_date/created_at freshness stamps.
+    """
+    # Lazy import: batch_loader imports the generators package (registry).
+    import json
+
+    from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
+
+    df = CausalPathsGenerator(GeneratorConfig(n_records=0)).generate()
+    com = df[df["grain"] == "commercial"]
+    cols = [c for c in TABLE_COLUMNS["causal_paths"] if c in com.columns]
+    # json round-trip strips the numpy scalars a DataFrame leaves in records
+    # (np.int64/np.bool_ break postgrest's stdlib-json serializer, PR #1098).
+    return json.loads(com[cols].to_json(orient="records"))
 
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
@@ -196,6 +336,43 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                         "created_at": now.isoformat(),
                         "is_synthetic": True,
                         "grain": "trigger",
+                    }
+                )
+        # Commercial-KPI grain — ADDITIVE fixed block (15 edges x 3 brands),
+        # content-addressed (see _COMMERCIAL_EDGES contract comment above).
+        for brand in _BRANDS:
+            for start_node, end_node, mediator, confounders, lo, hi in _COMMERCIAL_EDGES:
+                rng = _commercial_edge_rng(brand, start_node, end_node)
+                effect = round(float(rng.uniform(lo, hi)), 4)
+                direct = round(effect * float(rng.uniform(0.4, 0.8)), 4)
+                indirect = round(effect - direct, 4)
+                disc = (now - timedelta(days=int(rng.integers(0, 25)))).date()
+                rows.append(
+                    {
+                        "path_id": _commercial_path_id(brand, start_node, end_node),
+                        "discovery_date": disc.isoformat(),
+                        "causal_chain": {"nodes": [start_node, mediator, end_node]},
+                        "start_node": start_node,
+                        "end_node": end_node,
+                        "intermediate_nodes": [mediator],
+                        "path_length": 2,
+                        "causal_effect_size": effect,
+                        "confidence_level": round(float(rng.uniform(0.75, 0.92)), 3),
+                        "method_used": "backdoor.linear_regression",
+                        "confounders_controlled": list(confounders),
+                        "mediators_identified": [mediator],
+                        "time_lag_days": int(rng.integers(14, 90)),
+                        "validation_status": "validated",
+                        "business_impact_estimate": round(effect * float(rng.uniform(1e5, 5e5)), 2),
+                        "data_split": "unassigned",
+                        "direct_effect": direct,
+                        "indirect_effect": indirect,
+                        "brand": brand,
+                        "region": str(rng.choice(_REGIONS)),
+                        "confirmation_count": int(rng.integers(1, 5)),
+                        "created_at": now.isoformat(),
+                        "is_synthetic": True,
+                        "grain": "commercial",
                     }
                 )
         return pd.DataFrame(rows)

@@ -94,6 +94,13 @@ _VARIABLE_KPI_BRIDGE: Dict[str, str] = {
     "treatment_initiated": "NRx",
     "persistent_180d": "Patient_Retention",
     "discontinued_180d": "Patient_Retention",
+    # Commercial grain (2026-07-07): bridge only to KPI nodes verified live in
+    # the graph (MATCH (k:KPI) — TRx/NRx/Market_Share exist; NBRx/ROI do not,
+    # so nbrx_volume/roi/intent_to_prescribe stay unbridged rather than
+    # pointing at nodes that would silently never match).
+    "trx_volume": "TRx",
+    "nrx_volume": "NRx",
+    "trx_market_share": "Market_Share",
 }
 
 

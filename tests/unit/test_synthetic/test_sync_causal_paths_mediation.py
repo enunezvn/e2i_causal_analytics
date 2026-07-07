@@ -63,4 +63,10 @@ class TestVariableKpiBridge:
             "treatment_initiated": "NRx",
             "persistent_180d": "Patient_Retention",
             "discontinued_180d": "Patient_Retention",
+            # Commercial grain (2026-07-07): only KPI nodes verified live in
+            # the graph (MATCH (k:KPI)) get a bridge — no NBRx/ROI nodes
+            # exist, so those outcomes stay unbridged rather than guessed.
+            "trx_volume": "TRx",
+            "nrx_volume": "NRx",
+            "trx_market_share": "Market_Share",
         }
