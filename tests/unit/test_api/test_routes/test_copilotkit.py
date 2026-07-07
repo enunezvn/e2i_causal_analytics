@@ -828,6 +828,78 @@ class TestFeedbackEndpoint:
         assert "No persisted assistant message" in data["error"]
         repo.add_feedback.assert_not_called()
 
+    def test_feedback_exact_content_match_beats_shared_prefix(self, test_client):
+        """Two responses sharing the same 500-char prefix are indistinguishable
+        to prefix matching — response_text (full content) must resolve the
+        exact row, not the newest prefix match."""
+        shared = "x" * 500
+        rows = [
+            {"id": 9, "session_id": "thread-1", "content": shared + " newer tail"},
+            {"id": 7, "session_id": "thread-1", "content": shared + " the rated tail"},
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": shared,
+                "response_text": shared + " the rated tail",
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 7
+
+    def test_feedback_attribution_derived_from_matched_row(self, test_client):
+        """The persisted row is the authority on who responded: a client-sent
+        agent_name (the old sidebar hardcoded 'copilotkit') must NOT override
+        the row's agent_name, and tools come from the row's tool_results."""
+        content = "The gap analysis shows Kisqali underperforming in the West."
+        rows = [
+            {
+                "id": 5,
+                "session_id": "thread-1",
+                "content": content,
+                "agent_name": "gap_analyzer",
+                "metadata": {"tool_results": [{"tool": "run_gap_analysis", "result": "..."}]},
+            }
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": content[:500],
+                "response_text": content,
+                "agent_name": "copilotkit",
+                "rating": "thumbs_down",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        kwargs = repo.add_feedback.call_args.kwargs
+        assert kwargs["agent_name"] == "gap_analyzer"
+        assert kwargs["tools_used"] == ["run_gap_analysis"]
+
+    def test_feedback_client_agent_hint_is_fallback_only(self, test_client):
+        """When the matched row has no agent_name, the client hint survives."""
+        content = "A response persisted without attribution."
+        rows = [{"id": 6, "session_id": "thread-1", "content": content}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_text": content,
+                "agent_name": "orchestrator",
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["agent_name"] == "orchestrator"
+
     def test_feedback_requires_id_or_session_preview(self, test_client):
         """Neither message_id nor (session_id + response_preview) → honest error."""
         response, repo = self._post_resolution(

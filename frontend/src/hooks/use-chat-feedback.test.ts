@@ -29,7 +29,7 @@ describe('useChatFeedback', () => {
     postMock.mockResolvedValue({ success: true, feedback_id: 1 });
   });
 
-  it('live-chat submission sends session + preview + uuid, and NO fabricated message_id', async () => {
+  it('live-chat submission sends session + content + uuid, and NO fabricated message_id or agent label', async () => {
     const { result } = renderHook(() => useChatFeedback());
 
     await act(async () => {
@@ -39,7 +39,7 @@ describe('useChatFeedback', () => {
         sessionId: 'thread-uuid',
         rating: 'thumbs_up',
         responsePreview: 'The TRx performance...',
-        agentName: 'copilotkit',
+        responseText: 'The TRx performance... full rated response text',
       });
     });
 
@@ -49,6 +49,12 @@ describe('useChatFeedback', () => {
     expect(body.message_uuid).toBe('ag-ui-uuid-1');
     expect(body.session_id).toBe('thread-uuid');
     expect(body.response_preview).toBe('The TRx performance...');
+    // Full text lets the server resolve by exact content match (two responses
+    // can share a 500-char prefix).
+    expect(body.response_text).toBe('The TRx performance... full rated response text');
+    // Attribution is server-derived from the matched row — the sidebar no
+    // longer dictates agent_name (it used to hardcode 'copilotkit').
+    expect(body.agent_name).toBeUndefined();
   });
 
   it('persisted-history submission passes the known DB id through', async () => {

@@ -180,6 +180,31 @@ class TestLearningSignalsFeedbackStore:
         assert [i["id"] for i in items] == ["s1"]
 
     @pytest.mark.asyncio
+    async def test_agents_filter_overfetches_then_truncates(self):
+        """Agent attribution lives in signal_details, so ``agents=`` can only
+        filter post-mapping. With the SQL limit applied pre-filter, a sparse
+        focus-agent could lose rows because other agents filled the newest
+        slice — the store must overfetch and apply ``limit`` after filtering."""
+        rows = [
+            _row("agent", 0.8, routed=["gap_analyzer"], signal_id=f"g{i}") for i in range(3)
+        ] + [_row("investigator", 0.7, signal_id=f"i{i}") for i in range(3)]
+        client = _RecordingClient(rows)
+        store = LearningSignalsFeedbackStore(client)
+        items = await store.get_feedback(agents=["gap_analyzer"], limit=2)
+
+        # SQL fetch widened beyond the caller's limit...
+        assert (max(2, 2000),) in client.query.named("limit")
+        # ...and the caller's limit applied to the FILTERED result
+        assert [i["id"] for i in items] == ["g0", "g1"]
+
+    @pytest.mark.asyncio
+    async def test_no_agents_filter_keeps_sql_limit(self):
+        client = _RecordingClient([])
+        store = LearningSignalsFeedbackStore(client)
+        await store.get_feedback(limit=100)
+        assert (100,) in client.query.named("limit")
+
+    @pytest.mark.asyncio
     async def test_no_client_returns_empty(self):
         store = get_learning_signals_feedback_store(supabase_client=None)
         assert await store.get_feedback() == []

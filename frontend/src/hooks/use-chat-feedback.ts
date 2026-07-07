@@ -45,8 +45,14 @@ export interface FeedbackSubmission {
   rating: FeedbackRating;
   comment?: string;
   queryText?: string;
+  /** Stored 500-char excerpt; also the resolution fallback. */
   responsePreview?: string;
+  /** Full response text — lets the server resolve the DB row by exact
+   * content match (two responses can share the same 500-char prefix). */
+  responseText?: string;
+  /** Hint only — the server derives attribution from the matched DB row. */
   agentName?: string;
+  /** Hint only — the server derives tools from the matched row's metadata. */
   toolsUsed?: string[];
 }
 
@@ -143,6 +149,7 @@ export function useChatFeedback(): UseChatFeedbackReturn {
           comment: feedback.comment,
           query_text: feedback.queryText,
           response_preview: feedback.responsePreview,
+          response_text: feedback.responseText,
           agent_name: feedback.agentName,
           tools_used: feedback.toolsUsed,
         });

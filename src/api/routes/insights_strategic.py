@@ -576,7 +576,14 @@ async def feedback_learning_insight(
     key = cache_key(
         "feedback-learning",
         str(req.days),
-        {"a": g["activity_summary"], "p": g["patterns_summary"], "u": g["updates_summary"]},
+        {
+            "a": g["activity_summary"],
+            "p": g["patterns_summary"],
+            "u": g["updates_summary"],
+            # signal_quality feeds the LM too — omitting it served stale
+            # low-reward-agent narratives when only the reward stats changed
+            "q": g["signal_quality_summary"],
+        },
     )
     cached = await cache_get(key)
     if cached is not None:

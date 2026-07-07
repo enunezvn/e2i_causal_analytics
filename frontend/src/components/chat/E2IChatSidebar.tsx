@@ -149,14 +149,18 @@ export function E2IChatSidebar({
           ? message.content
           : JSON.stringify(message.content || '');
 
-        // Fire and forget - don't await to avoid blocking the UI
+        // Fire and forget - don't await to avoid blocking the UI.
+        // No agentName: the server derives attribution from the matched
+        // message row (the client is not the authority on who responded).
+        // responseText enables exact full-content resolution; the 500-char
+        // preview is what gets stored on the feedback row.
         submitFeedback({
           messageKey: messageUuid ?? String(Date.now()),
           messageUuid,
           sessionId: threadId,
           rating,
           responsePreview: content.substring(0, 500),
-          agentName: 'copilotkit',
+          responseText: content.substring(0, 20000),
         }).then((result) => {
           if (result.success) {
             logger.debug(`[E2IChatSidebar] ${rating} feedback submitted for message:`, messageUuid);

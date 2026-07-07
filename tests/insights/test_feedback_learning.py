@@ -2,22 +2,22 @@ from src.insights.feedback_learning import build_grounding, generate_insight
 
 
 def _grounding(**overrides):
-    defaults = dict(
-        cycles_24h=4,
-        last_cycle_at="2026-07-07T00:00:00+00:00",
-        thumbs_7d=3,
-        signals_7d=36,
-        avg_reward_7d=0.87,
-        patterns=[
+    defaults = {
+        "cycles_24h": 4,
+        "last_cycle_at": "2026-07-07T00:00:00+00:00",
+        "thumbs_7d": 3,
+        "signals_7d": 36,
+        "avg_reward_7d": 0.87,
+        "patterns": [
             {"severity": "high", "pattern_type": "accuracy_issue", "description": "low reward"},
             {"severity": "medium", "pattern_type": "latency_issue", "description": "slow hops"},
         ],
-        updates=[
+        "updates": [
             {"status": "applied", "update_type": "prompt_refinement"},
             {"status": "proposed", "update_type": "prompt_refinement"},
         ],
-        low_reward_agents=[("cognitive_investigator", 0.42)],
-    )
+        "low_reward_agents": [("cognitive_investigator", 0.42)],
+    }
     defaults.update(overrides)
     return build_grounding(**defaults)
 

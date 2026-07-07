@@ -159,6 +159,46 @@ class TestPatternAnalyzerNode:
         assert "problematic_agent" in relevance_patterns[0]["affected_agents"]
 
     @pytest.mark.asyncio
+    async def test_agent_specific_pattern_counts_thumbs_strings(self, base_state):
+        """The per-agent negative detector must normalize thumbs strings like
+        the overall low-rating detector does — an isinstance gate silently
+        dropped every thumbs_down, hiding per-agent negative streaks (codex
+        round-1 MED)."""
+        feedback_items = [
+            {
+                "feedback_id": f"F{i:03d}",
+                "source_agent": "problematic_agent",
+                "query": f"Query {i}",
+                "agent_response": f"Response {i}",
+                "user_feedback": "thumbs_down" if i < 6 else "thumbs_up",
+                "feedback_type": "rating",
+                "timestamp": f"2024-01-{15 + i % 15:02d}T10:00:00Z",
+            }
+            for i in range(10)
+        ]
+
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 10,
+                "by_type": {"rating": 10},
+                "by_agent": {"problematic_agent": 10},
+                "average_rating": 2.6,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False)
+
+        result = await node.execute(state)
+
+        relevance_patterns = [
+            p for p in result["detected_patterns"] if p["pattern_type"] == "relevance_issue"
+        ]
+        assert len(relevance_patterns) > 0
+        assert "problematic_agent" in relevance_patterns[0]["affected_agents"]
+
+    @pytest.mark.asyncio
     async def test_pattern_clustering(self, state_with_feedback):
         """Test that patterns are properly clustered by type."""
         node = PatternAnalyzerNode(use_llm=False)

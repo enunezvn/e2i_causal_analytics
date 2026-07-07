@@ -3717,11 +3717,21 @@ class FeedbackRequest(BaseModel):
     response_preview: Optional[str] = Field(
         default=None, description="First 500 chars of the response"
     )
+    response_text: Optional[str] = Field(
+        default=None,
+        max_length=20000,
+        description="Full response text, used for exact-match message resolution "
+        "(response_preview stays the stored 500-char excerpt)",
+    )
     agent_name: Optional[str] = Field(
-        default=None, description="Which agent generated the response"
+        default=None,
+        description="Fallback-only hint: the persisted message row is the "
+        "authority on which agent responded",
     )
     tools_used: Optional[List[str]] = Field(
-        default=None, description="Tools used in generating the response"
+        default=None,
+        description="Fallback-only hint: derived from the persisted row's "
+        "tool_calls/tool_results metadata when omitted",
     )
 
 
@@ -3753,12 +3763,15 @@ async def submit_feedback(
         POST /api/copilotkit/feedback
         {
             "session_id": "<copilotkit threadId>",
+            "response_text": "<full response text>",
             "response_preview": "The TRx performance...",
             "message_uuid": "<ag-ui message uuid>",
             "rating": "thumbs_up"
         }
-        The server resolves the DB message by matching the response prefix
-        against recent assistant messages in the session.
+        The server resolves the DB message by exact full-content match
+        (response_text) against recent assistant messages in the session,
+        falling back to response-prefix matching (response_preview).
+        agent_name/tools_used are derived server-side from the matched row.
     """
     logger.info(
         f"[Feedback] Received feedback: message_id={request.message_id}, "
@@ -3802,46 +3815,64 @@ async def submit_feedback(
         # Using service key client to bypass RLS policies.
         session_id = None
         resolved_message_id = request.message_id
+        matched_row: Optional[dict] = None
         lookup_error = None
         try:
             service_client = create_client(service_url, service_key)
             if resolved_message_id is not None:
                 message_result = (
                     service_client.table("chatbot_messages")
-                    .select("id, session_id")
+                    .select("id, session_id, agent_name, metadata")
                     .eq("id", resolved_message_id)
                     .limit(1)
                     .execute()
                 )
 
                 if message_result.data and len(message_result.data) > 0:
-                    session_id = message_result.data[0].get("session_id")  # type: ignore[union-attr]
+                    matched_row = message_result.data[0]
+                    session_id = matched_row.get("session_id")  # type: ignore[union-attr]
                     logger.info(
                         f"[Feedback] Found message {resolved_message_id} with session_id={session_id}"
                     )
                 else:
                     lookup_error = f"Message {resolved_message_id} not found in database"
                     logger.warning(f"[Feedback] {lookup_error}")
-            elif request.session_id and (request.response_preview or "").strip():
-                preview = request.response_preview[:500]  # type: ignore[index]
+            elif request.session_id and (
+                (request.response_preview or "").strip() or (request.response_text or "").strip()
+            ):
+                preview = (request.response_preview or request.response_text or "")[:500]
+                full_text = request.response_text or None
                 candidates = (
                     service_client.table("chatbot_messages")
-                    .select("id, session_id, content")
+                    .select("id, session_id, content, agent_name, metadata")
                     .eq("session_id", request.session_id)
                     .eq("role", "assistant")
                     .order("created_at", desc=True)
                     .limit(20)
                     .execute()
                 )
-                for row in candidates.data or []:
-                    content = row.get("content") or ""
-                    # Exact-prefix match only: a fuzzy/newest-row fallback could
-                    # attach the rating to the wrong message.
-                    if content[: len(preview)] == preview:
-                        resolved_message_id = row.get("id")
-                        session_id = row.get("session_id")
-                        break
-                if resolved_message_id is not None:
+                rows = candidates.data or []
+                # Two-pass resolution. The AG-UI uuid cannot disambiguate here:
+                # copilotkit_emit_message mints a fresh uuid PER CHUNK, so no
+                # single backend-known uuid maps to the client's message id.
+                # Pass 1 — exact full-content equality (identical duplicate
+                # responses are interchangeable for feedback, newest wins).
+                if full_text:
+                    for row in rows:
+                        if (row.get("content") or "") == full_text:
+                            matched_row = row
+                            break
+                # Pass 2 — exact-prefix match only: a fuzzy/newest-row fallback
+                # could attach the rating to the wrong message.
+                if matched_row is None:
+                    for row in rows:
+                        content = row.get("content") or ""
+                        if content[: len(preview)] == preview:
+                            matched_row = row
+                            break
+                if matched_row is not None:
+                    resolved_message_id = matched_row.get("id")
+                    session_id = matched_row.get("session_id")
                     logger.info(
                         f"[Feedback] Resolved message {resolved_message_id} by response "
                         f"prefix in session {str(request.session_id)[:20]}..."
@@ -3867,6 +3898,25 @@ async def submit_feedback(
                 error=lookup_error or f"Could not find session for message_id {request.message_id}",
             )
 
+        # The persisted message row is the authority on attribution (trust
+        # boundary — the old client hardcoded agent_name='copilotkit' on every
+        # live thumb). Sidebar-graph rows genuinely say 'copilotkit' (that
+        # pipeline IS the responder — its graph has no routed agent), while
+        # orchestrator-flow rows carry the real routed agent, so deriving from
+        # the row keeps both honest. Client-supplied values are fallback-only
+        # for rows persisted without attribution.
+        row_meta = (matched_row or {}).get("metadata") or {}
+        resolved_agent_name = (matched_row or {}).get("agent_name") or request.agent_name
+        resolved_tools = request.tools_used
+        if not resolved_tools:
+            tool_entries = row_meta.get("tool_results") or row_meta.get("tool_calls") or []
+            tool_names = [
+                str(entry.get("tool") or entry.get("name"))
+                for entry in tool_entries
+                if isinstance(entry, dict) and (entry.get("tool") or entry.get("name"))
+            ]
+            resolved_tools = tool_names or None
+
         client = await get_async_supabase_client()
         repo = get_chatbot_feedback_repository(supabase_client=client)
 
@@ -3877,8 +3927,8 @@ async def submit_feedback(
             comment=request.comment,
             query_text=request.query_text,
             response_preview=request.response_preview,
-            agent_name=request.agent_name,
-            tools_used=request.tools_used,
+            agent_name=resolved_agent_name,
+            tools_used=resolved_tools,
             metadata=({"message_uuid": request.message_uuid} if request.message_uuid else None),
         )
 

@@ -40,7 +40,7 @@ class LearningSignalsFeedbackStore(BaseRepository):
         """Return real cognitive-workflow reward signals as feedback items.
 
         ``rating`` carries the reward mapped onto the analyzer's 1–5 scale
-        (``pattern_analyzer._rating_to_numeric`` passes numerics through
+        (``feedback_learner.rating_utils.rating_to_numeric`` passes numerics through
         unchanged and flags ``avg < 3.0`` as a low-ratings pattern — raw 0..1
         rewards would read as abysmal 1–5 ratings and fabricate that pattern on
         every cycle). The raw 0..1 reward is preserved in ``metadata.reward``.
@@ -62,7 +62,13 @@ class LearningSignalsFeedbackStore(BaseRepository):
         if end_time:
             query = query.lte("created_at", end_time)
 
-        result = await query.order("created_at", desc=True).limit(limit).execute()
+        # Agent attribution lives inside signal_details, so an ``agents``
+        # filter can only be applied AFTER mapping. Fetching exactly ``limit``
+        # rows would then lose valid rows whenever other agents dominate the
+        # newest slice — overfetch when a filter is requested and truncate to
+        # ``limit`` post-filter instead.
+        sql_limit = limit if not agents else max(limit, 2000)
+        result = await query.order("created_at", desc=True).limit(sql_limit).execute()
         rows = result.data or []
 
         mapped: List[Dict[str, Any]] = []
@@ -107,6 +113,8 @@ class LearningSignalsFeedbackStore(BaseRepository):
                     },
                 }
             )
+            if len(mapped) >= limit:
+                break
         return mapped
 
 
