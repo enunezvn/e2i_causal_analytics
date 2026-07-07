@@ -85,6 +85,10 @@ async def test_no_matches_disclose_substrate_coverage():
     assert "conversion_flag" in coverage["outcomes_covered"]
     # The note must frame this as a coverage gap, not a null finding.
     assert "does not" in coverage["note"] or "no causal paths" in coverage["note"].lower()
+    # Post commercial-grain seed the registry DOES model commercial volume
+    # KPIs, so the note must not claim they are uncovered as a class — the
+    # honest note names the missing KPI and points at outcomes_covered.
+    assert "not commercial" not in coverage["note"]
 
 
 @pytest.mark.unit

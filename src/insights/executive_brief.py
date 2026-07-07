@@ -48,13 +48,22 @@ try:
         Structure: lead with the single highest-impact decision and its
         stakes; then the action sequence across the ranked opportunities;
         then an honest actionability judgment; ALWAYS close with the caveat
-        given in `caveats`."""
+        given in `caveats`. Where `causal_context` names modeled causal
+        levers, you may connect recommended actions to those levers BY NAME
+        with their stated provenance — no figures are provided for them and
+        you must not invent any."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"
         )
         opportunities: str = dspy.InputField(
             desc="Ranked opportunities with ROI multiple, revenue impact, gap %, segment, effort"
+        )
+        causal_context: str = dspy.InputField(
+            desc=(
+                "Registry-modeled causal levers by NAME only (may say none are "
+                "available); reference qualitatively, never with numbers"
+            )
         )
         caveats: str = dspy.InputField(desc="Data caveats that MUST be stated")
 
@@ -143,6 +152,7 @@ def build_grounding(
     strategic_bets_count: int,
     suppressed_count: int,
     opportunities: list[dict[str, Any]],
+    causal_drivers: list[str] | None = None,
 ) -> dict[str, Any]:
     mix = (
         f"{quick_wins_count} quick win(s), {steady_plays_count} steady play(s), "
@@ -232,6 +242,20 @@ def build_grounding(
         "Figures come from the gap analyzer's ROI model on current data; "
         "validate them before committing budget."
     )
+    # Causal levers (commercial grain, 2026-07-07) — NAMES ONLY, digit-free by
+    # construction: the placeholder guard fails closed on ANY numeric char in
+    # LM output, so a lever like "persistent_180d" fed raw would poison every
+    # sample into fallback. Defensive filter here; the route humanizes via
+    # causal_context.format_driver_names, which drops digit-bearing names too.
+    levers = [n for n in (causal_drivers or []) if not any(ch.isnumeric() for ch in n)]
+    if levers:
+        causal_context = (
+            "Modeled causal levers from the causal-path registry "
+            "(curated synthetic knowledge, provenance-labeled): " + "; ".join(levers) + "."
+        )
+        grounding.append({"label": "Causal levers", "value": str(len(levers))})
+    else:
+        causal_context = "No modeled causal levers are available for this brand."
     return {
         "brand": brand,
         "scope": scope,
@@ -242,6 +266,11 @@ def build_grounding(
         "lm_scope": lm_scope,
         "lm_opportunities": lm_opportunities,
         "lm_caveats": " ".join(lm_caveat_parts),
+        # Same digit-free string on both channels — nothing to inject, and no
+        # separate figure-bearing display variant to drift from the LM's view.
+        "causal_context": causal_context,
+        "lm_causal_context": causal_context,
+        "has_causal_context": bool(levers),
         "injection": injection,
     }
 
@@ -258,8 +287,9 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
             "grounding": g["grounding"],
             "is_fallback": True,
         }
+    causal_line = f" {g['causal_context']}" if g.get("has_causal_context") else ""
     insight = (
-        f"Scope: {g['scope']}. Ranked opportunities: {g['opportunities']} "
+        f"Scope: {g['scope']}. Ranked opportunities: {g['opportunities']}{causal_line} "
         f"{g['caveats']} (Factual summary — LLM interpretation unavailable.)"
     )
     return {
@@ -335,6 +365,9 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
             lm_cache=False,
             scope=g["lm_scope"],
             opportunities=g["lm_opportunities"],
+            causal_context=g.get(
+                "lm_causal_context", "No modeled causal levers are available for this brand."
+            ),
             caveats=g["lm_caveats"],
         )
         if pred is None:

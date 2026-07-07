@@ -406,3 +406,42 @@ def test_verbose_free_text_is_bounded():
     assert "y" * 61 not in g["opportunities"]
     assert "x" * 161 not in g["lm_opportunities"]
     assert "y" * 61 not in g["injection"]["{SEG_1}"]
+
+
+# ---- Causal-registry levers (commercial grain, 2026-07-07) ----------------------
+CAUSAL_LEVERS = [
+    "rep detailing frequency → TRx volume",
+    "patient persistence → TRx volume",
+    "copay support program → ROI",
+]
+
+
+def test_build_grounding_carries_digit_free_causal_levers():
+    """The brief's placeholder guard fails closed on ANY numeric character in
+    LM output, so the lever context the LM sees must be digit-free by
+    construction — names only, no effects, no confidences."""
+    g = _grounding(causal_drivers=CAUSAL_LEVERS)
+    assert "rep detailing frequency" in g["lm_causal_context"]
+    assert not any(ch.isnumeric() for ch in g["lm_causal_context"]), g["lm_causal_context"]
+    # Display variant matches (no separate figure-bearing channel to drift).
+    assert g["causal_context"] == g["lm_causal_context"]
+    assert any(c["label"] == "Causal levers" for c in g["grounding"])
+
+
+def test_build_grounding_filters_digit_bearing_lever_defensively():
+    g = _grounding(causal_drivers=["persistent_180d → trx_volume", *CAUSAL_LEVERS])
+    assert "180d" not in g["lm_causal_context"]
+    assert not any(ch.isnumeric() for ch in g["lm_causal_context"])
+
+
+def test_build_grounding_without_levers_says_none_and_no_chip():
+    g = _grounding()
+    assert "no modeled causal levers" in g["lm_causal_context"].lower()
+    assert not any(c["label"] == "Causal levers" for c in g["grounding"])
+
+
+def test_fallback_appends_causal_levers_when_present():
+    g = _grounding(causal_drivers=CAUSAL_LEVERS)
+    out = generate_insight(g)  # LM off in tests -> deterministic fallback
+    assert out["is_fallback"] is True
+    assert "rep detailing frequency" in out["insight"]

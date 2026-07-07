@@ -3,15 +3,18 @@ so causal_effect_size (CM-003) and mediators_identified (CM-005) are non-NULL.
 data_split enum-exact; brand from brand_type; we do NOT touch the 50 stale real rows."""
 
 from src.ml.synthetic.generators.base import GeneratorConfig
-from src.ml.synthetic.generators.causal_paths_generator import CausalPathsGenerator
+from src.ml.synthetic.generators.causal_paths_generator import (
+    N_COMMERCIAL_ROWS,
+    CausalPathsGenerator,
+)
 
 
 def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
     n = 12
     df = CausalPathsGenerator(GeneratorConfig(seed=8, n_records=n)).generate()
-    # HCP rows are ADDITIVE (fixed 6-row block: 2 questions x 3 brands), so total
-    # is n_records + 6 HCP + 6 trigger = n_records + 12 regardless of the n_records knob.
-    assert len(df) == n + 12
+    # HCP/trigger/commercial rows are ADDITIVE fixed blocks (6 HCP + 6 trigger +
+    # N_COMMERCIAL_ROWS commercial), independent of the n_records knob.
+    assert len(df) == n + 12 + N_COMMERCIAL_ROWS
     assert df["causal_effect_size"].notna().all()  # CM-003 non-NULL
     assert (
         df[df["grain"] != "trigger"]["mediators_identified"].apply(lambda m: len(m) >= 1).all()
