@@ -212,6 +212,83 @@ class TestGetTimeSeries(TestBusinessMetricRepository):
 
 
 @pytest.mark.unit
+class TestQueryMetrics(TestBusinessMetricRepository):
+    """Tests for query_metrics: generic equality filters + optional
+    metric_date lower bound, newest first. The chatbot's KPI branch needs a
+    date-bounded query; get_many only supports equality filters."""
+
+    def _chain_query(self, rows):
+        """Self-chaining query mock: every builder method returns the query."""
+        q = MagicMock()
+        for m in ("eq", "gte", "order", "limit", "offset"):
+            getattr(q, m).return_value = q
+        mock_result = MagicMock()
+        mock_result.data = rows
+        q.execute = AsyncMock(return_value=mock_result)
+        return q
+
+    @pytest.mark.asyncio
+    async def test_applies_filters_since_and_newest_first(self, repo, mock_client, sample_metrics):
+        """Equality filters, gte(metric_date), and desc ordering are applied."""
+        q = self._chain_query(sample_metrics)
+        mock_client.table.return_value.select.return_value = q
+
+        result = await repo.query_metrics(
+            filters={"brand": "Fabhalta", "metric_name": "trx"},
+            since="2026-04-08",
+            limit=10,
+        )
+
+        assert len(result) == 2
+        q.eq.assert_any_call("brand", "Fabhalta")
+        q.eq.assert_any_call("metric_name", "trx")
+        q.gte.assert_called_once_with("metric_date", "2026-04-08")
+        q.order.assert_called_once_with("metric_date", desc=True)
+        q.limit.assert_called_once_with(10)
+
+    @pytest.mark.asyncio
+    async def test_no_since_skips_date_bound(self, repo, mock_client, sample_metrics):
+        q = self._chain_query(sample_metrics)
+        mock_client.table.return_value.select.return_value = q
+
+        await repo.query_metrics(filters={"brand": "Fabhalta"}, since=None, limit=5)
+
+        q.gte.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_provenance_default_excludes_synthetic(
+        self, repo, mock_client, sample_metrics, monkeypatch
+    ):
+        """Real-mode deployments keep the default-exclude gate (SSOT #894)."""
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+        q = self._chain_query(sample_metrics)
+        mock_client.table.return_value.select.return_value = q
+
+        await repo.query_metrics(filters={}, since=None, limit=5)
+
+        q.eq.assert_any_call("is_synthetic", False)
+
+    @pytest.mark.asyncio
+    async def test_showcase_deployment_includes_synthetic(
+        self, repo, mock_client, sample_metrics, monkeypatch
+    ):
+        """E2I_INCLUDE_SYNTHETIC deployments skip the exclusion predicate."""
+        monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+        q = self._chain_query(sample_metrics)
+        mock_client.table.return_value.select.return_value = q
+
+        await repo.query_metrics(filters={}, since=None, limit=5)
+
+        assert ("is_synthetic", False) not in [c.args for c in q.eq.call_args_list]
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_without_client(self):
+        repo = BusinessMetricRepository(supabase_client=None)
+        result = await repo.query_metrics(filters={}, since=None, limit=5)
+        assert result == []
+
+
+@pytest.mark.unit
 class TestGetLatestSnapshot(TestBusinessMetricRepository):
     """Tests for get_latest_snapshot method."""
 

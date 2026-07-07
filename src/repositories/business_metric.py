@@ -105,6 +105,48 @@ class BusinessMetricRepository(BaseRepository):
 
         return [self._to_model(row) for row in result.data]
 
+    async def query_metrics(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
+        limit: int = 100,
+        include_synthetic: bool = False,
+    ) -> List:
+        """
+        Get metrics by equality filters with an optional date lower bound.
+
+        Unlike ``get_many`` this supports a ``metric_date >= since`` window and
+        returns rows newest-first, which "last N days" readers (chatbot KPI
+        queries) need.
+
+        Args:
+            filters: Column-value equality filters (brand, region, metric_name)
+            since: Optional inclusive lower bound for metric_date (YYYY-MM-DD)
+            limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
+
+        Returns:
+            List of BusinessMetric records, newest first
+        """
+        if not self.client:
+            return []
+
+        query = self.client.table(self.table_name).select("*")
+
+        for column, value in (filters or {}).items():
+            query = query.eq(column, value)
+
+        if since:
+            query = query.gte("metric_date", since)
+
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = apply_provenance_filter(query, include_synthetic)
+
+        result = await query.order("metric_date", desc=True).limit(limit).execute()
+
+        return [self._to_model(row) for row in result.data]
+
     async def get_latest_snapshot(
         self,
         brand: str,
