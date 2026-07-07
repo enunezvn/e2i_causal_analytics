@@ -295,10 +295,20 @@ class TestFeedbackRequest:
         assert request.agent_name is None
         assert request.tools_used is None
 
-    def test_feedback_requires_message_id(self):
-        """Test that message_id is required."""
-        with pytest.raises(ValueError):
-            FeedbackRequest(rating="thumbs_up")
+    def test_feedback_message_id_now_optional(self):
+        """message_id is optional: the live CopilotKit stream only knows its
+        AG-UI uuid, so the server resolves the DB row from session_id +
+        response_preview instead (the old client fabricated ids via
+        parseInt(uuid)||Date.now(), which could attach feedback to a row from a
+        DIFFERENT session)."""
+        request = FeedbackRequest(
+            rating="thumbs_up",
+            session_id="thread-uuid",
+            response_preview="The TRx for...",
+            message_uuid="ag-ui-uuid",
+        )
+        assert request.message_id is None
+        assert request.message_uuid == "ag-ui-uuid"
 
     def test_feedback_requires_rating(self):
         """Test that rating is required."""
@@ -740,6 +750,96 @@ class TestFeedbackEndpoint:
         data = response.json()
         assert data["success"] is False
         assert "configuration error" in data["error"]
+
+    @staticmethod
+    def _chain_client(rows):
+        """Self-chaining supabase client mock whose execute() returns ``rows``."""
+        client = MagicMock()
+        for method in ("table", "select", "eq", "order", "limit"):
+            getattr(client, method).return_value = client
+        client.execute.return_value = MagicMock(data=rows)
+        return client
+
+    def _post_resolution(self, test_client, rows, payload):
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "SUPABASE_URL": "https://test.supabase.co",
+                    "SUPABASE_SERVICE_KEY": "test-key",
+                },
+            ),
+            patch("supabase.create_client", return_value=self._chain_client(rows)),
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new_callable=AsyncMock,
+            ),
+            patch("src.repositories.get_chatbot_feedback_repository") as mock_repo,
+        ):
+            repo = MagicMock()
+            repo.add_feedback = AsyncMock(return_value={"id": 42})
+            mock_repo.return_value = repo
+            response = test_client.post("/copilotkit/feedback", json=payload)
+        return response, repo
+
+    def test_feedback_resolves_by_session_and_preview(self, test_client):
+        """Without a DB message_id, the server must resolve the rated message by
+        exact response-prefix match within the session — the live CopilotKit
+        stream only knows its AG-UI uuid, never the DB id."""
+        preview = "The TRx performance for Remibrutinib is strong"
+        rows = [
+            {"id": 9, "session_id": "thread-1", "content": "A different, newer response"},
+            {"id": 7, "session_id": "thread-1", "content": preview + " across all regions."},
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": preview,
+                "message_uuid": "ag-ui-uuid-1",
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        kwargs = repo.add_feedback.call_args.kwargs
+        assert kwargs["message_id"] == 7
+        assert kwargs["session_id"] == "thread-1"
+        assert kwargs["metadata"] == {"message_uuid": "ag-ui-uuid-1"}
+
+    def test_feedback_resolution_no_match_fails_closed(self, test_client):
+        """A preview matching NO persisted assistant message must fail honestly —
+        never fall back to 'newest row' (that would attach the rating to the
+        wrong message)."""
+        rows = [{"id": 9, "session_id": "thread-1", "content": "Entirely different content"}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_preview": "The TRx performance...",
+                "rating": "thumbs_down",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "No persisted assistant message" in data["error"]
+        repo.add_feedback.assert_not_called()
+
+    def test_feedback_requires_id_or_session_preview(self, test_client):
+        """Neither message_id nor (session_id + response_preview) → honest error."""
+        response, repo = self._post_resolution(
+            test_client,
+            [],
+            {"rating": "thumbs_up"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "message_id or (session_id + response_preview)" in data["error"]
+        repo.add_feedback.assert_not_called()
 
 
 # =============================================================================

@@ -144,6 +144,59 @@ def test_window_hours_env_override():
     assert abs(window_hours - 48.0) < 0.1, f"Expected ~48h window, got {window_hours}h"
 
 
+def test_task_persists_page_artifacts_with_beat_batch_id():
+    """The beat must persist the cycle's artifacts to the page tables — before
+    this, it persisted ONLY dspy training signals, so /feedback-learning stayed
+    empty (0 cycles / 0 patterns) despite the loop running 4×/day."""
+    fake_output = _make_fake_output()
+
+    with (
+        patch(_AGENT_PATCH) as MockAgent,
+        patch(
+            "src.api.routes.feedback.persist_learning_cycle_output",
+            new_callable=AsyncMock,
+        ) as mock_persist,
+    ):
+        mock_instance = MagicMock()
+        mock_instance.learn = AsyncMock(return_value=fake_output)
+        MockAgent.return_value = mock_instance
+
+        from src.tasks.dspy_optimization_tasks import run_feedback_learning_cycle
+
+        result = run_feedback_learning_cycle.run()
+
+    mock_persist.assert_awaited_once()
+    out_arg, batch_id = mock_persist.await_args.args
+    assert out_arg is fake_output
+    assert batch_id.startswith("beat_")
+    assert result["batch_id"] == batch_id
+
+
+def test_task_survives_artifact_persistence_failure():
+    """Artifact persistence is best-effort: the training signal (this task's
+    primary product) is already persisted by the agent's finalize node, so a
+    page-table failure must not fail the cycle."""
+    fake_output = _make_fake_output()
+
+    with (
+        patch(_AGENT_PATCH) as MockAgent,
+        patch(
+            "src.api.routes.feedback.persist_learning_cycle_output",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("page tables unreachable"),
+        ),
+    ):
+        mock_instance = MagicMock()
+        mock_instance.learn = AsyncMock(return_value=fake_output)
+        MockAgent.return_value = mock_instance
+
+        from src.tasks.dspy_optimization_tasks import run_feedback_learning_cycle
+
+        result = run_feedback_learning_cycle.run()
+
+    assert result["status"] == "completed"
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------

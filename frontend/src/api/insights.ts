@@ -9,6 +9,7 @@ import type {
   TreatmentEffectInsightRequest,
   ExecutiveBriefInsightRequest,
   HTEInsightRequest,
+  FeedbackLearningInsightRequest,
 } from '@/types/insights';
 
 const BASE = '/insights';
@@ -36,3 +37,6 @@ export const getExecutiveBriefInsight = (r: ExecutiveBriefInsightRequest) =>
 
 export const getHTEInsight = (r: HTEInsightRequest) =>
   post<StrategicInsightResponse, HTEInsightRequest>(`${BASE}/hte`, r);
+
+export const getFeedbackLearningInsight = (r: FeedbackLearningInsightRequest) =>
+  post<StrategicInsightResponse, FeedbackLearningInsightRequest>(`${BASE}/feedback-learning`, r);

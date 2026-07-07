@@ -328,6 +328,39 @@ class FeedbackLearnerAgent:
 # ============================================================================
 
 
+class _CompositeFeedbackStore:
+    """Fan ``get_feedback`` out to several stores and concatenate the results.
+
+    Production composes explicit chat thumbs (``chatbot_message_feedback``)
+    with the always-flowing cognitive reward stream (``learning_signals``), so
+    learning cycles have material even when thumbs volume is low. Each store
+    fails closed to ``[]`` independently — a broken source degrades coverage
+    without killing the cycle.
+    """
+
+    def __init__(self, stores: List[Any]):
+        self._stores = [s for s in stores if s is not None]
+
+    async def get_feedback(self, **kwargs: Any) -> List[Dict[str, Any]]:
+        import asyncio
+
+        results = await asyncio.gather(
+            *(s.get_feedback(**kwargs) for s in self._stores),
+            return_exceptions=True,
+        )
+        items: List[Dict[str, Any]] = []
+        for store, res in zip(self._stores, results, strict=True):
+            if isinstance(res, BaseException):
+                logger.warning(
+                    "feedback_learner: store %s failed, continuing without it: %s",
+                    type(store).__name__,
+                    res,
+                )
+                continue
+            items.extend(res or [])
+        return items
+
+
 async def build_production_feedback_stores() -> tuple[
     Optional[Any], Optional[Dict[str, Any]], Optional[Any]
 ]:
@@ -362,12 +395,24 @@ async def build_production_feedback_stores() -> tuple[
     try:
         from src.memory.services.factories import get_async_supabase_client
         from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
+        from src.repositories.learning_signals_feedback import (
+            get_learning_signals_feedback_store,
+        )
 
         from .knowledge_stores import build_knowledge_stores
 
         client = await get_async_supabase_client()
+        # Explicit chat thumbs + the per-turn cognitive reward stream. The
+        # composite keeps cycles fed on real data even when nobody clicks the
+        # thumbs (the rating UI ships with this change; volume will ramp).
+        feedback_store = _CompositeFeedbackStore(
+            [
+                get_chatbot_feedback_repository(supabase_client=client),
+                get_learning_signals_feedback_store(supabase_client=client),
+            ]
+        )
         return (
-            get_chatbot_feedback_repository(supabase_client=client),
+            feedback_store,
             build_knowledge_stores(client),
             client,
         )

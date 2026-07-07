@@ -3683,12 +3683,31 @@ async def chat(
 
 
 class FeedbackRequest(BaseModel):
-    """Request schema for submitting message feedback."""
+    """Request schema for submitting message feedback.
 
-    message_id: int = Field(..., description="ID of the message being rated")
+    Two ways to identify the rated message:
+
+    - ``message_id`` — the ``chatbot_messages.id`` DB key, for surfaces that
+      render persisted history and genuinely know it.
+    - ``session_id`` + ``response_preview`` — for the live CopilotKit stream,
+      which only knows its own AG-UI message uuid (never the DB id). The
+      server resolves the DB row by matching the response prefix within the
+      session (``session_id`` IS the CopilotKit threadId — that is what
+      message persistence stores as the session key).
+    """
+
+    message_id: Optional[int] = Field(
+        default=None,
+        description="DB id of the message being rated (omit to resolve by "
+        "session_id + response_preview)",
+    )
+    message_uuid: Optional[str] = Field(
+        default=None,
+        description="Client-side AG-UI message uuid, stored in feedback metadata for tracing",
+    )
     session_id: Optional[str] = Field(
         default=None,
-        description="Conversation session ID (optional - will be looked up from message if not provided)",
+        description="Conversation session ID (CopilotKit threadId); required when message_id is omitted",
     )
     rating: str = Field(..., description="Rating: 'thumbs_up' or 'thumbs_down'")
     comment: Optional[str] = Field(default=None, description="Optional user comment")
@@ -3726,24 +3745,25 @@ async def submit_feedback(
     This endpoint allows users to rate assistant responses for quality
     improvement and prompt optimization.
 
-    Usage:
+    Usage (explicit DB id — persisted-history surfaces):
         POST /api/copilotkit/feedback
-        Content-Type: application/json
+        {"message_id": 123, "rating": "thumbs_up", ...}
 
+    Usage (live CopilotKit stream — no DB id available client-side):
+        POST /api/copilotkit/feedback
         {
-            "message_id": 123,
-            "session_id": "user-uuid~timestamp",
-            "rating": "thumbs_up",
-            "comment": "Great response!",
-            "query_text": "What is TRx performance?",
+            "session_id": "<copilotkit threadId>",
             "response_preview": "The TRx performance...",
-            "agent_name": "tool_composer",
-            "tools_used": ["query_kpi"]
+            "message_uuid": "<ag-ui message uuid>",
+            "rating": "thumbs_up"
         }
+        The server resolves the DB message by matching the response prefix
+        against recent assistant messages in the session.
     """
     logger.info(
         f"[Feedback] Received feedback: message_id={request.message_id}, "
-        f"rating={request.rating}, session={request.session_id[:20] if request.session_id else 'to-be-looked-up'}..."
+        f"message_uuid={request.message_uuid}, rating={request.rating}, "
+        f"session={request.session_id[:20] if request.session_id else 'to-be-looked-up'}..."
     )
 
     # Validate rating
@@ -3771,33 +3791,77 @@ async def submit_feedback(
                 error="Server configuration error: missing Supabase credentials",
             )
 
-        # Look up the message to get the actual session_id from the database
-        # Using service key client to bypass RLS policies
+        # Resolve the rated message row. Two paths:
+        #  (a) explicit DB message_id — surfaces that render persisted history;
+        #  (b) session_id + response_preview — the live CopilotKit stream only
+        #      knows its AG-UI uuid, which is unrelated to the DB id. Match the
+        #      response prefix against recent assistant rows in the session.
+        #      (The old client fabricated an id via parseInt(uuid)||Date.now(),
+        #      which either failed this lookup or collided with a real row from
+        #      a DIFFERENT session — silently mis-attributed feedback.)
+        # Using service key client to bypass RLS policies.
         session_id = None
+        resolved_message_id = request.message_id
         lookup_error = None
         try:
             service_client = create_client(service_url, service_key)
-            message_result = (
-                service_client.table("chatbot_messages")
-                .select("id, session_id")
-                .eq("id", request.message_id)
-                .limit(1)
-                .execute()
-            )
-
-            if message_result.data and len(message_result.data) > 0:
-                session_id = message_result.data[0].get("session_id")  # type: ignore[union-attr]
-                logger.info(
-                    f"[Feedback] Found message {request.message_id} with session_id={session_id}"
+            if resolved_message_id is not None:
+                message_result = (
+                    service_client.table("chatbot_messages")
+                    .select("id, session_id")
+                    .eq("id", resolved_message_id)
+                    .limit(1)
+                    .execute()
                 )
+
+                if message_result.data and len(message_result.data) > 0:
+                    session_id = message_result.data[0].get("session_id")  # type: ignore[union-attr]
+                    logger.info(
+                        f"[Feedback] Found message {resolved_message_id} with session_id={session_id}"
+                    )
+                else:
+                    lookup_error = f"Message {resolved_message_id} not found in database"
+                    logger.warning(f"[Feedback] {lookup_error}")
+            elif request.session_id and (request.response_preview or "").strip():
+                preview = request.response_preview[:500]  # type: ignore[index]
+                candidates = (
+                    service_client.table("chatbot_messages")
+                    .select("id, session_id, content")
+                    .eq("session_id", request.session_id)
+                    .eq("role", "assistant")
+                    .order("created_at", desc=True)
+                    .limit(20)
+                    .execute()
+                )
+                for row in candidates.data or []:
+                    content = row.get("content") or ""
+                    # Exact-prefix match only: a fuzzy/newest-row fallback could
+                    # attach the rating to the wrong message.
+                    if content[: len(preview)] == preview:
+                        resolved_message_id = row.get("id")
+                        session_id = row.get("session_id")
+                        break
+                if resolved_message_id is not None:
+                    logger.info(
+                        f"[Feedback] Resolved message {resolved_message_id} by response "
+                        f"prefix in session {str(request.session_id)[:20]}..."
+                    )
+                else:
+                    lookup_error = (
+                        "No persisted assistant message in this session matches the "
+                        "rated response (it may not have been persisted yet)"
+                    )
+                    logger.warning(f"[Feedback] {lookup_error}")
             else:
-                lookup_error = f"Message {request.message_id} not found in database"
-                logger.warning(f"[Feedback] {lookup_error}")
+                lookup_error = (
+                    "Either message_id or (session_id + response_preview) is required "
+                    "to identify the rated message"
+                )
         except Exception as lookup_err:
             lookup_error = f"Error looking up message: {lookup_err}"
             logger.warning(f"[Feedback] {lookup_error}")
 
-        if not session_id:
+        if not session_id or resolved_message_id is None:
             return FeedbackResponse(
                 success=False,
                 error=lookup_error or f"Could not find session for message_id {request.message_id}",
@@ -3807,7 +3871,7 @@ async def submit_feedback(
         repo = get_chatbot_feedback_repository(supabase_client=client)
 
         result = await repo.add_feedback(
-            message_id=request.message_id,
+            message_id=resolved_message_id,
             session_id=session_id,  # type: ignore[arg-type]
             rating=request.rating,  # type: ignore[arg-type]
             comment=request.comment,
@@ -3815,6 +3879,7 @@ async def submit_feedback(
             response_preview=request.response_preview,
             agent_name=request.agent_name,
             tools_used=request.tools_used,
+            metadata=({"message_uuid": request.message_uuid} if request.message_uuid else None),
         )
 
         if result:

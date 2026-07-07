@@ -333,3 +333,76 @@ class TestStoreEpisodeAgentNameEnum:
         # Real provenance still persisted.
         assert memory.description == "A real synthesized answer."
         assert captured["session_id"] == "conv-953b"
+
+
+# =============================================================================
+# Synthesis reward grading — the previous constant `0.8 if response` had zero
+# variance, so GEPA gating and feedback-learner pattern analysis learned
+# nothing from the `type=agent` signal (live data: 40/40 rows at exactly 0.8).
+# =============================================================================
+
+
+class TestAgentRewardGrading:
+    """_collect_training_signals must grade the synthesis (`agent`) reward from
+    observable outcome quality, mirroring its summarizer/investigator siblings."""
+
+    def _module(self):
+        from src.rag.cognitive_rag_dspy import ReflectorModule
+
+        return ReflectorModule(
+            {"episodic": MagicMock(), "semantic": MagicMock(), "procedural": MagicMock()},
+            MagicMock(),
+        )
+
+    def _agent_signal(self, state):
+        signals = self._module()._collect_training_signals(state, user_feedback=None)
+        return next(s for s in signals if s["type"] == "agent")
+
+    def test_no_response_scores_zero(self):
+        from src.rag.cognitive_rag_dspy import CognitiveState
+
+        state = CognitiveState(user_query="q", conversation_id="c")
+        assert self._agent_signal(state)["reward"] == 0.0
+
+    def test_bare_response_scores_base_in_fuel_band(self):
+        """Any completed response stays in the GEPA fuel band (>= 0.5), as the
+        old constant did — but a bare thin answer no longer scores 0.8."""
+        from src.rag.cognitive_rag_dspy import CognitiveState
+
+        state = CognitiveState(user_query="q", conversation_id="c")
+        state.response = "short"
+        reward = self._agent_signal(state)["reward"]
+        assert reward == pytest.approx(0.5)
+
+    def test_grounded_substantive_response_scores_higher(self):
+        """Evidence, substance, sufficiency, and an artifact each add credit —
+        the signal now has variance for downstream learners."""
+        from src.rag.cognitive_rag_dspy import CognitiveState, Evidence, MemoryType
+
+        state = CognitiveState(user_query="q", conversation_id="c")
+        state.response = "x" * 250
+        state.sufficient_evidence = True
+        state.visualization_config = {"type": "bar"}
+        state.evidence_board = [
+            Evidence(
+                source=list(MemoryType)[0], hop_number=1, content="e", relevance_score=0.9
+            )
+            for _ in range(4)
+        ]
+        reward = self._agent_signal(state)["reward"]
+        assert reward == pytest.approx(1.0)
+
+    def test_reward_never_exceeds_one(self):
+        from src.rag.cognitive_rag_dspy import CognitiveState, Evidence, MemoryType
+
+        state = CognitiveState(user_query="q", conversation_id="c")
+        state.response = "x" * 1000
+        state.sufficient_evidence = True
+        state.visualization_config = {"type": "bar"}
+        state.evidence_board = [
+            Evidence(
+                source=list(MemoryType)[0], hop_number=1, content="e", relevance_score=1.0
+            )
+            for _ in range(10)
+        ]
+        assert self._agent_signal(state)["reward"] <= 1.0

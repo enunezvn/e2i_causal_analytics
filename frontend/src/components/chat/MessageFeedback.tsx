@@ -74,12 +74,14 @@ export function MessageFeedback({
   onFeedbackSubmit,
 }: MessageFeedbackProps) {
   const { submitFeedback, getRating, hasRated, state } = useChatFeedback();
-  const currentRating = getRating(messageId);
-  const isRated = hasRated(messageId);
+  const messageKey = String(messageId);
+  const currentRating = getRating(messageKey);
+  const isRated = hasRated(messageKey);
 
   const handleFeedback = async (rating: FeedbackRating) => {
     const result = await submitFeedback({
-      messageId,
+      messageKey,
+      dbMessageId: messageId,
       sessionId,
       rating,
       queryText,

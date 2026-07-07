@@ -24,7 +24,23 @@ import { post, ApiError } from '@/lib/api-client';
 export type FeedbackRating = 'thumbs_up' | 'thumbs_down';
 
 export interface FeedbackSubmission {
-  messageId: number;
+  /**
+   * Client-side key for local rated-state (any stable string — the CopilotKit
+   * message uuid for live chat, or String(dbMessageId) for persisted history).
+   */
+  messageKey: string;
+  /**
+   * The chatbot_messages.id DB key, when the surface genuinely knows it
+   * (persisted-history views). Live CopilotKit messages do NOT know it — omit
+   * and the backend resolves the row by sessionId + responsePreview instead.
+   * (Never derive this from the CopilotKit uuid: parseInt on a uuid yields a
+   * leading-digit fragment that can collide with a real row from a different
+   * session.)
+   */
+  dbMessageId?: number;
+  /** CopilotKit AG-UI message uuid, stored server-side for tracing. */
+  messageUuid?: string;
+  /** CopilotKit threadId — the session key the backend persists messages under. */
   sessionId: string;
   rating: FeedbackRating;
   comment?: string;
@@ -43,8 +59,8 @@ export interface FeedbackResult {
 }
 
 export interface FeedbackState {
-  /** Map of messageId -> rating */
-  ratings: Record<number, FeedbackRating>;
+  /** Map of messageKey -> rating */
+  ratings: Record<string, FeedbackRating>;
   /** Whether a submission is in progress */
   isSubmitting: boolean;
   /** Last error message */
@@ -57,9 +73,9 @@ export interface UseChatFeedbackReturn {
   /** Submit feedback for a message */
   submitFeedback: (feedback: FeedbackSubmission) => Promise<FeedbackResult>;
   /** Get the rating for a specific message */
-  getRating: (messageId: number) => FeedbackRating | undefined;
+  getRating: (messageKey: string) => FeedbackRating | undefined;
   /** Check if a message has been rated */
-  hasRated: (messageId: number) => boolean;
+  hasRated: (messageKey: string) => boolean;
   /** Clear all ratings (e.g., on session change) */
   clearRatings: () => void;
 }
@@ -73,25 +89,27 @@ export interface UseChatFeedbackReturn {
  *
  * @example
  * ```tsx
- * function ChatMessage({ messageId, sessionId, content }) {
+ * function ChatMessage({ message, threadId }) {
  *   const { submitFeedback, getRating, hasRated } = useChatFeedback();
+ *   const content = message.content;
  *
  *   const handleThumbsUp = async () => {
  *     await submitFeedback({
- *       messageId,
- *       sessionId,
+ *       messageKey: message.id,          // CopilotKit uuid — local state key
+ *       messageUuid: message.id,
+ *       sessionId: threadId,             // useCopilotContext().threadId
  *       rating: 'thumbs_up',
- *       responsePreview: content.substring(0, 500),
+ *       responsePreview: content.substring(0, 500), // server resolves DB row
  *     });
  *   };
  *
  *   return (
  *     <div>
  *       <p>{content}</p>
- *       {!hasRated(messageId) && (
+ *       {!hasRated(message.id) && (
  *         <button onClick={handleThumbsUp}>👍</button>
  *       )}
- *       {getRating(messageId) === 'thumbs_up' && <span>Thanks!</span>}
+ *       {getRating(message.id) === 'thumbs_up' && <span>Thanks!</span>}
  *     </div>
  *   );
  * }
@@ -116,7 +134,10 @@ export function useChatFeedback(): UseChatFeedbackReturn {
         // Use apiClient post() instead of raw fetch() to include auth headers
         // (Phase 1 System Evaluation - Data Flow fix)
         const result = await post<FeedbackResult>('/copilotkit/feedback', {
-          message_id: feedback.messageId,
+          // Omitted (undefined) when only the CopilotKit uuid is known — the
+          // backend then resolves the DB row by session + response prefix.
+          message_id: feedback.dbMessageId,
+          message_uuid: feedback.messageUuid,
           session_id: feedback.sessionId,
           rating: feedback.rating,
           comment: feedback.comment,
@@ -132,7 +153,7 @@ export function useChatFeedback(): UseChatFeedbackReturn {
             ...prev,
             ratings: {
               ...prev.ratings,
-              [feedback.messageId]: feedback.rating,
+              [feedback.messageKey]: feedback.rating,
             },
             isSubmitting: false,
           }));
@@ -168,15 +189,15 @@ export function useChatFeedback(): UseChatFeedbackReturn {
   );
 
   const getRating = useCallback(
-    (messageId: number): FeedbackRating | undefined => {
-      return state.ratings[messageId];
+    (messageKey: string): FeedbackRating | undefined => {
+      return state.ratings[messageKey];
     },
     [state.ratings]
   );
 
   const hasRated = useCallback(
-    (messageId: number): boolean => {
-      return messageId in state.ratings;
+    (messageKey: string): boolean => {
+      return messageKey in state.ratings;
     },
     [state.ratings]
   );

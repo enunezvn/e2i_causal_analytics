@@ -185,4 +185,5 @@ export {
   usePredictiveCohortInsight,
   useResourceOptimizationInsight,
   useTreatmentEffectInsight,
+  useFeedbackLearningInsight,
 } from './use-insights';
