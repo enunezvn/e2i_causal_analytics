@@ -11,11 +11,48 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from src.repositories.expert_review import ExpertReviewRepository
 
 logger = logging.getLogger(__name__)
+
+# Keys of the in-state CausalGraph that are persisted with an auto-created
+# review (mig 097). Bounded on purpose: enough to RENDER the DAG in the review
+# UI and GROUND the advisory agent assessment — not the dag_dot blob or any
+# other transient state.
+_DAG_SNAPSHOT_KEYS = (
+    "treatment_nodes",
+    "outcome_nodes",
+    "adjustment_sets",
+    "confidence",
+    "discovery_gate_decision",
+    "dag_version_hash",
+)
+
+
+def sanitize_dag_structure(causal_graph: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Reduce a rich in-state CausalGraph to a JSON-serializable render snapshot.
+
+    Keeps nodes/edges (edge tuples coerced to lists for JSONB round-trip) plus
+    the treatment/outcome/adjustment/discovery keys; drops ``dag_dot`` and
+    anything else. Returns None when there are no nodes — an empty snapshot
+    would render as a blank graph posing as a real one.
+    """
+    if not causal_graph or not causal_graph.get("nodes"):
+        return None
+    structure: Dict[str, Any] = {
+        "nodes": [str(n) for n in causal_graph.get("nodes", [])],
+        "edges": [[str(e[0]), str(e[1])] for e in causal_graph.get("edges", [])],
+    }
+    if causal_graph.get("augmented_edges"):
+        structure["augmented_edges"] = [
+            [str(e[0]), str(e[1])] for e in causal_graph["augmented_edges"]
+        ]
+    for key in _DAG_SNAPSHOT_KEYS:
+        if causal_graph.get(key) is not None:
+            structure[key] = causal_graph[key]
+    return structure
 
 
 class ReviewGateDecision(Enum):
@@ -106,6 +143,10 @@ class ExpertReviewGate:
         outcome: Optional[str] = None,
         requester_id: Optional[str] = None,
         analysis_context: Optional[str] = None,
+        # Mapping (not Dict): callers pass the in-state CausalGraph TypedDict,
+        # which mypy only accepts through a read-only Mapping.
+        dag_structure: Optional[Mapping[str, Any]] = None,
+        related_validation_ids: Optional[List[str]] = None,
     ) -> ReviewGateResult:
         """
         Check if a DAG has expert approval and is valid.
@@ -117,6 +158,12 @@ class ExpertReviewGate:
             outcome: Outcome variable name
             requester_id: User ID requesting the analysis
             analysis_context: Description of the analysis
+            dag_structure: In-state CausalGraph (rich form accepted; sanitized
+                via ``sanitize_dag_structure`` before persistence) so an
+                auto-created review row is renderable in the review UI (097)
+            related_validation_ids: causal_validations row ids from the
+                refutation run that triggered this consult — links the
+                review to its statistical evidence
 
         Returns:
             ReviewGateResult with decision and metadata
@@ -181,12 +228,30 @@ class ExpertReviewGate:
         pending = [r for r in pending_reviews if r.get("approval_status") == "pending"]
 
         if pending:
-            # Review already pending
+            # Review already pending. Backfill-on-encounter (097): this
+            # short-circuit is the ONLY consult a pre-097 (structure-less)
+            # pending row will ever see for its DAG, so attach the renderable
+            # snapshot now. Best-effort — a backfill failure must never break
+            # the gate.
+            pending_row = pending[0]
+            review_id = pending_row.get("review_id")
+            structure = sanitize_dag_structure(dag_structure)
+            if structure and review_id and not pending_row.get("dag_structure_json"):
+                try:
+                    await self.repository.update_dag_structure(
+                        str(review_id),
+                        structure,
+                        related_validation_ids=related_validation_ids,
+                    )
+                except Exception as backfill_err:  # noqa: BLE001 - gate must not break
+                    logger.warning(
+                        f"DAG-structure backfill failed for review {review_id}: {backfill_err}"
+                    )
             return ReviewGateResult(
                 decision=ReviewGateDecision.PENDING_REVIEW,
                 dag_hash=dag_hash,
                 is_approved=False,
-                review_id=pending[0].get("review_id"),
+                review_id=review_id,
                 message="DAG review pending expert approval",
                 requires_action=True,
             )
@@ -216,6 +281,8 @@ class ExpertReviewGate:
                 treatment_variable=treatment,
                 outcome_variable=outcome,
                 analysis_context=analysis_context,
+                dag_structure=sanitize_dag_structure(dag_structure),
+                related_validation_ids=related_validation_ids,
             )
 
             if review_id:

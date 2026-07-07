@@ -1,13 +1,16 @@
 /**
- * Expert Reviews Page (R6-F2 Phase B4)
- * ====================================
+ * Expert Reviews Page (R6-F2 Phase B4; DAG snapshot + advisory assessment 097)
+ * ============================================================================
  *
  * Admin review-queue UI for the causal-DAG human-in-the-loop loop.
  *
  * A REVIEW-band causal estimate creates a `pending` expert_reviews row; an
  * operator sees it here and resolves it (approve/reject) with the 010 checklist
- * items + comments. Per OD-2 this is metadata + approve/reject + comments only —
- * NO interactive DAG graph render in v1.
+ * items + comments. The expanded row renders the DAG under review from its
+ * stored snapshot (`dag_structure_json`) — rows created before snapshot capture
+ * show an honest "not captured" fallback — and an ADVISORY agent assessment of
+ * the checklist questions (`agent_assessment_json`, generated on demand). The
+ * assessment never pre-fills the human checklist.
  *
  * Honest states: loading spinner, error banner, and an EmptyState (no hardcoded
  * SAMPLE_ data) when the live queue is empty.
@@ -16,7 +19,14 @@
  */
 
 import { Fragment, useState, useCallback } from 'react';
-import { ClipboardCheck, CheckCircle2, XCircle, RefreshCw, Inbox } from 'lucide-react';
+import {
+  ClipboardCheck,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+  Inbox,
+  Sparkles,
+} from 'lucide-react';
 import {
   Card,
   CardContent,
@@ -38,12 +48,21 @@ import {
 } from '@/components/ui/table';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { WarningBanner } from '@/components/ui/WarningBanner';
+import { CausalDAG } from '@/components/visualizations/causal/CausalDAG';
+import type {
+  CausalNode,
+  CausalEdge,
+} from '@/components/visualizations/causal/CausalDAG';
 import {
   usePendingReviews,
   useResolveReview,
+  useReviewAssessment,
   useReviewSummary,
 } from '@/hooks/api/use-expert-review';
 import type {
+  AgentAssessment,
+  AssessmentVerdict,
+  DagStructure,
   PendingReviewItem,
   ReviewApprovalStatus,
 } from '@/types/expert-review';
@@ -63,6 +82,67 @@ function shortHash(hash?: string | null): string {
   return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash;
 }
 
+// Verdict chip styling: concern is the only destructive signal; supports and
+// the two "human judgment required" verdicts stay visually calm.
+const VERDICT_VARIANT: Record<AssessmentVerdict, 'secondary' | 'destructive' | 'outline'> =
+  {
+    supports: 'secondary',
+    concern: 'destructive',
+    unclear: 'outline',
+    no_evidence: 'outline',
+  };
+
+/** Render the stored DAG snapshot, or an honest fallback for pre-097 rows. */
+function DagPanel({ structure }: { structure?: DagStructure | null }) {
+  if (!structure?.nodes?.length) {
+    return (
+      <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-sm text-[var(--color-muted-foreground)]">
+        DAG structure not captured for this review (created before snapshot
+        capture was added). The DAG hash identifies the structure but cannot be
+        rendered from it.
+      </div>
+    );
+  }
+
+  const treatments = new Set(structure.treatment_nodes ?? []);
+  const outcomes = new Set(structure.outcome_nodes ?? []);
+  const augmented = new Set(
+    (structure.augmented_edges ?? []).map(([s, t]) => `${s}->${t}`)
+  );
+
+  const nodes: CausalNode[] = structure.nodes.map((id) => ({
+    id,
+    label: id,
+    type: treatments.has(id) ? 'treatment' : outcomes.has(id) ? 'outcome' : 'variable',
+  }));
+  const edges: CausalEdge[] = (structure.edges ?? []).map(([source, target]) => ({
+    id: `${source}->${target}`,
+    source,
+    target,
+    // Discovery-augmented edges are visually distinct: they were added by the
+    // discovery gate, not the curated domain DAG.
+    type: augmented.has(`${source}->${target}`) ? 'association' : 'causal',
+  }));
+
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-medium">DAG under review</h4>
+      <CausalDAG
+        nodes={nodes}
+        edges={edges}
+        minHeight={320}
+        ariaLabel="Causal DAG under review"
+      />
+      {structure.augmented_edges && structure.augmented_edges.length > 0 && (
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Dashed/association edges were discovery-augmented (gate=
+          {structure.discovery_gate_decision ?? 'unknown'}).
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface ResolveFormProps {
   review: PendingReviewItem;
   onClose: () => void;
@@ -72,6 +152,14 @@ function ResolveForm({ review, onClose }: ResolveFormProps) {
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState('');
   const resolve = useResolveReview();
+  const assessmentMutation = useReviewAssessment();
+
+  // Prefer the freshly generated assessment; fall back to the row's cache.
+  const assessment: AgentAssessment | null =
+    assessmentMutation.data?.assessment ?? review.agent_assessment_json ?? null;
+  const assessmentById = new Map(
+    (assessment?.items ?? []).map((item) => [item.id, item])
+  );
 
   const submit = useCallback(
     (approval_status: ReviewApprovalStatus) => {
@@ -92,21 +180,69 @@ function ResolveForm({ review, onClose }: ResolveFormProps) {
 
   return (
     <div className="space-y-4 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/20 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+          Agent assessment (advisory — the checklist answers are yours)
+          {assessment?.is_fallback && ' · deterministic, no LLM'}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            assessmentMutation.mutate({
+              reviewId: review.review_id,
+              force: !!assessment,
+            })
+          }
+          disabled={assessmentMutation.isPending}
+        >
+          <RefreshCw
+            className={`mr-1 h-3.5 w-3.5 ${assessmentMutation.isPending ? 'animate-spin' : ''}`}
+          />
+          {assessment ? 'Regenerate agent assessment' : 'Generate agent assessment'}
+        </Button>
+      </div>
+
+      {assessmentMutation.isError && (
+        <WarningBanner
+          title="Failed to generate agent assessment"
+          messages={[
+            assessmentMutation.error?.message ?? 'An unexpected error occurred.',
+          ]}
+        />
+      )}
+
       <div className="space-y-2">
-        {CHECKLIST_ITEMS.map((item) => (
-          <div key={item.id} className="flex items-center gap-2">
-            <Checkbox
-              id={`${review.review_id}-${item.id}`}
-              checked={!!checklist[item.id]}
-              onCheckedChange={(v) =>
-                setChecklist((prev) => ({ ...prev, [item.id]: v === true }))
-              }
-            />
-            <Label htmlFor={`${review.review_id}-${item.id}`} className="text-sm">
-              {item.question}
-            </Label>
-          </div>
-        ))}
+        {CHECKLIST_ITEMS.map((item) => {
+          const graded = assessmentById.get(item.id);
+          return (
+            <div key={item.id} className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={`${review.review_id}-${item.id}`}
+                  checked={!!checklist[item.id]}
+                  onCheckedChange={(v) =>
+                    setChecklist((prev) => ({ ...prev, [item.id]: v === true }))
+                  }
+                />
+                <Label htmlFor={`${review.review_id}-${item.id}`} className="text-sm">
+                  {item.question}
+                </Label>
+                {graded && (
+                  <Badge variant={VERDICT_VARIANT[graded.verdict] ?? 'outline'}>
+                    {graded.verdict}
+                  </Badge>
+                )}
+              </div>
+              {graded && (
+                <p className="pl-6 text-xs text-[var(--color-muted-foreground)]">
+                  {graded.rationale}
+                </p>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="space-y-1">
@@ -255,7 +391,13 @@ export default function ExpertReviews() {
                     {openRow === review.review_id && (
                       <TableRow>
                         <TableCell colSpan={7}>
-                          <ResolveForm review={review} onClose={() => setOpenRow(null)} />
+                          <div className="grid gap-4 xl:grid-cols-2">
+                            <DagPanel structure={review.dag_structure_json} />
+                            <ResolveForm
+                              review={review}
+                              onClose={() => setOpenRow(null)}
+                            />
+                          </div>
                         </TableCell>
                       </TableRow>
                     )}

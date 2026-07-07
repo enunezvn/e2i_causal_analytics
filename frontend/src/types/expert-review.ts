@@ -13,6 +13,47 @@
  */
 
 /**
+ * Sanitized causal-graph snapshot captured when the review was created
+ * (mig 097). Null/absent for rows created before snapshot capture existed —
+ * the hash is one-way, so those cannot be rendered.
+ */
+export interface DagStructure {
+  nodes: string[];
+  edges: string[][];
+  treatment_nodes?: string[];
+  outcome_nodes?: string[];
+  adjustment_sets?: string[][];
+  augmented_edges?: string[][];
+  discovery_gate_decision?: string | null;
+  confidence?: number | null;
+  dag_version_hash?: string | null;
+}
+
+/** Verdict vocabulary of the advisory agent assessment. */
+export type AssessmentVerdict = 'supports' | 'concern' | 'unclear' | 'no_evidence';
+
+/** One checklist question graded by the agent (advisory only). */
+export interface AssessmentItem {
+  id: string;
+  question: string;
+  verdict: AssessmentVerdict;
+  rationale: string;
+}
+
+/**
+ * Advisory agent assessment of the reviewer checklist. `is_fallback` marks the
+ * deterministic (no-LLM) grading; evidence counts say what it was grounded in.
+ */
+export interface AgentAssessment {
+  items: AssessmentItem[];
+  is_fallback: boolean;
+  evidence?: {
+    refutation_tests: number;
+    has_dag_structure: boolean;
+  };
+}
+
+/**
  * A single pending expert review.
  *
  * Mirrors the `PendingReviewItem` backend schema / the
@@ -28,6 +69,8 @@ export interface PendingReviewItem {
   analysis_context?: string | null;
   created_at?: string | null;
   days_pending?: number | null;
+  dag_structure_json?: DagStructure | null;
+  agent_assessment_json?: AgentAssessment | null;
 }
 
 /**
@@ -73,4 +116,17 @@ export interface ReviewSummaryResponse {
   rejected: number;
   expired: number;
   expiring_soon: number;
+}
+
+/**
+ * Response for POST /expert-reviews/{review_id}/assessment.
+ *
+ * `cached` marks a replay of the stored assessment; `persisted` is honest
+ * about whether a fresh assessment reached the DB.
+ */
+export interface AgentAssessmentResponse {
+  review_id: string;
+  assessment: AgentAssessment;
+  cached: boolean;
+  persisted: boolean;
 }

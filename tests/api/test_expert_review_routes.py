@@ -37,6 +37,9 @@ class _FakeExpertReviewRepo:
         }
         self.submit_calls: List[Dict[str, Any]] = []
         self.submit_return: bool = True
+        self.rows_by_id: Dict[str, Dict[str, Any]] = {}
+        self.assessment_writes: List[Dict[str, Any]] = []
+        self.assessment_write_return: bool = True
 
     async def get_pending_reviews(
         self,
@@ -71,6 +74,13 @@ class _FakeExpertReviewRepo:
 
     async def get_review_summary(self, brand: Optional[str] = None) -> Dict[str, int]:
         return dict(self.summary)
+
+    async def get_by_id(self, id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        return self.rows_by_id.get(id)
+
+    async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
+        self.assessment_writes.append({"review_id": review_id, "assessment": assessment})
+        return self.assessment_write_return
 
 
 @pytest.fixture
@@ -210,3 +220,137 @@ class TestReviewSummary:
             "expired": 2,
             "expiring_soon": 1,
         }
+
+
+_STRUCTURE = {
+    "nodes": ["t", "y", "c"],
+    "edges": [["t", "y"], ["c", "t"], ["c", "y"]],
+    "treatment_nodes": ["t"],
+    "outcome_nodes": ["y"],
+}
+
+_ASSESSMENT = {
+    "items": [
+        {
+            "id": "conf_complete",
+            "question": "Are all known confounders included?",
+            "verdict": "supports",
+            "rationale": "confounder refuters passed",
+        }
+    ],
+    "is_fallback": True,
+    "evidence": {"refutation_tests": 1, "has_dag_structure": True},
+}
+
+
+class TestPendingReviewsCarryDagStructure:
+    """Mig 097: the queue rows must expose the renderable DAG snapshot and any
+    cached agent assessment — parsed to OBJECTS even when the repo row holds a
+    JSON string (json.dumps write path -> JSONB string scalar)."""
+
+    def test_structure_and_assessment_surfaced_as_objects(self, client, fake_repo):
+        import json as _json
+
+        fake_repo.pending_rows = [
+            {
+                "review_id": "33333333-3333-3333-3333-333333333333",
+                "review_type": "dag_approval",
+                "dag_structure_json": _json.dumps(_STRUCTURE),  # string form
+                "agent_assessment_json": _ASSESSMENT,  # dict form
+            }
+        ]
+        resp = client.get("/api/expert-reviews/pending")
+        assert resp.status_code == 200, resp.text
+        item = resp.json()["reviews"][0]
+        assert item["dag_structure_json"] == _STRUCTURE
+        assert item["agent_assessment_json"]["items"][0]["verdict"] == "supports"
+
+    def test_absent_structure_is_null_not_fabricated(self, client, fake_repo):
+        fake_repo.pending_rows = [{"review_id": "44444444-4444-4444-4444-444444444444"}]
+        resp = client.get("/api/expert-reviews/pending")
+        item = resp.json()["reviews"][0]
+        assert item["dag_structure_json"] is None
+        assert item["agent_assessment_json"] is None
+
+
+class TestAgentAssessmentEndpoint:
+    """POST /expert-reviews/{id}/assessment — on-demand advisory assessment,
+    cached in agent_assessment_json (never regenerated unless force=true)."""
+
+    @pytest.fixture
+    def stub_generation(self, monkeypatch):
+        """Stub the LM/evidence seams: no live DB reads, no LM call."""
+        calls = {"generate": 0}
+
+        async def _fake_validation_rows(ids):
+            return [{"test_type": "random_common_cause", "status": "passed"}]
+
+        def _fake_build(review, validations):
+            calls["generate"] += 1
+            return dict(_ASSESSMENT)
+
+        monkeypatch.setattr(expert_review_route, "_get_validation_rows", _fake_validation_rows)
+        monkeypatch.setattr(expert_review_route, "_build_assessment", _fake_build)
+        return calls
+
+    def test_unknown_review_404(self, client, fake_repo, stub_generation):
+        resp = client.post("/api/expert-reviews/99999999-9999-9999-9999-999999999999/assessment")
+        assert resp.status_code == 404
+
+    def test_generates_persists_and_returns(self, client, fake_repo, stub_generation):
+        rid = "55555555-5555-5555-5555-555555555555"
+        fake_repo.rows_by_id[rid] = {
+            "review_id": rid,
+            "dag_structure_json": _STRUCTURE,
+            "related_validation_ids": ["val-1"],
+        }
+        resp = client.post(f"/api/expert-reviews/{rid}/assessment")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["cached"] is False
+        assert body["persisted"] is True
+        assert body["assessment"]["items"][0]["id"] == "conf_complete"
+        assert stub_generation["generate"] == 1
+        assert fake_repo.assessment_writes[0]["review_id"] == rid
+
+    def test_cached_assessment_is_returned_without_regenerating(
+        self, client, fake_repo, stub_generation
+    ):
+        import json as _json
+
+        rid = "66666666-6666-6666-6666-666666666666"
+        fake_repo.rows_by_id[rid] = {
+            "review_id": rid,
+            # stored as a JSON string (json.dumps write path) -> must come back parsed
+            "agent_assessment_json": _json.dumps(_ASSESSMENT),
+        }
+        resp = client.post(f"/api/expert-reviews/{rid}/assessment")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["cached"] is True
+        assert body["assessment"]["items"][0]["verdict"] == "supports"
+        assert stub_generation["generate"] == 0
+        assert fake_repo.assessment_writes == []
+
+    def test_force_regenerates_over_cache(self, client, fake_repo, stub_generation):
+        rid = "77777777-7777-7777-7777-777777777777"
+        fake_repo.rows_by_id[rid] = {
+            "review_id": rid,
+            "agent_assessment_json": dict(_ASSESSMENT),
+        }
+        resp = client.post(f"/api/expert-reviews/{rid}/assessment?force=true")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["cached"] is False
+        assert stub_generation["generate"] == 1
+
+    def test_persistence_failure_is_honest(self, client, fake_repo, stub_generation):
+        """Cache write failing must NOT fabricate persisted=True (the assessment
+        itself is still returned — it is valid, just not cached)."""
+        rid = "88888888-8888-8888-8888-888888888888"
+        fake_repo.rows_by_id[rid] = {"review_id": rid}
+        fake_repo.assessment_write_return = False
+        resp = client.post(f"/api/expert-reviews/{rid}/assessment")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["persisted"] is False
+        assert body["assessment"]["items"]

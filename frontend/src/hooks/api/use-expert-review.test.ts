@@ -22,6 +22,7 @@ vi.mock('@/api/expert-review', () => ({
   getPendingReviews: vi.fn(),
   resolveReview: vi.fn(),
   getReviewSummary: vi.fn(),
+  generateReviewAssessment: vi.fn(),
 }));
 
 // Mock query-client
@@ -48,6 +49,7 @@ vi.mock('@/lib/query-client', () => ({
 import {
   usePendingReviews,
   useResolveReview,
+  useReviewAssessment,
   useReviewSummary,
 } from './use-expert-review';
 import * as expertReviewApi from '@/api/expert-review';
@@ -226,5 +228,65 @@ describe('useResolveReview', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(onSuccess).toHaveBeenCalled();
+  });
+});
+
+describe('useReviewAssessment', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const mockAssessmentResponse = {
+    review_id: '11111111-1111-1111-1111-111111111111',
+    assessment: {
+      items: [
+        {
+          id: 'conf_complete',
+          question: 'Are all known confounders included?',
+          verdict: 'supports' as const,
+          rationale: 'confounder refuters passed',
+        },
+      ],
+      is_fallback: true,
+    },
+    cached: false,
+    persisted: true,
+  };
+
+  it('posts the assessment request and invalidates the pending queue', async () => {
+    vi.mocked(expertReviewApi.generateReviewAssessment).mockResolvedValueOnce(
+      mockAssessmentResponse
+    );
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useReviewAssessment(), { wrapper });
+
+    result.current.mutate({
+      reviewId: '11111111-1111-1111-1111-111111111111',
+      force: true,
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual(mockAssessmentResponse);
+    expect(expertReviewApi.generateReviewAssessment).toHaveBeenCalledWith(
+      '11111111-1111-1111-1111-111111111111',
+      true
+    );
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles an assessment error', async () => {
+    vi.mocked(expertReviewApi.generateReviewAssessment).mockRejectedValueOnce(
+      new Error('nope')
+    );
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useReviewAssessment(), { wrapper });
+
+    result.current.mutate({ reviewId: 'bad' });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
   });
 });

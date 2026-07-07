@@ -75,6 +75,7 @@ class ExpertReviewRepository(BaseRepository):
         analysis_context: Optional[str] = None,
         checklist: Optional[Dict[str, Any]] = None,
         related_validation_ids: Optional[List[str]] = None,
+        dag_structure: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Create a new expert review request.
@@ -92,6 +93,10 @@ class ExpertReviewRepository(BaseRepository):
             analysis_context: Description of what analysis this covers
             checklist: Initial checklist items (to be completed during review)
             related_validation_ids: Related causal_validations records
+            dag_structure: Sanitized causal-graph snapshot (nodes/edges/
+                treatment/outcome) persisted as dag_structure_json (mig 097) so
+                the review UI can render the DAG under review — the hash alone
+                is one-way and not renderable
 
         Returns:
             Created review_id or None on failure
@@ -114,6 +119,7 @@ class ExpertReviewRepository(BaseRepository):
             "analysis_context": analysis_context,
             "checklist_json": json.dumps(checklist) if checklist else None,
             "related_validation_ids": related_validation_ids,
+            "dag_structure_json": json.dumps(dag_structure) if dag_structure else None,
         }
 
         # Remove None values
@@ -247,6 +253,79 @@ class ExpertReviewRepository(BaseRepository):
             return True
         except Exception as e:
             logger.error(f"Failed to submit review {review_id}: {e}")
+            return False
+
+    async def update_agent_assessment(
+        self,
+        review_id: str,
+        assessment: Dict[str, Any],
+    ) -> bool:
+        """Cache an advisory agent assessment on the review row (mig 097).
+
+        Writes ``agent_assessment_json`` ONLY — never touches
+        ``checklist_json``, which remains the human reviewer's own record.
+
+        Returns:
+            True when exactly this row was updated; False on zero-row match
+            (nonexistent review) or persistence error — fail-closed, mirroring
+            ``submit_review``.
+        """
+        if not self.client:
+            return False
+
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .update({"agent_assessment_json": json.dumps(assessment)})
+                .eq("review_id", review_id)
+                .execute()
+            )
+            if not result.data:
+                logger.warning(
+                    f"update_agent_assessment matched no rows for {review_id}; returning False"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cache agent assessment for {review_id}: {e}")
+            return False
+
+    async def update_dag_structure(
+        self,
+        review_id: str,
+        dag_structure: Dict[str, Any],
+        related_validation_ids: Optional[List[str]] = None,
+    ) -> bool:
+        """Backfill the DAG snapshot on an existing review row (097).
+
+        Pre-097 pending rows carry only the one-way hash; when the same DAG is
+        re-encountered by the gate, this attaches the renderable structure (and
+        the fresh run's evidence ids, when given) to the EXISTING row instead of
+        losing it to the pending-row short-circuit. Zero-row match or error
+        returns False (fail-closed), mirroring ``submit_review``.
+        """
+        if not self.client or not dag_structure:
+            return False
+
+        update_data: Dict[str, Any] = {"dag_structure_json": json.dumps(dag_structure)}
+        if related_validation_ids:
+            update_data["related_validation_ids"] = related_validation_ids
+
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .update(update_data)
+                .eq("review_id", review_id)
+                .execute()
+            )
+            if not result.data:
+                logger.warning(
+                    f"update_dag_structure matched no rows for {review_id}; returning False"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Failed to backfill DAG structure for {review_id}: {e}")
             return False
 
     async def is_dag_approved(
