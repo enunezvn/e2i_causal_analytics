@@ -121,3 +121,32 @@ def test_extract_history_caps_length():
     # Most recent prior turns are kept
     assert history[-1]["content"] == "answer 29"
     assert all(len(h["content"]) <= 2000 for h in history)
+
+
+@pytest.mark.unit
+def test_prompt_forbids_overlapping_window_baselines():
+    """2026-07-07 session review: the synthesizer compared last-30d TRx against
+    a last-90d figure that CONTAINS those same 30 days and called the -3.4%
+    delta a 'softening'. The prompt must forbid overlapping-window baselines
+    and require prior non-overlapping periods instead."""
+    p = build_synthesis_prompt(
+        "is that above or below baseline?",
+        [{"name": "kpi_calculate_tool", "args": {"kpi_name": "TRx", "window": "last 90 days"}}],
+        [{"tool": "kpi_calculate_tool", "result": '{"value": 15767}'}],
+    )
+    assert "overlap" in p.lower()
+    assert "non-overlapping" in p.lower()
+
+
+@pytest.mark.unit
+def test_prompt_requires_surfacing_coverage_warning():
+    """When a tool result carries a coverage_warning, the synthesizer must repeat
+    it and refuse trend conclusions from that figure."""
+    # Results deliberately do NOT contain the literal string — the INSTRUCTION
+    # block itself must tell the synthesizer what to do with a coverage_warning.
+    p = build_synthesis_prompt(
+        "is that above or below baseline?",
+        [{"name": "kpi_calculate_tool", "args": {"kpi_name": "TRx"}}],
+        [{"tool": "kpi_calculate_tool", "result": '{"value": 15767}'}],
+    )
+    assert "coverage_warning" in p
