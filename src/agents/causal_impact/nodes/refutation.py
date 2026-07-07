@@ -479,7 +479,10 @@ class RefutationNode:
         logger.info(f"RefutationNode initialized (DoWhy available: {DOWHY_AVAILABLE})")
 
     async def _consult_review_gate(
-        self, state: CausalImpactState, suite: "RefutationSuite"
+        self,
+        state: CausalImpactState,
+        suite: "RefutationSuite",
+        validation_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """On a REVIEW- or BLOCK-band gate, consult the ExpertReviewGate.
 
@@ -490,6 +493,11 @@ class RefutationNode:
         warning; a gate error degrades without breaking the node). ``needs_review``
         is set by the caller from ``suite.needs_review`` (REVIEW only), so a BLOCK
         row is queued without being mislabelled valid-but-needs-review.
+
+        Args:
+            validation_ids: causal_validations row ids persisted for THIS
+                refutation run — forwarded so the queued review row links to
+                its statistical evidence (mig 097).
         """
         from src.causal_engine.expert_review_gate import ExpertReviewGate
 
@@ -507,6 +515,7 @@ class RefutationNode:
 
         expert_review_decision: Optional[str] = None
         review_id: Optional[str] = None
+        active_approval_note = ""
         try:
             review_result = await gate.check_approval(
                 dag_hash=dag_hash,
@@ -519,9 +528,28 @@ class RefutationNode:
                 analysis_context=(
                     f"confidence={suite.confidence_score:.2f}, gate={suite.gate_decision.value}"
                 ),
+                # 097: the graph snapshot makes the queued row renderable in the
+                # review UI; the validation ids link its statistical evidence.
+                dag_structure=state.get("causal_graph"),
+                related_validation_ids=validation_ids,
             )
             expert_review_decision = review_result.decision.value
             review_id = review_result.review_id
+            # HITL visibility: when this DAG already holds an ACTIVE approval,
+            # say so — reviewer + validity — while making explicit that the
+            # approval vouches the DAG STRUCTURE, not this estimate's
+            # statistical robustness (structure sign-off never upgrades a
+            # borderline/failed estimate to validated).
+            if getattr(review_result, "is_approved", False):
+                reviewer = getattr(review_result, "reviewer_name", None)
+                valid_until = getattr(review_result, "valid_until", None)
+                active_approval_note = (
+                    " The DAG structure was expert-approved"
+                    + (f" by {reviewer}" if reviewer else "")
+                    + (f" (valid until {valid_until})" if valid_until else "")
+                    + "; that approval covers the DAG structure, not this"
+                    " estimate's statistical robustness."
+                )
         except Exception as gate_err:  # noqa: BLE001 - gate must never break the node
             logger.warning(
                 f"ExpertReviewGate consult failed (degrading to needs_review): {gate_err}"
@@ -539,6 +567,7 @@ class RefutationNode:
                 f"confidence={suite.confidence_score:.2f}). This estimate needs expert "
                 f"review before it is used as a validated result."
             )
+        caveat += active_approval_note
         # `needs_review` is intentionally NOT returned here: the caller's result
         # dict sets it from ``suite.needs_review`` (True only for REVIEW), so a
         # BLOCK row is queued without being surfaced as valid-but-needs-review.
@@ -827,7 +856,9 @@ class RefutationNode:
                 # queue too, so a human can adjudicate or override the failure. The
                 # estimate still surfaces as failed (needs_review stays False from
                 # suite.needs_review); the queued row carries the gate=block context.
-                review_fields = await self._consult_review_gate(state, suite)
+                review_fields = await self._consult_review_gate(
+                    state, suite, validation_ids=validation_ids
+                )
             elif suite.gate_decision == GateDecision.REVIEW:
                 logger.info(
                     f"Refutation requires REVIEW: confidence={suite.confidence_score:.2f}, "
@@ -838,7 +869,9 @@ class RefutationNode:
                 error_message = None
                 # H2: consult the ExpertReviewGate and flag needs_review + caveat
                 # so a REVIEW band is NOT surfaced/persisted as robust/validated.
-                review_fields = await self._consult_review_gate(state, suite)
+                review_fields = await self._consult_review_gate(
+                    state, suite, validation_ids=validation_ids
+                )
             else:
                 logger.info(
                     f"Refutation PASSED: confidence={suite.confidence_score:.2f}, "

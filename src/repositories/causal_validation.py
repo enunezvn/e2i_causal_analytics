@@ -166,6 +166,29 @@ class CausalValidationRepository(BaseRepository):
             logger.error(f"Failed to save validation test: {e}")
             return None
 
+    async def get_by_ids(self, validation_ids: List[str]) -> List[Dict[str, Any]]:
+        """Fetch validation rows by their ids (expert-review evidence link, 097).
+
+        Backs POST /expert-reviews/{id}/assessment: the review row carries
+        ``related_validation_ids`` and the endpoint grounds the advisory
+        assessment in exactly those refutation rows. Best-effort read: empty
+        input, missing client, or a query error all return [] (the assessment
+        then honestly reports no refutation evidence).
+        """
+        if not validation_ids or not self.client:
+            return []
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .select("*")
+                .in_("validation_id", validation_ids)
+                .execute()
+            )
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch validations by ids: {e}")
+            return []
+
     async def get_validations_for_estimate(
         self,
         estimate_id: str,

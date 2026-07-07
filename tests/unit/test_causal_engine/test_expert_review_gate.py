@@ -226,6 +226,191 @@ class TestAutoCreateReviewTypeEnum:
         assert result.review_id == "rev-captured"
 
 
+class TestSanitizeDagStructure:
+    """The persisted snapshot must be a bounded, JSON-serializable subset of the
+    rich in-state CausalGraph — render/assessment keys only, no dag_dot blob."""
+
+    def test_keeps_render_keys_and_coerces_edge_tuples(self):
+        from src.causal_engine.expert_review_gate import sanitize_dag_structure
+
+        rich_graph = {
+            "nodes": ["T", "O", "C"],
+            "edges": [("T", "O"), ("C", "T"), ("C", "O")],  # tuples from nx
+            "treatment_nodes": ["T"],
+            "outcome_nodes": ["O"],
+            "adjustment_sets": [["C"]],
+            "dag_dot": "digraph { ... }",  # must be dropped (redundant blob)
+            "confidence": 0.85,
+            "augmented_edges": [("X", "O")],
+            "discovery_gate_decision": "augment",
+            "dag_version_hash": "deadbeef",
+        }
+
+        structure = sanitize_dag_structure(rich_graph)
+
+        assert structure is not None
+        assert structure["nodes"] == ["T", "O", "C"]
+        assert structure["edges"] == [["T", "O"], ["C", "T"], ["C", "O"]]
+        assert structure["treatment_nodes"] == ["T"]
+        assert structure["outcome_nodes"] == ["O"]
+        assert structure["adjustment_sets"] == [["C"]]
+        assert structure["augmented_edges"] == [["X", "O"]]
+        assert structure["discovery_gate_decision"] == "augment"
+        assert structure["dag_version_hash"] == "deadbeef"
+        assert "dag_dot" not in structure
+        # Must survive JSON round-trip (it is persisted as JSONB).
+        import json
+
+        assert json.loads(json.dumps(structure)) == structure
+
+    def test_returns_none_without_nodes(self):
+        from src.causal_engine.expert_review_gate import sanitize_dag_structure
+
+        assert sanitize_dag_structure(None) is None
+        assert sanitize_dag_structure({}) is None
+        assert sanitize_dag_structure({"edges": [["A", "B"]]}) is None
+
+
+class TestAutoCreateDagStructureCapture:
+    """Mig 097: the auto-created review row must carry the sanitized DAG
+    snapshot and the refutation validation-row ids, so the review UI can render
+    the graph and link its evidence."""
+
+    @pytest.mark.asyncio
+    async def test_auto_create_forwards_structure_and_validation_ids(self):
+        repo = _CapturingRepo()
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+        rich_graph = {
+            "nodes": ["T", "O", "C"],
+            "edges": [("T", "O"), ("C", "T"), ("C", "O")],
+            "treatment_nodes": ["T"],
+            "outcome_nodes": ["O"],
+            "dag_dot": "digraph { ... }",
+        }
+
+        result = await gate.check_approval(
+            "deadbeef",
+            requester_id="causal_impact_agent",
+            treatment="email_frequency",
+            outcome="trx",
+            dag_structure=rich_graph,
+            related_validation_ids=["val-1", "val-2"],
+        )
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert repo.create_kwargs is not None
+        structure = repo.create_kwargs["dag_structure"]
+        assert structure["edges"] == [["T", "O"], ["C", "T"], ["C", "O"]]
+        assert "dag_dot" not in structure
+        assert repo.create_kwargs["related_validation_ids"] == ["val-1", "val-2"]
+
+    @pytest.mark.asyncio
+    async def test_auto_create_without_structure_still_creates(self):
+        """No graph in scope (defensive) -> review still created, structure None."""
+        repo = _CapturingRepo()
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+        result = await gate.check_approval("deadbeef", requester_id="agent")
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert repo.create_kwargs is not None
+        assert repo.create_kwargs.get("dag_structure") is None
+
+
+class _PendingRepo(_CapturingRepo):
+    """Repo whose queue already holds a pending row for the DAG (pre-097 rows
+    lack dag_structure_json). Captures update_dag_structure calls."""
+
+    def __init__(self, pending_row: dict) -> None:
+        super().__init__()
+        self._pending_row = pending_row
+        self.structure_updates: list[tuple] = []
+
+    async def get_reviews_for_dag(self, dag_hash, include_expired=False, brand=None):
+        return [self._pending_row]
+
+    async def update_dag_structure(self, review_id, dag_structure, related_validation_ids=None):
+        self.structure_updates.append((review_id, dag_structure, related_validation_ids))
+        return True
+
+
+class TestPendingRowStructureBackfill:
+    """Backfill-on-encounter (097): the queue's pre-097 rows carry only the
+    one-way hash. When the SAME DAG is re-analyzed, the gate short-circuits on
+    the existing pending row — so that consult is the ONLY chance to attach the
+    renderable snapshot. It must backfill a structure-less pending row and
+    leave a row that already has one untouched."""
+
+    @pytest.mark.asyncio
+    async def test_backfills_structureless_pending_row(self):
+        repo = _PendingRepo(
+            {"review_id": "rev-old", "approval_status": "pending", "dag_structure_json": None}
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+        graph = {
+            "nodes": ["t", "y"],
+            "edges": [("t", "y")],
+            "treatment_nodes": ["t"],
+            "outcome_nodes": ["y"],
+        }
+
+        result = await gate.check_approval(
+            "deadbeef",
+            requester_id="agent",
+            dag_structure=graph,
+            related_validation_ids=["val-1"],
+        )
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert result.review_id == "rev-old"
+        assert len(repo.structure_updates) == 1
+        review_id, structure, val_ids = repo.structure_updates[0]
+        assert review_id == "rev-old"
+        assert structure["edges"] == [["t", "y"]]
+        assert val_ids == ["val-1"]
+        # The short-circuit must NOT create a duplicate row.
+        assert repo.create_kwargs is None
+
+    @pytest.mark.asyncio
+    async def test_row_with_structure_is_left_untouched(self):
+        repo = _PendingRepo(
+            {
+                "review_id": "rev-has",
+                "approval_status": "pending",
+                "dag_structure_json": {"nodes": ["t"], "edges": []},
+            }
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+        result = await gate.check_approval(
+            "deadbeef",
+            requester_id="agent",
+            dag_structure={"nodes": ["t", "y"], "edges": [("t", "y")]},
+        )
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert repo.structure_updates == []
+
+    @pytest.mark.asyncio
+    async def test_backfill_error_never_breaks_the_gate(self):
+        class _BoomRepo(_PendingRepo):
+            async def update_dag_structure(self, *a, **k):
+                raise RuntimeError("db down")
+
+        repo = _BoomRepo(
+            {"review_id": "rev-old", "approval_status": "pending", "dag_structure_json": None}
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+        result = await gate.check_approval(
+            "deadbeef",
+            requester_id="agent",
+            dag_structure={"nodes": ["t", "y"], "edges": [("t", "y")]},
+        )
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+
+
 class TestExpertReviewGateCanProceed:
     """Test can_proceed convenience method."""
 

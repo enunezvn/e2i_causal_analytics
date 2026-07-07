@@ -4,6 +4,7 @@ Version: 4.3
 Tests the expert review repository CRUD operations.
 """
 
+import json
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -133,6 +134,98 @@ class TestExpertReviewRepository:
         )
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_create_review_persists_dag_structure_json(self, repo, mock_client):
+        """The DAG snapshot rides the insert as serialized dag_structure_json so
+        the review UI can render the graph under review (mig 097)."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-dag"}]))
+        mock_client.table.return_value.insert.return_value.execute = mock_execute
+        structure = {
+            "nodes": ["T", "O", "C"],
+            "edges": [["T", "O"], ["C", "T"], ["C", "O"]],
+            "treatment_nodes": ["T"],
+            "outcome_nodes": ["O"],
+        }
+
+        review_id = await repo.create_review(
+            reviewer_id="user-1",
+            review_type="dag_approval",
+            dag_version_hash="abc123",
+            dag_structure=structure,
+        )
+
+        assert review_id == "rev-dag"
+        inserted_row = mock_client.table.return_value.insert.call_args[0][0]
+        assert json.loads(inserted_row["dag_structure_json"]) == structure
+
+    @pytest.mark.asyncio
+    async def test_create_review_omits_dag_structure_when_absent(self, repo, mock_client):
+        """No structure provided -> no dag_structure_json key (column stays NULL)."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-x"}]))
+        mock_client.table.return_value.insert.return_value.execute = mock_execute
+
+        await repo.create_review(reviewer_id="user-1", review_type="dag_approval")
+
+        inserted_row = mock_client.table.return_value.insert.call_args[0][0]
+        assert "dag_structure_json" not in inserted_row
+
+    @pytest.mark.asyncio
+    async def test_update_agent_assessment_persists_json(self, repo, mock_client):
+        """update_agent_assessment writes agent_assessment_json for the row."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        (mock_client.table.return_value.update.return_value.eq.return_value.execute) = mock_execute
+        assessment = {"items": [{"id": "conf_complete", "verdict": "supports"}]}
+
+        ok = await repo.update_agent_assessment("rev-123", assessment)
+
+        assert ok is True
+        updated = mock_client.table.return_value.update.call_args[0][0]
+        assert json.loads(updated["agent_assessment_json"]) == assessment
+
+    @pytest.mark.asyncio
+    async def test_update_agent_assessment_zero_rows_returns_false(self, repo, mock_client):
+        """A zero-row update (nonexistent review) must NOT report success."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        (mock_client.table.return_value.update.return_value.eq.return_value.execute) = mock_execute
+
+        ok = await repo.update_agent_assessment("rev-missing", {"items": []})
+
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_update_agent_assessment_without_client(self):
+        """No client -> False (fail-closed), never a fabricated success."""
+        repo = ExpertReviewRepository()
+        repo.client = None
+
+        ok = await repo.update_agent_assessment("rev-123", {"items": []})
+
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_update_dag_structure_backfills_row(self, repo, mock_client):
+        """Backfill (097): a pre-097 pending row gains the snapshot + evidence
+        ids when the same DAG is re-encountered."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-old"}]))
+        (mock_client.table.return_value.update.return_value.eq.return_value.execute) = mock_execute
+        structure = {"nodes": ["T", "O"], "edges": [["T", "O"]]}
+
+        ok = await repo.update_dag_structure("rev-old", structure, related_validation_ids=["val-1"])
+
+        assert ok is True
+        updated = mock_client.table.return_value.update.call_args[0][0]
+        assert json.loads(updated["dag_structure_json"]) == structure
+        assert updated["related_validation_ids"] == ["val-1"]
+
+    @pytest.mark.asyncio
+    async def test_update_dag_structure_zero_rows_returns_false(self, repo, mock_client):
+        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        (mock_client.table.return_value.update.return_value.eq.return_value.execute) = mock_execute
+
+        ok = await repo.update_dag_structure("rev-missing", {"nodes": ["T"], "edges": []})
+
+        assert ok is False
 
     @pytest.mark.asyncio
     async def test_submit_review_approved(self, repo, mock_client):

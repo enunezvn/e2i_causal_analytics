@@ -22,14 +22,17 @@ Author: E2I Causal Analytics Team
 Version: 4.3.0
 """
 
+import asyncio
+import json
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_operator
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
+    AgentAssessmentResponse,
     PendingReviewItem,
     PendingReviewsResponse,
     ResolveReviewRequest,
@@ -138,6 +141,83 @@ async def resolve_review(
         review_id=review_id,
         approval_status=request.approval_status,
         success=True,
+    )
+
+
+async def _get_validation_rows(validation_ids: List[str]) -> List[Dict[str, Any]]:
+    """Fetch the causal_validations rows a review links as evidence (097)."""
+    if not validation_ids:
+        return []
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.causal_validation import CausalValidationRepository
+
+    client = await get_async_supabase_client()
+    repo = CausalValidationRepository(supabase_client=client)
+    return await repo.get_by_ids(validation_ids)
+
+
+def _build_assessment(review: Dict[str, Any], validations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Grade the checklist questions from the stored evidence (BLOCKING LM call —
+    run via asyncio.to_thread). Deferred import keeps the route module light."""
+    from src.insights.expert_review_assessment import build_grounding, generate_assessment
+
+    return generate_assessment(build_grounding(review, validations))
+
+
+def _as_json_object(value: Any) -> Optional[Dict[str, Any]]:
+    """agent_assessment_json arrives as dict (JSONB object) or a json.dumps string."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+@router.post(
+    "/{review_id}/assessment",
+    response_model=AgentAssessmentResponse,
+    summary="Generate (or return cached) advisory agent assessment for a review",
+    operation_id="generate_expert_review_assessment",
+)
+async def generate_review_assessment(
+    review_id: str,
+    force: bool = Query(False, description="Regenerate even when a cached assessment exists"),
+    user: Dict[str, Any] = Depends(require_operator),
+) -> AgentAssessmentResponse:
+    """Advisory agent grading of the six reviewer-checklist questions.
+
+    Grounded ONLY in what the review row stores: the DAG snapshot
+    (``dag_structure_json``) and its linked refutation rows
+    (``related_validation_ids`` -> ``causal_validations``). The result is cached
+    in ``agent_assessment_json`` — kept separate from ``checklist_json``, which
+    remains the human reviewer's own record. ``persisted`` is honest about the
+    cache write; a failed write still returns the (valid) assessment.
+    """
+    repo = await _get_expert_review_repo()
+    review = await repo.get_by_id(review_id)
+    if not review:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Review {review_id} was not found.",
+        )
+
+    cached = _as_json_object(review.get("agent_assessment_json"))
+    if cached is not None and not force:
+        return AgentAssessmentResponse(
+            review_id=review_id, assessment=cached, cached=True, persisted=True
+        )
+
+    validation_ids = review.get("related_validation_ids") or []
+    validations = await _get_validation_rows(validation_ids)
+    # run_signature is a BLOCKING LM call; keep the event loop free.
+    assessment = await asyncio.to_thread(_build_assessment, review, validations)
+    persisted = await repo.update_agent_assessment(review_id, assessment)
+    return AgentAssessmentResponse(
+        review_id=review_id, assessment=assessment, cached=False, persisted=persisted
     )
 
 

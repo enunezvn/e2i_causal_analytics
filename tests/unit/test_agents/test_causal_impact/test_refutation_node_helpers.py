@@ -142,3 +142,96 @@ class TestConsultReviewGateRouting:
         fields = asyncio.run(node._consult_review_gate(state, _suite(GateDecision.REVIEW)))
         assert fields["expert_review_id"] is None
         assert "REVIEW" in fields["review_caveat"]
+
+    def test_passes_causal_graph_and_validation_ids_to_gate(self):
+        """Mig 097: the consult must forward the in-state graph (so the queued
+        row is renderable) and the persisted validation-row ids (evidence link)."""
+        gate = _FakeReviewGate()
+        node = RefutationNode(expert_review_gate=gate)
+        graph = {
+            "nodes": ["t", "y", "c"],
+            "edges": [("t", "y"), ("c", "t"), ("c", "y")],
+            "treatment_nodes": ["t"],
+            "outcome_nodes": ["y"],
+        }
+        state = {
+            "dag_version_hash": "h3",
+            "causal_graph": graph,
+            "treatment_var": "t",
+            "outcome_var": "y",
+            "query_id": "q",
+        }
+        asyncio.run(
+            node._consult_review_gate(
+                state, _suite(GateDecision.REVIEW), validation_ids=["val-9", "val-10"]
+            )
+        )
+        assert gate.calls[0]["dag_structure"] == graph
+        assert gate.calls[0]["related_validation_ids"] == ["val-9", "val-10"]
+
+    def test_absent_graph_and_ids_forward_none(self):
+        """Defensive: a state without causal_graph must not break the consult."""
+        gate = _FakeReviewGate()
+        node = RefutationNode(expert_review_gate=gate)
+        state = {"dag_version_hash": "h", "treatment_var": "t", "outcome_var": "y", "query_id": "q"}
+        asyncio.run(node._consult_review_gate(state, _suite(GateDecision.REVIEW)))
+        assert gate.calls[0]["dag_structure"] is None
+        assert gate.calls[0]["related_validation_ids"] is None
+
+
+class _ApprovedReviewGate:
+    """Gate whose check_approval finds an ACTIVE approval for this DAG hash."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def check_approval(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            decision=SimpleNamespace(value="proceed"),
+            review_id="rev-approved-7",
+            is_approved=True,
+            reviewer_name="Dr. Jane Roe",
+            valid_until="2026-09-30",
+        )
+
+
+class TestApprovalAwareCaveat:
+    """When the DAG already holds an ACTIVE expert approval, the surfaced caveat
+    must acknowledge it (reviewer + validity) instead of reading as if the HITL
+    loop never happened — while still stating that the approval covers the DAG
+    STRUCTURE, not this estimate's statistical robustness (never overclaims)."""
+
+    def test_review_band_caveat_acknowledges_active_approval(self):
+        gate = _ApprovedReviewGate()
+        node = RefutationNode(expert_review_gate=gate)
+        state = {"dag_version_hash": "h", "treatment_var": "t", "outcome_var": "y", "query_id": "q"}
+        fields = asyncio.run(node._consult_review_gate(state, _suite(GateDecision.REVIEW)))
+        assert fields["expert_review_decision"] == "proceed"
+        caveat = fields["review_caveat"]
+        assert "expert-approved" in caveat
+        assert "Dr. Jane Roe" in caveat
+        assert "2026-09-30" in caveat
+        # The approval must NOT be presented as validating the estimate itself.
+        assert "not" in caveat and "robustness" in caveat
+        # The band wording is still present (borderline stays borderline).
+        assert "REVIEW" in caveat
+
+    def test_block_band_caveat_also_acknowledges_but_stays_blocked(self):
+        gate = _ApprovedReviewGate()
+        node = RefutationNode(expert_review_gate=gate)
+        state = {"dag_version_hash": "h", "treatment_var": "t", "outcome_var": "y", "query_id": "q"}
+        fields = asyncio.run(
+            node._consult_review_gate(state, _suite(GateDecision.BLOCK, confidence=0.3))
+        )
+        caveat = fields["review_caveat"]
+        assert "BLOCK" in caveat
+        assert "expert-approved" in caveat
+
+    def test_pending_review_caveat_unchanged(self):
+        """No active approval -> the existing band caveat, no approval note."""
+        gate = _FakeReviewGate()
+        node = RefutationNode(expert_review_gate=gate)
+        state = {"dag_version_hash": "h", "treatment_var": "t", "outcome_var": "y", "query_id": "q"}
+        fields = asyncio.run(node._consult_review_gate(state, _suite(GateDecision.REVIEW)))
+        assert "expert-approved" not in fields["review_caveat"]
