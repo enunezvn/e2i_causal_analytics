@@ -218,7 +218,17 @@ import operator
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Sequence, TypedDict
+from typing import (
+    Annotated,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    TypedDict,
+    cast,
+)
 
 from ag_ui.core import RunAgentInput
 from copilotkit import Action as CopilotAction
@@ -649,6 +659,14 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # messages bug in tool-using queries).
         ag_ui_handling_stream = False
 
+        # Track (frontend messageId -> accumulated text) for every outgoing
+        # TEXT_MESSAGE lifecycle — custom-converted AND native ag_ui — so the
+        # mapping can be stamped onto the persisted rows after the stream
+        # (feedback resolution then has a stable key instead of content
+        # heuristics; see _stamp_frontend_message_ids).
+        text_message_deltas: Dict[str, List[str]] = {}
+        completed_text_messages: Dict[str, str] = {}
+
         try:
             async for event in self.run(run_input):
                 event_count += 1
@@ -741,6 +759,11 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     source = "e2i-copilot"
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
                     event_count += 1
+                    _track_text_message_event(
+                        {"type": "TEXT_MESSAGE_END", "messageId": streaming_message_id},
+                        text_message_deltas,
+                        completed_text_messages,
+                    )
                     # FIX (v1.26.0): Track completed messages for duplicate detection (ERROR level to ensure visibility)
                     if streaming_message_id is not None:
                         completed_message_ids.append(streaming_message_id)
@@ -804,11 +827,25 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                             )
                         yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': streaming_message_id, 'parentMessageId': last_user_msg_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
+                        _track_text_message_event(
+                            {"type": "TEXT_MESSAGE_START", "messageId": streaming_message_id},
+                            text_message_deltas,
+                            completed_text_messages,
+                        )
                         dbg(f"Started streaming message_id={streaming_message_id}")
 
                     # Emit CONTENT for this chunk (using consistent message_id)
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': streaming_message_id, 'delta': message, 'timestamp': current_ts, 'source': source})}\n\n"
                     event_count += 1
+                    _track_text_message_event(
+                        {
+                            "type": "TEXT_MESSAGE_CONTENT",
+                            "messageId": streaming_message_id,
+                            "delta": message,
+                        },
+                        text_message_deltas,
+                        completed_text_messages,
+                    )
 
                     # Skip emitting the original CUSTOM event (frontend doesn't need it)
                     continue
@@ -831,6 +868,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                             dbg(f"Yielding string event type: {event_dict['type']}")
                         # Fix lifecycle events (v1.17.0)
                         event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                        _track_text_message_event(
+                            event_dict, text_message_deltas, completed_text_messages
+                        )
                         yield f"data: {json.dumps(event_dict)}\n\n"
                     except (json.JSONDecodeError, KeyError):
                         # Wrap in SSE format if not already
@@ -847,6 +887,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         dbg(f"Yielding Pydantic event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
                     event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                    _track_text_message_event(
+                        event_dict, text_message_deltas, completed_text_messages
+                    )
                     yield f"data: {json.dumps(event_dict)}\n\n"
                 elif hasattr(event, "dict"):
                     # Pydantic v1 object - serialize to dict with SSE format
@@ -859,6 +902,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         dbg(f"Yielding Pydantic v1 event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
                     event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                    _track_text_message_event(
+                        event_dict, text_message_deltas, completed_text_messages
+                    )
                     yield f"data: {json.dumps(event_dict)}\n\n"
                 else:
                     # Fallback - convert to string with SSE format
@@ -889,7 +935,19 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             source = "e2i-copilot"
             yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
             event_count += 1
+            _track_text_message_event(
+                {"type": "TEXT_MESSAGE_END", "messageId": streaming_message_id},
+                text_message_deltas,
+                completed_text_messages,
+            )
             dbg(f"Ended streaming at generator completion, message_id={streaming_message_id}")
+
+        # Stamp (frontend messageId -> persisted row) mappings now that the
+        # stream is done — the graph nodes have finished persisting by the
+        # time the terminal event flowed through. Best-effort; the response
+        # already reached the client.
+        if completed_text_messages and persistent_session_id:
+            _stamp_frontend_message_ids(persistent_session_id, completed_text_messages)
 
         dbg(f"Finished yielding {event_count} events")
 
@@ -987,6 +1045,107 @@ def _persist_message_sync(
     except Exception as e:
         logger.error(f"[CopilotKit] _persist_message_sync failed: {e}")
         return None
+
+
+def _track_text_message_event(
+    event: dict,
+    deltas: Dict[str, List[str]],
+    completed: Dict[str, str],
+) -> None:
+    """Observe a TEXT_MESSAGE_* lifecycle event and accumulate message content.
+
+    The SSE translation layer is the only place that knows which messageId the
+    frontend will see for an assistant message (the graph nodes persist rows
+    without it — the id is minted here or inside ag_ui_langgraph, never in the
+    node). Feeding every outgoing TEXT_MESSAGE_* event through this tracker
+    rebuilds (messageId -> full text) so the mapping can be stamped onto the
+    persisted row after the stream. Handles both camelCase (AG-UI wire alias)
+    and snake_case keys. Observation must never break the stream: malformed
+    events are ignored.
+    """
+    try:
+        etype = event.get("type")
+        message_id = event.get("messageId") or event.get("message_id")
+        if not message_id:
+            return
+        key = str(message_id)
+        if etype == "TEXT_MESSAGE_START":
+            deltas.setdefault(key, [])
+        elif etype == "TEXT_MESSAGE_CONTENT":
+            delta = event.get("delta")
+            if isinstance(delta, str):
+                deltas.setdefault(key, []).append(delta)
+        elif etype == "TEXT_MESSAGE_END":
+            parts = deltas.pop(key, None)
+            if parts:
+                completed[key] = "".join(parts)
+    except Exception:  # noqa: BLE001 — observation-only, never propagate
+        pass
+
+
+def _stamp_frontend_message_ids(session_id: str, messages: Dict[str, str]) -> None:
+    """Stamp metadata.frontend_message_id onto the persisted assistant rows.
+
+    Runs after an SSE stream completes. Write-time matching is deterministic:
+    the row carrying each completed message's text was written moments ago by
+    this very run, so the newest unstamped exact-content match IS that row —
+    older identical-content rows (already stamped or from prior runs) rank
+    later. The stamp gives /copilotkit/feedback a stable resolution key (the
+    client's message_uuid) instead of content heuristics. Best-effort: any
+    failure leaves feedback on its content-matching fallback.
+    """
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        client = get_supabase()
+        if not client:
+            return
+        result = (
+            client.table("chatbot_messages")
+            .select("id, content, metadata")
+            .eq("session_id", session_id)
+            .eq("role", "assistant")
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+        rows = result.data or []
+        for message_id, content in messages.items():
+            if not content:
+                continue
+            for row in rows:
+                if (row.get("content") or "") != content:
+                    continue
+                meta = row.get("metadata") or {}
+                if meta.get("frontend_message_id"):
+                    # Already mapped (identical content stamped for another
+                    # messageId) — try the next-newest matching row.
+                    continue
+                meta["frontend_message_id"] = message_id
+                client.table("chatbot_messages").update({"metadata": meta}).eq(
+                    "id", row["id"]
+                ).execute()
+                row["metadata"] = meta
+                break
+    except Exception as e:
+        logger.debug(f"[CopilotKit] frontend_message_id stamping skipped: {e}")
+
+
+def _tool_names_from(entries: Any) -> List[str]:
+    """Extract tool names from a persisted tool_calls/tool_results list.
+
+    Both shapes appear in chatbot_messages: orchestrator-flow rows store
+    top-level tool_calls/tool_results columns (entries keyed "name" or
+    "tool"), sidebar synthesis rows store metadata.tool_results (keyed
+    "tool"). Non-list input and nameless entries yield nothing.
+    """
+    if not isinstance(entries, list):
+        return []
+    return [
+        str(entry.get("tool") or entry.get("name"))
+        for entry in entries
+        if isinstance(entry, dict) and (entry.get("tool") or entry.get("name"))
+    ]
 
 
 def _classify_query_type(query: str) -> str:
@@ -3689,21 +3848,24 @@ class FeedbackRequest(BaseModel):
 
     - ``message_id`` — the ``chatbot_messages.id`` DB key, for surfaces that
       render persisted history and genuinely know it.
-    - ``session_id`` + ``response_preview`` — for the live CopilotKit stream,
-      which only knows its own AG-UI message uuid (never the DB id). The
-      server resolves the DB row by matching the response prefix within the
-      session (``session_id`` IS the CopilotKit threadId — that is what
-      message persistence stores as the session key).
+    - ``session_id`` + ``message_uuid``/``response_preview`` — for the live
+      CopilotKit stream, which only knows its own AG-UI message uuid (never
+      the DB id). The server resolves the DB row by the stamped
+      ``metadata.frontend_message_id`` key first, then by content matching
+      (``session_id`` IS the CopilotKit threadId — that is what message
+      persistence stores as the session key).
     """
 
     message_id: Optional[int] = Field(
         default=None,
         description="DB id of the message being rated (omit to resolve by "
-        "session_id + response_preview)",
+        "session_id + message_uuid/response_preview)",
     )
     message_uuid: Optional[str] = Field(
         default=None,
-        description="Client-side AG-UI message uuid, stored in feedback metadata for tracing",
+        description="Client-side AG-UI message uuid; primary resolution key "
+        "(the SSE layer stamps it onto the persisted row as "
+        "metadata.frontend_message_id), also stored in feedback metadata",
     )
     session_id: Optional[str] = Field(
         default=None,
@@ -3730,8 +3892,8 @@ class FeedbackRequest(BaseModel):
     )
     tools_used: Optional[List[str]] = Field(
         default=None,
-        description="Fallback-only hint: derived from the persisted row's "
-        "tool_calls/tool_results metadata when omitted",
+        description="Fallback-only hint: the persisted row's tool_results/"
+        "tool_calls (top-level columns or metadata) win whenever present",
     )
 
 
@@ -3768,9 +3930,10 @@ async def submit_feedback(
             "message_uuid": "<ag-ui message uuid>",
             "rating": "thumbs_up"
         }
-        The server resolves the DB message by exact full-content match
+        The server resolves the DB message by the stamped frontend_message_id
+        key (message_uuid) first, then by exact full-content match
         (response_text) against recent assistant messages in the session,
-        falling back to response-prefix matching (response_preview).
+        finally by response-prefix matching (response_preview).
         agent_name/tools_used are derived server-side from the matched row.
     """
     logger.info(
@@ -3822,15 +3985,15 @@ async def submit_feedback(
             if resolved_message_id is not None:
                 message_result = (
                     service_client.table("chatbot_messages")
-                    .select("id, session_id, agent_name, metadata")
+                    .select("id, session_id, agent_name, metadata, tool_calls, tool_results")
                     .eq("id", resolved_message_id)
                     .limit(1)
                     .execute()
                 )
 
                 if message_result.data and len(message_result.data) > 0:
-                    matched_row = message_result.data[0]
-                    session_id = matched_row.get("session_id")  # type: ignore[union-attr]
+                    matched_row = cast(Dict[str, Any], message_result.data[0])
+                    session_id = matched_row.get("session_id")
                     logger.info(
                         f"[Feedback] Found message {resolved_message_id} with session_id={session_id}"
                     )
@@ -3838,44 +4001,70 @@ async def submit_feedback(
                     lookup_error = f"Message {resolved_message_id} not found in database"
                     logger.warning(f"[Feedback] {lookup_error}")
             elif request.session_id and (
-                (request.response_preview or "").strip() or (request.response_text or "").strip()
+                (request.message_uuid or "").strip()
+                or (request.response_preview or "").strip()
+                or (request.response_text or "").strip()
             ):
                 preview = (request.response_preview or request.response_text or "")[:500]
                 full_text = request.response_text or None
-                candidates = (
-                    service_client.table("chatbot_messages")
-                    .select("id, session_id, content, agent_name, metadata")
-                    .eq("session_id", request.session_id)
-                    .eq("role", "assistant")
-                    .order("created_at", desc=True)
-                    .limit(20)
-                    .execute()
-                )
-                rows = candidates.data or []
-                # Two-pass resolution. The AG-UI uuid cannot disambiguate here:
-                # copilotkit_emit_message mints a fresh uuid PER CHUNK, so no
-                # single backend-known uuid maps to the client's message id.
-                # Pass 1 — exact full-content equality (identical duplicate
-                # responses are interchangeable for feedback, newest wins).
-                if full_text:
-                    for row in rows:
-                        if (row.get("content") or "") == full_text:
-                            matched_row = row
-                            break
-                # Pass 2 — exact-prefix match only: a fuzzy/newest-row fallback
-                # could attach the rating to the wrong message.
-                if matched_row is None:
-                    for row in rows:
-                        content = row.get("content") or ""
-                        if content[: len(preview)] == preview:
-                            matched_row = row
-                            break
+                # Pass 0 — stable key. The SSE translation layer stamps each
+                # assistant row with the frontend-visible messageId after the
+                # stream (metadata.frontend_message_id, see
+                # _stamp_frontend_message_ids), so the client's message_uuid
+                # resolves the row directly, no content heuristics.
+                if request.message_uuid:
+                    uuid_result = (
+                        service_client.table("chatbot_messages")
+                        .select(
+                            "id, session_id, content, agent_name, metadata, "
+                            "tool_calls, tool_results"
+                        )
+                        .eq("session_id", request.session_id)
+                        .eq("role", "assistant")
+                        .eq("metadata->>frontend_message_id", request.message_uuid)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                    if uuid_result.data:
+                        matched_row = cast(Dict[str, Any], uuid_result.data[0])
+                if matched_row is None and (full_text or preview):
+                    candidates = (
+                        service_client.table("chatbot_messages")
+                        .select(
+                            "id, session_id, content, agent_name, metadata, "
+                            "tool_calls, tool_results"
+                        )
+                        .eq("session_id", request.session_id)
+                        .eq("role", "assistant")
+                        .order("created_at", desc=True)
+                        .limit(20)
+                        .execute()
+                    )
+                    rows = cast(List[Dict[str, Any]], candidates.data or [])
+                    # Content fallback for rows the stamp didn't reach (e.g.
+                    # persistence raced the stamping sweep, or pre-deploy rows).
+                    # Pass 1 — exact full-content equality (identical duplicate
+                    # responses are interchangeable for feedback, newest wins).
+                    if full_text:
+                        for row in rows:
+                            if (row.get("content") or "") == full_text:
+                                matched_row = row
+                                break
+                    # Pass 2 — exact-prefix match only: a fuzzy/newest-row
+                    # fallback could attach the rating to the wrong message.
+                    if matched_row is None:
+                        for row in rows:
+                            content = row.get("content") or ""
+                            if content[: len(preview)] == preview:
+                                matched_row = row
+                                break
                 if matched_row is not None:
                     resolved_message_id = matched_row.get("id")
                     session_id = matched_row.get("session_id")
                     logger.info(
-                        f"[Feedback] Resolved message {resolved_message_id} by response "
-                        f"prefix in session {str(request.session_id)[:20]}..."
+                        f"[Feedback] Resolved message {resolved_message_id} "
+                        f"in session {str(request.session_id)[:20]}..."
                     )
                 else:
                     lookup_error = (
@@ -3907,15 +4096,24 @@ async def submit_feedback(
         # for rows persisted without attribution.
         row_meta = (matched_row or {}).get("metadata") or {}
         resolved_agent_name = (matched_row or {}).get("agent_name") or request.agent_name
-        resolved_tools = request.tools_used
+        # Row data beats the client hint whenever it exists: orchestrator-flow
+        # rows store tools in top-level tool_results/tool_calls columns
+        # (chatbot_graph persistence), sidebar synthesis rows in
+        # metadata.tool_results. request.tools_used is fallback-only, for rows
+        # persisted without tool data.
+        resolved_tools = None
+        for source in (
+            (matched_row or {}).get("tool_results"),
+            (matched_row or {}).get("tool_calls"),
+            row_meta.get("tool_results"),
+            row_meta.get("tool_calls"),
+        ):
+            tool_names = _tool_names_from(source)
+            if tool_names:
+                resolved_tools = tool_names
+                break
         if not resolved_tools:
-            tool_entries = row_meta.get("tool_results") or row_meta.get("tool_calls") or []
-            tool_names = [
-                str(entry.get("tool") or entry.get("name"))
-                for entry in tool_entries
-                if isinstance(entry, dict) and (entry.get("tool") or entry.get("name"))
-            ]
-            resolved_tools = tool_names or None
+            resolved_tools = request.tools_used or None
 
         client = await get_async_supabase_client()
         repo = get_chatbot_feedback_repository(supabase_client=client)

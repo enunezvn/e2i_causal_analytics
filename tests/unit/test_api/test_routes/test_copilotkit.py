@@ -753,11 +753,50 @@ class TestFeedbackEndpoint:
 
     @staticmethod
     def _chain_client(rows):
-        """Self-chaining supabase client mock whose execute() returns ``rows``."""
+        """Supabase client fake that honors the pass-0 resolution filter.
+
+        The route now runs a metadata->>frontend_message_id eq-query BEFORE
+        content matching; a fake that returned the same rows for every query
+        would make pass 0 spuriously match the newest row and hide content-
+        resolution behavior from the tests. Other filters (session_id, role)
+        are ignored — rows are already scoped per test.
+        """
+
+        class _Query:
+            def __init__(self, all_rows):
+                self._rows = all_rows
+                self._uuid_filter = None
+                self._limit = None
+
+            def select(self, *_args, **_kwargs):
+                return self
+
+            def order(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, n):
+                self._limit = n
+                return self
+
+            def eq(self, key, value):
+                if key == "metadata->>frontend_message_id":
+                    self._uuid_filter = value
+                return self
+
+            def execute(self):
+                result = self._rows
+                if self._uuid_filter is not None:
+                    result = [
+                        r
+                        for r in result
+                        if (r.get("metadata") or {}).get("frontend_message_id") == self._uuid_filter
+                    ]
+                if self._limit is not None:
+                    result = result[: self._limit]
+                return MagicMock(data=result)
+
         client = MagicMock()
-        for method in ("table", "select", "eq", "order", "limit"):
-            getattr(client, method).return_value = client
-        client.execute.return_value = MagicMock(data=rows)
+        client.table.side_effect = lambda _name: _Query(rows)
         return client
 
     def _post_resolution(self, test_client, rows, payload):
@@ -900,6 +939,82 @@ class TestFeedbackEndpoint:
         assert response.json()["success"] is True
         assert repo.add_feedback.call_args.kwargs["agent_name"] == "orchestrator"
 
+    def test_feedback_resolves_by_stamped_frontend_message_id(self, test_client):
+        """Pass 0: the SSE layer stamps metadata.frontend_message_id on the
+        persisted row, so the client's message_uuid resolves the exact row
+        even when content matching would pick a different (newer) one."""
+        preview = "Identical preview text for both rows"
+        rows = [
+            {"id": 9, "session_id": "thread-1", "content": preview + " newer"},
+            {
+                "id": 7,
+                "session_id": "thread-1",
+                "content": preview + " rated",
+                "agent_name": "copilotkit",
+                "metadata": {"frontend_message_id": "ag-ui-uuid-7"},
+            },
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "message_uuid": "ag-ui-uuid-7",
+                "response_preview": preview,
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 7
+
+    def test_feedback_unstamped_uuid_falls_back_to_content(self, test_client):
+        """A message_uuid with no stamped row (stamping is best-effort) must
+        fall through to content matching, not fail."""
+        content = "Fallback-resolved response."
+        rows = [{"id": 4, "session_id": "thread-1", "content": content}]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "message_uuid": "never-stamped",
+                "response_text": content,
+                "rating": "thumbs_down",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["message_id"] == 4
+
+    def test_feedback_row_tool_columns_beat_client_hint(self, test_client):
+        """Orchestrator-flow rows store tools in top-level tool_results/
+        tool_calls columns (not metadata); those must be selected and must
+        win over a client-supplied tools_used hint."""
+        content = "Causal analysis complete."
+        rows = [
+            {
+                "id": 3,
+                "session_id": "thread-1",
+                "content": content,
+                "agent_name": "causal_impact",
+                "tool_results": [{"tool": "run_causal_analysis", "result": "..."}],
+            }
+        ]
+        response, repo = self._post_resolution(
+            test_client,
+            rows,
+            {
+                "session_id": "thread-1",
+                "response_text": content,
+                "tools_used": ["client-invented-tool"],
+                "rating": "thumbs_up",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert repo.add_feedback.call_args.kwargs["tools_used"] == ["run_causal_analysis"]
+
     def test_feedback_requires_id_or_session_preview(self, test_client):
         """Neither message_id nor (session_id + response_preview) → honest error."""
         response, repo = self._post_resolution(
@@ -912,6 +1027,123 @@ class TestFeedbackEndpoint:
         assert data["success"] is False
         assert "message_id or (session_id + response_preview)" in data["error"]
         repo.add_feedback.assert_not_called()
+
+
+# =============================================================================
+# Frontend messageId tracking + stamping (feedback resolution pass-0 key)
+# =============================================================================
+
+
+class TestFrontendMessageIdStamping:
+    """The SSE layer rebuilds (messageId -> text) from TEXT_MESSAGE_* events
+    and stamps metadata.frontend_message_id onto the persisted rows — the
+    stable key /copilotkit/feedback resolves by before content matching."""
+
+    def test_tracker_accumulates_lifecycle(self):
+        from src.api.routes.copilotkit import _track_text_message_event
+
+        deltas: dict = {}
+        completed: dict = {}
+        events = [
+            {"type": "TEXT_MESSAGE_START", "messageId": "m1"},
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m1", "delta": "Hello "},
+            # snake_case key — native ag_ui events serialize by alias, but
+            # defensive handling covers both spellings
+            {"type": "TEXT_MESSAGE_CONTENT", "message_id": "m1", "delta": "world"},
+            {"type": "TEXT_MESSAGE_END", "messageId": "m1"},
+        ]
+        for event in events:
+            _track_text_message_event(event, deltas, completed)
+        assert completed == {"m1": "Hello world"}
+        assert deltas == {}
+
+    def test_tracker_ignores_malformed_events(self):
+        from src.api.routes.copilotkit import _track_text_message_event
+
+        deltas: dict = {}
+        completed: dict = {}
+        for event in [
+            {"type": "TEXT_MESSAGE_CONTENT", "delta": "no message id"},
+            {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m2", "delta": 42},
+            {"type": "TEXT_MESSAGE_END", "messageId": "m2"},  # no content accumulated
+            {"type": "RUN_FINISHED"},
+        ]:
+            _track_text_message_event(event, deltas, completed)
+        assert completed == {}
+
+    def _stamp_client(self, rows):
+        """Sync-client fake recording metadata updates."""
+        updates = []
+
+        class _Query:
+            def __init__(self):
+                self._update_payload = None
+                self._update_id = None
+
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, key, value):
+                if self._update_payload is not None and key == "id":
+                    self._update_id = value
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def limit(self, *_a):
+                return self
+
+            def update(self, payload):
+                self._update_payload = payload
+                return self
+
+            def execute(self):
+                if self._update_payload is not None:
+                    updates.append((self._update_id, self._update_payload))
+                    return MagicMock(data=[])
+                return MagicMock(data=rows)
+
+        client = MagicMock()
+        client.table.side_effect = lambda _name: _Query()
+        return client, updates
+
+    def test_stamps_newest_matching_row(self):
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        rows = [
+            {"id": 9, "content": "The answer.", "metadata": {"source": "copilotkit"}},
+            {"id": 7, "content": "The answer.", "metadata": {}},  # older duplicate
+        ]
+        client, updates = self._stamp_client(rows)
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+            _stamp_frontend_message_ids("thread-1", {"m1": "The answer."})
+        assert updates == [(9, {"metadata": {"source": "copilotkit", "frontend_message_id": "m1"}})]
+
+    def test_already_stamped_row_skipped_for_next_match(self):
+        """An identical-content row already mapped to another messageId must
+        not be re-stamped — the next-newest matching row takes the id."""
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        rows = [
+            {"id": 9, "content": "Same.", "metadata": {"frontend_message_id": "m-old"}},
+            {"id": 7, "content": "Same.", "metadata": {}},
+        ]
+        client, updates = self._stamp_client(rows)
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=client):
+            _stamp_frontend_message_ids("thread-1", {"m-new": "Same."})
+        assert updates == [(7, {"metadata": {"frontend_message_id": "m-new"}})]
+
+    def test_stamping_failure_is_swallowed(self):
+        """Stamping is best-effort: a DB failure must never propagate into the
+        SSE generator (feedback falls back to content matching)."""
+        from src.api.routes.copilotkit import _stamp_frontend_message_ids
+
+        with patch(
+            "src.api.dependencies.supabase_client.get_supabase",
+            side_effect=RuntimeError("db down"),
+        ):
+            _stamp_frontend_message_ids("thread-1", {"m1": "text"})  # no raise
 
 
 # =============================================================================
