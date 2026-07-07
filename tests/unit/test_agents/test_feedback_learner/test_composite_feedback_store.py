@@ -80,15 +80,15 @@ async def test_builder_composes_thumbs_and_learning_signals(monkeypatch):
 
     import src.memory.services.factories as factories
 
-    monkeypatch.setattr(
-        factories, "get_async_supabase_client", AsyncMock(return_value=MagicMock())
-    )
+    monkeypatch.setattr(factories, "get_async_supabase_client", AsyncMock(return_value=MagicMock()))
 
     from src.agents.feedback_learner import agent as agent_mod
 
-    feedback_store, _knowledge_stores, db_client = (
-        await agent_mod.build_production_feedback_stores()
-    )
+    (
+        feedback_store,
+        _knowledge_stores,
+        db_client,
+    ) = await agent_mod.build_production_feedback_stores()
     assert isinstance(feedback_store, _CompositeFeedbackStore)
     store_types = {type(s).__name__ for s in feedback_store._stores}
     assert store_types == {"ChatbotFeedbackRepository", "LearningSignalsFeedbackStore"}
