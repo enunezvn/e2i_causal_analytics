@@ -200,3 +200,18 @@ def test_prompt_teaches_render_kpi_trend():
     # Must warn against combining the chart action with other tool calls
     # (mixed turns lose the chart — see _strip_frontend_calls_when_mixed).
     assert "own" in low or "combin" in low
+
+
+def test_prompt_chart_ids_match_frontend_alias_map():
+    """The kpiIds the prompt advertises must be ids the frontend alias map
+    resolves to real kpi_history series. v1.30.0 advertised bare ids that
+    don't exist in the substrate ('plot NRX trends' → count:0, empty chart).
+    Per-brand-only KPIs (nbrx, trx_share) must teach the model to pass brand.
+    """
+    low = E2I_COPILOT_SYSTEM_PROMPT.lower()
+    for kpi_id in ("trx", "nrx", "nbrx", "trx_share", "roi"):
+        assert kpi_id in low, f"prompt must advertise supported kpiId {kpi_id!r}"
+    # Registry codes pass through the alias map — teach at least one example.
+    assert "ws3-bi-" in low
+    # The per-brand-only KPIs return honest-empty without a brand argument.
+    assert "per brand only" in low

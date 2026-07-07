@@ -7,9 +7,24 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.30.0
+Version: 1.31.0
 
 Changelog:
+    1.31.0 - Fixed the frontend-action follow-up run 400 ("This model does not
+             support assistant message prefill"). After the client executes a
+             frontend action (e.g. renderKpiTrend), CopilotKit starts a follow-up
+             run whose message list ends with the action result as a role-"tool"
+             message so the model can narrate it. The execute() bridge flattened
+             every non-user dict into a plain AssistantMessage and dropped
+             content-less assistant tool-call turns, so the conversation reached
+             Anthropic ending on an assistant message → 400 → the ⚠️ backend-error
+             fallback (and the raw tool-result JSON echoed into the chat). Fix:
+             _execute_bridge_agui_messages converts role-"tool" dicts (and
+             LangChain ToolMessages) to AG-UI ToolMessages carrying tool_call_id,
+             and preserves assistant toolCalls so tool_use/tool_result stay
+             paired. Also corrected the Inline Charts prompt section: kpiId
+             aliases now match the frontend alias map, and per-brand-only KPIs
+             (nbrx, trx_share) require a brand argument.
     1.30.0 - Wired frontend actions (CopilotKit generative UI) into the chat agent —
              inline KPI trend charts now work end-to-end. The frontend has had the
              complete chart pipeline since renderKpiTrend shipped (useCopilotAction +
@@ -269,7 +284,12 @@ from typing import (
     cast,
 )
 
+from ag_ui.core import AssistantMessage as AGUIAssistantMessage
+from ag_ui.core import FunctionCall as AGUIFunctionCall
 from ag_ui.core import RunAgentInput
+from ag_ui.core import ToolCall as AGUIToolCall
+from ag_ui.core import ToolMessage as AGUIToolMessage
+from ag_ui.core import UserMessage as AGUIUserMessage
 from copilotkit import Action as CopilotAction
 from copilotkit import CopilotKitRemoteEndpoint
 from copilotkit.integrations.fastapi import (
@@ -495,6 +515,113 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
 # This wrapper bridges the gap by adding execute() that delegates to run().
 
 
+def _coerce_agui_tool_call(raw: Any) -> Optional[AGUIToolCall]:
+    """Parse one tool call from any of the shapes that reach the bridge.
+
+    Accepts the OpenAI/AG-UI nested shape ({"id", "function": {"name",
+    "arguments"}}) and the flat LangChain shape ({"id", "name", "args"}).
+    ``arguments`` may already be a JSON string or still a dict.
+    """
+    if not isinstance(raw, dict):
+        return None
+    fn = raw["function"] if isinstance(raw.get("function"), dict) else raw
+    name = fn.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    arguments = fn.get("arguments", fn.get("args", {}))
+    if not isinstance(arguments, str):
+        try:
+            arguments = json.dumps(arguments)
+        except (TypeError, ValueError):
+            return None
+    call_id = raw.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+    return AGUIToolCall(id=str(call_id), function=AGUIFunctionCall(name=name, arguments=arguments))
+
+
+def _execute_bridge_agui_messages(messages: Optional[List[Any]]) -> List[Any]:
+    """Convert the raw messages reaching execute() into AG-UI messages.
+
+    Sources: AG-UI protocol dicts from the frontend — including the follow-up
+    run after a frontend action, whose list ends with the role-"tool" action
+    result — and LangChain message objects from SDK internals.
+
+    Assistant tool-call turns and their tool results must stay paired:
+    Anthropic requires every tool_result to reference a tool_use, and the
+    conversation to end on a user-role turn (tool results ride user turns).
+    Flattening either side into plain assistant text ends the conversation on
+    an assistant message → 400 "assistant message prefill". A tool result
+    whose tool_call_id is missing degrades to a user turn for the same reason
+    (a dangling tool_result also 400s).
+    """
+    converted: List[Any] = []
+    for msg in messages or []:
+        if isinstance(msg, dict):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            msg_id = msg.get("id") or f"msg-{uuid.uuid4()}"
+            if role == "tool":
+                if not isinstance(content, str):
+                    try:
+                        content = json.dumps(content)
+                    except (TypeError, ValueError):
+                        content = str(content)
+                tool_call_id = msg.get("toolCallId") or msg.get("tool_call_id")
+                if tool_call_id:
+                    converted.append(
+                        AGUIToolMessage(id=msg_id, content=content, tool_call_id=str(tool_call_id))
+                    )
+                elif content:
+                    logger.warning(
+                        "[execute] tool message %s has no toolCallId; degrading to user turn",
+                        msg_id,
+                    )
+                    converted.append(AGUIUserMessage(id=msg_id, content=f"[tool result] {content}"))
+            elif role == "user":
+                if content:
+                    converted.append(AGUIUserMessage(id=msg_id, content=content))
+            else:
+                # assistant — and, matching prior behavior, any unknown role
+                raw_calls = msg.get("toolCalls") or msg.get("tool_calls") or []
+                tool_calls = [tc for tc in map(_coerce_agui_tool_call, raw_calls) if tc]
+                if content or tool_calls:
+                    converted.append(
+                        AGUIAssistantMessage(
+                            id=msg_id,
+                            content=content or None,
+                            tool_calls=tool_calls or None,
+                        )
+                    )
+        elif hasattr(msg, "content") and hasattr(msg, "type"):
+            msg_id = getattr(msg, "id", None) or f"msg-{uuid.uuid4()}"
+            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+            if msg.type == "tool":
+                tool_call_id = getattr(msg, "tool_call_id", None)
+                if tool_call_id:
+                    converted.append(
+                        AGUIToolMessage(id=msg_id, content=content, tool_call_id=str(tool_call_id))
+                    )
+                elif content:
+                    logger.warning(
+                        "[execute] LangChain ToolMessage %s has no tool_call_id; degrading",
+                        msg_id,
+                    )
+                    converted.append(AGUIUserMessage(id=msg_id, content=f"[tool result] {content}"))
+            elif msg.type == "human":
+                converted.append(AGUIUserMessage(id=msg_id, content=content))
+            else:
+                lc_calls = getattr(msg, "tool_calls", None) or []
+                tool_calls = [tc for tc in map(_coerce_agui_tool_call, lc_calls) if tc]
+                if content or tool_calls:
+                    converted.append(
+                        AGUIAssistantMessage(
+                            id=msg_id,
+                            content=content or None,
+                            tool_calls=tool_calls or None,
+                        )
+                    )
+    return converted
+
+
 class LangGraphAgent(_LangGraphAGUIAgent):
     """
     Extended LangGraphAGUIAgent that adds the execute() method required by SDK.
@@ -583,39 +710,14 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             f"Using fresh thread_id={thread_id[:8]}... (original={original_thread_id[:8] if original_thread_id else 'None'}...)"
         )
 
-        # Convert messages to the format expected by RunAgentInput
+        # Convert messages to the format expected by RunAgentInput.
         # Messages can come from:
-        # 1. AG-UI protocol: dicts like {"role": "user", "content": "..."}
-        # 2. SDK internals: LangChain message objects with .type and .content attributes
-        # Note: ag_ui.core.Message is a Union type, so we must use specific types
-        from ag_ui.core import AssistantMessage, UserMessage
-
-        agui_messages: list[UserMessage | AssistantMessage] = []
+        # 1. AG-UI protocol: dicts like {"role": "user", "content": "..."} —
+        #    including the follow-up run after a frontend action, whose list
+        #    ends with the role-"tool" action result the model must narrate
+        # 2. SDK internals: LangChain message objects with .type and .content
         dbg(f"Converting {len(messages or [])} messages to AG-UI format")
-        for i, msg in enumerate(messages or []):
-            dbg(f"msg[{i}] type={type(msg).__name__} value={msg}")
-
-            if isinstance(msg, dict):
-                # Handle dict format from AG-UI protocol (frontend sends this)
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                msg_id = msg.get("id") or f"msg-{uuid.uuid4()}"
-                if content:
-                    if role == "user":
-                        agui_messages.append(UserMessage(id=msg_id, content=content))
-                    else:
-                        agui_messages.append(AssistantMessage(id=msg_id, content=content))
-                    dbg(f"Added dict message: role={role}, content={content[:50]}...")
-            elif hasattr(msg, "content") and hasattr(msg, "type"):
-                # Convert langchain message to AGUI format
-                role = "user" if msg.type == "human" else "assistant"
-                msg_id = getattr(msg, "id", None) or f"msg-{uuid.uuid4()}"
-                if role == "user":
-                    agui_messages.append(UserMessage(id=msg_id, content=msg.content))
-                else:
-                    agui_messages.append(AssistantMessage(id=msg_id, content=msg.content))
-                dbg(f"Added LangChain message: role={role}, content={msg.content[:50]}...")
-
+        agui_messages = _execute_bridge_agui_messages(messages)
         dbg(f"Converted to {len(agui_messages)} AG-UI messages")
 
         # Extract last user message ID for parentMessageId in response events
@@ -2527,7 +2629,7 @@ DO NOT just describe what tools can do - actually CALL them to get data!
 
 ## Inline Charts (generative UI)
 
-When the user asks to chart / plot / graph / visualize a KPI's trend over time AND a `renderKpiTrend` tool is available, call `renderKpiTrend` (kpiId such as `trx`, `nrx`, or `market_share`) — the UI renders a real line chart from stored KPI history directly inside your reply. Call it on its OWN, never combined with other tool calls in the same turn (combined turns drop the chart). If `renderKpiTrend` is not in your tool list, answer with data from the other tools and say inline charts aren't available in this surface — do NOT describe a chart you cannot render.
+When the user asks to chart / plot / graph / visualize a KPI's trend over time AND a `renderKpiTrend` tool is available, call `renderKpiTrend` — the UI renders a real line chart from stored KPI history directly inside your reply. Valid kpiId values: `trx`, `nrx`, `nbrx`, `trx_share` (aka `market_share`), `conversion_rate`, `roi`, or a registry code such as `WS3-BI-005` / `BR-001`. `nbrx` and `trx_share` are tracked per brand only — pass `brand` (Remibrutinib, Fabhalta, or Kisqali) for them or the chart will be empty; other KPIs accept an optional brand. History is monthly: requests for finer windows (e.g. "last 90 days") chart the stored monthly series — say so rather than apologizing. Call it on its OWN, never combined with other tool calls in the same turn (combined turns drop the chart). If `renderKpiTrend` is not in your tool list, answer with data from the other tools and say inline charts aren't available in this surface — do NOT describe a chart you cannot render.
 
 ## Response Format
 
