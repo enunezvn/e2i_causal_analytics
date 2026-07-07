@@ -256,10 +256,20 @@ async def causal_discovery_insight(
     req: CausalInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
     """Portfolio-level interpretation of the discovered-effects leaderboard."""
-    g = causal_discovery.build_grounding(
-        req.brand, req.grain, [e.model_dump() for e in req.effects]
+    # Registry context (2026-07-07): commercial chains the grain-scope guard
+    # keeps OUT of estimation runs — cited as additional modeled coverage,
+    # digit-free. fetch fails soft to [] — a registry hiccup never blocks.
+    from src.insights.causal_context import fetch_commercial_drivers
+
+    drivers = await fetch_commercial_drivers(
+        req.brand, outcomes=("TRx", "NRx", "market share", "ROI")
     )
-    key = cache_key("causal-discovery", req.brand, {"t": g["effects_table"]})
+    g = causal_discovery.build_grounding(
+        req.brand, req.grain, [e.model_dump() for e in req.effects], causal_drivers=drivers
+    )
+    key = cache_key(
+        "causal-discovery", req.brand, {"t": g["effects_table"], "r": g["registry_context"]}
+    )
     cached = await cache_get(key)
     if cached is not None:
         payload = cached
@@ -274,6 +284,14 @@ async def treatment_effect_insight(
     req: TreatmentEffectInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
     """Interpret a single de-confounded (cohort, brand) treatment-effect estimate."""
+    # Registry context (2026-07-07): curated chains token-matched to the
+    # estimated pair — rendered digit-free and kept SEPARATE from the estimate
+    # narrative (contrast, never corroboration). fetch fails soft to [].
+    from src.insights.causal_context import fetch_commercial_drivers
+
+    drivers = await fetch_commercial_drivers(
+        req.brand, outcomes=(req.outcome_var, req.treatment_var)
+    )
     g = treatment_effect.build_grounding(
         req.cohort,
         req.brand,
@@ -286,6 +304,7 @@ async def treatment_effect_insight(
         req.p_value,
         req.n,
         req.estimator,
+        causal_drivers=drivers,
     )
     # Key on the derived grounding strings (which encode ate, CI, p, n, estimator,
     # treatment/outcome, confounders) so two estimates that differ only in CI — and
@@ -293,7 +312,7 @@ async def treatment_effect_insight(
     key = cache_key(
         "treatment-effect",
         f"{req.cohort}/{req.brand}",
-        {"e": g["estimate"], "d": g["design"]},
+        {"e": g["estimate"], "d": g["design"], "r": g["registry_context"]},
     )
     cached = await cache_get(key)
     if cached is not None:
@@ -312,17 +331,28 @@ async def predictive_cohort_insight(
     req: PredictiveInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
     """Targeting interpretation of a scored cohort (distribution, top targets, SHAP drivers)."""
+    # Registry context (2026-07-07): outcome-matched chains derived from the
+    # gold-standard model name; unrecognizable names honestly fetch nothing.
+    from src.insights.causal_context import fetch_commercial_drivers
+
+    reg_brand, reg_terms = predictive_cohort.outcome_terms_for_model(req.model_version)
+    drivers = await fetch_commercial_drivers(reg_brand, outcomes=reg_terms) if reg_terms else []
     g = predictive_cohort.build_grounding(
         req.model_version,
         req.n_scored,
         req.mean_prob,
         [t.model_dump() for t in req.top_targets],
         [d.model_dump() for d in req.top_drivers],
+        causal_drivers=drivers,
     )
     key = cache_key(
         "predictive-cohort",
         req.model_version,
-        {"d": g["distribution_summary"], "t": g["top_targets_summary"]},
+        {
+            "d": g["distribution_summary"],
+            "t": g["top_targets_summary"],
+            "r": g["registry_context"],
+        },
     )
     cached = await cache_get(key)
     if cached is not None:
@@ -455,13 +485,26 @@ async def hte_insight(
             },
             provenance="Persisted segment-level CATE analysis (incomplete run)",
         )
-    g = hte.build_grounding(record.model_dump())
+    record_dict = record.model_dump()
+    # Commercial levers (2026-07-07): brand-scoped registry chains around the
+    # analyzed outcome + volume KPIs — digit-free, so the fail-closed numeric
+    # guard is untouched. fetch fails soft to [].
+    from src.insights.causal_context import fetch_commercial_drivers
+
+    lever_terms = tuple(t for t in (record_dict.get("outcome_var"), "TRx", "NRx") if t)
+    drivers = await fetch_commercial_drivers(record_dict.get("brand"), outcomes=lever_terms)
+    g = hte.build_grounding(record_dict, causal_drivers=drivers)
     # Key on the derived grounding strings so two runs differing in any figure
     # never collide (the analysis_id alone would pin a stale re-run).
     key = cache_key(
         "hte",
         req.analysis_id,
-        {"e": g["effect_summary"], "s": g["segments"], "t": g["targeting"]},
+        {
+            "e": g["effect_summary"],
+            "s": g["segments"],
+            "t": g["targeting"],
+            "cc": g["commercial_context"],
+        },
     )
     cached = await cache_get(key)
     if cached is not None:

@@ -1403,3 +1403,65 @@ class TestGenerateInsight:
 )
 def test_pp_formatting(value, expected):
     assert hte._pp(value) == expected
+
+
+# ---------------------------------------------------------------------------
+# Commercial levers context (2026-07-07 follow-up)
+# ---------------------------------------------------------------------------
+
+
+DRIVERS = [
+    {
+        "start": "rep_detailing_frequency",
+        "end": "trx_volume",
+        "effect": 0.2977,
+        "confidence": 0.87,
+        "synthetic": True,
+    },
+    {
+        "start": "copay_support_program",
+        "end": "trx_volume",
+        "effect": 0.18,
+        "confidence": 0.82,
+        "synthetic": True,
+    },
+]
+
+
+class TestCommercialContext:
+    def test_build_grounding_carries_digit_free_commercial_context_and_chip(self):
+        g = hte.build_grounding(_record(), causal_drivers=DRIVERS)
+        assert "rep detailing frequency → TRx volume" in g["commercial_context"]
+        assert "curated synthetic" in g["commercial_context"]
+        # DIGIT-FREE is load-bearing here: the fail-closed numeric guard
+        # vouches only figures the grounding rendered — a "+0.30" in the
+        # prompt would either poison samples into fallback or (if vouched)
+        # weaken the guard. Names-only sidesteps both.
+        assert not any(ch.isnumeric() for ch in g["commercial_context"])
+        assert any(c["label"] == "Commercial levers" and c["value"] == "2" for c in g["grounding"])
+
+    def test_without_drivers_is_honest_and_chipless(self):
+        g = hte.build_grounding(_record())
+        assert "no modeled causal drivers" in g["commercial_context"].lower()
+        assert not any(c["label"] == "Commercial levers" for c in g["grounding"])
+
+    def test_registry_figures_do_not_enter_vouched_vocabulary(self):
+        """The guard must still REJECT a candidate that echoes a registry
+        effect size — the commercial context adds NO numbers to vouch."""
+        g = hte.build_grounding(_record(), causal_drivers=DRIVERS)
+        assert not hte._is_grounded("Rep detailing frequency lifts TRx volume by +0.30.", g)
+        # ... while a faithful candidate remains grounded.
+        assert hte._is_grounded("The overall ATE is +11.1pp.", g)
+
+    def test_fallback_appends_commercial_line_only_when_present(self):
+        out = hte._fallback(hte.build_grounding(_record(), causal_drivers=DRIVERS))
+        assert "Registry-modeled causal chains" in out["insight"]
+        bare = hte._fallback(hte.build_grounding(_record()))
+        assert "Registry-modeled" not in bare["insight"]
+
+    def test_no_signal_fallback_stays_clean(self):
+        # A record with no CATE rows keeps the "re-run the analysis" message
+        # untouched — commercial context must not decorate a no-data state.
+        g = hte.build_grounding(_record(cate_by_segment={}), causal_drivers=DRIVERS)
+        out = hte._fallback(g)
+        assert "Registry-modeled" not in out["insight"]
