@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from src.repositories.expert_review import ExpertReviewRepository
 
@@ -31,7 +31,7 @@ _DAG_SNAPSHOT_KEYS = (
 )
 
 
-def sanitize_dag_structure(causal_graph: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def sanitize_dag_structure(causal_graph: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
     """Reduce a rich in-state CausalGraph to a JSON-serializable render snapshot.
 
     Keeps nodes/edges (edge tuples coerced to lists for JSONB round-trip) plus
@@ -143,7 +143,9 @@ class ExpertReviewGate:
         outcome: Optional[str] = None,
         requester_id: Optional[str] = None,
         analysis_context: Optional[str] = None,
-        dag_structure: Optional[Dict[str, Any]] = None,
+        # Mapping (not Dict): callers pass the in-state CausalGraph TypedDict,
+        # which mypy only accepts through a read-only Mapping.
+        dag_structure: Optional[Mapping[str, Any]] = None,
         related_validation_ids: Optional[List[str]] = None,
     ) -> ReviewGateResult:
         """
