@@ -384,9 +384,7 @@ class TestAgentRewardGrading:
         state.sufficient_evidence = True
         state.visualization_config = {"type": "bar"}
         state.evidence_board = [
-            Evidence(
-                source=list(MemoryType)[0], hop_number=1, content="e", relevance_score=0.9
-            )
+            Evidence(source=list(MemoryType)[0], hop_number=1, content="e", relevance_score=0.9)
             for _ in range(4)
         ]
         reward = self._agent_signal(state)["reward"]
@@ -400,9 +398,7 @@ class TestAgentRewardGrading:
         state.sufficient_evidence = True
         state.visualization_config = {"type": "bar"}
         state.evidence_board = [
-            Evidence(
-                source=list(MemoryType)[0], hop_number=1, content="e", relevance_score=1.0
-            )
+            Evidence(source=list(MemoryType)[0], hop_number=1, content="e", relevance_score=1.0)
             for _ in range(10)
         ]
         assert self._agent_signal(state)["reward"] <= 1.0
