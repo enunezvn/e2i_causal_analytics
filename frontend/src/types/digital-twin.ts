@@ -88,6 +88,8 @@ export enum InterventionType {
   SAMPLE_DISTRIBUTION = 'sample_distribution',
   PEER_INFLUENCE_ACTIVATION = 'peer_influence_activation',
   DIGITAL_ENGAGEMENT = 'digital_engagement',
+  PATIENT_SUPPORT_PROGRAM = 'patient_support_program',
+  REP_TRAINING_QUALITY = 'rep_training_quality',
 }
 
 /**
@@ -107,6 +109,8 @@ export const FALLBACK_INTERVENTION_TYPES: ReadonlyArray<{
   { value: InterventionType.SAMPLE_DISTRIBUTION, label: 'Sample Distribution' },
   { value: InterventionType.PEER_INFLUENCE_ACTIVATION, label: 'Peer Influence Activation' },
   { value: InterventionType.DIGITAL_ENGAGEMENT, label: 'Digital Engagement' },
+  { value: InterventionType.PATIENT_SUPPORT_PROGRAM, label: 'Patient Support Program' },
+  { value: InterventionType.REP_TRAINING_QUALITY, label: 'Rep Training Quality' },
 ];
 
 /**

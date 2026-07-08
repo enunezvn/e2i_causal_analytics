@@ -186,4 +186,5 @@ export {
   useResourceOptimizationInsight,
   useTreatmentEffectInsight,
   useFeedbackLearningInsight,
+  useDigitalTwinInsight,
 } from './use-insights';

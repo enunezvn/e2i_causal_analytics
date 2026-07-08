@@ -705,23 +705,21 @@ async def list_intervention_types(
     Return the canonical intervention taxonomy — the single source of truth the
     frontend dropdown reads, so FE and backend can never drift.
 
-    Availability is **brand-aware**. ``available`` is True only when a trained twin
-    model exists for the brand/twin_type (otherwise ``/simulate`` would 503).
-    ``available_for_effect`` is True only when the intervention's effect is IDENTIFIED
-    in the connected cohort — i.e. a real causal estimate is possible; the frontend
-    should expose only effect-available interventions. ``effect_basis`` is
+    Availability is **brand-aware** and **per-intervention**. ``available`` is True
+    only when a trained twin model exists for the brand/twin_type (otherwise
+    ``/simulate`` would 503). ``available_for_effect`` is True only when THAT
+    intervention's planted treatment channel has enough usable cohort rows for a
+    direct causal estimate — honest per channel, so a substrate holding only some
+    channels advertises exactly what ``/simulate`` can estimate. ``effect_basis`` is
     ``"cohort_causal"`` for identified interventions (direct DML estimate on the cohort)
     and ``"unavailable"`` otherwise (no fabricated effect; ``/simulate`` returns 422).
     """
-    from src.digital_twin.effect.cohort_loader import brand_has_cohort
-    from src.digital_twin.effect.provider import (
-        COHORT_ESTIMABLE_INTERVENTIONS,
-        INTERVENTION_CATALOG,
-    )
+    from src.digital_twin.effect.cohort_loader import cohort_treatment_availability
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
     from src.digital_twin.models.twin_models import TwinType
 
     available = False
-    has_cohort = False
+    effect_available: Dict[str, bool] = {}
     if brand is not None:
         try:
             repo = await _get_twin_repo()
@@ -729,26 +727,22 @@ async def list_intervention_types(
                 twin_type=TwinType(twin_type.value), brand=brand.value
             )
             available = len(actives) > 0
-            # Phase 2: cohort-estimable interventions report effect_basis
-            # "cohort_estimated" only when the brand has a usable synthetic-gold
-            # cohort to estimate from (else they fall back to the uniform basis).
-            has_cohort = await brand_has_cohort(repo.client, brand.value)
+            # Per-intervention: an intervention is effect-available only when ITS
+            # planted treatment channel has enough usable synthetic-gold cohort
+            # rows to estimate from (never a collective all-or-nothing flag).
+            effect_available = await cohort_treatment_availability(repo.client, brand.value)
         except Exception as e:  # repo/DB unreachable — degrade, never fabricate
             logger.warning("intervention-types: availability/cohort check failed: %s", e)
             available = False
-            has_cohort = False
+            effect_available = {}
 
     items = [
         InterventionTypeItem(
             value=value,
             label=label,
-            effect_basis=(
-                "cohort_causal"
-                if (has_cohort and value in COHORT_ESTIMABLE_INTERVENTIONS)
-                else "unavailable"
-            ),
+            effect_basis=("cohort_causal" if effect_available.get(value, False) else "unavailable"),
             available=available,
-            available_for_effect=bool(has_cohort and value in COHORT_ESTIMABLE_INTERVENTIONS),
+            available_for_effect=effect_available.get(value, False),
         )
         for value, label in INTERVENTION_CATALOG
     ]

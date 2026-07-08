@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.api.dependencies.auth import require_analyst
 from src.insights import (
     causal_discovery,
+    digital_twin,
     executive_brief,
     feedback_learning,
     hte,
@@ -141,6 +142,18 @@ class HTEInsightRequest(BaseModel):
     analysis_id: str
 
 
+class DigitalTwinInsightRequest(BaseModel):
+    # Brand only: the grounding is derived SERVER-SIDE from the twin-model
+    # inventory, simulation history and the per-intervention identification map
+    # (same read paths as /digital-twin/health, /simulations and
+    # /intervention-types). Accepting caller-posted figures would let any
+    # authenticated caller mint a grounded-looking insight from arbitrary
+    # numbers under digital-twin provenance (same trust boundary as
+    # /insights/executive-brief).
+    brand: str = "Remibrutinib"
+    twin_type: str = "hcp"
+
+
 class TreatmentEffectInsightRequest(BaseModel):
     cohort: str
     brand: str
@@ -201,6 +214,55 @@ async def knowledge_graph_insight(
         payload = await asyncio.to_thread(knowledge_graph.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Curated knowledge graph (server-derived)")
+
+
+@router.post("/digital-twin", response_model=StrategicInsightResponse)
+async def digital_twin_insight(
+    req: DigitalTwinInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Strategic interpretation of a brand's digital-twin simulation program
+    (server-derived grounding: twin models, simulation history, effect coverage)."""
+    from src.api.routes.digital_twin import _get_twin_repo
+    from src.digital_twin.effect.cohort_loader import cohort_treatment_availability
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+    from src.digital_twin.models.twin_models import TwinType
+
+    try:
+        repo = await _get_twin_repo()
+        models = await repo.list_active_models(twin_type=TwinType(req.twin_type), brand=req.brand)
+        simulations = await repo.simulations.list_simulations(brand=req.brand, limit=100)
+        effect_available = await cohort_treatment_availability(repo.client, req.brand)
+        g = digital_twin.build_grounding(
+            req.brand,
+            models or [],
+            simulations or [],
+            effect_available,
+            INTERVENTION_CATALOG,
+        )
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("digital-twin insight grounding unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": f"Digital-twin data for {req.brand} is currently unavailable, "
+                "so no grounded interpretation can be produced right now.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Digital-twin simulation program (unavailable)",
+        )
+    key = cache_key(
+        "digital-twin",
+        f"{req.brand}:{req.twin_type}",
+        {"s": g["simulation_summary"], "c": g["intervention_coverage"], "m": g["model_summary"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(digital_twin.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Digital-twin simulation program (server-derived)")
 
 
 @router.post("/model-performance", response_model=StrategicInsightResponse)

@@ -34,6 +34,11 @@ vi.mock('@/hooks/api/use-digital-twin', () => ({
   useInterventionTypes: vi.fn(),
 }));
 
+// Strategic Interpretation hook (barrel import in the page).
+vi.mock('@/hooks/api', () => ({
+  useDigitalTwinInsight: vi.fn(),
+}));
+
 import {
   useDigitalTwinHealth,
   useSimulationHistory,
@@ -41,6 +46,7 @@ import {
   useSimulation,
   useInterventionTypes,
 } from '@/hooks/api/use-digital-twin';
+import { useDigitalTwinInsight } from '@/hooks/api';
 
 // Create wrapper with QueryClientProvider
 function createWrapper() {
@@ -98,7 +104,7 @@ const mockHistory = {
 const mockRunResult: SimulationResponse = {
   simulation_id: 'real-sim-run-123',
   model_id: 'model-abc',
-  intervention_type: 'hcp_engagement',
+  intervention_type: 'digital_engagement',
   brand: 'Remibrutinib',
   twin_type: 'hcp',
   twin_count: 5000,
@@ -151,6 +157,8 @@ const INTERVENTION_CATALOG: ReadonlyArray<[string, string]> = [
   ['sample_distribution', 'Sample Distribution'],
   ['peer_influence_activation', 'Peer Influence Activation'],
   ['digital_engagement', 'Digital Engagement'],
+  ['patient_support_program', 'Patient Support Program'],
+  ['rep_training_quality', 'Rep Training Quality'],
 ];
 const ALL_INTERVENTION_VALUES = INTERVENTION_CATALOG.map(([v]) => v);
 
@@ -196,6 +204,7 @@ const FABRICATED_MARKERS = [
 
 describe('DigitalTwin', () => {
   const mockMutate = vi.fn();
+  const mockInsightMutate = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -228,6 +237,13 @@ describe('DigitalTwin', () => {
     (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
       interventionTypesResult(ALL_INTERVENTION_VALUES)
     );
+    // Strategic Interpretation card: idle (not yet generated).
+    (useDigitalTwinInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockInsightMutate,
+      isPending: false,
+      data: undefined,
+      error: null,
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -305,6 +321,66 @@ describe('DigitalTwin', () => {
     // … and the unavailable ones are NOT rendered (would 503 on /simulate).
     expect(screen.queryByRole('option', { name: 'Sample Distribution' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Speaker Program Invitation' })).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Strategic Interpretation card (LLM-grounded, server-derived grounding)
+  // -------------------------------------------------------------------------
+
+  it('renders the Strategic Interpretation card and generates for the selected brand', async () => {
+    const user = userEvent.setup();
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/Strategic Interpretation/i)).toBeInTheDocument();
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /Generate strategic insight/i }));
+    });
+    // Grounding is server-derived; the page only sends the brand under configuration.
+    expect(mockInsightMutate).toHaveBeenCalledWith({ brand: 'Remibrutinib' });
+  });
+
+  it('renders the returned twin-program insight with grounding chips', () => {
+    (useDigitalTwinInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockInsightMutate,
+      isPending: false,
+      error: null,
+      data: {
+        insight: 'Digital engagement is the strongest identified lever for Remibrutinib.',
+        key_takeaways: ['Pre-screen speaker programs next'],
+        grounding: [
+          { label: 'Twin models', value: '1' },
+          { label: 'Identified interventions', value: '8/8' },
+        ],
+        is_fallback: false,
+        provenance: 'Digital-twin simulation program (server-derived)',
+        generated_at: '2026-07-08T00:00:00Z',
+      },
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByText('Digital engagement is the strongest identified lever for Remibrutinib.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Pre-screen speaker programs next')).toBeInTheDocument();
+    // Chip text is split across nodes (<span>label</span>: value) — match textContent.
+    expect(
+      screen.getByText((_, el) => el?.textContent === 'Identified interventions: 8/8')
+    ).toBeInTheDocument();
+  });
+
+  it('renders the full 8-intervention catalog when every effect is identified', () => {
+    // Post-mig-099 substrate: every canonical intervention (incl. the two new
+    // program-level levers) has a planted, identified effect.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(ALL_INTERVENTION_VALUES, ALL_INTERVENTION_VALUES)
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    for (const [, label] of INTERVENTION_CATALOG) {
+      expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('option', { name: 'Patient Support Program' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Rep Training Quality' })).toBeInTheDocument();
   });
 
   it('disables Run and explains when no twin model exists for the brand', () => {

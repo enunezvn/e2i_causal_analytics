@@ -35,12 +35,18 @@ export const ApiErrorResponseSchema = z.object({
  * Intervention type enum values for simulation requests
  */
 export const InterventionTypeEnum = z.enum([
-  'hcp_engagement',
-  'patient_support',
-  'pricing',
-  'rep_training',
-  'digital_marketing',
-  'formulary_access',
+  // Canonical values — mirrors backend INTERVENTION_CATALOG
+  // (src/digital_twin/effect/provider.py). The prior program-level values
+  // (hcp_engagement, pricing, ...) were disjoint from the backend allowlist
+  // and every simulation using them 422'd.
+  'email_campaign',
+  'call_frequency_increase',
+  'speaker_program_invitation',
+  'sample_distribution',
+  'peer_influence_activation',
+  'digital_engagement',
+  'patient_support_program',
+  'rep_training_quality',
 ]);
 
 /**
