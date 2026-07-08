@@ -9,9 +9,10 @@ import { ROUTES } from '../fixtures/test-data'
  * "Model performance" mode (walk-forward backtest trends per cohort ×
  * brand, the `#ts-cohort` / `#ts-brand` selects and the mode tabs) moved
  * to the Model Performance page — see the sibling PR. The current UI is:
- * KPI select + time-range select in the header, five summary stat cards,
- * the "KPI History" chart (with an honest empty-state when a KPI has no
- * real history), and the "Current KPI Status" card. See
+ * grouped KPI select (+ a brand select when the selected KPI has named
+ * brand scopes) + time-range select in the header, five summary stat
+ * cards, the "KPI History" chart (with an honest empty-state when a KPI
+ * has no real history), and the "Current KPI Status" card. See
  * `time-series.spec.ts` for inline KPI-history mocks; do not modify
  * `e2e/fixtures/api-mocks.ts` per the agent contract on #332.
  */

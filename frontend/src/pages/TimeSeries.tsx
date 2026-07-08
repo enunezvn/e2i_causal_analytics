@@ -262,13 +262,24 @@ function TimeSeries() {
         },
       ];
     }
-    return WORKSTREAM_GROUPS.map((group) => ({
-      ...group,
-      options: list
-        .filter((k) => String(k.workstream) === group.key)
+    const knownKeys = new Set(WORKSTREAM_GROUPS.map((g) => g.key));
+    const toOptions = (matches: typeof list) =>
+      matches
         .map((k) => ({ id: k.id, name: k.name, hasHistory: coverageMap.has(k.id) }))
-        .sort((a, b) => a.id.localeCompare(b.id)),
-    })).filter((group) => group.options.length > 0);
+        .sort((a, b) => a.id.localeCompare(b.id));
+    return [
+      ...WORKSTREAM_GROUPS.map((group) => ({
+        ...group,
+        options: toOptions(list.filter((k) => String(k.workstream) === group.key)),
+      })),
+      // Registry-drift safety: a workstream this page doesn't know yet surfaces
+      // under "Other" instead of silently vanishing from the dropdown.
+      {
+        key: 'other',
+        label: 'Other',
+        options: toOptions(list.filter((k) => !knownKeys.has(String(k.workstream)))),
+      },
+    ].filter((group) => group.options.length > 0);
   }, [kpiList.data, coverageMap]);
 
   // Brand scopes available for the selected KPI (from real coverage, not

@@ -9,34 +9,76 @@ import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 // =============================================================================
 //
 // The Time Series page is the single-mode KPI-history home: it reads
-// `GET /api/kpis` (useKPIList) for the select, `GET /api/kpis/{id}/history`
-// (useKPIHistory) for the chart, `GET /api/kpis/{id}` (useKPIValue) for the
-// status card and `GET /api/kpis/{id}/metadata` (useKPIMetadata) for the
-// display name. The shared `mockApiRoutes` fixture only knows two WS1 KPIs
-// and no `/history` surface, so we register more specific routes here AFTER
-// `mockApiRoutes` — Playwright's route dispatch picks the last-registered
-// matching route first. Per the agent contract on issue #332, the api-mocks
-// fixture and production code are off-limits.
+// `GET /api/kpis` (useKPIList) for the grouped select, `GET /api/kpis/
+// history/coverage` (useKPIHistoryCoverage) for the has-history badges +
+// brand scopes, `GET /api/kpis/{id}/history` (useKPIHistory) for the chart,
+// `GET /api/kpis/{id}` (useKPIValue) for the status card and `GET
+// /api/kpis/{id}/metadata` (useKPIMetadata) for the display name. The shared
+// `mockApiRoutes` fixture only knows two WS1 KPIs and no `/history` surface,
+// so we register more specific routes here AFTER `mockApiRoutes` —
+// Playwright's route dispatch picks the last-registered matching route
+// first. Per the agent contract on issue #332, the api-mocks fixture and
+// production code are off-limits.
 //
 // The former "Model performance" mode (and its `/api/monitoring/performance/
 // {model_id}/trend` stub) moved to the Model Performance page — sibling PR.
+//
+// Workstream values MUST match the live registry (`ws3_business`, NOT the
+// pre-rewrite `ws3_business_impact` — that stale key is exactly how this
+// spec caught the dropdown's silent-vanish failure mode in CI).
 // =============================================================================
 
-// Deliberately NOT alphabetical — the page must sort the select by name.
+// Deliberately unordered — the page groups by workstream + sorts by KPI id.
+// The WS1-MP-* and CM-* entries MUST be filtered out of the dropdown (they
+// are served on /model-performance / per-analysis surfaces respectively).
 const KPI_FIXTURES = [
-  kpiFixture('WS1-DQ-001', 'Source Coverage - Patients'),
-  kpiFixture('WS3-BI-010', 'Return on Investment'),
-  kpiFixture('WS2-TR-005', 'Alert Yield'),
+  kpiFixture('WS1-DQ-001', 'Source Coverage - Patients', 'ws1_data_quality'),
+  kpiFixture('WS3-BI-010', 'Return on Investment', 'ws3_business'),
+  kpiFixture('WS2-TR-005', 'Alert Yield', 'ws2_triggers'),
+  kpiFixture('WS3-BI-007', 'New-to-Brand Prescriptions (NBRx)', 'ws3_business'),
+  kpiFixture('WS1-MP-001', 'ROC-AUC', 'ws1_model_performance'),
+  kpiFixture('CM-001', 'Average Treatment Effect (ATE)', 'causal_metrics'),
 ]
 
-function kpiFixture(id: string, name: string) {
+// The dropdown must offer exactly the non-hidden fixtures.
+const VISIBLE_KPI_IDS = ['WS1-DQ-001', 'WS3-BI-010', 'WS2-TR-005', 'WS3-BI-007']
+
+// Coverage map: which KPIs have a real series, in which brand scopes.
+// WS1-DQ-001 is deliberately absent (-> "no history yet" badge); WS3-BI-007
+// NBRx is per-brand ONLY (no '' global scope) — the page must snap its brand
+// select to a real brand instead of showing a false empty-state.
+const COVERAGE_FIXTURES = [
+  {
+    kpi_id: 'WS3-BI-010',
+    brands: [''],
+    points: 24,
+    first_date: '2024-07-01',
+    last_date: '2026-06-01',
+  },
+  {
+    kpi_id: 'WS2-TR-005',
+    brands: [''],
+    points: 35,
+    first_date: '2023-08-01',
+    last_date: '2026-06-01',
+  },
+  {
+    kpi_id: 'WS3-BI-007',
+    brands: ['Fabhalta', 'Kisqali', 'Remibrutinib'],
+    points: 105,
+    first_date: '2023-08-01',
+    last_date: '2026-06-01',
+  },
+]
+
+function kpiFixture(id: string, name: string, workstream: string) {
   return {
     id,
     name,
     definition: `${name} definition`,
     formula: 'numerator / denominator',
     calculation_type: 'direct',
-    workstream: 'ws3_business_impact',
+    workstream,
     tables: [],
     columns: [],
     threshold: { target: 85, warning: 70, critical: 50 },
@@ -47,12 +89,23 @@ function kpiFixture(id: string, name: string) {
 }
 
 async function stubTimeSeriesEndpoints(page: Page): Promise<void> {
-  // KPI list — populates the (alphabetically sorted) KPI select.
+  // KPI list — populates the grouped KPI select.
   await page.route(/\/api\/kpis(?:\?|$)/, async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ kpis: KPI_FIXTURES, total: KPI_FIXTURES.length }),
+    })
+  })
+
+  // History coverage — drives the "no history yet" badges and the per-KPI
+  // brand scopes. Static path, so it must be stubbed explicitly (it would
+  // otherwise fall through to the shared fixture and error).
+  await page.route(/\/api\/kpis\/history\/coverage(?:\?|$)/, async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ coverage: COVERAGE_FIXTURES, total: COVERAGE_FIXTURES.length }),
     })
   })
 
@@ -182,18 +235,34 @@ test.describe('Time Series Page', () => {
     })
 
     test('should default to Return on Investment (WS3-BI-010)', async () => {
-      // WS3-BI-010 is currently the only KPI with real history rows, so the
-      // page lands on a populated chart instead of an empty-state.
+      // WS3-BI-010 is the deepest real series in kpi_history, so the page
+      // lands on a populated chart instead of an empty-state.
       await expect(timeSeriesPage.kpiSelector).toContainText('Return on Investment')
+      // The KPI id is visible in the trigger — families are identifiable.
+      await expect(timeSeriesPage.kpiSelector).toContainText('WS3-BI-010')
     })
 
-    test('should list KPIs alphabetically by name', async ({ page }) => {
+    test('should group KPIs by workstream with visible ids, hiding MP-*/CM-*', async ({
+      page,
+    }) => {
       await timeSeriesPage.kpiSelector.click()
       const options = page.getByRole('option')
-      await expect(options).toHaveCount(KPI_FIXTURES.length)
-      const names = await options.allTextContents()
-      const sorted = [...names].sort((a, b) => a.localeCompare(b))
-      expect(names).toEqual(sorted)
+      // Exactly the non-hidden fixtures — WS1-MP-* and CM-* must NOT render.
+      await expect(options).toHaveCount(VISIBLE_KPI_IDS.length)
+      const texts = await options.allTextContents()
+      for (const id of VISIBLE_KPI_IDS) {
+        expect(texts.some((t) => t.includes(id))).toBe(true)
+      }
+      expect(texts.some((t) => t.includes('WS1-MP') || t.includes('ROC-AUC'))).toBe(false)
+      expect(texts.some((t) => t.includes('CM-001') || t.includes('(ATE)'))).toBe(false)
+      // Workstream group labels render for the families present.
+      await expect(page.getByText('Data Quality (WS1)')).toBeVisible()
+      await expect(page.getByText('Trigger Performance (WS2)')).toBeVisible()
+      await expect(page.getByText('Business Impact (WS3)')).toBeVisible()
+      // History-less entries are labeled honestly (WS1-DQ-001 has no
+      // coverage entry; WS3-BI-010 has a real series).
+      expect(texts.find((t) => t.includes('WS1-DQ-001'))).toMatch(/no history yet/i)
+      expect(texts.find((t) => t.includes('WS3-BI-010'))).not.toMatch(/no history yet/i)
       await page.keyboard.press('Escape')
     })
 
@@ -203,6 +272,24 @@ test.describe('Time Series Page', () => {
       // The chart re-renders for the newly selected KPI.
       const hasChart = await timeSeriesPage.verifyHistoryChartDisplayed()
       expect(hasChart).toBeTruthy()
+    })
+
+    test('per-brand-only KPI shows a brand select snapped to a real brand', async ({
+      page,
+    }) => {
+      // A global NBRx series is undefined by design — on selection the page
+      // must surface the brand select snapped to the first covered brand
+      // (previously these 105 real points were unreachable: the page never
+      // passed a brand, so NBRx falsely rendered as an empty-state).
+      await timeSeriesPage.selectKpi('New-to-Brand')
+      const brandSelect = page.getByRole('combobox', { name: /^brand$/i })
+      await expect(brandSelect).toBeVisible()
+      await expect(brandSelect).toContainText('Fabhalta')
+      // No "All Brands" option for a per-brand-only KPI.
+      await brandSelect.click()
+      await expect(page.getByRole('option', { name: /All Brands/i })).toHaveCount(0)
+      await expect(page.getByRole('option', { name: 'Kisqali' })).toBeVisible()
+      await page.keyboard.press('Escape')
     })
   })
 

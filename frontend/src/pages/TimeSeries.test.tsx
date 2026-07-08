@@ -99,6 +99,14 @@ const sampleKPIList = [
     name: 'Average Treatment Effect (ATE)',
     workstream: 'causal_metrics',
   },
+  // A workstream the page does not know: must surface under "Other", never
+  // silently vanish (the failure mode a stale e2e fixture exposed in CI).
+  {
+    ...sampleKPIMetadata,
+    id: 'WS9-XX-001',
+    name: 'Future Metric',
+    workstream: 'ws9_future_family',
+  },
 ];
 
 // Coverage: which KPIs have a real series. WS1-DQ-002 is deliberately absent
@@ -239,6 +247,9 @@ describe('TimeSeries (KPI-history home)', () => {
     // History-less entries are labeled honestly.
     expect(texts.find((t) => t.includes('WS1-DQ-002'))).toMatch(/no history yet/i);
     expect(texts.find((t) => t.includes('WS1-DQ-001'))).not.toMatch(/no history yet/i);
+    // Unknown workstreams surface under "Other" — never silently dropped.
+    expect(screen.getByText('Other')).toBeInTheDocument();
+    expect(texts.some((t) => t.includes('WS9-XX-001'))).toBe(true);
   });
 
   it('selecting a KPI feeds the new id into the history hook', async () => {
