@@ -33,6 +33,8 @@ from src.api.schemas.kpi import (
     CacheInvalidationResponse,
     KPICalculationRequest,
     KPIHealthResponse,
+    KPIHistoryCoverageEntry,
+    KPIHistoryCoverageResponse,
     KPIHistoryPoint,
     KPIHistoryResponse,
     KPIListResponse,
@@ -403,6 +405,55 @@ async def health_check(
             last_calculation=None,
             error=str(e),
         )
+
+
+# =============================================================================
+# KPI HISTORY COVERAGE (static path — declared BEFORE the /{kpi_id} routes so a
+# KPI literally named "history" could never shadow it, and vice versa)
+# =============================================================================
+
+
+@router.get(
+    "/history/coverage",
+    response_model=KPIHistoryCoverageResponse,
+    summary="KPI history coverage map",
+    description=(
+        "Which KPIs have a real materialized series in kpi_history, and in which "
+        "brand scopes ('' = global; per-brand-only KPIs such as WS3-BI-007 NBRx "
+        "carry no '' scope by design). KPIs absent from the map have no history — "
+        "the Time-Series page uses this to badge its dropdown and scope its brand "
+        "selector instead of guessing."
+    ),
+    operation_id="get_kpi_history_coverage",
+)
+async def get_kpi_history_coverage() -> KPIHistoryCoverageResponse:
+    """Return the per-KPI history coverage summary (empty map when none)."""
+    from src.repositories.kpi_history import get_kpi_history_repository
+
+    repo = await get_kpi_history_repository()
+    rows = await repo.get_coverage()
+
+    by_kpi: dict[str, KPIHistoryCoverageEntry] = {}
+    for row in rows:
+        kpi_id = str(row.get("kpi_id") or "")
+        if not kpi_id:
+            continue
+        entry = by_kpi.get(kpi_id)
+        if entry is None:
+            entry = KPIHistoryCoverageEntry(kpi_id=kpi_id)
+            by_kpi[kpi_id] = entry
+        entry.brands.append(str(row.get("brand") if row.get("brand") is not None else ""))
+        entry.points += int(row.get("points") or 0)
+        first = row.get("first_date")
+        last = row.get("last_date")
+        if first and (entry.first_date is None or str(first) < entry.first_date):
+            entry.first_date = str(first)
+        if last and (entry.last_date is None or str(last) > entry.last_date):
+            entry.last_date = str(last)
+    for entry in by_kpi.values():
+        entry.brands.sort()
+    coverage = sorted(by_kpi.values(), key=lambda e: e.kpi_id)
+    return KPIHistoryCoverageResponse(coverage=coverage, total=len(coverage))
 
 
 # =============================================================================

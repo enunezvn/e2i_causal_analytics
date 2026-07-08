@@ -420,6 +420,26 @@ class KPIHistoryPoint(BaseModel):
     )
 
 
+class KPIHistoryCoverageEntry(BaseModel):
+    """History coverage for one KPI: which scopes have a real series."""
+
+    kpi_id: str
+    brands: list[str] = Field(
+        default_factory=list,
+        description="Brand scopes with points; '' = global. Per-brand-only KPIs have no ''.",
+    )
+    points: int = Field(default=0, description="Total points across all scopes")
+    first_date: str | None = Field(default=None, description="Earliest metric_date across scopes")
+    last_date: str | None = Field(default=None, description="Latest metric_date across scopes")
+
+
+class KPIHistoryCoverageResponse(BaseModel):
+    """Coverage map for the whole registry — KPIs absent here have NO history."""
+
+    coverage: list[KPIHistoryCoverageEntry] = Field(default_factory=list)
+    total: int = Field(default=0, description="Number of KPIs with at least one point")
+
+
 class KPIHistoryResponse(BaseModel):
     """Date-ordered KPI history for one KPI (empty when no real series exists)."""
 

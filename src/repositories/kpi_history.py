@@ -73,6 +73,23 @@ class KPIHistoryRepository(BaseRepository):
             )
             return 0
 
+    async def get_coverage(self) -> List[Dict[str, Any]]:
+        """Return per-(kpi_id, brand) coverage rows from ``v_kpi_history_coverage``.
+
+        Each row: ``{kpi_id, brand, points, first_date, last_date}``. The view
+        (migration 098) aggregates in the database, so this stays one small read
+        regardless of how many history points accumulate.
+        """
+        if not self.client:
+            return []
+        try:
+            result_or_coro = self.client.table("v_kpi_history_coverage").select("*").execute()
+            result = await result_or_coro if inspect.isawaitable(result_or_coro) else result_or_coro
+            return result.data if getattr(result, "data", None) else []
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to read v_kpi_history_coverage: {e}", exc_info=True)
+            return []
+
     async def get_history(
         self,
         kpi_id: str,
