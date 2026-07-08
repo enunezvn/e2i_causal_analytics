@@ -15,7 +15,7 @@
  * @module hooks/api/use-kpi
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query';
 import {
   listKPIs,
@@ -247,6 +247,27 @@ export function useKPIHistory(
     staleTime: 10 * 60 * 1000, // 10 minutes — history is stable
     enabled: !!kpiId,
     ...options,
+  });
+}
+
+/**
+ * Hook to fetch the monthly KPI history for SEVERAL brand scopes at once
+ * (the Time-Series "Compare Brands" overlay: one line per brand).
+ *
+ * One query per brand, sharing the exact single-brand cache keys — toggling
+ * compare mode on/off never refetches a series the page already holds.
+ * Pass an empty `brands` array to run no queries at all.
+ *
+ * @returns query results in the same order as `brands`
+ */
+export function useKPIHistoryMultiBrand(kpiId: string, brands: readonly string[]) {
+  return useQueries({
+    queries: brands.map((brand) => ({
+      queryKey: queryKeys.kpi.history(kpiId, brand),
+      queryFn: () => getKPIHistory(kpiId, brand),
+      staleTime: 10 * 60 * 1000, // 10 minutes — matches useKPIHistory
+      enabled: !!kpiId,
+    })),
   });
 }
 

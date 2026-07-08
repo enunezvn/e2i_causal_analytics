@@ -9,6 +9,8 @@
  *  - `useKPIHistory()`  — real monthly series from the backend (`kpi_history`)
  *  - `useKPIValue()`    — current point-in-time value (status card)
  *  - `useKPIMetadata()` — display name for the selected KPI
+ *  - `useKPIHistoryMultiBrand()` — per-brand series for the "Compare Brands"
+ *    overlay (one line per brand scope, offered when coverage has ≥2 brands)
  *
  * The page's former "Model performance" mode (walk-forward backtest trends per
  * cohort × brand) moved to the Model Performance page — see the sibling PR.
@@ -34,7 +36,7 @@ import type {
   NameType,
   ValueType,
 } from 'recharts/types/component/DefaultTooltipContent';
-import { RefreshCw, Download, Activity } from 'lucide-react';
+import { RefreshCw, Download, Activity, GitCompare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -53,12 +55,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { mergeBrandSeries, type DatedValue } from '@/lib/timeseries-brands';
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import {
   useKPIValue,
   useKPIHistory,
   useKPIHistoryCoverage,
+  useKPIHistoryMultiBrand,
   useKPIMetadata,
   useKPIList,
 } from '@/hooks/api/use-kpi';
@@ -91,6 +95,24 @@ const WORKSTREAM_GROUPS: { key: string; label: string }[] = [
 // Radix SelectItem forbids an empty-string value, so the global scope rides a
 // sentinel in the brand <Select> and is mapped back to '' for the API.
 const GLOBAL_BRAND = '__global__';
+
+// Per-brand line colors for the compare overlay (matches ModelPerformance's
+// BRAND_COLORS so the same brand reads the same color across pages). Brands
+// outside the fixed map fall back to the remaining chart palette by position.
+const BRAND_COLORS: Record<string, string> = {
+  Remibrutinib: 'var(--color-chart-1)',
+  Fabhalta: 'var(--color-chart-2)',
+  Kisqali: 'var(--color-chart-3)',
+};
+const FALLBACK_BRAND_COLORS = [
+  'var(--color-chart-4)',
+  'var(--color-chart-5)',
+  'var(--color-chart-6)',
+];
+
+function brandColor(brand: string, index: number): string {
+  return BRAND_COLORS[brand] ?? FALLBACK_BRAND_COLORS[index % FALLBACK_BRAND_COLORS.length];
+}
 
 const TIME_RANGES: { value: string; label: string; days: number }[] = [
   { value: '30d', label: '30 Days', days: 30 },
@@ -143,6 +165,7 @@ function TimeSeries() {
   // '' = global / all brands (the kpi_history scope convention).
   const [brand, setBrand] = useState<string>('');
   const [timeRange, setTimeRange] = useState<string>('1825d');
+  const [compareBrands, setCompareBrands] = useState<boolean>(false);
 
   const days = rangeToDays(timeRange);
 
@@ -156,6 +179,20 @@ function TimeSeries() {
     [kpiCoverage.data]
   );
   const coverageEntry = coverageMap.get(kpiId);
+
+  // Brand scopes available for the selected KPI (from real coverage, not
+  // guesses). No coverage entry -> only the global scope is offered.
+  const brandScopes = coverageEntry?.brands ?? [''];
+  const namedBrands = useMemo(
+    () => (coverageEntry?.brands ?? []).filter((b) => b !== ''),
+    [coverageEntry]
+  );
+  const hasGlobalScope = !coverageEntry || brandScopes.includes('');
+
+  // Compare mode needs ≥2 named brand scopes to mean anything. The toggle
+  // state survives KPI switches but only takes effect where eligible.
+  const canCompare = namedBrands.length >= 2;
+  const comparing = compareBrands && canCompare;
 
   // Keep the brand scope valid for the selected KPI: per-brand-only KPIs
   // (e.g. WS3-BI-007 NBRx — a global series is undefined by design) snap to
@@ -175,6 +212,9 @@ function TimeSeries() {
   // Real monthly history from the backend (kpi_history). Empty for point-in-time
   // KPIs — the chart then shows an honest empty-state, never a fabricated series.
   const kpiHistory = useKPIHistory(kpiId, brand);
+  // Per-brand series for the compare overlay. Zero queries while off; each
+  // query shares the single-brand cache key, so toggling never refetches.
+  const compareQueries = useKPIHistoryMultiBrand(kpiId, comparing ? namedBrands : []);
 
   // ---- Chart series ----
   const kpiSeries: ChartPoint[] = useMemo(() => {
@@ -190,6 +230,43 @@ function TimeSeries() {
       return Number.isNaN(t) ? true : t >= cutoffMs;
     });
   }, [kpiHistory.data, days]);
+
+  // Compare-mode chart rows: per-brand series aligned by date (a brand's cell
+  // is absent — NOT zero — on months it has no point), same time-range cutoff.
+  const compareRows = useMemo(() => {
+    if (!comparing) return [];
+    const perBrand: Record<string, DatedValue[]> = {};
+    namedBrands.forEach((b, i) => {
+      perBrand[b] = (compareQueries[i]?.data?.points ?? []).map((p) => ({
+        date: p.metric_date,
+        value: p.value,
+      }));
+    });
+    const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    return mergeBrandSeries(perBrand, namedBrands).filter((r) => {
+      const t = Date.parse(r.date);
+      return Number.isNaN(t) ? true : t >= cutoffMs;
+    });
+  }, [comparing, compareQueries, namedBrands, days]);
+
+  // Per-brand latest-value cards for compare mode. The single-series stat
+  // cards (average/max/min) are undefined across multiple series — replace
+  // them instead of averaging brands into a number nobody asked for.
+  const compareBrandStats = useMemo(
+    () =>
+      namedBrands.map((b) => {
+        const values = compareRows
+          .map((r) => r[b])
+          .filter((v): v is number => typeof v === 'number');
+        return {
+          brand: b,
+          latest: values.length > 0 ? values[values.length - 1] : null,
+          count: values.length,
+          sparkline: values,
+        };
+      }),
+    [namedBrands, compareRows]
+  );
 
   const seriesLabel = kpiMetadata.data?.name ?? kpiId;
 
@@ -215,24 +292,32 @@ function TimeSeries() {
   const sparklineSeries = useMemo(() => kpiSeries.map((p) => p.value), [kpiSeries]);
 
   // ---- Loading / error ----
-  // The chart is driven by kpiHistory (the time series); kpiValue backs only
-  // the current-status card.
-  const isLoading = kpiHistory.isLoading;
-  const error = kpiHistory.error;
-  const refetch = kpiHistory.refetch;
-  const isRefetching = kpiHistory.isRefetching;
+  // The chart is driven by kpiHistory (single mode) or the per-brand compare
+  // queries; kpiValue backs only the current-status card.
+  const isLoading = comparing ? compareQueries.some((q) => q.isLoading) : kpiHistory.isLoading;
+  const error = comparing
+    ? (compareQueries.find((q) => q.error)?.error ?? null)
+    : kpiHistory.error;
+  const isRefetching = comparing
+    ? compareQueries.some((q) => q.isRefetching)
+    : kpiHistory.isRefetching;
+
+  const refetch = () => {
+    if (comparing) {
+      compareQueries.forEach((q) => q.refetch());
+    } else {
+      kpiHistory.refetch();
+    }
+  };
 
   const handleRefresh = () => {
     refetch();
   };
 
   const handleExport = () => {
-    const exportData = {
-      kpiId,
-      brand,
-      days,
-      series: kpiSeries,
-    };
+    const exportData = comparing
+      ? { kpiId, days, brands: namedBrands, series: compareRows }
+      : { kpiId, brand, days, series: kpiSeries };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
       type: 'application/json',
     });
@@ -282,12 +367,6 @@ function TimeSeries() {
     ].filter((group) => group.options.length > 0);
   }, [kpiList.data, coverageMap]);
 
-  // Brand scopes available for the selected KPI (from real coverage, not
-  // guesses). No coverage entry -> only the global scope is offered.
-  const brandScopes = coverageEntry?.brands ?? [''];
-  const namedBrands = brandScopes.filter((b) => b !== '');
-  const hasGlobalScope = !coverageEntry || brandScopes.includes('');
-
   return (
     <div className="container mx-auto px-4 py-8">
       {/* Synthetic demo-data disclosure: the KPI-history series is computed over
@@ -335,7 +414,9 @@ function TimeSeries() {
               value={brand === '' ? GLOBAL_BRAND : brand}
               onValueChange={(v) => setBrand(v === GLOBAL_BRAND ? '' : v)}
             >
-              <SelectTrigger className="w-[150px]" aria-label="brand">
+              {/* Compare mode charts every brand at once — the single-brand
+                  pick is inert until compare is toggled off. */}
+              <SelectTrigger className="w-[150px]" aria-label="brand" disabled={comparing}>
                 <SelectValue placeholder="Brand" />
               </SelectTrigger>
               <SelectContent>
@@ -347,6 +428,19 @@ function TimeSeries() {
                 ))}
               </SelectContent>
             </Select>
+          )}
+          {/* Offered only when the selected KPI has ≥2 named brand scopes in
+              real coverage — a single-brand or global-only KPI has nothing to
+              compare. */}
+          {canCompare && (
+            <Button
+              variant={comparing ? 'default' : 'outline'}
+              onClick={() => setCompareBrands((v) => !v)}
+              aria-pressed={comparing}
+            >
+              <GitCompare className="mr-2 h-4 w-4" />
+              Compare Brands
+            </Button>
           )}
           <Select value={timeRange} onValueChange={setTimeRange}>
             <SelectTrigger className="w-[120px]" aria-label="time range">
@@ -398,11 +492,28 @@ function TimeSeries() {
           </div>
         )}
 
+        {/* Compare mode: one latest-value card per brand (the single-series
+            stats below are undefined across multiple series). */}
+        {comparing && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {compareBrandStats.map((s) => (
+              <KPICard
+                key={s.brand}
+                title={s.brand}
+                value={s.latest !== null ? s.latest.toLocaleString() : '—'}
+                description={`Latest value · ${s.count} points in range`}
+                sparklineData={s.sparkline}
+              />
+            ))}
+          </div>
+        )}
+
         {/* Summary cards. Every card shows the real `sparklineSeries` trend
             sparkline (never the KPICard SAMPLE_SPARKLINE fallback, which would
             render a fixture array). */}
         {/* No-series honesty: with 0 points every stat is undefined — show an
             em-dash, never a fabricated-looking 0 (or a green badge on it). */}
+        {!comparing && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <KPICard
             title="Current Value"
@@ -436,6 +547,7 @@ function TimeSeries() {
             sparklineData={sparklineSeries}
           />
         </div>
+        )}
 
         {/* KPI history chart */}
         <Card>
@@ -444,7 +556,8 @@ function TimeSeries() {
               <div>
                 <CardTitle>KPI History</CardTitle>
                 <CardDescription>
-                  {seriesLabel} ({kpiId}) historical values — last {days} days
+                  {seriesLabel} ({kpiId}){' '}
+                  {comparing ? 'per-brand comparison' : 'historical values'} — last {days} days
                 </CardDescription>
               </div>
             </div>
@@ -453,7 +566,7 @@ function TimeSeries() {
             {/* Honest empty-state: monthly history is materialized only for KPIs
                 with an honest temporal source. When this KPI has none, DON'T
                 render a blank chart that reads as real flat data — say so. */}
-            {!isLoading && kpiSeries.length === 0 ? (
+            {!isLoading && (comparing ? compareRows.length === 0 : kpiSeries.length === 0) ? (
               <div
                 data-testid="kpi-history-empty"
                 className="flex h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground"
@@ -461,13 +574,39 @@ function TimeSeries() {
                 <Activity className="h-8 w-8 opacity-40" />
                 <p className="font-medium">No historical data for this KPI in this scope</p>
                 <p className="max-w-md text-xs">
-                  {coverageEntry && !brandScopes.includes(brand)
-                    ? 'This KPI has no series for the selected brand scope — pick another brand above.'
-                    : coverageEntry
-                      ? 'The series exists but has no points inside the selected time range — widen the range above.'
-                      : 'Point-in-time KPIs accrue real history from weekly live captures — the series grows one honest point per week; no past values are fabricated. See the current status below.'}
+                  {comparing
+                    ? 'No brand series has points inside the selected time range — widen the range above.'
+                    : coverageEntry && !brandScopes.includes(brand)
+                      ? 'This KPI has no series for the selected brand scope — pick another brand above.'
+                      : coverageEntry
+                        ? 'The series exists but has no points inside the selected time range — widen the range above.'
+                        : 'Point-in-time KPIs accrue real history from weekly live captures — the series grows one honest point per week; no past values are fabricated. See the current status below.'}
                 </p>
               </div>
+            ) : comparing ? (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={compareRows} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                  <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
+                  <YAxis fontSize={12} tickLine={false} axisLine={false} />
+                  <Tooltip formatter={formatTooltipValue} labelFormatter={formatDate} />
+                  <Legend />
+                  {/* One line per brand, colored like ModelPerformance's
+                      overlay so a brand reads the same across pages. */}
+                  {namedBrands.map((b, i) => (
+                    <Line
+                      key={b}
+                      type="monotone"
+                      dataKey={b}
+                      stroke={brandColor(b, i)}
+                      strokeWidth={2}
+                      dot={compareRows.length <= 24 ? { r: 3 } : false}
+                      connectNulls
+                      name={b}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
             ) : (
               <ResponsiveContainer width="100%" height={400}>
                 <LineChart data={kpiSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
@@ -492,8 +631,9 @@ function TimeSeries() {
           </CardContent>
         </Card>
 
-        {/* Current point-in-time status */}
-        {kpiValue.data && (
+        {/* Current point-in-time status — a single-scope value; hidden while
+            comparing (which brand would it be?). */}
+        {!comparing && kpiValue.data && (
           <Card>
             <CardHeader>
               <CardTitle>Current KPI Status</CardTitle>
