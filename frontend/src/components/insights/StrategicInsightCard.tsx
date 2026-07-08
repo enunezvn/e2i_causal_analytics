@@ -1,4 +1,4 @@
-import { Sparkles } from 'lucide-react';
+import { RefreshCw, Sparkles } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import type { GroundingChip } from '@/types/insights';
@@ -47,7 +47,16 @@ export function StrategicInsightCard({
             <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
           </div>
         )}
-        {!isLoading && error && <p className="text-sm text-destructive">{error}</p>}
+        {!isLoading && error && (
+          <div className="space-y-2">
+            <p className="text-sm text-destructive">{error}</p>
+            {onGenerate && (
+              <Button variant="outline" onClick={onGenerate}>
+                <Sparkles className="mr-2 h-4 w-4" /> Try again
+              </Button>
+            )}
+          </div>
+        )}
         {!isLoading && !error && !insight && onGenerate && (
           <Button variant="outline" onClick={onGenerate}>
             <Sparkles className="mr-2 h-4 w-4" /> Generate strategic insight
@@ -75,7 +84,7 @@ export function StrategicInsightCard({
                 ))}
               </div>
             )}
-            <div className="flex items-center gap-2 pt-1 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
               {isFallback && (
                 <span className="rounded bg-muted px-1.5 py-0.5">
                   factual summary — LLM unavailable
@@ -83,6 +92,11 @@ export function StrategicInsightCard({
               )}
               {provenance && <span>{provenance}</span>}
               {generatedAt && <span>· {new Date(generatedAt).toLocaleString()}</span>}
+              {onGenerate && (
+                <Button variant="ghost" size="sm" className="ml-auto h-7" onClick={onGenerate}>
+                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Regenerate
+                </Button>
+              )}
             </div>
           </>
         )}

@@ -32,12 +32,18 @@ vi.mock('@/hooks/api/use-predictions', () => ({
 
 // The Strategic Interpretation card's hook comes from the `@/hooks/api` barrel;
 // mock it so the card renders its idle "generate" state deterministically.
+// Hoisted spies so tests can assert the page resets the interpretation.
+const { mockInsightMutate, mockInsightReset } = vi.hoisted(() => ({
+  mockInsightMutate: vi.fn(),
+  mockInsightReset: vi.fn(),
+}));
 vi.mock('@/hooks/api', () => ({
   usePredictiveCohortInsight: vi.fn(() => ({
-    mutate: vi.fn(),
+    mutate: mockInsightMutate,
     isPending: false,
     error: null,
     data: undefined,
+    reset: mockInsightReset,
   })),
 }));
 
@@ -317,6 +323,33 @@ describe('PredictiveAnalytics (cohort scoring)', () => {
   it('always renders the Strategic Interpretation card', async () => {
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
     expect(await screen.findByText(/strategic interpretation/i)).toBeInTheDocument();
+  });
+
+  it('resets the strategic interpretation when the cohort is re-scored', async () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    mockInsightReset.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /score holdout cohort/i }));
+    await waitFor(() => expect(mockScoreMutate).toHaveBeenCalledTimes(1));
+    expect(mockInsightReset).toHaveBeenCalled();
+  });
+
+  it('resets the strategic interpretation when the model changes', async () => {
+    const user = userEvent.setup();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // Wait for the initial auto-select to settle, then clear the mount-time reset.
+    await screen.findAllByText('initiation_kisqali_goldstd_lr_v1');
+    mockInsightReset.mockClear();
+    await user.click(screen.getByRole('combobox', { name: /model/i }));
+    await user.click(
+      await screen.findByRole('option', { name: /persistence_fabhalta_goldstd_lr_v1/i })
+    );
+    await waitFor(() => expect(mockInsightReset).toHaveBeenCalled());
+  }, 15000);
+
+  it('renders in-row probability bars with a cohort-mean legend', () => {
+    (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({ data: mockCohort });
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(screen.getByText(/the tick marks the\s+cohort mean \(60\.0%\)/i)).toBeInTheDocument();
   });
 
   it('renders gracefully when the models list is empty', () => {
