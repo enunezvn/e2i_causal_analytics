@@ -113,6 +113,69 @@ def test_knowledge_graph_insight_degrades_on_backend_error(test_client, monkeypa
     assert "unavailable" in data["insight"].lower()
 
 
+def test_digital_twin_insight_fallback_is_server_derived(test_client, monkeypatch):
+    """Grounding comes from the twin repo + availability map (server-derived);
+    with no LM the deterministic fallback narrates the REAL rows and discloses
+    the synthetic-gold substrate."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+
+    repo = MagicMock()
+    repo.client = MagicMock()
+    repo.list_active_models = AsyncMock(return_value=[{"model_name": "hcp_Remibrutinib_twin"}])
+    repo.simulations.list_simulations = AsyncMock(
+        return_value=[
+            {
+                "simulation_status": "completed",
+                "recommendation": "deploy",
+                "intervention_type": "digital_engagement",
+                "simulated_ate": 0.231,
+                "simulated_ci_lower": 0.198,
+                "simulated_ci_upper": 0.265,
+                "data_provenance": "cohort_estimated_synthetic_gold_v1",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        "src.api.routes.digital_twin._get_twin_repo", AsyncMock(return_value=repo)
+    )
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={v: True for v, _ in INTERVENTION_CATALOG}),
+    )
+    # Cache must not replay a previous payload for these fabricated test rows.
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_set", AsyncMock())
+
+    r = test_client.post("/api/insights/digital-twin", json={"brand": "Remibrutinib"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "hcp_Remibrutinib_twin" in data["insight"]
+    assert "digital_engagement" in data["insight"]
+    # Honesty-critical: the synthetic substrate is disclosed in the narrative.
+    assert "synthetic-gold" in data["insight"]
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Identified interventions"] == "8/8"
+    assert data["provenance"] == "Digital-twin simulation program (server-derived)"
+
+
+def test_digital_twin_insight_degrades_on_backend_error(test_client, monkeypatch):
+    """Twin repo unreachable -> honest is_fallback response, NOT a 500."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "src.api.routes.digital_twin._get_twin_repo",
+        AsyncMock(side_effect=RuntimeError("supabase unreachable")),
+    )
+    r = test_client.post("/api/insights/digital-twin", json={"brand": "Kisqali"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "unavailable" in data["insight"].lower()
+
+
 def test_treatment_effect_insight_fallback(test_client):
     body = {
         "cohort": "hcp_adoption",
