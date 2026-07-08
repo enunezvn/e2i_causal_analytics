@@ -23,11 +23,11 @@ from src.digital_twin.effect.errors import EffectDataUnavailable
 # hcp_engagement, rep_training, ... — was @deprecated and DISJOINT from this
 # set, so every UI simulation 422'd "unsupported intervention".)
 #
-# v1 effect basis is "synthetic": the SyntheticEffectDataProvider DGP is
-# intervention-agnostic (effect == true_ate for every supported type), so the
-# type is an allowlist gate, not an effect differentiator. A future
-# CohortEffectDataProvider (Phase 2) sources a real per-brand CATE for the
-# mappable types and flips their basis to "modeled".
+# 2026-07-08 (user-approved taxonomy decision): the six channel-level HCP
+# interventions are joined by two program-level levers modeled as HCP-level
+# proxies — patient_support_program (share of the HCP's patients enrolled in
+# patient-support programs) and rep_training_quality (territory rep-training
+# quality experienced by the HCP).
 INTERVENTION_CATALOG: tuple[tuple[str, str], ...] = (
     ("email_campaign", "Email Campaign"),
     ("call_frequency_increase", "Increased Call Frequency"),
@@ -35,6 +35,8 @@ INTERVENTION_CATALOG: tuple[tuple[str, str], ...] = (
     ("sample_distribution", "Sample Distribution"),
     ("peer_influence_activation", "Peer Influence Activation"),
     ("digital_engagement", "Digital Engagement"),
+    ("patient_support_program", "Patient Support Program"),
+    ("rep_training_quality", "Rep Training Quality"),
 )
 
 SUPPORTED_INTERVENTIONS = {value for value, _label in INTERVENTION_CATALOG}
@@ -43,15 +45,30 @@ SUPPORTED_INTERVENTIONS = {value for value, _label in INTERVENTION_CATALOG}
 # (business_metrics/per_hcp_rollup) and therefore estimable by direct causal
 # estimation. Mapped to the cohort treatment column.
 #
-# Only `digital_engagement` (-> engagement_score) is identified: the DGP plants a
-# real region-heterogeneous causal effect of engagement on conversion
-# (backfill_segment_engagement.py: conversion = baseline + tau[region]*T_engagement).
-# `call_frequency` is an engagement-linked exposure CORRELATE, explicitly NOT in the
-# causal path, so `call_frequency_increase` is NOT identified and is surfaced as an
-# honest "unavailable" effect basis rather than a confounded number. Interventions with
-# no cohort treatment column (email/speaker/samples/peer) are likewise unavailable.
+# Every catalog intervention now carries its own planted treatment channel
+# (backfill_segment_engagement.py multi-channel DGP: each treatment is generated
+# from the row's OBSERVED confounders — market_share, total_rx_count, region —
+# and conversion_rate = baseline(confounders) + Σ_k tau_k[region]*T_k + noise,
+# with a documented per-channel, per-region true CATE). Because every channel
+# shares the same observed confounders and independent noise, adjusting for
+# COHORT_CONFOUNDERS + region identifies each channel's effect; the other
+# channels contribute only conditionally-independent outcome variance.
+# call_frequency, previously a deliberately non-causal exposure correlate, is
+# re-planted as a genuine treatment channel in the same DGP revision.
+# Availability stays HONEST per intervention: the endpoint reports
+# available_for_effect only for channels whose column is populated with enough
+# usable rows (see cohort_loader.cohort_treatment_availability), so a substrate
+# without a channel (e.g. pre-backfill, or future RWD with partial channels)
+# degrades to an honest 422, never a fabricated effect.
 INTERVENTION_TREATMENT_MAP: dict[str, str] = {
+    "email_campaign": "email_campaign_count",
+    "call_frequency_increase": "call_frequency",
+    "speaker_program_invitation": "speaker_program_count",
+    "sample_distribution": "sample_volume",
+    "peer_influence_activation": "peer_influence_score",
     "digital_engagement": "engagement_score",
+    "patient_support_program": "patient_support_enrollment",
+    "rep_training_quality": "rep_training_score",
 }
 COHORT_ESTIMABLE_INTERVENTIONS = frozenset(INTERVENTION_TREATMENT_MAP)
 

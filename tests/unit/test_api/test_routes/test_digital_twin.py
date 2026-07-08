@@ -467,8 +467,8 @@ async def test_list_intervention_types_is_canonical_source_of_truth(
     mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
     # No cohort -> no intervention's effect is identified (all unavailable).
     monkeypatch.setattr(
-        "src.digital_twin.effect.cohort_loader.brand_has_cohort",
-        AsyncMock(return_value=False),
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={}),
     )
 
     result = await list_intervention_types(
@@ -476,7 +476,7 @@ async def test_list_intervention_types_is_canonical_source_of_truth(
     )
 
     assert {i.value for i in result.interventions} == SUPPORTED_INTERVENTIONS
-    assert len(result.interventions) == 6
+    assert len(result.interventions) == 8
     # No cohort -> nothing is effect-identified -> honest unavailable (never fabricated).
     assert all(i.effect_basis == "unavailable" for i in result.interventions)
     assert all(not i.available_for_effect for i in result.interventions)
@@ -489,11 +489,11 @@ async def test_list_intervention_types_is_canonical_source_of_truth(
 async def test_list_intervention_types_identified_flip_when_cohort_present(
     mock_twin_repository, monkeypatch
 ):
-    """When the brand has a usable cohort, the IDENTIFIED intervention reports
-    effect_basis 'cohort_causal' and available_for_effect=True; every other
-    intervention is honestly 'unavailable' (no fabricated effect). Only
-    digital_engagement is identified (engagement->conversion is causal in the DGP;
-    call_frequency is an explicit non-causal correlate)."""
+    """Availability is PER-INTERVENTION: exactly the interventions whose planted
+    treatment channel is usable report effect_basis 'cohort_causal' and
+    available_for_effect=True; every other intervention is honestly
+    'unavailable' (no fabricated effect). A partial map (e.g. pre-backfill, or
+    future RWD with partial channel coverage) must NOT flip the whole catalog."""
     from src.api.routes.digital_twin import (
         BrandEnum,
         TwinTypeEnum,
@@ -502,9 +502,12 @@ async def test_list_intervention_types_identified_flip_when_cohort_present(
     from src.digital_twin.effect.provider import COHORT_ESTIMABLE_INTERVENTIONS
 
     mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    partial = dict.fromkeys(COHORT_ESTIMABLE_INTERVENTIONS, False)
+    partial["digital_engagement"] = True
+    partial["email_campaign"] = True
     monkeypatch.setattr(
-        "src.digital_twin.effect.cohort_loader.brand_has_cohort",
-        AsyncMock(return_value=True),
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value=partial),
     )
 
     result = await list_intervention_types(
@@ -514,18 +517,17 @@ async def test_list_intervention_types_identified_flip_when_cohort_present(
     by_basis = {i.value: i.effect_basis for i in result.interventions}
     by_effect = {i.value: i.available_for_effect for i in result.interventions}
     cohort_types = {v for v, b in by_basis.items() if b == "cohort_causal"}
-    assert cohort_types == set(COHORT_ESTIMABLE_INTERVENTIONS)
-    assert cohort_types == {"digital_engagement"}
+    assert cohort_types == {"digital_engagement", "email_campaign"}
     # available_for_effect is True exactly for the identified (cohort_causal) interventions.
     assert {v for v, e in by_effect.items() if e} == cohort_types
     # Everything else is honestly unavailable (no fabricated synthetic uplift).
-    assert all(
-        b == "unavailable" for v, b in by_basis.items() if v not in COHORT_ESTIMABLE_INTERVENTIONS
-    )
+    assert all(b == "unavailable" for v, b in by_basis.items() if v not in cohort_types)
 
 
 @pytest.mark.asyncio
-async def test_list_intervention_types_unavailable_without_trained_model(mock_twin_repository):
+async def test_list_intervention_types_unavailable_without_trained_model(
+    mock_twin_repository, monkeypatch
+):
     """Brand-aware availability: no trained twin model for the brand -> the types
     are reported unavailable (honest — /simulate would 503), never fabricated."""
     from src.api.routes.digital_twin import (
@@ -535,12 +537,16 @@ async def test_list_intervention_types_unavailable_without_trained_model(mock_tw
     )
 
     mock_twin_repository.list_active_models = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={}),
+    )
 
     result = await list_intervention_types(
         brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
     )
 
-    assert len(result.interventions) == 6
+    assert len(result.interventions) == 8
     assert all(not i.available for i in result.interventions)
 
 

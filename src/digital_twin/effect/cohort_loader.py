@@ -11,6 +11,7 @@ loop; the cohort is pre-loaded and handed to the provider as a DataFrame.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -28,9 +29,19 @@ logger = logging.getLogger(__name__)
 
 COHORT_TABLE = "business_metrics"
 COHORT_METRIC_TYPE = "per_hcp_rollup"
-# region (heterogeneity axis) + treatment + outcome + pre-treatment confounders
-# (market_share, total_rx_count) for the direct causal estimate.
-_COHORT_COLUMNS = "region,engagement_score,conversion_rate,market_share,total_rx_count"
+# All planted treatment channels (deduped, stable order for the select string).
+_TREATMENT_COLUMNS: tuple[str, ...] = tuple(sorted(set(INTERVENTION_TREATMENT_MAP.values())))
+# region (heterogeneity axis) + every treatment channel + outcome + pre-treatment
+# confounders (market_share, total_rx_count) for the direct causal estimate.
+_COHORT_COLUMNS = ",".join(
+    ["region", "conversion_rate", "market_share", "total_rx_count", *_TREATMENT_COLUMNS]
+)
+_NUMERIC_COLUMNS: tuple[str, ...] = (
+    "conversion_rate",
+    "market_share",
+    "total_rx_count",
+    *_TREATMENT_COLUMNS,
+)
 # Generous cap so we read the full per-brand cohort (~7k rows) past PostgREST's
 # default 1000-row page; the estimate only needs a representative sample.
 _FETCH_LIMIT = 20000
@@ -54,7 +65,7 @@ async def load_cohort_frame(client: Any, brand: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    for col in ("engagement_score", "conversion_rate", "market_share", "total_rx_count"):
+    for col in _NUMERIC_COLUMNS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
@@ -100,28 +111,50 @@ async def build_cohort_provider_or_none(
     return CohortEffectDataProvider(usable)
 
 
-async def brand_has_cohort(client: Any, brand: str) -> bool:
-    """Does the brand have a cohort USABLE by the direct causal estimator — at least
-    ``COHORT_MIN_ROWS`` rows with the treatment, outcome, region AND the required
-    pre-treatment confounders all non-null? Drives ``available_for_effect``, so it must
-    match what ``/simulate`` will accept (else it would 422 a selectable intervention).
-    Degrades to ``False`` on any error (advisory only).
+async def _treatment_column_usable(client: Any, brand: str, treatment_col: str) -> bool:
+    """Does the brand's cohort have >= ``COHORT_MIN_ROWS`` rows usable by the direct
+    causal estimator for THIS treatment column — treatment, outcome, region AND the
+    required pre-treatment confounders all non-null? Must match what ``/simulate``
+    will accept (else the endpoint would advertise an intervention that then 422s).
     """
-    try:
-        query = (
-            client.table(COHORT_TABLE)
-            .select("metric_id", count="exact")
-            .eq("metric_type", COHORT_METRIC_TYPE)
-            .eq("brand", brand)
-            .not_.is_("engagement_score", "null")
-            .not_.is_("conversion_rate", "null")
-            .not_.is_("region", "null")
-        )
-        for col in COHORT_CONFOUNDERS:
-            query = query.not_.is_(col, "null")
-        result = await query.limit(1).execute()
-    except Exception as e:
-        logger.warning("brand_has_cohort check failed for %s: %s", brand, e)
-        return False
+    query = (
+        client.table(COHORT_TABLE)
+        .select("metric_id", count="exact")
+        .eq("metric_type", COHORT_METRIC_TYPE)
+        .eq("brand", brand)
+        .not_.is_(treatment_col, "null")
+        .not_.is_("conversion_rate", "null")
+        .not_.is_("region", "null")
+    )
+    for col in COHORT_CONFOUNDERS:
+        query = query.not_.is_(col, "null")
+    result = await query.limit(1).execute()
     count = getattr(result, "count", None)
     return bool(count is not None and count >= COHORT_MIN_ROWS)
+
+
+async def cohort_treatment_availability(client: Any, brand: str) -> dict[str, bool]:
+    """Per-intervention effect availability for a brand: ``{intervention: usable}``.
+
+    An intervention is usable when its planted treatment column has enough usable
+    rows (see :func:`_treatment_column_usable`). Drives ``available_for_effect`` in
+    ``GET /digital-twin/intervention-types`` — HONEST per channel, so a substrate
+    holding only some channels (pre-backfill, or future RWD with partial coverage)
+    advertises exactly what ``/simulate`` can estimate. Degrades to ``False`` per
+    column on any error (advisory only); never raises.
+    """
+
+    async def _safe(col: str) -> bool:
+        try:
+            return await _treatment_column_usable(client, brand, col)
+        except Exception as e:
+            logger.warning("cohort availability check failed for %s/%s: %s", brand, col, e)
+            return False
+
+    columns = list(_TREATMENT_COLUMNS)
+    results = await asyncio.gather(*(_safe(c) for c in columns))
+    usable_by_column = dict(zip(columns, results, strict=True))
+    return {
+        intervention: usable_by_column.get(column, False)
+        for intervention, column in INTERVENTION_TREATMENT_MAP.items()
+    }
