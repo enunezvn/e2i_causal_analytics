@@ -288,6 +288,7 @@ function PredictiveAnalytics() {
     setShowAdvanced(false);
     scoreCohortMutation.reset();
     predictMutation.reset();
+    predInsight.reset();
     // mutations excluded — new identity each render would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedModel]);
@@ -296,6 +297,8 @@ function PredictiveAnalytics() {
     if (!selectedModel) return;
     setSelectedRow(null);
     predictMutation.reset();
+    // The interpretation is grounded in the previous scoring run — clear it.
+    predInsight.reset();
     scoreCohortMutation.mutate(
       { modelName: selectedModel, topN: 100 },
       { onSuccess: (data) => setCohortJobId(data.job_id) }
@@ -618,19 +621,45 @@ function PredictiveAnalytics() {
                     </div>
                     {cohort.top_rows.map((row) => {
                       const active = selectedRow?.entity_id === row.entity_id;
+                      const meanProb = cohort.distribution?.mean;
                       return (
                         <button
                           key={row.entity_id}
                           type="button"
                           onClick={() => handleSelectRow(row)}
-                          className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left hover:bg-accent ${active ? 'bg-accent' : ''}`}
+                          className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-sm text-left hover:bg-accent ${active ? 'bg-accent' : ''}`}
                         >
-                          <span className="font-mono truncate">{row.entity_id}</span>
-                          <span className="font-medium">{(row.probability * 100).toFixed(1)}%</span>
+                          <span className="font-mono truncate min-w-0 flex-1">{row.entity_id}</span>
+                          <span className="flex items-center gap-2 shrink-0">
+                            <span
+                              className="relative h-2 w-24 rounded-sm bg-muted overflow-hidden"
+                              aria-hidden="true"
+                            >
+                              <span
+                                className="absolute inset-y-0 left-0 rounded-sm bg-blue-500/70"
+                                style={{ width: `${row.probability * 100}%` }}
+                              />
+                              {typeof meanProb === 'number' && (
+                                <span
+                                  className="absolute inset-y-0 w-px bg-foreground/70"
+                                  style={{ left: `${meanProb * 100}%` }}
+                                />
+                              )}
+                            </span>
+                            <span className="font-medium tabular-nums w-14 text-right">
+                              {(row.probability * 100).toFixed(1)}%
+                            </span>
+                          </span>
                         </button>
                       );
                     })}
                   </div>
+                  {typeof cohort.distribution?.mean === 'number' && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Row bars show each target&apos;s predicted probability; the tick marks the
+                      cohort mean ({(cohort.distribution.mean * 100).toFixed(1)}%).
+                    </p>
+                  )}
                 </div>
               )}
             </CardContent>
