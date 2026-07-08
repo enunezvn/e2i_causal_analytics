@@ -40,6 +40,8 @@ import {
   useSimulation,
   useInterventionTypes,
 } from '@/hooks/api/use-digital-twin';
+import { useDigitalTwinInsight } from '@/hooks/api';
+import { StrategicInsightCard } from '@/components/insights';
 import { toast } from '@/hooks/use-toast';
 import { useDataFreshness } from '@/hooks/use-data-freshness';
 import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
@@ -175,12 +177,17 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
 function SimulationForm({
   onSubmit,
   isLoading,
+  brand,
+  onBrandChange,
 }: {
   onSubmit: (data: { interventionType: InterventionType; brand: string; sampleSize: number; durationDays: number }) => void;
   isLoading: boolean;
+  // Brand state is lifted to the page so the Strategic Interpretation card and
+  // this form always describe the same brand's twin program.
+  brand: string;
+  onBrandChange: (brand: string) => void;
 }) {
   const [interventionType, setInterventionType] = useState<InterventionType>(InterventionType.EMAIL_CAMPAIGN);
-  const [brand, setBrand] = useState('Remibrutinib');
   const [sampleSize, setSampleSize] = useState(1000);
   const [durationDays, setDurationDays] = useState(90);
 
@@ -288,7 +295,7 @@ function SimulationForm({
         </label>
         <select
           value={brand}
-          onChange={(e) => setBrand(e.target.value)}
+          onChange={(e) => onBrandChange(e.target.value)}
           className="w-full px-3 py-2 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg text-[var(--color-text-primary)]"
         >
           <option value="Remibrutinib">Remibrutinib</option>
@@ -534,6 +541,9 @@ export default function DigitalTwin() {
   const [activeTab, setActiveTab] = useState<'results' | 'history'>('results');
   // The simulation_id of a history item the user clicked to inspect (if any).
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Brand under configuration (lifted from the form so the Strategic
+  // Interpretation card describes the same brand's twin program).
+  const [brand, setBrand] = useState('Remibrutinib');
   // History brand filter ('all' = every brand the caller may see).
   const [historyBrand, setHistoryBrand] = useState<string>('all');
   // Expanded (brand, intervention) groups in the deduped history list.
@@ -602,6 +612,11 @@ export default function DigitalTwin() {
     isLoading: isDetailLoading,
     isError: isDetailError,
   } = useSimulation(selectedId ?? '', { enabled: !!selectedId });
+
+  // Strategic Interpretation — LLM-grounded read of the brand's twin program
+  // (models, simulation evidence, intervention coverage); server-derived
+  // grounding, honest deterministic fallback when the LLM is unavailable.
+  const twinInsight = useDigitalTwinInsight();
 
   // What the Results tab shows: the inspected history detail takes priority,
   // otherwise the latest run result. Never a fabricated default.
@@ -708,6 +723,20 @@ export default function DigitalTwin() {
         />
       </div>
 
+      {/* Strategic Interpretation — what the twin evidence means for {brand} */}
+      <StrategicInsightCard
+        description={`Agentic read of ${brand}'s twin simulation program, grounded in its models, run history and intervention coverage`}
+        onGenerate={() => twinInsight.mutate({ brand })}
+        isLoading={twinInsight.isPending}
+        error={twinInsight.error?.message ?? null}
+        insight={twinInsight.data?.insight}
+        keyTakeaways={twinInsight.data?.key_takeaways}
+        grounding={twinInsight.data?.grounding}
+        isFallback={twinInsight.data?.is_fallback}
+        provenance={twinInsight.data?.provenance}
+        generatedAt={twinInsight.data?.generated_at}
+      />
+
       {/* Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Simulation Form */}
@@ -716,7 +745,12 @@ export default function DigitalTwin() {
             <Settings2 className="h-5 w-5 text-[var(--color-primary)]" />
             Configure Simulation
           </h3>
-          <SimulationForm onSubmit={handleRunSimulation} isLoading={isRunning} />
+          <SimulationForm
+            onSubmit={handleRunSimulation}
+            isLoading={isRunning}
+            brand={brand}
+            onBrandChange={setBrand}
+          />
         </div>
 
         {/* Results / History Panel */}

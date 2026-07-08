@@ -10,6 +10,7 @@ import type {
   ExecutiveBriefInsightRequest,
   HTEInsightRequest,
   FeedbackLearningInsightRequest,
+  DigitalTwinInsightRequest,
 } from '@/types/insights';
 
 const BASE = '/insights';
@@ -40,3 +41,6 @@ export const getHTEInsight = (r: HTEInsightRequest) =>
 
 export const getFeedbackLearningInsight = (r: FeedbackLearningInsightRequest) =>
   post<StrategicInsightResponse, FeedbackLearningInsightRequest>(`${BASE}/feedback-learning`, r);
+
+export const getDigitalTwinInsight = (r: DigitalTwinInsightRequest) =>
+  post<StrategicInsightResponse, DigitalTwinInsightRequest>(`${BASE}/digital-twin`, r);

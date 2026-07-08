@@ -109,3 +109,14 @@ export interface FeedbackLearningInsightRequest {
    */
   days?: number;
 }
+
+export interface DigitalTwinInsightRequest {
+  /**
+   * Brand (+ twin type) only: the grounding (twin-model inventory, simulation
+   * history, per-intervention effect coverage) is derived SERVER-SIDE —
+   * caller-posted figures are not accepted (same trust boundary as
+   * ExecutiveBriefInsightRequest).
+   */
+  brand: string;
+  twin_type?: string;
+}
