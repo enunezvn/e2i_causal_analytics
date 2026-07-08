@@ -137,9 +137,7 @@ def test_digital_twin_insight_fallback_is_server_derived(test_client, monkeypatc
             }
         ]
     )
-    monkeypatch.setattr(
-        "src.api.routes.digital_twin._get_twin_repo", AsyncMock(return_value=repo)
-    )
+    monkeypatch.setattr("src.api.routes.digital_twin._get_twin_repo", AsyncMock(return_value=repo))
     monkeypatch.setattr(
         "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
         AsyncMock(return_value={v: True for v, _ in INTERVENTION_CATALOG}),
