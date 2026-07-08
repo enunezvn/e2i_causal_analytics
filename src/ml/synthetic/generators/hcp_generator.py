@@ -154,6 +154,30 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
         df["territory_id"] = territory_ids
         df["sales_rep_id"] = [f"REP-{tid}" for tid in territory_ids]
 
+        # Field-force targeting substrate (WS3-BI-004 HCP Coverage). Previously
+        # NEITHER column was emitted: priority_tier landed NULL (KPI denominator
+        # empty -> incomputable) and coverage_status inherited its DB default
+        # TRUE for every row (a 100%-coverage artifact). priority_tier = patient-
+        # volume quintile (1 = highest-volume fifth) — deterministic given the
+        # volumes, so it consumes no RNG draws. coverage_status = tier-weighted
+        # engagement draw (the field force prioritizes tier 1-2), drawn from the
+        # seeded RNG AFTER all other columns so existing draws are unchanged.
+        if n > 0:
+            volume_rank = np.argsort(
+                np.argsort(-df["total_patient_volume"].to_numpy(), kind="stable"),
+                kind="stable",
+            )
+            tiers = (volume_rank * 5 // n) + 1
+        else:
+            tiers = np.array([], dtype=int)
+        df["priority_tier"] = tiers.astype(int)
+        coverage_p = np.select(
+            [tiers == 1, tiers == 2, tiers == 3, tiers == 4],
+            [0.95, 0.90, 0.70, 0.50],
+            default=0.30,
+        )
+        df["coverage_status"] = self._rng.random(n) < coverage_p
+
         self._log(f"Generated {len(df)} HCP profiles")
         return df
 

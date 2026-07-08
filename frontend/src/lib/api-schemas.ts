@@ -770,6 +770,21 @@ export const KPIListResponseWireSchema = z.object({
   causal_library: z.string().nullable().optional(),
 });
 
+/** Faithful mirror of `KPIHistoryCoverageEntry` (types/kpi.ts). */
+export const KPIHistoryCoverageEntryWireSchema = z.object({
+  kpi_id: z.string(),
+  brands: z.array(z.string()),
+  points: z.number().int().nonnegative(),
+  first_date: z.string().nullable().optional(),
+  last_date: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `KPIHistoryCoverageResponse` (types/kpi.ts). */
+export const KPIHistoryCoverageResponseWireSchema = z.object({
+  coverage: z.array(KPIHistoryCoverageEntryWireSchema),
+  total: z.number().int().nonnegative(),
+});
+
 /** Faithful mirror of `WorkstreamInfo` (types/kpi.ts). */
 export const WorkstreamInfoWireSchema = z.object({
   id: z.string(),

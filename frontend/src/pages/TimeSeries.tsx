@@ -18,7 +18,7 @@
  * @module pages/TimeSeries
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   LineChart,
   Line,
@@ -46,23 +46,51 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
-import { useKPIValue, useKPIHistory, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
+import {
+  useKPIValue,
+  useKPIHistory,
+  useKPIHistoryCoverage,
+  useKPIMetadata,
+  useKPIList,
+} from '@/hooks/api/use-kpi';
 
 // =============================================================================
 // CONSTANTS
 // =============================================================================
 
-// Default to WS3-BI-010 (Return on Investment): currently the only KPI with
-// real rows in `kpi_history`, so the page lands on a populated chart instead
-// of an empty-state. A backend PR is backfilling history for more KPIs.
+// Default to WS3-BI-010 (Return on Investment): the deepest real series in
+// `kpi_history`, so the page lands on a populated chart instead of an
+// empty-state.
 const DEFAULT_KPI_ID = 'WS3-BI-010';
+
+// Families deliberately NOT offered here:
+// - ws1_model_performance: model-metric trends are served from the walk-forward
+//   ml_performance_metrics table on /model-performance (with per-brand compare);
+//   duplicating them into kpi_history would blur provenance.
+// - causal_metrics: CM-* are per-analysis estimates carrying CIs/p-values — a
+//   platform "monthly history" is not defined for them.
+const HIDDEN_WORKSTREAMS = new Set(['ws1_model_performance', 'causal_metrics']);
+
+// Dropdown group order + display labels (only workstreams offered here).
+const WORKSTREAM_GROUPS: { key: string; label: string }[] = [
+  { key: 'ws1_data_quality', label: 'Data Quality (WS1)' },
+  { key: 'ws2_triggers', label: 'Trigger Performance (WS2)' },
+  { key: 'ws3_business', label: 'Business Impact (WS3)' },
+  { key: 'brand_specific', label: 'Brand-Specific' },
+];
+
+// Radix SelectItem forbids an empty-string value, so the global scope rides a
+// sentinel in the brand <Select> and is mapped back to '' for the API.
+const GLOBAL_BRAND = '__global__';
 
 const TIME_RANGES: { value: string; label: string; days: number }[] = [
   { value: '30d', label: '30 Days', days: 30 },
@@ -112,6 +140,8 @@ interface ChartPoint {
 
 function TimeSeries() {
   const [kpiId, setKpiId] = useState<string>(DEFAULT_KPI_ID);
+  // '' = global / all brands (the kpi_history scope convention).
+  const [brand, setBrand] = useState<string>('');
   const [timeRange, setTimeRange] = useState<string>('1825d');
 
   const days = rangeToDays(timeRange);
@@ -119,10 +149,32 @@ function TimeSeries() {
   // ---- KPI hooks ----
   const kpiList = useKPIList();
   const kpiMetadata = useKPIMetadata(kpiId);
-  const kpiValue = useKPIValue(kpiId); // current point-in-time value (status card)
+  // Coverage map: which KPIs have a real series, in which brand scopes.
+  const kpiCoverage = useKPIHistoryCoverage();
+  const coverageMap = useMemo(
+    () => new Map((kpiCoverage.data?.coverage ?? []).map((e) => [e.kpi_id, e])),
+    [kpiCoverage.data]
+  );
+  const coverageEntry = coverageMap.get(kpiId);
+
+  // Keep the brand scope valid for the selected KPI: per-brand-only KPIs
+  // (e.g. WS3-BI-007 NBRx — a global series is undefined by design) snap to
+  // their first brand instead of showing a false empty-state.
+  useEffect(() => {
+    const entry = coverageMap.get(kpiId);
+    if (!entry) {
+      setBrand('');
+      return;
+    }
+    if (!entry.brands.includes(brand)) {
+      setBrand(entry.brands.includes('') ? '' : (entry.brands[0] ?? ''));
+    }
+  }, [kpiId, coverageMap, brand]);
+
+  const kpiValue = useKPIValue(kpiId, brand || undefined); // point-in-time value (status card)
   // Real monthly history from the backend (kpi_history). Empty for point-in-time
   // KPIs — the chart then shows an honest empty-state, never a fabricated series.
-  const kpiHistory = useKPIHistory(kpiId);
+  const kpiHistory = useKPIHistory(kpiId, brand);
 
   // ---- Chart series ----
   const kpiSeries: ChartPoint[] = useMemo(() => {
@@ -177,6 +229,7 @@ function TimeSeries() {
   const handleExport = () => {
     const exportData = {
       kpiId,
+      brand,
       days,
       series: kpiSeries,
     };
@@ -192,18 +245,48 @@ function TimeSeries() {
   };
 
   // ---- Available KPI options ----
-  // Sorted alphabetically by display name: the registry order buried entries
-  // (e.g. "Return on Investment" sat at position 34 of 44), which read as
-  // "missing" in the dropdown.
-  const availableKpis = useMemo(() => {
-    const list = kpiList.data?.kpis ?? [];
+  // Grouped by workstream with the KPI ID visible (a name-only alphabetical
+  // list made whole families unidentifiable — "ROC-AUC" gives no hint it's
+  // WS1-MP). Model-performance and causal-metrics families are excluded here
+  // (see HIDDEN_WORKSTREAMS); entries without a series yet are labeled.
+  const kpiGroups = useMemo(() => {
+    const list = (kpiList.data?.kpis ?? []).filter(
+      (k) => !HIDDEN_WORKSTREAMS.has(String(k.workstream))
+    );
     if (list.length === 0) {
-      return [{ id: DEFAULT_KPI_ID, name: DEFAULT_KPI_ID }];
+      return [
+        {
+          key: 'fallback',
+          label: 'KPIs',
+          options: [{ id: DEFAULT_KPI_ID, name: DEFAULT_KPI_ID, hasHistory: true }],
+        },
+      ];
     }
-    return list
-      .map((k) => ({ id: k.id, name: k.name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [kpiList.data]);
+    const knownKeys = new Set(WORKSTREAM_GROUPS.map((g) => g.key));
+    const toOptions = (matches: typeof list) =>
+      matches
+        .map((k) => ({ id: k.id, name: k.name, hasHistory: coverageMap.has(k.id) }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+    return [
+      ...WORKSTREAM_GROUPS.map((group) => ({
+        ...group,
+        options: toOptions(list.filter((k) => String(k.workstream) === group.key)),
+      })),
+      // Registry-drift safety: a workstream this page doesn't know yet surfaces
+      // under "Other" instead of silently vanishing from the dropdown.
+      {
+        key: 'other',
+        label: 'Other',
+        options: toOptions(list.filter((k) => !knownKeys.has(String(k.workstream)))),
+      },
+    ].filter((group) => group.options.length > 0);
+  }, [kpiList.data, coverageMap]);
+
+  // Brand scopes available for the selected KPI (from real coverage, not
+  // guesses). No coverage entry -> only the global scope is offered.
+  const brandScopes = coverageEntry?.brands ?? [''];
+  const namedBrands = brandScopes.filter((b) => b !== '');
+  const hasGlobalScope = !coverageEntry || brandScopes.includes('');
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -227,17 +310,44 @@ function TimeSeries() {
         </div>
         <div className="flex items-center gap-3">
           <Select value={kpiId} onValueChange={setKpiId}>
-            <SelectTrigger className="w-[220px]" aria-label="kpi">
+            <SelectTrigger className="w-[320px]" aria-label="kpi">
               <SelectValue placeholder="Select KPI" />
             </SelectTrigger>
             <SelectContent>
-              {availableKpis.map((k) => (
-                <SelectItem key={k.id} value={k.id}>
-                  {k.name}
-                </SelectItem>
+              {kpiGroups.map((group) => (
+                <SelectGroup key={group.key}>
+                  <SelectLabel>{group.label}</SelectLabel>
+                  {group.options.map((k) => (
+                    <SelectItem key={k.id} value={k.id}>
+                      <span className="font-mono text-xs text-muted-foreground">{k.id}</span>{' '}
+                      {k.name}
+                      {!k.hasHistory && (
+                        <span className="text-xs text-muted-foreground"> · no history yet</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectContent>
           </Select>
+          {(namedBrands.length > 0 || !hasGlobalScope) && (
+            <Select
+              value={brand === '' ? GLOBAL_BRAND : brand}
+              onValueChange={(v) => setBrand(v === GLOBAL_BRAND ? '' : v)}
+            >
+              <SelectTrigger className="w-[150px]" aria-label="brand">
+                <SelectValue placeholder="Brand" />
+              </SelectTrigger>
+              <SelectContent>
+                {hasGlobalScope && <SelectItem value={GLOBAL_BRAND}>All Brands</SelectItem>}
+                {namedBrands.map((b) => (
+                  <SelectItem key={b} value={b}>
+                    {b}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select value={timeRange} onValueChange={setTimeRange}>
             <SelectTrigger className="w-[120px]" aria-label="time range">
               <SelectValue placeholder="Time range" />
@@ -291,29 +401,31 @@ function TimeSeries() {
         {/* Summary cards. Every card shows the real `sparklineSeries` trend
             sparkline (never the KPICard SAMPLE_SPARKLINE fallback, which would
             render a fixture array). */}
+        {/* No-series honesty: with 0 points every stat is undefined — show an
+            em-dash, never a fabricated-looking 0 (or a green badge on it). */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <KPICard
             title="Current Value"
-            value={summary.current.toLocaleString()}
+            value={summary.count > 0 ? summary.current.toLocaleString() : '—'}
             description="Latest value"
             sparklineData={sparklineSeries}
           />
           <KPICard
             title="Average"
-            value={Math.round(summary.average * 1000) / 1000 + ''}
+            value={summary.count > 0 ? Math.round(summary.average * 1000) / 1000 + '' : '—'}
             description="Over period"
             sparklineData={sparklineSeries}
           />
           <KPICard
             title="Maximum"
-            value={summary.max.toLocaleString()}
+            value={summary.count > 0 ? summary.max.toLocaleString() : '—'}
             description="Peak value"
-            status="healthy"
+            status={summary.count > 0 ? 'healthy' : undefined}
             sparklineData={sparklineSeries}
           />
           <KPICard
             title="Minimum"
-            value={summary.min.toLocaleString()}
+            value={summary.count > 0 ? summary.min.toLocaleString() : '—'}
             description="Lowest value"
             sparklineData={sparklineSeries}
           />
@@ -347,11 +459,13 @@ function TimeSeries() {
                 className="flex h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground"
               >
                 <Activity className="h-8 w-8 opacity-40" />
-                <p className="font-medium">No historical data available for this KPI</p>
+                <p className="font-medium">No historical data for this KPI in this scope</p>
                 <p className="max-w-md text-xs">
-                  History is captured only for KPIs with an honest temporal source, and
-                  this KPI doesn&apos;t have one yet — only its point-in-time value is
-                  available. See the current status below.
+                  {coverageEntry && !brandScopes.includes(brand)
+                    ? 'This KPI has no series for the selected brand scope — pick another brand above.'
+                    : coverageEntry
+                      ? 'The series exists but has no points inside the selected time range — widen the range above.'
+                      : 'Point-in-time KPIs accrue real history from weekly live captures — the series grows one honest point per week; no past values are fabricated. See the current status below.'}
                 </p>
               </div>
             ) : (
@@ -367,7 +481,9 @@ function TimeSeries() {
                     dataKey="value"
                     stroke="var(--color-chart-2)"
                     strokeWidth={2}
-                    dot={false}
+                    // A young captured series (1-2 weekly points) is invisible as a
+                    // dot-less line — render dots until the line carries the shape.
+                    dot={kpiSeries.length <= 24 ? { r: 3 } : false}
                     name={seriesLabel}
                   />
                 </LineChart>

@@ -86,6 +86,24 @@ PYTHONPATH="$PROJECT_ROOT" \
 
 echo "=== kpi_history backfill done $(date -Is) ==="
 
+# Present-state KPIs (coverage/eligibility, non-recastable windows) can't be
+# backfilled honestly — record this week's live reading instead (append-only;
+# same calculator path as the API). After a --full reseed the old captures
+# describe a substrate that no longer exists, so purge them first.
+echo "=== kpi_history weekly capture start $(date -Is) ==="
+
+if [[ "$MODE" == "--anchor-to-now" ]]; then
+    PYTHONPATH="$PROJECT_ROOT" \
+        .venv/bin/dotenv -f .env run -- \
+        .venv/bin/python -m src.kpi.history_capture --purge
+fi
+
+PYTHONPATH="$PROJECT_ROOT" \
+    .venv/bin/dotenv -f .env run -- \
+    .venv/bin/python -m src.kpi.history_capture
+
+echo "=== kpi_history weekly capture done $(date -Is) ==="
+
 # Retrain the 12 gold-standard staging models on the substrate that just grew
 # (or, in --full recovery mode, was rewritten — after which the old fits
 # describe data that no longer exists, so retraining is not optional in

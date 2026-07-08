@@ -121,6 +121,9 @@ TABLE_COLUMNS = {
         # Sales territory + rep (territory_metrics ETL groups on territory_id).
         "territory_id",
         "sales_rep_id",
+        # Field-force targeting (WS3-BI-004 HCP Coverage substrate).
+        "priority_tier",
+        "coverage_status",
         "is_synthetic",
     ],
     "patient_journeys": [
