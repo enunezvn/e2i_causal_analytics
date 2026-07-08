@@ -330,3 +330,19 @@ export interface KPIHistoryResponse {
   count: number;
   points: KPIHistoryPoint[];
 }
+
+/** History coverage for one KPI: which scopes have a real series. */
+export interface KPIHistoryCoverageEntry {
+  kpi_id: string;
+  /** Brand scopes with points; '' = global. Per-brand-only KPIs have no ''. */
+  brands: string[];
+  points: number;
+  first_date?: string | null;
+  last_date?: string | null;
+}
+
+/** Coverage map for the registry — KPIs absent here have NO history. */
+export interface KPIHistoryCoverageResponse {
+  coverage: KPIHistoryCoverageEntry[];
+  total: number;
+}

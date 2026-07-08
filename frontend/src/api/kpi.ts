@@ -22,6 +22,7 @@ import {
   KPIMetadataWireSchema,
   KPIResultWireSchema,
   KPIHealthResponseWireSchema,
+  KPIHistoryCoverageResponseWireSchema,
 } from '@/lib/api-schemas';
 import type {
   BatchKPICalculationRequest,
@@ -30,6 +31,7 @@ import type {
   CacheInvalidationResponse,
   KPICalculationRequest,
   KPIHealthResponse,
+  KPIHistoryCoverageResponse,
   KPIHistoryResponse,
   KPIListParams,
   KPIListResponse,
@@ -166,6 +168,16 @@ export async function getKPIHistory(
   return get<KPIHistoryResponse>(`${KPI_BASE}/${encodeURIComponent(kpiId)}/history`, {
     brand,
     region,
+  });
+}
+
+/**
+ * Get the history coverage map: which KPIs have a real series, in which brand
+ * scopes ('' = global; per-brand-only KPIs such as NBRx carry no '' scope).
+ */
+export async function getKPIHistoryCoverage(): Promise<KPIHistoryCoverageResponse> {
+  return get<KPIHistoryCoverageResponse>(`${KPI_BASE}/history/coverage`, undefined, {
+    schema: KPIHistoryCoverageResponseWireSchema,
   });
 }
 

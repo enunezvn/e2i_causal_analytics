@@ -23,6 +23,7 @@ import {
   getKPIMetadata,
   getKPIValue,
   getKPIHistory,
+  getKPIHistoryCoverage,
   calculateKPI,
   batchCalculateKPIs,
   invalidateKPICache,
@@ -36,6 +37,7 @@ import type {
   CacheInvalidationResponse,
   KPICalculationRequest,
   KPIHealthResponse,
+  KPIHistoryCoverageResponse,
   KPIHistoryResponse,
   KPIListParams,
   KPIListResponse,
@@ -244,6 +246,21 @@ export function useKPIHistory(
     queryFn: () => getKPIHistory(kpiId, brand, region),
     staleTime: 10 * 60 * 1000, // 10 minutes — history is stable
     enabled: !!kpiId,
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch the history coverage map (which KPIs chart, in which brand
+ * scopes). One request backs the whole Time-Series dropdown + brand selector.
+ */
+export function useKPIHistoryCoverage(
+  options?: Omit<UseQueryOptions<KPIHistoryCoverageResponse, Error>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery({
+    queryKey: [...queryKeys.kpi.all(), 'history-coverage'] as const,
+    queryFn: getKPIHistoryCoverage,
+    staleTime: 10 * 60 * 1000, // 10 minutes — changes only when backfill/capture runs
     ...options,
   });
 }
