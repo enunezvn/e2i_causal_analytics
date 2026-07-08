@@ -543,6 +543,129 @@ class TestKPIHistoryEndpoint:
         assert body["points"] == []
 
 
+class TestKPIHistoryCoverageEndpoint:
+    """GET /api/kpis/history/coverage."""
+
+    def test_coverage_groups_scopes_per_kpi(self):
+        rows = [
+            {
+                "kpi_id": "WS3-BI-007",
+                "brand": "Kisqali",
+                "points": 35,
+                "first_date": "2023-08-01",
+                "last_date": "2026-06-01",
+            },
+            {
+                "kpi_id": "WS3-BI-007",
+                "brand": "Fabhalta",
+                "points": 35,
+                "first_date": "2023-09-01",
+                "last_date": "2026-05-01",
+            },
+            {
+                "kpi_id": "WS3-BI-010",
+                "brand": "",
+                "points": 163,
+                "first_date": "2013-01-01",
+                "last_date": "2026-07-01",
+            },
+        ]
+        fake_repo = SimpleNamespace(get_coverage=AsyncMock(return_value=rows))
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            resp = client.get("/api/kpis/history/coverage")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        by_id = {e["kpi_id"]: e for e in body["coverage"]}
+        # Per-brand-only KPI: no '' scope, brands sorted, points summed,
+        # date span = min/max across scopes.
+        nbrx = by_id["WS3-BI-007"]
+        assert nbrx["brands"] == ["Fabhalta", "Kisqali"]
+        assert nbrx["points"] == 70
+        assert nbrx["first_date"] == "2023-08-01"
+        assert nbrx["last_date"] == "2026-06-01"
+        # Global KPI keeps its '' scope visible.
+        assert by_id["WS3-BI-010"]["brands"] == [""]
+
+    def test_coverage_empty_when_no_history(self):
+        fake_repo = SimpleNamespace(get_coverage=AsyncMock(return_value=[]))
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            resp = client.get("/api/kpis/history/coverage")
+        assert resp.status_code == 200
+        assert resp.json() == {"coverage": [], "total": 0}
+
+
+class TestWeeklyCapture:
+    """src.kpi.history_capture — append-only capture of present-state KPIs."""
+
+    def _result(self, value, status="good", error=None):
+        return SimpleNamespace(value=value, status=SimpleNamespace(value=status), error=error)
+
+    def test_capture_writes_todays_point_and_skips_failures(self):
+        from src.kpi import history_capture
+
+        def fake_calculate(kpi_id, use_cache=True, force_refresh=False):
+            if kpi_id == "WS3-BI-004":
+                return self._result(None, error="KPI WS3-BI-004 unavailable: no data")
+            return self._result(0.87)
+
+        calculator = SimpleNamespace(calculate=fake_calculate)
+        upserted: list = []
+
+        async def fake_upsert(points):
+            upserted.extend(points)
+            return len(points)
+
+        fake_repo = SimpleNamespace(upsert_points=fake_upsert)
+        with (
+            patch("src.api.routes.kpi.get_kpi_calculator", return_value=calculator),
+            patch(
+                "src.repositories.kpi_history.get_kpi_history_repository",
+                new=AsyncMock(return_value=fake_repo),
+            ),
+        ):
+            summary = asyncio.run(history_capture.run_capture(["WS1-DQ-001", "WS3-BI-004"]))
+
+        # The healthy KPI wrote exactly one append-only point for today.
+        assert summary["written"] == {"WS1-DQ-001": 0.87}
+        assert len(upserted) == 1
+        point = upserted[0]
+        assert point["kpi_id"] == "WS1-DQ-001"
+        assert point["source"] == "weekly_capture"
+        assert point["metric_date"] == summary["date"]
+        assert point["brand"] == "" and point["region"] == ""
+        assert point["is_synthetic"] is True
+        # The failing KPI wrote NOTHING and surfaced its error honestly.
+        assert "WS3-BI-004" in summary["errors"]
+        assert all(p["kpi_id"] != "WS3-BI-004" for p in upserted)
+
+    def test_purge_deletes_only_weekly_capture_source(self):
+        from src.kpi import history_capture
+
+        deleted_pairs: list = []
+
+        async def fake_delete(kpi_id, source):
+            deleted_pairs.append((kpi_id, source))
+            return 1
+
+        fake_repo = SimpleNamespace(delete_source=fake_delete)
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            asyncio.run(history_capture.purge_captures())
+
+        assert deleted_pairs, "purge must target every capture KPI"
+        assert {s for _, s in deleted_pairs} == {"weekly_capture"}
+        assert {k for k, _ in deleted_pairs} == set(history_capture.CAPTURE_KPI_IDS)
+
+
 class TestROIHistoryHandler:
     """The ROI backfill handler aggregates real business_metrics.roi monthly."""
 
