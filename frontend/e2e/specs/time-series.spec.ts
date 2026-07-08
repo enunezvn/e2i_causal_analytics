@@ -131,13 +131,19 @@ async function stubTimeSeriesEndpoints(page: Page): Promise<void> {
   await page.route(/\/api\/kpis\/[^/]+\/history(?:\?|$)/, async (route: Route) => {
     const url = new URL(route.request().url())
     const kpiId = decodeURIComponent(url.pathname.split('/').slice(-2)[0] ?? 'WS3-BI-010')
+    // Brand-scoped series differ by a fixed offset so the Compare-Brands
+    // overlay draws three distinguishable lines (and echoes the scope back,
+    // matching the real endpoint's response contract).
+    const brand = url.searchParams.get('brand') ?? ''
+    const brandOffset =
+      { Fabhalta: 0, Kisqali: 0.3, Remibrutinib: 0.6 }[brand] ?? 0
     const now = Date.now()
     const points = []
     for (let i = 23; i >= 0; i--) {
       const d = new Date(now - i * 30 * 24 * 60 * 60 * 1000)
       points.push({
         metric_date: d.toISOString().slice(0, 10),
-        value: Number((1.8 + 0.05 * Math.sin(i / 3)).toFixed(4)),
+        value: Number((1.8 + brandOffset + 0.05 * Math.sin(i / 3)).toFixed(4)),
         status: 'warning',
       })
     }
@@ -146,7 +152,7 @@ async function stubTimeSeriesEndpoints(page: Page): Promise<void> {
       contentType: 'application/json',
       body: JSON.stringify({
         kpi_id: kpiId,
-        brand: '',
+        brand,
         region: '',
         count: points.length,
         points,
@@ -290,6 +296,33 @@ test.describe('Time Series Page', () => {
       await expect(page.getByRole('option', { name: /All Brands/i })).toHaveCount(0)
       await expect(page.getByRole('option', { name: 'Kisqali' })).toBeVisible()
       await page.keyboard.press('Escape')
+    })
+
+    test('Compare Brands overlays one line per brand scope', async ({ page }) => {
+      // Offered only for KPIs with ≥2 named brand scopes in real coverage —
+      // the global-only default KPI has nothing to compare.
+      const toggle = page.getByRole('button', { name: /compare brands/i })
+      await expect(toggle).toHaveCount(0)
+
+      await timeSeriesPage.selectKpi('New-to-Brand')
+      await expect(toggle).toBeVisible()
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+
+      // One legend entry per covered brand scope.
+      const legend = page.locator('.recharts-legend-wrapper')
+      for (const brand of ['Fabhalta', 'Kisqali', 'Remibrutinib']) {
+        await expect(legend.getByText(brand)).toBeVisible()
+      }
+      // The single-brand pick is inert and the single-scope status card is
+      // hidden while comparing.
+      await expect(page.getByRole('combobox', { name: /^brand$/i })).toBeDisabled()
+      await expect(page.getByText('Current KPI Status')).toHaveCount(0)
+
+      // Toggling off restores the single-series view.
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+      await expect(page.getByText('Current KPI Status')).toBeVisible()
     })
   })
 

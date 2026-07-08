@@ -22,6 +22,7 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIValue: vi.fn(),
   useKPIHistory: vi.fn(),
   useKPIHistoryCoverage: vi.fn(),
+  useKPIHistoryMultiBrand: vi.fn(),
   useKPIMetadata: vi.fn(),
   useKPIList: vi.fn(),
 }));
@@ -30,6 +31,7 @@ import {
   useKPIValue,
   useKPIHistory,
   useKPIHistoryCoverage,
+  useKPIHistoryMultiBrand,
   useKPIMetadata,
   useKPIList,
 } from '@/hooks/api/use-kpi';
@@ -37,6 +39,9 @@ import {
 const mockUseKPIValue = useKPIValue as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIHistory = useKPIHistory as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIHistoryCoverage = useKPIHistoryCoverage as unknown as ReturnType<typeof vi.fn>;
+const mockUseKPIHistoryMultiBrand = useKPIHistoryMultiBrand as unknown as ReturnType<
+  typeof vi.fn
+>;
 const mockUseKPIMetadata = useKPIMetadata as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIList = useKPIList as unknown as ReturnType<typeof vi.fn>;
 
@@ -189,7 +194,51 @@ beforeEach(() => {
     refetch: vi.fn(),
     isRefetching: false,
   });
+  // Compare mode off by default -> the page calls this with [] (no queries).
+  mockUseKPIHistoryMultiBrand.mockImplementation((_kpiId: string, brands: string[]) =>
+    brands.map(() => ({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+      isRefetching: false,
+    })),
+  );
 });
+
+// Per-brand NBRx series for the compare-mode tests. May 2026 deliberately has
+// no Remibrutinib point (the merged row must OMIT the cell, not write 0).
+const compareBrandPoints: Record<string, { metric_date: string; value: number }[]> = {
+  Fabhalta: [
+    { metric_date: '2026-04-01', value: 100 },
+    { metric_date: '2026-05-01', value: 110 },
+  ],
+  Kisqali: [
+    { metric_date: '2026-05-01', value: 200 },
+    { metric_date: '2026-06-01', value: 210 },
+  ],
+  Remibrutinib: [{ metric_date: '2026-06-01', value: 300 }],
+};
+
+function mockComparableHistories() {
+  mockUseKPIHistoryMultiBrand.mockImplementation((kpiId: string, brands: string[]) =>
+    brands.map((b) => ({
+      data: {
+        kpi_id: kpiId,
+        brand: b,
+        region: '',
+        count: compareBrandPoints[b]?.length ?? 0,
+        points: compareBrandPoints[b] ?? [],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+      isRefetching: false,
+    })),
+  );
+}
 
 describe('TimeSeries (KPI-history home)', () => {
   it('renders the KPI-focused header with no mode tabs', () => {
@@ -294,6 +343,94 @@ describe('TimeSeries (KPI-history home)', () => {
       const calls = mockUseKPIHistory.mock.calls;
       expect(calls[calls.length - 1]?.[1]).toBe('Kisqali');
     });
+  });
+
+  it('Compare Brands is offered only for KPIs with ≥2 named brand scopes', async () => {
+    const user = userEvent.setup();
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // Default KPI (WS3-BI-010) is global-only -> nothing to compare.
+    expect(screen.queryByRole('button', { name: /compare brands/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('combobox', { name: /^kpi$/i }));
+    await user.click(await screen.findByRole('option', { name: /New-to-Brand/ }));
+
+    expect(await screen.findByRole('button', { name: /compare brands/i })).toBeInTheDocument();
+  });
+
+  it('toggling Compare Brands overlays every brand scope and swaps the cards', async () => {
+    const user = userEvent.setup();
+    mockComparableHistories();
+    const { container } = render(<TimeSeries />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('combobox', { name: /^kpi$/i }));
+    await user.click(await screen.findByRole('option', { name: /New-to-Brand/ }));
+
+    const toggle = await screen.findByRole('button', { name: /compare brands/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    // The multi-brand hook is fed every named brand scope from coverage.
+    await waitFor(() => {
+      const calls = mockUseKPIHistoryMultiBrand.mock.calls;
+      expect(calls[calls.length - 1]).toEqual([
+        'WS3-BI-007',
+        ['Fabhalta', 'Kisqali', 'Remibrutinib'],
+      ]);
+    });
+
+    // Per-brand latest-value cards replace the single-series stat cards.
+    expect(screen.getByText('110')).toBeInTheDocument(); // Fabhalta latest
+    expect(screen.getByText('210')).toBeInTheDocument(); // Kisqali latest
+    expect(screen.getByText('300')).toBeInTheDocument(); // Remibrutinib latest
+    expect(screen.queryByText('Average')).not.toBeInTheDocument();
+    expect(screen.queryByText('Data Points')).not.toBeInTheDocument();
+
+    // Single-brand pick is inert while comparing; single-scope status hidden.
+    expect(screen.getByRole('combobox', { name: /^brand$/i })).toBeDisabled();
+    expect(screen.queryByText('Current KPI Status')).not.toBeInTheDocument();
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+
+    // Toggling off restores the single-series view.
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Data Points')).toBeInTheDocument();
+    expect(screen.getByText('Current KPI Status')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /^brand$/i })).not.toBeDisabled();
+  });
+
+  it('compare-mode export carries per-brand rows with absent (not zero) gaps', async () => {
+    const user = userEvent.setup();
+    mockComparableHistories();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {});
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('combobox', { name: /^kpi$/i }));
+    await user.click(await screen.findByRole('option', { name: /New-to-Brand/ }));
+    await user.click(await screen.findByRole('button', { name: /compare brands/i }));
+    await user.click(screen.getByRole('button', { name: /export/i }));
+
+    expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
+    const blob = mockCreateObjectURL.mock.calls[0]?.[0] as Blob;
+    const text = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+    const payload = JSON.parse(text);
+    expect(payload.kpiId).toBe('WS3-BI-007');
+    expect(payload.brands).toEqual(['Fabhalta', 'Kisqali', 'Remibrutinib']);
+    // Merged rows: date-keyed, one numeric cell per brand that has a point.
+    const may = payload.series.find((r: { date: string }) => r.date === '2026-05-01');
+    expect(may).toBeDefined();
+    expect(may.Fabhalta).toBe(110);
+    expect(may.Kisqali).toBe(200);
+    expect(may).not.toHaveProperty('Remibrutinib'); // gap stays a gap
+    clickSpy.mockRestore();
   });
 
   it('time-range filter trims the KPI history series (not just UI state)', async () => {
@@ -519,9 +656,11 @@ describe('TimeSeries (KPI-history home)', () => {
     const source = fs.readFileSync(sourcePath, 'utf-8');
 
     // The mode moved to the Model Performance page (sibling PR) — none of its
-    // wiring may survive here.
+    // wiring may survive here. `mergeBrandSeries` is deliberately NOT on this
+    // list anymore: the KPI-mode "Compare Brands" overlay legitimately reuses
+    // that shared pure helper to align per-brand kpi_history series.
     expect(source).not.toMatch(/usePerformanceTrend/);
-    expect(source).not.toMatch(/mergeBrandSeries|meanPerDate/);
+    expect(source).not.toMatch(/meanPerDate/);
     expect(source).not.toMatch(/ts-cohort|ts-brand/);
     expect(source).not.toMatch(/GOLDSTD_BRANDS|BRAND_OPTIONS|COHORT_OPTIONS|METRIC_OPTIONS/);
     expect(source).not.toMatch(/TabsTrigger|TabsContent|TabsList/);

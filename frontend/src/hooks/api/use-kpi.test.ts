@@ -16,6 +16,8 @@ vi.mock('@/api/kpi', () => ({
   getWorkstreams: vi.fn(),
   getKPIMetadata: vi.fn(),
   getKPIValue: vi.fn(),
+  getKPIHistory: vi.fn(),
+  getKPIHistoryCoverage: vi.fn(),
   calculateKPI: vi.fn(),
   batchCalculateKPIs: vi.fn(),
   invalidateKPICache: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('@/lib/query-client', () => ({
       workstreams: () => ['e2i', 'kpi', 'workstreams'] as const,
       health: () => ['e2i', 'kpi', 'health'] as const,
       detail: (id: string) => ['e2i', 'kpi', 'detail', id] as const,
+      history: (id: string, brand: string) => ['e2i', 'kpi', 'history', id, brand] as const,
     },
   },
   queryClient: new QueryClient({
@@ -48,6 +51,7 @@ import {
   useKPIHealth,
   useKPIMetadata,
   useKPIValue,
+  useKPIHistoryMultiBrand,
   useCalculateKPI,
   useBatchCalculateKPIs,
   useInvalidateKPICache,
@@ -395,6 +399,65 @@ describe('useKPIValue', () => {
 
     expect(result.current.fetchStatus).toBe('idle');
     expect(kpiApi.getKPIValue).not.toHaveBeenCalled();
+  });
+});
+
+describe('useKPIHistoryMultiBrand', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const historyFor = (kpiId: string, brand?: string) => ({
+    kpi_id: kpiId,
+    brand: brand ?? '',
+    region: '',
+    count: 1,
+    points: [{ metric_date: '2026-06-01', value: brand === 'Kisqali' ? 2 : 1 }],
+  });
+
+  it('fetches one history per brand, results in brand order', async () => {
+    vi.mocked(kpiApi.getKPIHistory).mockImplementation(async (kpiId, brand) =>
+      historyFor(kpiId, brand)
+    );
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => useKPIHistoryMultiBrand('WS3-BI-007', ['Fabhalta', 'Kisqali']),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current).toHaveLength(2);
+      expect(result.current.every((q) => q.isSuccess)).toBe(true);
+    });
+
+    expect(result.current[0].data?.brand).toBe('Fabhalta');
+    expect(result.current[1].data?.brand).toBe('Kisqali');
+    expect(result.current[1].data?.points[0]?.value).toBe(2);
+    expect(kpiApi.getKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Fabhalta');
+    expect(kpiApi.getKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Kisqali');
+  });
+
+  it('runs no queries for an empty brand list', () => {
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useKPIHistoryMultiBrand('WS3-BI-007', []), {
+      wrapper,
+    });
+
+    expect(result.current).toEqual([]);
+    expect(kpiApi.getKPIHistory).not.toHaveBeenCalled();
+  });
+
+  it('is disabled when kpiId is empty', () => {
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useKPIHistoryMultiBrand('', ['Fabhalta']), {
+      wrapper,
+    });
+
+    expect(result.current[0]?.fetchStatus).toBe('idle');
+    expect(kpiApi.getKPIHistory).not.toHaveBeenCalled();
   });
 });
 
