@@ -5,9 +5,10 @@ labeled frame for DIRECT causal estimation (paired with ``CohortCausalEstimator`
 NOT a region-only ATE laundered through a synthetic injected-effect frame. These tests
 pin: (1) the retained ``region_standardized_ate`` baseline still behaves, (2) the
 provider returns the raw cohort frame (no synthetic handoff, ground_truth_ate=None),
-(3) only the IDENTIFIED intervention (digital_engagement) is estimable — call_frequency
-is now honestly unavailable, (4) the end-to-end estimate reports cohort provenance with
-an honest CI.
+(3) only interventions whose planted treatment CHANNEL is present in the cohort are
+estimable — unknown levers and missing channels are honestly unavailable (revision 2
+of the DGP plants a channel for every catalog intervention, incl. call_frequency),
+(4) the end-to-end estimate reports cohort provenance with an honest CI.
 """
 
 import numpy as np
@@ -96,19 +97,30 @@ def test_cohort_provider_returns_raw_cohort_frame():
     assert frame.df is cohort  # raw cohort, not a synthetic resample
 
 
-def test_cohort_provider_non_mappable_intervention_fails_closed():
+def test_cohort_provider_unknown_intervention_fails_closed():
+    provider = CohortEffectDataProvider(_make_cohort())
+    with pytest.raises(EffectDataUnavailable):
+        provider.get_training_frame("not_a_real_lever", brand="X", twin_type="hcp")
+
+
+def test_cohort_provider_missing_channel_column_fails_closed():
+    """email_campaign is estimable in the revision-2 DGP, but THIS cohort lacks its
+    planted column (email_campaign_count) — e.g. pre-backfill, or RWD with partial
+    channel coverage -> honest unavailable, never a guessed effect."""
     provider = CohortEffectDataProvider(_make_cohort())
     with pytest.raises(EffectDataUnavailable):
         provider.get_training_frame("email_campaign", brand="X", twin_type="hcp")
 
 
-def test_cohort_provider_call_frequency_now_unavailable():
-    """call_frequency is an exposure CORRELATE, explicitly NOT in the causal path, so
-    call_frequency_increase is no longer identified -> honest unavailable (was estimable
-    in the prior region-only version)."""
+def test_cohort_provider_call_frequency_estimable_from_its_own_channel():
+    """Revision 2 re-plants call_frequency as a genuine treatment channel, so
+    call_frequency_increase is identified again — from ITS OWN column (not
+    engagement's)."""
     provider = CohortEffectDataProvider(_make_cohort())
-    with pytest.raises(EffectDataUnavailable):
-        provider.get_training_frame("call_frequency_increase", brand="Kisqali", twin_type="hcp")
+    frame = provider.get_training_frame("call_frequency_increase", brand="Kisqali", twin_type="hcp")
+    assert frame.treatment_var == "call_frequency"
+    assert frame.outcome_var == "conversion_rate"
+    assert frame.ground_truth_ate is None
 
 
 @pytest.mark.slow
