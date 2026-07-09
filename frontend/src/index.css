@@ -4,6 +4,158 @@
    E2I Causal Analytics - Base Styles
    ============================================ */
 
+/* Theme tokens registered with Tailwind. Tailwind v4 only generates semantic
+   color utilities (bg-background, text-muted-foreground, bg-muted/50,
+   border-border, ...) for tokens declared inside @theme — a plain :root block
+   leaves every one of those classes as a silent no-op (the chat pane rendered
+   transparent because bg-background emitted no CSS).
+
+   Token values MUST be var() references to the runtime palette below, not
+   literals (`inline` substitutes them into utilities). With literal values
+   Tailwind bakes opacity-modified utilities into static hex — bg-muted/50
+   became `#f1f5f980` — freezing the light palette into dark mode. With var()
+   values they compile to color-mix(...var(--muted)...), which re-resolves
+   when ThemeManager toggles .dark on <html>. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-hover: var(--secondary-hover);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+}
+
+/* Runtime palette — light theme. .dark below overrides these on <html>. */
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a;
+  /* Muted is a SURFACE color (shadcn semantics: bg-muted panels, skeleton
+     pulses, table-header tints) — muted TEXT is --muted-foreground.
+     Was #64748b (slate-500), which predated bg-muted actually rendering. */
+  --muted: #f1f5f9;
+  /* slate-500 (was slate-400 #94a3b8 → only 2.56:1 on white, failed WCAG AA);
+     #64748b is ~4.6:1 on white. */
+  --muted-foreground: #5b6473;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #3b82f6;
+
+  /* Primary colors */
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --primary-hover: #2563eb;
+
+  /* Secondary colors */
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --secondary-hover: #e2e8f0;
+
+  /* Accent colors */
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+
+  /* Destructive colors */
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+
+  /* Success colors */
+  --success: #22c55e;
+  --success-foreground: #ffffff;
+
+  /* Warning colors */
+  --warning: #f59e0b;
+  --warning-foreground: #ffffff;
+
+  /* Card styles */
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+
+  /* Popover styles */
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+
+  /* Sidebar colors */
+  --sidebar: #f8fafc;
+  --sidebar-foreground: #334155;
+  --sidebar-hover: #f1f5f9;
+
+  /* Chart colors for data visualization */
+  --chart-1: #3b82f6;
+  --chart-2: #22c55e;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #8b5cf6;
+  --chart-6: #06b6d4;
+
+  /* Legacy --color-* aliases. ~1100 call sites reference var(--color-*)
+     directly (arbitrary-value classes, Recharts stroke/fill props, inline
+     styles) — keep them resolving without a repo-wide rename. New code may
+     use either spelling; utilities are preferred over raw var() where one
+     exists. Aliases re-resolve per element, so .dark works through them. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-hover: var(--secondary-hover);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+}
+
 /* CSS Custom Properties for theming */
 :root {
   /* Typography */
@@ -32,63 +184,14 @@
   --transition-normal: 200ms ease-in-out;
   --transition-slow: 300ms ease-in-out;
 
-  /* Light theme colors */
-  --color-background: #ffffff;
-  --color-foreground: #0f172a;
-  --color-muted: #64748b;
-  /* slate-500 (was slate-400 #94a3b8 → only 2.56:1 on white, failed WCAG AA);
-     #64748b is ~4.6:1 on white. */
-  --color-muted-foreground: #5b6473;
-  --color-border: #e2e8f0;
-  --color-input: #e2e8f0;
-  --color-ring: #3b82f6;
-
-  /* Primary colors */
-  --color-primary: #3b82f6;
-  --color-primary-foreground: #ffffff;
-  --color-primary-hover: #2563eb;
-
-  /* Secondary colors */
-  --color-secondary: #f1f5f9;
-  --color-secondary-foreground: #0f172a;
-  --color-secondary-hover: #e2e8f0;
-
-  /* Accent colors */
-  --color-accent: #f1f5f9;
-  --color-accent-foreground: #0f172a;
-
-  /* Destructive colors */
-  --color-destructive: #ef4444;
-  --color-destructive-foreground: #ffffff;
-
-  /* Success colors */
-  --color-success: #22c55e;
-  --color-success-foreground: #ffffff;
-
-  /* Warning colors */
-  --color-warning: #f59e0b;
-  --color-warning-foreground: #ffffff;
-
-  /* Card styles */
-  --color-card: #ffffff;
-  --color-card-foreground: #0f172a;
-
-  /* Popover styles */
-  --color-popover: #ffffff;
-  --color-popover-foreground: #0f172a;
-
-  /* Sidebar colors */
-  --color-sidebar: #f8fafc;
-  --color-sidebar-foreground: #334155;
-  --color-sidebar-hover: #f1f5f9;
-
-  /* Chart colors for data visualization */
-  --color-chart-1: #3b82f6;
-  --color-chart-2: #22c55e;
-  --color-chart-3: #f59e0b;
-  --color-chart-4: #ef4444;
-  --color-chart-5: #8b5cf6;
-  --color-chart-6: #06b6d4;
+  /* Legacy text-tier aliases. 124 call sites reference
+     var(--color-text-primary|secondary|tertiary) from an older palette naming
+     that was never defined here, so they silently fell back to inherited
+     color. Map them onto the current palette; keep as plain vars (not @theme)
+     so they don't mint new utility names. var() chains re-resolve under .dark. */
+  --color-text-primary: var(--foreground);
+  --color-text-secondary: var(--muted-foreground);
+  --color-text-tertiary: var(--muted-foreground);
 
   /* Shadow values */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
@@ -116,40 +219,41 @@
     color-scheme: dark;
 
     /* Dark theme colors */
-    --color-background: #0f172a;
-    --color-foreground: #f8fafc;
-    --color-muted: #475569;
-    --color-muted-foreground: #94a3b8;
-    --color-border: #334155;
-    --color-input: #334155;
-    --color-ring: #3b82f6;
+    --background: #0f172a;
+    --foreground: #f8fafc;
+    /* Surface color — see @theme note. Matches secondary/card dark. */
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --border: #334155;
+    --input: #334155;
+    --ring: #3b82f6;
 
     /* Primary colors (adjusted for dark) */
-    --color-primary: #60a5fa;
-    --color-primary-foreground: #0f172a;
-    --color-primary-hover: #3b82f6;
+    --primary: #60a5fa;
+    --primary-foreground: #0f172a;
+    --primary-hover: #3b82f6;
 
     /* Secondary colors */
-    --color-secondary: #1e293b;
-    --color-secondary-foreground: #f8fafc;
-    --color-secondary-hover: #334155;
+    --secondary: #1e293b;
+    --secondary-foreground: #f8fafc;
+    --secondary-hover: #334155;
 
     /* Accent colors */
-    --color-accent: #1e293b;
-    --color-accent-foreground: #f8fafc;
+    --accent: #1e293b;
+    --accent-foreground: #f8fafc;
 
     /* Card styles */
-    --color-card: #1e293b;
-    --color-card-foreground: #f8fafc;
+    --card: #1e293b;
+    --card-foreground: #f8fafc;
 
     /* Popover styles */
-    --color-popover: #1e293b;
-    --color-popover-foreground: #f8fafc;
+    --popover: #1e293b;
+    --popover-foreground: #f8fafc;
 
     /* Sidebar colors */
-    --color-sidebar: #1e293b;
-    --color-sidebar-foreground: #cbd5e1;
-    --color-sidebar-hover: #334155;
+    --sidebar: #1e293b;
+    --sidebar-foreground: #cbd5e1;
+    --sidebar-hover: #334155;
 
     /* Shadow values (darker for dark mode) */
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
@@ -291,13 +395,15 @@ input::placeholder, textarea::placeholder {
   border-radius: var(--radius-full);
 }
 
+/* muted is now a light surface color, so thumbs use muted-foreground
+   (the gray the thumb was originally tuned to). */
 ::-webkit-scrollbar-thumb {
-  background: var(--color-muted);
+  background: var(--color-muted-foreground);
   border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted-foreground);
+  background: var(--color-foreground);
 }
 
 /* Selection styling */
@@ -396,11 +502,11 @@ input::placeholder, textarea::placeholder {
 
 .copilotKitChat::-webkit-scrollbar-thumb,
 .copilotKitChat > div::-webkit-scrollbar-thumb {
-  background: var(--color-muted);
+  background: var(--color-muted-foreground);
   border-radius: var(--radius-full);
 }
 
 .copilotKitChat::-webkit-scrollbar-thumb:hover,
 .copilotKitChat > div::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted-foreground);
+  background: var(--color-foreground);
 }

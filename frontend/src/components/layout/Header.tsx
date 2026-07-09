@@ -129,7 +129,7 @@ export function Header({ className = '' }: HeaderProps) {
             lg:hidden
             inline-flex items-center justify-center
             rounded-md p-2
-            text-[var(--color-muted)]
+            text-[var(--color-muted-foreground)]
             hover:bg-[var(--color-secondary)]
             hover:text-[var(--color-foreground)]
             focus-ring
@@ -178,7 +178,7 @@ export function Header({ className = '' }: HeaderProps) {
 
         {/* Page title / Breadcrumb - visible on larger screens */}
         <div className="hidden md:flex items-center">
-          <span className="text-[var(--color-muted)]">/</span>
+          <span className="text-[var(--color-muted-foreground)]">/</span>
           <span className="ml-2 text-sm font-medium text-[var(--color-foreground)]">
             {pageTitle}
           </span>
@@ -196,7 +196,7 @@ export function Header({ className = '' }: HeaderProps) {
           className="
             inline-flex items-center justify-center
             rounded-md p-2
-            text-[var(--color-muted)]
+            text-[var(--color-muted-foreground)]
             hover:bg-[var(--color-secondary)]
             hover:text-[var(--color-foreground)]
             focus-ring

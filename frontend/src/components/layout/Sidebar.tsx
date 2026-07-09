@@ -259,7 +259,7 @@ export function Sidebar({ className = '' }: SidebarProps) {
               hidden lg:flex
               items-center justify-center
               rounded-md p-2
-              text-[var(--color-muted)]
+              text-[var(--color-muted-foreground)]
               hover:bg-[var(--color-sidebar-hover)]
               hover:text-[var(--color-foreground)]
               focus-ring
@@ -275,7 +275,7 @@ export function Sidebar({ className = '' }: SidebarProps) {
           {navSections.map((section) => (
             <div key={section.key} className={section.label ? 'mt-6' : ''}>
               {section.label && !isCollapsed && (
-                <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
                   {section.label}
                 </h3>
               )}
@@ -291,13 +291,13 @@ export function Sidebar({ className = '' }: SidebarProps) {
         {/* Sidebar footer */}
         <div className="border-t border-[var(--color-border)] p-3">
           {!isCollapsed ? (
-            <div className="text-xs text-[var(--color-muted)]">
+            <div className="text-xs text-[var(--color-muted-foreground)]">
               <p>E2I Causal Analytics</p>
               <p className="mt-1">v1.0.0</p>
             </div>
           ) : (
             <div className="flex justify-center">
-              <span className="text-xs text-[var(--color-muted)]">v1</span>
+              <span className="text-xs text-[var(--color-muted-foreground)]">v1</span>
             </div>
           )}
         </div>
