@@ -19,9 +19,13 @@ try:
         invent entities, probabilities, or features. Refer to the scored rows by
         their stated kind (patients or prescribers), not as "entities". Say who
         to prioritise, what drives their scores, and how confident the ranking
-        is. If drivers_summary says drivers were not computed at cohort level,
-        do NOT claim the model lacks feature importances — state that per-target
-        SHAP contributions are available in the drill-down. The registry
+        is. drivers_summary is authoritative on feature importances: when it
+        lists drivers, those ARE the cohort-level feature importances — present
+        them as such and never say importances are missing or not computed;
+        only when it explicitly says drivers were not computed do you instead
+        point to the per-target drill-down (never claim the model lacks
+        feature importances). Never state the opposite of what drivers_summary
+        says. The registry
         context lists curated directional chains around the predicted outcome —
         SEPARATE domain knowledge, not model output: you may use it
         qualitatively to frame why targeting matters, but NEVER present it as

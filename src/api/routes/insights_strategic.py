@@ -489,6 +489,7 @@ async def predictive_cohort_insight(
         {
             "d": g["distribution_summary"],
             "t": g["top_targets_summary"],
+            "dr": g["drivers_summary"],
             "r": g["registry_context"],
         },
     )
