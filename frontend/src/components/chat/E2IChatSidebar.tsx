@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { logger } from '@/lib/logger';
-import { getValidated } from '@/lib/api-client';
+import { getValidated, post } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled, type AgentInfo } from '@/providers/E2ICopilotProvider';
@@ -67,23 +67,28 @@ type ChatSuggestion = { title: string; message: string };
 
 /**
  * Follow-up pills rendered above the input, only once a conversation exists.
- * A static suggestions array bypasses CopilotKit's suggestion engine and is
- * passed through reactively, so the pills stay visible across turns and
- * retheme live when the user navigates or changes the brand filter — but that
- * bypass also skips the engine's message-count gating, so the empty-until-
- * first-user-message gate is reimplemented in the component: an empty pane
- * must not presume what the user needs before they have asked anything.
+ * Two tiers: after each completed assistant turn, ConversationSuggestions
+ * fetches conversation-adaptive pills from POST /chat/suggestions (one
+ * fast-tier LLM call over the recent transcript, no orchestrator); the
+ * static context-aware set below is the FALLBACK — shown until the first
+ * generation lands and whenever generation fails. A suggestions array
+ * bypasses CopilotKit's suggestion engine and is passed through reactively,
+ * so pills swap live as new generations arrive — but the bypass also skips
+ * the engine's message-count gating, so the empty-until-first-user-message
+ * gate is reimplemented here: an empty pane must not presume what the user
+ * needs before they have asked anything.
  *
- * LLM-generated suggestions (suggestions="auto") are deliberately NOT used:
- * the engine clones the default agent and forces a `copilotkitSuggest` tool
- * call via forwardedProps.toolChoice, which our LangGraph runtime ignores
- * (copilotkit.py binds tools with its own tool_choice="auto") — every
- * exchange would burn a full orchestrator run and never yield a pill.
+ * CopilotKit's own LLM suggestions (suggestions="auto") are deliberately NOT
+ * used: the engine clones the default agent and forces a `copilotkitSuggest`
+ * tool call via forwardedProps.toolChoice, which our LangGraph runtime
+ * ignores (copilotkit.py binds tools with its own tool_choice="auto") —
+ * every exchange would burn a full orchestrator run and never yield a pill.
+ * The /chat/suggestions endpoint is the cheap replacement.
  *
- * Keep pill topics inside what the bound backend tools can actually answer
- * (KPIs, causal paths, agents — see E2I_CHATBOT_TOOLS in chatbot_tools.py);
- * the chart pills route through the renderKpiTrend generative-UI action so
- * users discover inline visuals.
+ * Keep fallback pill topics inside what the bound backend tools can actually
+ * answer (KPIs, causal paths, agents — see E2I_CHATBOT_TOOLS in
+ * chatbot_tools.py); the chart pills route through the renderKpiTrend
+ * generative-UI action so users discover inline visuals.
  */
 const PAGE_SUGGESTIONS: Record<string, ChatSuggestion> = {
   '/': {
@@ -136,30 +141,91 @@ function buildChatSuggestions(pathname: string, brand: string): ChatSuggestion[]
 }
 
 /**
- * Reports whether the user has sent at least one message, so the sidebar can
- * withhold suggestion pills until a conversation exists. Runs as a child of
- * the (copilot-enabled) pane because the chat hooks THROW outside the
- * CopilotKit provider, and this sidebar's top-level hooks also run with
+ * Conversation probe: reports whether the user has sent at least one message
+ * (the pill gate) and fetches conversation-adaptive pills from
+ * POST /chat/suggestions after each completed assistant turn. Runs as a
+ * child of the (copilot-enabled) pane because the chat hooks THROW outside
+ * the CopilotKit provider, and this sidebar's top-level hooks also run with
  * copilot disabled. Conversation state lives on the agent (verified live:
  * the legacy CopilotMessagesContext stays empty on this architecture, and
  * `useCopilotChat().visibleMessages` is typed but no longer returned by the
  * 1.51.2 implementation — always undefined). useCopilotChatInternal is
  * exported from the package index and returns the agent's live AG-UI
- * messages; it only reads config and subscribes, registering nothing, so
- * mounting it alongside CopilotChat is side-effect-free. Keyed to USER
- * messages so the `labels.initial` greeting can't open the gate. Renders
- * nothing.
+ * messages plus isLoading (Boolean(agent.isRunning) — verified present in
+ * the installed bundle, unlike visibleMessages); it only reads config and
+ * subscribes, registering nothing, so mounting it alongside CopilotChat is
+ * side-effect-free. The gate is keyed to USER messages so the
+ * `labels.initial` greeting can't open it. Renders nothing.
  */
-function ConversationGate({
-  onHasUserMessage,
+function ConversationSuggestions({
+  pathname,
+  brand,
+  onUpdate,
 }: {
-  onHasUserMessage: (hasUserMessage: boolean) => void;
+  pathname: string;
+  brand: string;
+  onUpdate: (state: { hasUserMessage: boolean; adaptive: ChatSuggestion[] | null }) => void;
 }) {
-  const { messages } = useCopilotChatInternal();
-  const hasUserMessage = (messages ?? []).some((m) => m.role === 'user');
+  const { messages, isLoading } = useCopilotChatInternal();
+  const [adaptive, setAdaptive] = React.useState<ChatSuggestion[] | null>(null);
+  // One fetch per completed turn (keyed on transcript length — also absorbs
+  // StrictMode double-effects), and stale responses are dropped whenever a
+  // newer request has been issued.
+  const lastFetchKeyRef = React.useRef<string | null>(null);
+  const requestSeqRef = React.useRef(0);
+
+  // User/assistant text turns only — tool/system/developer messages and
+  // non-string content never reach the suggestion endpoint.
+  const transcript = React.useMemo(() => {
+    const turns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const m of messages ?? []) {
+      if (
+        (m.role === 'user' || m.role === 'assistant') &&
+        typeof m.content === 'string' &&
+        m.content.trim()
+      ) {
+        turns.push({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content.slice(0, 1500),
+        });
+      }
+    }
+    return turns;
+  }, [messages]);
+
+  const hasUserMessage = transcript.some((t) => t.role === 'user');
+
   React.useEffect(() => {
-    onHasUserMessage(hasUserMessage);
-  }, [hasUserMessage, onHasUserMessage]);
+    if (isLoading || !hasUserMessage) return;
+    const last = transcript[transcript.length - 1];
+    if (!last || last.role !== 'assistant') return;
+    const key = String(transcript.length);
+    if (lastFetchKeyRef.current === key) return;
+    lastFetchKeyRef.current = key;
+    const seq = ++requestSeqRef.current;
+    post<{ suggestions: ChatSuggestion[] }>('/chat/suggestions', {
+      messages: transcript.slice(-12),
+      page: pathname,
+      brand,
+    })
+      .then((res) => {
+        if (seq !== requestSeqRef.current) return;
+        const pills = (res.suggestions ?? [])
+          .filter((s) => typeof s?.title === 'string' && s.title && typeof s?.message === 'string' && s.message)
+          .slice(0, 4);
+        setAdaptive(pills.length > 0 ? pills : null);
+      })
+      .catch(() => {
+        // Generation failed (e.g. 502) — fall back to the static
+        // context-aware pills; never crash or blank the pane.
+        if (seq === requestSeqRef.current) setAdaptive(null);
+      });
+  }, [isLoading, hasUserMessage, transcript, pathname, brand]);
+
+  React.useEffect(() => {
+    onUpdate({ hasUserMessage, adaptive });
+  }, [hasUserMessage, adaptive, onUpdate]);
+
   return null;
 }
 
@@ -186,14 +252,19 @@ export function E2IChatSidebar({
   const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
   const { pathname } = useLocation();
 
-  // Suggestions gate: pills are follow-ups, not openers. False until the
-  // ConversationGate child (which can read conversation state) reports a
-  // first user message; the pane starts pill-free.
-  const [hasUserMessage, setHasUserMessage] = React.useState(false);
-  const chatSuggestions = React.useMemo(
-    () => (hasUserMessage ? buildChatSuggestions(pathname, filters.brand) : []),
-    [hasUserMessage, pathname, filters.brand]
-  );
+  // Suggestion pills: none until a conversation exists (pills are follow-ups,
+  // not openers), then the conversation-adaptive set generated by the backend,
+  // with the static context-aware set as fallback until the first generation
+  // lands or when generation fails. State is reported by the
+  // ConversationSuggestions child, which can read conversation state.
+  const [pillState, setPillState] = React.useState<{
+    hasUserMessage: boolean;
+    adaptive: ChatSuggestion[] | null;
+  }>({ hasUserMessage: false, adaptive: null });
+  const chatSuggestions = React.useMemo(() => {
+    if (!pillState.hasUserMessage) return [];
+    return pillState.adaptive ?? buildChatSuggestions(pathname, filters.brand);
+  }, [pillState, pathname, filters.brand]);
   const [showAgents, setShowAgents] = React.useState(false);
   const [traceIdCopied, setTraceIdCopied] = React.useState(false);
   const { submitFeedback } = useChatFeedback();
@@ -475,7 +546,11 @@ export function E2IChatSidebar({
               {/* CoAgent progress renderer - displays real-time progress from LangGraph */}
               <AgentProgressRenderer className="shrink-0 px-3 pt-2" />
 
-              <ConversationGate onHasUserMessage={setHasUserMessage} />
+              <ConversationSuggestions
+                pathname={pathname}
+                brand={filters.brand}
+                onUpdate={setPillState}
+              />
               <CopilotChat
                 AssistantMessage={CustomAssistantMessage}
                 onThumbsUp={handleThumbsUp}

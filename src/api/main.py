@@ -71,6 +71,7 @@ from src.api.routes.agents import router as agents_router
 from src.api.routes.analytics import router as analytics_router
 from src.api.routes.audit import router as audit_router
 from src.api.routes.causal import router as causal_router
+from src.api.routes.chat import router as chat_router
 from src.api.routes.cognitive import router as cognitive_router
 from src.api.routes.copilotkit import add_copilotkit_routes
 from src.api.routes.copilotkit import router as copilotkit_router
@@ -543,6 +544,10 @@ openapi_tags = [
         "description": "Human-in-the-loop expert-review queue for causal estimates flagged REVIEW by the validation gate (pending/resolve/summary).",
     },
     {
+        "name": "Chat",
+        "description": "Chat sidebar helpers: conversation-adaptive suggestion pills generated from the recent transcript.",
+    },
+    {
         "name": "Cognitive Workflow",
         "description": "Multi-step cognitive workflows combining causal reasoning with domain knowledge.",
     },
@@ -727,6 +732,7 @@ def custom_openapi():
             "name": "Platform",
             "tags": [
                 "copilotkit",
+                "Chat",
                 "Agent Orchestration",
                 "Audit Chain",
             ],
@@ -1143,6 +1149,9 @@ app.include_router(audit_router, prefix="/api")
 
 # Analytics & metrics dashboard endpoints (/api/analytics/*)
 app.include_router(analytics_router, prefix="/api")
+
+# Chat sidebar helpers — conversation-adaptive suggestion pills (/api/chat/*)
+app.include_router(chat_router, prefix="/api")
 
 # CopilotKit status endpoints (/api/copilotkit/*)
 app.include_router(copilotkit_router, prefix="/api")

@@ -95,6 +95,7 @@ def _build_full_app() -> FastAPI:
     from src.api.routes.analytics import router as analytics_router
     from src.api.routes.audit import router as audit_router
     from src.api.routes.causal import router as causal_router
+    from src.api.routes.chat import router as chat_router
     from src.api.routes.cognitive import router as cognitive_router
     from src.api.routes.copilotkit import add_copilotkit_routes
     from src.api.routes.copilotkit import router as copilotkit_router
@@ -135,6 +136,7 @@ def _build_full_app() -> FastAPI:
         health_score_router,
         digital_twin_router,
         causal_router,
+        chat_router,
         expert_review_router,
         audit_router,
         analytics_router,
@@ -347,6 +349,7 @@ def test_slim_app_includes_all_routers_from_src_api_main() -> None:
         "agents": "/agents",
         "analytics": "/analytics",
         "causal": "/causal",
+        "chat": "/chat",
         "cognitive": "/cognitive",
         "copilotkit": "/copilotkit",
         "digital_twin": "/digital-twin",
@@ -519,6 +522,7 @@ def test_include_router_prefixes_match_expected_drift_table() -> None:
         # kpi_router declares its own prefix=/api/kpis
         "kpi_router": None,
         "causal_router": "/api",
+        "chat_router": "/api",
         "audit_router": "/api",
         "analytics_router": "/api",
         "copilotkit_router": "/api",
