@@ -495,3 +495,176 @@ def test_hte_insight_incomplete_run_degrades_honestly(test_client, monkeypatch):
     assert data["is_fallback"] is True
     assert "'failed'" in data["insight"]
     assert data["provenance"] == "Persisted segment-level CATE analysis (incomplete run)"
+
+
+# ---- /insights/home-kpis (server-derived KPI grid interpretation) --------------
+def _force_insight_cache_miss(monkeypatch):
+    # The dev box runs a live redis: force a miss so the generate path runs
+    # regardless of what earlier runs cached (same trick as the exec-brief tests).
+    async def _cache_miss(key):
+        return None
+
+    async def _cache_noop(key, value, ttl_seconds=3600):
+        return None
+
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", _cache_miss)
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_set", _cache_noop)
+
+
+def _fake_kpi_calculator(seen_contexts):
+    from src.kpi.models import (
+        CalculationType,
+        KPIBatchResult,
+        KPIMetadata,
+        KPIResult,
+        KPIStatus,
+        Workstream,
+    )
+
+    metas = [
+        KPIMetadata(
+            id="WS3-BI-001",
+            name="Total TRx",
+            definition="Total prescriptions",
+            formula="count(rx)",
+            calculation_type=CalculationType.DIRECT,
+            workstream=Workstream.WS3_BUSINESS,
+        ),
+        KPIMetadata(
+            id="WS1-MP-002",
+            name="Holdout Accuracy",
+            definition="Holdout accuracy",
+            formula="acc",
+            calculation_type=CalculationType.DERIVED,
+            workstream=Workstream.WS1_MODEL_PERFORMANCE,
+            value_format="percent",
+        ),
+        KPIMetadata(
+            id="WS2-TR-001",
+            name="Trigger Precision",
+            definition="Trigger precision",
+            formula="tp/(tp+fp)",
+            calculation_type=CalculationType.DERIVED,
+            workstream=Workstream.WS2_TRIGGERS,
+        ),
+        KPIMetadata(
+            id="KIS-CLI-001",
+            name="Kisqali - Oncologist Reach",
+            definition="Oncologists reached",
+            formula="count(hcp)",
+            calculation_type=CalculationType.DIRECT,
+            workstream=Workstream.BRAND_SPECIFIC,
+            brand="Kisqali",
+        ),
+    ]
+
+    class _FakeCalc:
+        def list_kpis(self, workstream=None, causal_library=None):
+            return metas
+
+        def calculate_batch(self, kpi_ids=None, workstream=None, use_cache=True, context=None):
+            seen_contexts.append(context)
+            batch = KPIBatchResult()
+            batch.add_result(
+                KPIResult(kpi_id="WS3-BI-001", value=11634.0, status=KPIStatus.INFORMATIONAL)
+            )
+            batch.add_result(KPIResult(kpi_id="WS1-MP-002", value=0.874, status=KPIStatus.WARNING))
+            # Honest not-computed row: must be EXCLUDED from the grounding.
+            batch.add_result(
+                KPIResult(kpi_id="WS2-TR-001", value=None, error="no view for this scope")
+            )
+            # Sibling-brand KPI: computes portfolio-wide, must be TAGGED under
+            # a different brand scope so the LM can't misattribute it.
+            batch.add_result(KPIResult(kpi_id="KIS-CLI-001", value=2890.0, status=KPIStatus.GOOD))
+            return batch
+
+    return _FakeCalc()
+
+
+def test_home_kpi_insight_fallback_is_server_derived(test_client, monkeypatch):
+    # The request carries ONLY the scope; figures come from the server's own
+    # calculator under the same brand/region context the dashboard batch uses.
+    seen_contexts = []
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator",
+        lambda: _fake_kpi_calculator(seen_contexts),
+    )
+    _force_insight_cache_miss(monkeypatch)
+    body = {"brand": "Fabhalta", "region": "northeast"}
+    r = test_client.post("/api/insights/home-kpis", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert seen_contexts == [{"brand": "Fabhalta", "region": "northeast"}]
+    assert "Fabhalta / Northeast" in data["insight"]
+    assert "Total TRx [ws3_business]: 11,634" in data["insight"]
+    # percent value_format renders as the dashboard does (0-1 ratio -> NN.N%)
+    assert "Holdout Accuracy [ws1_model_performance]: 87.4%" in data["insight"]
+    # the not-computed KPI is excluded, and coverage says so honestly
+    assert "Trigger Precision" not in data["insight"]
+    assert "3 of 4 defined KPIs computed" in data["insight"]
+    # another brand's KPI computes portfolio-wide -> tagged, not misattributed
+    assert (
+        "Kisqali - Oncologist Reach [brand_specific]: 2,890 (good) [sibling brand: Kisqali]"
+        in (data["insight"])
+    )
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Brand"] == "Fabhalta"
+    assert chips["Territory"] == "Northeast"
+    assert chips["Computed"] == "3/4"
+    assert data["provenance"] == "Registry KPIs recomputed for this scope (server-derived)"
+
+
+def test_home_kpi_insight_ignores_caller_posted_figures(test_client, monkeypatch):
+    # Same trust boundary as executive-brief: posted figures must not be able
+    # to mint a grounded-looking insight.
+    seen_contexts = []
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator",
+        lambda: _fake_kpi_calculator(seen_contexts),
+    )
+    _force_insight_cache_miss(monkeypatch)
+    body = {
+        "brand": "Fabhalta",
+        "region": "northeast",
+        "kpis": [{"name": "Fabricated KPI", "value": 99999.0, "status": "critical"}],
+    }
+    r = test_client.post("/api/insights/home-kpis", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "Fabricated" not in data["insight"]
+    assert "99,999" not in data["insight"]
+    assert "Total TRx" in data["insight"]
+
+
+def test_home_kpi_insight_all_us_portfolio_scope(test_client, monkeypatch):
+    # brand=All / region omitted -> empty calculator context (portfolio view).
+    seen_contexts = []
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator",
+        lambda: _fake_kpi_calculator(seen_contexts),
+    )
+    _force_insight_cache_miss(monkeypatch)
+    r = test_client.post("/api/insights/home-kpis", json={"brand": "All"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert seen_contexts == [{}]
+    assert "All brands (portfolio) / All US" in data["insight"]
+    # No brand scope -> brand-specific rows are first-class, never tagged.
+    assert "[sibling brand:" not in data["insight"]
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Territory"] == "All US"
+
+
+def test_home_kpi_insight_degrades_on_backend_error(test_client, monkeypatch):
+    def _boom():
+        raise RuntimeError("supabase unreachable")
+
+    monkeypatch.setattr("src.api.routes.kpi.get_kpi_calculator", _boom)
+    r = test_client.post("/api/insights/home-kpis", json={"brand": "Fabhalta"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "unavailable" in data["insight"]
+    assert data["provenance"] == "Registry KPIs for this scope (unavailable)"
+    assert data["grounding"] == []

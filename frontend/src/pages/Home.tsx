@@ -15,7 +15,7 @@
  * @module pages/Home
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -27,6 +27,7 @@ import { AlertStatus } from '@/types/monitoring';
 import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
+import { useHomeKpiInsight } from '@/hooks/api/use-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
 import { getValidated } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
@@ -68,6 +69,7 @@ import {
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ExecutiveSummary } from '@/components/dashboard/ExecutiveSummary';
 import { CausalValueChains } from '@/components/dashboard/CausalValueChains';
+import { StrategicInsightCard } from '@/components/insights';
 import { getNavigationRoutes } from '@/router/routes';
 
 // =============================================================================
@@ -173,12 +175,10 @@ const WORKSTREAM_ORDER = [
 // The calculators, per-KPI definitions, and the Brand SELECTOR are all unchanged.
 const HIDDEN_HOME_WORKSTREAMS = new Set<string>([]);
 
-// Per-card drill-down destination. Only the Model Performance workstream has a
-// dedicated drill-down page; every other KPI has no deeper view, so its card is
-// non-interactive (no misleading "View details" affordance) rather than linking
-// to the KPI Dictionary glossary, which is not a metric drill-down.
-const kpiDrillPath = (category: string): string | null =>
-  category === 'ws1_model_performance' ? '/model-performance' : null;
+// KPI cards are non-interactive by design. The Model Performance cards used to
+// drill to /model-performance, but that page does not inherit the dashboard's
+// brand selection — a user who picked a brand here would silently land on
+// another model's metrics. No drill-down beats a misleading one.
 
 const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   All: [
@@ -503,6 +503,24 @@ function Home() {
     selectedBrand !== 'All' ? { limit: 5 } : { limit: 5 },
     { retry: false }
   );
+
+  // Strategic Insights card — agentic read of the KPI grid for the selected
+  // brand + territory. The request carries ONLY the scope; the KPI figures are
+  // recomputed server-side (same trust boundary as the executive brief).
+  const kpiInsight = useHomeKpiInsight();
+  const { mutate: generateKpiInsight } = kpiInsight;
+  const requestKpiInsight = useCallback(() => {
+    generateKpiInsight({ brand: selectedBrand, region: regionParam ?? null });
+  }, [generateKpiInsight, selectedBrand, regionParam]);
+  // Auto-populate on brand/territory selection (and initial load); the ref
+  // guard absorbs StrictMode double-effects so each scope fires once.
+  const kpiInsightScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    const scope = `${selectedBrand}|${regionParam ?? 'all-us'}`;
+    if (kpiInsightScopeRef.current === scope) return;
+    kpiInsightScopeRef.current = scope;
+    requestKpiInsight();
+  }, [selectedBrand, regionParam, requestKpiInsight]);
 
   // Transform API KPIs to local KPIMetric format. The category IS the real
   // workstream value — no keyword guessing (which silently mis-binned every
@@ -1093,9 +1111,6 @@ function Home() {
                     ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                       {filteredKPIs.map((kpi) => {
-                        // Only Model Performance KPIs have a drill-down page; the
-                        // rest are non-interactive (no misleading "View details").
-                        const drill = kpiDrillPath(kpi.category);
                         // In live mode, read the REAL value fetched via the batch
                         // endpoint. View-backed KPIs return a float; the rest
                         // return value:null/error → honest "Not yet computed".
@@ -1118,7 +1133,6 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
-                              onClick={drill ? () => navigate(drill) : undefined}
                             />
                           );
                         }
@@ -1137,7 +1151,6 @@ function Home() {
                             description={kpi.description}
                             higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                             size="sm"
-                            onClick={drill ? () => navigate(drill) : undefined}
                           />
                         );
                       })}
@@ -1148,6 +1161,27 @@ function Home() {
               </Tabs>
             </CardContent>
           </Card>
+
+          {/* Strategic Insights — agentic interpretation of the KPI grid above,
+              re-generated whenever the brand/territory selection changes. The
+              figures are recomputed server-side for the same scope. */}
+          <StrategicInsightCard
+            title="Strategic Insights"
+            description={`Agentic read of the ${
+              selectedBrand === 'All' ? 'portfolio' : selectedBrand
+            } KPI picture — ${
+              selectedRegion === 'All US' ? 'all US regions' : `${selectedRegion} region`
+            }, grounded in the computed KPI values above`}
+            insight={kpiInsight.data?.insight}
+            keyTakeaways={kpiInsight.data?.key_takeaways}
+            grounding={kpiInsight.data?.grounding}
+            isLoading={kpiInsight.isPending}
+            error={kpiInsight.error?.message ?? null}
+            onGenerate={requestKpiInsight}
+            isFallback={kpiInsight.data?.is_fallback}
+            provenance={kpiInsight.data?.provenance}
+            generatedAt={kpiInsight.data?.generated_at}
+          />
 
           {/* Agent Insights Feed */}
           <Card>

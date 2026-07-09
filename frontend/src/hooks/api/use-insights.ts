@@ -11,6 +11,7 @@ import {
   getHTEInsight,
   getFeedbackLearningInsight,
   getDigitalTwinInsight,
+  getHomeKpiInsight,
 } from '@/api/insights';
 import type {
   StrategicInsightResponse,
@@ -24,6 +25,7 @@ import type {
   HTEInsightRequest,
   FeedbackLearningInsightRequest,
   DigitalTwinInsightRequest,
+  HomeKpiInsightRequest,
 } from '@/types/insights';
 
 export const useKnowledgeGraphInsight = () =>
@@ -74,4 +76,9 @@ export const useFeedbackLearningInsight = () =>
 export const useDigitalTwinInsight = () =>
   useMutation<StrategicInsightResponse, ApiError, DigitalTwinInsightRequest>({
     mutationFn: getDigitalTwinInsight,
+  });
+
+export const useHomeKpiInsight = () =>
+  useMutation<StrategicInsightResponse, ApiError, HomeKpiInsightRequest>({
+    mutationFn: getHomeKpiInsight,
   });
