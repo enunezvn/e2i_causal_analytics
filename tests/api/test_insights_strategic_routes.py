@@ -65,6 +65,28 @@ def test_predictive_cohort_insight_fallback(test_client):
     assert "HCP7" in data["insight"]
 
 
+def test_predictive_whatif_insight_fallback(test_client):
+    body = {
+        "model_version": "persistence_remibrutinib_goldstd_lr_v1",
+        "features": {"disease_severity": 5.6, "academic_hcp": 0},
+        "probability": 0.87,
+        "confidence": 0.87,
+        "cohort_mean": 0.45,
+        "n_scored": 4847,
+        "top_drivers": [{"feature": "disease_severity", "importance": -1.21}],
+    }
+    r = test_client.post("/api/insights/predictive-whatif", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    # Grounded in the entered profile + score, labeled by entity kind, and
+    # explicit that a what-if is predictive, not causal.
+    assert "hypothetical patient" in data["insight"]
+    assert "0.87" in data["insight"]
+    assert "not a causal estimate" in data["insight"]
+    assert data["provenance"] == "What-if prediction + per-row SHAP"
+
+
 def test_resource_optimization_insight_surfaces_summary(test_client):
     body = {
         "optimization_summary": "Reallocating to high-ROI HCPs lifts projected outcome 6%.",

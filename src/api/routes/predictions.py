@@ -998,9 +998,10 @@ async def models_status(
 # probability distribution. The row source is the model's own
 # ``FeatureBuilder.load_frame(splits=["holdout"])`` (same training schema, both
 # grains, real entity ids); scoring goes through the BentoML raw-covariate BATCH
-# path in chunks (patient holdout ~5k rows/brand). Per-row SHAP is intentionally
-# NOT computed here — that is the single-predict drill-down's job (O(1) per row),
-# never O(cohort). Synthetic-for-now (include_real defaults False); labeled honestly.
+# path in chunks (patient holdout ~5k rows/brand). SHAP stays O(top-N), never
+# O(cohort): cohort-level drivers sample only the top-ranked rows
+# (_DRIVER_SHAP_ROWS); full per-row SHAP remains the single-predict drill-down's
+# job. Synthetic-for-now (include_real defaults False); labeled honestly.
 
 
 class CohortScoredRow(BaseModel):
@@ -1012,6 +1013,22 @@ class CohortScoredRow(BaseModel):
     probability: float = Field(..., description="Predicted positive-class probability")
     covariates: Dict[str, Any] = Field(
         default_factory=dict, description="The RAW covariates scored for this entity"
+    )
+
+
+class CohortDriver(BaseModel):
+    """One cohort-level SHAP driver: mean |SHAP| over the sampled top targets."""
+
+    feature: str = Field(..., description="Encoded feature name (matches drill-down SHAP)")
+    importance: float = Field(
+        ..., description="Mean |SHAP| across the sampled top-ranked rows (log-odds scale)"
+    )
+    direction: str = Field(
+        ...,
+        description=(
+            "Sign of the mean signed SHAP across sampled rows: 'increases' | "
+            "'decreases' | 'mixed' (mean ~0 while |SHAP| is not)"
+        ),
     )
 
 
@@ -1055,11 +1072,90 @@ class CohortScoreResponse(BaseModel):
     distribution: Optional[CohortScoreDistribution] = Field(
         default=None, description="Probability distribution over all scored rows"
     )
+    top_drivers: List[CohortDriver] = Field(
+        default_factory=list,
+        description=(
+            "Cohort-level SHAP drivers: mean |SHAP| per encoded feature over the "
+            "top-ranked rows (capped at drivers_from_top_n), desc. Best-effort — "
+            "empty when SHAP is unavailable, never fabricated."
+        ),
+    )
+    drivers_from_top_n: int = Field(
+        default=0,
+        description="How many top-ranked rows the driver aggregation actually sampled",
+    )
     error: Optional[str] = Field(default=None, description="Set when status == failed")
     latency_ms: float = Field(default=0.0, description="Scoring wall-clock once completed")
 
 
 _COHORT_SCORE_BINS = 10
+
+# Cohort-level drivers sample the top-ranked rows only: one serving /shap call
+# per row (~5ms measured live), so 50 rows adds well under a second to the async
+# job while staying O(top-N), never O(cohort).
+_DRIVER_SHAP_ROWS = 50
+_DRIVER_TOP_K = 10
+
+
+def aggregate_shap_drivers(
+    shap_rows: List[Dict[str, float]], top_k: int = _DRIVER_TOP_K
+) -> List[CohortDriver]:
+    """Pure: mean |SHAP| (and mean signed SHAP for direction) per encoded feature
+    over the sampled rows, ranked desc by mean |SHAP|, capped at ``top_k``.
+    Features contributing ~nothing everywhere (mean |SHAP| < 1e-6) are dropped."""
+    if not shap_rows:
+        return []
+    abs_sums: Dict[str, float] = {}
+    signed_sums: Dict[str, float] = {}
+    counts: Dict[str, int] = {}
+    for row in shap_rows:
+        for feature, value in row.items():
+            v = float(value)
+            abs_sums[feature] = abs_sums.get(feature, 0.0) + abs(v)
+            signed_sums[feature] = signed_sums.get(feature, 0.0) + v
+            counts[feature] = counts.get(feature, 0) + 1
+    drivers = []
+    for feature, abs_sum in abs_sums.items():
+        n = counts[feature]
+        mean_abs = abs_sum / n
+        if mean_abs < 1e-6:
+            continue
+        mean_signed = signed_sums[feature] / n
+        # 'mixed': per-row contributions cancel out (|mean| well below mean |.|),
+        # so calling it increases/decreases would overstate a consistent direction.
+        if abs(mean_signed) < 0.25 * mean_abs:
+            direction = "mixed"
+        else:
+            direction = "increases" if mean_signed > 0 else "decreases"
+        drivers.append(CohortDriver(feature=feature, importance=mean_abs, direction=direction))
+    drivers.sort(key=lambda d: d.importance, reverse=True)
+    return drivers[: max(0, top_k)]
+
+
+async def _sample_cohort_drivers(
+    client: Any, model_name: str, top_rows: List["CohortScoredRow"]
+) -> tuple[List[CohortDriver], int]:
+    """Best-effort (drivers, n_rows_sampled): per-row serving /shap over the top
+    rows, aggregated by ``aggregate_shap_drivers``. Any failure yields ([], 0) —
+    the cohort job must never fail (or fabricate drivers) because of SHAP."""
+    sample = top_rows[:_DRIVER_SHAP_ROWS]
+    shap_rows: List[Dict[str, float]] = []
+    try:
+        for row in sample:
+            result = await client.get_shap(model_name, [row.covariates])
+            if result.get("error"):
+                continue
+            values = result.get("shap_values") or {}
+            if values:
+                shap_rows.append({str(k): float(v) for k, v in values.items()})
+    except Exception as exc:  # noqa: BLE001 — drivers are best-effort
+        logger.warning(
+            "cohort-level SHAP drivers unavailable for model=%s (non-fatal): %s",
+            model_name,
+            exc,
+        )
+        return [], 0
+    return aggregate_shap_drivers(shap_rows), len(shap_rows)
 
 
 def _cohort_ranking(
@@ -1237,6 +1333,7 @@ async def _run_cohort_score_task(
 
         probabilities = await _score_cohort_chunks(client, model_name, raw_features)
         top_rows, dist = _cohort_ranking(entity_ids, raw_features, probabilities, top_n)
+        top_drivers, drivers_from_top_n = await _sample_cohort_drivers(client, model_name, top_rows)
 
         await _cohort_score_store.set(
             job_id,
@@ -1250,6 +1347,8 @@ async def _run_cohort_score_task(
                 top_n=top_n,
                 top_rows=top_rows,
                 distribution=dist,
+                top_drivers=top_drivers,
+                drivers_from_top_n=drivers_from_top_n,
                 latency_ms=(_time.time() - started) * 1000,
             ),
         )

@@ -110,6 +110,18 @@ class PredictiveInsightRequest(BaseModel):
     top_drivers: list[DriverRow] = Field(default_factory=list)
 
 
+class PredictiveWhatIfInsightRequest(BaseModel):
+    """One hypothetical what-if row: the entered profile + the model's score."""
+
+    model_version: str
+    features: dict[str, Any] = Field(default_factory=dict)
+    probability: float
+    confidence: float | None = None
+    cohort_mean: float | None = None
+    n_scored: int | None = None
+    top_drivers: list[DriverRow] = Field(default_factory=list)
+
+
 class AllocationMove(BaseModel):
     entity_id: str
     change_percentage: float | None = None
@@ -487,6 +499,47 @@ async def predictive_cohort_insight(
         payload = await asyncio.to_thread(predictive_cohort.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Out-of-sample scored cohort + SHAP")
+
+
+@router.post("/predictive-whatif", response_model=StrategicInsightResponse)
+async def predictive_whatif_insight(
+    req: PredictiveWhatIfInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Plain-language read of ONE hypothetical what-if prediction (inputs, score,
+    SHAP drivers, cohort-mean comparison) + how to use it. Predictive, not causal."""
+    from src.insights.causal_context import fetch_commercial_drivers
+
+    reg_brand, reg_terms = predictive_cohort.outcome_terms_for_model(req.model_version)
+    drivers = await fetch_commercial_drivers(reg_brand, outcomes=reg_terms) if reg_terms else []
+    g = predictive_cohort.build_whatif_grounding(
+        req.model_version,
+        req.features,
+        req.probability,
+        req.confidence,
+        req.cohort_mean,
+        req.n_scored,
+        [d.model_dump() for d in req.top_drivers],
+        causal_drivers=drivers,
+    )
+    # Keyed on the profile + result + drivers strings: two what-ifs that differ
+    # in any entered input, the score, or the SHAP read never collide.
+    key = cache_key(
+        "predictive-whatif",
+        req.model_version,
+        {
+            "p": g["profile_summary"],
+            "s": g["result_summary"],
+            "d": g["drivers_summary"],
+            "r": g["registry_context"],
+        },
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(predictive_cohort.generate_whatif_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="What-if prediction + per-row SHAP")
 
 
 @router.post("/executive-brief", response_model=StrategicInsightResponse)

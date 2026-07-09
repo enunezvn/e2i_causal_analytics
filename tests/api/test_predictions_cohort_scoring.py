@@ -255,3 +255,87 @@ class TestCohortScoreEndpoint:
             assert resp.status_code == 422, resp.text
         finally:
             app.dependency_overrides.clear()
+
+
+# =============================================================================
+# Cohort-level SHAP drivers (2026-07-09): mean |SHAP| over the sampled top rows,
+# aggregated for the Strategic Interpretation. Pure aggregation + best-effort
+# sampler (a SHAP failure must never fail the cohort job or fabricate drivers).
+# =============================================================================
+class TestAggregateShapDrivers:
+    def test_empty_input_yields_no_drivers(self):
+        assert pred.aggregate_shap_drivers([]) == []
+
+    def test_ranks_by_mean_abs_and_directions(self):
+        rows = [
+            {"disease_severity": -1.2, "insurance_type_commercial": 0.4, "academic_hcp": 0.0},
+            {"disease_severity": -0.8, "insurance_type_commercial": 0.3, "academic_hcp": 0.0},
+        ]
+        drivers = pred.aggregate_shap_drivers(rows)
+        # academic_hcp contributes ~0 everywhere -> dropped, not a fake driver.
+        assert [d.feature for d in drivers] == ["disease_severity", "insurance_type_commercial"]
+        assert drivers[0].direction == "decreases"
+        assert abs(drivers[0].importance - 1.0) < 1e-9
+        assert drivers[1].direction == "increases"
+
+    def test_cancelling_contributions_are_mixed_not_directional(self):
+        drivers = pred.aggregate_shap_drivers([{"region": 1.0}, {"region": -1.0}])
+        assert drivers[0].direction == "mixed"
+        assert drivers[0].importance == 1.0
+
+    def test_caps_at_top_k(self):
+        rows = [{f"f{i}": float(i + 1) for i in range(15)}]
+        drivers = pred.aggregate_shap_drivers(rows, top_k=10)
+        assert len(drivers) == 10
+        assert drivers[0].feature == "f14"
+
+
+class _FakeShapClient:
+    def __init__(self, per_row: Dict[str, float] | None = None, error: str | None = None):
+        self.per_row = per_row if per_row is not None else {"disease_severity": 0.4}
+        self.error = error
+        self.calls = 0
+
+    async def get_shap(self, model_name: str, raw_features):
+        self.calls += 1
+        if self.error:
+            return {"error": self.error, "shap_values": {}}
+        return {"error": None, "shap_values": dict(self.per_row)}
+
+
+@pytest.mark.asyncio
+class TestSampleCohortDrivers:
+    async def test_samples_top_rows_and_aggregates(self):
+        fake = _FakeShapClient()
+        rows = [
+            pred.CohortScoredRow(entity_id=f"e{i}", probability=0.9, covariates={"x": i})
+            for i in range(3)
+        ]
+        drivers, sampled = await pred._sample_cohort_drivers(fake, "m", rows)
+        assert sampled == 3 and fake.calls == 3
+        assert drivers[0].feature == "disease_severity"
+
+    async def test_caps_at_driver_shap_rows(self):
+        fake = _FakeShapClient()
+        rows = [
+            pred.CohortScoredRow(entity_id=f"e{i}", probability=0.9, covariates={})
+            for i in range(pred._DRIVER_SHAP_ROWS + 25)
+        ]
+        _drivers, sampled = await pred._sample_cohort_drivers(fake, "m", rows)
+        assert sampled == pred._DRIVER_SHAP_ROWS
+        assert fake.calls == pred._DRIVER_SHAP_ROWS
+
+    async def test_per_row_shap_errors_are_skipped(self):
+        fake = _FakeShapClient(error="no bundle for model")
+        rows = [pred.CohortScoredRow(entity_id="e0", probability=0.9, covariates={})]
+        drivers, sampled = await pred._sample_cohort_drivers(fake, "m", rows)
+        assert drivers == [] and sampled == 0
+
+    async def test_client_exception_is_best_effort_empty(self):
+        class _Boom:
+            async def get_shap(self, model_name, raw_features):
+                raise RuntimeError("serving down")
+
+        rows = [pred.CohortScoredRow(entity_id="e0", probability=0.9, covariates={})]
+        drivers, sampled = await pred._sample_cohort_drivers(_Boom(), "m", rows)
+        assert drivers == [] and sampled == 0

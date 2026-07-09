@@ -214,6 +214,16 @@ export interface CohortScoredRow {
   covariates: Record<string, unknown>;
 }
 
+/** One cohort-level SHAP driver: mean |SHAP| over the sampled top targets. */
+export interface CohortDriver {
+  /** Encoded feature name (matches the drill-down SHAP names) */
+  feature: string;
+  /** Mean |SHAP| across the sampled top-ranked rows (log-odds scale) */
+  importance: number;
+  /** 'increases' | 'decreases' | 'mixed' (per-row contributions cancel out) */
+  direction: string;
+}
+
 /** Probability distribution over ALL scored rows (fixed [0,1] bins). */
 export interface CohortScoreDistribution {
   n: number;
@@ -246,6 +256,10 @@ export interface CohortScoreResponse {
   /** Highest-probability entities, ranked desc, capped at top_n */
   top_rows: CohortScoredRow[];
   distribution?: CohortScoreDistribution | null;
+  /** Cohort-level SHAP drivers over the top-ranked rows (best-effort; may be empty) */
+  top_drivers?: CohortDriver[];
+  /** How many top-ranked rows the driver aggregation actually sampled */
+  drivers_from_top_n?: number;
   error?: string | null;
   latency_ms: number;
 }

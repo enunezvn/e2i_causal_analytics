@@ -183,6 +183,7 @@ export {
   useModelPerformanceInsight,
   useCausalDiscoveryInsight,
   usePredictiveCohortInsight,
+  usePredictiveWhatIfInsight,
   useResourceOptimizationInsight,
   useTreatmentEffectInsight,
   useFeedbackLearningInsight,
