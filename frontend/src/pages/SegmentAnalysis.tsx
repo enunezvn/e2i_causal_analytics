@@ -203,7 +203,15 @@ function FeatureImportanceChart({ importance }: FeatureImportanceChartProps) {
     <ResponsiveContainer width="100%" height={Math.max(280, chartData.length * 36 + 40)}>
       <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 16, bottom: 24 }}>
         <CartesianGrid strokeDasharray="3 3" />
-        <XAxis type="number" domain={[0, 'dataMax']} label={{ value: 'Importance (%)', position: 'bottom' }} />
+        {/* A bare 'dataMax' domain makes recharts render the exact data max as the
+            last tick (e.g. "79.66264674939283"); ceiling to the next multiple of 10
+            keeps every tick a round number at its true position. */}
+        <XAxis
+          type="number"
+          domain={[0, (dataMax: number) => Math.ceil(dataMax / 10) * 10]}
+          label={{ value: 'Importance (%)', position: 'bottom' }}
+        />
+
         {/* interval={0} forces a tick+label for EVERY feature — recharts otherwise
             auto-skips category ticks under limited height (the "8 bars, 4 labels"
             bug). width=180 + a longer-name tickFormatter stop the left-edge clip. */}
