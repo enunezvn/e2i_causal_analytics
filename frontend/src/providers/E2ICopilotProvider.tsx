@@ -477,6 +477,10 @@ export const CopilotKitWrapper: React.FC<CopilotKitWrapperProps> = ({
         publicApiKey={apiKey}
         agent="default"
         showDevConsole={process.env.NODE_ENV === 'development'}
+        // The Web Inspector bubble has its own gate that defaults to
+        // isLocalhost() when the prop is omitted — it rendered over the chat
+        // header for anyone viewing a production build via localhost.
+        enableInspector={process.env.NODE_ENV === 'development'}
         headers={headers}
       >
         {children}

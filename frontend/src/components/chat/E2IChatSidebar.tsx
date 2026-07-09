@@ -59,6 +59,33 @@ export interface E2IChatSidebarProps {
 }
 
 // =============================================================================
+// SUGGESTIONS
+// =============================================================================
+
+/**
+ * Static starter suggestions rendered as pills in the (otherwise empty)
+ * messages area. Deliberately chart-leaning: the first two route straight
+ * through the renderKpiTrend generative-UI action so new users discover that
+ * the assistant can answer with inline visuals, not just text.
+ */
+const CHAT_SUGGESTIONS = [
+  { title: '📈 Chart the TRx trend', message: 'Chart the TRx trend' },
+  {
+    title: '📊 Kisqali market share',
+    message: 'Chart the market share trend for Kisqali',
+  },
+  {
+    title: 'Biggest KPI movers',
+    message:
+      'Which KPIs moved the most recently? Summarize the biggest movers in a table.',
+  },
+  {
+    title: 'Top causal drivers',
+    message: 'What are the top causal drivers of TRx right now?',
+  },
+];
+
+// =============================================================================
 // COMPONENT
 // =============================================================================
 
@@ -352,10 +379,13 @@ export function E2IChatSidebar({
               )}
             </AnimatePresence>
 
-            {/* Chat Area - min-h-0 is critical for flexbox scroll containers */}
-            <div className="flex-1 overflow-y-auto min-h-0">
+            {/* Chat Area - a flex column so CopilotChat (flex-1) owns all
+                remaining height: messages scroll internally and the input sits
+                at the pane bottom. overflow-hidden (not auto) — an outer
+                scrollbar here would scroll the input away with the messages. */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {/* CoAgent progress renderer - displays real-time progress from LangGraph */}
-              <AgentProgressRenderer className="px-3 pt-2" />
+              <AgentProgressRenderer className="shrink-0 px-3 pt-2" />
 
               <CopilotChat
                 AssistantMessage={CustomAssistantMessage}
@@ -378,12 +408,15 @@ Available actions:
 - highlightCausalPaths: Highlight paths on visualizations
 - setDetailLevel: Adjust response complexity
 
-Always fetch real data with the available tools before answering, cite the actual metric values and their source, and deliver rich, evidence-based strategic insight — what the numbers mean for the business and the concrete next action — not just the figure. Focus on pharmaceutical commercial analytics (TRx, NRx, market share, causal drivers).`}
+Always fetch real data with the available tools before answering, cite the actual metric values and their source, and deliver rich, evidence-based strategic insight — what the numbers mean for the business and the concrete next action — not just the figure. Focus on pharmaceutical commercial analytics (TRx, NRx, market share, causal drivers).
+
+Visual answers: whenever the answer involves a KPI's evolution over time, a trend, or a period comparison, call renderKpiTrend so the chart renders inline alongside your text (kpiId: trx, nrx, nbrx, trx_share, conversion_rate, roi, or a registry code like WS3-BI-005; nbrx and trx_share need a brand). Use markdown tables for multi-row numeric comparisons instead of prose lists of figures.`}
                 labels={{
                   initial: 'How can I help you explore E2I analytics?',
                   placeholder: 'Ask about KPIs, agents, or insights...',
                 }}
-                className="h-full"
+                suggestions={CHAT_SUGGESTIONS}
+                className="min-h-0 flex-1"
               />
             </div>
 

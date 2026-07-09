@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/* CopilotKit's base stylesheet. Without it every .copilotKit* class is
+   unstyled: no message padding, no input chrome, and no messages/input flex
+   split — the input container stretched to half the pane as dead white space
+   (the ad-hoc scroll rules this file used to carry were compensating for the
+   missing import, and caused that stretch). Scoped to .copilotKit classes and
+   :root vars only, so it cannot leak into app styles. Theme mapping lives in
+   the "CopilotKit Theme" section below. */
+@import "@copilotkit/react-ui/styles.css";
 
 /* ============================================
    E2I Causal Analytics - Base Styles
@@ -459,54 +467,34 @@ input::placeholder, textarea::placeholder {
 }
 
 /* ============================================
-   CopilotKit Scroll Container Fixes
+   CopilotKit Theme
    ============================================ */
 
-/* FIX: Enable proper scrolling within CopilotChat component
-   The CopilotChat component uses flexbox internally, so we need to ensure
-   the messages container can scroll independently. min-height: 0 is critical
-   for flex children that need to scroll. */
+/* Map CopilotKit's palette onto the app theme tokens. The var() references
+   re-resolve when ThemeManager toggles .dark on <html>, so one mapping covers
+   both modes — but it must ALSO be declared on html.dark: the imported
+   stylesheet ships its own `html.dark {...}` gray palette whose specificity
+   (0,1,1) beats a lone :root (0,1,0). */
+:root,
+html.dark {
+  --copilot-kit-primary-color: var(--primary);
+  --copilot-kit-contrast-color: var(--primary-foreground);
+  --copilot-kit-background-color: var(--background);
+  --copilot-kit-input-background-color: var(--background);
+  --copilot-kit-secondary-color: var(--background);
+  --copilot-kit-secondary-contrast-color: var(--foreground);
+  --copilot-kit-separator-color: var(--border);
+  --copilot-kit-muted-color: var(--muted-foreground);
+}
+
+/* The chat fills the sidebar's flex column; min-height: 0 lets the messages
+   list shrink below its content height so it scrolls instead of pushing the
+   input off-pane. (Layout itself — messages flex: 1, input auto-sized at the
+   bottom — comes from the imported base stylesheet.) */
 .copilotKitChat {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
 }
 
-/* Target the messages container inside CopilotKit */
-.copilotKitChat > div {
-  flex: 1;
-  overflow-y: auto;
+.copilotKitChat .copilotKitMessages {
   min-height: 0;
-}
-
-/* Ensure message list scrolls properly */
-.copilotKitChat [class*="Messages"],
-.copilotKitChat [class*="messages"] {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-/* Ensure visible scrollbar in the chat area */
-.copilotKitChat::-webkit-scrollbar,
-.copilotKitChat > div::-webkit-scrollbar {
-  width: 8px;
-}
-
-.copilotKitChat::-webkit-scrollbar-track,
-.copilotKitChat > div::-webkit-scrollbar-track {
-  background: var(--color-secondary);
-  border-radius: var(--radius-full);
-}
-
-.copilotKitChat::-webkit-scrollbar-thumb,
-.copilotKitChat > div::-webkit-scrollbar-thumb {
-  background: var(--color-muted-foreground);
-  border-radius: var(--radius-full);
-}
-
-.copilotKitChat::-webkit-scrollbar-thumb:hover,
-.copilotKitChat > div::-webkit-scrollbar-thumb:hover {
-  background: var(--color-foreground);
 }
