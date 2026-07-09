@@ -17,7 +17,7 @@
 
 import * as React from 'react';
 import { useLocation } from 'react-router-dom';
-import { CopilotContext } from '@copilotkit/react-core';
+import { CopilotContext, useCopilotChatInternal } from '@copilotkit/react-core';
 import { CopilotChat } from '@copilotkit/react-ui';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -66,10 +66,13 @@ export interface E2IChatSidebarProps {
 type ChatSuggestion = { title: string; message: string };
 
 /**
- * Starter pills rendered above the input. A static suggestions array bypasses
- * CopilotKit's suggestion engine and is passed through reactively, so the
- * pills stay visible across turns and retheme live when the user navigates or
- * changes the brand filter.
+ * Follow-up pills rendered above the input, only once a conversation exists.
+ * A static suggestions array bypasses CopilotKit's suggestion engine and is
+ * passed through reactively, so the pills stay visible across turns and
+ * retheme live when the user navigates or changes the brand filter — but that
+ * bypass also skips the engine's message-count gating, so the empty-until-
+ * first-user-message gate is reimplemented in the component: an empty pane
+ * must not presume what the user needs before they have asked anything.
  *
  * LLM-generated suggestions (suggestions="auto") are deliberately NOT used:
  * the engine clones the default agent and forces a `copilotkitSuggest` tool
@@ -132,6 +135,34 @@ function buildChatSuggestions(pathname: string, brand: string): ChatSuggestion[]
   ];
 }
 
+/**
+ * Reports whether the user has sent at least one message, so the sidebar can
+ * withhold suggestion pills until a conversation exists. Runs as a child of
+ * the (copilot-enabled) pane because the chat hooks THROW outside the
+ * CopilotKit provider, and this sidebar's top-level hooks also run with
+ * copilot disabled. Conversation state lives on the agent (verified live:
+ * the legacy CopilotMessagesContext stays empty on this architecture, and
+ * `useCopilotChat().visibleMessages` is typed but no longer returned by the
+ * 1.51.2 implementation — always undefined). useCopilotChatInternal is
+ * exported from the package index and returns the agent's live AG-UI
+ * messages; it only reads config and subscribes, registering nothing, so
+ * mounting it alongside CopilotChat is side-effect-free. Keyed to USER
+ * messages so the `labels.initial` greeting can't open the gate. Renders
+ * nothing.
+ */
+function ConversationGate({
+  onHasUserMessage,
+}: {
+  onHasUserMessage: (hasUserMessage: boolean) => void;
+}) {
+  const { messages } = useCopilotChatInternal();
+  const hasUserMessage = (messages ?? []).some((m) => m.role === 'user');
+  React.useEffect(() => {
+    onHasUserMessage(hasUserMessage);
+  }, [hasUserMessage, onHasUserMessage]);
+  return null;
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -154,9 +185,14 @@ export function E2IChatSidebar({
   const copilotEnabled = useCopilotEnabled();
   const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
   const { pathname } = useLocation();
+
+  // Suggestions gate: pills are follow-ups, not openers. False until the
+  // ConversationGate child (which can read conversation state) reports a
+  // first user message; the pane starts pill-free.
+  const [hasUserMessage, setHasUserMessage] = React.useState(false);
   const chatSuggestions = React.useMemo(
-    () => buildChatSuggestions(pathname, filters.brand),
-    [pathname, filters.brand]
+    () => (hasUserMessage ? buildChatSuggestions(pathname, filters.brand) : []),
+    [hasUserMessage, pathname, filters.brand]
   );
   const [showAgents, setShowAgents] = React.useState(false);
   const [traceIdCopied, setTraceIdCopied] = React.useState(false);
@@ -439,6 +475,7 @@ export function E2IChatSidebar({
               {/* CoAgent progress renderer - displays real-time progress from LangGraph */}
               <AgentProgressRenderer className="shrink-0 px-3 pt-2" />
 
+              <ConversationGate onHasUserMessage={setHasUserMessage} />
               <CopilotChat
                 AssistantMessage={CustomAssistantMessage}
                 onThumbsUp={handleThumbsUp}
