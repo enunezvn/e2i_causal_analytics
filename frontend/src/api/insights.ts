@@ -5,6 +5,7 @@ import type {
   ModelPerfInsightRequest,
   CausalInsightRequest,
   PredictiveInsightRequest,
+  PredictiveWhatIfInsightRequest,
   ResourceInsightRequest,
   TreatmentEffectInsightRequest,
   ExecutiveBriefInsightRequest,
@@ -27,6 +28,9 @@ export const getCausalDiscoveryInsight = (r: CausalInsightRequest) =>
 
 export const getPredictiveCohortInsight = (r: PredictiveInsightRequest) =>
   post<StrategicInsightResponse, PredictiveInsightRequest>(`${BASE}/predictive-cohort`, r);
+
+export const getPredictiveWhatIfInsight = (r: PredictiveWhatIfInsightRequest) =>
+  post<StrategicInsightResponse, PredictiveWhatIfInsightRequest>(`${BASE}/predictive-whatif`, r);
 
 export const getResourceOptimizationInsight = (r: ResourceInsightRequest) =>
   post<StrategicInsightResponse, ResourceInsightRequest>(`${BASE}/resource-optimization`, r);

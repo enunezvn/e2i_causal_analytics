@@ -43,6 +43,17 @@ export interface PredictiveInsightRequest {
   top_drivers: Array<{ feature: string; importance: number }>;
 }
 
+/** One hypothetical what-if row: the entered profile + the model's score. */
+export interface PredictiveWhatIfInsightRequest {
+  model_version: string;
+  features: Record<string, unknown>;
+  probability: number;
+  confidence?: number | null;
+  cohort_mean?: number | null;
+  n_scored?: number | null;
+  top_drivers: Array<{ feature: string; importance: number }>;
+}
+
 export interface AllocationMove {
   entity_id: string;
   change_percentage?: number | null;

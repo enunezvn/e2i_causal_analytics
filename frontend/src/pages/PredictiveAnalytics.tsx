@@ -5,9 +5,11 @@
  * DATA-DRIVEN population view. Instead of asking the user to hand-type one
  * feature row, the page scores the selected model's OWN out-of-sample holdout
  * cohort (loaded server-side from the model's FeatureBuilder) and presents a
- * RANKED list of targets + a probability distribution. Clicking a ranked row
- * drills down into that real entity's per-feature SHAP contributions. A custom
- * "Advanced what-if" row is still available for hypotheticals.
+ * RANKED list of targets + a probability distribution, labeled by what the
+ * rows ARE (patients vs prescribers, from the model's cohort). Clicking a
+ * ranked row drills down into that real target's per-feature SHAP
+ * contributions. A what-if tool scores a hypothetical profile and gets its
+ * own strategic interpretation (inputs, score vs cohort mean, how to use it).
  *
  * Backed by the predictions hooks (`useModelsStatus`, `useModelInfo`,
  * `useScoreCohort` + `usePollCohortScore`, `usePredict`) — no synthetic data
@@ -41,13 +43,58 @@ import {
   useScoreCohort,
   usePollCohortScore,
 } from '@/hooks/api/use-predictions';
-import { usePredictiveCohortInsight } from '@/hooks/api';
+import { usePredictiveCohortInsight, usePredictiveWhatIfInsight } from '@/hooks/api';
 import type {
   CohortScoredRow,
   ModelEndpointHealth,
   ModelInfoResponse,
   PredictionRequest,
 } from '@/types/predictions';
+
+// =============================================================================
+// COHORT FACETS (what the scored rows ARE + what the model predicts)
+// =============================================================================
+
+// The raw entity ids (scvpt_*/scvhcp_*) don't say whether targets are patients
+// or prescribers — the model name's cohort prefix does. Mirrors the backend's
+// insights/predictive_cohort facets.
+interface CohortFacets {
+  singular: string;
+  plural: string;
+  outcome: string;
+}
+
+const COHORT_FACETS: Record<string, CohortFacets> = {
+  hcp_adoption: {
+    singular: 'HCP',
+    plural: 'HCPs (prescribers)',
+    outcome: 'adopting the brand (intent to prescribe)',
+  },
+  persistence: {
+    singular: 'patient',
+    plural: 'patients',
+    outcome: 'staying on therapy at 180 days',
+  },
+  initiation: { singular: 'patient', plural: 'patients', outcome: 'starting treatment' },
+  discontinuation: {
+    singular: 'patient',
+    plural: 'patients',
+    outcome: 'discontinuing therapy within 180 days',
+  },
+};
+
+const NEUTRAL_FACETS: CohortFacets = {
+  singular: 'entity',
+  plural: 'entities',
+  outcome: 'the targeted outcome',
+};
+
+function facetsForModel(modelName: string, cohort?: string | null): CohortFacets {
+  const key =
+    (cohort && cohort in COHORT_FACETS ? cohort : undefined) ??
+    Object.keys(COHORT_FACETS).find((c) => modelName.toLowerCase().startsWith(c));
+  return key ? COHORT_FACETS[key] : NEUTRAL_FACETS;
+}
 
 // =============================================================================
 // MODEL SELECTOR (page-local; not exported)
@@ -276,9 +323,11 @@ function PredictiveAnalytics() {
   // Strategic interpretation (agentic read of the scored cohort).
   const predInsight = usePredictiveCohortInsight();
 
-  // Advanced what-if (manual row — preserved for hypotheticals)
+  // What-if tool (hypothetical row) + its own per-row interpretation.
   const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [featureValues, setFeatureValues] = React.useState<Record<string, string>>({});
+  const [lastRunWasWhatIf, setLastRunWasWhatIf] = React.useState(false);
+  const whatIfInsight = usePredictiveWhatIfInsight();
 
   // Reset everything when the model changes.
   React.useEffect(() => {
@@ -286,39 +335,41 @@ function PredictiveAnalytics() {
     setSelectedRow(null);
     setFeatureValues({});
     setShowAdvanced(false);
+    setLastRunWasWhatIf(false);
     scoreCohortMutation.reset();
     predictMutation.reset();
     predInsight.reset();
+    whatIfInsight.reset();
     // mutations excluded — new identity each render would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedModel]);
 
+  // What the ranked rows ARE (patients vs prescribers) + the predicted outcome,
+  // from the completed job's cohort or the model name.
+  const facets = facetsForModel(selectedModel, cohort?.cohort ?? null);
+  const singularTitle = facets.singular.charAt(0).toUpperCase() + facets.singular.slice(1);
+
   const handleScoreCohort = () => {
     if (!selectedModel) return;
     setSelectedRow(null);
+    setLastRunWasWhatIf(false);
     predictMutation.reset();
-    // The interpretation is grounded in the previous scoring run — clear it.
+    // The interpretations are grounded in the previous scoring run — clear them.
     predInsight.reset();
+    whatIfInsight.reset();
     scoreCohortMutation.mutate(
       { modelName: selectedModel, topN: 100 },
       { onSuccess: (data) => setCohortJobId(data.job_id) }
     );
   };
 
-  // Generate the strategic interpretation from the REAL scored cohort.
-  // Grounded only in data already on the page — top targets, distribution mean,
-  // and (when a row has been drilled into) that entity's SHAP contributions.
-  // No drivers are fabricated when SHAP is unavailable.
+  // Generate the strategic interpretation from the REAL scored cohort:
+  // top targets, distribution mean, and the backend's cohort-level drivers
+  // (mean |SHAP| over the top-ranked rows). No drivers are fabricated when
+  // the driver aggregation was unavailable.
   const handleGenerateInsight = () => {
     const rows = cohort?.top_rows;
     if (!rows?.length) return;
-    const importance = predictMutation.data?.feature_importance;
-    const topDrivers = importance
-      ? Object.entries(importance).map(([feature, value]) => ({
-          feature,
-          importance: value,
-        }))
-      : [];
     predInsight.mutate({
       model_version: selectedModel,
       n_scored: cohort?.n_scored ?? rows.length,
@@ -326,7 +377,10 @@ function PredictiveAnalytics() {
       top_targets: rows
         .slice(0, 5)
         .map((row) => ({ entity_id: row.entity_id, probability: row.probability })),
-      top_drivers: topDrivers,
+      top_drivers: (cohort?.top_drivers ?? []).map((d) => ({
+        feature: d.feature,
+        importance: d.importance,
+      })),
     });
   };
 
@@ -334,6 +388,8 @@ function PredictiveAnalytics() {
   const handleSelectRow = (row: CohortScoredRow) => {
     setSelectedRow(row);
     setShowAdvanced(false);
+    setLastRunWasWhatIf(false);
+    whatIfInsight.reset();
     predictMutation.mutate({
       modelName: selectedModel,
       request: {
@@ -403,6 +459,8 @@ function PredictiveAnalytics() {
   const handleRunWhatIf = () => {
     if (!selectedModel || !allFieldsFilled) return;
     setSelectedRow(null);
+    setLastRunWasWhatIf(true);
+    whatIfInsight.reset();
     const features: Record<string, unknown> = {};
     for (const field of formFields) {
       const raw = featureValues[field.name];
@@ -419,7 +477,49 @@ function PredictiveAnalytics() {
       return_probabilities: true,
       return_feature_importance: true,
     };
-    predictMutation.mutate({ modelName: selectedModel, request });
+    predictMutation.mutate(
+      { modelName: selectedModel, request },
+      {
+        // Auto-generate the what-if interpretation from THIS result — the
+        // cohort-level Strategic Interpretation deliberately does not cover
+        // hypothetical rows. Grounded only in the returned score/SHAP; no
+        // probability -> no insight (never a read on an unknown score).
+        onSuccess: (data) => {
+          const probability =
+            data.probabilities?.positive_class ??
+            (typeof data.prediction === 'number' &&
+            data.prediction >= 0 &&
+            data.prediction <= 1
+              ? data.prediction
+              : null);
+          if (probability == null) return;
+          whatIfInsight.mutate({
+            model_version: selectedModel,
+            features,
+            probability,
+            confidence: data.confidence ?? null,
+            cohort_mean: cohort?.distribution?.mean ?? null,
+            n_scored: cohort?.n_scored ?? null,
+            top_drivers: Object.entries(data.feature_importance ?? {})
+              .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
+              .slice(0, 8)
+              .map(([feature, value]) => ({ feature, importance: value })),
+          });
+        },
+      }
+    );
+  };
+
+  // Seed the what-if form from the selected ranked row so "change one
+  // attribute and compare" is one edit away instead of full manual re-entry.
+  const handlePrefillFromSelected = () => {
+    if (!selectedRow) return;
+    const next: Record<string, string> = {};
+    for (const field of formFields) {
+      const value = selectedRow.covariates[field.name];
+      if (value !== undefined && value !== null) next[field.name] = String(value);
+    }
+    setFeatureValues(next);
   };
 
   // ---------------------------------------------------------------------------
@@ -445,8 +545,9 @@ function PredictiveAnalytics() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Predictive Analytics</h1>
           <p className="text-muted-foreground">
-            Score a model&apos;s real holdout cohort, rank the top targets, and drill into
-            any entity&apos;s feature contributions.
+            Score a model&apos;s real holdout cohort, rank the {facets.plural} most likely
+            to end up {facets.outcome}, and drill into any {facets.singular}&apos;s feature
+            contributions.
           </p>
         </div>
 
@@ -554,7 +655,7 @@ function PredictiveAnalytics() {
       {/* Strategic interpretation (agentic read of the scored cohort) */}
       <div className="mb-6">
         <StrategicInsightCard
-          description="Agentic read of the scored holdout cohort, grounded in the ranked targets and probability distribution"
+          description={`Agentic read of the scored holdout cohort of ${facets.plural} — grounded in the ranked targets, probability distribution, and cohort-level SHAP drivers. Covers the cohort only; drill-down and what-if results are per-${facets.singular} and do not change this read.`}
           insight={predInsight.data?.insight}
           keyTakeaways={predInsight.data?.key_takeaways}
           grounding={predInsight.data?.grounding}
@@ -578,8 +679,8 @@ function PredictiveAnalytics() {
               </CardTitle>
               <CardDescription>
                 {cohort?.cohort && cohort?.brand
-                  ? `${cohort.brand} ${cohort.cohort} holdout cohort`
-                  : 'Score the cohort to rank targets by predicted probability'}
+                  ? `${cohort.brand} ${cohort.cohort.replace(/_/g, ' ')} holdout cohort — ${facets.plural} ranked by probability of ${facets.outcome}`
+                  : `Score the cohort to rank ${facets.plural} by predicted probability`}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -592,7 +693,7 @@ function PredictiveAnalytics() {
               {!isScoring && !cohort && (
                 <p className="text-sm text-muted-foreground py-4">
                   Click &ldquo;Score holdout cohort&rdquo; to rank this model&apos;s real
-                  out-of-sample entities.
+                  out-of-sample {facets.plural}.
                 </p>
               )}
               {cohortStatus === 'completed' && cohort && (
@@ -600,7 +701,7 @@ function PredictiveAnalytics() {
                   {/* Provenance banner */}
                   <div className="rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
                     Scored <span className="font-semibold">{cohort.n_scored.toLocaleString()}</span>{' '}
-                    entities · {cohort.split} split ·{' '}
+                    {facets.plural} · {cohort.split} split ·{' '}
                     {cohort.out_of_sample ? 'out-of-sample' : 'in-sample'} ·{' '}
                     {cohort.feature_source === 'holdout_synthetic' ? 'synthetic data' : cohort.feature_source}
                   </div>
@@ -616,7 +717,9 @@ function PredictiveAnalytics() {
                   {/* Ranked table (already sorted desc by the backend) */}
                   <div className="border rounded-md divide-y max-h-80 overflow-auto">
                     <div className="flex items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground bg-muted/50">
-                      <span>Entity (top {cohort.top_rows.length})</span>
+                      <span>
+                        {singularTitle} (top {cohort.top_rows.length})
+                      </span>
                       <span>Probability</span>
                     </div>
                     {cohort.top_rows.map((row) => {
@@ -656,8 +759,16 @@ function PredictiveAnalytics() {
                   </div>
                   {typeof cohort.distribution?.mean === 'number' && (
                     <p className="text-[10px] text-muted-foreground">
-                      Row bars show each target&apos;s predicted probability; the tick marks the
-                      cohort mean ({(cohort.distribution.mean * 100).toFixed(1)}%).
+                      Row bars show each {facets.singular}&apos;s predicted probability; the
+                      tick marks the cohort mean ({(cohort.distribution.mean * 100).toFixed(1)}
+                      %).
+                      {(cohort.drivers_from_top_n ?? 0) > 0 && (
+                        <>
+                          {' '}
+                          Cohort drivers for the interpretation = mean |SHAP| over the top{' '}
+                          {cohort.drivers_from_top_n} targets.
+                        </>
+                      )}
                     </p>
                   )}
                 </div>
@@ -668,11 +779,19 @@ function PredictiveAnalytics() {
           {/* Drill-down / what-if */}
           <Card>
             <CardHeader>
-              <CardTitle>{selectedRow ? `Entity ${selectedRow.entity_id}` : 'Prediction Detail'}</CardTitle>
+              <CardTitle>
+                {selectedRow
+                  ? `${singularTitle} ${selectedRow.entity_id}`
+                  : lastRunWasWhatIf && prediction
+                    ? `What-if result (hypothetical ${facets.singular})`
+                    : 'Prediction Detail'}
+              </CardTitle>
               <CardDescription>
                 {selectedRow
-                  ? 'Real entity from the cohort — prediction + feature contributions'
-                  : 'Select a ranked entity, or open Advanced what-if'}
+                  ? `Real ${facets.singular} from the cohort — prediction + feature contributions`
+                  : lastRunWasWhatIf && prediction
+                    ? 'Model score for the profile you entered below'
+                    : `Select a ranked ${facets.singular}, or score a hypothetical one with the what-if tool`}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -691,7 +810,8 @@ function PredictiveAnalytics() {
               )}
               {!predictionError && !isPredicting && !prediction && !showAdvanced && (
                 <p className="text-sm text-muted-foreground py-4">
-                  Click a ranked entity on the left to see its prediction and feature contributions.
+                  Click a ranked {facets.singular} on the left to see its prediction and feature
+                  contributions.
                 </p>
               )}
               {!predictionError && !isPredicting && prediction && (
@@ -699,6 +819,15 @@ function PredictiveAnalytics() {
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Prediction</p>
                     <p className="text-2xl font-bold">{formatPrediction(prediction.prediction)}</p>
+                    {typeof prediction.probabilities?.positive_class === 'number' && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {(prediction.probabilities.positive_class * 100).toFixed(1)}% probability
+                        of {facets.outcome}
+                        {typeof cohort?.distribution?.mean === 'number' && (
+                          <> · cohort mean {(cohort.distribution.mean * 100).toFixed(1)}%</>
+                        )}
+                      </p>
+                    )}
                   </div>
                   {typeof prediction.confidence === 'number' && (
                     <div>
@@ -716,15 +845,51 @@ function PredictiveAnalytics() {
                 </div>
               )}
 
-              {/* Advanced what-if toggle */}
+              {/* What-if tool: score a hypothetical profile */}
               <div className="mt-4 pt-4 border-t">
                 <button
                   type="button"
                   className="text-xs text-muted-foreground hover:text-foreground underline"
                   onClick={() => setShowAdvanced((v) => !v)}
                 >
-                  {showAdvanced ? 'Hide advanced what-if' : 'Advanced: score a custom row (what-if)'}
+                  {showAdvanced
+                    ? 'Hide what-if tool'
+                    : `What-if: score a hypothetical ${facets.singular}`}
                 </button>
+                {showAdvanced && (
+                  <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs text-muted-foreground space-y-1 mt-3">
+                    <p>
+                      <span className="font-medium text-foreground">Inputs</span> — the
+                      attributes the model was trained on. Fill them in to describe a
+                      hypothetical {facets.singular}
+                      {selectedRow
+                        ? `, or start from ${selectedRow.entity_id} and change one attribute to compare`
+                        : ''}
+                      .
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">Output</span> — the
+                      model&apos;s predicted probability that this profile ends up{' '}
+                      {facets.outcome}, its SHAP feature contributions, and a strategic
+                      interpretation of how to use the result.
+                    </p>
+                    <p>
+                      This is a prediction, not a causal estimate: changing an input shows how
+                      the score responds, not what an intervention would achieve.
+                    </p>
+                  </div>
+                )}
+                {showAdvanced && selectedRow && formFields.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={handlePrefillFromSelected}
+                  >
+                    Start from {selectedRow.entity_id}
+                  </Button>
+                )}
                 {showAdvanced && formFields.length > 0 && (
                   <form
                     className="space-y-3 mt-3"
@@ -771,6 +936,26 @@ function PredictiveAnalytics() {
                     </Button>
                   </form>
                 )}
+                {/* Per-row interpretation of the LAST what-if run (auto-generated).
+                    Separate from the cohort card above, which never covers
+                    hypothetical rows. */}
+                {lastRunWasWhatIf &&
+                  (whatIfInsight.isPending || whatIfInsight.data || whatIfInsight.error) && (
+                    <div className="mt-4">
+                      <StrategicInsightCard
+                        title="What-If Interpretation"
+                        description={`How to read and use this hypothetical ${facets.singular}'s score`}
+                        insight={whatIfInsight.data?.insight}
+                        keyTakeaways={whatIfInsight.data?.key_takeaways}
+                        grounding={whatIfInsight.data?.grounding}
+                        isLoading={whatIfInsight.isPending}
+                        error={whatIfInsight.error?.message ?? null}
+                        isFallback={whatIfInsight.data?.is_fallback}
+                        provenance={whatIfInsight.data?.provenance}
+                        generatedAt={whatIfInsight.data?.generated_at}
+                      />
+                    </div>
+                  )}
               </div>
             </CardContent>
           </Card>

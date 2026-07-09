@@ -5,6 +5,7 @@ import {
   getModelPerformanceInsight,
   getCausalDiscoveryInsight,
   getPredictiveCohortInsight,
+  getPredictiveWhatIfInsight,
   getResourceOptimizationInsight,
   getTreatmentEffectInsight,
   getExecutiveBriefInsight,
@@ -19,6 +20,7 @@ import type {
   ModelPerfInsightRequest,
   CausalInsightRequest,
   PredictiveInsightRequest,
+  PredictiveWhatIfInsightRequest,
   ResourceInsightRequest,
   TreatmentEffectInsightRequest,
   ExecutiveBriefInsightRequest,
@@ -46,6 +48,11 @@ export const useCausalDiscoveryInsight = () =>
 export const usePredictiveCohortInsight = () =>
   useMutation<StrategicInsightResponse, ApiError, PredictiveInsightRequest>({
     mutationFn: getPredictiveCohortInsight,
+  });
+
+export const usePredictiveWhatIfInsight = () =>
+  useMutation<StrategicInsightResponse, ApiError, PredictiveWhatIfInsightRequest>({
+    mutationFn: getPredictiveWhatIfInsight,
   });
 
 export const useResourceOptimizationInsight = () =>
