@@ -234,6 +234,9 @@ class ProfileGeneratorNode:
         not stalled.
         """
         try:
+            from src.agents.heterogeneous_optimizer.cross_validation import (
+                serialize_validation_for_llm,
+            )
             from src.agents.heterogeneous_optimizer.dspy_integration import (
                 generate_cate_interpretation,
             )
@@ -264,6 +267,11 @@ class ProfileGeneratorNode:
                 targeting_summary=(
                     state.get("optimal_allocation_summary")
                     or "No targeting recommendation was computed."
+                ),
+                # Cross-library verdict rides along so the narrative can never
+                # silently contradict the Library Validation card.
+                cross_library_validation_text=serialize_validation_for_llm(
+                    cast(Dict[str, Any], state)
                 ),
             )
         except Exception as e:  # noqa: BLE001 — never break the run on the LLM path
@@ -318,14 +326,16 @@ class ProfileGeneratorNode:
         if not high_responders and not low_responders:
             return (
                 f"Heterogeneous effect analysis complete. "
-                f"Overall treatment effect: {overall_ate:.3f}. "
+                f"Overall treatment effect (average outcome change across all "
+                f"patients): {overall_ate:.3f}. "
                 f"Limited heterogeneity detected (score: {heterogeneity_score:.2f}). "
                 f"Treatment effects are relatively uniform across segments."
             )
 
         summary_parts = [
             "Heterogeneous treatment effect analysis complete.",
-            f"Overall treatment effect: {overall_ate:.3f}.",
+            f"Overall treatment effect (average outcome change across all "
+            f"patients): {overall_ate:.3f}.",
             f"Heterogeneity score: {heterogeneity_score:.2f} (0=uniform, 1=highly heterogeneous).",
         ]
 
@@ -333,7 +343,7 @@ class ProfileGeneratorNode:
             top_high = high_responders[0]
             summary_parts.append(
                 f"Top high-responder: {top_high['segment_id']} "
-                f"(CATE: {top_high['cate_estimate']:.3f}, "
+                f"(segment-level effect, CATE: {top_high['cate_estimate']:.3f}, "
                 f"{top_high['size_percentage']:.1f}% of population)."
             )
 
@@ -341,7 +351,7 @@ class ProfileGeneratorNode:
             top_low = low_responders[0]
             summary_parts.append(
                 f"Most harmful segment: {top_low['segment_id']} "
-                f"(CATE: {top_low['cate_estimate']:.3f}, "
+                f"(segment-level effect, CATE: {top_low['cate_estimate']:.3f}, "
                 f"{top_low['size_percentage']:.1f}% of population)."
             )
 
@@ -373,17 +383,18 @@ class ProfileGeneratorNode:
         # Insight 1: Overall treatment effect
         if overall_ate > 0:
             insights.append(
-                f"Treatment has positive overall effect (ATE: {overall_ate:.3f}), "
-                f"but effect varies significantly across segments."
+                f"Treatment has a positive average effect across all patients "
+                f"(ATE: {overall_ate:.3f}), but the effect varies across segments."
             )
         elif overall_ate < 0:
             insights.append(
-                f"Treatment has negative overall effect (ATE: {overall_ate:.3f}). "
-                f"Consider segment-specific interventions."
+                f"Treatment has a negative average effect across all patients "
+                f"(ATE: {overall_ate:.3f}). Consider segment-specific interventions."
             )
         else:
             insights.append(
-                f"Treatment has minimal overall effect (ATE: {overall_ate:.3f}). "
+                f"Treatment has minimal average effect across all patients "
+                f"(ATE: {overall_ate:.3f}). "
                 f"Heterogeneity analysis reveals segment-specific opportunities."
             )
 
@@ -453,6 +464,18 @@ class ProfileGeneratorNode:
             "positive" if overall_ate > 0 else "negative" if overall_ate < 0 else "neutral"
         )
 
+        # Mirror the LM path's honesty rule: a FAILED cross-library validation
+        # must be surfaced next to any targeting narrative, fallback included.
+        validation_caveat = ""
+        if state.get("validation_passed") is False:
+            raw_score = state.get("library_agreement_score")
+            score_txt = f" (agreement {float(raw_score):.0%})" if raw_score is not None else ""
+            validation_caveat = (
+                f"\n\nCAVEAT: cross-library validation FAILED{score_txt} — an "
+                f"independent uplift model does not reproduce this segment "
+                f"ranking. Review before acting on targeting conclusions."
+            )
+
         # When the above-ATE gate surfaced NO targeting opportunity (expected lift ~0),
         # the honest interpretation is uniform deployment REGARDLESS of the nominal
         # heterogeneity_score or how many display-tier "high responders" segment_analyzer
@@ -463,7 +486,7 @@ class ProfileGeneratorNode:
         if abs(expected_total_lift) < 1e-9:
             return f"""STRATEGIC INSIGHT: NO RELIABLE DIFFERENTIAL-TARGETING OPPORTUNITY
 
-Treatment Uniformity: No segment's effect is statistically distinguishable from the overall average (above-ATE significance gate). The {effect_direction} treatment effect (ATE: {overall_ate:.3f}) is effectively uniform across segments for targeting purposes, even though the spread-based heterogeneity score is {heterogeneity_score:.2f}.
+Treatment Uniformity: No segment's effect is statistically distinguishable from the overall average (above-ATE significance gate). The {effect_direction} average treatment effect (ATE: {overall_ate:.3f}) is effectively uniform across segments for targeting purposes, even though the spread-based heterogeneity score is {heterogeneity_score:.2f}.
 
 Business Implication:
 Concentrating treatment on the nominal top segments would be noise-driven — the expected lift from differential targeting is ~0. Any responder tiers shown are a relative ranking for context, not a statistically reliable targeting signal.
@@ -472,7 +495,7 @@ Tactical Recommendation:
 - Deploy the treatment uniformly across all segments
 - Allocate budget proportionally to segment size
 - Focus operational resources on execution quality, not segment selection
-- Re-evaluate targeting only if a larger sample narrows the per-segment confidence intervals"""
+- Re-evaluate targeting only if a larger sample narrows the per-segment confidence intervals{validation_caveat}"""
 
         if heterogeneity_score < 0.3:
             # Low heterogeneity - uniform approach recommended
@@ -499,7 +522,7 @@ Tactical Recommendation:
 Treatment Variability: Effect varies moderately across segments (heterogeneity score: {heterogeneity_score:.2f}).
 
 Business Implication:
-While the overall treatment effect is {effect_direction} (ATE: {overall_ate:.3f}), certain segments respond significantly better than others. Targeted resource allocation can improve ROI.
+While the average treatment effect across all patients is {effect_direction} (ATE: {overall_ate:.3f}), certain segments respond significantly better than others. Targeted resource allocation can improve ROI.
 
 Segment Distribution:
 - High responders: {high_count} segments identified
@@ -530,8 +553,8 @@ Business Implication:
 The {effect_spread:.3f} effect spread between high and low responders means that treating all segments equally results in significant opportunity cost.
 
 Segment Analysis:
-- Top high-responder: {top_high["segment_id"] if top_high else "N/A"} (CATE: {high_cate:.3f})
-- Top low-responder: {top_low["segment_id"] if top_low else "N/A"} (CATE: {low_cate:.3f})
+- Top high-responder: {top_high["segment_id"] if top_high else "N/A"} (segment-level effect, CATE: {high_cate:.3f})
+- Top low-responder: {top_low["segment_id"] if top_low else "N/A"} (segment-level effect, CATE: {low_cate:.3f})
 
 Tactical Recommendation:
 1. IMMEDIATE: Reallocate resources from low-responder to high-responder segments
@@ -539,7 +562,7 @@ Tactical Recommendation:
 3. MEDIUM-TERM: Build targeting infrastructure for continuous optimization
 4. Expected total lift from optimization: {abs(expected_total_lift):.1f} units"""
 
-        return interpretation
+        return interpretation + validation_caveat
 
     async def _collect_dspy_signal(
         self,

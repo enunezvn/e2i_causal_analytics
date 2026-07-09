@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 import numpy as np
 import pandas as pd
 
+from ..cross_validation import compute_cross_library_validation
 from ..state import HeterogeneousOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,20 @@ class UpliftAnalyzerNode:
             # Calculate targeting efficiency
             targeting_efficiency = self._calculate_targeting_efficiency(uplift_scores, treatment, y)
 
+            # Cross-library validation: does this (CausalML) uplift model agree
+            # with the EconML CATE estimates on segment direction and ranking?
+            # Guarded so a validation bug can never cost the uplift outputs.
+            cross_validation = self._cross_library_update(
+                state, uplift_by_segment, model_info["model_type"]
+            )
+
+            # Honest library provenance: EconML ran upstream iff CATE results
+            # exist; CausalML only when a real CausalML model fitted (the
+            # ImportError fallback is a plain diff-in-means heuristic).
+            libraries = ["econml"] if state.get("cate_by_segment") else []
+            if model_info["model_type"] in ("random_forest", "gradient_boosting"):
+                libraries.append("causalml")
+
             uplift_latency_ms = int((time.time() - start_time) * 1000)
 
             logger.info(
@@ -192,6 +207,8 @@ class UpliftAnalyzerNode:
                 "targeting_efficiency": targeting_efficiency,
                 "model_type_used": model_info["model_type"],
                 "uplift_latency_ms": uplift_latency_ms,
+                "libraries_executed": libraries,
+                **cross_validation,
             }
 
         except asyncio.TimeoutError:
@@ -233,6 +250,42 @@ class UpliftAnalyzerNode:
                 ],
                 "warnings": ["Uplift analysis failed - continuing with CATE results only"],
             }
+
+    def _cross_library_update(
+        self,
+        state: HeterogeneousOptimizerState,
+        uplift_by_segment: Dict[str, List[UpliftScoreResult]],
+        model_type: str,
+    ) -> Dict[str, Any]:
+        """Compute the EconML↔CausalML agreement state update, never raising.
+
+        On failure or a FAILED verdict the update carries a warning (append
+        reducer channel) so the run surfaces the disagreement honestly.
+        """
+        try:
+            update = compute_cross_library_validation(
+                state.get("cate_by_segment"),
+                cast(Dict[str, List[Dict[str, Any]]], uplift_by_segment),
+                uplift_model_type=model_type,
+            )
+        except Exception as e:  # noqa: BLE001 - validation must not cost uplift outputs
+            logger.warning("Cross-library validation errored (non-fatal): %s", e)
+            return {
+                "cross_library_validation": {
+                    "computed": False,
+                    "reason": f"validation error: {e}",
+                }
+            }
+        if update.get("validation_passed") is False:
+            score = update.get("library_agreement_score") or 0.0
+            detail = update.get("cross_library_validation") or {}
+            update["warnings"] = [
+                f"Cross-library validation FAILED: EconML and CausalML agree only "
+                f"{score:.0%} on segment direction/ranking "
+                f"(threshold {detail.get('threshold', 0):.0%}); treat targeting "
+                f"conclusions with caution."
+            ]
+        return update
 
     async def _get_data(self, state: HeterogeneousOptimizerState) -> Optional[pd.DataFrame]:
         """Get data for uplift modeling.
