@@ -203,7 +203,15 @@ function FeatureImportanceChart({ importance }: FeatureImportanceChartProps) {
     <ResponsiveContainer width="100%" height={Math.max(280, chartData.length * 36 + 40)}>
       <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 16, bottom: 24 }}>
         <CartesianGrid strokeDasharray="3 3" />
-        <XAxis type="number" domain={[0, 'dataMax']} label={{ value: 'Importance (%)', position: 'bottom' }} />
+        {/* A bare 'dataMax' domain makes recharts render the exact data max as the
+            last tick (e.g. "79.66264674939283"); ceiling to the next multiple of 10
+            keeps every tick a round number at its true position. */}
+        <XAxis
+          type="number"
+          domain={[0, (dataMax: number) => Math.ceil(dataMax / 10) * 10]}
+          label={{ value: 'Importance (%)', position: 'bottom' }}
+        />
+
         {/* interval={0} forces a tick+label for EVERY feature — recharts otherwise
             auto-skips category ticks under limited height (the "8 bars, 4 labels"
             bug). width=180 + a longer-name tickFormatter stop the left-edge clip. */}
@@ -302,7 +310,7 @@ function PolicyScatterChart({ policies }: PolicyChartProps) {
                 <p className="text-sm">Current: {data.current.toFixed(0)}%</p>
                 <p className="text-sm">Recommended: {data.recommended.toFixed(0)}%</p>
                 <p className={`text-sm ${data.impact >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  Impact: {data.impact >= 0 ? '+' : ''}{data.impact}
+                  Impact: {data.impact >= 0 ? '+' : ''}{data.impact.toFixed(2)} outcomes
                 </p>
                 <p className="text-sm text-muted-foreground">
                   Confidence: {(data.confidence * 100).toFixed(0)}%
@@ -573,6 +581,16 @@ export default function SegmentAnalysis() {
   // dropdowns previously always title-cased the raw column, so the curated labels
   // GET /segments/datasets returns never reached the user.
   const labelFor = (col: string) => datasets?.labels?.[col] ?? titleCase(col);
+
+  // Policy Details shows only actionable recommendations. Zero-lift entries are
+  // segments the backend's above-ATE significance gate kept at their current
+  // rate (rate_change = 0 exactly), so lift > 0 doubles as the significance
+  // filter — anything positive already cleared that gate.
+  const actionablePolicies = (analysisResult?.policy_recommendations ?? []).filter(
+    (p) => p.expected_incremental_outcome > 0,
+  );
+  const maintainedPolicyCount =
+    (analysisResult?.policy_recommendations.length ?? 0) - actionablePolicies.length;
 
   // Order CATE dimensions by within-segment heterogeneity (most heterogeneous
   // dimension first) so the most interesting breakdown leads.
@@ -970,22 +988,20 @@ export default function SegmentAnalysis() {
               <CardHeader>
                 <CardTitle>Policy Details</CardTitle>
                 <CardDescription>
-                  Each segment, framed by its expected incremental outcome (the "why")
+                  Segments where changing the targeting rate has a significant expected payoff
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {analysisResult.policy_recommendations.map((policy, idx) => (
+                  {/* Zero-lift entries are segments the above-ATE significance
+                      gate kept at their current rate — no action, so no card.
+                      Anything with lift > 0 already passed that gate. */}
+                  {actionablePolicies.map((policy, idx) => (
                     <div key={idx} className="p-3 border rounded-lg">
                       <div className="flex items-center justify-between mb-2">
                         <span className="font-medium">{policy.segment}</span>
-                        <Badge
-                          variant={
-                            policy.expected_incremental_outcome >= 0 ? 'default' : 'outline'
-                          }
-                        >
-                          {policy.expected_incremental_outcome >= 0 ? '+' : ''}
-                          {policy.expected_incremental_outcome} expected lift
+                        <Badge variant="default">
+                          +{policy.expected_incremental_outcome.toFixed(2)} outcomes
                         </Badge>
                       </div>
                       <div className="flex items-center gap-4 text-sm">
@@ -993,15 +1009,16 @@ export default function SegmentAnalysis() {
                           Current: {(policy.current_treatment_rate * 100).toFixed(0)}%
                         </span>
                         <span>→</span>
-                        <span className={policy.expected_incremental_outcome >= 0 ? 'text-green-600' : 'text-red-600'}>
+                        <span className="text-green-600">
                           Recommended: {(policy.recommended_treatment_rate * 100).toFixed(0)}%
                         </span>
                       </div>
                       <div className="text-xs text-muted-foreground mt-1">
-                        Why: targeting this segment is expected to move the outcome by{' '}
-                        {policy.expected_incremental_outcome >= 0 ? '+' : ''}
-                        {policy.expected_incremental_outcome} · Confidence:{' '}
-                        {(policy.confidence * 100).toFixed(0)}%
+                        Why: moving targeting from{' '}
+                        {(policy.current_treatment_rate * 100).toFixed(0)}% to{' '}
+                        {(policy.recommended_treatment_rate * 100).toFixed(0)}% of this segment is
+                        expected to add ~{policy.expected_incremental_outcome.toFixed(2)} positive
+                        outcomes (patients) · Confidence: {(policy.confidence * 100).toFixed(0)}%
                       </div>
                       <LabelGateBadge
                         label_verdict={policy.label_verdict}
@@ -1012,6 +1029,20 @@ export default function SegmentAnalysis() {
                       />
                     </div>
                   ))}
+                  {actionablePolicies.length === 0 &&
+                    analysisResult.policy_recommendations.length > 0 && (
+                      <p className="text-sm text-muted-foreground italic py-6 text-center">
+                        No segment shows a treatment effect significantly above average — all
+                        segments stay at their current targeting rate.
+                      </p>
+                    )}
+                  {maintainedPolicyCount > 0 && actionablePolicies.length > 0 && (
+                    <p className="text-xs text-muted-foreground italic">
+                      {maintainedPolicyCount} other segment
+                      {maintainedPolicyCount === 1 ? '' : 's'} showed no statistically
+                      significant above-average effect and stay at the current rate (not shown).
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -1051,24 +1082,38 @@ export default function SegmentAnalysis() {
                   <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                     <span>Libraries Used</span>
                     <div className="flex gap-2">
-                      {analysisResult.libraries_used?.map((lib) => (
-                        <Badge key={lib} variant="outline">
-                          {lib}
-                        </Badge>
-                      ))}
+                      {analysisResult.libraries_used?.length ? (
+                        analysisResult.libraries_used.map((lib) => (
+                          <Badge key={lib} variant="outline">
+                            {lib}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-sm text-muted-foreground italic">Not reported</span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                     <span>Agreement Score</span>
-                    <Badge variant={(analysisResult.library_agreement_score ?? 0) >= 0.8 ? 'default' : 'secondary'}>
-                      {((analysisResult.library_agreement_score || 0) * 100).toFixed(0)}%
-                    </Badge>
+                    {analysisResult.library_agreement_score != null ? (
+                      // 0.7 mirrors the backend pass threshold, so color and
+                      // Validation Status can't disagree.
+                      <Badge variant={analysisResult.library_agreement_score >= 0.7 ? 'default' : 'secondary'}>
+                        {(analysisResult.library_agreement_score * 100).toFixed(0)}%
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline">Not computed</Badge>
+                    )}
                   </div>
                   <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                     <span>Validation Status</span>
-                    <Badge variant={analysisResult.validation_passed ? 'default' : 'destructive'}>
-                      {analysisResult.validation_passed ? 'Passed' : 'Failed'}
-                    </Badge>
+                    {analysisResult.validation_passed != null ? (
+                      <Badge variant={analysisResult.validation_passed ? 'default' : 'destructive'}>
+                        {analysisResult.validation_passed ? 'Passed' : 'Failed'}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline">Not run</Badge>
+                    )}
                   </div>
                 </div>
               </CardContent>

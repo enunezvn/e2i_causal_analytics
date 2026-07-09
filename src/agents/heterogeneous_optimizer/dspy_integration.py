@@ -214,9 +214,24 @@ try:
         - RECONCILE the displayed tiers: nominal 'high/low responder' segments may be
           listed for relative ranking even when none is statistically distinguishable
           from the average effect — explain that distinction when it applies.
+        - RECONCILE the cross-library validation: if it FAILED, include an explicit
+          caveat that a second, independent estimation method does not reproduce the
+          segment ranking, so targeting conclusions need review before acting. If it
+          reads 'not computed', do not mention validation at all. Never claim the
+          results are 'validated' or 'confirmed' beyond what that input states.
+        - PLAIN LANGUAGE: the reader may not know causal-inference or clinical
+          shorthand. Define every technical term or acronym in a brief plain-English
+          aside on FIRST use — e.g. "average treatment effect (ATE — the average
+          change in the outcome the treatment causes across all patients)", "CATE
+          (that same effect measured within one specific segment)", "ECOG performance
+          status (a standard 0-5 scale of a patient's daily functioning; 0 = fully
+          active)". After defining a term once, the short form may be reused. Prefer
+          everyday phrasing ("responds better than average", "expected gain") over
+          unexplained jargon.
         - Be specific and quantitative (cite the ATE, heterogeneity score,
           expected_lift_pp, and named segments) but concise. Audience: a pharma
-          brand / medical analyst making a targeting decision.
+          brand / commercial stakeholder making a targeting decision — not
+          necessarily a statistician.
         """
 
         overall_ate: float = dspy.InputField(
@@ -236,16 +251,25 @@ try:
             desc="The significance-gated targeting recommendation already computed "
             "(which segments, if any, qualify for a treatment-rate change)"
         )
+        cross_library_validation: str = dspy.InputField(
+            desc="Whether an independent uplift model (CausalML) reproduces the "
+            "primary EconML CATE segment direction/ranking — PASSED/FAILED with "
+            "the agreement score, or 'not computed'"
+        )
 
         executive_summary: str = dspy.OutputField(
-            desc="2-4 sentence overview for an executive, grounded in the numbers"
+            desc="2-4 sentence overview for an executive, grounded in the numbers; "
+            "no unexplained acronyms or clinical scales"
         )
         interpretation: str = dspy.OutputField(
             desc="Detailed interpretation of the heterogeneity and what it means for "
-            "targeting (or why uniform rollout is right)"
+            "targeting (or why uniform rollout is right). MUST define ATE, CATE, and "
+            "any clinical scale (e.g. ECOG) in a brief plain-English aside at first "
+            "mention — the reader is not a statistician"
         )
         key_insights: list = dspy.OutputField(
-            desc="3-5 concise, specific, quantitative insights (each cites a number)"
+            desc="3-5 concise, specific, quantitative insights (each cites a number); "
+            "define any acronym or clinical scale at its first use across the list"
         )
         high_responder_description: str = dspy.OutputField(
             desc="Who responds best, or 'no segment significantly above average'"
@@ -308,6 +332,7 @@ def generate_cate_interpretation(
     feature_importance_text: str,
     expected_lift_pp: float,
     targeting_summary: str,
+    cross_library_validation_text: str = "not computed",
 ) -> Optional[Dict[str, Any]]:
     """Run :class:`CATEInterpretationSignature` via DSPy + the configured OpenAI LM
     to produce an LLM-reasoned, analysis-GROUNDED explanation of the segment
@@ -342,6 +367,7 @@ def generate_cate_interpretation(
             feature_importance=feature_importance_text,
             expected_lift_pp=float(expected_lift_pp),
             targeting_summary=targeting_summary,
+            cross_library_validation=cross_library_validation_text,
         )
 
         insights = getattr(pred, "key_insights", None) or []

@@ -493,6 +493,9 @@ class CATEEstimatorNode:
                 "feature_importance": feature_importance,
                 "cate_by_segment": cate_by_segment,
                 "estimation_latency_ms": estimation_time,
+                # Library provenance for the Library Validation card; the
+                # uplift node extends this with "causalml" when it fits one.
+                "libraries_executed": ["econml"],
                 "status": "analyzing",
             }
 
