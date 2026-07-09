@@ -23,7 +23,7 @@ them for real.
 
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,8 @@ def _finite(value: Any) -> Optional[float]:
 
 
 def compute_cross_library_validation(
-    cate_by_segment: Optional[Dict[str, List[Dict[str, Any]]]],
-    uplift_by_segment: Optional[Dict[str, List[Dict[str, Any]]]],
+    cate_by_segment: Optional[Mapping[str, Sequence[Mapping[str, Any]]]],
+    uplift_by_segment: Optional[Mapping[str, Sequence[Mapping[str, Any]]]],
     uplift_model_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute EconML↔CausalML agreement over segments both libraries scored.

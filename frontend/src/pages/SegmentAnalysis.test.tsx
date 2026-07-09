@@ -9,6 +9,8 @@
  *  - Strategic Interpretation rendering in the Insights tab
  *  - Agent-driven config sends { query, brand, treatment_var, outcome_var }
  *    (NOT the old segment_vars/effect_modifiers/data_source hardcode)
+ *  - Library Validation honest-null (no fabricated "0% / Failed" from nulls)
+ *  - Policy Details: 2-decimal lift with units, zero-lift maintain cards hidden
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -355,6 +357,132 @@ describe('SegmentAnalysis — agent-driven config request', () => {
     expect(req).not.toHaveProperty('confounders');
     expect(req).not.toHaveProperty('data_source');
     expect(req).not.toHaveProperty('filters');
+  });
+});
+
+describe('SegmentAnalysis — Library Validation honest-null', () => {
+  it('renders "Not computed" / "Not run" when validation fields are null (no fabricated 0%/Failed)', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    // Legitimately-not-computed run: e.g. uplift degraded or <3 paired segments.
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: [],
+        library_agreement_score: undefined,
+        validation_passed: undefined,
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Not computed')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Not run')).toBeInTheDocument();
+    expect(screen.getByText('Not reported')).toBeInTheDocument();
+    // The old null-coerced fabrications must be gone.
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+  });
+
+  it('renders the real score and verdict when validation was computed', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 0.756,
+        validation_passed: true,
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('76%')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Passed')).toBeInTheDocument();
+    expect(screen.getByText('econml')).toBeInTheDocument();
+    expect(screen.getByText('causalml')).toBeInTheDocument();
+  });
+});
+
+describe('SegmentAnalysis — Policy Details formatting + zero-lift filtering', () => {
+  const policy = (
+    segment: string,
+    lift: number,
+    recommendedRate = 0.7,
+  ) => ({
+    segment,
+    current_treatment_rate: 0.5,
+    recommended_treatment_rate: recommendedRate,
+    expected_incremental_outcome: lift,
+    confidence: 0.9,
+  });
+
+  it('rounds lift to 2 decimals with units and hides zero-lift maintain segments', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        policy_recommendations: [
+          // Real values from run seg_8b4bc09251c7 — the raw float the card used
+          // to print verbatim.
+          policy('ecog_performance_status=1.0', 204.60681722776272),
+          policy('ecog_performance_status=0.0', 0, 0.5),
+          policy('age_band=65+', 0, 0.5),
+        ],
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Policies/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('+204.61 outcomes')).toBeInTheDocument();
+    });
+    // Raw unrounded float must not appear anywhere.
+    expect(screen.queryByText(/204\.60681722776272/)).not.toBeInTheDocument();
+    // Zero-lift maintain segments render no card...
+    expect(screen.queryByText('age_band=65+')).not.toBeInTheDocument();
+    // ...but are honestly accounted for in the footnote.
+    expect(screen.getByText(/2 other segments showed no statistically significant/i)).toBeInTheDocument();
+  });
+
+  it('shows an honest empty note when every segment is maintained (all zero-lift)', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        policy_recommendations: [
+          policy('ecog_performance_status=0.0', 0, 0.5),
+          policy('age_band=65+', 0, 0.5),
+        ],
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Policies/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No segment shows a treatment effect significantly above average/i),
+      ).toBeInTheDocument();
+    });
   });
 });
 
