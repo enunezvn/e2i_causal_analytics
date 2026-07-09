@@ -16,6 +16,7 @@
  */
 
 import * as React from 'react';
+import { useLocation } from 'react-router-dom';
 import { CopilotContext } from '@copilotkit/react-core';
 import { CopilotChat } from '@copilotkit/react-ui';
 import { useQuery } from '@tanstack/react-query';
@@ -62,28 +63,74 @@ export interface E2IChatSidebarProps {
 // SUGGESTIONS
 // =============================================================================
 
+type ChatSuggestion = { title: string; message: string };
+
 /**
- * Static starter suggestions rendered as pills in the (otherwise empty)
- * messages area. Deliberately chart-leaning: the first two route straight
- * through the renderKpiTrend generative-UI action so new users discover that
- * the assistant can answer with inline visuals, not just text.
+ * Starter pills rendered above the input. A static suggestions array bypasses
+ * CopilotKit's suggestion engine and is passed through reactively, so the
+ * pills stay visible across turns and retheme live when the user navigates or
+ * changes the brand filter.
+ *
+ * LLM-generated suggestions (suggestions="auto") are deliberately NOT used:
+ * the engine clones the default agent and forces a `copilotkitSuggest` tool
+ * call via forwardedProps.toolChoice, which our LangGraph runtime ignores
+ * (copilotkit.py binds tools with its own tool_choice="auto") — every
+ * exchange would burn a full orchestrator run and never yield a pill.
+ *
+ * Keep pill topics inside what the bound backend tools can actually answer
+ * (KPIs, causal paths, agents — see E2I_CHATBOT_TOOLS in chatbot_tools.py);
+ * the chart pills route through the renderKpiTrend generative-UI action so
+ * users discover inline visuals.
  */
-const CHAT_SUGGESTIONS = [
-  { title: '📈 Chart the TRx trend', message: 'Chart the TRx trend' },
-  {
-    title: '📊 Kisqali market share',
-    message: 'Chart the market share trend for Kisqali',
-  },
-  {
-    title: 'Biggest KPI movers',
+const PAGE_SUGGESTIONS: Record<string, ChatSuggestion> = {
+  '/': {
+    title: 'Executive summary',
     message:
-      'Which KPIs moved the most recently? Summarize the biggest movers in a table.',
+      'Give me an executive summary of current brand performance and the top actions to take.',
   },
-  {
-    title: 'Top causal drivers',
-    message: 'What are the top causal drivers of TRx right now?',
+  '/causal-analysis': {
+    title: 'Strongest causal paths',
+    message:
+      'What are the strongest causal paths driving TRx, and how confident are we in them?',
   },
-];
+  '/knowledge-graph': {
+    title: 'Paths to share growth',
+    message: 'What causal paths lead to market share growth?',
+  },
+  '/time-series': {
+    title: 'Compare brand TRx',
+    message: 'Compare TRx across Remibrutinib, Fabhalta, and Kisqali in a table.',
+  },
+  '/segment-analysis': {
+    title: 'Segment responders',
+    message: 'Which patient segments respond best to interventions?',
+  },
+  '/agent-orchestration': {
+    title: 'Agent activity',
+    message: 'Which agents are active right now and what are they working on?',
+  },
+};
+
+const DEFAULT_PAGE_SUGGESTION: ChatSuggestion = {
+  title: 'Top causal drivers',
+  message: 'What are the top causal drivers of TRx right now?',
+};
+
+function buildChatSuggestions(pathname: string, brand: string): ChatSuggestion[] {
+  return [
+    { title: '📈 Chart the TRx trend', message: 'Chart the TRx trend' },
+    {
+      title: `📊 ${brand} market share`,
+      message: `Chart the market share trend for ${brand}`,
+    },
+    PAGE_SUGGESTIONS[pathname] ?? DEFAULT_PAGE_SUGGESTION,
+    {
+      title: 'Biggest KPI movers',
+      message:
+        'Which KPIs moved the most recently? Summarize the biggest movers in a table.',
+    },
+  ];
+}
 
 // =============================================================================
 // COMPONENT
@@ -106,6 +153,11 @@ export function E2IChatSidebar({
 }: E2IChatSidebarProps) {
   const copilotEnabled = useCopilotEnabled();
   const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
+  const { pathname } = useLocation();
+  const chatSuggestions = React.useMemo(
+    () => buildChatSuggestions(pathname, filters.brand),
+    [pathname, filters.brand]
+  );
   const [showAgents, setShowAgents] = React.useState(false);
   const [traceIdCopied, setTraceIdCopied] = React.useState(false);
   const { submitFeedback } = useChatFeedback();
@@ -415,7 +467,7 @@ Visual answers: whenever the answer involves a KPI's evolution over time, a tren
                   initial: 'How can I help you explore E2I analytics?',
                   placeholder: 'Ask about KPIs, agents, or insights...',
                 }}
-                suggestions={CHAT_SUGGESTIONS}
+                suggestions={chatSuggestions}
                 className="min-h-0 flex-1"
               />
             </div>
