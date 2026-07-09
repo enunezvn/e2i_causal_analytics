@@ -76,6 +76,10 @@ export interface UIState {
 
   // Breadcrumbs
   breadcrumbs: Array<{ label: string; href?: string }>;
+
+  // Chat panel width in px; null = component default. Persisted so a
+  // user-dragged width survives reloads.
+  chatPanelWidth: number | null;
 }
 
 /**
@@ -116,6 +120,9 @@ export interface UIActions {
   setBreadcrumbs: (breadcrumbs: Array<{ label: string; href?: string }>) => void;
   clearBreadcrumbs: () => void;
 
+  // Chat panel actions
+  setChatPanelWidth: (width: number | null) => void;
+
   // Reset
   reset: () => void;
 }
@@ -142,6 +149,7 @@ const initialState: UIState = {
   modals: {},
   isMobileMenuOpen: false,
   breadcrumbs: [],
+  chatPanelWidth: null,
 };
 
 /**
@@ -257,13 +265,16 @@ export const useUIStore = create<UIStore>()(
         setBreadcrumbs: (breadcrumbs) => set({ breadcrumbs }),
         clearBreadcrumbs: () => set({ breadcrumbs: [] }),
 
+        // Chat panel actions
+        setChatPanelWidth: (width) => set({ chatPanelWidth: width }),
+
         // Reset
         reset: () => set(initialState),
       }),
       {
         name: 'e2i-ui-store',
         // Bump when the persisted shape changes so stale values are migrated.
-        version: 1,
+        version: 2,
         // Only persist durable preferences. The mobile drawer open/closed state
         // (`sidebarOpen`) is intentionally NOT persisted: it is ephemeral session
         // UI that must always start closed on load (see initialState), otherwise
@@ -271,18 +282,22 @@ export const useUIStore = create<UIStore>()(
         partialize: (state) => ({
           theme: state.theme,
           sidebarCollapsed: state.sidebarCollapsed,
+          chatPanelWidth: state.chatPanelWidth,
         }),
         // v0 persisted `sidebarOpen` (defaulted open), which rehydrated the mobile
         // drawer open on every load. Drop it here while preserving the user's
-        // theme + collapse preferences.
+        // theme + collapse preferences. v2 adds chatPanelWidth (absent in v0/v1
+        // → null, i.e. component default).
         migrate: (persisted) => {
           const prev = (persisted ?? {}) as {
             theme?: UIState['theme'];
             sidebarCollapsed?: boolean;
+            chatPanelWidth?: number | null;
           };
           return {
             theme: prev.theme ?? 'light',
             sidebarCollapsed: prev.sidebarCollapsed ?? false,
+            chatPanelWidth: prev.chatPanelWidth ?? null,
           };
         },
       }

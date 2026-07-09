@@ -7,6 +7,7 @@
  *
  * Features:
  * - Collapsible sidebar panel
+ * - Drag-to-resize width (min 320px up to full page width; double-click resets)
  * - Agent status indicators
  * - Message history
  * - Keyboard shortcut (Cmd/Ctrl + /)
@@ -33,6 +34,8 @@ import { getValidated } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled, type AgentInfo } from '@/providers/E2ICopilotProvider';
+import { useResizablePanel } from '@/hooks/use-resizable-panel';
+import { useUIStore } from '@/stores/ui-store';
 import { AgentStatusPanel } from './AgentStatusPanel';
 import { AgentProgressRenderer } from './AgentProgressRenderer';
 import { useChatFeedback, FeedbackRating } from '@/hooks/use-chat-feedback';
@@ -47,7 +50,7 @@ export interface E2IChatSidebarProps {
   defaultOpen?: boolean;
   /** Position of the sidebar */
   position?: 'left' | 'right';
-  /** Width of the sidebar */
+  /** Default width of the sidebar (px value; the user can drag-resize from there) */
   width?: string;
   /** Show agent status panel */
   showAgentStatus?: boolean;
@@ -79,6 +82,24 @@ export function E2IChatSidebar({
   const [showAgents, setShowAgents] = React.useState(false);
   const [traceIdCopied, setTraceIdCopied] = React.useState(false);
   const { submitFeedback } = useChatFeedback();
+
+  // Drag-to-resize: the persisted width lives in the UI store (survives
+  // reloads); the `width` prop is only the default. Clamped between 320px and
+  // the full window width; double-click on the handle resets to the default.
+  const chatPanelWidth = useUIStore((s) => s.chatPanelWidth);
+  const setChatPanelWidth = useUIStore((s) => s.setChatPanelWidth);
+  const {
+    width: panelWidth,
+    isDragging,
+    handleProps,
+  } = useResizablePanel({
+    defaultWidth: Number.parseInt(width, 10) || 400,
+    minWidth: 320,
+    edge: position === 'right' ? 'left' : 'right',
+    persistedWidth: chatPanelWidth,
+    onWidthChange: setChatPanelWidth,
+    ariaLabel: 'Resize chat panel',
+  });
 
   // Live agent status from the SAME real source the Agent Orchestration page
   // uses: GET /agents/status derives status from audit_chain_entries (an agent
@@ -258,12 +279,30 @@ export function E2IChatSidebar({
             exit={{ x: position === 'right' ? '100%' : '-100%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
             className={cn(
-              'fixed inset-y-0 z-50 flex flex-col bg-background border-l shadow-xl',
+              // Opaque theme background via the CSS var directly: `bg-background`
+              // is a NO-OP in this Tailwind v4 setup (no @theme mapping for
+              // --color-background), which left the panel transparent — the page
+              // showed through the "semi-transparent" pane.
+              'fixed inset-y-0 z-50 flex flex-col bg-[var(--color-background)] border-l shadow-xl',
               position === 'right' ? 'right-0' : 'left-0 border-l-0 border-r',
               className
             )}
-            style={{ width }}
+            // min() keeps a previously saved wide panel inside the viewport if
+            // the window has since shrunk
+            style={{ width: `min(${panelWidth}px, 100vw)` }}
           >
+            {/* Resize Handle (inner edge) */}
+            <div
+              {...handleProps}
+              title="Drag to resize — double-click to reset"
+              className={cn(
+                'absolute inset-y-0 z-10 w-2 cursor-col-resize touch-none',
+                'transition-colors hover:bg-blue-500/30 focus-visible:bg-blue-500/40 focus-visible:outline-none',
+                isDragging && 'bg-blue-500/40',
+                position === 'right' ? 'left-0' : 'right-0'
+              )}
+            />
+
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b bg-muted/50">
               <div className="flex items-center gap-3">

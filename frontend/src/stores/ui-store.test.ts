@@ -35,3 +35,24 @@ describe('ui-store: sidebar drawer state', () => {
     expect(useUIStore.getState().sidebarCollapsed).toBe(true);
   });
 });
+
+describe('ui-store: chat panel width', () => {
+  beforeEach(() => {
+    useUIStore.getState().reset();
+  });
+
+  it('defaults to null (component default width)', () => {
+    expect(useUIStore.getState().chatPanelWidth).toBeNull();
+  });
+
+  it('setChatPanelWidth stores a custom width', () => {
+    useUIStore.getState().setChatPanelWidth(640);
+    expect(useUIStore.getState().chatPanelWidth).toBe(640);
+  });
+
+  it('setChatPanelWidth(null) resets to the component default', () => {
+    useUIStore.getState().setChatPanelWidth(640);
+    useUIStore.getState().setChatPanelWidth(null);
+    expect(useUIStore.getState().chatPanelWidth).toBeNull();
+  });
+});

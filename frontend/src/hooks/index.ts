@@ -17,6 +17,12 @@ export { useCytoscape } from './use-cytoscape';
 
 // UI hooks
 export { useToast } from './use-toast';
+export { useResizablePanel } from './use-resizable-panel';
+export type {
+  UseResizablePanelOptions,
+  UseResizablePanelReturn,
+  ResizeHandleProps,
+} from './use-resizable-panel';
 
 // E2I CopilotKit hooks
 export { useE2IFilters } from './use-e2i-filters';
