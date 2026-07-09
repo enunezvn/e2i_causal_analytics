@@ -163,7 +163,7 @@ export function UserMenu({ className = '' }: UserMenuProps) {
           className={`
             inline-flex items-center justify-center gap-2
             rounded-md p-1.5
-            text-[var(--color-muted)]
+            text-[var(--color-muted-foreground)]
             hover:bg-[var(--color-secondary)]
             hover:text-[var(--color-foreground)]
             focus:outline-none focus:ring-2 focus:ring-[var(--color-ring)] focus:ring-offset-2

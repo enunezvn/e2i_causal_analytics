@@ -70,7 +70,7 @@ export function Footer({ className = '' }: FooterProps) {
             <p className="text-sm text-[var(--color-foreground)]">
               <span className="font-semibold">E2I Causal Analytics</span>
             </p>
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-xs text-[var(--color-muted-foreground)]">
               &copy; {currentYear} All rights reserved.
             </p>
           </div>
@@ -82,13 +82,13 @@ export function Footer({ className = '' }: FooterProps) {
           >
             <Link
               to="/"
-              className="text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors"
+              className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] transition-colors"
             >
               Dashboard
             </Link>
             <Link
               to="/system-health"
-              className="text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors"
+              className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] transition-colors"
             >
               System Status
             </Link>
@@ -98,7 +98,7 @@ export function Footer({ className = '' }: FooterProps) {
               rel="noopener noreferrer"
               className="
                 inline-flex items-center gap-1
-                text-[var(--color-muted)]
+                text-[var(--color-muted-foreground)]
                 hover:text-[var(--color-foreground)]
                 transition-colors
               "
@@ -109,7 +109,7 @@ export function Footer({ className = '' }: FooterProps) {
           </nav>
 
           {/* Version info */}
-          <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+          <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
             <span className="inline-flex items-center gap-1">
               <span
                 className="h-2 w-2 rounded-full bg-[var(--color-success)]"

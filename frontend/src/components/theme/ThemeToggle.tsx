@@ -64,7 +64,7 @@ export function ThemeToggle({ className = '' }: { className?: string }) {
       className={`
         inline-flex items-center justify-center
         rounded-md p-2
-        text-[var(--color-muted)]
+        text-[var(--color-muted-foreground)]
         hover:bg-[var(--color-secondary)]
         hover:text-[var(--color-foreground)]
         focus-ring
