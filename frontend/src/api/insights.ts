@@ -11,6 +11,7 @@ import type {
   HTEInsightRequest,
   FeedbackLearningInsightRequest,
   DigitalTwinInsightRequest,
+  HomeKpiInsightRequest,
 } from '@/types/insights';
 
 const BASE = '/insights';
@@ -44,3 +45,13 @@ export const getFeedbackLearningInsight = (r: FeedbackLearningInsightRequest) =>
 
 export const getDigitalTwinInsight = (r: DigitalTwinInsightRequest) =>
   post<StrategicInsightResponse, DigitalTwinInsightRequest>(`${BASE}/digital-twin`, r);
+
+export const getHomeKpiInsight = (r: HomeKpiInsightRequest) =>
+  post<StrategicInsightResponse, HomeKpiInsightRequest>(
+    `${BASE}/home-kpis`,
+    r,
+    // Server recomputes the full KPI batch (~6-10s) then runs the LM (~8-23s
+    // measured cold) — a cold scope can exceed the 30s client default. Redis
+    // caches the payload per scope, so repeats are fast; nginx allows 120s.
+    { timeout: 95000 }
+  );

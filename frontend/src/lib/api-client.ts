@@ -365,11 +365,16 @@ export async function post<T, D = unknown>(
   data?: D,
   config?: { params?: Record<string, unknown> } & SchemaRequestConfig<ZodTypeAny>
 ): Promise<T> {
-  // Forward only `params` to axios; `schema`/validation flags are stripped so
-  // they never leak into the request config. Preserve the original call shape
-  // (3rd arg undefined) when no params were supplied.
+  // Forward only `params`/`timeout` to axios; `schema`/validation flags are
+  // stripped so they never leak into the request config. Preserve the original
+  // call shape (3rd arg undefined) when neither was supplied.
   const axiosConfig =
-    config?.params !== undefined ? { params: config.params } : undefined;
+    config?.params !== undefined || config?.timeout !== undefined
+      ? {
+          ...(config?.params !== undefined ? { params: config.params } : {}),
+          ...(config?.timeout !== undefined ? { timeout: config.timeout } : {}),
+        }
+      : undefined;
   const response = await apiClient.post<T>(endpoint, data, axiosConfig);
   return maybeValidate(response.data, endpoint, config) as T;
 }

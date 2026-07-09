@@ -17,6 +17,7 @@ from src.insights import (
     digital_twin,
     executive_brief,
     feedback_learning,
+    home_kpi,
     hte,
     knowledge_graph,
     model_performance,
@@ -63,6 +64,16 @@ class KGInsightRequest(BaseModel):
 
 class ModelPerfInsightRequest(BaseModel):
     model_version: str
+
+
+class HomeKpiInsightRequest(BaseModel):
+    """Only the SCOPE is caller-supplied; the KPI figures are recomputed
+    server-side (same trust boundary as ExecutiveBriefInsightRequest)."""
+
+    brand: str = "All"
+    # Lowercase US-census region ('northeast'/'south'/'midwest'/'west') or
+    # None for the All-US portfolio view — same param the KPI batch route takes.
+    region: str | None = None
 
 
 class CausalEffect(BaseModel):
@@ -214,6 +225,59 @@ async def knowledge_graph_insight(
         payload = await asyncio.to_thread(knowledge_graph.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Curated knowledge graph (server-derived)")
+
+
+@router.post("/home-kpis", response_model=StrategicInsightResponse)
+async def home_kpi_insight(
+    req: HomeKpiInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Strategic interpretation of the home KPI grid for a brand + territory
+    (server-derived grounding: registry KPIs recomputed under the same
+    brand/region context the dashboard's batch endpoint uses)."""
+    from src.api.routes.kpi import get_kpi_calculator
+
+    def _load() -> dict[str, Any]:
+        calc = get_kpi_calculator()
+        metas = calc.list_kpis()
+        # Same context shape the dashboard's POST /kpis/batch sends; use_cache
+        # means this usually re-reads the values the grid just computed.
+        context: dict[str, Any] = {}
+        if req.brand != "All":
+            context["brand"] = req.brand
+        if req.region:
+            context["region"] = req.region
+        batch = calc.calculate_batch(kpi_ids=[m.id for m in metas], use_cache=True, context=context)
+        return home_kpi.build_grounding(req.brand, req.region, metas, batch.results)
+
+    try:
+        g = await asyncio.to_thread(_load)
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("home KPI insight grounding unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": "The KPI values for this scope are currently unavailable, "
+                "so no grounded interpretation can be produced right now — this is "
+                "a data-source failure, not an empty dashboard.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Registry KPIs for this scope (unavailable)",
+        )
+    # Key on the derived grounding strings so two scopes that differ in any
+    # computed value or status never collide.
+    key = cache_key(
+        "home-kpis",
+        f"{req.brand}:{req.region or 'all-us'}",
+        {"t": g["kpi_table"], "s": g["status_summary"], "c": g["coverage"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(home_kpi.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Registry KPIs recomputed for this scope (server-derived)")
 
 
 @router.post("/digital-twin", response_model=StrategicInsightResponse)

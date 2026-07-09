@@ -120,3 +120,15 @@ export interface DigitalTwinInsightRequest {
   brand: string;
   twin_type?: string;
 }
+
+export interface HomeKpiInsightRequest {
+  /**
+   * Scope only: the KPI figures are recomputed SERVER-SIDE under the same
+   * brand/region context the dashboard's batch endpoint uses — caller-posted
+   * figures are not accepted (same trust boundary as
+   * ExecutiveBriefInsightRequest).
+   */
+  brand: string;
+  /** Lowercase US-census region, or null/omitted for the All-US portfolio view. */
+  region?: string | null;
+}

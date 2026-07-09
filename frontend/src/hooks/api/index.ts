@@ -187,4 +187,5 @@ export {
   useTreatmentEffectInsight,
   useFeedbackLearningInsight,
   useDigitalTwinInsight,
+  useHomeKpiInsight,
 } from './use-insights';

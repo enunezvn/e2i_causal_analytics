@@ -39,6 +39,9 @@ vi.mock('@/hooks/api/use-home-executive-insights', () => ({
 vi.mock('@/hooks/api/use-gaps', () => ({
   useOpportunities: vi.fn(),
 }));
+vi.mock('@/hooks/api/use-insights', () => ({
+  useHomeKpiInsight: vi.fn(),
+}));
 // Alerts come from the monitoring API ONLY (the hardcoded ACTIVE_ALERTS
 // fallback was removed) — mock the hook for deterministic alert states.
 vi.mock('@/hooks/api/use-monitoring', () => ({
@@ -51,8 +54,9 @@ vi.mock('@/lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api-client')>();
   return { ...actual, getValidated: vi.fn() };
 });
-// Spy on navigation so we can assert per-card destinations (Model Performance
-// tab → /model-performance; every other card → /kpi-dictionary).
+// Spy on navigation so we can assert KPI cards navigate NOWHERE (the old
+// /model-performance drill lost the brand selection) while the other Home
+// links (System Health, Agent Status, Quick Actions) still route.
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -68,6 +72,7 @@ import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
+import { useHomeKpiInsight } from '@/hooks/api/use-insights';
 import { useAlerts, useBrandModelSummary } from '@/hooks/api/use-monitoring';
 import { getValidated } from '@/lib/api-client';
 
@@ -106,6 +111,12 @@ function resetHomeHookDefaults() {
   (useOpportunities as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
     isLoading: false,
+    error: null,
+  });
+  (useHomeKpiInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+    mutate: vi.fn(),
+    data: undefined,
+    isPending: false,
     error: null,
   });
   (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -552,14 +563,18 @@ describe('Home', () => {
       expect(screen.getByText(/Showing 1 of 3 defined KPIs/)).toBeInTheDocument();
     });
 
-    it('routes a Model Performance card to /model-performance', () => {
+    it('makes a Model Performance card non-interactive (drill lost the brand selection)', () => {
+      // The old /model-performance drill did NOT inherit the dashboard's brand
+      // selection — a user who picked Fabhalta would silently read another
+      // model's metrics. The card is now non-interactive like every other KPI.
       mockLiveKpis([{ id: 'WS1-MP-001', name: 'ROC-AUC', workstream: 'ws1_model_performance' }], {
         'WS1-MP-001': 0.82,
       });
       renderWithAllProviders(<Home />);
 
+      expect(screen.queryByText('View details')).not.toBeInTheDocument();
       fireEvent.click(screen.getByText('ROC-AUC').closest('div')!);
-      expect(mockNavigate).toHaveBeenCalledWith('/model-performance');
+      expect(mockNavigate).not.toHaveBeenCalledWith('/model-performance');
     });
 
     it('makes a non-Model-Performance card non-interactive (no drill-down)', () => {
@@ -576,6 +591,51 @@ describe('Home', () => {
       mockNavigate.mockClear();
       fireEvent.click(screen.getByText('False Alert Rate').closest('div')!);
       expect(mockNavigate).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // STRATEGIC INSIGHTS CARD TESTS
+  // =========================================================================
+
+  describe('Strategic Insights card', () => {
+    it('auto-populates for the selected scope on load (brand=All, region=null)', () => {
+      const mutate = vi.fn();
+      (useHomeKpiInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate,
+        data: undefined,
+        isPending: true,
+        error: null,
+      });
+      renderWithAllProviders(<Home />);
+
+      expect(screen.getByText('Strategic Insights')).toBeInTheDocument();
+      // The request carries ONLY the scope — figures are server-derived.
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(mutate).toHaveBeenCalledWith({ brand: 'All', region: null });
+    });
+
+    it('renders the generated insight, takeaways, and grounding chips', () => {
+      (useHomeKpiInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate: vi.fn(),
+        data: {
+          insight: 'Trigger precision is the portfolio bottleneck this period.',
+          key_takeaways: ['Prioritize WS2 trigger tuning'],
+          grounding: [{ label: 'Computed', value: '31/44' }],
+          is_fallback: false,
+          generated_at: '2026-07-09T18:00:00Z',
+          provenance: 'Registry KPIs recomputed for this scope (server-derived)',
+        },
+        isPending: false,
+        error: null,
+      });
+      renderWithAllProviders(<Home />);
+
+      expect(
+        screen.getByText('Trigger precision is the portfolio bottleneck this period.')
+      ).toBeInTheDocument();
+      expect(screen.getByText('Prioritize WS2 trigger tuning')).toBeInTheDocument();
+      expect(screen.getByText(/31\/44/)).toBeInTheDocument();
     });
   });
 
