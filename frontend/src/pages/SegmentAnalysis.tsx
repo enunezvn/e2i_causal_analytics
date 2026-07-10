@@ -63,6 +63,7 @@ import { QueryErrorState } from '@/components/ui/query-error-state';
 import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LabelGateBadge } from '@/components/insights/LabelGateBadge';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import {
   useSegmentHealth,
   useSegmentDatasets,
@@ -667,6 +668,33 @@ export default function SegmentAnalysis() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = useMemo(() => {
+    const brandLabel = selectedBrand === ALL_BRANDS ? 'All brands' : selectedBrand;
+    const lines: string[] = [
+      `Segment Analysis page. Brand filter: ${brandLabel}; treatment: ${selectedTreatment}; outcome: ${selectedOutcome}.`,
+    ];
+    if (analysisResult) {
+      lines.push(
+        `Analysis result on screen: overall ATE ${analysisResult.overall_ate?.toFixed(4) ?? 'n/a'}, heterogeneity score ${analysisResult.heterogeneity_score?.toFixed(2) ?? 'n/a'}, ${highResponders.length} high-responder and ${lowResponders.length} low-responder segments.`
+      );
+      const topHigh = highResponders[0];
+      if (topHigh) {
+        lines.push(
+          `Top high-responder segment: ${topHigh.segment_id} (CATE ${topHigh.cate_estimate.toFixed(4)}, ${topHigh.size_percentage.toFixed(1)}% of cohort).`
+        );
+      }
+      const firstInsight = analysisResult.key_insights?.[0];
+      if (firstInsight) lines.push(`Key insight: ${firstInsight}`);
+    } else {
+      lines.push('No analysis has been run yet on this visit.');
+    }
+    return lines.join('\n');
+  }, [selectedBrand, selectedTreatment, selectedOutcome, analysisResult, highResponders, lowResponders]);
+  usePageChatContext(pageChatSummary);
 
   return (
     <div className="container mx-auto py-6 space-y-6">

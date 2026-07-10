@@ -16,7 +16,7 @@
  * @module pages/ResourceOptimization
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   BarChart,
   Bar,
@@ -40,6 +40,7 @@ import { KPICard } from '@/components/visualizations';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { WarningBanner } from '@/components/ui/WarningBanner';
 import { StrategicInsightCard } from '@/components/insights';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import {
   useResourceHealth,
   useRunOptimizationAndWait,
@@ -386,6 +387,33 @@ export default function ResourceOptimization() {
     (sum, a) => sum + a.optimized_allocation,
     0
   );
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = useMemo(() => {
+    const lines: string[] = [
+      `Resource Optimization page. Brand: ${selectedBrand}; resource type: ${selectedResourceType}; objective: ${selectedObjective}.`,
+    ];
+    if (optimizationResult) {
+      lines.push(
+        `Optimization result on screen: ${optimizationResult.optimal_allocations.length} allocations, projected ROI ${optimizationResult.projected_roi}, projected total outcome ${optimizationResult.projected_total_outcome}.`
+      );
+      if (topIncreases[0]) {
+        lines.push(`Largest increase: ${topIncreases[0].entity_id} (+${topIncreases[0].change}).`);
+      }
+      if (topDecreases[0]) {
+        lines.push(`Largest decrease: ${topDecreases[0].entity_id} (${topDecreases[0].change}).`);
+      }
+    } else {
+      lines.push('No optimization run yet on this visit.');
+    }
+    return lines.join('\n');
+    // topIncreases/topDecreases are derived from optimizationResult inline
+    // (new arrays each render) — depend on the source result instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBrand, selectedResourceType, selectedObjective, optimizationResult]);
+  usePageChatContext(pageChatSummary);
 
   return (
     <div className="container mx-auto py-6 space-y-6">

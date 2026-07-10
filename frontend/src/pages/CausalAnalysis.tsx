@@ -66,6 +66,7 @@ import {
 import { KPICard } from '@/components/visualizations';
 import { CausalAnalysisDetail } from '@/components/causal/CausalAnalysisDetail';
 import { StrategicInsightCard } from '@/components/insights';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import {
   useCausalHealth,
   useCausalAnalysisHistory,
@@ -381,6 +382,33 @@ export default function CausalAnalysis() {
         : 'N/A',
     };
   }, [health, estimatorsData]);
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = useMemo(() => {
+    const brandLabel = selectedBrand === ALL_BRANDS ? 'All brands' : selectedBrand;
+    const lines: string[] = [
+      `Causal Analysis page. Brand filter: ${brandLabel}; dataset: ${dataset}.`,
+    ];
+    if (effects.length > 0) {
+      const top = effects
+        .slice(0, 3)
+        .map(
+          (e) =>
+            `${e.treatment} → ${e.outcome} (ATE ${e.ate?.toFixed(3)}, confidence ${e.confidence_score.toFixed(2)})`
+        )
+        .join('; ');
+      lines.push(`Discovered effects: ${effects.length} total. Top: ${top}.`);
+    }
+    if (teData) {
+      lines.push(
+        `Treatment-effect estimate on screen: ${teData.treatment_var} → ${teData.outcome_var} for ${teData.brand}, ATE ${teData.ate.toFixed(3)} (n=${teData.n}).`
+      );
+    }
+    return lines.join('\n');
+  }, [selectedBrand, dataset, effects, teData]);
+  usePageChatContext(pageChatSummary);
 
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">

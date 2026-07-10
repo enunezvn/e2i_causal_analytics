@@ -57,6 +57,7 @@ import {
 import { cn } from '@/lib/utils';
 import { mergeBrandSeries, type DatedValue } from '@/lib/timeseries-brands';
 import { KPICard } from '@/components/visualizations';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import {
   useKPIValue,
@@ -366,6 +367,28 @@ function TimeSeries() {
       },
     ].filter((group) => group.options.length > 0);
   }, [kpiList.data, coverageMap]);
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = useMemo(() => {
+    const lines: string[] = [
+      `Time Series page. KPI: ${seriesLabel} (${kpiId}); brand scope: ${brand || 'All brands'}; time range: ${timeRange}.`,
+    ];
+    if (comparing) {
+      const stats = compareBrandStats
+        .filter((s) => s.latest != null)
+        .map((s) => `${s.brand}: latest ${s.latest} (${s.count} months)`)
+        .join('; ');
+      if (stats) lines.push(`Comparing brands — ${stats}.`);
+    } else if (summary.count > 0) {
+      lines.push(
+        `Series on screen: ${summary.count} monthly points — current ${summary.current}, average ${summary.average.toFixed(1)}, min ${summary.min}, max ${summary.max}.`
+      );
+    }
+    return lines.join('\n');
+  }, [seriesLabel, kpiId, brand, timeRange, comparing, compareBrandStats, summary]);
+  usePageChatContext(pageChatSummary);
 
   return (
     <div className="container mx-auto px-4 py-8">

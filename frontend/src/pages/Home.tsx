@@ -70,6 +70,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ExecutiveSummary } from '@/components/dashboard/ExecutiveSummary';
 import { CausalValueChains } from '@/components/dashboard/CausalValueChains';
 import { StrategicInsightCard } from '@/components/insights';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import { getNavigationRoutes } from '@/router/routes';
 
 // =============================================================================
@@ -849,6 +850,60 @@ function Home() {
       setTimeout(() => setIsRefreshing(false), 500);
     }
   }, [queryClient]);
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context). Header line always; data lines only
+  // once loaded — the sidebar debounces so the richer summary usually wins.
+  const pageChatSummary = useMemo(() => {
+    const lines: string[] = [
+      `Home dashboard. Brand filter: ${selectedBrand}; region: ${selectedRegion}.`,
+    ];
+    if (kpiSummary?.metrics) {
+      const m = kpiSummary.metrics;
+      const parts: string[] = [];
+      if (m.trx_volume != null) parts.push(`Total TRx (MTD): ${m.trx_volume}`);
+      if (m.market_share != null) parts.push(`market share: ${m.market_share}%`);
+      if (m.hcp_reach != null) parts.push(`HCPs reached: ${m.hcp_reach}`);
+      if (parts.length > 0) lines.push(`KPI tiles — ${parts.join('; ')}.`);
+    }
+    if (activeExp?.active_count != null) {
+      lines.push(`Active campaigns: ${activeExp.active_count}.`);
+    }
+    if (modelSummary?.available && modelSummary.accuracy != null) {
+      lines.push(`Model accuracy (avg): ${(modelSummary.accuracy * 100).toFixed(1)}%.`);
+    }
+    if (computedKPIs.length > 0) {
+      lines.push(
+        `KPI grid: ${computedKPIs.length} computed KPIs, e.g. ${computedKPIs
+          .slice(0, 4)
+          .map((k) => k.name)
+          .join(', ')}.`
+      );
+    }
+    if (trustedHealth) {
+      lines.push(
+        `System health: ${Math.round(trustedHealth.overall_health_score)} (${trustedHealth.health_grade}).`
+      );
+    }
+    const topOpp = opportunities?.opportunities?.[0];
+    if (topOpp) {
+      lines.push(
+        `Top gap opportunity: ${topOpp.gap.metric} in ${topOpp.gap.segment_value} (expected ROI ${topOpp.roi_estimate.expected_roi}).`
+      );
+    }
+    return lines.join('\n');
+  }, [
+    selectedBrand,
+    selectedRegion,
+    kpiSummary,
+    activeExp,
+    modelSummary,
+    computedKPIs,
+    trustedHealth,
+    opportunities,
+  ]);
+  usePageChatContext(pageChatSummary);
 
   // Get brand color
   const selectedBrandInfo = BRANDS.find((b) => b.value === selectedBrand);
