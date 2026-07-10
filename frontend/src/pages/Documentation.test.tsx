@@ -65,3 +65,19 @@ describe('Documentation page shell', () => {
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
   });
 });
+
+describe('CausalScopeMap', () => {
+  it('renders the three causal levels', () => {
+    renderPage();
+    expect(screen.getByRole('button', { name: /hcp prescribing behavior/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /patient journey outcomes/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /market & brand performance/i })).toBeInTheDocument();
+  });
+
+  it('shows a level summary and its registry nodes on selection', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /patient journey outcomes/i }));
+    expect(screen.getByText(/treatment initiation, persistence, and discontinuation/i)).toBeInTheDocument();
+    expect(screen.getByText('patient persistence')).toBeInTheDocument();
+  });
+});

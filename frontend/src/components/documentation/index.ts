@@ -5,4 +5,5 @@
  * content.
  */
 export { SectionNav } from './SectionNav';
+export { CausalScopeMap } from './CausalScopeMap';
 export * from './content';
