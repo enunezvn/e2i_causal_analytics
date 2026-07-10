@@ -8,4 +8,5 @@ export { SectionNav } from './SectionNav';
 export { CausalScopeMap } from './CausalScopeMap';
 export { CorrelationCausationToggle } from './CorrelationCausationToggle';
 export { CapabilityIndex } from './CapabilityIndex';
+export { CausalPipeline } from './CausalPipeline';
 export * from './content';

@@ -148,3 +148,21 @@ describe('CapabilityIndex', () => {
     expect(within(twinCard as HTMLElement).getByText('HCP')).toBeInTheDocument();
   });
 });
+
+describe('CausalPipeline', () => {
+  it('renders the five stages', () => {
+    renderPage();
+    for (const name of ['Frame', 'Identify', 'Estimate', 'Refute', 'Act']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${name}`, 'i') })).toBeInTheDocument();
+    }
+  });
+
+  it('expands a stage with plain language and a "For analysts" collapsible', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /^refute/i }));
+    expect(screen.getByText(/attack the estimate before believing it/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /for analysts/i }));
+    expect(screen.getByText(/placebo treatment/i)).toBeInTheDocument();
+    expect(screen.getByText(/e-value/i)).toBeInTheDocument();
+  });
+});

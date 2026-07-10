@@ -17,6 +17,7 @@ import {
   CausalScopeMap,
   CorrelationCausationToggle,
   CapabilityIndex,
+  CausalPipeline,
   DOC_SECTIONS,
   STAT_CHIPS,
 } from '@/components/documentation';
@@ -88,7 +89,8 @@ export function Documentation() {
       </Section>
 
       <Section id="methodology" title="Methodology — how it works">
-        {/* CausalPipeline (Task 9), AgentTierStack (Task 10), ClinicalGrounding (Task 11) mount here */}
+        <CausalPipeline />
+        {/* AgentTierStack (Task 10), ClinicalGrounding (Task 11) mount here */}
       </Section>
 
       <Section id="practices" title="Best Practices — using E2I well">
