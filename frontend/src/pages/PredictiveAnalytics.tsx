@@ -140,6 +140,11 @@ interface FormField {
   type: FormFieldType;
   /** Allowed values for a categorical field (one-hot-encoded covariate). */
   options?: string[];
+  /** DGP-grounded numeric guidance from the backend's curated input_fields. */
+  min?: number;
+  max?: number;
+  step?: number;
+  hint?: string;
 }
 
 /**
@@ -161,6 +166,9 @@ function deriveFormFields(
   const asStringList = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
 
+  const asFiniteNumber = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
   const curatedFields = Array.isArray(bag['input_fields'])
     ? (bag['input_fields'] as Array<Record<string, unknown>>)
         .filter((f) => typeof f?.['name'] === 'string')
@@ -170,7 +178,14 @@ function deriveFormFields(
           if (f['type'] === 'category' && choices.length > 0) {
             return { name, type: 'category', options: choices };
           }
-          return { name, type: f['type'] === 'number' ? 'number' : 'string' };
+          return {
+            name,
+            type: f['type'] === 'number' ? 'number' : 'string',
+            min: asFiniteNumber(f['min']),
+            max: asFiniteNumber(f['max']),
+            step: asFiniteNumber(f['step']),
+            hint: typeof f['hint'] === 'string' ? f['hint'] : undefined,
+          };
         })
     : [];
   if (curatedFields.length > 0) return curatedFields;
@@ -924,9 +939,19 @@ function PredictiveAnalytics() {
                             type={field.type === 'number' ? 'number' : 'text'}
                             value={featureValues[field.name] ?? ''}
                             onChange={(e) => handleFeatureChange(field.name, e.target.value)}
-                            placeholder={`Enter ${field.name}`}
+                            placeholder={
+                              field.min !== undefined && field.max !== undefined
+                                ? `${field.min}–${field.max}`
+                                : `Enter ${field.name}`
+                            }
+                            min={field.min}
+                            max={field.max}
+                            step={field.step}
                             disabled={isPredicting}
                           />
+                        )}
+                        {field.hint && (
+                          <p className="text-xs text-muted-foreground">{field.hint}</p>
                         )}
                       </div>
                     ))}

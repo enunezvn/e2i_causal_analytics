@@ -90,3 +90,41 @@ def test_patient_cohort_features_have_no_specialty():
 def test_unknown_model_returns_none():
     assert build_curated_input_fields("totally_unknown_model") is None
     assert build_curated_input_fields("hcp_adoption_notabrand_goldstd_lr_v1") is None
+
+
+def test_patient_numeric_fields_carry_dgp_grounded_guidance():
+    """Every numeric input tells the user what values make sense (min/max/step/hint).
+
+    Bounds mirror the DGP draws: severity Normal(5,2) clip 0-10, age 18-85,
+    comorbidity Poisson clip 0-5, prior lines 0-3, academic_hcp binary.
+    """
+    by = _by_name(build_curated_input_fields("persistence_kisqali_goldstd_lr_v1"))
+    assert (by["disease_severity"]["min"], by["disease_severity"]["max"]) == (0, 10)
+    assert by["disease_severity"]["step"] == 0.1
+    assert (by["age_at_diagnosis"]["min"], by["age_at_diagnosis"]["max"]) == (18, 85)
+    assert (by["comorbidity_burden"]["min"], by["comorbidity_burden"]["max"]) == (0, 5)
+    assert (by["prior_therapy_lines"]["min"], by["prior_therapy_lines"]["max"]) == (0, 3)
+    assert (by["academic_hcp"]["min"], by["academic_hcp"]["max"]) == (0, 1)
+    assert "academic" in by["academic_hcp"]["hint"]
+    for name in (
+        "disease_severity",
+        "academic_hcp",
+        "age_at_diagnosis",
+        "comorbidity_burden",
+        "prior_therapy_lines",
+    ):
+        assert by[name]["hint"], f"{name} must carry a user-facing hint"
+
+
+def test_hcp_numeric_fields_carry_guidance_lognormals_unbounded_above():
+    """years_experience is hard-bounded (2-40); the two influence covariates are
+    log-normal in the DGP so they get a floor + observed-range hint but NO hard
+    max (a what-if may deliberately extrapolate)."""
+    by = _by_name(build_curated_input_fields("hcp_adoption_kisqali_goldstd_lr_v1"))
+    assert (by["years_experience"]["min"], by["years_experience"]["max"]) == (2, 40)
+    assert by["peer_influence_score"]["min"] == 0
+    assert "max" not in by["peer_influence_score"]
+    assert by["influence_network_size"]["min"] == 0
+    assert "max" not in by["influence_network_size"]
+    for name in ("peer_influence_score", "influence_network_size", "years_experience"):
+        assert by[name]["hint"], f"{name} must carry a user-facing hint"

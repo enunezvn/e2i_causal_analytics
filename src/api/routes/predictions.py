@@ -827,6 +827,63 @@ _REGION_CHOICES = ["northeast", "south", "midwest", "west"]
 # T9: insurance_type is a categorical persistence driver (access gradient) — render
 # it as a dropdown on the score-cohort form, not a free numeric input.
 _INSURANCE_CHOICES = ["commercial", "medicare", "medicaid"]
+# Per-covariate guidance for the what-if form's numeric inputs. min/max/step
+# mirror the DGP draws (patient_generator: severity Normal(5,2) clip 0-10, age
+# 18-85, comorbidity Poisson clip 0-5, prior lines 0-3; hcp_generator: years
+# 2-40) and the hints quote the observed substrate distribution. The two
+# influence covariates are log-normal with no hard upper bound, so they get a
+# floor + observed-range hint only — a what-if may deliberately extrapolate,
+# and values far outside the hinted range are extrapolations the model never
+# trained on. Brand-uniform by construction: the DGP draws these identically
+# across brands; only ``specialty`` varies by brand (BRAND_SPECIALTY_DIST).
+_NUMERIC_GUIDANCE: Dict[str, Dict[str, Any]] = {
+    "disease_severity": {
+        "min": 0,
+        "max": 10,
+        "step": 0.1,
+        "hint": "Severity scale 0–10 · cohort median ≈ 5",
+    },
+    "academic_hcp": {
+        "min": 0,
+        "max": 1,
+        "step": 1,
+        "hint": "Binary: 0 = community HCP, 1 = academic HCP",
+    },
+    "age_at_diagnosis": {
+        "min": 18,
+        "max": 85,
+        "step": 1,
+        "hint": "Age in years at diagnosis (18–85)",
+    },
+    "comorbidity_burden": {
+        "min": 0,
+        "max": 5,
+        "step": 1,
+        "hint": "Comorbidity count (0–5) · cohort median ≈ 1",
+    },
+    "prior_therapy_lines": {
+        "min": 0,
+        "max": 3,
+        "step": 1,
+        "hint": "Prior lines of therapy (0–3)",
+    },
+    "peer_influence_score": {
+        "min": 0,
+        "step": 0.1,
+        "hint": "Log-scale network centrality · observed ≈ 0.3–6.5, median ≈ 3",
+    },
+    "influence_network_size": {
+        "min": 0,
+        "step": 1,
+        "hint": "Peers in referral network · observed 0–~680, median ≈ 20",
+    },
+    "years_experience": {
+        "min": 2,
+        "max": 40,
+        "step": 1,
+        "hint": "Years in practice (2–40)",
+    },
+}
 
 
 def _parse_model_brand_cohort(model_name: str):
@@ -843,8 +900,9 @@ def _parse_model_brand_cohort(model_name: str):
 def build_curated_input_fields(model_name: str) -> Optional[List[Dict[str, Any]]]:
     """Brand/cohort-appropriate input fields for a gold-standard model, or None.
 
-    Each entry is ``{name, type, choices?}`` over the model's REAL covariates
-    (``cohort_spec`` base_covariates), with brand-appropriate categorical choices
+    Each entry is ``{name, type, choices?, min?, max?, step?, hint?}`` over the
+    model's REAL covariates (``cohort_spec`` base_covariates), with brand-appropriate
+    categorical choices and DGP-grounded numeric guidance (``_NUMERIC_GUIDANCE``)
     so the predictive-analytics form is clinically coherent (Kisqali -> oncology,
     Remibrutinib -> CSU specialties, Fabhalta -> PNH specialties). Numeric
     covariates stay ``type="number"``; values map 1:1 to the model's inputs, so
@@ -886,7 +944,7 @@ def build_curated_input_fields(model_name: str) -> Optional[List[Dict[str, Any]]
         elif cov == "insurance_type":
             fields.append({"name": cov, "type": "category", "choices": list(_INSURANCE_CHOICES)})
         else:
-            fields.append({"name": cov, "type": "number"})
+            fields.append({"name": cov, "type": "number", **_NUMERIC_GUIDANCE.get(cov, {})})
     return fields
 
 
