@@ -2445,3 +2445,6 @@ Appended 2026-07-10 by the execution coordinator. The plan code above is left un
 
 **Task 4 deviation (commit 6cd93ca2):**
 11. `frontend/src/components/layout/Sidebar.test.tsx` — hardcoded nav-link count bumped 23 → 24 (assertion + test title). The plan's Step 5 wrongly predicted Sidebar tests would pass untouched; adding the `/documentation` nav entry legitimately raises the count. Task 16's verification list includes this test — expect 24.
+
+**Task 6 code-quality review fix (commit a6faa870):**
+12. `frontend/src/pages/Documentation.test.tsx` — the CausalScopeMap describe block contains ONE test beyond the plan's Step 1 code: "defaults to the HCP level active on mount" (HCP button `aria-pressed="true"`, Patient/Market buttons `aria-pressed="false"`, HCP node text "rep detailing frequency" visible pre-click), and the plan's click test additionally asserts the Patient button has `aria-pressed="true"` after the click. Added because the plan's two tests never pinned the `useState('hcp')` default. Keep these; Tasks 7–13 appending later describe blocks must not remove them. Consider the same default-state pinning pattern when transcribing later toggle-style components.
