@@ -163,7 +163,10 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
       ) : (
         !seminal_real_world_evidence && (
           <p className="text-xs text-muted-foreground">
-            No real-world-evidence citation found for this brand.
+            No real-world evidence yet. RWE comes from post-marketing, observational
+            data (registries, claims, routine-care cohorts) — distinct from the
+            randomized trial endpoints above — and typically lags a brand&rsquo;s
+            approval by years, so recently approved drugs often have none.
           </p>
         )
       )}
