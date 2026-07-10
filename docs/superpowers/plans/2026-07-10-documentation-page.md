@@ -2442,3 +2442,6 @@ Appended 2026-07-10 by the execution coordinator. The plan code above is left un
 8. `frontend/src/pages/Documentation.tsx` — `const showLiveChip = typeof kpiTotal === 'number' && kpiTotal > 0;` derived once and used BOTH for rendering the live chip AND for the stat-chip grid columns (`repeat(5,…)` when true, `repeat(4,…)` when false — both literals statically present for Tailwind JIT).
 9. NEW FILE `frontend/src/components/documentation/SectionNav.test.tsx` — 2 tests locking in the scroll-spy behavior (topmost-wins, ignore-empty-batch). Exists beyond the plan's file list; keep it passing.
 10. `frontend/src/components/documentation/index.ts` — header comment reads "(removed by this feature)" not "(deleted)" (AgenticMethodology deletion happens in Task 14).
+
+**Task 4 deviation (commit 6cd93ca2):**
+11. `frontend/src/components/layout/Sidebar.test.tsx` — hardcoded nav-link count bumped 23 → 24 (assertion + test title). The plan's Step 5 wrongly predicted Sidebar tests would pass untouched; adding the `/documentation` nav entry legitimately raises the count. Task 16's verification list includes this test — expect 24.
