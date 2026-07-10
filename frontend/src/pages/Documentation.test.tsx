@@ -221,3 +221,13 @@ describe('AgentTierStack', () => {
     expect(coordination).toHaveAttribute('aria-expanded', 'false');
   });
 });
+
+describe('ClinicalGrounding', () => {
+  it('renders all five clinical sources with UMLS and OpenFDA present', () => {
+    renderPage();
+    const strip = screen.getByRole('region', { name: /grounded in clinical reality/i });
+    for (const name of ['UMLS', 'OpenFDA', 'ClinicalTrials.gov', 'PubMed', 'ChEMBL']) {
+      expect(within(strip).getByText(name)).toBeInTheDocument();
+    }
+  });
+});
