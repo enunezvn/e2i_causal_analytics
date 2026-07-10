@@ -637,10 +637,19 @@ function Home() {
     // the cards visible (they render as "Unavailable" with the degraded banner)
     // rather than hiding them, so the failure is legible, not a silent empty grid.
     if (batchFailed) return effectiveKPIs;
-    return effectiveKPIs.filter((kpi) => {
-      const r = valueByKpiId.get(kpi.id);
-      return r != null && r.value != null && !r.error;
-    });
+    return effectiveKPIs
+      .filter((kpi) => {
+        const r = valueByKpiId.get(kpi.id);
+        return r != null && r.value != null && !r.error;
+      })
+      // Overlay the threshold-derived batch status (good/warning/critical/
+      // informational) over the transform's neutral placeholder — the brand
+      // banner counts from here, and without the overlay On Track/Attention
+      // were structurally 0 in live mode.
+      .map((kpi) => ({
+        ...kpi,
+        status: mapKpiStatus(valueByKpiId.get(kpi.id)?.status),
+      }));
   }, [liveKpiMode, batchSettled, batchFailed, effectiveKPIs, valueByKpiId]);
 
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
@@ -1098,6 +1107,15 @@ function Home() {
                   <div className="font-semibold text-lg text-amber-500">{summaryStats.warning}</div>
                   <div className="text-muted-foreground">Attention</div>
                 </div>
+                {/* Critical is a distinct state (KPI cards render it as such) —
+                    folding it into Attention would understate it, omitting it
+                    would hide it from the banner entirely. */}
+                {summaryStats.critical > 0 && (
+                  <div className="text-center">
+                    <div className="font-semibold text-lg text-rose-500">{summaryStats.critical}</div>
+                    <div className="text-muted-foreground">Critical</div>
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>

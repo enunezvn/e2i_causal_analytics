@@ -595,6 +595,99 @@ describe('Home', () => {
   });
 
   // =========================================================================
+  // BRAND BANNER HEALTH COUNTS (live mode)
+  // =========================================================================
+
+  describe('Brand banner health counts (live mode)', () => {
+    /** Live mode with per-KPI batch statuses (the real backend vocabulary:
+     *  good / warning / critical / informational / unknown). */
+    function mockLiveKpisWithStatuses(
+      kpis: Array<{
+        id: string;
+        name: string;
+        workstream: string;
+        value: number | null;
+        status: string;
+      }>
+    ) {
+      (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          kpis: kpis.map((k) => ({
+            id: k.id,
+            name: k.name,
+            workstream: k.workstream,
+            unit: undefined,
+            definition: `${k.name} definition`,
+          })),
+        },
+        isLoading: false,
+        error: null,
+      });
+      (useBatchCalculateKPIs as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate: vi.fn(),
+        data: {
+          results: kpis.map((k) => ({
+            kpi_id: k.id,
+            value: k.value,
+            status: k.status,
+            error: null,
+            data_source: 'database',
+          })),
+        },
+        isError: false,
+      });
+    }
+
+    /** Select a specific brand so the banner (hidden for All) renders. */
+    async function selectBrand(name: string) {
+      const brandSelector = screen.getAllByRole('combobox')[0];
+      fireEvent.click(brandSelector);
+      fireEvent.click(await screen.findByText(name));
+    }
+
+    /** The stat value rendered above the given banner label. */
+    function bannerStat(label: string): string | null | undefined {
+      const labelEl = screen.getByText(label);
+      return labelEl.parentElement?.querySelector('.font-semibold')?.textContent;
+    }
+
+    it('counts On Track / Attention from the real batch statuses, not a hardcoded neutral', async () => {
+      mockLiveKpisWithStatuses([
+        { id: 'CM-001', name: 'TRx Growth', workstream: 'ws3_business_impact', value: 5.2, status: 'good' },
+        { id: 'CM-002', name: 'NBRx Share', workstream: 'ws3_business_impact', value: 12.1, status: 'good' },
+        { id: 'WS2-TR-001', name: 'Trigger Precision', workstream: 'ws2_triggers', value: 0.61, status: 'warning' },
+        { id: 'WS1-MP-001', name: 'ROC-AUC', workstream: 'ws1_model_performance', value: 0.55, status: 'critical' },
+        { id: 'WS3-BI-003', name: 'Total TRx Volume', workstream: 'ws3_business_impact', value: 125000, status: 'informational' },
+      ]);
+      renderWithAllProviders(<Home />);
+      await selectBrand('Remibrutinib');
+
+      expect(bannerStat('KPIs')).toBe('5');
+      // 2 × good → On Track; 1 × warning → Attention. Before the fix these were
+      // structurally 0: the transform hardcoded status:'neutral' and never
+      // overlaid the batch result status.
+      expect(bannerStat('On Track')).toBe('2');
+      expect(bannerStat('Attention')).toBe('1');
+      // critical is a real, distinct state — it must surface, not vanish into
+      // neither chip.
+      expect(bannerStat('Critical')).toBe('1');
+    });
+
+    it('omits the Critical chip when no KPI is critical', async () => {
+      mockLiveKpisWithStatuses([
+        { id: 'CM-001', name: 'TRx Growth', workstream: 'ws3_business_impact', value: 5.2, status: 'good' },
+        { id: 'WS2-TR-001', name: 'Trigger Precision', workstream: 'ws2_triggers', value: 0.61, status: 'warning' },
+      ]);
+      renderWithAllProviders(<Home />);
+      await selectBrand('Fabhalta');
+
+      expect(bannerStat('On Track')).toBe('1');
+      expect(bannerStat('Attention')).toBe('1');
+      expect(screen.queryByText('Critical')).not.toBeInTheDocument();
+    });
+  });
+
+  // =========================================================================
   // STRATEGIC INSIGHTS CARD TESTS
   // =========================================================================
 
