@@ -10,7 +10,7 @@ Components:
   - explain.py: Real-Time SHAP interpretability endpoints
 
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.2.1
 """
 
-__version__ = "4.2.0"
+__version__ = "4.2.1"
