@@ -311,6 +311,52 @@ describe('PredictiveAnalytics (cohort scoring)', () => {
     expect(typeof request.features.disease_severity).toBe('number');
   }, 15000);
 
+  it('renders backend numeric guidance (min/max/step, range placeholder, hint) on the what-if form', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        ...mockModelInfo,
+        input_fields: [
+          {
+            name: 'disease_severity',
+            type: 'number',
+            min: 0,
+            max: 10,
+            step: 0.1,
+            hint: 'Severity scale 0–10 · cohort median ≈ 5',
+          },
+          {
+            name: 'peer_influence_score',
+            type: 'number',
+            min: 0,
+            step: 0.1,
+            hint: 'Log-scale network centrality · observed ≈ 0.3–6.5, median ≈ 3',
+          },
+          { name: 'geographic_region', type: 'category', choices: ['south', 'west'] },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    fireEvent.click(screen.getByRole('button', { name: /what-if: score a hypothetical/i }));
+
+    // Bounded covariate: min/max/step attrs + a range placeholder + the hint.
+    const severity = screen.getByLabelText(/disease_severity/i);
+    expect(severity).toHaveAttribute('min', '0');
+    expect(severity).toHaveAttribute('max', '10');
+    expect(severity).toHaveAttribute('step', '0.1');
+    expect(severity).toHaveAttribute('placeholder', '0–10');
+    expect(screen.getByText(/Severity scale 0–10 · cohort median ≈ 5/)).toBeInTheDocument();
+
+    // Unbounded (log-normal) covariate: floor only, generic placeholder, observed-range hint.
+    const influence = screen.getByLabelText(/peer_influence_score/i);
+    expect(influence).toHaveAttribute('min', '0');
+    expect(influence).not.toHaveAttribute('max');
+    expect(influence).toHaveAttribute('placeholder', 'Enter peer_influence_score');
+    expect(screen.getByText(/observed ≈ 0.3–6.5, median ≈ 3/)).toBeInTheDocument();
+  });
+
   it('auto-generates the what-if interpretation from the returned score + SHAP', async () => {
     const user = userEvent.setup();
     (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({ data: mockCohort });
