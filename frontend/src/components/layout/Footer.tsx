@@ -92,6 +92,12 @@ export function Footer({ className = '' }: FooterProps) {
             >
               System Status
             </Link>
+            <Link
+              to="/documentation"
+              className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] transition-colors"
+            >
+              Documentation
+            </Link>
             <a
               href="/api/docs"
               target="_blank"

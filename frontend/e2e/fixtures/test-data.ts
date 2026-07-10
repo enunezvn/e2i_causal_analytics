@@ -110,6 +110,7 @@ export const ROUTES = {
   MONITORING: '/monitoring',
   AGENT_ORCHESTRATION: '/agent-orchestration',
   KPI_DICTIONARY: '/kpi-dictionary',
+  DOCUMENTATION: '/documentation',
   MEMORY_ARCHITECTURE: '/memory-architecture',
   DIGITAL_TWIN: '/digital-twin',
 } as const
