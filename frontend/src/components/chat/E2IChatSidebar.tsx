@@ -6,7 +6,8 @@
  * Provides natural language interaction with E2I agents.
  *
  * Features:
- * - Collapsible sidebar panel
+ * - Collapsible sidebar panel, non-modal: no backdrop, the page behind stays
+ *   readable and interactive while the chat is open
  * - Drag-to-resize width (min 320px up to full page width; double-click resets)
  * - Agent status indicators
  * - Message history
@@ -618,18 +619,10 @@ Visual answers: whenever the answer involves a KPI's evolution over time, a tren
         )}
       </AnimatePresence>
 
-      {/* Backdrop */}
-      <AnimatePresence>
-        {chatOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setChatOpen(false)}
-            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-          />
-        )}
-      </AnimatePresence>
+      {/* No backdrop: the pane is a non-modal docked panel — the page behind
+          it must stay readable AND interactive (scroll, hover, filter) so the
+          analyst can reference on-screen data while chatting. Close via the
+          header X, the FAB, or Cmd/Ctrl+/. */}
     </>
   );
 }
