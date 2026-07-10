@@ -9,57 +9,67 @@ import asyncio
 from types import SimpleNamespace
 
 from sklearn.base import is_classifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from src.agents.causal_impact.nodes.refutation import (
     RefutationNode,
-    _scaled_nuisance_init_params,
+    _reconstruction_nuisance_init_params,
 )
 from src.causal_engine.refutation_runner import GateDecision
 
 
-class TestScaledNuisanceInitParams:
-    """Perf-fix: the reconstructed estimator's nuisance models are scaled
-    (StandardScaler) so the logistic propensity converges fast instead of
-    grinding lbfgs to max_iter (~40s/refit) on mixed-scale covariates. Applied
-    ONLY to the lbfgs-prone estimators (LinearDML / DRLearner); forest-based
-    (CausalForestDML) and plain linear methods are left untouched."""
+class TestReconstructionNuisanceInitParams:
+    """The reconstructed LinearDML must use the SAME nuisance models production's
+    LinearDMLWrapper uses (RandomForest outcome + treatment), so the reconstructed
+    ATE reproduces the reported one and the tolerance guard validates the ACTUAL
+    estimate. A prior scaled-LINEAR substitution refit a different model and
+    diverged on nonlinear data (hcp_adoption: 0.2033 vs 0.0248), fail-closing
+    refutation. Forest / plain-linear methods take no override."""
 
-    def test_lineardml_discrete_scaled_classifier_propensity(self):
-        p = _scaled_nuisance_init_params("backdoor.econml.dml.LinearDML", discrete_treatment=True)
+    def test_lineardml_discrete_uses_randomforest_nuisance(self):
+        p = _reconstruction_nuisance_init_params(
+            "backdoor.econml.dml.LinearDML", discrete_treatment=True
+        )
         assert set(p) == {"model_y", "model_t"}
-        for m in p.values():
-            assert isinstance(m, Pipeline)
-            assert isinstance(m.steps[0][1], StandardScaler)
-        # discrete treatment -> propensity model_t is a classifier; model_y a regressor
+        # Mirror production exactly: RF regressor outcome, RF classifier propensity
+        # (discrete treatment). Same params as LinearDMLWrapper (n_estimators=50, ...).
+        assert isinstance(p["model_y"], RandomForestRegressor)
+        assert isinstance(p["model_t"], RandomForestClassifier)
+        assert p["model_y"].n_estimators == 50
+        assert p["model_y"].min_samples_leaf == 5
         assert is_classifier(p["model_t"])
         assert not is_classifier(p["model_y"])
 
     def test_lineardml_continuous_treatment_uses_regressor(self):
-        p = _scaled_nuisance_init_params("backdoor.econml.dml.LinearDML", discrete_treatment=False)
+        p = _reconstruction_nuisance_init_params(
+            "backdoor.econml.dml.LinearDML", discrete_treatment=False
+        )
+        assert isinstance(p["model_t"], RandomForestRegressor)
         assert not is_classifier(p["model_t"])
 
     def test_drlearner_left_at_defaults(self):
-        # DRLearner is intentionally NOT scaled here: its scaled-linear
-        # reconstruction is unvalidated against the selector's GradientBoosting
-        # nuisance, so we don't ship that numeric change. Left at econml defaults.
+        # DRLearner reconstruction is not yet validated against the selector's
+        # GradientBoosting nuisance, so we don't ship a numeric change. Follow-up.
         assert (
-            _scaled_nuisance_init_params("backdoor.econml.dr.DRLearner", discrete_treatment=True)
+            _reconstruction_nuisance_init_params(
+                "backdoor.econml.dr.DRLearner", discrete_treatment=True
+            )
             == {}
         )
 
     def test_forest_and_linear_methods_get_no_override(self):
-        # CausalForestDML uses scale-invariant forest nuisance -> no scaling needed.
+        # CausalForestDML uses scale-invariant forest nuisance -> no override needed.
         assert (
-            _scaled_nuisance_init_params(
+            _reconstruction_nuisance_init_params(
                 "backdoor.econml.dml.CausalForestDML", discrete_treatment=True
             )
             == {}
         )
         # Plain linear regression has no iterative nuisance to converge.
         assert (
-            _scaled_nuisance_init_params("backdoor.linear_regression", discrete_treatment=True)
+            _reconstruction_nuisance_init_params(
+                "backdoor.linear_regression", discrete_treatment=True
+            )
             == {}
         )
 
