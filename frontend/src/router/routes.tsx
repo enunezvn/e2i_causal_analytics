@@ -32,6 +32,7 @@ const SegmentAnalysis = lazy(() => import('@/pages/SegmentAnalysis'));
 const AuditChain = lazy(() => import('@/pages/AuditChain'));
 const FeedbackLearning = lazy(() => import('@/pages/FeedbackLearning'));
 const Analytics = lazy(() => import('@/pages/Analytics'));
+const Documentation = lazy(() => import('@/pages/Documentation'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -188,6 +189,14 @@ export const routeConfigs: RouteConfig[] = [
     title: 'KPI Dictionary',
     description: 'KPI reference across 6 workstreams',
     icon: 'book-open',
+    section: 'data',
+    showInNav: true,
+  },
+  {
+    path: '/documentation',
+    title: 'Documentation',
+    description: 'Platform purpose, methodology, and best practices',
+    icon: 'graduation-cap',
     section: 'data',
     showInNav: true,
   },
@@ -418,6 +427,16 @@ export const routes: RouteObject[] = [
       <ProtectedRoute>
         <LazyPage>
           <KPIDictionary />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/documentation',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <Documentation />
         </LazyPage>
       </ProtectedRoute>
     ),

@@ -26,10 +26,10 @@ describe('Sidebar navigation (rendered IA)', () => {
     ]);
   });
 
-  it('renders all 23 nav links with causal pages ahead of system pages', () => {
+  it('renders all 24 nav links with causal pages ahead of system pages', () => {
     renderSidebar();
     const links = screen.getAllByRole('link').map((a) => a.textContent?.trim());
-    expect(links).toHaveLength(23);
+    expect(links).toHaveLength(24);
     expect(links).toContain('Causal Analysis');
     expect(links).toContain('System Health');
     // a causal page must come before a system page (the old order had it reversed)
