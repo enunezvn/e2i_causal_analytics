@@ -2422,3 +2422,23 @@ Expected: count ≥ 1.
 - **Spec coverage:** Footer link → T5; sidebar + route → T4; §1 narrative/chips/scope map/toggle/index → T3/T6/T7/T8; §2 pipeline/tiers/clinical → T9/T10/T11; §3 → T12; §4 + chip degradation → T13; deletion → T14; e2e + ROUTES → T15; tsc/vitest gates → T16; PR/merge/deploy/live → T17. Scroll-spy graceful degradation → SectionNav guard + jsdom tests. No-fabricated-digits → content.test.ts regex. ✔
 - **Placeholder scan:** every code step contains complete code; no TBDs. The only intentionally deferred content is none. ✔
 - **Type consistency:** `CausalLevel`/`LEVEL_LABELS`/`CAPABILITY_EXEMPT_PATHS` defined in T2 and consumed in T6/T8; `DocSection`/`DOC_SECTIONS` in T2, consumed in T3; `PracticeRole` in T2, consumed in T12; `useKPIList(undefined, { retry: false })` matches the hook's `(params?, options?)` signature; `KPIListResponse.total` exists (`types/kpi.ts:246`). ✔
+
+---
+
+## Appendix: Authorized deviations from plan code (recorded during execution — do NOT revert)
+
+Appended 2026-07-10 by the execution coordinator. The plan code above is left untouched so task line references stay valid; where the deviations below conflict with plan code blocks, THE DEVIATIONS WIN. Later tasks that transcribe or extend the affected files must preserve them.
+
+**Task 3 type fixes (commit 86eaa91c):**
+1. `frontend/src/pages/Documentation.tsx` — `Section` helper props: `children?: React.ReactNode` (optional). The plan's required prop caused TS2741 on comment-only sections.
+2. `frontend/src/pages/Documentation.test.tsx` — mock idiom is `(useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({...})` (repo convention, per KPIDictionary.test.tsx), NOT the plan's `vi.mocked(...).mockReturnValue({...} as ReturnType<typeof useKPIList>)`, which fails TS2352. **Task 13's planned test additions repeat the bad cast — use the repo idiom instead.**
+
+**Task 3 code-quality review fixes (commit 3dbddf4c):**
+3. `SectionNav.tsx` — nav is `sticky top-16` (NOT `top-0`; the app Header is `sticky top-0 z-40 h-16` and paints over a `top-0` nav).
+4. `SectionNav.tsx` — full-bleed is `-mx-1 px-1` (NOT `-mx-4 px-4`; page wrapper uses `px-1`).
+5. `SectionNav.tsx` — scroll-spy callback filters to intersecting entries, early-returns on an empty batch, and activates the entry with the smallest `boundingClientRect.top` (topmost wins; the plan's last-write-wins loop was a bug).
+6. `SectionNav.tsx` — click handler respects reduced motion: `typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches` → `scrollIntoView` with `behavior: 'auto'` instead of `'smooth'`.
+7. `frontend/src/pages/Documentation.tsx` — `Section` helper uses `scroll-mt-28` (NOT `scroll-mt-16`; must clear header 64px + docked nav ≈48px).
+8. `frontend/src/pages/Documentation.tsx` — `const showLiveChip = typeof kpiTotal === 'number' && kpiTotal > 0;` derived once and used BOTH for rendering the live chip AND for the stat-chip grid columns (`repeat(5,…)` when true, `repeat(4,…)` when false — both literals statically present for Tailwind JIT).
+9. NEW FILE `frontend/src/components/documentation/SectionNav.test.tsx` — 2 tests locking in the scroll-spy behavior (topmost-wins, ignore-empty-batch). Exists beyond the plan's file list; keep it passing.
+10. `frontend/src/components/documentation/index.ts` — header comment reads "(removed by this feature)" not "(deleted)" (AgenticMethodology deletion happens in Task 14).
