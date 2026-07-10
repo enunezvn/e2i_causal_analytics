@@ -85,9 +85,12 @@ All styling uses the CSS-var token system (`--color-*` vars registered via Tailw
   1. **HCP prescribing behavior** — which promotional levers actually change prescribing (rep detailing, speaker programs, sampling, peer influence, digital engagement, rep training); 8 simulatable intervention channels (`digital_twin/effect/provider.py` `INTERVENTION_CATALOG`); a dedicated HCP-adoption predictive cohort targeting intent-to-prescribe.
   2. **Patient journey outcomes** — what drives treatment initiation, 180-day persistence, and discontinuation (patient support programs, copay support, access); three patient-level predictive cohorts (`src/insights/predictive_cohort.py`).
   3. **Market & brand performance** — how upstream behaviors plus market dynamics (formulary status, competitor activity) aggregate into TRx/NRx/NBRx, market share, and ROI.
+
+  The narrative closes by noting that business insights are grounded in clinical context from authoritative external sources — UMLS terminology and OpenFDA drug labels foremost, plus ClinicalTrials.gov, PubMed, and ChEMBL — detailed in §2's `ClinicalGrounding` strip.
 - **Interactive illustration A — `CausalScopeMap`:** a compact three-layer SVG diagram (HCP behavior → patient journey → brand outcomes) whose node labels are drawn verbatim from the causal registry's `_NODE_LABELS` (`src/insights/causal_context.py`) — every node shown is a modeled node, nothing invented. Hovering/tapping a layer highlights its nodes and shows a one-line description.
 - **Stat chips row:** static structural chips (3 brands / 4 indications · 4 predictive cohorts · 8 intervention channels · 5 refutation tests) typed as constants; one **live** chip — KPI count from `useKPIList` — that renders only when the query succeeds. On error or while loading, the chip is simply absent: no spinner, no error banner, no placeholder number. (The 21-agent/6-tier fact moves to §2 where the tier stack shows it.)
 - **Interactive illustration B — `CorrelationCausationToggle`:** an SVG scatter panel showing a convincing spurious correlation ("HCP calls correlate with TRx"), with a toggle that reveals the confounder (physician specialty) as a small DAG and shows how the adjusted effect differs. Data points are hand-authored illustrative coordinates (clearly labeled "illustrative example"), not real metrics.
+- **`CapabilityIndex` — per-page capability map (closes §1):** a grouped grid covering every nav page (grouped by the sidebar's five sections: Causal Analytics, Predictions, Decisions, Data & Reference, System), one card per page with the page title (an internal `<Link>` to it), the question that page answers (e.g. Causal Analysis → "What is the measured effect of X on Y, and does it survive refutation?"; Segment Analysis → "Who responds above or below average?"; Digital Twin → "What would happen if we intervened, before we spend?"; Predictive Analytics → "Which patients or HCPs are most likely to initiate, persist, discontinue, or adopt?"), and — for analysis surfaces — small badges for the causal level(s) it touches (HCP / patient / market). Retired routes (e.g. `/causal-discovery`, unified into `/causal-analysis`) are excluded. Exact card copy is authored at implementation time from each page's `routeConfig.description` plus its actual capabilities, and lives in `content.ts` as typed constants.
 
 ### §2 Methodology — "How it works"
 
@@ -97,6 +100,14 @@ Two interactive components:
   - *Plain language* (always visible when expanded): what the stage does and why it matters, ~2-3 sentences.
   - *"For analysts" collapsible* (Radix Collapsible): backdoor adjustment and DAG-based identification; EconML/CausalML cross-library validation; the five named refutation tests as implemented in `src/api/schemas/causal.py` (placebo treatment, random common cause, data subset, bootstrap, unobserved common cause — the last mapped from the E-value sensitivity analysis); proceed/review/block gates.
 - **`AgentTierStack`** — the corrected successor to `AgenticMethodology`: a compact vertical stack of the 6 agent tiers; clicking a tier expands it to list its agents with one-line roles. Content is typed constants sourced from the current codebase/docs (21 agents, 6 tiers) — no counts that drift weekly.
+- **`ClinicalGrounding`** — a highlight strip: "Business insights, grounded in clinical reality." Cards for the five external clinical knowledge sources the platform integrates, with **UMLS** and **OpenFDA** prominent:
+  - **UMLS** (UTS REST, `src/data/kg/umls_uts.py`) — the terminology backbone for knowledge-graph entity linking: concept search, CUI lookup, and ICD-10-CM/RxNorm/LOINC crosswalks.
+  - **OpenFDA** (`src/services/clinical_context/`) — official drug-label indications feeding the on-label gate, so insights stay inside approved labeling.
+  - **ClinicalTrials.gov** — real trial endpoints per brand/indication (`ClinicalTrialsEndpointProvider`).
+  - **PubMed** — real-world-evidence literature citations (`PubMedRWEProvider`).
+  - **ChEMBL** — mechanism-of-action context (`ChEMBLMechanismProvider`).
+
+  Each card states what the source contributes in one sentence. This component *describes* the integrations (static constants); the docs page never calls these external APIs itself.
 
 ### §3 Best Practices — "Using E2I well"
 
@@ -128,11 +139,14 @@ frontend/src/pages/Documentation.tsx           page shell: header, SectionNav, 4
 frontend/src/pages/Documentation.test.tsx      vitest + RTL (pattern: KPIDictionary.test.tsx)
 frontend/src/components/documentation/
   index.ts                                     barrel export
-  content.ts                                   typed constants: SCOPE_LEVELS, PIPELINE_STAGES,
-                                               AGENT_TIERS, PRACTICES, IMPACT_PATHWAYS, STAT_CHIPS
+  content.ts                                   typed constants: SCOPE_LEVELS, CAPABILITY_INDEX,
+                                               CLINICAL_SOURCES, PIPELINE_STAGES, AGENT_TIERS,
+                                               PRACTICES, IMPACT_PATHWAYS, STAT_CHIPS
   SectionNav.tsx                               sticky scroll-spy nav
   CausalScopeMap.tsx                           §1 three-level capability map
   CorrelationCausationToggle.tsx               §1 illustration
+  CapabilityIndex.tsx                          §1 per-page capability grid
+  ClinicalGrounding.tsx                        §2 clinical knowledge sources strip
   CausalPipeline.tsx                           §2 pipeline
   AgentTierStack.tsx                           §2 tier stack
   PracticeCards.tsx                            §3 do/don't cards
@@ -157,6 +171,8 @@ Each component is presentational with typed props/constants; only `Documentation
 - **`Documentation.test.tsx`** (vitest + RTL, `vi.mock('@/hooks/api/use-kpi')`, QueryClientProvider wrapper with `retry: false, gcTime: 0`):
   - all four sections and the section nav render;
   - scope map renders its three levels and highlights one on interaction;
+  - capability index renders all five groups and its links carry correct `to` paths (no retired routes);
+  - clinical grounding strip renders all five sources including UMLS and OpenFDA;
   - pipeline stage expands on click and shows the "For analysts" collapsible;
   - tier stack expands a tier to reveal agents;
   - live KPI chip renders with mocked data, and is absent when the hook returns an error;
