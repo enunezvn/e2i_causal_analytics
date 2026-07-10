@@ -176,3 +176,19 @@ describe('CausalPipeline', () => {
     expect(screen.queryByText(/econml/i)).not.toBeInTheDocument();
   });
 });
+
+describe('AgentTierStack', () => {
+  it('renders all six tiers', () => {
+    renderPage();
+    for (const name of ['ML Foundation', 'Coordination', 'Causal Analytics', 'Monitoring', 'ML Predictions', 'Self-Improvement']) {
+      expect(screen.getByRole('button', { name: new RegExp(name, 'i') })).toBeInTheDocument();
+    }
+  });
+
+  it('expands a tier to list its agents', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /causal analytics.*3 agents/i }));
+    expect(screen.getByText('causal_impact')).toBeInTheDocument();
+    expect(screen.getByText('heterogeneous_optimizer')).toBeInTheDocument();
+  });
+});

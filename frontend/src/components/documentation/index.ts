@@ -9,4 +9,5 @@ export { CausalScopeMap } from './CausalScopeMap';
 export { CorrelationCausationToggle } from './CorrelationCausationToggle';
 export { CapabilityIndex } from './CapabilityIndex';
 export { CausalPipeline } from './CausalPipeline';
+export { AgentTierStack } from './AgentTierStack';
 export * from './content';
