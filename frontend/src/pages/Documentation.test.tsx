@@ -23,11 +23,11 @@ import { useKPIList } from '@/hooks/api/use-kpi';
 // jsdom has neither scrollIntoView nor IntersectionObserver.
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
-  vi.mocked(useKPIList).mockReturnValue({
+  (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
     data: { kpis: [], total: 46 },
     isLoading: false,
     isError: false,
-  } as ReturnType<typeof useKPIList>);
+  });
 });
 
 function renderPage() {

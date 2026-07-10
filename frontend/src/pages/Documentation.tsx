@@ -14,7 +14,7 @@
 import { useKPIList } from '@/hooks/api/use-kpi';
 import { SectionNav, DOC_SECTIONS, STAT_CHIPS } from '@/components/documentation';
 
-function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+function Section({ id, title, children }: { id: string; title: string; children?: React.ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-16 space-y-6 pb-12">
       <h2 id={`${id}-heading`} className="text-xl font-semibold text-[var(--color-foreground)]">
