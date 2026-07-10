@@ -16,6 +16,7 @@ import {
   SectionNav,
   CausalScopeMap,
   CorrelationCausationToggle,
+  CapabilityIndex,
   DOC_SECTIONS,
   STAT_CHIPS,
 } from '@/components/documentation';
@@ -83,7 +84,7 @@ export function Documentation() {
         </div>
         <CausalScopeMap />
         <CorrelationCausationToggle />
-        {/* CapabilityIndex (Task 8) mounts here */}
+        <CapabilityIndex />
       </Section>
 
       <Section id="methodology" title="Methodology — how it works">

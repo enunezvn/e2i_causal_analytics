@@ -6,7 +6,7 @@
  * components/documentation/content.test.ts).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -114,5 +114,37 @@ describe('CorrelationCausationToggle', () => {
     renderPage();
     await userEvent.click(screen.getByRole('button', { name: /reveal the confounder/i }));
     expect(screen.getAllByText(/specialty drives both/i).length).toBeGreaterThan(0);
+  });
+});
+
+describe('CapabilityIndex', () => {
+  it('renders the five sidebar groups', () => {
+    renderPage();
+    const index = screen.getByRole('region', { name: /where to go for each question/i });
+    for (const label of [
+      'Causal Analytics',
+      'Predictive Modeling',
+      'Decisions & Optimization',
+      'Data & Reference',
+      'System & Platform',
+    ]) {
+      expect(within(index).getByRole('heading', { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it('links each card to its live page and excludes exempt/retired routes', () => {
+    renderPage();
+    const index = screen.getByRole('region', { name: /where to go for each question/i });
+    expect(within(index).getByRole('link', { name: /segment analysis/i })).toHaveAttribute('href', '/segment-analysis');
+    expect(within(index).queryByRole('link', { name: /causal discovery/i })).not.toBeInTheDocument();
+    expect(within(index).queryByRole('link', { name: /^documentation$/i })).not.toBeInTheDocument();
+  });
+
+  it('shows causal-level badges on analysis surfaces', () => {
+    renderPage();
+    const index = screen.getByRole('region', { name: /where to go for each question/i });
+    const twinCard = within(index).getByRole('link', { name: /digital twin/i }).closest('li');
+    expect(twinCard).not.toBeNull();
+    expect(within(twinCard as HTMLElement).getByText('HCP')).toBeInTheDocument();
   });
 });
