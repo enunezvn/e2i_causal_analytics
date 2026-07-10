@@ -17,9 +17,15 @@ export function SectionNav({ sections }: SectionNavProps) {
     if (typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) setActiveId(entry.target.id);
-        }
+        // Multiple sections can intersect the band in one batch (notably the
+        // initial callback); the TOPMOST one on screen wins, not the last in
+        // the array. Batches with no intersecting entries leave state alone.
+        const intersecting = entries.filter((entry) => entry.isIntersecting);
+        if (intersecting.length === 0) return;
+        const topmost = intersecting.reduce((a, b) =>
+          a.boundingClientRect.top <= b.boundingClientRect.top ? a : b
+        );
+        setActiveId(topmost.target.id);
       },
       // Trigger when a section's top crosses the upper third of the viewport.
       { rootMargin: '-20% 0px -70% 0px' }
@@ -34,14 +40,22 @@ export function SectionNav({ sections }: SectionNavProps) {
   return (
     <nav
       aria-label="On this page"
-      className="sticky top-0 z-10 -mx-4 mb-8 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-background)]/95 px-4 py-2 backdrop-blur"
+      className="sticky top-16 z-10 -mx-1 mb-8 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-background)]/95 px-1 py-2 backdrop-blur"
     >
       <ul className="flex items-center gap-1">
         {sections.map((s) => (
           <li key={s.id}>
             <button
               type="button"
-              onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              onClick={() => {
+                // jsdom has no matchMedia — the typeof guard keeps tests stub-free.
+                const reduceMotion =
+                  typeof window.matchMedia === 'function' &&
+                  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                document
+                  .getElementById(s.id)
+                  ?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+              }}
               aria-current={activeId === s.id ? 'true' : undefined}
               className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors motion-reduce:transition-none ${
                 activeId === s.id

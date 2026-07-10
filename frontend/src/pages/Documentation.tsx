@@ -16,7 +16,7 @@ import { SectionNav, DOC_SECTIONS, STAT_CHIPS } from '@/components/documentation
 
 function Section({ id, title, children }: { id: string; title: string; children?: React.ReactNode }) {
   return (
-    <section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-16 space-y-6 pb-12">
+    <section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-28 space-y-6 pb-12">
       <h2 id={`${id}-heading`} className="text-xl font-semibold text-[var(--color-foreground)]">
         {title}
       </h2>
@@ -39,6 +39,7 @@ export function Documentation() {
   // absence (never a spinner, error banner, or placeholder number).
   const { data: kpiData } = useKPIList(undefined, { retry: false });
   const kpiTotal = kpiData?.total;
+  const showLiveChip = typeof kpiTotal === 'number' && kpiTotal > 0;
 
   return (
     <div className="space-y-6 px-1">
@@ -62,13 +63,17 @@ export function Documentation() {
           levels — HCP prescribing behavior, patient journey outcomes, and market &amp; brand
           performance.
         </p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 md:max-w-3xl md:[grid-template-columns:repeat(5,minmax(0,1fr))]">
+        <div
+          className={`grid grid-cols-2 gap-3 sm:grid-cols-4 md:max-w-3xl ${
+            showLiveChip
+              ? 'md:[grid-template-columns:repeat(5,minmax(0,1fr))]'
+              : 'md:[grid-template-columns:repeat(4,minmax(0,1fr))]'
+          }`}
+        >
           {STAT_CHIPS.map((chip) => (
             <StatChipView key={chip.label} value={chip.value} label={chip.label} />
           ))}
-          {typeof kpiTotal === 'number' && kpiTotal > 0 && (
-            <StatChipView value={String(kpiTotal)} label="governed KPIs" />
-          )}
+          {showLiveChip && <StatChipView value={String(kpiTotal)} label="governed KPIs" />}
         </div>
         {/* CausalScopeMap (Task 6), CorrelationCausationToggle (Task 7), CapabilityIndex (Task 8) mount here */}
       </Section>
