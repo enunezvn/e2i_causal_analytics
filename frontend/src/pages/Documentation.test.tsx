@@ -165,4 +165,14 @@ describe('CausalPipeline', () => {
     expect(screen.getByText(/placebo treatment/i)).toBeInTheDocument();
     expect(screen.getByText(/e-value/i)).toBeInTheDocument();
   });
+
+  it('resets the "For analysts" layer when switching stages', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /^refute/i }));
+    await userEvent.click(screen.getByRole('button', { name: /for analysts/i }));
+    expect(screen.getByText(/placebo treatment/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^estimate/i }));
+    expect(screen.getByRole('button', { name: /for analysts/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/econml/i)).not.toBeInTheDocument();
+  });
 });

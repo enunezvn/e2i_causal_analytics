@@ -42,7 +42,7 @@ export function CausalPipeline() {
       </div>
 
       {openStage && (
-        <div className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
+        <div key={openStage.id} className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
           <p className="text-sm leading-6 text-[var(--color-foreground)]">{openStage.plain}</p>
           <Collapsible className="mt-3">
             <CollapsibleTrigger className="flex items-center gap-1 text-xs font-medium text-[var(--color-primary)] hover:underline">
