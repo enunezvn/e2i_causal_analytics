@@ -20,6 +20,7 @@ import {
   CausalPipeline,
   AgentTierStack,
   ClinicalGrounding,
+  PracticeCards,
   DOC_SECTIONS,
   STAT_CHIPS,
 } from '@/components/documentation';
@@ -97,7 +98,7 @@ export function Documentation() {
       </Section>
 
       <Section id="practices" title="Best Practices — using E2I well">
-        {/* PracticeCards (Task 12) mounts here */}
+        <PracticeCards />
       </Section>
 
       <Section id="impact" title="Expected Impact — what good looks like">

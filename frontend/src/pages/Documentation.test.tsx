@@ -231,3 +231,21 @@ describe('ClinicalGrounding', () => {
     }
   });
 });
+
+describe('PracticeCards', () => {
+  it('renders do/don’t pairs', () => {
+    renderPage();
+    expect(screen.getByText(/check the refutation gate/i)).toBeInTheDocument();
+    expect(screen.getByText(/rerun an analysis with different settings/i)).toBeInTheDocument();
+  });
+
+  it('filters by role', async () => {
+    renderPage();
+    // whatif-ranges is analyst-only; informational-kpis is exec-only.
+    await userEvent.click(screen.getByRole('button', { name: /^exec$/i }));
+    expect(screen.queryByText(/what-if simulation inputs/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/informational.*kpis as if they were performance targets/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^all$/i }));
+    expect(screen.getByText(/what-if simulation inputs/i)).toBeInTheDocument();
+  });
+});
