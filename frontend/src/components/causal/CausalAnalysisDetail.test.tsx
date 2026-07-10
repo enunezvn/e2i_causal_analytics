@@ -103,8 +103,39 @@ describe('CausalAnalysisDetail', () => {
   it('renders the estimator-comparison panel (the #1030 data-driven evaluation)', () => {
     renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
     expect(screen.getByText('Estimator selection (data-driven)')).toBeInTheDocument();
-    expect(screen.getByText(/2\/2 estimators fit/)).toBeInTheDocument();
+    expect(screen.getByText(/2\/2 applicable estimators fit/)).toBeInTheDocument();
     expect(screen.getByText(/confounding-robust preferred over OLS/)).toBeInTheDocument();
+  });
+
+  it('renders empty-backdoor estimators as "Not applicable", not a fit failure', () => {
+    // A zero-covariate (randomized) question: only OLS applies; the covariate-based
+    // estimators are skipped with an honest not-applicable reason, never a raw
+    // sklearn "0 feature(s)" traceback.
+    const rct: AgentCausalAnalysisResponse = {
+      ...RESULT,
+      selected_estimator: 'ols',
+      estimator_comparison: {
+        candidates: [
+          { estimator: 'ols', success: true, skipped: false, energy_score: 0.42, ate: 0.43, error: null, is_selected: true },
+          { estimator: 'causal_forest', success: false, skipped: true, energy_score: null, ate: null, error: 'not applicable: no covariates to adjust for (randomized / empty-backdoor design).', is_selected: false },
+          { estimator: 'linear_dml', success: false, skipped: true, energy_score: null, ate: null, error: 'not applicable: no covariates to adjust for (randomized / empty-backdoor design).', is_selected: false },
+        ],
+        selection_reason: 'No covariates to adjust for (randomized / empty-backdoor design), so ols is correct.',
+        energy_score_gap: 0,
+        n_evaluated: 3,
+        n_succeeded: 1,
+        quality_tier: 'good',
+        requires_review: false,
+      },
+    };
+    renderWithProviders(<CausalAnalysisDetail result={rct} />);
+    // Header distinguishes fit vs not-applicable, never implying the skipped ones failed.
+    expect(screen.getByText(/1\/1 applicable estimator fit/)).toBeInTheDocument();
+    expect(screen.getByText(/2 not applicable \(no covariates\)/)).toBeInTheDocument();
+    // The skipped estimators are badged "Not applicable" and never show the raw
+    // sklearn "0 feature(s)" traceback text.
+    expect(screen.getAllByText('Not applicable').length).toBe(2);
+    expect(screen.queryByText(/0 feature/)).toBeNull();
   });
 
   it('renders interpretation: key insights + recommendations', () => {

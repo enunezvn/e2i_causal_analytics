@@ -551,11 +551,21 @@ class EstimatorCandidate(BaseModel):
 
     estimator: str = Field(..., description="Estimator type (e.g. causal_forest / linear_dml)")
     success: bool = Field(default=False, description="Did this estimator fit successfully?")
+    skipped: bool = Field(
+        default=False,
+        description=(
+            "True if this estimator was NOT run because it is not applicable to this "
+            "design (e.g. a covariate-based estimator on a zero-covariate / randomized "
+            "question) — distinct from a genuine fit failure"
+        ),
+    )
     energy_score: Optional[float] = Field(
         default=None, description="Energy score (LOWER is better); None if the fit failed"
     )
     ate: Optional[float] = Field(default=None, description="This estimator's ATE estimate")
-    error: Optional[str] = Field(default=None, description="Failure reason, if it did not fit")
+    error: Optional[str] = Field(
+        default=None, description="Failure reason (or not-applicable reason if skipped)"
+    )
     is_selected: bool = Field(default=False, description="True for the winning estimator")
 
 
@@ -867,6 +877,14 @@ class ClinicalContext(BaseModel):
     pivotal_endpoints: PivotalEndpoint
     real_world_evidence: Optional[RealWorldEvidence] = Field(
         default=None, description="A real cited RWE reference; None when none was found."
+    )
+    seminal_real_world_evidence: Optional[RealWorldEvidence] = Field(
+        default=None,
+        description=(
+            "Curated brand-SPECIFIC seminal RWE citation (independent of the live "
+            "relevance search, which can rank a competitor/class-comparison paper "
+            "first). None when no seminal RWE is curated for this brand."
+        ),
     )
     approved_indications: Optional[ApprovedIndications] = Field(
         default=None, description="FDA-label approved indications + limitations + boxed warning."

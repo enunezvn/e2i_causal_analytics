@@ -145,6 +145,23 @@ class ClinicalContextService:
                 "url": cite.citation.url,
                 "source": cite.source,
             }
+        # Curated brand-SPECIFIC seminal RWE (from the brand map). Deterministic and
+        # always present for brands that have one, so the brand of interest gets a
+        # brand-faithful reference regardless of what the live relevance search above
+        # returned. The URL is built from the PMID; source is honestly "curated".
+        seminal_payload: Optional[Dict[str, Any]] = None
+        if profile.seminal_rwe:
+            s = profile.seminal_rwe
+            pmid = s.get("pmid")
+            seminal_payload = {
+                "pmid": pmid,
+                "title": s.get("title"),
+                "journal": s.get("journal"),
+                "pubdate": s.get("year"),
+                "doi": s.get("doi"),
+                "url": (f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None),
+                "source": "curated",
+            }
         return {
             "brand": profile.brand,
             "drug_name": profile.drug_name,
@@ -160,6 +177,7 @@ class ClinicalContextService:
                 "source": eps.source,
             },
             "real_world_evidence": citation_payload,
+            "seminal_real_world_evidence": seminal_payload,
             "approved_indications": {
                 "indications": list(indications.approved_indications),
                 "limitations_of_use": indications.limitations_of_use,

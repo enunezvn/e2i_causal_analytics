@@ -102,6 +102,24 @@ _ESTIMATOR_SPEED_RANK: dict[EstimatorType, int] = {
 _CONFOUNDING_BLIND_ESTIMATORS: frozenset[EstimatorType] = frozenset({EstimatorType.OLS})
 
 
+# Estimators that can produce an estimate from a ZERO-covariate design matrix (an
+# empty backdoor — the correct adjustment set for a randomized / exogenous
+# treatment, e.g. the nba_triggers RCT). Only OLS has an empty-backdoor path (its
+# treatment coefficient is the unadjusted difference-in-means); every DML / forest
+# / meta-learner orthogonalises against covariates and its nuisance/propensity fit
+# raises sklearn's "Found array with 0 feature(s)" on an empty X. So on an empty
+# backdoor the covariate-requiring estimators are NOT applicable (not "failed"):
+# they are skipped with an honest reason instead of surfacing a raw traceback.
+_EMPTY_BACKDOOR_CAPABLE: frozenset[EstimatorType] = frozenset({EstimatorType.OLS})
+
+_EMPTY_BACKDOOR_SKIP_REASON = (
+    "not applicable: no covariates to adjust for (randomized / empty-backdoor "
+    "design). Covariate-based estimators (DML, causal forest, meta-learners) have "
+    "nothing to orthogonalize against here; the unadjusted contrast (OLS) is the "
+    "correct estimator."
+)
+
+
 class SelectionStrategy(str, Enum):
     """Strategy for selecting among estimators."""
 
@@ -136,6 +154,14 @@ class EstimatorResult:
     error_message: Optional[str] = None
     error_type: Optional[str] = None
 
+    # NOT-APPLICABLE (skipped, not failed): the estimator was deliberately not
+    # run because it cannot apply to this design — e.g. a covariate-requiring
+    # DML / forest / meta-learner on a ZERO-covariate (randomized / empty-backdoor)
+    # question, where the correct estimator is the unadjusted contrast (OLS).
+    # ``skipped`` distinguishes this from a genuine ``.fit()`` failure so the UI
+    # renders "not applicable" instead of a cryptic sklearn traceback.
+    skipped: bool = False
+
     # Timing
     estimation_time_ms: float = 0.0
 
@@ -154,6 +180,7 @@ class EstimatorResult:
         return {
             "estimator_type": self.estimator_type.value,
             "success": self.success,
+            "skipped": self.skipped,
             "ate": self.ate,
             "ate_std": self.ate_std,
             "ate_ci_lower": self.ate_ci_lower,
@@ -1150,8 +1177,31 @@ class EstimatorSelector:
 
         results: list[EstimatorResult] = []
 
+        # Empty backdoor (zero covariates) = the correct adjustment set for a
+        # randomized / exogenous treatment. Covariate-requiring estimators cannot
+        # fit a 0-feature design matrix (EconML/sklearn raise "Found array with 0
+        # feature(s)"), so skip them with an honest not-applicable reason rather
+        # than surfacing that raw traceback per-estimator in the UI comparison.
+        empty_backdoor = covariates.shape[1] == 0
+
         # Evaluate each estimator
         for wrapper in self.estimators:
+            if empty_backdoor and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
+                logger.info(
+                    "Skipping %s: empty backdoor (0 covariates) — not applicable.",
+                    wrapper.estimator_type.value,
+                )
+                results.append(
+                    EstimatorResult(
+                        estimator_type=wrapper.estimator_type,
+                        success=False,
+                        skipped=True,
+                        error_message=_EMPTY_BACKDOOR_SKIP_REASON,
+                        error_type="NotApplicable",
+                    )
+                )
+                continue
+
             logger.info(f"Evaluating {wrapper.estimator_type.value}...")
 
             result = wrapper.fit(treatment, outcome, covariates, **kwargs)
@@ -1372,6 +1422,17 @@ class EstimatorSelector:
             return "All estimators failed; returning last attempt"
 
         successful = [r for r in all_results if r.success]
+        skipped = [r for r in all_results if r.skipped]
+
+        # Empty-backdoor (randomized / exogenous treatment) case: the covariate-
+        # requiring estimators were skipped as not-applicable, so the unadjusted
+        # contrast (OLS) is the only — and correct — estimator. Say so plainly.
+        if skipped and selected.estimator_type in _EMPTY_BACKDOOR_CAPABLE:
+            return (
+                "No covariates to adjust for (randomized / empty-backdoor design), so "
+                f"the unadjusted contrast ({selected.estimator_type.value}) is the "
+                "correct estimator; covariate-based estimators are not applicable here."
+            )
 
         if len(successful) == 1:
             return f"Only {selected.estimator_type.value} succeeded"

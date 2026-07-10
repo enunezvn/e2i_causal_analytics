@@ -73,6 +73,54 @@ async def test_endpoint_returns_assembled_context_for_known_brand():
 
 
 @pytest.mark.asyncio
+async def test_endpoint_surfaces_seminal_rwe_through_schema():
+    """The curated brand-specific seminal RWE must survive the ClinicalContext
+    schema round-trip (response_model=ClinicalContext). Regression guard: the
+    field was originally plumbed through the service but NOT declared on the
+    schema, so Pydantic's default extra='ignore' silently dropped it before it
+    ever reached the frontend."""
+    fake_ctx = {
+        "brand": "Kisqali",
+        "drug_name": "ribociclib",
+        "disease": "Malignant neoplasm of breast",
+        "our_outcome": "persistent_180d",
+        "mapped_endpoint": "Treatment persistence / duration of therapy",
+        "mechanism": {"mechanism_of_action": "CDK4/6 inhibitor", "source": "chembl"},
+        "pivotal_endpoints": {
+            "endpoints": ["Overall Survival (OS)"],
+            "source": "clinicaltrials.gov",
+        },
+        "real_world_evidence": None,
+        "seminal_real_world_evidence": {
+            "pmid": "36135090",
+            "title": "Real-World Clinical Outcomes of Ribociclib ...",
+            "journal": "Current Oncology",
+            "pubdate": "2022",
+            "doi": "10.3390/curroncol29090521",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/36135090/",
+            "source": "curated",
+        },
+        "honesty_label": "estimate = synthetic; context = real, cited",
+    }
+    with patch.object(
+        causal_routes._clinical_context_service, "get_context", return_value=fake_ctx
+    ):
+        with patch.object(
+            causal_routes,
+            "_list_dataset_brands",
+            return_value=["Kisqali", "Fabhalta", "Remibrutinib"],
+        ):
+            resp = await causal_routes.get_clinical_context(
+                brand="Kisqali", outcome="persistent_180d", user={"sub": "t"}
+            )
+    assert resp.seminal_real_world_evidence is not None
+    assert resp.seminal_real_world_evidence.pmid == "36135090"
+    assert resp.seminal_real_world_evidence.source == "curated"
+    # And the response_model serialization keeps it (not stripped on the way out).
+    assert resp.model_dump()["seminal_real_world_evidence"]["pmid"] == "36135090"
+
+
+@pytest.mark.asyncio
 async def test_endpoint_404s_unknown_brand():
     from fastapi import HTTPException
 

@@ -2411,7 +2411,11 @@ def _estimator_comparison_from_estimation(
     """
     evaluated = estimation.get("all_estimators_evaluated") or []
     n_evaluated = int(estimation.get("n_estimators_evaluated") or len(evaluated))
-    if n_evaluated <= 1 or not evaluated:
+    # Collapse only when a single estimator was CONSIDERED at all. An empty-backdoor
+    # (randomized) run fits only OLS but carries the not-applicable rows for the
+    # covariate-based estimators, so it still renders — and those rows explain WHY
+    # only OLS applied (rather than the analyst wondering where they went).
+    if len(evaluated) <= 1 or not evaluated:
         return None
 
     selected = estimation.get("selected_estimator") or estimation.get("method")
@@ -2419,6 +2423,7 @@ def _estimator_comparison_from_estimation(
         EstimatorCandidate(
             estimator=str(e.get("estimator")),
             success=bool(e.get("success")),
+            skipped=bool(e.get("skipped", False)),
             energy_score=e.get("energy_score"),
             ate=e.get("ate"),
             error=e.get("error"),

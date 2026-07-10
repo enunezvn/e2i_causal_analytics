@@ -209,6 +209,10 @@ export interface RefutationSummary {
 export interface EstimatorCandidate {
   estimator: string;
   success: boolean;
+  /** True if not run because it is not applicable to this design (e.g. a
+   * covariate-based estimator on a zero-covariate / randomized question) —
+   * distinct from a genuine fit failure. */
+  skipped?: boolean;
   /** Energy score — LOWER is better; null if the fit failed. */
   energy_score?: number | null;
   ate?: number | null;
@@ -398,6 +402,10 @@ export interface ClinicalContext {
   mechanism: MechanismOfAction;
   pivotal_endpoints: PivotalEndpoint;
   real_world_evidence?: RealWorldEvidence | null;
+  /** Curated brand-SPECIFIC seminal real-world-evidence citation. Present for
+   * brands with a curated seminal RWE; independent of the live relevance search
+   * (which can rank a competitor / class-comparison paper first). */
+  seminal_real_world_evidence?: RealWorldEvidence | null;
   /** FDA-approved indications from the drug label (openFDA | static_fallback). */
   approved_indications?: ApprovedIndications | null;
   /** Competitive market landscape (curated). */

@@ -19,6 +19,15 @@ try:
         outcomes, ATEs, CIs, gate statuses, and estimators given; NEVER invent effects
         or numbers. Emphasise which effects are robust and ACTIONABLE (gate=proceed,
         CI excludes 0) vs which need review; if none are robust, say so plainly.
+
+        For the robust effects, translate each into a CONCRETE, EXECUTABLE commercial
+        action grounded in that specific treatment -> outcome — say HOW to act, not just
+        THAT it is actionable. Name the lever to pull (the treatment), the segment or
+        audience to prioritize, and the metric to monitor and how to validate it. Vague
+        filler such as "make data-driven decisions", "leverage the effect", or "monitor
+        outcomes" — without saying WHICH action, for WHOM, measured HOW — is NOT
+        acceptable.
+
         The registry context lists commercial chains modeled OUTSIDE this
         leaderboard's estimation scope (curated, directional): you may mention them
         as additional modeled coverage, but NEVER present them as discovered
@@ -34,9 +43,18 @@ try:
         )
 
         interpretation: str = dspy.OutputField(
-            desc="Which effects to act on and why, grounded in ATE/CI/gate"
+            desc=(
+                "Which effects to act on and HOW — grounded in ATE/CI/gate, with the "
+                "concrete action each robust effect implies (lever, target segment, metric)"
+            )
         )
-        key_takeaways: list = dspy.OutputField(desc="3-5 grounded, actionable takeaways")
+        key_takeaways: list = dspy.OutputField(
+            desc=(
+                "3-5 grounded takeaways, each a SPECIFIC action a brand team could execute — "
+                "name the lever, the target segment, and the metric; NOT vague guidance like "
+                "'make data-driven decisions' or 'leverage the effect'"
+            )
+        )
 
     DSPY_AVAILABLE = True
 except ImportError:

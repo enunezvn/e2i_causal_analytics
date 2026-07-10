@@ -79,18 +79,26 @@ function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): 
 // with a robust-over-fast tie-break. Surface that evaluation so the analyst sees
 // WHAT was compared and WHY the winner won — not just the winner's name.
 function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorComparison }) {
+  // Rank fit estimators by energy score; sink skipped/failed ones to the bottom
+  // (a skipped estimator has no score and is not-applicable, not a loser).
   const ranked = [...comparison.candidates].sort((a, b) => {
+    if (a.skipped && !b.skipped) return 1;
+    if (b.skipped && !a.skipped) return -1;
     if (a.energy_score == null) return 1;
     if (b.energy_score == null) return -1;
     return a.energy_score - b.energy_score;
   });
+  const nSkipped = comparison.candidates.filter((c) => c.skipped).length;
+  const nApplicable = comparison.candidates.length - nSkipped;
+  const nFit = comparison.candidates.filter((c) => c.success).length;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm font-medium">Estimator selection (data-driven)</p>
         <p className="text-xs text-muted-foreground">
-          {comparison.n_succeeded}/{comparison.n_evaluated} estimators fit · lower energy score is
-          better
+          {nFit}/{nApplicable} applicable estimator{nApplicable === 1 ? '' : 's'} fit
+          {nSkipped > 0 ? ` · ${nSkipped} not applicable (no covariates)` : ''} · lower energy
+          score is better
         </p>
       </div>
       <div className="overflow-x-auto rounded-md border">
@@ -107,7 +115,9 @@ function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorCompari
             {ranked.map((c) => (
               <tr
                 key={c.estimator}
-                className={`border-b last:border-0 ${c.is_selected ? 'bg-muted/50 font-medium' : ''}`}
+                className={`border-b last:border-0 ${c.is_selected ? 'bg-muted/50 font-medium' : ''} ${
+                  c.skipped ? 'opacity-70' : ''
+                }`}
               >
                 <td className="p-2 capitalize">
                   {c.estimator.replace(/_/g, ' ')}
@@ -116,11 +126,20 @@ function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorCompari
                       Selected
                     </Badge>
                   )}
+                  {c.skipped && (
+                    <Badge variant="outline" className="ml-2 align-middle font-normal">
+                      Not applicable
+                    </Badge>
+                  )}
                 </td>
                 <td className="p-2">{c.energy_score != null ? c.energy_score.toFixed(4) : '—'}</td>
                 <td className="p-2">{c.ate != null ? c.ate.toFixed(4) : '—'}</td>
                 <td className="p-2 text-xs text-muted-foreground">
-                  {c.success ? 'fit' : `failed${c.error ? `: ${c.error}` : ''}`}
+                  {c.success
+                    ? 'fit'
+                    : c.skipped
+                      ? (c.error ?? 'not applicable to this design')
+                      : `failed${c.error ? `: ${c.error}` : ''}`}
                 </td>
               </tr>
             ))}

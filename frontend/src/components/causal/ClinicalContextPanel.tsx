@@ -54,7 +54,14 @@ function sourceChip(source: string) {
 }
 
 export function ClinicalContextPanel({ context }: { context: ClinicalContext }) {
-  const { mechanism, pivotal_endpoints, real_world_evidence, approved_indications, competitor_landscape } = context;
+  const {
+    mechanism,
+    pivotal_endpoints,
+    real_world_evidence,
+    seminal_real_world_evidence,
+    approved_indications,
+    competitor_landscape,
+  } = context;
   return (
     <div className="space-y-4 rounded-md border p-4">
       <div className="flex items-center gap-2">
@@ -99,12 +106,43 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
         </div>
       )}
 
-      {/* Real-world-evidence citation (only when real) */}
+      {/* Seminal real-world evidence — curated, brand-SPECIFIC. Shown first so the
+          brand of interest always has a brand-faithful reference, independent of the
+          live relevance search below (which can surface a class-comparison paper). */}
+      {seminal_real_world_evidence && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <BookText className="h-3.5 w-3.5" />
+            Seminal real-world evidence — {context.drug_name}
+            <Badge variant="secondary" className="ml-1 align-middle text-xs">
+              curated · brand-specific
+            </Badge>
+          </div>
+          <a
+            href={seminal_real_world_evidence.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 inline-flex items-start gap-1 text-primary hover:underline"
+          >
+            <span>
+              {seminal_real_world_evidence.title}
+              {seminal_real_world_evidence.journal ? ` — ${seminal_real_world_evidence.journal}` : ''}
+              {seminal_real_world_evidence.pubdate ? ` (${seminal_real_world_evidence.pubdate})` : ''}
+              {` · PMID ${seminal_real_world_evidence.pmid}`}
+            </span>
+            <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          </a>
+        </div>
+      )}
+
+      {/* Live real-world-evidence citation from the PubMed relevance search. When a
+          curated seminal RWE is shown above, this is labelled "Additional" so a
+          broader class-comparison hit reads as supplementary, not the brand's own. */}
       {real_world_evidence ? (
         <div className="text-sm">
           <div className="flex items-center gap-1 text-muted-foreground">
             <BookText className="h-3.5 w-3.5" />
-            Real-world evidence
+            {seminal_real_world_evidence ? 'Additional real-world evidence' : 'Real-world evidence'}
             {sourceChip(real_world_evidence.source)}
           </div>
           <a
@@ -123,9 +161,11 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           </a>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          No real-world-evidence citation found for this brand.
-        </p>
+        !seminal_real_world_evidence && (
+          <p className="text-xs text-muted-foreground">
+            No real-world-evidence citation found for this brand.
+          </p>
+        )
       )}
 
       {/* Regulatory / Label — approved indications from the FDA drug label (openFDA) */}

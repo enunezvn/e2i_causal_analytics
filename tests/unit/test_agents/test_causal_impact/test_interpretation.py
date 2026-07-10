@@ -420,10 +420,15 @@ class TestInterpretationNode:
 
         # Should have low confidence
         assert interp["causal_confidence"] == "low"
-        # Recommendations should be cautious (includes phrases like "collect data", "sensitivity analyses")
+        # Recommendations should steer toward caution / strengthening the evidence
+        # rather than acting on the effect (the grounded copy says "Do not act … yet",
+        # "Increase statistical power", "Pressure-test the design").
         recommendations_text = " ".join(interp["recommendations"]).lower()
         assert (
             "caution" in recommendations_text
+            or "do not act" in recommendations_text
+            or "statistical power" in recommendations_text
+            or "pressure-test" in recommendations_text
             or "further" in recommendations_text
             or "investigate" in recommendations_text
             or "additional data" in recommendations_text

@@ -550,13 +550,18 @@ class EstimationNode:
             "requires_review": requires_review,
         }
 
-        # Include all estimator results for logging
+        # Include all estimator results for logging. ``skipped`` marks an estimator
+        # that was NOT run because it is not applicable to this design (e.g. a
+        # covariate-requiring estimator on a zero-covariate / randomized question) —
+        # distinct from a genuine fit failure, so the UI can say "not applicable"
+        # rather than "failed".
         all_results = []
         for r in selection_result.all_results:
             all_results.append(
                 {
                     "estimator": r.estimator_type.value,
                     "success": r.success,
+                    "skipped": bool(getattr(r, "skipped", False)),
                     "energy_score": float(r.energy_score) if r.success else None,
                     "ate": float(r.ate) if r.ate is not None else None,
                     "error": r.error_message if not r.success else None,

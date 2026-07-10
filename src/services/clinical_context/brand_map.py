@@ -55,6 +55,13 @@ class BrandClinicalProfile:
     boxed_warning_fallback: Optional[str] = None
     # key = disease string lowercased → list of competitor "Brand (generic)" strings
     competitor_map: Dict[str, List[str]] = field(default_factory=dict)
+    # Curated brand-SPECIFIC seminal real-world-evidence citation (verified against
+    # PubMed). Surfaced as its OWN "seminal RWE" link so the brand of interest always
+    # has a brand-faithful reference, INDEPENDENT of what the live PubMed relevance
+    # search returns — that search can rank a competitor / CDK4-6-class-comparison
+    # paper first (the reported abemaciclib-for-Kisqali confusion). Keys:
+    # pmid, title, journal, year, doi. None when no seminal RWE is curated yet.
+    seminal_rwe: Optional[Dict[str, str]] = None
 
 
 # Enrichment-only static facts keyed by brand. The drug_name / disease / drug_class
@@ -88,6 +95,23 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
                 "Ibrance (palbociclib)",
                 "Verzenio (abemaciclib)",
             ],  # ATC L01EF CDK4/6 inhibitors (OpenFDA/RxClass probe-confirmed)
+        },
+        # Curated brand-SPECIFIC seminal RWE (ribociclib-only, no competitor in the
+        # title — verified against PubMed 2026-07-10). A real-world managed-access
+        # study mirroring the MONALEESA-7 pivotal population. Chosen over a live
+        # relevance hit precisely because relevance ranks CDK4/6-class comparisons
+        # (palbociclib/abemaciclib) first, which read as competitor papers.
+        "seminal_rwe": {
+            "pmid": "36135090",
+            "title": (
+                "Real-World Clinical Outcomes of Ribociclib in Combination with a "
+                "Non-Steroidal Aromatase Inhibitor and a Luteinizing Hormone-Releasing "
+                "Hormone Agonist in Premenopausal HR+/HER2- Advanced Breast Cancer "
+                "Patients: An Italian Managed Access Program"
+            ),
+            "journal": "Current Oncology",
+            "year": "2022",
+            "doi": "10.3390/curroncol29090521",
         },
     },
     "Remibrutinib": {
@@ -190,6 +214,9 @@ def _build_map() -> Dict[str, BrandClinicalProfile]:
                 else None
             ),
             competitor_map={k: list(v) for k, v in extra.get("competitor_map", {}).items()},  # type: ignore[attr-defined]
+            seminal_rwe=(
+                dict(extra["seminal_rwe"]) if extra.get("seminal_rwe") else None  # type: ignore[call-overload]
+            ),
         )
     return out
 

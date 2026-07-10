@@ -1191,3 +1191,71 @@ class TestEmptyBackdoorUnadjusted:
 
         assert result.success is False
         assert "two treatment arms" in (result.error_message or "")
+
+
+# =============================================================================
+# Empty-backdoor (randomized / zero-covariate) skip behavior
+# =============================================================================
+
+
+class TestEmptyBackdoorSkip:
+    """A ZERO-covariate design matrix is the correct adjustment set for a randomized
+    / exogenous treatment (e.g. the nba_triggers RCT). The covariate-requiring
+    estimators (causal_forest, linear_dml, drlearner) cannot fit a 0-feature X, so
+    they must be SKIPPED as not-applicable — not surfaced as a raw sklearn 'Found
+    array with 0 feature(s)' failure. Only OLS (the unadjusted contrast) applies.
+    """
+
+    def _empty_backdoor_frame(self, n=400, seed=0):
+        rng = np.random.default_rng(seed)
+        treatment = rng.integers(0, 2, n)
+        covariates = pd.DataFrame(index=range(n))  # 0 columns
+        outcome = (0.4 * treatment + rng.normal(0, 0.3, n)).astype(float)
+        return treatment, outcome, covariates
+
+    def test_covariate_estimators_skipped_not_failed(self):
+        treatment, outcome, covariates = self._empty_backdoor_frame()
+        result = EstimatorSelector().select(treatment, outcome, covariates)
+
+        by_type = {r.estimator_type: r for r in result.all_results}
+        for et in (
+            EstimatorType.CAUSAL_FOREST,
+            EstimatorType.LINEAR_DML,
+            EstimatorType.DRLEARNER,
+        ):
+            r = by_type[et]
+            assert r.skipped is True, f"{et.value} should be skipped on an empty backdoor"
+            assert r.success is False
+            # Honest not-applicable reason, NOT the cryptic sklearn traceback.
+            assert "not applicable" in (r.error_message or "").lower()
+            assert "0 feature" not in (r.error_message or "")
+
+    def test_ols_still_fits_and_is_selected(self):
+        treatment, outcome, covariates = self._empty_backdoor_frame()
+        result = EstimatorSelector().select(treatment, outcome, covariates)
+
+        ols = next(r for r in result.all_results if r.estimator_type == EstimatorType.OLS)
+        assert ols.skipped is False
+        assert ols.success is True
+        assert result.selected.estimator_type == EstimatorType.OLS
+        # The unadjusted contrast recovers the planted ~0.4 effect.
+        assert result.selected.ate == pytest.approx(0.4, abs=0.1)
+
+    def test_selection_reason_explains_empty_backdoor(self):
+        treatment, outcome, covariates = self._empty_backdoor_frame()
+        result = EstimatorSelector().select(treatment, outcome, covariates)
+        reason = result.selection_reason.lower()
+        assert "randomized" in reason or "empty-backdoor" in reason or "no covariates" in reason
+
+    def test_with_covariates_nothing_is_skipped(self):
+        """Regression guard: the skip fires ONLY on a truly empty backdoor. With >=1
+        covariate every estimator is attempted as before."""
+        rng = np.random.default_rng(1)
+        n = 400
+        treatment = rng.integers(0, 2, n)
+        covariates = pd.DataFrame({"x1": rng.normal(0, 1, n), "x2": rng.normal(0, 1, n)})
+        outcome = (
+            0.3 * treatment + 0.5 * covariates["x1"].to_numpy() + rng.normal(0, 0.3, n)
+        ).astype(float)
+        result = EstimatorSelector().select(treatment, outcome, covariates)
+        assert all(r.skipped is False for r in result.all_results)
