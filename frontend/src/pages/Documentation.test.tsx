@@ -253,3 +253,35 @@ describe('PracticeCards', () => {
     expect(screen.getByText(/what-if simulation inputs/i)).toBeInTheDocument();
   });
 });
+
+describe('ImpactPathways', () => {
+  it('renders four pathway cards linking to live pages', () => {
+    renderPage();
+    const region = screen.getByRole('region', { name: /expected impact pathways/i });
+    expect(within(region).getByRole('link', { name: /see your segments/i })).toHaveAttribute('href', '/segment-analysis');
+    expect(within(region).getByRole('link', { name: /see your allocation/i })).toHaveAttribute('href', '/resource-optimization');
+    expect(within(region).getByRole('link', { name: /run a simulation/i })).toHaveAttribute('href', '/digital-twin');
+    expect(within(region).getByRole('link', { name: /open the dashboard/i })).toHaveAttribute('href', '/');
+  });
+});
+
+describe('live KPI chip degradation', () => {
+  it('shows the governed-KPIs chip when the query succeeds', () => {
+    renderPage();
+    expect(screen.getByText('46')).toBeInTheDocument();
+    expect(screen.getByText('governed KPIs')).toBeInTheDocument();
+  });
+
+  it('silently omits the chip on error — no error UI', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+    renderPage();
+    expect(screen.queryByText('governed KPIs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // Static chips unaffected:
+    expect(screen.getByText('intervention channels')).toBeInTheDocument();
+  });
+});

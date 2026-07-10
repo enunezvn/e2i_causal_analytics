@@ -21,6 +21,7 @@ import {
   AgentTierStack,
   ClinicalGrounding,
   PracticeCards,
+  ImpactPathways,
   DOC_SECTIONS,
   STAT_CHIPS,
 } from '@/components/documentation';
@@ -102,7 +103,7 @@ export function Documentation() {
       </Section>
 
       <Section id="impact" title="Expected Impact — what good looks like">
-        {/* ImpactPathways (Task 13) mounts here */}
+        <ImpactPathways />
       </Section>
     </div>
   );

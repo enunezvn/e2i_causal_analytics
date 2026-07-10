@@ -12,4 +12,5 @@ export { CausalPipeline } from './CausalPipeline';
 export { AgentTierStack } from './AgentTierStack';
 export { ClinicalGrounding } from './ClinicalGrounding';
 export { PracticeCards } from './PracticeCards';
+export { ImpactPathways } from './ImpactPathways';
 export * from './content';
