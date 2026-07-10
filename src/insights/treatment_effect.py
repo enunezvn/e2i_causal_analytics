@@ -22,10 +22,22 @@ try:
         straddles 0 (not distinguishable from no effect), using p-value and n as
         supporting evidence; name the confounders adjusted for; and ALWAYS close with
         the caveat that this is a single model-based estimate whose robustness was NOT
-        validated (refutation tests were not run). The registry context lists curated
-        directional chains related to this pair — SEPARATE knowledge, not evidence for
-        or against this estimate: you may use it qualitatively to situate the effect,
-        but NEVER present it as corroboration and NEVER attribute numbers to it."""
+        validated (refutation tests were not run).
+
+        Translate the finding into CONCRETE, EXECUTABLE commercial actions grounded in
+        the specific treatment and outcome — say HOW, not just THAT it is actionable.
+        Name the lever to pull (the treatment), the segment or audience to prioritize,
+        and the metric to monitor and how to validate it in-market. Match the action to
+        the CI-vs-0 verdict carried in the estimate — read that verdict from the input
+        and let it decide the action's nature; do not restate a template of branches.
+        Vague filler such as "make data-driven decisions", "leverage the positive
+        effect", or "monitor outcomes closely" — without saying WHICH action, for WHOM,
+        measured HOW — is NOT acceptable.
+
+        The registry context lists curated directional chains related to this pair —
+        SEPARATE knowledge, not evidence for or against this estimate: you may use it
+        qualitatively to situate the effect, but NEVER present it as corroboration and
+        NEVER attribute numbers to it."""
 
         scope: str = dspy.InputField(desc="Cohort + brand for this estimate")
         estimate: str = dspy.InputField(
@@ -37,9 +49,19 @@ try:
         )
 
         interpretation: str = dspy.OutputField(
-            desc="Grounded read of the effect, its actionability, and the robustness caveat"
+            desc=(
+                "Grounded read of the effect, its actionability, the concrete commercial "
+                "action(s) it implies (lever, target segment, metric to watch), and the "
+                "robustness caveat"
+            )
         )
-        key_takeaways: list = dspy.OutputField(desc="3-5 grounded, actionable takeaways")
+        key_takeaways: list = dspy.OutputField(
+            desc=(
+                "3-5 grounded takeaways, each a SPECIFIC action a brand team could execute — "
+                "name the lever, the target segment, and the metric to monitor; NOT vague "
+                "guidance like 'make data-driven decisions' or 'leverage the effect'"
+            )
+        )
 
     DSPY_AVAILABLE = True
 except ImportError:

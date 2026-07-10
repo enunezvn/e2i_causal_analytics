@@ -160,151 +160,198 @@ interface ComparisonChartProps {
 }
 
 /**
- * A simple bar chart comparing original vs refuted estimates
+ * Grouped bar chart comparing the ORIGINAL causal estimate against each test's
+ * REFUTED estimate. Layout notes:
+ *  - Left gutter carries y-axis tick labels so the scale is readable (previously
+ *    only the 0-line was labelled, so the magnitude was invisible / cut off).
+ *  - Each group draws two bars (original + refuted) whose value labels are
+ *    COLOR-MATCHED to their bar, so a near-zero refuted value (e.g. a passing
+ *    placebo test at -0.001) can never be mistaken for the tall original bar
+ *    beside it.
+ *  - The legend sits in the lower-left BELOW the plot, not floating over the bars.
  */
 function ComparisonChart({ results, decimalPlaces }: ComparisonChartProps) {
-  // Calculate chart dimensions
+  // Plot geometry
+  const marginLeft = 56; // room for y-axis tick labels
+  const marginRight = 20;
+  const marginTop = 16;
   const chartHeight = 200;
-  const barGroupWidth = 60;
-  const chartWidth = Math.max(results.length * barGroupWidth + 100, 300);
+  const barGroupWidth = 76;
+  const barWidth = 22;
+  const intraGap = 8; // gap between the original and refuted bar within a group
 
-  // Calculate scale
+  const plotWidth = results.length * barGroupWidth;
+  // Floor wide enough that the 3-item legend below the plot never clips: its last
+  // item ("Refuted (Fail)") runs to ~marginLeft + 300 ≈ 350px. 380 also matches the
+  // natural width of the standard 4-test suite, so this only widens the degraded
+  // (<= 3 completed tests) case — the 4-test case is unchanged.
+  const legendMinWidth = 380;
+  const chartWidth = Math.max(plotWidth + marginLeft + marginRight, legendMinWidth);
+  const plotBottom = marginTop + chartHeight;
+  const xLabelY = plotBottom + 18;
+  const legendY = plotBottom + 40;
+  const svgHeight = plotBottom + 66;
+
+  // Symmetric-ish scale that always includes 0.
   const allValues = results.flatMap((r) => [r.originalEstimate, r.refutedEstimate]);
   const minValue = Math.min(...allValues, 0);
   const maxValue = Math.max(...allValues, 0);
   const range = maxValue - minValue || 1;
-  const padding = range * 0.1;
+  const padding = range * 0.12;
   const yMin = minValue - padding;
   const yMax = maxValue + padding;
   const yRange = yMax - yMin;
 
-  // Calculate zero line position
-  const zeroY = chartHeight - ((0 - yMin) / yRange) * chartHeight;
+  const yToPixel = (v: number) => plotBottom - ((v - yMin) / yRange) * chartHeight;
+  const zeroY = yToPixel(0);
+
+  // Evenly spaced y-axis ticks across the range (5 divisions).
+  const tickCount = 5;
+  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => yMin + (yRange * i) / tickCount);
 
   return (
     <div className="w-full overflow-x-auto">
       <svg
         width={chartWidth}
-        height={chartHeight + 60}
-        viewBox={`0 0 ${chartWidth} ${chartHeight + 60}`}
+        height={svgHeight}
+        viewBox={`0 0 ${chartWidth} ${svgHeight}`}
         className="mx-auto"
         role="img"
         aria-label="Comparison chart of original vs refuted estimates"
       >
-        {/* Y-axis */}
+        {/* Y-axis gridlines + scale labels */}
+        {ticks.map((t, i) => {
+          const y = yToPixel(t);
+          const isZero = Math.abs(t) < yRange * 1e-6;
+          return (
+            <g key={`tick-${i}`}>
+              <line
+                x1={marginLeft}
+                y1={y}
+                x2={chartWidth - marginRight}
+                y2={y}
+                stroke={isZero ? 'var(--color-muted-foreground)' : 'var(--color-border)'}
+                strokeWidth={1}
+                strokeDasharray={isZero ? '4,4' : undefined}
+                opacity={isZero ? 0.9 : 0.4}
+              />
+              <text
+                x={marginLeft - 8}
+                y={y + 3}
+                textAnchor="end"
+                fontSize={9}
+                fill="var(--color-muted-foreground)"
+              >
+                {t.toFixed(decimalPlaces)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Y-axis line */}
         <line
-          x1={50}
-          y1={10}
-          x2={50}
-          y2={chartHeight + 10}
+          x1={marginLeft}
+          y1={marginTop}
+          x2={marginLeft}
+          y2={plotBottom}
           stroke="var(--color-border)"
           strokeWidth={1}
         />
 
-        {/* Zero line */}
-        <line
-          x1={50}
-          y1={zeroY + 10}
-          x2={chartWidth - 20}
-          y2={zeroY + 10}
-          stroke="var(--color-muted-foreground)"
-          strokeWidth={1}
-          strokeDasharray="4,4"
-        />
-        <text
-          x={45}
-          y={zeroY + 14}
-          textAnchor="end"
-          fontSize={10}
-          fill="var(--color-muted-foreground)"
-        >
-          0
-        </text>
-
         {/* Bars */}
         {results.map((result, index) => {
-          const groupX = 70 + index * barGroupWidth;
-          const barWidth = 20;
+          const groupCenter = marginLeft + index * barGroupWidth + barGroupWidth / 2;
+          const origX = groupCenter - barWidth - intraGap / 2;
+          const refX = groupCenter + intraGap / 2;
+          const refColor = result.passed
+            ? 'var(--color-success)'
+            : 'var(--color-destructive)';
 
-          // Original estimate bar
-          const origHeight = (Math.abs(result.originalEstimate) / yRange) * chartHeight;
-          const origY =
-            result.originalEstimate >= 0
-              ? zeroY + 10 - origHeight
-              : zeroY + 10;
+          // Bar rectangles anchored at the zero line.
+          const origHeight = Math.max((Math.abs(result.originalEstimate) / yRange) * chartHeight, 1);
+          const origY = result.originalEstimate >= 0 ? zeroY - origHeight : zeroY;
+          const refHeight = Math.max((Math.abs(result.refutedEstimate) / yRange) * chartHeight, 1);
+          const refY = result.refutedEstimate >= 0 ? zeroY - refHeight : zeroY;
 
-          // Refuted estimate bar
-          const refHeight = (Math.abs(result.refutedEstimate) / yRange) * chartHeight;
-          const refY =
-            result.refutedEstimate >= 0
-              ? zeroY + 10 - refHeight
-              : zeroY + 10;
+          // Value labels sit just OUTSIDE their own bar (above a positive bar,
+          // below a negative one) and are color-matched to the bar so the pairing
+          // is unambiguous even when one bar is near zero.
+          const origLabelY = result.originalEstimate >= 0 ? origY - 4 : origY + origHeight + 11;
+          const refLabelY = result.refutedEstimate >= 0 ? refY - 4 : refY + refHeight + 11;
 
           return (
             <g key={result.id}>
-              {/* Original estimate bar */}
               <rect
-                x={groupX}
+                x={origX}
                 y={origY}
                 width={barWidth}
-                height={Math.max(origHeight, 1)}
+                height={origHeight}
                 fill="var(--color-primary)"
-                opacity={0.8}
+                opacity={0.85}
               />
-              {/* Refuted estimate bar */}
               <rect
-                x={groupX + barWidth + 2}
+                x={refX}
                 y={refY}
                 width={barWidth}
-                height={Math.max(refHeight, 1)}
-                fill={result.passed ? 'var(--color-success)' : 'var(--color-destructive)'}
-                opacity={0.8}
+                height={refHeight}
+                fill={refColor}
+                opacity={0.85}
               />
-              {/* Label */}
+              {/* Color-matched value labels */}
               <text
-                x={groupX + barWidth}
-                y={chartHeight + 30}
+                x={origX + barWidth / 2}
+                y={origLabelY}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={600}
+                fill="var(--color-primary)"
+              >
+                {formatNumber(result.originalEstimate, decimalPlaces)}
+              </text>
+              <text
+                x={refX + barWidth / 2}
+                y={refLabelY}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={600}
+                fill={refColor}
+              >
+                {formatNumber(result.refutedEstimate, decimalPlaces)}
+              </text>
+              {/* Method label under the group */}
+              <text
+                x={groupCenter}
+                y={xLabelY}
                 textAnchor="middle"
                 fontSize={9}
                 fill="var(--color-foreground)"
               >
                 {getMethodLabel(result).split(' ')[0]}
               </text>
-              {/* Values */}
-              <text
-                x={groupX + barWidth / 2}
-                y={origY - 4}
-                textAnchor="middle"
-                fontSize={8}
-                fill="var(--color-muted-foreground)"
-              >
-                {formatNumber(result.originalEstimate, decimalPlaces)}
-              </text>
-              <text
-                x={groupX + barWidth + 2 + barWidth / 2}
-                y={refY - 4}
-                textAnchor="middle"
-                fontSize={8}
-                fill="var(--color-muted-foreground)"
-              >
-                {formatNumber(result.refutedEstimate, decimalPlaces)}
-              </text>
             </g>
           );
         })}
 
-        {/* Legend */}
-        <g transform={`translate(${chartWidth - 140}, 10)`}>
-          <rect x={0} y={0} width={12} height={12} fill="var(--color-primary)" opacity={0.8} />
-          <text x={16} y={10} fontSize={10} fill="var(--color-foreground)">
+        {/* Legend — lower-left, below the plot (never over the bars) */}
+        <g transform={`translate(${marginLeft}, ${legendY})`}>
+          <rect x={0} y={0} width={11} height={11} rx={2} fill="var(--color-primary)" opacity={0.85} />
+          <text x={15} y={9} fontSize={10} fill="var(--color-foreground)">
             Original
           </text>
-          <rect x={0} y={18} width={12} height={12} fill="var(--color-success)" opacity={0.8} />
-          <text x={16} y={28} fontSize={10} fill="var(--color-foreground)">
+          <rect x={78} y={0} width={11} height={11} rx={2} fill="var(--color-success)" opacity={0.85} />
+          <text x={93} y={9} fontSize={10} fill="var(--color-foreground)">
             Refuted (Pass)
           </text>
-          <rect x={0} y={36} width={12} height={12} fill="var(--color-destructive)" opacity={0.8} />
-          <text x={16} y={46} fontSize={10} fill="var(--color-foreground)">
+          <rect
+            x={188}
+            y={0}
+            width={11}
+            height={11}
+            rx={2}
+            fill="var(--color-destructive)"
+            opacity={0.85}
+          />
+          <text x={203} y={9} fontSize={10} fill="var(--color-foreground)">
             Refuted (Fail)
           </text>
         </g>

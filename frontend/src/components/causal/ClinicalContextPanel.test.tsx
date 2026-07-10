@@ -128,4 +128,28 @@ describe('ClinicalContextPanel', () => {
     expect(screen.queryByText(/live FDA label/i)).toBeNull();
     expect(screen.queryByText(/rivals/i)).toBeNull();
   });
+
+  it('renders a curated brand-specific seminal RWE and demotes the live one to "Additional"', () => {
+    const withSeminal: ClinicalContext = {
+      ...FULL,
+      seminal_real_world_evidence: {
+        pmid: '36135090',
+        title: 'Real-World Clinical Outcomes of Ribociclib in Premenopausal HR+/HER2- BC',
+        journal: 'Current Oncology',
+        pubdate: '2022',
+        doi: '10.3390/curroncol29090521',
+        url: 'https://pubmed.ncbi.nlm.nih.gov/36135090/',
+        source: 'curated',
+      },
+    };
+    render(<ClinicalContextPanel context={withSeminal} />);
+    // The seminal block names the brand-specific paper and is labelled brand-specific.
+    expect(screen.getByText(/Seminal real-world evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/curated · brand-specific/i)).toBeInTheDocument();
+    const seminalLink = screen.getByRole('link', { name: /Ribociclib in Premenopausal/i });
+    expect(seminalLink).toHaveAttribute('href', 'https://pubmed.ncbi.nlm.nih.gov/36135090/');
+    // The live relevance citation is demoted to "Additional" so it does not read as
+    // the brand's own evidence (the reported competitor-paper confusion).
+    expect(screen.getByText(/Additional real-world evidence/i)).toBeInTheDocument();
+  });
 });

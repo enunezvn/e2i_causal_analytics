@@ -54,6 +54,89 @@ def _clinical_context_sentence(ctx: Dict[str, Any]) -> str:
     return "Clinical/market context: " + "; ".join(bits) + "."
 
 
+def _humanize_var(name: str) -> str:
+    """Turn a raw column like ``acceptance_status`` into ``acceptance status`` for
+    prose. Empty/None -> a neutral placeholder so the sentence still reads."""
+    if not name:
+        return "the treatment"
+    return str(name).replace("_", " ").strip() or "the treatment"
+
+
+def _actionable_recommendations(
+    *,
+    treatment_var: str,
+    outcome_var: str,
+    brand: str | None,
+    ate: float,
+    effect_size: str,
+    significant: bool,
+    robust: bool,
+) -> list[str]:
+    """Concrete, GROUNDED next actions for the "Recommended actions" surface.
+
+    The previous static bullets ("Implement targeted interventions…", "Monitor
+    outcomes closely…") named no lever, no audience, and no metric — the user
+    asked HOW. These reference the actual treatment -> outcome, the estimated
+    direction/magnitude, and the brand, so each bullet says WHAT to pull, WHERE
+    to focus, and WHICH metric to watch. Grounded only in values already
+    computed upstream — never invents a number.
+    """
+    t = _humanize_var(treatment_var)
+    o = _humanize_var(outcome_var)
+    who = brand or "this brand"
+    # Effect of the treatment on the outcome. A positive ATE means MORE of the
+    # treatment raises the outcome, so the lever is to increase exposure; a
+    # negative ATE means more of the treatment lowers it, so the lever is to
+    # re-target it. Framed on the sign, never asserting desirability.
+    raises = ate >= 0
+
+    # NOTE: rendered as PLAIN TEXT in the UI (<li>{r}</li>) — no markdown, so no
+    # ** ** emphasis (it would show literal asterisks). Keep the copy clean prose.
+    who_poss = f"{who}'s"  # e.g. "Kisqali's" / "this brand's"
+    if significant and robust:
+        lever = (
+            f"Scale up '{t}' for {who} where it is currently low"
+            if raises
+            else f"Re-target '{t}' for {who} — more of it is associated with a lower {o}"
+        )
+        return [
+            (
+                f"{lever}: the estimate is {ate:+.3f} ({effect_size} effect) on '{o}' and "
+                f"cleared the robustness gate. Rank {who_poss} HCPs/patients by their current "
+                f"{t} and target the segment where changing it moves {o} most."
+            ),
+            (
+                f"Validate before a full rollout: apply {t} to a randomized subset of {who_poss} "
+                f"HCPs/patients and track {o} against a matched holdout for ~1–2 follow-up "
+                f"cycles to confirm the {ate:+.3f} effect replicates in-market before committing "
+                f"budget."
+            ),
+            (
+                f"Spend where it pays off: use the heterogeneous-effects (CATE) view to concentrate "
+                f"{t} on {who_poss} sub-cohorts with the largest predicted effect on {o}, rather "
+                f"than applying it uniformly."
+            ),
+        ]
+
+    # Not significant and/or not robust — the honest action is to WITHHOLD the
+    # decision and strengthen the evidence, named to this pair/brand.
+    return [
+        (
+            f"Do not act on {t} → {o} for {who} yet: the effect is not yet distinguishable "
+            f"from zero and/or did not clear the robustness gate — treating it as real risks "
+            f"spending against noise."
+        ),
+        (
+            f"Increase statistical power: enlarge the {who} cohort or extend the observation "
+            f"window, then re-estimate {t} → {o} before making a call."
+        ),
+        (
+            f"Pressure-test the design: re-run with an alternative adjustment set and a placebo "
+            f"outcome; a genuine {t} → {o} effect should survive, a spurious one will not."
+        ),
+    ]
+
+
 class InterpretationNode:
     """Generates natural language interpretation of causal analysis.
 
@@ -230,6 +313,10 @@ class InterpretationNode:
         ):
             overall_robust = False
 
+        # Humanized treatment/outcome for grounded prose (the "too generic" fix).
+        t_name = _humanize_var(str(state.get("treatment_var") or ""))
+        o_name = _humanize_var(str(state.get("outcome_var") or ""))
+
         e_value = sensitivity_analysis.get("e_value", 1.0)
         robust_to_confounding = sensitivity_analysis.get("robust_to_confounding", False)
         # M-fo3: the sensitivity node writes NO sensitivity_analysis when it raises
@@ -306,18 +393,21 @@ class InterpretationNode:
             except Exception as exc:  # noqa: BLE001 — best-effort; never blocks the estimate
                 logger.debug("interpretation: clinical context unavailable: %s", exc)
 
-        # Recommendations
+        # Recommendations (grounded in the actual treatment -> outcome).
         if significance and overall_robust:
+            _lever = "increasing" if ate >= 0 else "re-targeting"
             narrative_parts.append(
-                "Based on these findings, we recommend proceeding with interventions targeting "
-                "this treatment variable, with careful monitoring of outcomes to validate "
-                "the predicted effects in practice."
+                f"Because this effect is significant and cleared the robustness gate, the practical "
+                f"next step is to act on {t_name} — focus on {_lever} it for the segment where it is "
+                f"currently lowest — and confirm the lift in {o_name} against a matched holdout "
+                f"before scaling."
             )
         else:
             narrative_parts.append(
-                "Given the uncertainty in these results, we recommend further investigation, "
-                "potentially with additional data or alternative analytical approaches, before "
-                "making major strategic decisions."
+                f"Because the {t_name} → {o_name} effect is not yet significant and/or robust, hold "
+                f"off on acting on it: enlarge the cohort or extend the window to gain power, and "
+                f"re-run with an alternative adjustment set and a placebo outcome before making a "
+                f"strategic call."
             )
 
         narrative = " ".join(narrative_parts)
@@ -350,24 +440,19 @@ class InterpretationNode:
             "Assumes causal graph accurately represents true relationships",
         ]
 
-        # Recommendations
-        recommendations = []
-        if significance and overall_robust:
-            recommendations.extend(
-                [
-                    "Implement targeted interventions based on identified causal effect",
-                    "Monitor outcomes closely to validate predictions",
-                    "Consider heterogeneous effects across segments for optimization",
-                ]
-            )
-        else:
-            recommendations.extend(
-                [
-                    "Collect additional data to improve statistical power",
-                    "Conduct sensitivity analyses with alternative model specifications",
-                    "Consider randomized experiment to validate findings",
-                ]
-            )
+        # Recommendations — GROUNDED in the actual treatment -> outcome, the
+        # estimated direction/magnitude, and the brand (the user asked HOW). See
+        # _actionable_recommendations: each bullet names the lever, the audience,
+        # and the metric to watch rather than generic "implement interventions".
+        recommendations = _actionable_recommendations(
+            treatment_var=str(state.get("treatment_var") or ""),
+            outcome_var=str(state.get("outcome_var") or ""),
+            brand=state.get("brand"),
+            ate=ate,
+            effect_size=effect_size,
+            significant=bool(significance),
+            robust=bool(overall_robust),
+        )
 
         # Confidence
         if significance and overall_robust and robust_to_confounding:
@@ -480,6 +565,12 @@ class InterpretationNode:
                 "suggesting the average treatment effect varies meaningfully by subgroup."
             )
 
+        # Deep-specific next-steps, GROUNDED in the actual pair/brand (same HOW
+        # discipline as the standard "Recommended actions") — NOT generic filler.
+        _t = _humanize_var(str(state.get("treatment_var") or ""))
+        _o = _humanize_var(str(state.get("outcome_var") or ""))
+        _who = state.get("brand") or "this brand"
+
         interpretation: NaturalLanguageInterpretation = {
             "narrative": enhanced_narrative,
             "executive_summary": standard.get("executive_summary", ""),
@@ -503,9 +594,21 @@ class InterpretationNode:
             ],
             "recommendations": standard["recommendations"]
             + [
-                "Investigate heterogeneous effects for optimization",
-                "Consider longitudinal analysis to capture dynamics",
-                "Validate findings with external data sources if available",
+                (
+                    f"Profile where the '{_t}' → '{_o}' effect concentrates for {_who}: read "
+                    f"the CATE / heterogeneity view to find the sub-cohorts driving the average "
+                    f"and prioritize them, rather than acting on the pooled effect."
+                ),
+                (
+                    f"Add a temporal read: re-estimate '{_t}' → '{_o}' across successive periods "
+                    f"to see whether the effect is building, fading, or stable before committing "
+                    f"to a multi-cycle plan."
+                ),
+                (
+                    f"Triangulate the '{_t}' → '{_o}' finding against an external source (claims, "
+                    f"registry, or a published study) for {_who}; a real effect should hold its "
+                    f"direction outside this cohort."
+                ),
             ],
             "depth_level": "deep",
             "user_expertise_adjusted": True,
