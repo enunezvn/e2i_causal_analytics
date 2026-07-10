@@ -74,9 +74,30 @@ describe('CausalScopeMap', () => {
     expect(screen.getByRole('button', { name: /market & brand performance/i })).toBeInTheDocument();
   });
 
+  it('defaults to the HCP level active on mount', () => {
+    renderPage();
+    expect(screen.getByRole('button', { name: /hcp prescribing behavior/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: /patient journey outcomes/i })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(screen.getByRole('button', { name: /market & brand performance/i })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(screen.getByText(/rep detailing frequency/i)).toBeInTheDocument();
+  });
+
   it('shows a level summary and its registry nodes on selection', async () => {
     renderPage();
     await userEvent.click(screen.getByRole('button', { name: /patient journey outcomes/i }));
+    expect(screen.getByRole('button', { name: /patient journey outcomes/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
     expect(screen.getByText(/treatment initiation, persistence, and discontinuation/i)).toBeInTheDocument();
     expect(screen.getByText('patient persistence')).toBeInTheDocument();
   });
