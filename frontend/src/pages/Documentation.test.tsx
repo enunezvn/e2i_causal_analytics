@@ -102,3 +102,17 @@ describe('CausalScopeMap', () => {
     expect(screen.getByText('patient persistence')).toBeInTheDocument();
   });
 });
+
+describe('CorrelationCausationToggle', () => {
+  it('starts on the correlation view, labeled illustrative', () => {
+    renderPage();
+    expect(screen.getByText(/calls correlate with trx/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/illustrative/i).length).toBeGreaterThan(0);
+  });
+
+  it('reveals the confounder on toggle', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /reveal the confounder/i }));
+    expect(screen.getByText(/specialty drives both/i)).toBeInTheDocument();
+  });
+});

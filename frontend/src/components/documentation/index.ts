@@ -6,4 +6,5 @@
  */
 export { SectionNav } from './SectionNav';
 export { CausalScopeMap } from './CausalScopeMap';
+export { CorrelationCausationToggle } from './CorrelationCausationToggle';
 export * from './content';

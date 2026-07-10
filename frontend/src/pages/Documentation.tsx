@@ -12,7 +12,13 @@
  *   visually labeled "illustrative".
  */
 import { useKPIList } from '@/hooks/api/use-kpi';
-import { SectionNav, CausalScopeMap, DOC_SECTIONS, STAT_CHIPS } from '@/components/documentation';
+import {
+  SectionNav,
+  CausalScopeMap,
+  CorrelationCausationToggle,
+  DOC_SECTIONS,
+  STAT_CHIPS,
+} from '@/components/documentation';
 
 function Section({ id, title, children }: { id: string; title: string; children?: React.ReactNode }) {
   return (
@@ -76,7 +82,8 @@ export function Documentation() {
           {showLiveChip && <StatChipView value={String(kpiTotal)} label="governed KPIs" />}
         </div>
         <CausalScopeMap />
-        {/* CorrelationCausationToggle (Task 7), CapabilityIndex (Task 8) mount here */}
+        <CorrelationCausationToggle />
+        {/* CapabilityIndex (Task 8) mounts here */}
       </Section>
 
       <Section id="methodology" title="Methodology — how it works">
