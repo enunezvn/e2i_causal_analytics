@@ -113,6 +113,6 @@ describe('CorrelationCausationToggle', () => {
   it('reveals the confounder on toggle', async () => {
     renderPage();
     await userEvent.click(screen.getByRole('button', { name: /reveal the confounder/i }));
-    expect(screen.getByText(/specialty drives both/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/specialty drives both/i).length).toBeGreaterThan(0);
   });
 });

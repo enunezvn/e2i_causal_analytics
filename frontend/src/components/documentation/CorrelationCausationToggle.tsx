@@ -27,7 +27,7 @@ export function CorrelationCausationToggle() {
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
-          {revealed ? 'Causation: specialty explains both' : 'Correlation: calls correlate with TRx'}
+          {revealed ? 'Causation: specialty drives both' : 'Correlation: calls correlate with TRx'}
         </h3>
         <div className="flex items-center gap-2">
           <span className="rounded-full border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
