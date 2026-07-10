@@ -108,51 +108,65 @@ _DOWHY_RECONSTRUCTION_REL_TOL = 0.20
 _DOWHY_RECONSTRUCTION_ABS_TOL = 0.10
 
 
-def _scaled_nuisance_init_params(dowhy_method: str, *, discrete_treatment: bool) -> Dict[str, Any]:
-    """Scaled (StandardScaler) nuisance models for the reconstructed estimator.
+def _reconstruction_nuisance_init_params(
+    dowhy_method: str, *, discrete_treatment: bool
+) -> Dict[str, Any]:
+    """Nuisance models that make the reconstructed estimate REPRODUCE the reported ATE.
 
-    econml's DEFAULT nuisance models (a logistic propensity / linear outcome) do
-    NOT converge on mixed-scale covariates (e.g. egfr 30-110 alongside binary
-    0/1 flags): lbfgs grinds to ``max_iter`` so EACH refutation refit costs ~40s,
-    and the suite re-fits ~45 times -> ~455s (it blew the agent's time budget and
-    refutation was skipped). Standardizing the features makes the logistic
-    converge in ~10 iters -> ~0.2s/refit, so the suite drops to ~11s and the run
-    completes WITH refutation. Scaling the nuisance does NOT materially move the
-    orthogonalized treatment effect (benchmarked on the real frame: ATE
-    0.1891 -> 0.1895), so the reconstructed estimate still matches the reported
-    ATE within ``_DOWHY_RECONSTRUCTION_*_TOL``.
+    The reconstructed-vs-reported tolerance guard (``_DOWHY_RECONSTRUCTION_*_TOL``)
+    only means anything if the reconstruction fits the SAME estimator the reported
+    ATE came from. For ``LinearDML`` that means the SAME nuisance models as
+    production's ``LinearDMLWrapper`` (``src/causal_engine/energy_score/
+    estimator_selector.py``): RandomForest outcome + treatment models.
 
-    Applied ONLY to ``LinearDML`` -> scaled ``model_y`` (regressor) + ``model_t``
-    (classifier when the treatment is discrete, else regressor). This is the path
-    validated end-to-end on a real frame (reconstructed ATE 0.1891 -> 0.1895,
-    within the reconstructed-vs-reported tolerance), and the one the energy-score
-    router actually selects for the 9-covariate case.
+    A PRIOR version substituted scaled-LINEAR nuisance here (StandardScaler +
+    LinearRegression / LogisticRegressionCV) to dodge an lbfgs-grind that only
+    afflicts econml's *default* logistic propensity on mixed-scale covariates. But
+    production never used that default — it uses RandomForest — so the linear
+    substitution refit a DIFFERENT model. It happened to agree on the 9-covariate
+    ``patient_journeys`` frame (ATE 0.1891 vs 0.1895), but on nonlinear data it
+    diverges hard: on ``hcp_adoption`` (``peer_influence_score -> adopted``,
+    adjusting ``centrality_z``) the RF nuisance gives ATE 0.2033 while the scaled-
+    linear substitution gives 0.0248 — a 0.18 gap that tripped the tolerance guard
+    and FAIL-CLOSED refutation (the analyst saw "no refutation test results").
+    RandomForest is scale-invariant and fast (no lbfgs grind — the reason the
+    linear substitution existed does not apply to it), so mirroring production is
+    both correct-by-construction AND within the time budget.
 
-    Returns ``{}`` (leave econml defaults) for every other method:
+    Applied ONLY to ``LinearDML``. Returns ``{}`` (leave econml defaults) for
+    every other method:
       * ``CausalForestDML`` — forest nuisance is scale-invariant (no lbfgs grind).
-      * ``DRLearner`` — its scaled-LINEAR reconstruction is NOT yet validated
-        against the selector's GradientBoosting nuisance (the reconstructed ATE
-        could diverge on nonlinear confounders), so we do NOT ship that
-        unvalidated numeric change here. A DRLearner-winner run that exceeds the
-        time budget still fails-closed cleanly (PR #1028), as it did before.
+      * ``DRLearner`` — its reconstruction is NOT yet validated against the
+        selector's GradientBoosting nuisance, so we do NOT ship an unvalidated
+        numeric change here. A DRLearner-winner run that diverges still
+        fails-closed cleanly (PR #1028), as it did before. (Follow-up.)
       * plain ``linear_regression`` / IPW — no iterative nuisance to converge.
     """
-    from sklearn.linear_model import LinearRegression, LogisticRegressionCV
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    def _regressor() -> Any:
-        return make_pipeline(StandardScaler(), LinearRegression())
-
-    def _classifier() -> Any:
-        return make_pipeline(
-            StandardScaler(), LogisticRegressionCV(cv=3, max_iter=1000, random_state=42)
-        )
-
     if "LinearDML" in dowhy_method:
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+
+        # Mirror production's LinearDMLWrapper nuisance EXACTLY (same class + params)
+        # so the reconstructed ATE reproduces the reported one by construction.
+        def _rf_regressor() -> Any:
+            return RandomForestRegressor(
+                n_estimators=50,
+                min_samples_leaf=5,
+                min_impurity_decrease=1e-7,
+                random_state=42,
+            )
+
         return {
-            "model_y": _regressor(),
-            "model_t": _classifier() if discrete_treatment else _regressor(),
+            "model_y": _rf_regressor(),
+            "model_t": (
+                RandomForestClassifier(
+                    n_estimators=50,
+                    min_samples_leaf=5,
+                    min_impurity_decrease=1e-7,
+                    random_state=42,
+                )
+                if discrete_treatment
+                else _rf_regressor()
+            ),
         }
     return {}
 
@@ -340,13 +354,15 @@ def _reconstruct_dowhy_artifacts(
         }
         if "DRLearner" not in dowhy_method:
             init_params["discrete_treatment"] = _discrete
-        # Scale the estimator's nuisance models so its logistic propensity
-        # converges fast instead of grinding lbfgs to max_iter (~40s/refit) on
-        # mixed-scale covariates — this is what makes refutation re-fit ~45x
-        # within the time budget so the run COMPLETES with refutation rather
-        # than fail-closing on the cooperative deadline. Numerics-neutral: the
-        # orthogonalized ATE is unchanged within tolerance (see helper docstring).
-        init_params.update(_scaled_nuisance_init_params(dowhy_method, discrete_treatment=_discrete))
+        # Reconstruct with the SAME nuisance models production used (RandomForest
+        # for LinearDML) so the reconstructed ATE reproduces the reported one and
+        # the tolerance guard validates the ACTUAL estimate — not a differently-
+        # fit model. RandomForest is scale-invariant + fast, so refutation still
+        # re-fits ~45x within the time budget (see helper docstring for the
+        # scaled-linear substitution this replaced and why it diverged).
+        init_params.update(
+            _reconstruction_nuisance_init_params(dowhy_method, discrete_treatment=_discrete)
+        )
         estimate = model.estimate_effect(
             identified_estimand,
             method_name=dowhy_method,
