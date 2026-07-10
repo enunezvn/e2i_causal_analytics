@@ -191,4 +191,33 @@ describe('AgentTierStack', () => {
     expect(screen.getByText('causal_impact')).toBeInTheDocument();
     expect(screen.getByText('heterogeneous_optimizer')).toBeInTheDocument();
   });
+
+  it('starts fully collapsed, closes the open tier when another opens, and toggles closed on re-click', async () => {
+    renderPage();
+
+    // All six tiers start collapsed
+    for (const name of [
+      /ml foundation/i,
+      /coordination/i,
+      /causal analytics/i,
+      /monitoring/i,
+      /ml predictions/i,
+      /self-improvement/i,
+    ]) {
+      expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false');
+    }
+
+    // Opening Monitoring, then Coordination: Monitoring must close (mutual exclusivity)
+    const monitoring = screen.getByRole('button', { name: /monitoring/i });
+    const coordination = screen.getByRole('button', { name: /coordination/i });
+    await userEvent.click(monitoring);
+    expect(monitoring).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(coordination);
+    expect(coordination).toHaveAttribute('aria-expanded', 'true');
+    expect(monitoring).toHaveAttribute('aria-expanded', 'false');
+
+    // Clicking the open tier again closes it (toggle)
+    await userEvent.click(coordination);
+    expect(coordination).toHaveAttribute('aria-expanded', 'false');
+  });
 });
