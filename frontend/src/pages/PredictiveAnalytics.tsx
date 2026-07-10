@@ -36,6 +36,7 @@ import { Progress } from '@/components/ui/progress';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { StatusBadge } from '@/components/visualizations/dashboard/StatusBadge';
 import { StrategicInsightCard } from '@/components/insights';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import {
   useModelsStatus,
   useModelInfo,
@@ -552,6 +553,29 @@ function PredictiveAnalytics() {
     cohortStatus === 'pending' ||
     cohortStatus === 'running' ||
     (!!cohortJobId && !cohort);
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = React.useMemo(() => {
+    const lines: string[] = [
+      `Predictive Analytics page. Model: ${selectedModel || 'none selected'}.`,
+    ];
+    if (cohort?.status === 'completed') {
+      lines.push(
+        `Scored cohort on screen: ${cohort.n_scored} ${facets.plural} for ${cohort.brand}, showing the top ${cohort.top_rows?.length ?? 0} ranked by probability of ending up ${facets.outcome}.`
+      );
+      if (cohort.distribution?.mean != null) {
+        lines.push(`Mean predicted probability: ${(cohort.distribution.mean * 100).toFixed(1)}%.`);
+      }
+      const drivers = cohort.top_drivers?.slice(0, 3).map((d) => d.feature);
+      if (drivers?.length) lines.push(`Top cohort drivers (mean |SHAP|): ${drivers.join(', ')}.`);
+    } else {
+      lines.push('No cohort scored yet on this visit.');
+    }
+    return lines.join('\n');
+  }, [selectedModel, cohort, facets]);
+  usePageChatContext(pageChatSummary);
 
   return (
     <div className="container mx-auto px-4 py-8">

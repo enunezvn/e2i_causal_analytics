@@ -6,7 +6,8 @@
  * Provides natural language interaction with E2I agents.
  *
  * Features:
- * - Collapsible sidebar panel
+ * - Collapsible sidebar panel, non-modal: no backdrop, the page behind stays
+ *   readable and interactive while the chat is open
  * - Drag-to-resize width (min 320px up to full page width; double-click resets)
  * - Agent status indicators
  * - Message history
@@ -66,17 +67,26 @@ export interface E2IChatSidebarProps {
 type ChatSuggestion = { title: string; message: string };
 
 /**
- * Follow-up pills rendered above the input, only once a conversation exists.
- * Two tiers: after each completed assistant turn, ConversationSuggestions
- * fetches conversation-adaptive pills from POST /chat/suggestions (one
- * fast-tier LLM call over the recent transcript, no orchestrator); the
- * static context-aware set below is the FALLBACK — shown until the first
- * generation lands and whenever generation fails. A suggestions array
- * bypasses CopilotKit's suggestion engine and is passed through reactively,
- * so pills swap live as new generations arrive — but the bypass also skips
- * the engine's message-count gating, so the empty-until-first-user-message
- * gate is reimplemented here: an empty pane must not presume what the user
- * needs before they have asked anything.
+ * Suggestion pills rendered above the input. Three tiers:
+ *
+ * 1. OPENER (empty conversation): when the pane is open before the user has
+ *    asked anything, ConversationSuggestions asks POST /chat/suggestions
+ *    (messages: []) for opener questions grounded in what the page is
+ *    showing — pages publish a compact data summary via usePageChatContext,
+ *    forwarded as page_context. Debounced so a page still loading its data
+ *    gets to publish its richer summary before the call goes out. (This
+ *    intentionally reverses the 2026-07-09 empty-until-first-user-message
+ *    gate — decided 2026-07-10: openers grounded in live page content are
+ *    the point. Do not re-add the gate.)
+ * 2. PER-TURN (conversation exists): after each completed assistant turn,
+ *    the same endpoint generates conversation-adaptive follow-ups from the
+ *    recent transcript (one fast-tier LLM call, no orchestrator).
+ * 3. STATIC FALLBACK: the route+brand template set below shows instantly
+ *    while a generation is in flight and whenever generation fails (502) —
+ *    never a blank pill row, never invented output.
+ *
+ * A suggestions array bypasses CopilotKit's suggestion engine and is passed
+ * through reactively, so pills swap live as new generations arrive.
  *
  * CopilotKit's own LLM suggestions (suggestions="auto") are deliberately NOT
  * used: the engine clones the default agent and forces a `copilotkitSuggest`
@@ -141,9 +151,10 @@ function buildChatSuggestions(pathname: string, brand: string): ChatSuggestion[]
 }
 
 /**
- * Conversation probe: reports whether the user has sent at least one message
- * (the pill gate) and fetches conversation-adaptive pills from
- * POST /chat/suggestions after each completed assistant turn. Runs as a
+ * Conversation probe: fetches suggestion pills from POST /chat/suggestions —
+ * page-grounded openers while the conversation is empty (messages: [] plus
+ * the page's published page_context), then conversation-adaptive follow-ups
+ * after each completed assistant turn. Runs as a
  * child of the (copilot-enabled) pane because the chat hooks THROW outside
  * the CopilotKit provider, and this sidebar's top-level hooks also run with
  * copilot disabled. Conversation state lives on the agent (verified live:
@@ -154,16 +165,19 @@ function buildChatSuggestions(pathname: string, brand: string): ChatSuggestion[]
  * messages plus isLoading (Boolean(agent.isRunning) — verified present in
  * the installed bundle, unlike visibleMessages); it only reads config and
  * subscribes, registering nothing, so mounting it alongside CopilotChat is
- * side-effect-free. The gate is keyed to USER messages so the
- * `labels.initial` greeting can't open it. Renders nothing.
+ * side-effect-free. The opener/per-turn mode switch is keyed to USER
+ * messages so the `labels.initial` greeting can't flip it. Renders nothing.
  */
 function ConversationSuggestions({
   pathname,
   brand,
+  pageContext,
   onUpdate,
 }: {
   pathname: string;
   brand: string;
+  /** Compact on-screen data summary published by the current page (or null). */
+  pageContext: string | null;
   onUpdate: (state: { hasUserMessage: boolean; adaptive: ChatSuggestion[] | null }) => void;
 }) {
   const { messages, isLoading } = useCopilotChatInternal();
@@ -195,6 +209,54 @@ function ConversationSuggestions({
 
   const hasUserMessage = transcript.some((t) => t.role === 'user');
 
+  const fetchPills = React.useCallback(
+    (body: {
+      messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+      page: string;
+      brand: string;
+      page_context?: string;
+    }) => {
+      const seq = ++requestSeqRef.current;
+      post<{ suggestions: ChatSuggestion[] }>('/chat/suggestions', body)
+        .then((res) => {
+          if (seq !== requestSeqRef.current) return;
+          const pills = (res.suggestions ?? [])
+            .filter((s) => typeof s?.title === 'string' && s.title && typeof s?.message === 'string' && s.message)
+            .slice(0, 4);
+          setAdaptive(pills.length > 0 ? pills : null);
+        })
+        .catch(() => {
+          // Generation failed (e.g. 502) — fall back to the static
+          // context-aware pills; never crash or blank the pane.
+          if (seq === requestSeqRef.current) setAdaptive(null);
+        });
+    },
+    []
+  );
+
+  // Opener mode: empty conversation → ask for openers grounded in the page's
+  // published data summary. Debounced 800ms so a page that is still loading
+  // publishes its richer summary before the call goes out; keyed so the same
+  // (route, brand, context) is only fetched once — a context UPGRADE (data
+  // finished loading) legitimately refetches, the pills improve.
+  const openerKeyRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (hasUserMessage) return;
+    const key = `${pathname}|${brand}|${pageContext ?? ''}`;
+    if (openerKeyRef.current === key) return;
+    const timer = setTimeout(() => {
+      openerKeyRef.current = key;
+      fetchPills({
+        messages: [],
+        page: pathname,
+        brand,
+        ...(pageContext ? { page_context: pageContext.slice(0, 4000) } : {}),
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [hasUserMessage, pathname, brand, pageContext, fetchPills]);
+
+  // Per-turn mode: refresh follow-ups after each completed assistant turn.
   React.useEffect(() => {
     if (isLoading || !hasUserMessage) return;
     const last = transcript[transcript.length - 1];
@@ -202,25 +264,8 @@ function ConversationSuggestions({
     const key = String(transcript.length);
     if (lastFetchKeyRef.current === key) return;
     lastFetchKeyRef.current = key;
-    const seq = ++requestSeqRef.current;
-    post<{ suggestions: ChatSuggestion[] }>('/chat/suggestions', {
-      messages: transcript.slice(-12),
-      page: pathname,
-      brand,
-    })
-      .then((res) => {
-        if (seq !== requestSeqRef.current) return;
-        const pills = (res.suggestions ?? [])
-          .filter((s) => typeof s?.title === 'string' && s.title && typeof s?.message === 'string' && s.message)
-          .slice(0, 4);
-        setAdaptive(pills.length > 0 ? pills : null);
-      })
-      .catch(() => {
-        // Generation failed (e.g. 502) — fall back to the static
-        // context-aware pills; never crash or blank the pane.
-        if (seq === requestSeqRef.current) setAdaptive(null);
-      });
-  }, [isLoading, hasUserMessage, transcript, pathname, brand]);
+    fetchPills({ messages: transcript.slice(-12), page: pathname, brand });
+  }, [isLoading, hasUserMessage, transcript, pathname, brand, fetchPills]);
 
   React.useEffect(() => {
     onUpdate({ hasUserMessage, adaptive });
@@ -249,20 +294,19 @@ export function E2IChatSidebar({
   className,
 }: E2IChatSidebarProps) {
   const copilotEnabled = useCopilotEnabled();
-  const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
+  const { chatOpen, setChatOpen, agents, filters, pageChatContext } = useE2ICopilot();
   const { pathname } = useLocation();
 
-  // Suggestion pills: none until a conversation exists (pills are follow-ups,
-  // not openers), then the conversation-adaptive set generated by the backend,
-  // with the static context-aware set as fallback until the first generation
-  // lands or when generation fails. State is reported by the
+  // Suggestion pills: the LLM-generated set (page-grounded openers before
+  // the first user message, conversation-adaptive follow-ups after), with
+  // the static route+brand template set shown instantly as fallback until a
+  // generation lands or when generation fails. State is reported by the
   // ConversationSuggestions child, which can read conversation state.
   const [pillState, setPillState] = React.useState<{
     hasUserMessage: boolean;
     adaptive: ChatSuggestion[] | null;
   }>({ hasUserMessage: false, adaptive: null });
   const chatSuggestions = React.useMemo(() => {
-    if (!pillState.hasUserMessage) return [];
     return pillState.adaptive ?? buildChatSuggestions(pathname, filters.brand);
   }, [pillState, pathname, filters.brand]);
   const [showAgents, setShowAgents] = React.useState(false);
@@ -549,6 +593,7 @@ export function E2IChatSidebar({
               <ConversationSuggestions
                 pathname={pathname}
                 brand={filters.brand}
+                pageContext={pageChatContext}
                 onUpdate={setPillState}
               />
               <CopilotChat
@@ -618,18 +663,10 @@ Visual answers: whenever the answer involves a KPI's evolution over time, a tren
         )}
       </AnimatePresence>
 
-      {/* Backdrop */}
-      <AnimatePresence>
-        {chatOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setChatOpen(false)}
-            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-          />
-        )}
-      </AnimatePresence>
+      {/* No backdrop: the pane is a non-modal docked panel — the page behind
+          it must stay readable AND interactive (scroll, hover, filter) so the
+          analyst can reference on-screen data while chatting. Close via the
+          header X, the FAB, or Cmd/Ctrl+/. */}
     </>
   );
 }

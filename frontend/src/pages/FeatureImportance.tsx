@@ -71,6 +71,7 @@ import {
   useGlobalFeatureImportance,
   useSampleEntities,
 } from '@/hooks/api/use-explain';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import { groupByCovariate, type CovariateGroup } from '@/lib/shap-covariates';
 import { interpretGlobalImportance } from '@/lib/feature-importance/interpret';
 import { cn } from '@/lib/utils';
@@ -648,6 +649,31 @@ function FeatureImportance() {
     link.click();
     URL.revokeObjectURL(url);
   }, [viewMode, effectiveModelType, selectedBrand, global, explanation]);
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = useMemo(() => {
+    const lines: string[] = [
+      `Feature Importance (SHAP) page. Model: ${effectiveModelType}; brand: ${selectedBrand}; view: ${viewMode}.`,
+    ];
+    if (viewMode === 'cohort' && global) {
+      const top = (global.features ?? [])
+        .slice(0, 5)
+        .map((f) => `${f.feature_name} (${f.mean_abs_shap.toFixed(3)})`)
+        .join(', ');
+      lines.push(
+        `Cohort view on screen: ${global.model_name}, averaged over n=${global.sample_size}. Top features by mean |SHAP|: ${top}.`
+      );
+    }
+    if (viewMode === 'individual' && explanation) {
+      lines.push(
+        `Individual explanation on screen: predicted ${explanation.prediction_class} at ${(explanation.prediction_probability * 100).toFixed(1)}% probability; top feature: ${explanation.top_features[0]?.feature_name ?? 'n/a'}.`
+      );
+    }
+    return lines.join('\n');
+  }, [effectiveModelType, selectedBrand, viewMode, global, explanation]);
+  usePageChatContext(pageChatSummary);
 
   // -- Render --------------------------------------------------------------
   return (

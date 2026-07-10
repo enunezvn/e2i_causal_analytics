@@ -1,9 +1,13 @@
 """
-Chat helper endpoints — conversation-adaptive suggestion pills.
+Chat helper endpoints — conversation- and page-adaptive suggestion pills.
 
 Endpoints:
-    POST /api/chat/suggestions   AUTH — generate follow-up suggestion pills
-                                 from the recent conversation transcript.
+    POST /api/chat/suggestions   AUTH — generate suggestion pills. Two modes:
+                                 non-empty ``messages`` → follow-up pills from
+                                 the recent transcript; empty ``messages``
+                                 (opener mode, pane just opened) → opener
+                                 pills grounded in ``page_context``, a compact
+                                 summary of the data visible on the page.
 
 Why this exists
 ---------------
@@ -47,11 +51,12 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # the fast-tier call stays ~1k input tokens.
 MAX_TRANSCRIPT_MESSAGES = 12
 MAX_MESSAGE_CHARS = 1500
+MAX_PAGE_CONTEXT_CHARS = 4000
 MAX_SUGGESTIONS = 4
 MAX_TITLE_CHARS = 60
 MAX_MESSAGE_TEXT_CHARS = 500
 
-_SYSTEM_PROMPT = """You generate follow-up suggestion pills for the E2I Assistant, \
+_SYSTEM_PROMPT = """You generate suggestion pills for the E2I Assistant, \
 a pharmaceutical commercial-analytics chatbot (brands: Remibrutinib, Fabhalta, Kisqali).
 
 The assistant can ONLY: query and calculate KPIs (TRx, NRx, NBRx, market share, \
@@ -61,16 +66,28 @@ for the brands, report on the platform's agents, and retrieve internal documents
 Never suggest anything outside those capabilities (no emails, no external data, no \
 CRM actions, no writing to systems).
 
-Given the conversation so far, propose exactly 4 follow-up questions the analyst is \
-most likely to want next. Deepen or branch from what was just discussed — never repeat \
-a question that was already asked or fully answered. Rules:
+Input is JSON with the current page path, brand filter, page_content (a compact \
+summary of the data currently visible on the page; may be empty), and the \
+conversation so far (may be empty).
+
+If the conversation is NON-EMPTY, propose exactly 4 follow-up questions the analyst \
+is most likely to want next. Deepen or branch from what was just discussed — never \
+repeat a question that was already asked or fully answered. Stay specific to the \
+entities already in play (brand, KPI, segment, time window); use the page and brand \
+context only as a tiebreaker.
+
+If the conversation is EMPTY (the analyst just opened the chat), propose exactly 4 \
+opener questions grounded in page_content: reference the specific entities and \
+values on screen (the named KPIs, segments, drivers, gaps, models) so each pill \
+reads as being about THIS page, not generic. If page_content is empty, ground the \
+openers in the page path and brand filter instead.
+
+Rules:
 - "title": the pill label, at most 42 characters, imperative or noun phrase; it MAY \
 start with a single emoji when it aids scanning (e.g. 📈 for a chart/trend follow-up).
 - "message": the full question the pill sends, one sentence.
-- When numeric KPIs were discussed, at least one suggestion should ask to chart a \
-trend or comparison.
-- Stay specific to the entities already in play (brand, KPI, segment, time window); \
-use the page and brand context only as a tiebreaker.
+- When numeric KPIs were discussed or are shown on the page, at least one suggestion \
+should ask to chart a trend or comparison.
 
 Respond with JSON only, no prose: \
 {"suggestions": [{"title": "...", "message": "..."}, ...]}"""
@@ -84,17 +101,25 @@ class TranscriptMessage(BaseModel):
 
 
 class SuggestionsRequest(BaseModel):
-    """Recent transcript plus the UI context the pills should respect."""
+    """Recent transcript plus the UI context the pills should respect.
 
-    messages: List[TranscriptMessage] = Field(..., min_length=1, max_length=MAX_TRANSCRIPT_MESSAGES)
+    An EMPTY ``messages`` list selects opener mode: the pane was just opened
+    and the pills should be grounded in ``page_context`` (what the analyst is
+    currently looking at) rather than a conversation.
+    """
+
+    messages: List[TranscriptMessage] = Field(
+        default_factory=list, max_length=MAX_TRANSCRIPT_MESSAGES
+    )
     page: Optional[str] = Field(default=None, max_length=200)
     brand: Optional[str] = Field(default=None, max_length=100)
+    page_context: Optional[str] = Field(default=None, max_length=MAX_PAGE_CONTEXT_CHARS)
 
     @field_validator("messages")
     @classmethod
     def _needs_a_user_turn(cls, v: List[TranscriptMessage]) -> List[TranscriptMessage]:
-        if not any(m.role == "user" for m in v):
-            raise ValueError("transcript must contain at least one user message")
+        if v and not any(m.role == "user" for m in v):
+            raise ValueError("non-empty transcript must contain at least one user message")
         return v
 
 
@@ -158,21 +183,24 @@ def _parse_suggestions(raw: str) -> List[ChatSuggestionItem]:
 @router.post(
     "/suggestions",
     response_model=SuggestionsResponse,
-    summary="Generate conversation-adaptive chat suggestion pills",
+    summary="Generate conversation- and page-adaptive chat suggestion pills",
     description=(
-        "One fast-tier LLM call over the recent transcript; returns up to "
-        "four follow-up pills. 502 on any generation/parsing failure — the "
-        "frontend falls back to its static context-aware pills."
+        "One fast-tier LLM call; returns up to four pills. Non-empty "
+        "messages → follow-ups from the recent transcript; empty messages "
+        "(opener mode) → openers grounded in page_context. 502 on any "
+        "generation/parsing failure — the frontend falls back to its static "
+        "context-aware pills."
     ),
 )
 async def generate_chat_suggestions(
     payload: SuggestionsRequest,
     user: Dict[str, Any] = Depends(require_auth),
 ) -> SuggestionsResponse:
-    """Generate follow-up pills from the sidebar's recent conversation."""
+    """Generate follow-up or opener pills for the chat sidebar."""
     context = {
         "page": payload.page or "/",
         "brand_filter": payload.brand or "",
+        "page_content": payload.page_context or "",
         "conversation": [{"role": m.role, "content": m.content} for m in payload.messages],
     }
     llm = get_fast_llm(max_tokens=500, timeout=8)

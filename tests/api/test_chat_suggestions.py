@@ -118,6 +118,46 @@ def test_oversized_transcript_is_422(test_client, auth_headers):
 
 
 # =============================================================================
+# OPENER MODE (empty transcript, pane just opened)
+# =============================================================================
+
+
+def test_opener_with_page_context_reaches_llm(test_client, auth_headers, monkeypatch):
+    fake = _FakeLLM(content=_good_reply(4))
+    monkeypatch.setattr(chat_module, "get_fast_llm", lambda **kwargs: fake)
+
+    payload = _payload(
+        messages=[],
+        page="/segment-analysis",
+        page_context="Top responder segment: ECOG 0-1, CATE +0.21; overall ATE +0.12.",
+    )
+    resp = test_client.post("/api/chat/suggestions", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert len(resp.json()["suggestions"]) == 4
+    sent = fake.calls[0][1].content
+    assert "ECOG 0-1" in sent
+    assert "/segment-analysis" in sent
+
+
+def test_opener_without_page_context_still_generates(test_client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        chat_module, "get_fast_llm", lambda **kwargs: _FakeLLM(content=_good_reply(3))
+    )
+    payload = _payload(messages=[])
+    payload.pop("page_context", None)
+    resp = test_client.post("/api/chat/suggestions", json=payload, headers=auth_headers)
+    assert resp.status_code == 200
+    assert len(resp.json()["suggestions"]) == 3
+
+
+def test_oversized_page_context_is_422(test_client, auth_headers):
+    payload = _payload(messages=[], page_context="x" * 4001)
+    resp = test_client.post("/api/chat/suggestions", json=payload, headers=auth_headers)
+    assert resp.status_code == 422
+
+
+# =============================================================================
 # PARSER
 # =============================================================================
 

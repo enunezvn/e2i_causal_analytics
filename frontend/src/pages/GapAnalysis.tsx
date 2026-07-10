@@ -50,6 +50,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { KPICard, StatusBadge } from '@/components/visualizations';
+import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LabelGateBadge } from '@/components/insights/LabelGateBadge';
@@ -303,6 +304,34 @@ function GapAnalysis() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Publish a compact on-screen data summary so the chat pane can generate
+  // opener pills grounded in what this page is showing (usePageChatContext →
+  // POST /chat/suggestions page_context).
+  const pageChatSummary = useMemo(() => {
+    const lines: string[] = [
+      `Gap Analysis page. Brand filter: ${isAllBrands ? 'All brands' : selectedBrand}.`,
+    ];
+    if (opportunities.length > 0) {
+      lines.push(
+        `Opportunities on screen: ${opportunities.length} (${quickWinsCount} quick wins, ${steadyPlaysCount} steady plays, ${strategicBetsCount} strategic bets); total addressable value ${totalAddressableValue}.`
+      );
+      const top = opportunities[0];
+      lines.push(
+        `Top opportunity: ${top.gap.metric} gap in ${top.gap.segment_value} (gap size ${top.gap.gap_size}, expected ROI ${top.roi_estimate.expected_roi}) — ${top.recommended_action}.`
+      );
+    }
+    return lines.join('\n');
+  }, [
+    isAllBrands,
+    selectedBrand,
+    opportunities,
+    quickWinsCount,
+    steadyPlaysCount,
+    strategicBetsCount,
+    totalAddressableValue,
+  ]);
+  usePageChatContext(pageChatSummary);
 
   return (
     <div className="container mx-auto px-4 py-8">

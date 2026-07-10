@@ -10,6 +10,7 @@ import React, {
   useContext,
   useState,
   useCallback,
+  useEffect,
   ReactNode,
 } from 'react';
 import { CopilotKit } from '@copilotkit/react-core';
@@ -337,6 +338,11 @@ export interface E2ICopilotContextValue {
   chatOpen: boolean;
   setChatOpen: React.Dispatch<React.SetStateAction<boolean>>;
 
+  // Compact summary of the data visible on the current page (published by
+  // pages via usePageChatContext); grounds the chat opener suggestion pills
+  pageChatContext: string | null;
+  setPageChatContext: React.Dispatch<React.SetStateAction<string | null>>;
+
   // Agent information
   agents: AgentInfo[];
 
@@ -381,6 +387,8 @@ interface E2IContextType {
   setPreferences: React.Dispatch<React.SetStateAction<UserPreferences>>;
   chatOpen: boolean;
   setChatOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  pageChatContext: string | null;
+  setPageChatContext: React.Dispatch<React.SetStateAction<string | null>>;
   agents: AgentInfo[];
 }
 
@@ -429,6 +437,8 @@ export function useE2ICopilot(): E2ICopilotContextValue {
     setPreferences: context.setPreferences,
     chatOpen: context.chatOpen,
     setChatOpen: context.setChatOpen,
+    pageChatContext: context.pageChatContext,
+    setPageChatContext: context.setPageChatContext,
     agents: context.agents,
     dashboard: context.dashboard,
     setDashboard: context.setDashboard,
@@ -437,6 +447,27 @@ export function useE2ICopilot(): E2ICopilotContextValue {
     highlightedCharts: context.highlightedCharts,
     clearHighlights: context.clearHighlights,
   };
+}
+
+/**
+ * Publish a compact summary of the data currently visible on the page.
+ *
+ * The chat sidebar sends it to POST /chat/suggestions when the pane opens
+ * with no conversation yet, so the opener pills reference the page's actual
+ * on-screen content (named KPIs, segments, drivers, gaps) instead of generic
+ * templates. Pass null/undefined while the page is still loading; the
+ * summary clears automatically on unmount, so navigating away never leaves a
+ * stale summary behind. No-op outside the provider so pages still render in
+ * isolation (tests, storybook).
+ */
+export function usePageChatContext(summary: string | null | undefined): void {
+  const context = useContext(E2IContext);
+  const setPageChatContext = context?.setPageChatContext;
+  useEffect(() => {
+    if (!setPageChatContext) return;
+    setPageChatContext(summary ?? null);
+    return () => setPageChatContext(null);
+  }, [summary, setPageChatContext]);
 }
 
 // -----------------------------------------------------------------------------
@@ -554,6 +585,7 @@ const E2IContextProvider: React.FC<E2IContextProviderProps> = ({
   const [filters, setFilters] = useState<E2IFilters>(DEFAULT_FILTERS);
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
+  const [pageChatContext, setPageChatContext] = useState<string | null>(null);
 
   // Agent state
   const [activeAgents] = useState<Map<string, AgentState>>(new Map());
@@ -615,6 +647,8 @@ const E2IContextProvider: React.FC<E2IContextProviderProps> = ({
     setPreferences,
     chatOpen,
     setChatOpen,
+    pageChatContext,
+    setPageChatContext,
     agents,
   };
 
