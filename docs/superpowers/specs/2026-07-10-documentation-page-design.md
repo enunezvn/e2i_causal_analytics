@@ -81,9 +81,13 @@ All styling uses the CSS-var token system (`--color-*` vars registered via Tailw
 
 ### §1 Purpose — "Why E2I exists"
 
-- Plain-language narrative: pharma commercial teams need to know what *causes* brand adoption (TRx/NBRx), not what merely correlates with it; E2I applies formal causal inference plus an agentic AI layer to commercial pharma data across three brands (Remibrutinib, Fabhalta, Kisqali).
-- **Stat chips row:** static structural chips (3 brands · 21 agents / 6 tiers · 5 refutation tests) typed as constants; one **live** chip — KPI count from `useKPIList` — that renders only when the query succeeds. On error or while loading, the chip is simply absent: no spinner, no error banner, no placeholder number.
-- **Interactive illustration — `CorrelationCausationToggle`:** an SVG scatter panel showing a convincing spurious correlation ("HCP calls correlate with TRx"), with a toggle that reveals the confounder (physician specialty) as a small DAG and shows how the adjusted effect differs. Data points are hand-authored illustrative coordinates (clearly labeled "illustrative example"), not real metrics.
+- Plain-language narrative: pharma commercial teams need to know what *causes* outcomes, not what merely correlates with them. E2I applies formal causal inference plus an agentic AI layer at **three linked levels**, each grounded in implemented capability (verified 2026-07-10 against the causal-path registry, predictive cohorts, and digital-twin intervention catalog):
+  1. **HCP prescribing behavior** — which promotional levers actually change prescribing (rep detailing, speaker programs, sampling, peer influence, digital engagement, rep training); 8 simulatable intervention channels (`digital_twin/effect/provider.py` `INTERVENTION_CATALOG`); a dedicated HCP-adoption predictive cohort targeting intent-to-prescribe.
+  2. **Patient journey outcomes** — what drives treatment initiation, 180-day persistence, and discontinuation (patient support programs, copay support, access); three patient-level predictive cohorts (`src/insights/predictive_cohort.py`).
+  3. **Market & brand performance** — how upstream behaviors plus market dynamics (formulary status, competitor activity) aggregate into TRx/NRx/NBRx, market share, and ROI.
+- **Interactive illustration A — `CausalScopeMap`:** a compact three-layer SVG diagram (HCP behavior → patient journey → brand outcomes) whose node labels are drawn verbatim from the causal registry's `_NODE_LABELS` (`src/insights/causal_context.py`) — every node shown is a modeled node, nothing invented. Hovering/tapping a layer highlights its nodes and shows a one-line description.
+- **Stat chips row:** static structural chips (3 brands / 4 indications · 4 predictive cohorts · 8 intervention channels · 5 refutation tests) typed as constants; one **live** chip — KPI count from `useKPIList` — that renders only when the query succeeds. On error or while loading, the chip is simply absent: no spinner, no error banner, no placeholder number. (The 21-agent/6-tier fact moves to §2 where the tier stack shows it.)
+- **Interactive illustration B — `CorrelationCausationToggle`:** an SVG scatter panel showing a convincing spurious correlation ("HCP calls correlate with TRx"), with a toggle that reveals the confounder (physician specialty) as a small DAG and shows how the adjusted effect differs. Data points are hand-authored illustrative coordinates (clearly labeled "illustrative example"), not real metrics.
 
 ### §2 Methodology — "How it works"
 
@@ -124,9 +128,10 @@ frontend/src/pages/Documentation.tsx           page shell: header, SectionNav, 4
 frontend/src/pages/Documentation.test.tsx      vitest + RTL (pattern: KPIDictionary.test.tsx)
 frontend/src/components/documentation/
   index.ts                                     barrel export
-  content.ts                                   typed constants: PIPELINE_STAGES, AGENT_TIERS,
-                                               PRACTICES, IMPACT_PATHWAYS, STAT_CHIPS
+  content.ts                                   typed constants: SCOPE_LEVELS, PIPELINE_STAGES,
+                                               AGENT_TIERS, PRACTICES, IMPACT_PATHWAYS, STAT_CHIPS
   SectionNav.tsx                               sticky scroll-spy nav
+  CausalScopeMap.tsx                           §1 three-level capability map
   CorrelationCausationToggle.tsx               §1 illustration
   CausalPipeline.tsx                           §2 pipeline
   AgentTierStack.tsx                           §2 tier stack
@@ -151,6 +156,7 @@ Each component is presentational with typed props/constants; only `Documentation
 
 - **`Documentation.test.tsx`** (vitest + RTL, `vi.mock('@/hooks/api/use-kpi')`, QueryClientProvider wrapper with `retry: false, gcTime: 0`):
   - all four sections and the section nav render;
+  - scope map renders its three levels and highlights one on interaction;
   - pipeline stage expands on click and shows the "For analysts" collapsible;
   - tier stack expands a tier to reveal agents;
   - live KPI chip renders with mocked data, and is absent when the hook returns an error;
