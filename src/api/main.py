@@ -12,7 +12,7 @@ Components:
 - MLOps service connections
 
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.2.1
 """
 
 import asyncio
@@ -121,7 +121,7 @@ try:
 
     SENTRY_DSN = os.environ.get("SENTRY_DSN")
     SENTRY_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
-    SENTRY_RELEASE = os.environ.get("SENTRY_RELEASE", "e2i-causal-analytics@4.2.0")
+    SENTRY_RELEASE = os.environ.get("SENTRY_RELEASE", "e2i-causal-analytics@4.2.1")
 
     def configure_sentry() -> bool:
         """Initialize the Sentry SDK from env, gated on SENTRY_DSN.
@@ -638,7 +638,9 @@ openapi_tags = [
 # =============================================================================
 
 # Single source of truth for the API version (OpenAPI info.version).
-API_VERSION = "4.2.0"
+# Must match [project] version in pyproject.toml (pinned by
+# tests/api/test_openapi_docs_metadata.py).
+API_VERSION = "4.2.1"
 
 app = FastAPI(
     title="E2I Causal Analytics Platform",
@@ -712,6 +714,8 @@ def custom_openapi():
                 "A/B Testing",
                 "Model Monitoring",
                 "Feedback Learning",
+                "Sentinels",
+                "Alerts",
             ],
         },
         {
@@ -726,6 +730,8 @@ def custom_openapi():
                 "Health Score",
                 "Segment Analysis",
                 "Resource Optimization",
+                "Executive Insights",
+                "Strategic Insights",
             ],
         },
         {

@@ -32,7 +32,7 @@ _tracer_provider = None
 # Configuration from environment
 OTEL_ENABLED = os.environ.get("OTEL_ENABLED", "true").lower() in ("1", "true", "yes")
 OTEL_SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "e2i-causal-analytics")
-OTEL_SERVICE_VERSION = os.environ.get("OTEL_SERVICE_VERSION", "4.2.0")
+OTEL_SERVICE_VERSION = os.environ.get("OTEL_SERVICE_VERSION", "4.2.1")
 OTEL_EXPORTER_TYPE = os.environ.get("OTEL_EXPORTER_TYPE", "otlp")  # otlp, console, none
 OTEL_EXPORTER_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
 OTEL_SAMPLING_RATE = float(os.environ.get("OTEL_SAMPLING_RATE", "1.0"))
