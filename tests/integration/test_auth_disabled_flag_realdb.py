@@ -10,6 +10,7 @@ get_user returns FRESH app_metadata per request, so lockout is immediate.
 """
 
 import os
+import secrets
 
 import pytest
 
@@ -19,7 +20,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 EMAIL = "etn3724+admtest-disabled@gmail.com"
-PASSWORD = "AdmTest#2026-disabled"
+# Runtime-randomized so no credential-shaped literal ever lands in git history
+# (GitGuardian flags even throwaway test passwords, and its PR check re-scans
+# all historical commits forever).
+PASSWORD = "Adm!2" + secrets.token_urlsafe(12)
 
 
 @pytest.fixture()

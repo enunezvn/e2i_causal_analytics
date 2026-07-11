@@ -6,6 +6,7 @@ Disposable users use the +admsvc email tag; every test cleans up after itself.
 """
 
 import os
+import secrets
 
 import pytest
 
@@ -15,6 +16,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 TAG = "+admsvc"
+# Runtime-randomized so no credential-shaped literal ever lands in git history
+# (GitGuardian flags even throwaway test passwords, and its PR check re-scans
+# all historical commits forever).
+PW = "Adm!2" + secrets.token_urlsafe(12)
 
 
 @pytest.fixture()
@@ -86,13 +91,13 @@ def test_invite_link_completes_verify_otp(svc):
     )
     verified = anon.auth.verify_otp({"type": "invite", "token_hash": token_hash})
     assert verified.session is not None
-    anon.auth.update_user({"password": "AdmSvc#2026-otp"})
+    anon.auth.update_user({"password": PW})
     anon.auth.sign_out()
     fresh = create_client(
         os.environ["SUPABASE_URL"],
         os.environ.get("SUPABASE_ANON_KEY") or os.environ["SUPABASE_KEY"],
     )
-    signed = fresh.auth.sign_in_with_password({"email": email, "password": "AdmSvc#2026-otp"})
+    signed = fresh.auth.sign_in_with_password({"email": email, "password": PW})
     assert signed.session is not None
 
 
@@ -116,7 +121,7 @@ def test_reinvite_pending_reissues_and_active_falls_back_to_recovery(svc):
         os.environ.get("SUPABASE_ANON_KEY") or os.environ["SUPABASE_KEY"],
     )
     anon.auth.verify_otp({"type": "invite", "token_hash": token_hash})
-    anon.auth.update_user({"password": "AdmSvc#2026-re"})
+    anon.auth.update_user({"password": PW})
 
     third = svc.reinvite_user(user_id)
     assert third["link_type"] == "recovery"
@@ -138,7 +143,7 @@ def test_invalid_role_and_brand_rejected(svc):
         svc.invite_user(email=f"etn3724{TAG}-bad@gmail.com", role="viewer", brands=["Humira"])
 
 
-def _mk(svc, suffix, role="viewer", password="AdmSvc#2026-x"):
+def _mk(svc, suffix, role="viewer", password=PW):
     """Create + activate a disposable user, return (id, email)."""
     email = f"etn3724{TAG}-{suffix}@gmail.com"
     created = svc.admin_client.auth.admin.create_user(
@@ -180,12 +185,12 @@ def test_disable_sets_flag_and_blocks_signin_enable_reverses(svc):
         os.environ.get("SUPABASE_ANON_KEY") or os.environ["SUPABASE_KEY"],
     )
     with pytest.raises(Exception, match="[Bb]anned"):
-        anon.auth.sign_in_with_password({"email": email, "password": "AdmSvc#2026-x"})
+        anon.auth.sign_in_with_password({"email": email, "password": PW})
 
     svc.enable_user(uid)
     u = svc._get_auth_user(uid)
     assert not (u.app_metadata or {}).get("disabled")
-    signed = anon.auth.sign_in_with_password({"email": email, "password": "AdmSvc#2026-x"})
+    signed = anon.auth.sign_in_with_password({"email": email, "password": PW})
     assert signed.session is not None
 
 
