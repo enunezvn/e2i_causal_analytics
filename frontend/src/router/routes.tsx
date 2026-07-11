@@ -33,6 +33,7 @@ const AuditChain = lazy(() => import('@/pages/AuditChain'));
 const FeedbackLearning = lazy(() => import('@/pages/FeedbackLearning'));
 const Analytics = lazy(() => import('@/pages/Analytics'));
 const Documentation = lazy(() => import('@/pages/Documentation'));
+const AcceptInvite = lazy(() => import('@/pages/AcceptInvite'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -303,6 +304,16 @@ export const routes: RouteObject[] = [
     element: (
       <LazyPage>
         <ResetPassword />
+      </LazyPage>
+    ),
+  },
+  // Invite acceptance (public, like /login): target of admin-minted invite
+  // and recovery links (/api/admin/users/invite).
+  {
+    path: '/accept-invite',
+    element: (
+      <LazyPage>
+        <AcceptInvite />
       </LazyPage>
     ),
   },
