@@ -28,6 +28,10 @@ from src.agents.experiment_monitor.state import (
 # per-experiment assignment/SRM/freshness checks (an unbounded check-loop blew
 # past the 30s client timeout — see _get_experiments).
 _RAW_FETCH_LIMIT = 1000
+
+# The platform's analyzed brand portfolio (brand_type values). An unscoped
+# check-all-active sweep is restricted to these — see _get_experiments.
+_PLATFORM_BRANDS = ["Remibrutinib", "Kisqali", "Fabhalta"]
 _MAX_EXPERIMENTS = 25
 
 
@@ -150,6 +154,13 @@ class HealthCheckerNode:
         # SRM, interim analyses) runs against planted experiments. Strictly
         # parsed state opt-in (validation runs), real-mode default-exclude.
         include_synthetic = coerce_provenance_flag(state.get("include_synthetic"))
+        # Explainability columns (2026-07-11): brand/description/channel ride to
+        # the UI card; brand also scopes the sweep and keys the roster interleave.
+        _SELECT = (
+            "id, experiment_name, status, prediction_target, created_at, "
+            "is_synthetic, brand, description, intervention_channel"
+        )
+        brand = state.get("brand")
 
         try:
             if state.get("check_all_active"):
@@ -160,23 +171,35 @@ class HealthCheckerNode:
                 # rows, surfacing many identical cards in the UI.
                 query = (
                     client.table("ml_experiments")
-                    .select(
-                        "id, experiment_name, status, prediction_target, created_at, is_synthetic"
-                    )
+                    .select(_SELECT)
                     .eq("status", "running")
                     .order("created_at", desc=True)
                     .limit(_RAW_FETCH_LIMIT)
                 )
+                if brand:
+                    query = query.eq("brand", brand)
+                else:
+                    # Unscoped = the platform brand portfolio ("All Brands"
+                    # everywhere else in the app). ml_experiments also carries
+                    # scope_definer scaffolding rows (brand NULL / 'competitor',
+                    # e.g. "unknown - Simple outcome") with ZERO A/B assignments
+                    # — ML-scoping artifacts, not A/B experiments; they only
+                    # added unexplainable stale-alert noise to the A/B page
+                    # (2026-07-11 review).
+                    query = query.in_("brand", _PLATFORM_BRANDS)
                 result = await apply_provenance_filter(query, include_synthetic).execute()
-                return self._dedupe_by_name(result.data or [], cap=_MAX_EXPERIMENTS)
+                deduped = self._dedupe_by_name(result.data or [], cap=_RAW_FETCH_LIMIT)
+                # Brand-balanced roster (2026-07-11): newest-first alone let one
+                # generation batch monopolize the capped slice (the live top-25
+                # was 25 same-batch Fabhalta rows). Interleave across brands so
+                # an unscoped sweep represents the whole portfolio.
+                return self._interleave_by_brand(deduped, cap=_MAX_EXPERIMENTS)
             elif state.get("experiment_ids"):
                 # Get specific experiments (a synthetic id must not resolve in
                 # real mode either — same semantics as BaseRepository.get_by_id)
                 query = (
                     client.table("ml_experiments")
-                    .select(
-                        "id, experiment_name, status, prediction_target, created_at, is_synthetic"
-                    )
+                    .select(_SELECT)
                     .in_("id", state["experiment_ids"])
                 )
                 result = await apply_provenance_filter(query, include_synthetic).execute()
@@ -217,6 +240,49 @@ class HealthCheckerNode:
             if len(deduped) >= cap:
                 break
         return deduped
+
+    @staticmethod
+    def _interleave_by_brand(rows: List[Dict], cap: int) -> List[Dict]:
+        """Round-robin the newest-first roster across brands, up to ``cap``.
+
+        Newest-first alone is batch-biased: the synthetic substrate is written
+        in per-brand bursts, so the newest N rows are typically ONE brand from
+        the latest burst (live incident 2026-07-11: the top-25 slice was 25
+        same-instant Fabhalta rows). Grouping by brand (preserving each group's
+        newest-first order, groups ordered by their newest row; rows without a
+        brand form their own group) and taking one per group per round keeps
+        the capped roster representative of the whole running portfolio.
+
+        Args:
+            rows: Deduped experiment rows, newest first.
+            cap: Maximum number of rows to return.
+
+        Returns:
+            Up to ``cap`` rows, brands interleaved, per-brand order preserved.
+        """
+        groups: Dict[str, List[Dict]] = {}
+        order: List[str] = []
+        for row in rows:
+            key = str(row.get("brand") or "__none__")
+            if key not in groups:
+                groups[key] = []
+                order.append(key)  # first appearance = group's newest row rank
+            groups[key].append(row)
+        interleaved: List[Dict] = []
+        round_idx = 0
+        while len(interleaved) < cap:
+            emitted = False
+            for key in order:
+                group = groups[key]
+                if round_idx < len(group):
+                    interleaved.append(group[round_idx])
+                    emitted = True
+                    if len(interleaved) >= cap:
+                        break
+            if not emitted:
+                break
+            round_idx += 1
+        return interleaved
 
     async def _check_experiment_health(
         self, experiment: Dict, client: Optional[Any], include_synthetic: bool = False
@@ -280,6 +346,11 @@ class HealthCheckerNode:
             enrollment_rate=round(enrollment_rate, 2),
             current_information_fraction=round(information_fraction, 4),
             is_synthetic=bool(experiment.get("is_synthetic", False)),
+            # Explainability (2026-07-11): what the experiment tests and why —
+            # None (not fabricated text) when the row predates the metadata.
+            brand=experiment.get("brand"),
+            description=experiment.get("description"),
+            intervention_channel=experiment.get("intervention_channel"),
         )
 
     def _determine_health_status(
@@ -403,14 +474,25 @@ class HealthCheckerNode:
                         datetime.now(timezone.utc) - created_time
                     ).total_seconds() / 3600
 
-                    # If experiment is older than threshold and no data, it's stale
+                    # If experiment is older than threshold and no data, it's stale.
+                    # SAME ladder as the with-assignments branch below: the API
+                    # documents one threshold-relative contract (breach = info,
+                    # 1.5x = warning, 3x = critical) regardless of whether
+                    # staleness is measured from the last assignment or, for a
+                    # never-enrolled experiment, from creation.
                     if hours_since_creation > threshold_hours:
+                        if hours_since_creation > 3 * threshold_hours:
+                            severity = "critical"
+                        elif hours_since_creation > 1.5 * threshold_hours:
+                            severity = "warning"
+                        else:
+                            severity = "info"
                         return StaleDataIssue(
                             experiment_id=exp_id,
                             last_data_timestamp="N/A - No assignments",
                             hours_since_update=hours_since_creation,
                             threshold_hours=threshold_hours,
-                            severity="warning" if hours_since_creation < 48 else "critical",
+                            severity=severity,  # type: ignore
                         )
                 return None
 
@@ -427,10 +509,14 @@ class HealthCheckerNode:
             ).total_seconds() / 3600
 
             if hours_since_update > threshold_hours:
-                # Determine severity based on staleness
-                if hours_since_update > 72:  # 3 days
+                # Severity RELATIVE to the caller's threshold (2026-07-11): the
+                # old absolute tiers (48h/72h) pinned every experiment critical
+                # once the substrate's refresh cadence was slower than 3 days —
+                # e.g. the weekly synthetic refresh — regardless of the threshold
+                # the caller chose. Breach = info, 1.5x = warning, 3x = critical.
+                if hours_since_update > 3 * threshold_hours:
                     severity = "critical"
-                elif hours_since_update > 48:  # 2 days
+                elif hours_since_update > 1.5 * threshold_hours:
                     severity = "warning"
                 else:
                     severity = "info"

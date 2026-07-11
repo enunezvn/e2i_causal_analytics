@@ -115,4 +115,23 @@ else
     echo "=== goldstd retrain SKIPPED (--skip-retrain) $(date -Is) ==="
 fi
 
+# Refresh the Shard-09 A/B substrate (ml_experiments + assignments/enrollments/
+# results) in place. The frontier append above does NOT touch these tables, so
+# without this step the experiment_monitor staleness alerts alarm on a frozen
+# substrate (found frozen at its last manual full load — 2026-07-11 /experiments
+# review). Deterministic uuid5 ids -> pure in-place refresh. Skipped in --full
+# mode because the full generate path already rebuilds the substrate.
+# Runs LAST deliberately: nothing else in this wrapper reads the AB tables, so
+# under set -e a refresh failure must not cost the week's kpi_history point or
+# the goldstd retrain (the weekly capture is append-only and cannot be
+# backfilled honestly). "$@" is forwarded so --dry-run stays write-free (the
+# purge is gated on it); --refresh-ab itself ignores --small.
+if [[ "$MODE" == "--append-frontier" ]]; then
+    echo "=== A/B substrate refresh start $(date -Is) ==="
+    PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
+        .venv/bin/dotenv -f .env run -- \
+        .venv/bin/python scripts/load_synthetic_data.py --refresh-ab "$@"
+    echo "=== A/B substrate refresh done $(date -Is) ==="
+fi
+
 echo "=== reseed_synthetic done $(date -Is) ==="

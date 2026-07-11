@@ -143,3 +143,14 @@ export interface HomeKpiInsightRequest {
   /** Lowercase US-census region, or null/omitted for the All-US portfolio view. */
   region?: string | null;
 }
+
+export interface ExperimentsInsightRequest {
+  /**
+   * Scope only: the per-channel A/B effects are recomputed SERVER-SIDE from
+   * ml_experiments × ab_experiment_results — caller-posted figures are not
+   * accepted (same trust boundary as ExecutiveBriefInsightRequest).
+   */
+  brand: string;
+  /** Provenance opt-in mirroring the monitor sweep's (#894). */
+  include_synthetic?: boolean;
+}

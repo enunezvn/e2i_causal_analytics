@@ -25,6 +25,9 @@ from src.insights import (
     resource_optimization,
     treatment_effect,
 )
+from src.insights import (
+    experiments as experiments_insight_mod,
+)
 from src.insights.common import cache_get, cache_key, cache_set
 
 logger = logging.getLogger(__name__)
@@ -838,3 +841,80 @@ async def feedback_learning_insight(
         payload = await asyncio.to_thread(feedback_learning.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Live feedback-learning loop data (server-derived)")
+
+
+class ExperimentsInsightRequest(BaseModel):
+    """Grounding is server-derived (running experiments × final A/B results,
+    grouped by intervention channel); the caller only picks the scope. The
+    provenance opt-in mirrors the monitor sweep's (#894): the A/B portfolio IS
+    the synthetic-gold substrate, so a real-mode deployment needs the same
+    explicit opt-in the page's checkbox sends."""
+
+    brand: str = "All"
+    include_synthetic: bool = False
+
+
+@router.post("/experiments", response_model=StrategicInsightResponse)
+async def experiments_portfolio_insight(
+    req: ExperimentsInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Strategic interpretation of the in-silico A/B experimentation portfolio:
+    which engagement interventions show statistically supported lift on the
+    brand's primary outcome, and what adopting the winners would be worth
+    (2026-07-11 /experiments usefulness review)."""
+    from src.api.dependencies.supabase_client import get_supabase
+    from src.repositories.provenance import apply_provenance_filter
+
+    def _load() -> dict[str, Any]:
+        client = get_supabase()
+        if client is None:
+            raise RuntimeError("Database unavailable")
+        # One embed query: running channel-tagged experiments with their final
+        # results. Channel presence (migration 100) defines A/B-portfolio
+        # membership — scope_definer scaffolding rows have no channel.
+        query = (
+            client.table("ml_experiments")
+            .select(
+                "id, brand, intervention_channel, "
+                "ab_experiment_results(effect_estimate, p_value, is_significant)"
+            )
+            .eq("status", "running")
+            .not_.is_("intervention_channel", "null")
+        )
+        if req.brand and req.brand != "All":
+            query = query.eq("brand", req.brand)
+        query = apply_provenance_filter(query, req.include_synthetic)
+        rows = query.execute().data or []
+        return experiments_insight_mod.build_grounding(req.brand, rows)
+
+    try:
+        g = await asyncio.to_thread(_load)
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("experiments insight grounding unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": "The A/B portfolio results for this scope are currently "
+                "unavailable, so no grounded interpretation can be produced right "
+                "now — this is a data-source failure, not an empty portfolio.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="A/B portfolio results for this scope (unavailable)",
+        )
+    # Key on the derived grounding strings so any change in computed effects or
+    # scope produces a fresh narrative (same discipline as the other routes).
+    key = cache_key(
+        "experiments",
+        f"{req.brand}:{req.include_synthetic}",
+        {"s": g["scope"], "c": g["channel_effects"], "h": g["highlights"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(experiments_insight_mod.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(
+        payload, provenance="A/B portfolio results grouped by intervention (server-derived)"
+    )

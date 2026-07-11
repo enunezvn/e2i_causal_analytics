@@ -31,6 +31,12 @@ class ExperimentSummary(TypedDict):
     # Provenance (#894): whether this experiment row is synthetic-gold. Optional
     # so older construction sites / fixtures that omit it stay valid.
     is_synthetic: NotRequired[bool]
+    # Explainability (2026-07-11 /experiments review): the card must say WHAT
+    # the experiment tests and WHY. Optional (older rows / fixtures omit them;
+    # NULL DB values surface as None -> the UI renders honest absence).
+    brand: NotRequired[str | None]
+    description: NotRequired[str | None]
+    intervention_channel: NotRequired[str | None]
 
 
 class SRMIssue(TypedDict):
@@ -137,6 +143,10 @@ class ExperimentMonitorState(TypedDict):
     # ab_experiment_assignments reads include synthetic rows. Default
     # (absent/ambiguous) is real mode — synthetic experiments are excluded.
     include_synthetic: NotRequired[bool]
+    # Brand scope (2026-07-11 /experiments review): restrict the check-all-active
+    # sweep to one brand_type value. MUST be declared here — LangGraph silently
+    # drops input keys that are not state channels.
+    brand: NotRequired[str | None]
 
     # ===== Configuration (8) =====
     srm_threshold: float  # P-value threshold for SRM detection (default: 0.001)

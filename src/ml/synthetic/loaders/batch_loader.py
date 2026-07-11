@@ -346,6 +346,11 @@ TABLE_COLUMNS = {
         "experiment_name",
         "description",
         "prediction_target",
+        # /experiments usefulness review (2026-07-11): meaningful portfolio
+        # metadata — cohort text + the digital-twin intervention taxonomy value
+        # (migration 100) the monitor badge + /insights/experiments group by.
+        "target_population",
+        "intervention_channel",
         "observation_window_days",
         "prediction_horizon_days",
         "minimum_auc",
