@@ -552,6 +552,20 @@ export const queryKeys = {
   },
 
   /**
+   * Admin user management queries
+   */
+  admin: {
+    all: () => [...queryKeys.all, 'admin'] as const,
+    users: () => [...queryKeys.admin.all(), 'users'] as const,
+    userActivity: (userId: string, days: number) =>
+      [...queryKeys.admin.all(), 'activity', userId, days] as const,
+    platformActivity: (days: number) =>
+      [...queryKeys.admin.all(), 'platform-activity', days] as const,
+    auditFeed: (days: number) =>
+      [...queryKeys.admin.all(), 'audit-feed', days] as const,
+  },
+
+  /**
    * Feedback Learning queries (Tier 5 self-improvement)
    */
   feedback: {
