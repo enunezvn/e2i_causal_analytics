@@ -72,6 +72,20 @@ PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
     .venv/bin/dotenv -f .env run -- \
     .venv/bin/python scripts/load_synthetic_data.py "$MODE" "$@"
 
+# Refresh the Shard-09 A/B substrate (ml_experiments + assignments/enrollments/
+# results) in place. The frontier append above does NOT touch these tables, so
+# without this step the experiment_monitor staleness alerts alarm on a frozen
+# substrate (found frozen at its last manual full load — 2026-07-11 /experiments
+# review). Deterministic uuid5 ids -> pure in-place refresh. Skipped in --full
+# mode because the full generate path already rebuilds the substrate.
+if [[ "$MODE" == "--append-frontier" ]]; then
+    echo "=== A/B substrate refresh start $(date -Is) ==="
+    PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
+        .venv/bin/dotenv -f .env run -- \
+        .venv/bin/python scripts/load_synthetic_data.py --refresh-ab
+    echo "=== A/B substrate refresh done $(date -Is) ==="
+fi
+
 # Rebuild kpi_history from the substrate. Replace semantics (delete per
 # (kpi_id, source), then upsert) stay correct in BOTH modes: after an append,
 # history months recompute to the same values (source rows are frozen) and the

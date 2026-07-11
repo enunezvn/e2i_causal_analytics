@@ -47,6 +47,9 @@ def _provenance_tagged_client() -> MockSupabaseClient:
     client.set_mock_data(
         "ml_experiments",
         [
+            # brand: the unscoped sweep restricts to the 3-brand portfolio
+            # (2026-07-11); live training + A/B rows carry a platform brand,
+            # so the fixture mirrors that shape.
             {
                 "id": "exp-real-693",
                 "experiment_name": "Real Training Row",
@@ -54,6 +57,7 @@ def _provenance_tagged_client() -> MockSupabaseClient:
                 "prediction_target": "conversion",
                 "created_at": (now - timedelta(days=7)).isoformat(),
                 "is_synthetic": False,
+                "brand": "Kisqali",
             },
             {
                 "id": "exp-synth-360",
@@ -62,6 +66,7 @@ def _provenance_tagged_client() -> MockSupabaseClient:
                 "prediction_target": "conversion",
                 "created_at": (now - timedelta(days=7)).isoformat(),
                 "is_synthetic": True,
+                "brand": "Fabhalta",
             },
         ],
     )

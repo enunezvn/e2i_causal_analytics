@@ -34,10 +34,19 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   useTriggerMonitoring,
   useInterimAnalyses,
   useFidelityComparisons,
+  useExperimentsInsight,
 } from '@/hooks/api';
+import { StrategicInsightCard } from '@/components/insights';
 import { EmptyState } from '@/components/ui/EmptyState';
 import {
   AlertSeverity,
@@ -75,6 +84,11 @@ interface LocalExperiment {
   variant_breakdown: Record<string, number>;
   start_date: string;
   primary_metric: string;
+  /** Explainability (2026-07-11): what the experiment tests and why. Null =
+   *  not recorded on the row; the card renders honest absence. */
+  brand?: string | null;
+  description?: string | null;
+  intervention_channel?: string | null;
 }
 
 // =============================================================================
@@ -91,6 +105,22 @@ const COLORS = {
 };
 
 const PIE_COLORS = [COLORS.primary, COLORS.secondary, COLORS.tertiary, '#f97316'];
+
+/** Brand scope options — same convention as the other pages' brand selectors. */
+const BRANDS = [
+  { value: 'All', label: 'All Brands' },
+  { value: 'Remibrutinib', label: 'Remibrutinib' },
+  { value: 'Kisqali', label: 'Kisqali' },
+  { value: 'Fabhalta', label: 'Fabhalta' },
+];
+
+/**
+ * Staleness threshold sent with every monitoring run: the synthetic A/B
+ * substrate refreshes WEEKLY (Mon 3AM cron), so "no new data for 24h" is the
+ * expected steady state 6 days out of 7, not an incident. 8 days = one refresh
+ * cycle + a day of slack; the backend scales alert severity to this value.
+ */
+const STALE_THRESHOLD_HOURS = 192;
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -136,6 +166,14 @@ function formatTimestamp(timestamp: string): string {
   return date.toLocaleString();
 }
 
+/** 'speaker_program_invitation' -> 'Speaker Program Invitation'. */
+function formatChannel(value: string): string {
+  return value
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 function formatTimeAgo(timestamp: string): string {
   const seconds = Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
   if (seconds < 60) return `${seconds}s ago`;
@@ -158,9 +196,14 @@ export default function Experiments() {
   // the gap_analyzer/het resolver convention); the reviewer explicitly opts in
   // to surface the synthetic-gold A/B substrate this deployment runs on.
   const [includeSynthetic, setIncludeSynthetic] = useState(false);
+  // Brand scope for the monitoring sweep ('All' = the 3-brand portfolio,
+  // interleaved server-side so one generation batch can't monopolize the roster).
+  const [selectedBrand, setSelectedBrand] = useState('All');
 
   // API hooks. No sample-data fallback — honest empty states only.
   const { data: monitorData, isPending: isLoadingMonitor, mutate: triggerMonitor } = useTriggerMonitoring();
+  // Strategic portfolio read (grounded server-side in per-channel A/B effects).
+  const expInsight = useExperimentsInsight();
 
   // Live interim analyses + fidelity for the currently-selected experiment.
   // Both endpoints are keyed by a single experiment id.
@@ -186,6 +229,9 @@ export default function Experiments() {
         variant_breakdown: {},
         start_date: exp.last_checked.split('T')[0],
         primary_metric: 'conversion_rate',
+        brand: exp.brand ?? null,
+        description: exp.description ?? null,
+        intervention_channel: exp.intervention_channel ?? null,
       }));
     }
     return [];
@@ -259,8 +305,19 @@ export default function Experiments() {
   const syntheticIncluded = monitorData?.synthetic_data_included ?? false;
   const syntheticSubstrate = syntheticForced || syntheticIncluded;
 
+  // One request shape for Run/Refresh: brand scope + provenance opt-in + the
+  // weekly-cadence staleness threshold (see STALE_THRESHOLD_HOURS).
+  const monitorRequest = useMemo(
+    () => ({
+      include_synthetic: includeSynthetic,
+      brand: selectedBrand === 'All' ? undefined : selectedBrand,
+      stale_data_threshold_hours: STALE_THRESHOLD_HOURS,
+    }),
+    [includeSynthetic, selectedBrand]
+  );
+
   const handleRunMonitoring = () => {
-    triggerMonitor({ include_synthetic: includeSynthetic });
+    triggerMonitor(monitorRequest);
   };
 
   return (
@@ -277,6 +334,20 @@ export default function Experiments() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Brand scope (2026-07-11): 'All Brands' = the 3-brand portfolio,
+              interleaved server-side; a single brand scopes the sweep. */}
+          <Select value={selectedBrand} onValueChange={setSelectedBrand}>
+            <SelectTrigger className="w-40" aria-label="Brand">
+              <SelectValue placeholder="Brand" />
+            </SelectTrigger>
+            <SelectContent>
+              {BRANDS.map((brand) => (
+                <SelectItem key={brand.value} value={brand.value}>
+                  {brand.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {/* Provenance opt-in (#894): all A/B substrate in this deployment is
               synthetic-gold, so a reviewer must opt in to see it. Default OFF
               matches the backend real-mode default-exclude. When the deployment
@@ -300,10 +371,7 @@ export default function Experiments() {
             <Play className="mr-2 h-4 w-4" />
             Run Monitoring
           </Button>
-          <Button
-            variant="outline"
-            onClick={() => triggerMonitor({ include_synthetic: includeSynthetic })}
-          >
+          <Button variant="outline" onClick={() => triggerMonitor(monitorRequest)}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoadingMonitor ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -318,12 +386,14 @@ export default function Experiments() {
       {syntheticSubstrate && (
         <Alert className="mb-6">
           <Beaker className="h-4 w-4" />
-          <AlertTitle>Static synthetic-gold substrate</AlertTitle>
+          <AlertTitle>In-silico A/B testing on the synthetic-gold substrate</AlertTitle>
           <AlertDescription>
-            These experiments use seeded synthetic-gold data with no live feed.
-            Freshness ("data staleness") and enrollment alerts below reflect the
-            static dataset growing older, not a broken data pipeline or failing
-            experiments.
+            Each experiment randomizes one engagement intervention (from the
+            digital-twin taxonomy) against standard practice on the synthetic HCP
+            panel, with known ground-truth effects planted so estimator recovery
+            is verifiable. The substrate refreshes weekly (Mon 3AM), so data
+            staleness is judged against an 8-day threshold — freshness alerts
+            reflect the refresh cadence, not a broken pipeline.
           </AlertDescription>
         </Alert>
       )}
@@ -381,6 +451,32 @@ export default function Experiments() {
           value={overviewMetrics.totalAlerts}
           status={overviewMetrics.criticalAlerts > 0 ? 'critical' : 'warning'}
           description="Requiring attention"
+        />
+      </div>
+
+      {/* Strategic Interpretation — agentic read of the A/B portfolio, grounded
+          SERVER-SIDE in per-channel effects from ab_experiment_results (which
+          interventions show real lift, what adopting them would be worth, and
+          which channels honestly show nothing). Rendered always so the header
+          is present on mount; generation is on demand. */}
+      <div className="mb-8">
+        <StrategicInsightCard
+          title="Portfolio Strategic Read"
+          description="Which tested interventions show causal lift on the brand outcome — and which don't"
+          isLoading={expInsight.isPending}
+          error={expInsight.error?.message ?? null}
+          insight={expInsight.data?.insight}
+          keyTakeaways={expInsight.data?.key_takeaways}
+          grounding={expInsight.data?.grounding}
+          isFallback={expInsight.data?.is_fallback}
+          provenance={expInsight.data?.provenance}
+          generatedAt={expInsight.data?.generated_at}
+          onGenerate={() =>
+            expInsight.mutate({
+              brand: selectedBrand,
+              include_synthetic: syntheticForced ? true : includeSynthetic,
+            })
+          }
         />
       </div>
 
@@ -447,7 +543,30 @@ export default function Experiments() {
                     </div>
                     {getHealthBadge(experiment.health_status)}
                   </div>
-                  <CardDescription>{experiment.experiment_id}</CardDescription>
+                  {/* Explainability badges: brand + intervention under test.
+                      Rendered only when recorded — no fabricated metadata. */}
+                  {(experiment.brand || experiment.intervention_channel) && (
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      {experiment.brand && (
+                        <Badge variant="outline">{experiment.brand}</Badge>
+                      )}
+                      {experiment.intervention_channel && (
+                        <Badge variant="secondary">
+                          {formatChannel(experiment.intervention_channel)}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
+                  {/* WHAT this experiment tests and WHY (hypothesis + in-silico
+                      design). Falls back to the id when the row predates the
+                      explainability metadata. */}
+                  {experiment.description ? (
+                    <CardDescription className="mt-1 whitespace-normal">
+                      {experiment.description}
+                    </CardDescription>
+                  ) : (
+                    <CardDescription>{experiment.experiment_id}</CardDescription>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-sm">

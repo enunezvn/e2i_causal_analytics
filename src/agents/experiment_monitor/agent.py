@@ -62,6 +62,11 @@ class ExperimentMonitorInput:
     check_enrollment: bool = True
     check_fidelity: bool = True
     include_synthetic: bool = False
+    # Brand scope (2026-07-11 /experiments review): restrict the
+    # check-all-active sweep to one brand_type value (Remibrutinib / Kisqali /
+    # Fabhalta). None = all brands, with the roster interleaved across brands
+    # so no single generation batch monopolizes the capped slice.
+    brand: Optional[str] = None
 
 
 @dataclass
@@ -171,6 +176,7 @@ class ExperimentMonitorAgent:
             # absent (real-mode default-exclude), hiding the synthetic A/B
             # substrate the live deployment runs on.
             "include_synthetic": input_data.include_synthetic,
+            "brand": input_data.brand,
             "experiments": [],
             "srm_issues": [],
             "enrollment_issues": [],

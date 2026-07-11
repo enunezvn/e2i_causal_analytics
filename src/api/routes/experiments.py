@@ -228,6 +228,26 @@ class TriggerMonitorRequest(BaseModel):
             "synthetic-gold, so callers must opt in to see it."
         ),
     )
+    brand: Optional[str] = Field(
+        default=None,
+        description=(
+            "Restrict the sweep to one brand (Remibrutinib / Kisqali / "
+            "Fabhalta). None = all brands, interleaved so no single generation "
+            "batch monopolizes the capped roster (2026-07-11 review)."
+        ),
+    )
+    stale_data_threshold_hours: float = Field(
+        default=24.0,
+        gt=0,
+        description=(
+            "Hours without a new assignment before an experiment counts as "
+            "stale. Callers should match the substrate's refresh cadence — the "
+            "synthetic showcase substrate refreshes WEEKLY (Mon 3AM cron), so "
+            "the page sends 192h (8 days); the 24h default suits live-fed "
+            "experiments. Severity scales with this threshold (1.5x warning, "
+            "3x critical)."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -238,6 +258,8 @@ class TriggerMonitorRequest(BaseModel):
                 "check_fidelity": True,
                 "srm_threshold": 0.001,
                 "include_synthetic": False,
+                "brand": None,
+                "stale_data_threshold_hours": 24.0,
             }
         }
     )
@@ -397,6 +419,13 @@ class ExperimentHealthSummary(BaseModel):
     # Provenance (#894): this experiment row is synthetic-gold (is_synthetic).
     # Lets the UI badge synthetic experiments instead of presenting them as live.
     is_synthetic: bool = False
+    # Explainability (2026-07-11 /experiments review): what the experiment tests
+    # and why (hypothesis + design from ml_experiments.description), its brand,
+    # and the digital-twin intervention-taxonomy channel (migration 100). None =
+    # metadata not recorded on the row; the UI renders honest absence.
+    brand: Optional[str] = None
+    description: Optional[str] = None
+    intervention_channel: Optional[str] = None
 
 
 class MonitorResponse(BaseModel):
@@ -1310,6 +1339,8 @@ async def trigger_experiment_monitoring(
                 check_enrollment=request.check_enrollment,
                 check_fidelity=request.check_fidelity,
                 include_synthetic=request.include_synthetic,
+                brand=request.brand,
+                stale_data_threshold_hours=request.stale_data_threshold_hours,
             )
         )
 
@@ -1338,6 +1369,9 @@ async def trigger_experiment_monitoring(
                     active_alerts=len(exp_alerts),
                     last_checked=datetime.now(timezone.utc),
                     is_synthetic=bool(exp.get("is_synthetic", False)),
+                    brand=exp.get("brand"),
+                    description=exp.get("description"),
+                    intervention_channel=exp.get("intervention_channel"),
                 )
             )
 

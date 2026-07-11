@@ -2,7 +2,7 @@
  * Experiments Page Tests — interim/fidelity live wiring (H2)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act, within } from '@testing-library/react';
+import { render, screen, waitFor, act, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -11,12 +11,14 @@ vi.mock('@/hooks/api', () => ({
   useTriggerMonitoring: vi.fn(),
   useInterimAnalyses: vi.fn(),
   useFidelityComparisons: vi.fn(),
+  useExperimentsInsight: vi.fn(),
 }));
 
 import {
   useTriggerMonitoring,
   useInterimAnalyses,
   useFidelityComparisons,
+  useExperimentsInsight,
 } from '@/hooks/api';
 import Experiments from './Experiments';
 
@@ -40,6 +42,12 @@ beforeEach(() => {
   });
   (useInterimAnalyses as ReturnType<typeof vi.fn>).mockReturnValue(idle);
   (useFidelityComparisons as ReturnType<typeof vi.fn>).mockReturnValue(idle);
+  (useExperimentsInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    isPending: false,
+    error: null,
+    mutate: vi.fn(),
+  });
 });
 
 describe('Experiments — interim analyses (H2)', () => {
@@ -322,13 +330,17 @@ describe('Experiments — synthetic-substrate honesty + load CTA', () => {
     expect(mutate).toHaveBeenCalled();
   });
 
-  it('surfaces the static-synthetic context banner when the substrate is synthetic', () => {
+  it('surfaces the in-silico substrate context banner when the substrate is synthetic', () => {
     (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
       monitorWith({ synthetic_data_included: true, synthetic_data_forced: false }),
     );
     render(<Experiments />, { wrapper: createWrapper() });
-    expect(screen.getByText(/Static synthetic-gold substrate/i)).toBeInTheDocument();
-    expect(screen.getByText(/no live feed/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/In-silico A\/B testing on the synthetic-gold substrate/i),
+    ).toBeInTheDocument();
+    // The banner explains the weekly refresh cadence behind the 8-day
+    // staleness threshold instead of the old "static dataset" framing.
+    expect(screen.getByText(/refreshes weekly/i)).toBeInTheDocument();
   });
 
   it('does NOT show the synthetic banner when the substrate is not synthetic', () => {
@@ -336,7 +348,9 @@ describe('Experiments — synthetic-substrate honesty + load CTA', () => {
       monitorWith({ synthetic_data_included: false }),
     );
     render(<Experiments />, { wrapper: createWrapper() });
-    expect(screen.queryByText(/Static synthetic-gold substrate/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/In-silico A\/B testing on the synthetic-gold substrate/i),
+    ).not.toBeInTheDocument();
   });
 
   it('disables and relabels the synthetic checkbox when the deployment forces inclusion', () => {
@@ -357,7 +371,9 @@ describe('Experiments — synthetic-substrate honesty + load CTA', () => {
       monitorWith({ synthetic_data_forced: true, synthetic_data_included: false }),
     );
     render(<Experiments />, { wrapper: createWrapper() });
-    expect(screen.getByText(/Static synthetic-gold substrate/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/In-silico A\/B testing on the synthetic-gold substrate/i),
+    ).toBeInTheDocument();
   });
 
   it('adds a static-synthetic note on the Alerts tab', async () => {
@@ -372,5 +388,117 @@ describe('Experiments — synthetic-substrate honesty + load CTA', () => {
     expect(
       screen.getByText(/computed on static synthetic-gold data/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe('Experiments — brand filter + explainability + portfolio insight (2026-07-11)', () => {
+  it('renders the brand selector with All Brands + the three platform brands', () => {
+    render(<Experiments />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    expect(screen.getByRole('option', { name: 'All Brands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Remibrutinib' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Kisqali' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fabhalta' })).toBeInTheDocument();
+  });
+
+  it('passes the selected brand and the weekly-cadence staleness threshold to the sweep', async () => {
+    const mutate = vi.fn();
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      mutate,
+    });
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'Kisqali' }));
+    await act(async () => {
+      await user.click(screen.getAllByRole('button', { name: /run monitoring/i })[0]);
+    });
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ brand: 'Kisqali', stale_data_threshold_hours: 192 }),
+    );
+  });
+
+  it('omits brand from the request when All Brands is selected (server interleaves)', async () => {
+    const mutate = vi.fn();
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      mutate,
+    });
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getAllByRole('button', { name: /run monitoring/i })[0]);
+    });
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ brand: undefined, stale_data_threshold_hours: 192 }),
+    );
+  });
+
+  it('renders the experiment description, brand and intervention badges on the card', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+      data: {
+        experiments: [
+          {
+            experiment_id: 'exp_meaningful_1',
+            experiment_name:
+              'Fabhalta: Speaker Program Invitation → PNH therapy persistence — lapsed prescribers, west (#002)',
+            health_status: 'healthy',
+            total_enrolled: 300,
+            enrollment_rate_per_day: 8,
+            current_information_fraction: 0.3,
+            has_srm: false,
+            active_alerts: 0,
+            last_checked: '2026-07-01T00:00:00Z',
+            brand: 'Fabhalta',
+            intervention_channel: 'speaker_program_invitation',
+            description:
+              'In-silico A/B test: does speaker program invitation increase PNH therapy persistence among lapsed prescribers…',
+          },
+        ],
+        alerts: [],
+      },
+    });
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText(/In-silico A\/B test: does speaker program/i)).toBeInTheDocument();
+    expect(screen.getByText('Fabhalta')).toBeInTheDocument();
+    // Channel badge renders the humanized taxonomy label
+    expect(screen.getByText('Speaker Program Invitation')).toBeInTheDocument();
+    // No raw-id fallback when a description exists
+    expect(screen.queryByText('exp_meaningful_1')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the experiment id when the row predates the explainability metadata', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      monitorWith({}),
+    );
+    render(<Experiments />, { wrapper: createWrapper() });
+    // monitorWith's roster row has no description -> honest id fallback.
+    expect(screen.getByText('exp_synth_1')).toBeInTheDocument();
+  });
+
+  it('renders the portfolio insight card and generates with the current scope', async () => {
+    const insightMutate = vi.fn();
+    (useExperimentsInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      error: null,
+      mutate: insightMutate,
+    });
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('Portfolio Strategic Read')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'Fabhalta' }));
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /generate/i }));
+    });
+    expect(insightMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ brand: 'Fabhalta', include_synthetic: false }),
+    );
   });
 });
