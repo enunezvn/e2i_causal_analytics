@@ -41,6 +41,8 @@ def disposable_user():
     session = anon.auth.sign_in_with_password({"email": EMAIL, "password": PASSWORD})
     yield admin, created.user.id, session.session.access_token
     admin.auth.admin.delete_user(created.user.id)
+    # the signup trigger creates a profile row and prod has no FK — clean it
+    admin.table("chatbot_user_profiles").delete().eq("id", created.user.id).execute()
 
 
 @pytest.mark.asyncio

@@ -280,6 +280,10 @@ class AdminUserService:
         self._guard_not_last_admin(user_id, "delete")
         user = self._get_auth_user(user_id)  # 404 before delete
         self.admin_client.auth.admin.delete_user(user_id)
+        # Prod chatbot_user_profiles has NO FK to auth.users (intentional: the
+        # anonymous@copilotkit.system profile has no auth row), so the profile
+        # is removed explicitly. Activity/audit history is kept on purpose.
+        self.admin_client.table("chatbot_user_profiles").delete().eq("id", user_id).execute()
         return {"user_id": user_id, "email": user.email, "deleted": True}
 
     # --------------------------------------------------------------- activity

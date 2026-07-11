@@ -23,10 +23,14 @@ def svc():
 
     service = AdminUserService()
     yield service
-    # cleanup ALL disposable users this file may have created
+    # cleanup ALL disposable users this file may have created — auth user AND
+    # profile row (no FK in prod, the signup trigger recreates profiles)
     for u in service.admin_client.auth.admin.list_users():
         if u.email and TAG in u.email:
             service.admin_client.auth.admin.delete_user(u.id)
+    service.admin_client.table("chatbot_user_profiles").delete().like(
+        "email", f"%{TAG}%"
+    ).execute()
 
 
 def test_list_users_merges_auth_and_profile(svc):
@@ -134,3 +138,117 @@ def test_invalid_role_and_brand_rejected(svc):
         svc.invite_user(email=f"etn3724{TAG}-bad@gmail.com", role="superuser", brands=["all"])
     with pytest.raises(AdminValidationError):
         svc.invite_user(email=f"etn3724{TAG}-bad@gmail.com", role="viewer", brands=["Humira"])
+
+
+def _mk(svc, suffix, role="viewer", password="AdmSvc#2026-x"):
+    """Create + activate a disposable user, return (id, email)."""
+    email = f"etn3724{TAG}-{suffix}@gmail.com"
+    created = svc.admin_client.auth.admin.create_user(
+        {
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "app_metadata": {"role": role, "brands": ["all"]},
+        }
+    )
+    svc._upsert_profile(created.user.id, email, role)
+    return created.user.id, email
+
+
+def test_update_user_dual_writes_role(svc):
+    uid, email = _mk(svc, "upd")
+    svc.update_user(uid, role="operator", brands=["Fabhalta"], acting_admin_id="not-the-target")
+    u = svc._get_auth_user(uid)
+    assert (u.app_metadata or {}).get("role") == "operator"
+    assert (u.app_metadata or {}).get("brands") == ["Fabhalta"]
+    p = svc.admin_client.table("chatbot_user_profiles").select("role, is_admin").eq("id", uid).execute()
+    assert p.data[0]["role"] == "operator" and p.data[0]["is_admin"] is False
+
+
+def test_disable_sets_flag_and_blocks_signin_enable_reverses(svc):
+    from supabase import create_client
+
+    uid, email = _mk(svc, "dis")
+    svc.disable_user(uid, acting_admin_id="not-the-target")
+    u = svc._get_auth_user(uid)
+    assert (u.app_metadata or {}).get("disabled") is True
+    anon = create_client(
+        os.environ["SUPABASE_URL"],
+        os.environ.get("SUPABASE_ANON_KEY") or os.environ["SUPABASE_KEY"],
+    )
+    with pytest.raises(Exception, match="[Bb]anned"):
+        anon.auth.sign_in_with_password({"email": email, "password": "AdmSvc#2026-x"})
+
+    svc.enable_user(uid)
+    u = svc._get_auth_user(uid)
+    assert not (u.app_metadata or {}).get("disabled")
+    signed = anon.auth.sign_in_with_password({"email": email, "password": "AdmSvc#2026-x"})
+    assert signed.session is not None
+
+
+def test_delete_removes_user_and_cascades_profile(svc):
+    uid, _ = _mk(svc, "del")
+    svc.delete_user(uid, acting_admin_id="not-the-target")
+    from src.services.admin_user_service import AdminNotFoundError
+
+    with pytest.raises(AdminNotFoundError):
+        svc._get_auth_user(uid)
+    p = svc.admin_client.table("chatbot_user_profiles").select("id").eq("id", uid).execute()
+    assert p.data == []  # service deletes the profile explicitly (no FK in prod)
+
+
+def test_self_targeting_guards(svc):
+    from src.services.admin_user_service import AdminGuardError
+
+    uid, _ = _mk(svc, "self", role="admin")
+    with pytest.raises(AdminGuardError):
+        svc.delete_user(uid, acting_admin_id=uid)
+    with pytest.raises(AdminGuardError):
+        svc.disable_user(uid, acting_admin_id=uid)
+
+
+def test_last_admin_guards(svc):
+    """Deleting/demoting/disabling the LAST enabled admin is refused. Uses only
+    disposable admins; the real admin (etn3724) always exists, so the guard
+    math is asserted via the counter + a direct guard call."""
+    from src.services.admin_user_service import AdminGuardError
+
+    uid, _ = _mk(svc, "lastadm", role="admin")
+    # There are >=2 admins now (real etn3724 + disposable) -> delete allowed
+    svc.delete_user(uid, acting_admin_id="not-the-target")
+
+    admins = svc._enabled_admin_ids()
+    assert len(admins) >= 1
+    if len(admins) == 1:
+        with pytest.raises(AdminGuardError):
+            svc._guard_not_last_admin(admins[0], "delete")
+
+
+def test_activity_readers_return_real_history(svc):
+    # Platform: real auth.audit_log_entries exist since 2026-02 (login events)
+    platform = svc.platform_activity(days=365)
+    assert platform["days"]  # non-empty
+    assert any(d["logins"] > 0 for d in platform["days"])
+
+    # Per-user: the real admin has login history
+    me = next(u for u in svc.list_users() if u["email"] == "etn3724@gmail.com")
+    activity = svc.user_activity(me["id"], days=365)
+    assert any(d["event_type"] == "login" and d["event_count"] > 0 for d in activity["auth_events"])
+    assert isinstance(activity["api_activity"], list)
+    assert isinstance(activity["recent_events"], list)
+    assert activity["chat"]["total_messages"] >= 0
+
+
+def test_reconcile_role_stores(svc):
+    """Users with NULL jwt role but a profile role get app_metadata backfilled."""
+    uid, email = _mk(svc, "recon")
+    # strip the jwt role to simulate legacy drift
+    svc.admin_client.auth.admin.update_user_by_id(
+        uid, {"app_metadata": {"role": None, "brands": None}}
+    )
+    svc.admin_client.table("chatbot_user_profiles").update({"role": "analyst"}).eq("id", uid).execute()
+
+    report = svc.reconcile_role_stores()
+    assert any(r["user_id"] == uid and r["action"] == "app_metadata_backfilled" for r in report)
+    u = svc._get_auth_user(uid)
+    assert (u.app_metadata or {}).get("role") == "analyst"
