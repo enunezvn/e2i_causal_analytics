@@ -50,6 +50,19 @@ def test_experiments_are_meaningful_and_explainable():
     assert len(set(ages)) > 1, "starts must be staggered, not a single burst"
 
 
+def test_generator_columns_are_registered_with_the_loader():
+    """Every column the generator emits must be registered in the loader's
+    TABLE_COLUMNS whitelist — BatchLoader silently gates out unregistered
+    columns at load time (caught live 2026-07-11: the enrollment-plan refresh
+    wrote all 360 rows with a NULL plan because the two new columns were
+    missing from the whitelist)."""
+    from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
+
+    df = ExperimentGenerator(GeneratorConfig(seed=7, n_records=1, brand=Brand.KISQALI)).generate()
+    missing = set(df.columns) - set(TABLE_COLUMNS["ml_experiments"])
+    assert not missing, f"generator emits columns the loader would silently drop: {missing}"
+
+
 def test_experiments_carry_a_real_enrollment_plan():
     """Migration 101: every synthetic experiment records a REAL enrollment plan
     (nominal 10 units/day over a 45-120 day window) so the monitor's
