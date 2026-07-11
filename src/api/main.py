@@ -633,6 +633,10 @@ openapi_tags = [
         "name": "Strategic Insights",
         "description": "Per-page agentic strategic interpretations, each grounded in real data with an honest deterministic fallback when the LLM is unavailable (never fabricated).",
     },
+    {
+        "name": "Admin",
+        "description": "Admin-only user management: copyable invite links, role/brand updates, disable/enable, delete, and login/chat/API activity readers.",
+    },
 ]
 
 # =============================================================================
