@@ -87,6 +87,28 @@ class TestMLExperimentDataClass:
         assert experiment.experiment_name == "test_experiment"
         assert experiment.brand is None
 
+    def test_to_dict_omits_unset_status(self):
+        """An unset status must be OMITTED (not written as NULL) so an insert
+        takes the DB default — writing an explicit NULL would bypass the
+        column default 'running' (migration 102 lifecycle)."""
+        experiment = MLExperiment(experiment_name="e", prediction_target="churn")
+
+        assert "status" not in experiment.to_dict()
+
+    def test_to_dict_includes_set_status(self):
+        experiment = MLExperiment(
+            experiment_name="e", prediction_target="churn", status="completed"
+        )
+
+        assert experiment.to_dict()["status"] == "completed"
+
+    def test_from_dict_reads_status(self):
+        experiment = MLExperiment.from_dict(
+            {"experiment_name": "e", "prediction_target": "churn", "status": "running"}
+        )
+
+        assert experiment.status == "running"
+
 
 @pytest.mark.unit
 class TestMLTrainingRunDataClass:
@@ -254,6 +276,36 @@ class TestMLExperimentRepository:
         assert result is not None
         assert result.experiment_name == "test_experiment"
         assert result.minimum_auc == 0.75
+
+    @pytest.mark.asyncio
+    async def test_create_experiment_status_payload(
+        self, repo, mock_client, sample_experiment_data
+    ):
+        """create_experiment writes an explicit status when given one, and
+        omits the key entirely when not — the DB default 'running' must only
+        apply to rows that are genuinely actively-enrolling experiments
+        (migration 102: lineage writers pass 'completed')."""
+        mock_result = MagicMock()
+        mock_result.data = [sample_experiment_data]
+        mock_execute = AsyncMock(return_value=mock_result)
+        insert_mock = mock_client.table.return_value.insert
+        insert_mock.return_value.execute = mock_execute
+
+        await repo.create_experiment(
+            name="scope_row",
+            mlflow_experiment_id="mlflow-124",
+            prediction_target="churn",
+            created_by="scope_definer",
+            status="completed",
+        )
+        assert insert_mock.call_args[0][0]["status"] == "completed"
+
+        await repo.create_experiment(
+            name="default_row",
+            mlflow_experiment_id="mlflow-125",
+            prediction_target="churn",
+        )
+        assert "status" not in insert_mock.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_list_experiments_returns_all(self, repo, mock_client, sample_experiment_data):

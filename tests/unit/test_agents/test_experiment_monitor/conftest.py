@@ -71,6 +71,17 @@ class MockSupabaseQuery:
         self._filters.append({"type": "in", "column": column, "values": values})
         return self
 
+    @property
+    def not_(self) -> "_MockNotProxy":
+        """Mock PostgREST negation, e.g. ``.not_.is_('col', 'null')``.
+
+        HealthCheckerNode._get_experiments filters lineage rows out of the
+        active sweep with ``.not_.is_('intervention_channel', 'null')``
+        (migration 102); without this property the real chain raised
+        AttributeError, which the node's ``except`` swallowed into an empty
+        roster."""
+        return _MockNotProxy(self)
+
     def order(self, column: str, desc: bool = False, **kwargs: Any) -> "MockSupabaseQuery":
         """Mock order: record the sort key so execute() returns deterministic rows.
 
@@ -115,6 +126,17 @@ class MockSupabaseQuery:
         return MockSupabaseResult(data=data, count=count)
 
 
+class _MockNotProxy:
+    """Negation proxy so ``query.not_.is_(col, 'null')`` records a not_is filter."""
+
+    def __init__(self, query: "MockSupabaseQuery"):
+        self._query = query
+
+    def is_(self, column: str, value: Any) -> "MockSupabaseQuery":
+        self._query._filters.append({"type": "not_is", "column": column, "value": value})
+        return self._query
+
+
 class MockSupabaseClient:
     """Mock Supabase client for testing without database connection."""
 
@@ -144,6 +166,11 @@ class MockSupabaseClient:
                 data = [d for d in data if d.get(f["column"]) == f["value"]]
             elif f["type"] == "in":
                 data = [d for d in data if d.get(f["column"]) in f["values"]]
+            elif f["type"] == "not_is" and f["value"] == "null":
+                # Faithful IS NOT NULL: a missing key is NULL, so rows without
+                # the column are excluded (mirrors PostgREST, keeps the
+                # genuine-A/B predicate honest in tests).
+                data = [d for d in data if d.get(f["column"]) is not None]
 
         return data
 

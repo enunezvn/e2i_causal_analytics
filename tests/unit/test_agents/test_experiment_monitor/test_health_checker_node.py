@@ -104,6 +104,9 @@ class TestHealthCheckerExecute:
         exp_query.select = MagicMock(return_value=exp_query)
         exp_query.eq = MagicMock(return_value=exp_query)
         exp_query.in_ = MagicMock(return_value=exp_query)
+        # Genuine-A/B predicate (migration 102): not_.is_ must return the same
+        # builder or the rest of the chain derails onto a fresh MagicMock.
+        exp_query.not_.is_ = MagicMock(return_value=exp_query)
         exp_query.order = MagicMock(return_value=exp_query)
         exp_query.limit = MagicMock(return_value=exp_query)
         exp_query.execute = AsyncMock(return_value=exp_result)
@@ -288,6 +291,9 @@ class TestGetExperiments:
         mock_query.limit = MagicMock(return_value=mock_query)
         # Unscoped sweep restricts to the platform brand portfolio (2026-07-11).
         mock_query.in_ = MagicMock(return_value=mock_query)
+        # Genuine-A/B predicate (migration 102): not_.is_ must return the same
+        # builder or the rest of the chain derails onto a fresh MagicMock.
+        mock_query.not_.is_ = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
@@ -308,6 +314,10 @@ class TestGetExperiments:
 
         assert len(result) == 2
         mock_query.eq.assert_any_call("status", "running")
+        # Migration 102: lineage rows (no intervention_channel) are not
+        # experiments — the sweep keeps them out even if a future writer
+        # inherits the DB-default 'running' status.
+        mock_query.not_.is_.assert_called_once_with("intervention_channel", "null")
         # #894: the enumeration default-excludes synthetic experiments
         mock_query.eq.assert_any_call("is_synthetic", False)
         # 2026-07-11: unscoped = the 3-brand portfolio (scope_definer scaffolding
@@ -333,6 +343,7 @@ class TestGetExperiments:
         mock_query.order.return_value = mock_query
         mock_query.limit.return_value = mock_query
         mock_query.in_ = MagicMock(return_value=mock_query)
+        mock_query.not_.is_ = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table.return_value = mock_query
 
@@ -375,6 +386,7 @@ class TestGetExperiments:
         mock_query.order.return_value = mock_query
         mock_query.limit.return_value = mock_query
         mock_query.in_ = MagicMock(return_value=mock_query)
+        mock_query.not_.is_ = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table.return_value = mock_query
 
@@ -409,6 +421,7 @@ class TestGetExperiments:
         mock_query.order.return_value = mock_query
         mock_query.limit.return_value = mock_query
         mock_query.in_ = MagicMock(return_value=mock_query)
+        mock_query.not_.is_ = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table.return_value = mock_query
 
@@ -425,6 +438,52 @@ class TestGetExperiments:
         # size instead of fabricating (or crashing on) a Mock attribute.
         mock_result.count = None
         await node._get_experiments(mock_client, state)
+        assert state["total_running"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_experiments_excludes_channel_less_lineage_rows(
+        self, node, mock_supabase_client, monkeypatch
+    ):
+        """Rows without an intervention_channel are pipeline-lineage records
+        (scope definitions, evals, deploys), not A/B experiments — the sweep
+        and its exact total_running count must exclude them even when they
+        carry status='running' (migration 102: 692 scope_definer rows sat on
+        the DB-default status and inflated the portfolio 955 vs 360)."""
+        import src.repositories.provenance as prov
+
+        monkeypatch.setattr(prov, "deployment_includes_synthetic", lambda: False)
+        now = datetime.now(timezone.utc)
+        mock_supabase_client.set_mock_data(
+            "ml_experiments",
+            [
+                {
+                    "id": "ab-1",
+                    "experiment_name": "Kisqali: Email Campaign",
+                    "status": "running",
+                    "brand": "Kisqali",
+                    "is_synthetic": False,
+                    "intervention_channel": "email_campaign",
+                    "created_at": (now - timedelta(days=3)).isoformat(),
+                },
+                {
+                    "id": "scope-1",
+                    "experiment_name": "Kisqali - Predict prescribing",
+                    "status": "running",  # inherited DB default, not an experiment
+                    "brand": "Kisqali",
+                    "is_synthetic": False,
+                    "created_at": (now - timedelta(days=1)).isoformat(),
+                },
+            ],
+        )
+        state: ExperimentMonitorState = {
+            "check_all_active": True,
+            "experiment_ids": [],
+            "status": "pending",
+        }
+
+        result = await node._get_experiments(mock_supabase_client, state)
+
+        assert [r["id"] for r in result] == ["ab-1"]
         assert state["total_running"] == 1
 
     @pytest.mark.asyncio

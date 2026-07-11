@@ -37,8 +37,10 @@ from .conftest import MockSupabaseClient
 def _provenance_tagged_client() -> MockSupabaseClient:
     """Client whose ml_experiments carries one real + one synthetic running row.
 
-    Mirrors the live shape the audit found: a zero-enrollment real training row
-    and a synthetic A/B experiment. ``apply_provenance_filter`` appends
+    One real + one synthetic A/B experiment (both carry an
+    intervention_channel — migration 102's genuine-A/B predicate excludes
+    channel-less lineage rows, so provenance stays the only variable under
+    test here). ``apply_provenance_filter`` appends
     ``.eq('is_synthetic', False)`` in real mode, which the mock query honours via
     its eq-filter, so the synthetic row is excluded unless opted in.
     """
@@ -50,14 +52,18 @@ def _provenance_tagged_client() -> MockSupabaseClient:
             # brand: the unscoped sweep restricts to the 3-brand portfolio
             # (2026-07-11); live training + A/B rows carry a platform brand,
             # so the fixture mirrors that shape.
+            # intervention_channel: the sweep excludes channel-less lineage
+            # rows (migration 102's genuine-A/B predicate) — these rows are
+            # A/B experiments so provenance stays the only variable under test.
             {
                 "id": "exp-real-693",
-                "experiment_name": "Real Training Row",
+                "experiment_name": "Real A/B Experiment",
                 "status": "running",
                 "prediction_target": "conversion",
                 "created_at": (now - timedelta(days=7)).isoformat(),
                 "is_synthetic": False,
                 "brand": "Kisqali",
+                "intervention_channel": "email_campaign",
             },
             {
                 "id": "exp-synth-360",
@@ -67,6 +73,7 @@ def _provenance_tagged_client() -> MockSupabaseClient:
                 "created_at": (now - timedelta(days=7)).isoformat(),
                 "is_synthetic": True,
                 "brand": "Fabhalta",
+                "intervention_channel": "email_campaign",
             },
         ],
     )

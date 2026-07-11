@@ -259,6 +259,10 @@ async def _get_or_create_experiment(
         "is_synthetic": False,
         "created_by": created_by,
         "description": description,
+        # Lifecycle (migration 102): registry/lineage rows must not sit on the
+        # DB-default 'running' — the experiment monitor and running-count
+        # endpoints read 'running' as an actively-enrolling A/B experiment.
+        "status": "completed",
     }
     if training_provenance is not None:
         # #968: stamp the experiment row's training-data origin on creation so the
