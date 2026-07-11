@@ -8,6 +8,7 @@ RBAC path (JWTAuthMiddleware -> require_admin).
 """
 
 import os
+import secrets
 
 import pytest
 
@@ -17,7 +18,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 TAG = "+admroute"
-PASSWORD = "AdmRoute#2026-x"
+# Runtime-randomized so no credential-shaped literal ever lands in git history
+# (GitGuardian flags even throwaway test passwords, and its PR check re-scans
+# all historical commits forever).
+PASSWORD = "Adm!2" + secrets.token_urlsafe(12)
 
 
 @pytest.fixture(scope="module")

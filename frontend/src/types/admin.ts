@@ -7,6 +7,15 @@ export type AdminBrand = 'Kisqali' | 'Fabhalta' | 'Remibrutinib' | 'all';
 export const ADMIN_ROLES: AdminRole[] = ['viewer', 'analyst', 'operator', 'admin'];
 export const ADMIN_BRANDS: AdminBrand[] = ['Kisqali', 'Fabhalta', 'Remibrutinib', 'all'];
 
+// Mirrors the backend RBAC hierarchy in src/api/dependencies/auth.py
+// (ADMIN > OPERATOR > ANALYST > VIEWER; higher roles inherit lower permissions).
+export const ROLE_DESCRIPTIONS: Record<AdminRole, string> = {
+  viewer: 'Read-only access to dashboards, KPIs, and reports.',
+  analyst: 'Can also run analyses: causal, gap, and segment.',
+  operator: 'Can also manage experiments, feedback learning, and the digital twin.',
+  admin: 'Full system management: user administration, cache, and model retraining.',
+};
+
 export interface AdminUser {
   id: string;
   email: string;
