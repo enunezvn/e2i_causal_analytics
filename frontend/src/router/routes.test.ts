@@ -72,7 +72,9 @@ describe('navigation sections (IA grouping)', () => {
 
   it('assigns every nav route to exactly one section (no orphans, no loss)', () => {
     const navRoutes = getNavigationRoutes();
-    const grouped = getNavigationSections().flatMap((s) => s.routes);
+    // includeAdmin=true: the partition invariant covers ALL nav routes; the
+    // default call additionally filters adminOnly entries for non-admins.
+    const grouped = getNavigationSections(true).flatMap((s) => s.routes);
     expect(grouped).toHaveLength(navRoutes.length);
     for (const r of navRoutes) {
       expect(r.section).toBeDefined();

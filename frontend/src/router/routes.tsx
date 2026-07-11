@@ -34,6 +34,7 @@ const FeedbackLearning = lazy(() => import('@/pages/FeedbackLearning'));
 const Analytics = lazy(() => import('@/pages/Analytics'));
 const Documentation = lazy(() => import('@/pages/Documentation'));
 const AcceptInvite = lazy(() => import('@/pages/AcceptInvite'));
+const Admin = lazy(() => import('@/pages/Admin'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -61,6 +62,8 @@ export interface RouteConfig {
   showInNav?: boolean;
   /** Sidebar group this route belongs to. Defaults to 'main' (top, no header). */
   section?: NavSection;
+  /** Only shown in nav (and only reachable) for admins. */
+  adminOnly?: boolean;
 }
 
 export const routeConfigs: RouteConfig[] = [
@@ -266,6 +269,15 @@ export const routeConfigs: RouteConfig[] = [
     icon: 'sparkles',
     section: 'system',
     showInNav: true,
+  },
+  {
+    path: '/admin',
+    title: 'Administration',
+    description: 'Invite and manage users, roles, and activity',
+    icon: 'shield-check',
+    section: 'system',
+    showInNav: true,
+    adminOnly: true,
   },
 ];
 
@@ -573,6 +585,16 @@ export const routes: RouteObject[] = [
     ),
   },
   {
+    path: '/admin',
+    element: (
+      <ProtectedRoute requireAdmin>
+        <LazyPage>
+          <Admin />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
     path: '*',
     element: (
       <LazyPage>
@@ -611,8 +633,10 @@ export interface NavSectionGroup {
 // Group navigation routes into ordered sidebar sections by explicit
 // `route.section` (defaults to 'main'). Membership is semantic, not positional,
 // so reordering a route can never silently move it into the wrong section.
-export function getNavigationSections(): NavSectionGroup[] {
-  const navRoutes = getNavigationRoutes();
+export function getNavigationSections(includeAdmin = false): NavSectionGroup[] {
+  const navRoutes = getNavigationRoutes().filter(
+    (route) => includeAdmin || !route.adminOnly
+  );
   return NAV_SECTION_ORDER.map(({ key, label }) => ({
     key,
     label,

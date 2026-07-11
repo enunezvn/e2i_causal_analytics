@@ -13,6 +13,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useSidebarState } from '@/stores/ui-store';
 import { getNavigationSections, type RouteConfig } from '@/router/routes';
+import { useAuth } from '@/hooks/use-auth';
 
 /**
  * Sidebar props interface
@@ -222,7 +223,10 @@ export function Sidebar({ className = '' }: SidebarProps) {
   // Sidebar groups come from explicit `route.section` (see getNavigationSections),
   // not positional slicing — so the ordering/membership in routeConfigs is the
   // single source of truth and a reorder can't silently mis-file a page.
-  const navSections = getNavigationSections();
+  // Admin-only entries (e.g. /admin) render only for admins; the route itself
+  // is additionally gated by ProtectedRoute requireAdmin.
+  const { isAdmin } = useAuth();
+  const navSections = getNavigationSections(isAdmin);
 
   return (
     <>
