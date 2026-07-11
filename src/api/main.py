@@ -68,6 +68,7 @@ from src.api.middleware.timing import TimingMiddleware
 from src.api.middleware.tracing import TracingMiddleware
 
 # Import routers
+from src.api.routes.admin import router as admin_router
 from src.api.routes.agents import router as agents_router
 from src.api.routes.analytics import router as analytics_router
 from src.api.routes.audit import router as audit_router
@@ -1159,6 +1160,9 @@ app.include_router(expert_review_router, prefix="/api")
 
 # Audit chain endpoints (/api/audit/*)
 app.include_router(audit_router, prefix="/api")
+
+# Admin user management endpoints (/api/admin/*) — require_admin on every route
+app.include_router(admin_router, prefix="/api")
 
 # Analytics & metrics dashboard endpoints (/api/analytics/*)
 app.include_router(analytics_router, prefix="/api")

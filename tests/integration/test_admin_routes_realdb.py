@@ -1,0 +1,195 @@
+"""Admin routes against the REAL app + REAL Supabase (no mocks, real JWTs).
+
+A disposable viewer and a disposable admin are created via the service-role
+client and signed in via the anon client — their tokens exercise the actual
+RBAC path (JWTAuthMiddleware -> require_admin).
+
+    E2I_DB_INTEGRATION=1 .venv/bin/pytest tests/integration/test_admin_routes_realdb.py -p no:cacheprovider -v
+"""
+
+import os
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("E2I_DB_INTEGRATION") != "1",
+    reason="real-DB integration; set E2I_DB_INTEGRATION=1 with docker supabase-db reachable",
+)
+
+TAG = "+admroute"
+PASSWORD = "AdmRoute#2026-x"
+
+
+@pytest.fixture(scope="module")
+def harness():
+    from fastapi.testclient import TestClient
+    from supabase import create_client
+
+    from src.api.main import app
+
+    # Real-auth harness: tests/conftest.py force-sets E2I_TESTING_MODE=1 and
+    # both auth.py and auth_middleware.py FREEZE the flag at import — so with
+    # testing mode on, the middleware injects a mock admin and every RBAC
+    # assertion here is void. Flip the two module constants for this module's
+    # duration (references resolve via module globals at call time), restore
+    # on teardown. This configures auth mode; product code paths stay real.
+    import src.api.dependencies.auth as auth_dep
+    import src.api.middleware.auth_middleware as auth_mw
+
+    saved_flags = (auth_dep.TESTING_MODE, auth_mw.TESTING_MODE)
+    auth_dep.TESTING_MODE = False
+    auth_mw.TESTING_MODE = False
+
+    url = os.environ["SUPABASE_URL"]
+    admin_client = create_client(
+        url, os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_SERVICE_KEY"]
+    )
+    anon_key = os.environ.get("SUPABASE_ANON_KEY") or os.environ["SUPABASE_KEY"]
+
+    def make_user(suffix, role):
+        email = f"etn3724{TAG}-{suffix}@gmail.com"
+        for u in admin_client.auth.admin.list_users():
+            if u.email == email:
+                admin_client.auth.admin.delete_user(u.id)
+        created = admin_client.auth.admin.create_user(
+            {
+                "email": email,
+                "password": PASSWORD,
+                "email_confirm": True,
+                "app_metadata": {"role": role, "brands": ["all"]},
+            }
+        )
+        anon = create_client(url, anon_key)
+        session = anon.auth.sign_in_with_password({"email": email, "password": PASSWORD})
+        return created.user.id, session.session.access_token
+
+    admin_id, admin_token = make_user("admin", "admin")
+    viewer_id, viewer_token = make_user("viewer", "viewer")
+
+    yield TestClient(app), admin_token, viewer_token, admin_client, admin_id
+
+    auth_dep.TESTING_MODE, auth_mw.TESTING_MODE = saved_flags
+    for u in admin_client.auth.admin.list_users():
+        if u.email and TAG in u.email:
+            admin_client.auth.admin.delete_user(u.id)
+    # trigger-created profile rows (no FK in prod)
+    admin_client.table("chatbot_user_profiles").delete().like("email", f"%{TAG}%").execute()
+
+
+def _auth(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_viewer_gets_403_admin_gets_200(harness):
+    client, admin_token, viewer_token, *_ = harness
+    assert client.get("/api/admin/users", headers=_auth(viewer_token)).status_code == 403
+    assert client.get("/api/admin/users").status_code == 401  # no token
+    resp = client.get("/api/admin/users", headers=_auth(admin_token))
+    assert resp.status_code == 200
+    assert any(u["email"] == "etn3724@gmail.com" for u in resp.json()["users"])
+
+
+def test_invite_flow_and_conflict(harness):
+    client, admin_token, *_ = harness
+    body = {"email": f"etn3724{TAG}-inv@gmail.com", "role": "viewer", "brands": ["Kisqali"]}
+    resp = client.post("/api/admin/users/invite", json=body, headers=_auth(admin_token))
+    assert resp.status_code == 200
+    assert resp.json()["invite_link"].startswith("https://eznomics.site/accept-invite?")
+    dup = client.post("/api/admin/users/invite", json=body, headers=_auth(admin_token))
+    assert dup.status_code == 409
+    bad = client.post(
+        "/api/admin/users/invite",
+        json={"email": "x@y.zz", "role": "root", "brands": ["all"]},
+        headers=_auth(admin_token),
+    )
+    assert bad.status_code == 422
+
+
+def test_role_update_disable_enable_delete(harness):
+    client, admin_token, _, admin_client, _ = harness
+    invited = client.post(
+        "/api/admin/users/invite",
+        json={"email": f"etn3724{TAG}-lc@gmail.com", "role": "viewer", "brands": ["all"]},
+        headers=_auth(admin_token),
+    ).json()
+    uid = invited["user_id"]
+
+    assert (
+        client.patch(
+            f"/api/admin/users/{uid}", json={"role": "analyst"}, headers=_auth(admin_token)
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(f"/api/admin/users/{uid}/disable", headers=_auth(admin_token)).status_code
+        == 200
+    )
+    assert (
+        client.post(f"/api/admin/users/{uid}/enable", headers=_auth(admin_token)).status_code
+        == 200
+    )
+    assert client.delete(f"/api/admin/users/{uid}", headers=_auth(admin_token)).status_code == 200
+
+
+def test_self_delete_forbidden(harness):
+    client, admin_token, _, _, admin_id = harness
+    resp = client.delete(f"/api/admin/users/{admin_id}", headers=_auth(admin_token))
+    assert resp.status_code == 403
+
+
+def test_reinvite_and_recovery_link(harness):
+    client, admin_token, *_ = harness
+    invited = client.post(
+        "/api/admin/users/invite",
+        json={"email": f"etn3724{TAG}-re@gmail.com", "role": "viewer", "brands": ["all"]},
+        headers=_auth(admin_token),
+    ).json()
+    uid = invited["user_id"]
+    re1 = client.post(f"/api/admin/users/{uid}/reinvite", headers=_auth(admin_token))
+    assert re1.status_code == 200
+    assert re1.json()["link_type"] == "invite"
+    rec = client.post(f"/api/admin/users/{uid}/recovery-link", headers=_auth(admin_token))
+    assert rec.status_code == 200
+    assert rec.json()["link_type"] == "recovery"
+
+
+def test_activity_endpoints(harness):
+    client, admin_token, *_ = harness
+    overview = client.get("/api/admin/activity/overview?days=365", headers=_auth(admin_token))
+    assert overview.status_code == 200
+    assert any(d["logins"] > 0 for d in overview.json()["days"])
+
+    users = client.get("/api/admin/users", headers=_auth(admin_token)).json()["users"]
+    me = next(u for u in users if u["email"] == "etn3724@gmail.com")
+    activity = client.get(
+        f"/api/admin/users/{me['id']}/activity?days=365", headers=_auth(admin_token)
+    )
+    assert activity.status_code == 200
+    assert activity.json()["auth_events"]
+
+
+def test_admin_actions_are_audited(harness):
+    client, admin_token, _, admin_client, _ = harness
+    email = f"etn3724{TAG}-aud@gmail.com"
+    invited = client.post(
+        "/api/admin/users/invite",
+        json={"email": email, "role": "viewer", "brands": ["all"]},
+        headers=_auth(admin_token),
+    ).json()
+    rows = (
+        admin_client.table("security_audit_log")
+        .select("event_type, resource_id")
+        .eq("resource_id", invited["user_id"])
+        .execute()
+    )
+    assert any(r["event_type"] == "admin.user.modified" for r in rows.data)
+    admin_client.table("security_audit_log").delete().eq(
+        "resource_id", invited["user_id"]
+    ).execute()
+
+
+def test_audit_feed_endpoint(harness):
+    client, admin_token, *_ = harness
+    resp = client.get("/api/admin/audit?days=30", headers=_auth(admin_token))
+    assert resp.status_code == 200
+    assert isinstance(resp.json()["events"], list)
