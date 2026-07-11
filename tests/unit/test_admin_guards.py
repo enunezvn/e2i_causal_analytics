@@ -148,9 +148,7 @@ def test_demote_with_surviving_admin_commits():
     result = svc.update_user("a1", acting_admin_id="a2", role="viewer")
     assert result["role"] == "viewer"
     fake = svc.admin_client.auth.admin
-    assert all(
-        c[1].get("app_metadata", {}).get("role") != "admin" for c in fake.update_calls
-    )
+    assert all(c[1].get("app_metadata", {}).get("role") != "admin" for c in fake.update_calls)
 
 
 # ------------------------------------------------ TOCTOU: disable compensated

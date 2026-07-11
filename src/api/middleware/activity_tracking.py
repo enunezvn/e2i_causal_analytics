@@ -93,9 +93,7 @@ async def flush_rows(rows: List[Dict[str, Any]]) -> None:
             lambda: client.rpc("record_user_activity", {"p_rows": rows}).execute()
         )
     except Exception:
-        logger.warning(
-            "activity flush failed (fail-open, %d rows lost)", len(rows), exc_info=True
-        )
+        logger.warning("activity flush failed (fail-open, %d rows lost)", len(rows), exc_info=True)
 
 
 # Strong references to in-flight flush tasks: asyncio only weakly references
@@ -141,9 +139,7 @@ class ActivityTrackingMiddleware(BaseHTTPMiddleware):
                     uuid.UUID(str(user["id"]))  # skip TESTING_MODE's non-UUID user
                 except ValueError:
                     return response
-                minute = (
-                    datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
-                )
+                minute = datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
                 if self.buffer.record(
                     str(user["id"]), user.get("email"), group, request.method, minute
                 ):

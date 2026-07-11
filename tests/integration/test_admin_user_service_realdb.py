@@ -28,9 +28,7 @@ def svc():
     for u in service.admin_client.auth.admin.list_users():
         if u.email and TAG in u.email:
             service.admin_client.auth.admin.delete_user(u.id)
-    service.admin_client.table("chatbot_user_profiles").delete().like(
-        "email", f"%{TAG}%"
-    ).execute()
+    service.admin_client.table("chatbot_user_profiles").delete().like("email", f"%{TAG}%").execute()
 
 
 def test_list_users_merges_auth_and_profile(svc):
@@ -161,7 +159,12 @@ def test_update_user_dual_writes_role(svc):
     u = svc._get_auth_user(uid)
     assert (u.app_metadata or {}).get("role") == "operator"
     assert (u.app_metadata or {}).get("brands") == ["Fabhalta"]
-    p = svc.admin_client.table("chatbot_user_profiles").select("role, is_admin").eq("id", uid).execute()
+    p = (
+        svc.admin_client.table("chatbot_user_profiles")
+        .select("role, is_admin")
+        .eq("id", uid)
+        .execute()
+    )
     assert p.data[0]["role"] == "operator" and p.data[0]["is_admin"] is False
 
 
@@ -257,7 +260,9 @@ def test_reconcile_role_stores(svc):
     svc.admin_client.auth.admin.update_user_by_id(
         uid, {"app_metadata": {"role": None, "brands": None}}
     )
-    svc.admin_client.table("chatbot_user_profiles").update({"role": "analyst"}).eq("id", uid).execute()
+    svc.admin_client.table("chatbot_user_profiles").update({"role": "analyst"}).eq(
+        "id", uid
+    ).execute()
 
     report = svc.reconcile_role_stores()
     assert any(r["user_id"] == uid and r["action"] == "app_metadata_backfilled" for r in report)

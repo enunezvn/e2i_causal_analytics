@@ -325,9 +325,7 @@ async def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
             # so /api/admin disable sets app_metadata.disabled and we fail
             # closed on the FRESH app_metadata get_user returns per request.
             if app_metadata.get("disabled"):
-                logger.warning(
-                    "Rejected token for disabled user: %s", response.user.email
-                )
+                logger.warning("Rejected token for disabled user: %s", response.user.email)
                 return None
             user_data = {
                 "id": response.user.id,

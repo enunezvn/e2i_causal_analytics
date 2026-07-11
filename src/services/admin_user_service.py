@@ -170,9 +170,7 @@ class AdminUserService:
             if existing.email and existing.email.lower() == lowered:
                 raise AdminConflictError(f"{email} is already registered")
         try:
-            resp = self.admin_client.auth.admin.generate_link(
-                {"type": "invite", "email": email}
-            )
+            resp = self.admin_client.auth.admin.generate_link({"type": "invite", "email": email})
         except Exception as e:
             if "already been registered" in str(e):
                 raise AdminConflictError(f"{email} is already registered") from e
@@ -218,9 +216,7 @@ class AdminUserService:
     def recovery_link(self, user_id: str) -> Dict[str, Any]:
         user = self._get_auth_user(user_id)
         self._guard_not_disabled(user, "issue a recovery link for")
-        resp = self.admin_client.auth.admin.generate_link(
-            {"type": "recovery", "email": user.email}
-        )
+        resp = self.admin_client.auth.admin.generate_link({"type": "recovery", "email": user.email})
         return {
             "user_id": user.id,
             "email": user.email,
@@ -283,9 +279,7 @@ class AdminUserService:
         )
         if meta.get("role") == "admin" and new_role != "admin":
             self._guard_not_last_admin(user_id, "demote")
-        attrs: Dict[str, Any] = {
-            "app_metadata": {**meta, "role": new_role, "brands": new_brands}
-        }
+        attrs: Dict[str, Any] = {"app_metadata": {**meta, "role": new_role, "brands": new_brands}}
         if full_name is not None:
             attrs["user_metadata"] = {**(user.user_metadata or {}), "full_name": full_name}
         self.admin_client.auth.admin.update_user_by_id(user_id, cast(Any, attrs))
@@ -293,9 +287,7 @@ class AdminUserService:
         if demoting_admin:
 
             def _repromote() -> None:
-                self.admin_client.auth.admin.update_user_by_id(
-                    user_id, {"app_metadata": meta}
-                )
+                self.admin_client.auth.admin.update_user_by_id(user_id, {"app_metadata": meta})
                 self._upsert_profile(user_id, user.email, "admin")
 
             self._verify_admins_remain(_repromote, "demote")
@@ -345,9 +337,7 @@ class AdminUserService:
             )
 
             def _restore_role() -> None:
-                self.admin_client.auth.admin.update_user_by_id(
-                    user_id, {"app_metadata": meta}
-                )
+                self.admin_client.auth.admin.update_user_by_id(user_id, {"app_metadata": meta})
 
             self._verify_admins_remain(_restore_role, "delete")
         self.admin_client.auth.admin.delete_user(user_id)
@@ -396,9 +386,7 @@ class AdminUserService:
         }
 
     def platform_activity(self, days: int = 30) -> Dict[str, Any]:
-        rows = self.admin_client.rpc(
-            "admin_get_platform_activity", {"p_days": days}
-        ).execute()
+        rows = self.admin_client.rpc("admin_get_platform_activity", {"p_days": days}).execute()
         return {"days": rows.data or []}
 
     # -------------------------------------------------------------- reconcile
@@ -408,13 +396,8 @@ class AdminUserService:
         app_metadata backfilled from the profile (migration 101 already synced
         the other direction, jwt -> profile)."""
         report: List[Dict[str, Any]] = []
-        profiles = (
-            self.admin_client.table("chatbot_user_profiles").select("id, role").execute()
-        )
-        by_id = {
-            p["id"]: p.get("role")
-            for p in cast(List[Dict[str, Any]], profiles.data or [])
-        }
+        profiles = self.admin_client.table("chatbot_user_profiles").select("id, role").execute()
+        by_id = {p["id"]: p.get("role") for p in cast(List[Dict[str, Any]], profiles.data or [])}
         for u in self._list_all_auth_users():
             meta = dict(u.app_metadata or {})
             if not meta.get("role") and by_id.get(u.id):
