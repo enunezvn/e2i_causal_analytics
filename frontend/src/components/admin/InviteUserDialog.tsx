@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { useInviteUser } from '@/hooks/api/use-admin';
-import { ADMIN_BRANDS, ADMIN_ROLES } from '@/types/admin';
+import { ADMIN_BRANDS, ADMIN_ROLES, ROLE_DESCRIPTIONS } from '@/types/admin';
 import type { AdminRole, LinkResponse } from '@/types/admin';
 import { LinkDialog } from './LinkDialog';
 
@@ -120,6 +120,9 @@ export function InviteUserDialog({ open, onClose }: InviteUserDialogProps) {
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
+              {ROLE_DESCRIPTIONS[role]}
+            </p>
           </div>
           <fieldset>
             <legend className="mb-1 block text-sm font-medium text-[var(--color-foreground)]">

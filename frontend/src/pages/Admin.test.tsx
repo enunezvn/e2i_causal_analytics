@@ -186,6 +186,29 @@ describe('Admin page — Users tab', () => {
     );
   });
 
+  it('explains the four user types in a legend on the Users tab', async () => {
+    renderPage();
+    const legend = screen.getByText(/what do the user types mean/i);
+    await userEvent.click(legend);
+    expect(screen.getByText(/read-only access to dashboards/i)).toBeInTheDocument();
+    expect(screen.getByText(/run analyses: causal, gap, and segment/i)).toBeInTheDocument();
+    expect(screen.getByText(/experiments, feedback learning, and the digital twin/i)).toBeInTheDocument();
+    expect(screen.getByText(/user administration/i)).toBeInTheDocument();
+    expect(screen.getByText(/each role includes everything the roles below it can do/i)).toBeInTheDocument();
+  });
+
+  it('invite dialog describes the selected role and updates on change', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /invite user/i }));
+    // scope to the dialog form — the RoleLegend holds the same text in the DOM
+    const form = screen.getByLabelText(/email/i).closest('form')!;
+    expect(within(form).getByText(/read-only access to dashboards/i)).toBeInTheDocument();
+    await userEvent.selectOptions(within(form).getByLabelText(/role/i), 'operator');
+    expect(
+      within(form).getByText(/experiments, feedback learning, and the digital twin/i)
+    ).toBeInTheDocument();
+  });
+
   it('reinvite action surfaces the fresh link', async () => {
     const mutateAsync = vi.fn().mockResolvedValue({
       user_id: 'u2',

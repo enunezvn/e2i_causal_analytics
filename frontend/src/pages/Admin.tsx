@@ -13,6 +13,7 @@ import { useAdminUsers } from '@/hooks/api/use-admin';
 import { UsersTable } from '@/components/admin/UsersTable';
 import { InviteUserDialog } from '@/components/admin/InviteUserDialog';
 import { ActivityTab } from '@/components/admin/ActivityTab';
+import { RoleLegend } from '@/components/admin/RoleLegend';
 
 type Tab = 'users' | 'activity';
 
@@ -63,12 +64,15 @@ export default function Admin() {
       </div>
 
       {tab === 'users' && (
-        <UsersTable
-          users={data?.users ?? []}
-          currentUserId={user?.id ?? ''}
-          isLoading={isLoading}
-          isError={isError}
-        />
+        <>
+          <RoleLegend />
+          <UsersTable
+            users={data?.users ?? []}
+            currentUserId={user?.id ?? ''}
+            isLoading={isLoading}
+            isError={isError}
+          />
+        </>
       )}
       {tab === 'activity' && <ActivityTab users={data?.users ?? []} />}
 
