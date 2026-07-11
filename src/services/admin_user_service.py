@@ -93,8 +93,20 @@ class AdminUserService:
             return "invited"
         return "active"
 
+    def _list_all_auth_users(self) -> List[Any]:
+        """Every auth user, across pages. list_users caps at per_page; the
+        last-admin guard and invite dedup must never undercount past 1000."""
+        out: List[Any] = []
+        page = 1
+        while True:
+            batch = self.admin_client.auth.admin.list_users(page=page, per_page=1000)
+            out.extend(batch)
+            if len(batch) < 1000:
+                return out
+            page += 1
+
     def list_users(self) -> List[Dict[str, Any]]:
-        auth_users = self.admin_client.auth.admin.list_users(page=1, per_page=1000)
+        auth_users = self._list_all_auth_users()
         profiles = (
             self.admin_client.table("chatbot_user_profiles")
             .select("id, role, total_conversations, total_messages, last_active_at")
@@ -153,7 +165,7 @@ class AdminUserService:
         # inviting an existing user (any state) is a 409 — reinvite is the
         # intentional path for a fresh link.
         lowered = email.lower()
-        for existing in self.admin_client.auth.admin.list_users(page=1, per_page=1000):
+        for existing in self._list_all_auth_users():
             if existing.email and existing.email.lower() == lowered:
                 raise AdminConflictError(f"{email} is already registered")
         try:
@@ -179,6 +191,9 @@ class AdminUserService:
 
     def reinvite_user(self, user_id: str) -> Dict[str, Any]:
         user = self._get_auth_user(user_id)
+        # A fresh link would let a disabled user set a password while banned,
+        # primed to sign in the moment they're re-enabled. Refuse instead.
+        self._guard_not_disabled(user, "reinvite")
         try:
             resp = self.admin_client.auth.admin.generate_link(
                 {"type": "invite", "email": user.email}
@@ -200,6 +215,7 @@ class AdminUserService:
 
     def recovery_link(self, user_id: str) -> Dict[str, Any]:
         user = self._get_auth_user(user_id)
+        self._guard_not_disabled(user, "issue a recovery link for")
         resp = self.admin_client.auth.admin.generate_link(
             {"type": "recovery", "email": user.email}
         )
@@ -215,7 +231,7 @@ class AdminUserService:
     def _enabled_admin_ids(self) -> List[str]:
         return [
             u.id
-            for u in self.admin_client.auth.admin.list_users(page=1, per_page=1000)
+            for u in self._list_all_auth_users()
             if (u.app_metadata or {}).get("role") == "admin"
             and not (u.app_metadata or {}).get("disabled")
         ]
@@ -228,6 +244,22 @@ class AdminUserService:
         admins = self._enabled_admin_ids()
         if user_id in admins and len(admins) <= 1:
             raise AdminGuardError(f"cannot {action} the last enabled admin")
+
+    def _guard_not_disabled(self, user, action: str) -> None:
+        if self._status(user) == "disabled":
+            raise AdminGuardError(f"cannot {action} a disabled user — enable them first")
+
+    def _verify_admins_remain(self, compensate, action: str) -> None:
+        """Close _guard_not_last_admin's TOCTOU window. GoTrue writes can't be
+        wrapped in a transaction with the guard's read, so two concurrent
+        requests targeting the last two admins can both pass the pre-write
+        check. Re-count AFTER the write; if the platform is left with zero
+        enabled admins, run the compensating write and refuse."""
+        if not self._enabled_admin_ids():
+            compensate()
+            raise AdminGuardError(
+                f"{action} reverted: a concurrent change would have left no enabled admins"
+            )
 
     # ------------------------------------------------------------------ write
 
@@ -244,6 +276,9 @@ class AdminUserService:
         new_role = role or meta.get("role") or "viewer"
         new_brands = brands if brands is not None else (meta.get("brands") or ["all"])
         _validate(new_role, new_brands)
+        demoting_admin = (
+            meta.get("role") == "admin" and new_role != "admin" and not meta.get("disabled")
+        )
         if meta.get("role") == "admin" and new_role != "admin":
             self._guard_not_last_admin(user_id, "demote")
         attrs: Dict[str, Any] = {
@@ -253,6 +288,15 @@ class AdminUserService:
             attrs["user_metadata"] = {**(user.user_metadata or {}), "full_name": full_name}
         self.admin_client.auth.admin.update_user_by_id(user_id, attrs)
         self._upsert_profile(user_id, user.email, new_role)
+        if demoting_admin:
+
+            def _repromote() -> None:
+                self.admin_client.auth.admin.update_user_by_id(
+                    user_id, {"app_metadata": meta}
+                )
+                self._upsert_profile(user_id, user.email, "admin")
+
+            self._verify_admins_remain(_repromote, "demote")
         return {"user_id": user_id, "role": new_role, "brands": new_brands}
 
     def disable_user(self, user_id: str, acting_admin_id: str) -> Dict[str, Any]:
@@ -260,10 +304,20 @@ class AdminUserService:
         self._guard_not_last_admin(user_id, "disable")
         user = self._get_auth_user(user_id)
         meta = dict(user.app_metadata or {})
+        was_enabled_admin = meta.get("role") == "admin" and not meta.get("disabled")
         meta["disabled"] = True
         self.admin_client.auth.admin.update_user_by_id(
             user_id, {"app_metadata": meta, "ban_duration": BAN_DURATION}
         )
+        if was_enabled_admin:
+
+            def _reenable() -> None:
+                self.admin_client.auth.admin.update_user_by_id(
+                    user_id,
+                    {"app_metadata": {**meta, "disabled": False}, "ban_duration": "none"},
+                )
+
+            self._verify_admins_remain(_reenable, "disable")
         return {"user_id": user_id, "status": "disabled"}
 
     def enable_user(self, user_id: str) -> Dict[str, Any]:
@@ -279,6 +333,21 @@ class AdminUserService:
         self._guard_not_self(user_id, acting_admin_id, "delete")
         self._guard_not_last_admin(user_id, "delete")
         user = self._get_auth_user(user_id)  # 404 before delete
+        meta = dict(user.app_metadata or {})
+        if meta.get("role") == "admin" and not meta.get("disabled"):
+            # Deletion is not compensable, so an admin target is demoted
+            # first (compensable); once the demote survives the post-write
+            # re-count, the delete can no longer remove the last admin.
+            self.admin_client.auth.admin.update_user_by_id(
+                user_id, {"app_metadata": {**meta, "role": "viewer"}}
+            )
+
+            def _restore_role() -> None:
+                self.admin_client.auth.admin.update_user_by_id(
+                    user_id, {"app_metadata": meta}
+                )
+
+            self._verify_admins_remain(_restore_role, "delete")
         self.admin_client.auth.admin.delete_user(user_id)
         # Prod chatbot_user_profiles has NO FK to auth.users (intentional: the
         # anonymous@copilotkit.system profile has no auth row), so the profile
@@ -341,7 +410,7 @@ class AdminUserService:
             self.admin_client.table("chatbot_user_profiles").select("id, role").execute()
         )
         by_id = {p["id"]: p.get("role") for p in profiles.data}
-        for u in self.admin_client.auth.admin.list_users(page=1, per_page=1000):
+        for u in self._list_all_auth_users():
             meta = dict(u.app_metadata or {})
             if not meta.get("role") and by_id.get(u.id):
                 meta["role"] = by_id[u.id]

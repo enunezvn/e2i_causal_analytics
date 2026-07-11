@@ -208,20 +208,31 @@ def test_self_targeting_guards(svc):
 
 
 def test_last_admin_guards(svc):
-    """Deleting/demoting/disabling the LAST enabled admin is refused. Uses only
-    disposable admins; the real admin (etn3724) always exists, so the guard
-    math is asserted via the counter + a direct guard call."""
-    from src.services.admin_user_service import AdminGuardError
-
+    """With >=2 enabled admins (real etn3724 + a disposable one), deleting the
+    disposable admin is allowed — exercising the demote-then-delete path end
+    to end. The guard's REFUSAL path would require exactly one enabled admin
+    on the live instance (never true here), so it is pinned deterministically
+    in tests/unit/test_admin_guards.py instead of being environment-gated."""
     uid, _ = _mk(svc, "lastadm", role="admin")
-    # There are >=2 admins now (real etn3724 + disposable) -> delete allowed
     svc.delete_user(uid, acting_admin_id="not-the-target")
 
     admins = svc._enabled_admin_ids()
     assert len(admins) >= 1
-    if len(admins) == 1:
-        with pytest.raises(AdminGuardError):
-            svc._guard_not_last_admin(admins[0], "delete")
+    assert uid not in admins
+
+
+def test_disabled_user_cannot_get_fresh_links(svc):
+    """Reinvite/recovery for a disabled user is refused server-side (the UI
+    hides the buttons, but a direct API call must not mint a link that lets
+    a banned user set a password while disabled)."""
+    from src.services.admin_user_service import AdminGuardError
+
+    uid, _ = _mk(svc, "dislink")
+    svc.disable_user(uid, acting_admin_id="not-the-target")
+    with pytest.raises(AdminGuardError, match="disabled"):
+        svc.reinvite_user(uid)
+    with pytest.raises(AdminGuardError, match="disabled"):
+        svc.recovery_link(uid)
 
 
 def test_activity_readers_return_real_history(svc):
