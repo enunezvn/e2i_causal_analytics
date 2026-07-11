@@ -94,9 +94,7 @@ def test_ab_known_per_channel_uplift_recoverable_and_enum_safe():
     # PER-CHANNEL ground truth must be recoverable: mean observed effect within
     # 3 unpooled SEs of the planted uplift for every channel (2 experiments per
     # channel at n>=120; tolerance scales with the actual arm sizes).
-    merged = res.merge(
-        exp[["id", "intervention_channel"]], left_on="experiment_id", right_on="id"
-    )
+    merged = res.merge(exp[["id", "intervention_channel"]], left_on="experiment_id", right_on="id")
     for channel, group in merged.groupby("intervention_channel"):
         truth = CHANNEL_TRUE_UPLIFT[channel]
         n_min = int(min(group["treatment_n"].min(), group["control_n"].min()))
@@ -116,7 +114,9 @@ def test_ab_statistics_are_honest_and_enrollment_rolls_to_frontier():
     """p-values are real two-proportion z-tests (the null channel must not come
     out significant by construction) and enrollment rolls forward to the
     generation frontier so weekly refreshes keep the substrate fresh."""
-    exp = ExperimentGenerator(GeneratorConfig(seed=7, n_records=16, brand=Brand.FABHALTA)).generate()
+    exp = ExperimentGenerator(
+        GeneratorConfig(seed=7, n_records=16, brand=Brand.FABHALTA)
+    ).generate()
     out = ABExperimentGenerator(GeneratorConfig(seed=9), experiments_df=exp).generate()
     asn, res = out["ab_experiment_assignments"], out["ab_experiment_results"]
     merged = res.merge(

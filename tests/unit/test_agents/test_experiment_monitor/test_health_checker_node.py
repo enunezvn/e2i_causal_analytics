@@ -312,9 +312,7 @@ class TestGetExperiments:
         mock_query.eq.assert_any_call("is_synthetic", False)
         # 2026-07-11: unscoped = the 3-brand portfolio (scope_definer scaffolding
         # rows with brand NULL/'competitor' are not A/B experiments).
-        mock_query.in_.assert_called_once_with(
-            "brand", ["Remibrutinib", "Kisqali", "Fabhalta"]
-        )
+        mock_query.in_.assert_called_once_with("brand", ["Remibrutinib", "Kisqali", "Fabhalta"])
         # The sweep fetches a wide newest-first window (then collapses duplicate
         # names via _dedupe_by_name); only the deduped subset incurs checks.
         mock_query.order.assert_called_once_with("created_at", desc=True)
@@ -974,11 +972,7 @@ class TestStaleSeverityRelativeToThreshold:
     def _client_with_last_assignment(self, hours_ago: float):
         result = MagicMock()
         result.data = [
-            {
-                "assigned_at": (
-                    datetime.now(timezone.utc) - timedelta(hours=hours_ago)
-                ).isoformat()
-            }
+            {"assigned_at": (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()}
         ]
         query = MagicMock()
         query.select.return_value = query
@@ -1055,9 +1049,7 @@ class TestStaleSeverityRelativeToThreshold:
         }
         for hours_ago, expected in ((240, "info"), (385, "warning"), (600, "critical")):
             created = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
-            issue = await node._check_stale_data(
-                {"id": "e1", "created_at": created}, client, state
-            )
+            issue = await node._check_stale_data({"id": "e1", "created_at": created}, client, state)
             assert issue is not None, hours_ago
             assert issue["severity"] == expected, (hours_ago, issue["severity"])
             assert issue["last_data_timestamp"] == "N/A - No assignments"

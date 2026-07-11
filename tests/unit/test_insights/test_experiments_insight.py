@@ -10,9 +10,7 @@ from src.insights.experiments import _fallback, build_grounding
 def _row(channel, effect, significant):
     return {
         "intervention_channel": channel,
-        "ab_experiment_results": [
-            {"effect_estimate": effect, "is_significant": significant}
-        ],
+        "ab_experiment_results": [{"effect_estimate": effect, "is_significant": significant}],
     }
 
 
@@ -57,13 +55,15 @@ class TestBuildGrounding:
         g = build_grounding(
             "All",
             [
-                {"intervention_channel": None, "ab_experiment_results": [
-                    {"effect_estimate": 0.9, "is_significant": True}
-                ]},
+                {
+                    "intervention_channel": None,
+                    "ab_experiment_results": [{"effect_estimate": 0.9, "is_significant": True}],
+                },
                 {"intervention_channel": "email_campaign", "ab_experiment_results": []},
-                {"intervention_channel": "email_campaign", "ab_experiment_results": [
-                    {"effect_estimate": None}
-                ]},
+                {
+                    "intervention_channel": "email_campaign",
+                    "ab_experiment_results": [{"effect_estimate": None}],
+                },
             ],
         )
         assert g["n_experiments"] == 0
