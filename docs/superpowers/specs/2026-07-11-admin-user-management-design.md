@@ -37,17 +37,27 @@ All verified against the live droplet stack (PROD == DEV == this host), not assu
    `from src.api.deps import get_supabase` — module doesn't exist (real module:
    `src.api.dependencies`). The ImportError is silently swallowed, so the DB sink
    is never wired and every security event ever emitted went to stdout only.
-5. **Role stores have already drifted.** Three stores exist:
-   JWT `app_metadata.role` (what the API trusts), `chatbot_user_profiles.role`
-   (what RLS `has_role()` trusts), and `user_profiles.is_admin` (legacy, created by
-   the `on_auth_user_created` trigger). Observed drift: `admin@e2i.local` has
-   jwt_role=admin but no profile row; several users have NULL jwt_role but profile
-   role=viewer.
-6. **Backend role enforcement is real-time.** `verify_supabase_token()` calls
-   `auth.get_user(token)` per request, which returns *fresh* `app_metadata` — so
-   demotions apply on the next request, and GoTrue bans lock out existing tokens
-   immediately. No token-expiry window to worry about (frontend session claims go
-   stale until refresh, which is harmless).
+5. **Role stores have already drifted — and there are TWO, not three.**
+   JWT `app_metadata.role` (what the API trusts) and `chatbot_user_profiles.role`
+   + `is_admin` (what RLS `has_role()` trusts; auto-created per auth user by the
+   `on_auth_user_created_chatbot` trigger). The `user_profiles` table defined in
+   `database/chat/001_user_profiles_requests.sql` **does not exist in the prod
+   DB** (verified 2026-07-11) — so role changes are a **dual-write**, not
+   tri-write. Observed drift: `admin@e2i.local` has jwt_role=admin but no
+   profile row; several users have NULL jwt_role but profile role=viewer.
+6. **Backend role enforcement is real-time — but bans are NOT.**
+   `verify_supabase_token()` calls `auth.get_user(token)` per request, which
+   returns *fresh* `app_metadata` — so demotions apply on the next request.
+   **DISPROVED by live experiment (2026-07-11):** a GoTrue ban does NOT
+   invalidate an existing access token — `get_user` still succeeds for a banned
+   user, and this gotrue-py version's `User` model has no `banned_until` field
+   at all (even via the admin API). Ban only blocks new sign-ins and refresh
+   (`Invalid Refresh Token: User Banned`), leaving up to a 1 h window (JWT
+   expiry). Therefore **disable = ban + `app_metadata.disabled: true`**, and
+   `verify_supabase_token()` gains a fail-closed check rejecting users whose
+   fresh `app_metadata` carries `disabled` — that makes lockout immediate.
+   `app_metadata.disabled` is also the UI's source of truth for "disabled"
+   status (ban state being unreadable through the client library).
 7. **`GOTRUE_URI_ALLOW_LIST` does not include eznomics.site** and
    `GOTRUE_SITE_URL=http://138.197.4.36`. The invite link therefore must NOT rely
    on GoTrue's `action_link` redirect. Instead: extract `hashed_token` from
@@ -116,10 +126,10 @@ Zero changes to the existing token-verification path.
 
 Existing hierarchy unchanged: `viewer(1) < analyst(2) < operator(3) < admin(4)`.
 Brand grants: `Kisqali`, `Fabhalta`, `Remibrutinib`, or `all` (cross-brand).
-Role changes are a **tri-write**: `app_metadata.role` + `app_metadata.brands`
-(auth admin API), `chatbot_user_profiles.role`/`is_admin`, and
-`user_profiles.is_admin`. `app_metadata` is authoritative for the API;
-`chatbot_user_profiles.role` must match for RLS correctness.
+Role changes are a **dual-write**: `app_metadata.role` + `app_metadata.brands`
+(auth admin API) and `chatbot_user_profiles.role`/`is_admin`. `app_metadata` is
+authoritative for the API; `chatbot_user_profiles.role` must match for RLS
+correctness. (`user_profiles` doesn't exist in prod — see verified fact 5.)
 
 ## Endpoints (all `Depends(require_admin)`, all mutations audited)
 
@@ -127,10 +137,10 @@ Role changes are a **tri-write**: `app_metadata.role` + `app_metadata.brands`
 |---|---|
 | `GET /api/admin/users` | Merged list: `auth.admin.list_users()` + profile join + status (active / disabled / invited-pending via `last_sign_in_at`/`banned_until`) + last sign-in + chat usage |
 | `POST /api/admin/users/invite` | `{email, full_name?, role, brands}` → `generate_link(type='invite')` → set `app_metadata` → sync profile stores (same tri-write as role changes) → return one-time copyable link `https://eznomics.site/accept-invite?token_hash=…` |
-| `POST /api/admin/users/{id}/reinvite` | Fresh link for a pending (never-signed-in) user; actual GoTrue behavior for re-generation is pinned by a test, with fallback to a recovery-type link if invite-type regeneration is rejected |
+| `POST /api/admin/users/{id}/reinvite` | Fresh link. **Verified 2026-07-11:** for a pending (never-signed-in) user, `generate_link(type='invite')` re-issues (new token, old link invalidated); for an already-active user GoTrue rejects invite-type ("already been registered") → falls back to a recovery-type link |
 | `PATCH /api/admin/users/{id}` | `{role?, brands?, full_name?}` — tri-write role stores |
-| `POST /api/admin/users/{id}/disable` | GoTrue ban (`ban_duration` ≈ 100 y); locks out existing sessions immediately; reversible |
-| `POST /api/admin/users/{id}/enable` | `ban_duration: 'none'` |
+| `POST /api/admin/users/{id}/disable` | GoTrue ban (`ban_duration` ≈ 100 y) **+ `app_metadata.disabled: true`** (the flag gives immediate API lockout — see verified fact 6); reversible |
+| `POST /api/admin/users/{id}/enable` | `ban_duration: 'none'` + clear the `disabled` flag |
 | `DELETE /api/admin/users/{id}` | Hard delete via `auth.admin.delete_user`; profile rows cascade. Guards: **no self-delete; no deleting or demoting the last active admin.** UI requires type-to-confirm |
 | `POST /api/admin/users/{id}/recovery-link` | Copyable password-reset link (closes the dead-ForgotPassword-email gap) |
 | `GET /api/admin/users/{id}/activity?days=90` | Login history (RPC over `auth.audit_log_entries`), API activity buckets (`user_activity_log`), chat counters, recent events feed |
@@ -165,8 +175,10 @@ conventions; charts follow the existing recharts component patterns.
   `verifyOtp` establishes a session → set password → sign-in works thereafter.
 - **Role change:** `update_user_by_id(app_metadata)` + profile updates → backend
   enforcement immediate (fresh `get_user` per request).
-- **Disable:** ban → GoTrue rejects the banned user's tokens on next `get_user` →
-  401 everywhere immediately.
+- **Disable:** ban (blocks sign-in + refresh) + `app_metadata.disabled` flag →
+  `verify_supabase_token()` rejects the fresh `app_metadata` on the very next
+  request → 401 everywhere immediately. (Ban alone was disproved as immediate —
+  verified fact 6.)
 - **Activity:** request → middleware buffer → batched insert → aggregation
   endpoints → charts.
 
