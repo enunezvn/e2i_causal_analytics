@@ -61,6 +61,7 @@ class ResourceOptimizerOutput(BaseModel):
     impact_by_segment: Optional[Dict[str, float]] = None
     scenarios: Optional[List[ScenarioResult]] = None
     sensitivity_analysis: Optional[Dict[str, float]] = None
+    sensitivity_analysis_current: Optional[Dict[str, float]] = None
     optimization_summary: str = ""
     recommendations: List[str] = Field(default_factory=list)
     total_latency_ms: int = 0
@@ -218,6 +219,7 @@ class ResourceOptimizerAgent:
             "solve_time_ms": 0,
             "scenarios": None,
             "sensitivity_analysis": None,
+            "sensitivity_analysis_current": None,
             "projected_total_outcome": None,
             "projected_roi": None,
             "impact_by_segment": None,
@@ -257,6 +259,7 @@ class ResourceOptimizerAgent:
                 impact_by_segment=result.get("impact_by_segment"),
                 scenarios=result.get("scenarios"),
                 sensitivity_analysis=result.get("sensitivity_analysis"),
+                sensitivity_analysis_current=result.get("sensitivity_analysis_current"),
                 optimization_summary=result.get("optimization_summary", ""),
                 recommendations=result.get("recommendations") or [],
                 total_latency_ms=result.get("total_latency_ms", 0),

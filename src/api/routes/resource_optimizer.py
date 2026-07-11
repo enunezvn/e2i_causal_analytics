@@ -249,7 +249,12 @@ class OptimizationResponse(BaseModel):
         default_factory=list, description="Scenario analysis results"
     )
     sensitivity_analysis: Optional[Dict[str, float]] = Field(
-        default=None, description="Sensitivity of objective to constraints"
+        default=None, description="Per-entity marginal return at the optimized allocation"
+    )
+    sensitivity_analysis_current: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Per-entity marginal return at the current (pre-optimization) "
+        "allocation; paired with sensitivity_analysis for the before->after view",
     )
 
     # Impact projections
@@ -422,6 +427,7 @@ def _sanitize_non_finite(
     sanitized.optimal_allocations = []
     sanitized.scenarios = []
     sanitized.sensitivity_analysis = None
+    sanitized.sensitivity_analysis_current = None
     sanitized.impact_by_segment = None
     sanitized.objective_value = None
     sanitized.projected_total_outcome = None
@@ -1345,6 +1351,7 @@ async def _execute_optimization(
             solve_time_ms=result.get("solve_time_ms", 0),
             scenarios=_convert_scenarios(result.get("scenarios", [])),
             sensitivity_analysis=result.get("sensitivity_analysis"),
+            sensitivity_analysis_current=result.get("sensitivity_analysis_current"),
             projected_total_outcome=result.get("projected_total_outcome"),
             projected_roi=result.get("projected_roi"),
             impact_by_segment=result.get("impact_by_segment"),
@@ -1514,6 +1521,10 @@ def _generate_mock_response(
         sensitivity_analysis={
             "budget": 0.85,
             "capacity": 0.42,
+        },
+        sensitivity_analysis_current={
+            "budget": 0.95,
+            "capacity": 0.38,
         },
         projected_total_outcome=round(total_impact, 2),
         projected_roi=round(projected_roi, 2),

@@ -25,6 +25,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  ReferenceLine,
   ResponsiveContainer,
   PieChart,
   Pie,
@@ -212,34 +213,66 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
 
 interface SensitivityChartProps {
   sensitivity: Record<string, number>;
+  sensitivityCurrent?: Record<string, number>;
 }
 
-function SensitivityAnalysisChart({ sensitivity }: SensitivityChartProps) {
-  // Backend values are marginal returns per +$1 at the optimized allocation;
-  // shown per +$1K for readable magnitudes. When the solver reached an
-  // interior optimum these bars are near-equal — equalized marginal returns
-  // are the signature of an optimal allocation, not a rendering bug.
-  const chartData = Object.entries(sensitivity).map(([key, value]) => ({
-    name: key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
-    marginal: value * 1000,
-  }));
+function SensitivityAnalysisChart({ sensitivity, sensitivityCurrent }: SensitivityChartProps) {
+  // Backend values are marginal returns per +$1 (shown per +$1K for readable
+  // magnitudes). At an ROI optimum the OPTIMIZED marginals equalize to the hurdle
+  // across territories, so on their own they render as a wall of identical bars
+  // that reads as broken. Pairing them with the CURRENT marginals (dispersed by
+  // productivity) shows the before->after equalization: over-productive
+  // territories start high and are funded until their marginal falls to the
+  // hurdle; under-productive ones start low and are cut until theirs rises to it.
+  const hasCurrent = !!sensitivityCurrent && Object.keys(sensitivityCurrent).length > 0;
+
+  const chartData = Object.entries(sensitivity)
+    .map(([key, value]) => ({
+      name: key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+      optimized: value * 1000,
+      current: hasCurrent ? (sensitivityCurrent?.[key] ?? 0) * 1000 : undefined,
+    }))
+    // Sort by CURRENT marginal descending so the chart reads as a funnel that
+    // converges on the equalized hurdle. Fall back to optimized when the current
+    // series is unavailable (e.g. an older cached response).
+    .sort((a, b) =>
+      hasCurrent ? (b.current ?? 0) - (a.current ?? 0) : b.optimized - a.optimized
+    );
+
+  // The equalized hurdle ~ the (near-constant) optimized marginals; use their
+  // median as the reference line the current marginals converge onto.
+  const optimizedVals = chartData.map((d) => d.optimized).sort((a, b) => a - b);
+  const hurdle = optimizedVals[Math.floor(optimizedVals.length / 2)] ?? 0;
 
   return (
-    <ResponsiveContainer width="100%" height={Math.max(200, chartData.length * 24)}>
-      <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
+    <ResponsiveContainer
+      width="100%"
+      height={Math.max(220, chartData.length * (hasCurrent ? 30 : 24))}
+    >
+      <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 20 }}>
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis
           type="number"
           label={{ value: 'Marginal return (outcome units per +$1K)', position: 'bottom' }}
         />
-        <YAxis type="category" dataKey="name" width={110} />
+        <YAxis type="category" dataKey="name" width={110} interval={0} tick={{ fontSize: 11 }} />
         <Tooltip
-          formatter={(value) => [
+          formatter={(value, name) => [
             `${(value as number)?.toFixed(2) ?? 0} units per +$1K`,
-            'Marginal return',
+            name,
           ]}
         />
-        <Bar dataKey="marginal" fill={COLORS.secondary} />
+        {hasCurrent && <Legend verticalAlign="top" />}
+        {hasCurrent && (
+          <ReferenceLine
+            x={hurdle}
+            stroke={COLORS.warning}
+            strokeDasharray="4 4"
+            label={{ value: `hurdle ${hurdle.toFixed(2)}`, position: 'insideTopRight', fontSize: 11 }}
+          />
+        )}
+        {hasCurrent && <Bar dataKey="current" name="At current allocation" fill={COLORS.primary} />}
+        <Bar dataKey="optimized" name="At optimized allocation" fill={COLORS.secondary} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -789,15 +822,21 @@ export default function ResourceOptimization() {
         <TabsContent value="sensitivity" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Sensitivity Analysis</CardTitle>
+              <CardTitle>Marginal Returns — Current vs Optimized</CardTitle>
               <CardDescription>
-                How sensitive is the objective to constraint changes
+                What one more $1K buys in each territory, before and after optimization.
+                Current marginals are dispersed by productivity; the optimizer moves money
+                until they equalize at the hurdle rate — over-productive territories are
+                funded until their marginal falls to the line, under-productive ones cut
+                until theirs rises to it. The equalized line is the signature of an optimal
+                allocation, not a rendering bug.
               </CardDescription>
             </CardHeader>
             <CardContent>
               {optimizationResult.sensitivity_analysis && (
                 <SensitivityAnalysisChart
                   sensitivity={optimizationResult.sensitivity_analysis}
+                  sensitivityCurrent={optimizationResult.sensitivity_analysis_current}
                 />
               )}
             </CardContent>
@@ -805,40 +844,59 @@ export default function ResourceOptimization() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Marginal Returns</CardTitle>
+              <CardTitle>Per-Territory Detail</CardTitle>
               <CardDescription>
-                What one more dollar buys in each territory at the optimized allocation.
-                Near-equal values mean the allocation is optimal — money has been moved
-                until no territory offers a better marginal return than another.
+                Marginal return per additional $1K at the current then optimized allocation,
+                with the direction the optimizer moved each territory's budget.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {optimizationResult.sensitivity_analysis &&
                   (() => {
+                    const current = optimizationResult.sensitivity_analysis_current;
                     const entries = Object.entries(
                       optimizationResult.sensitivity_analysis
                     );
-                    const values = entries.map(([, v]) => v).sort((a, b) => a - b);
-                    const median = values[Math.floor(values.length / 2)] ?? 0;
-                    return entries.map(([key, value]) => (
-                      <div
-                        key={key}
-                        className="flex items-center justify-between p-3 border rounded-lg"
-                      >
-                        <div>
-                          <p className="font-medium">
-                            {key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            +{(value * 1000).toFixed(2)} outcome units per additional $1K
-                          </p>
+                    return entries.map(([key, optValue]) => {
+                      const curValue = current?.[key];
+                      // Concave response: funding a territory MORE lowers its
+                      // marginal, funding it LESS raises it. So current > optimized
+                      // means the optimizer grew this territory, and vice-versa.
+                      const rel =
+                        curValue !== undefined && optValue
+                          ? (curValue - optValue) / optValue
+                          : 0;
+                      const direction =
+                        curValue === undefined
+                          ? null
+                          : rel > 0.005
+                            ? 'up'
+                            : rel < -0.005
+                              ? 'down'
+                              : 'held';
+                      return (
+                        <div
+                          key={key}
+                          className="flex items-center justify-between p-3 border rounded-lg"
+                        >
+                          <div>
+                            <p className="font-medium">
+                              {key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                            </p>
+                            <p className="text-sm text-muted-foreground">
+                              {curValue !== undefined
+                                ? `+${(curValue * 1000).toFixed(2)} → +${(optValue * 1000).toFixed(2)} outcome units per additional $1K`
+                                : `+${(optValue * 1000).toFixed(2)} outcome units per additional $1K`}
+                            </p>
+                          </div>
+                          {direction === 'up' && <Badge variant="default">Funded up</Badge>}
+                          {direction === 'down' && <Badge variant="outline">Funded down</Badge>}
+                          {direction === 'held' && <Badge variant="outline">Held</Badge>}
+                          {direction === null && <Badge variant="outline">At optimum</Badge>}
                         </div>
-                        <Badge variant={value > median ? 'default' : 'outline'}>
-                          {value > median ? 'Above median' : 'At/below median'}
-                        </Badge>
-                      </div>
-                    ));
+                      );
+                    });
                   })()}
               </div>
             </CardContent>

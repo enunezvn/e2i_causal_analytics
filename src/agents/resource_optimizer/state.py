@@ -122,6 +122,10 @@ class ResourceOptimizerState(TypedDict):
     # === SCENARIO OUTPUTS (NotRequired - only if run_scenarios=True) ===
     scenarios: NotRequired[List[ScenarioResult] | None]
     sensitivity_analysis: NotRequired[Dict[str, float] | None]
+    # Per-entity marginal return at the CURRENT (pre-optimization) allocation.
+    # Paired with sensitivity_analysis (evaluated at the optimized allocation) so
+    # the UI can show the before->after equalization instead of a flat bar wall.
+    sensitivity_analysis_current: NotRequired[Dict[str, float] | None]
 
     # === IMPACT OUTPUTS (NotRequired - computed after optimization) ===
     projected_total_outcome: NotRequired[float | None]
