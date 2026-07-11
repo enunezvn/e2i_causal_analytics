@@ -40,7 +40,7 @@ def test_list_users_merges_auth_and_profile(svc):
     assert me["role"] == "admin"
     assert me["status"] == "active"
     assert me["last_sign_in_at"] is not None
-    # profile join fields present (backfilled by migration 100)
+    # profile join fields present (backfilled by migration 101)
     assert "total_messages" in me and "last_active_at" in me
 
 

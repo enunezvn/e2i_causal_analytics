@@ -75,7 +75,7 @@ Zero changes to the existing token-verification path.
   `PUBLIC_PATHS` — JWT-gated by the middleware by default.
 - **Service:** `src/services/admin_user_service.py` — holds a server-only
   service-role Supabase client and all business logic; routes stay thin.
-- **DB:** migration `database/migrations/100_admin_user_activity.sql` (next free
+- **DB:** migration `database/migrations/101_admin_user_activity.sql` (next free
   number after the 099 collision):
   - `user_activity_log` table — pre-aggregated per-minute buckets:
     `(id bigserial PK, user_id uuid, endpoint_group text, method text,
@@ -240,7 +240,7 @@ conventions; charts follow the existing recharts component patterns.
 ## Rollout
 
 Worktree isolation → TDD red-first → ralph-loop with codex rescue audits to
-fixed point → migration 100 applied manually on the droplet → single PR
+fixed point → migration 101 applied manually on the droplet → single PR
 (merge commit, never squash) → **CI/deploy batched as one push at the very end**
 (OOM history; racing deploys converge) → post-deploy live verification on
 eznomics.site.

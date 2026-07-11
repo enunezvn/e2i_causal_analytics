@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 100: Admin user management — activity log + auth-schema RPCs
+-- Migration 101: Admin user management — activity log + auth-schema RPCs
 -- ============================================================================
 -- Spec: docs/superpowers/specs/2026-07-11-admin-user-management-design.md
 -- 1) user_activity_log: per-minute pre-aggregated API activity (bounded rows)

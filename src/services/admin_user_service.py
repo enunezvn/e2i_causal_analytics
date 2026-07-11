@@ -334,7 +334,7 @@ class AdminUserService:
 
     def reconcile_role_stores(self) -> List[Dict[str, Any]]:
         """One-time drift repair: users with NO jwt role but a profile role get
-        app_metadata backfilled from the profile (migration 100 already synced
+        app_metadata backfilled from the profile (migration 101 already synced
         the other direction, jwt -> profile)."""
         report: List[Dict[str, Any]] = []
         profiles = (

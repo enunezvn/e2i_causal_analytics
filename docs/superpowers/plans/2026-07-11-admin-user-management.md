@@ -4,7 +4,7 @@
 
 **Goal:** Build the `/admin` surface for eznomics.site — invite users via copyable links, manage roles/brands, disable/enable/delete users, and view per-user + platform activity over time — per the approved spec `docs/superpowers/specs/2026-07-11-admin-user-management-design.md`.
 
-**Architecture:** Thin admin layer over Supabase GoTrue: new `/api/admin/*` router behind existing `require_admin`, a service-role `AdminUserService`, migration 100 (activity table + SECURITY DEFINER RPCs over `auth.audit_log_entries`), a bounded fail-open activity middleware, the one-line `security_audit` DB-sink fix, and a React `/admin` page + public `/accept-invite` page.
+**Architecture:** Thin admin layer over Supabase GoTrue: new `/api/admin/*` router behind existing `require_admin`, a service-role `AdminUserService`, migration 101 (activity table + SECURITY DEFINER RPCs over `auth.audit_log_entries`), a bounded fail-open activity middleware, the one-line `security_audit` DB-sink fix, and a React `/admin` page + public `/accept-invite` page.
 
 **Tech Stack:** Python 3.12 / FastAPI / supabase-py 2.27 (sync) / pytest real-DB integration tests (`E2I_DB_INTEGRATION=1` opt-in, no mocks); React 18 / TypeScript / TanStack Query / recharts / vitest + testing-library (vi.mock convention).
 
@@ -57,16 +57,16 @@ All subsequent git commands run FROM THE WORKTREE dir (standing feedback 2026-06
 
 ---
 
-### Task 1: Migration 100 — activity table, RPCs, backfill, purge
+### Task 1: Migration 101 — activity table, RPCs, backfill, purge
 
 **Files:**
-- Create: `database/migrations/100_admin_user_activity.sql`
+- Create: `database/migrations/101_admin_user_activity.sql`
 
 - [ ] **Step 1.1: Write the migration** (idempotent, autocommit-safe, NO BEGIN/COMMIT):
 
 ```sql
 -- ============================================================================
--- Migration 100: Admin user management — activity log + auth-schema RPCs
+-- Migration 101: Admin user management — activity log + auth-schema RPCs
 -- ============================================================================
 -- Spec: docs/superpowers/specs/2026-07-11-admin-user-management-design.md
 -- 1) user_activity_log: per-minute pre-aggregated API activity (bounded rows)
@@ -245,7 +245,7 @@ WHERE u.id = p.id
 - [ ] **Step 1.2: Dry-run on the droplet** (transactional preview — this migration has no ALTER TYPE, so a txn wrapper is safe):
 
 ```bash
-{ echo "BEGIN;"; cat database/migrations/100_admin_user_activity.sql; echo "ROLLBACK;"; } | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
+{ echo "BEGIN;"; cat database/migrations/101_admin_user_activity.sql; echo "ROLLBACK;"; } | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
 ```
 
 Expected: runs to `ROLLBACK` with no errors (NOTICEs are fine).
@@ -253,7 +253,7 @@ Expected: runs to `ROLLBACK` with no errors (NOTICEs are fine).
 - [ ] **Step 1.3: Apply for real** (additive + idempotent; safe mid-development, user authorized migrations):
 
 ```bash
-docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < database/migrations/100_admin_user_activity.sql
+docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < database/migrations/101_admin_user_activity.sql
 ```
 
 - [ ] **Step 1.4: Verify:**
@@ -268,8 +268,8 @@ docker exec supabase-db psql -U postgres -d postgres -tA -c "SELECT p.role FROM 
 - [ ] **Step 1.5: Commit**
 
 ```bash
-git add database/migrations/100_admin_user_activity.sql
-git commit -m "feat(admin): migration 100 — user_activity_log, auth-audit RPCs, profile backfill"
+git add database/migrations/101_admin_user_activity.sql
+git commit -m "feat(admin): migration 101 — user_activity_log, auth-audit RPCs, profile backfill"
 ```
 
 ---
@@ -926,7 +926,7 @@ def test_list_users_merges_auth_and_profile(svc):
     assert me["role"] == "admin"
     assert me["status"] == "active"
     assert me["last_sign_in_at"] is not None
-    # profile join fields present (backfilled by migration 100)
+    # profile join fields present (backfilled by migration 101)
     assert "total_messages" in me and "last_active_at" in me
 
 
@@ -1502,7 +1502,7 @@ def test_reconcile_role_stores(svc):
 
     def reconcile_role_stores(self) -> List[Dict[str, Any]]:
         """One-time drift repair: users with NO jwt role but a profile role get
-        app_metadata backfilled from the profile (migration 100 already synced
+        app_metadata backfilled from the profile (migration 101 already synced
         the other direction, jwt -> profile)."""
         report: List[Dict[str, Any]] = []
         profiles = (
