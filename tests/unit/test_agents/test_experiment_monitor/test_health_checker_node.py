@@ -1161,6 +1161,112 @@ class TestInterleaveByBrand:
         assert len(out) == 5  # cap reached even though Kisqali ran dry
 
 
+def _ab_row(id_, ci_lower=None, ci_upper=None, target=None, brand="Kisqali"):
+    row = {"id": id_, "experiment_name": id_, "brand": brand}
+    if ci_lower is not None or ci_upper is not None:
+        row["ab_experiment_results"] = [
+            {
+                "effect_estimate": ((ci_lower or 0) + (ci_upper or 0)) / 2,
+                "effect_ci_lower": ci_lower,
+                "effect_ci_upper": ci_upper,
+            }
+        ]
+    if target is not None:
+        row["target_enrollment"] = target
+    return row
+
+
+class TestExpectedImpact:
+    """_expected_impact: CI-shrunk OBSERVED effect x planned reach.
+
+    The score must be earned with data — the CI bound nearer zero, never the
+    point estimate or a ground-truth prior — so a noisy early read cannot jump
+    the monitoring queue.
+    """
+
+    def test_positive_effect_uses_ci_lower(self):
+        row = _ab_row("e", ci_lower=0.10, ci_upper=0.30, target=1000)
+        assert HealthCheckerNode._expected_impact(row) == 100.0
+
+    def test_confidently_harmful_uses_abs_ci_upper(self):
+        # An experiment confidently making things worse deserves monitoring
+        # priority too.
+        row = _ab_row("e", ci_lower=-0.30, ci_upper=-0.10, target=500)
+        assert HealthCheckerNode._expected_impact(row) == 50.0
+
+    def test_ci_spanning_zero_scores_zero(self):
+        row = _ab_row("e", ci_lower=-0.05, ci_upper=0.15, target=1000)
+        assert HealthCheckerNode._expected_impact(row) == 0.0
+
+    def test_missing_results_is_unscorable_not_zero(self):
+        assert HealthCheckerNode._expected_impact(_ab_row("e", target=1000)) is None
+
+    def test_missing_plan_is_unscorable_not_zero(self):
+        row = _ab_row("e", ci_lower=0.10, ci_upper=0.30)
+        assert HealthCheckerNode._expected_impact(row) is None
+
+    def test_embedded_result_dict_accepted(self):
+        # PostgREST returns a to-one embed as a dict on some client versions.
+        row = {
+            "id": "e",
+            "target_enrollment": 100,
+            "ab_experiment_results": {"effect_ci_lower": 0.2, "effect_ci_upper": 0.4},
+        }
+        assert HealthCheckerNode._expected_impact(row) == 20.0
+
+
+class TestRankByImpact:
+    """_rank_by_impact: top slots by expected impact + newest-first reserve,
+    with evidence-based tiers stamped on every row."""
+
+    def test_top_slots_by_impact_reserve_by_recency(self):
+        # Input is created_at-desc: newest first. n1/n2 are new & unscorable;
+        # winners w1..w3 are older but carry demonstrated impact.
+        rows = [
+            _ab_row("n1"),
+            _ab_row("n2"),
+            _ab_row("z1", ci_lower=-0.1, ci_upper=0.1, target=1000),  # score 0
+            _ab_row("w3", ci_lower=0.05, ci_upper=0.2, target=1000),  # 50
+            _ab_row("w1", ci_lower=0.20, ci_upper=0.4, target=1000),  # 200
+            _ab_row("w2", ci_lower=0.10, ci_upper=0.3, target=1000),  # 100
+        ]
+        # cap 4 with _NEWEST_SLOTS=5 would leave 0 impact slots; exercise the
+        # mix explicitly via a cap where both segments are non-empty.
+        out = HealthCheckerNode._rank_by_impact(rows, cap=7)
+        ids = [r["id"] for r in out]
+        # 2 impact slots (cap 7 - 5 reserve): the two highest scores, in order.
+        assert ids[:2] == ["w1", "w2"]
+        # Reserve: newest-first among the rest.
+        assert set(ids[2:]) == {"n1", "n2", "z1", "w3"}
+
+    def test_tiers_are_evidence_based(self):
+        rows = [
+            _ab_row("hi", ci_lower=0.20, ci_upper=0.4, target=1000),  # 200
+            _ab_row("mid", ci_lower=0.05, ci_upper=0.2, target=1000),  # 50
+            _ab_row("null_effect", ci_lower=-0.1, ci_upper=0.1, target=1000),  # 0
+            _ab_row("unscored"),
+        ]
+        HealthCheckerNode._rank_by_impact(rows, cap=25)
+        tiers = {r["id"]: r["impact_tier"] for r in rows}
+        assert tiers == {
+            "hi": "high",
+            "mid": "medium",
+            "null_effect": "low",
+            "unscored": None,
+        }
+
+    def test_all_unscorable_falls_back_to_newest_interleaved(self):
+        rows = [_ab_row(f"e{i}") for i in range(6)]
+        out = HealthCheckerNode._rank_by_impact(rows, cap=4)
+        assert [r["id"] for r in out] == ["e0", "e1", "e2", "e3"]
+        assert all(r["expected_impact"] is None for r in rows)
+
+    def test_cap_respected(self):
+        rows = [_ab_row(f"e{i}", ci_lower=0.1, ci_upper=0.2, target=100 + i) for i in range(30)]
+        out = HealthCheckerNode._rank_by_impact(rows, cap=25)
+        assert len(out) == 25
+
+
 class TestStaleSeverityRelativeToThreshold:
     """_check_stale_data severity scales with the caller's threshold (2026-07-11).
 

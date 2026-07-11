@@ -46,6 +46,13 @@ class ExperimentSummary(TypedDict):
     brand: NotRequired[str | None]
     description: NotRequired[str | None]
     intervention_channel: NotRequired[str | None]
+    # Expected impact (2026-07-11): CI-shrunk OBSERVED effect x planned reach
+    # (never a ground-truth prior — the experiment must earn its rank with
+    # data). None = unscorable (no results row / no enrollment plan), NOT zero.
+    expected_impact: NotRequired[float | None]
+    # high / medium (positive score, split at the median positive) / low (CI
+    # spans zero — no demonstrated effect yet) / None (unscorable).
+    impact_tier: NotRequired[str | None]
 
 
 class SRMIssue(TypedDict):

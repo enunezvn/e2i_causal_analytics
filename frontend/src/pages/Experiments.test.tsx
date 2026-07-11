@@ -563,7 +563,7 @@ describe('Experiments — health honesty (2026-07-11 follow-up)', () => {
     await act(async () => {
       await user.hover(infoIcon as Element);
     });
-    const notes = await screen.findAllByText(/1 newest monitored this sweep/i);
+    const notes = await screen.findAllByText(/1 monitored: top expected impact \+ newest/i);
     expect(notes.length).toBeGreaterThan(0);
   });
 
@@ -595,7 +595,96 @@ describe('Experiments — health honesty (2026-07-11 follow-up)', () => {
       rosterWith({ current_information_fraction: null, target_enrollment: null }),
     );
     render(<Experiments />, { wrapper: createWrapper() });
-    expect(screen.getByText('—')).toBeInTheDocument();
+    // Plan Progress dash + the (unscored) Expected Impact dash both render.
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+});
+
+describe('Experiments — expected-impact ranking + filter (2026-07-11)', () => {
+  const rosterWithTiers = () => ({
+    isPending: false,
+    mutate: vi.fn(),
+    data: {
+      experiments_checked: 2,
+      total_running: 360,
+      healthy_count: 2,
+      warning_count: 0,
+      critical_count: 0,
+      experiments: [
+        {
+          experiment_id: 'exp_hi',
+          experiment_name: 'High Impact Experiment',
+          health_status: 'healthy',
+          total_enrolled: 500,
+          enrollment_rate_per_day: 7.1,
+          current_information_fraction: 0.83,
+          target_enrollment: 600,
+          has_srm: false,
+          active_alerts: 0,
+          last_checked: '2026-07-11T00:00:00Z',
+          expected_impact: 120.5,
+          impact_tier: 'high',
+        },
+        {
+          experiment_id: 'exp_lo',
+          experiment_name: 'Null Effect Experiment',
+          health_status: 'healthy',
+          total_enrolled: 400,
+          enrollment_rate_per_day: 6.0,
+          current_information_fraction: 0.5,
+          target_enrollment: 800,
+          has_srm: false,
+          active_alerts: 0,
+          last_checked: '2026-07-11T00:00:00Z',
+          expected_impact: 0,
+          impact_tier: 'low',
+        },
+      ],
+      alerts: [],
+      monitor_summary: 'ok',
+      recommended_actions: [],
+      check_latency_ms: 10,
+      timestamp: '2026-07-11T00:00:00Z',
+    },
+  });
+
+  it('renders the impact tier badge and the expected-impact value on the card', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(rosterWithTiers());
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('high impact')).toBeInTheDocument();
+    expect(screen.getByText('120.5')).toBeInTheDocument();
+    expect(screen.getAllByText('Expected Impact').length).toBe(2);
+  });
+
+  it('filters the roster by expected-impact tier', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(rosterWithTiers());
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('High Impact Experiment')).toBeInTheDocument();
+    expect(screen.getByText('Null Effect Experiment')).toBeInTheDocument();
+
+    // Radix Select needs fireEvent in jsdom (same idiom as the brand tests).
+    fireEvent.click(screen.getByRole('combobox', { name: /expected impact/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'High Impact' }));
+
+    expect(screen.getByText('High Impact Experiment')).toBeInTheDocument();
+    expect(screen.queryByText('Null Effect Experiment')).not.toBeInTheDocument();
+  });
+
+  it('renders no impact badge and an honest dash when the row is unscorable', () => {
+    const roster = rosterWithTiers();
+    roster.data.experiments = [
+      {
+        ...roster.data.experiments[0],
+        expected_impact: null as unknown as number,
+        impact_tier: null as unknown as string,
+      },
+    ];
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(roster);
+    render(<Experiments />, { wrapper: createWrapper() });
+    // No tier badge (the "Expected Impact" metric label legitimately remains;
+    // anchored so the card title "High Impact Experiment" can't match).
+    expect(screen.queryByText(/^(high|medium|low) impact$/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 });
