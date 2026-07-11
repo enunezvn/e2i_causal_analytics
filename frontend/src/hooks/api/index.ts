@@ -191,3 +191,21 @@ export {
   useHomeKpiInsight,
   useExperimentsInsight,
 } from './use-insights';
+
+// =============================================================================
+// ADMIN USER MANAGEMENT HOOKS
+// =============================================================================
+
+export {
+  useAdminUsers,
+  useUserActivity,
+  usePlatformActivity,
+  useAuditFeed,
+  useInviteUser,
+  useReinviteUser,
+  useRecoveryLink,
+  useUpdateUser,
+  useDisableUser,
+  useEnableUser,
+  useDeleteUser,
+} from './use-admin';

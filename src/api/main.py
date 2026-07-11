@@ -59,6 +59,7 @@ from src.api.dependencies.supabase_client import (
     init_supabase,
     supabase_health_check,
 )
+from src.api.middleware.activity_tracking import ActivityTrackingMiddleware
 from src.api.middleware.auth_middleware import JWTAuthMiddleware
 from src.api.middleware.insight_verifier import InsightVerifierMiddleware
 from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
@@ -67,6 +68,7 @@ from src.api.middleware.timing import TimingMiddleware
 from src.api.middleware.tracing import TracingMiddleware
 
 # Import routers
+from src.api.routes.admin import router as admin_router
 from src.api.routes.agents import router as agents_router
 from src.api.routes.analytics import router as analytics_router
 from src.api.routes.audit import router as audit_router
@@ -631,6 +633,10 @@ openapi_tags = [
         "name": "Strategic Insights",
         "description": "Per-page agentic strategic interpretations, each grounded in real data with an honest deterministic fallback when the LLM is unavailable (never fabricated).",
     },
+    {
+        "name": "Admin",
+        "description": "Admin-only user management: copyable invite links, role/brand updates, disable/enable, delete, and login/chat/API activity readers.",
+    },
 ]
 
 # =============================================================================
@@ -843,6 +849,12 @@ app.add_middleware(InsightVerifierMiddleware)
 logger.info(
     "Insight Verifier: ENABLED (JIT provenance check on /api/causal, /api/explain, /api/executive-insights)"
 )
+
+# User activity tracking (admin feature) — bounded per-minute aggregation of
+# authenticated /api requests, flushed in the background. Added BEFORE
+# JWTAuthMiddleware so it is INNER to it (sees request.state.user).
+app.add_middleware(ActivityTrackingMiddleware)
+logger.info("Activity Tracking: ENABLED (per-minute buckets -> user_activity_log)")
 
 # JWT Authentication middleware (Supabase)
 # Protects all routes except public paths (health, docs, read-only endpoints)
@@ -1152,6 +1164,9 @@ app.include_router(expert_review_router, prefix="/api")
 
 # Audit chain endpoints (/api/audit/*)
 app.include_router(audit_router, prefix="/api")
+
+# Admin user management endpoints (/api/admin/*) — require_admin on every route
+app.include_router(admin_router, prefix="/api")
 
 # Analytics & metrics dashboard endpoints (/api/analytics/*)
 app.include_router(analytics_router, prefix="/api")

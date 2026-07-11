@@ -733,7 +733,7 @@ def get_security_audit_service() -> SecurityAuditService:
         # Try to get Supabase client if configured
         supabase_client = None
         try:
-            from src.api.deps import get_supabase
+            from src.api.dependencies import get_supabase
 
             supabase_client = get_supabase()
         except Exception:

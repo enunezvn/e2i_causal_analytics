@@ -1,6 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+
+// Sidebar consults useAuth().isAdmin to gate adminOnly nav entries; these
+// tests render it outside AuthProvider, so the hook is mocked (default:
+// non-admin, preserving the historical 24-link expectations below).
+const mockUseAuth = vi.fn(() => ({ isAdmin: false }));
+vi.mock('@/hooks/use-auth', () => ({
+  useAuth: () => mockUseAuth(),
+}));
+
 import { Sidebar } from './Sidebar';
 
 function renderSidebar() {
@@ -65,5 +74,18 @@ describe('Sidebar navigation (rendered IA)', () => {
       .filter(([, sig]) => sig === homeGlyph)
       .map(([title]) => title);
     expect(itemsUsingHomeGlyph).toEqual(['Home']);
+  });
+});
+
+describe('Sidebar admin gating', () => {
+  it('renders the Administration link only for admins', () => {
+    mockUseAuth.mockReturnValueOnce({ isAdmin: true });
+    renderSidebar();
+    expect(screen.getByRole('link', { name: /administration/i })).toBeInTheDocument();
+  });
+
+  it('hides the Administration link for non-admins', () => {
+    renderSidebar();
+    expect(screen.queryByRole('link', { name: /administration/i })).toBeNull();
   });
 });

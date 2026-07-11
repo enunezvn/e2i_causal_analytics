@@ -319,13 +319,21 @@ async def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
         response = client.auth.get_user(token)
 
         if response and response.user:
+            app_metadata = response.user.app_metadata or {}
+            # Admin-disabled users are locked out immediately. GoTrue bans do
+            # NOT invalidate already-issued access tokens (verified 2026-07-11),
+            # so /api/admin disable sets app_metadata.disabled and we fail
+            # closed on the FRESH app_metadata get_user returns per request.
+            if app_metadata.get("disabled"):
+                logger.warning("Rejected token for disabled user: %s", response.user.email)
+                return None
             user_data = {
                 "id": response.user.id,
                 "email": response.user.email,
                 "role": response.user.role,
                 "aud": response.user.aud,
                 "created_at": str(response.user.created_at) if response.user.created_at else None,
-                "app_metadata": response.user.app_metadata or {},
+                "app_metadata": app_metadata,
                 "user_metadata": response.user.user_metadata or {},
             }
             logger.debug(f"Token verified for user: {user_data['email']}")

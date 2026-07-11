@@ -91,6 +91,7 @@ def _build_full_app() -> FastAPI:
     os.environ.setdefault("ENVIRONMENT", "development")
 
     # Import every router. List ORDER mirrors src.api.main.
+    from src.api.routes.admin import router as admin_router
     from src.api.routes.agents import router as agents_router
     from src.api.routes.analytics import router as analytics_router
     from src.api.routes.audit import router as audit_router
@@ -146,6 +147,7 @@ def _build_full_app() -> FastAPI:
         executive_insights_router,
         insights_strategic_router,
         staleness_alerts_router,
+        admin_router,
     ):
         app.include_router(r, prefix="/api")
     # Non-prefixed routers (these set their own prefix in src.api.main).
@@ -340,6 +342,7 @@ def test_slim_app_includes_all_routers_from_src_api_main() -> None:
     # Sourced directly from each route module — when a future router lands,
     # update this dict alongside the slim-app builder.
     expected_prefix_substrings = {
+        "admin": "/admin",
         "executive_insights": "/executive-insights",
         "audit": "/audit",
         # staleness_alerts router uses prefix=/alerts (not /staleness-alerts)
@@ -531,6 +534,7 @@ def test_include_router_prefixes_match_expected_drift_table() -> None:
         "executive_insights_router": "/api",
         "insights_strategic_router": "/api",
         "staleness_alerts_router": "/api",
+        "admin_router": "/api",
         # metrics_router declares its own prefix (or no prefix needed)
         "metrics_router": None,
     }

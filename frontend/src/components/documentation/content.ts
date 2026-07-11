@@ -173,6 +173,9 @@ export const CAPABILITY_QUESTIONS: Record<string, CapabilityInfo> = {
   '/feedback-learning': {
     question: 'Does the system actually learn from user feedback?',
   },
+  '/admin': {
+    question: 'Who has access to the platform, and what have they been doing? (admin only)',
+  },
 };
 
 // ── §2 Methodology ──────────────────────────────────────────────────────────
