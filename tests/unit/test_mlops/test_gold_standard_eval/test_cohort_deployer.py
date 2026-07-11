@@ -283,6 +283,9 @@ async def test_register_cohort_model_writes_staging_not_production(tmp_path):
     assert experiment_inserts[0]["experiment_name"] != "csu_treatment_initiation_live_v1", (
         "must use a DISTINCT experiment from the serving deploy"
     )
+    # Lifecycle (migration 102): lineage rows are written 'completed' — the
+    # DB-default 'running' is reserved for actively-enrolling A/B experiments.
+    assert experiment_inserts[0]["status"] == "completed"
     assert row["experiment_id"] == FakeClient.EXPERIMENT_ID
 
 

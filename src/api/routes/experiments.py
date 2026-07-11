@@ -505,8 +505,15 @@ async def active_experiment_count() -> Dict[str, Any]:
         # perpetually-"running" rows are a separate data-gen artifact.)
         from src.repositories.provenance import apply_provenance_filter
 
+        # Genuine A/B experiments only (2026-07-11, migration 102): rows
+        # without an intervention_channel are pipeline-lineage records
+        # (scope definitions, evals, deploys) that used to inherit the
+        # DB-default 'running'. Same predicate as the experiment monitor.
         active_q = (
-            client.table("ml_experiments").select("id", count="exact").eq("status", "running")
+            client.table("ml_experiments")
+            .select("id", count="exact")
+            .eq("status", "running")
+            .not_.is_("intervention_channel", "null")
         )
         active_q = apply_provenance_filter(active_q)
         result = active_q.execute()

@@ -228,7 +228,7 @@ class ExperimentGenerator(BaseGenerator[pd.DataFrame]):
                     "region": region,
                     "created_by": "synthetic_loader",
                     "created_at": created_at.isoformat(),
-                    "status": "running",  # mirrors the 621 real running experiments
+                    "status": "running",  # the A/B portfolio is actively enrolling by design
                     "target_enrollment": target_enrollment,
                     "planned_duration_days": planned_duration_days,
                     "is_synthetic": True,

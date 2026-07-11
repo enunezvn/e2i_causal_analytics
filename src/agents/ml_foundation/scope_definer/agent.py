@@ -320,9 +320,37 @@ class ScopeDefinerAgent:
             raw_brand = scope_spec.get("brand")
             db_brand = None if raw_brand in (None, "", "unknown") else raw_brand
 
+            name = output.get("experiment_name", f"exp_{output.get('experiment_id', 'unknown')}")
+
+            # Get-or-refresh by name (2026-07-11): every Tier-0 pipeline run
+            # re-persists its scope, and blind inserts accumulated 692 rows for
+            # 18 distinct scope names — all stuck on the DB-default status
+            # 'running' (nothing ever transitions ml_experiments.status), which
+            # the experiment monitor and running-count endpoints read as
+            # actively-enrolling A/B experiments. A scope-definition record is
+            # complete at write time → status='completed'; re-runs refresh the
+            # existing row instead of duplicating it (migration 102 closed out
+            # the historical duplicates).
+            existing = await repo.get_by_name(name)
+            if existing and existing.id:
+                await repo.update(
+                    str(existing.id),
+                    {
+                        "description": scope_spec.get("problem_description", ""),
+                        "brand": db_brand,
+                        "region": db_region,
+                        "minimum_auc": success_criteria.get("minimum_auc"),
+                        "minimum_precision_at_k": success_criteria.get("minimum_precision_at_k"),
+                        "maximum_fpr": success_criteria.get("maximum_fpr"),
+                        "status": "completed",
+                    },
+                )
+                logger.info(f"Refreshed existing experiment scope: {name}")
+                return
+
             # Create experiment record
             result = await repo.create_experiment(
-                name=output.get("experiment_name", f"exp_{output.get('experiment_id', 'unknown')}"),
+                name=name,
                 mlflow_experiment_id=output.get("experiment_id", ""),
                 prediction_target=scope_spec.get("target_variable", ""),
                 description=scope_spec.get("problem_description", ""),
@@ -330,6 +358,7 @@ class ScopeDefinerAgent:
                 region=db_region,
                 created_by="scope_definer",
                 success_criteria=success_criteria,
+                status="completed",
             )
 
             if result:

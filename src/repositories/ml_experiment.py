@@ -80,10 +80,16 @@ class MLExperiment:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     data_split: str = "unassigned"
+    # Lifecycle (migration 102): draft/running/completed/stopped/archived.
+    # Only actively-enrolling A/B rows may be 'running'; pipeline-lineage rows
+    # (scope definitions, evals, deploys) are written as 'completed'. None =
+    # unset; to_dict omits it so an insert takes the DB default rather than
+    # writing NULL over it.
+    status: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for database storage."""
-        return {
+        data = {
             "id": str(self.id) if self.id else None,
             "experiment_name": self.experiment_name,
             "mlflow_experiment_id": self.mlflow_experiment_id,
@@ -100,6 +106,9 @@ class MLExperiment:
             "created_by": self.created_by,
             "data_split": self.data_split,
         }
+        if self.status is not None:
+            data["status"] = self.status
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MLExperiment":
@@ -122,6 +131,7 @@ class MLExperiment:
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             data_split=data.get("data_split", "unassigned"),
+            status=data.get("status"),
         )
 
 
@@ -413,6 +423,7 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
         region: Optional[str] = None,
         created_by: Optional[str] = None,
         success_criteria: Optional[Dict[str, float]] = None,
+        status: Optional[str] = None,
     ) -> MLExperiment:
         """Create a new experiment.
 
@@ -425,6 +436,9 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
             region: Region filter
             created_by: Creator username
             success_criteria: Dict with minimum_auc, etc.
+            status: Lifecycle status; None keeps the DB default. Lineage rows
+                (scope definitions, evals) should pass 'completed' — only
+                actively-enrolling A/B experiments may sit on 'running'.
 
         Returns:
             Created MLExperiment
@@ -438,6 +452,7 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
             brand=brand,
             region=region,
             created_by=created_by,
+            status=status,
             minimum_auc=success_criteria.get("minimum_auc") if success_criteria else None,
             minimum_precision_at_k=success_criteria.get("minimum_precision_at_k")
             if success_criteria

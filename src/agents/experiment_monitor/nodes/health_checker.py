@@ -173,10 +173,19 @@ class HealthCheckerNode:
                 # count="exact" rides the same request (PostgREST Content-Range)
                 # so the UI can say "N running, 25 monitored" instead of showing
                 # the capped roster size as if it were the portfolio size.
+                # Genuine A/B experiments only (2026-07-11): rows without an
+                # intervention_channel are pipeline-lineage records (scope
+                # definitions, evals, deploys), not experiments — they carry
+                # zero assignments and their status is registry bookkeeping.
+                # Migration 102 closed the historical ones out of 'running';
+                # this predicate keeps the sweep honest against any future
+                # writer that inherits the DB-default status. Same predicate
+                # as the insights endpoint (insights_strategic.py).
                 query = (
                     client.table("ml_experiments")
                     .select(_SELECT, count="exact")
                     .eq("status", "running")
+                    .not_.is_("intervention_channel", "null")
                     .order("created_at", desc=True)
                     .limit(_RAW_FETCH_LIMIT)
                 )
