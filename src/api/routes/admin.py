@@ -6,8 +6,9 @@ security_audit_log via the (now-fixed) SecurityAuditService."""
 import asyncio
 import ipaddress
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -99,6 +100,9 @@ def _map_error(e: AdminServiceError) -> HTTPException:
 # ------------------------------------------------------------------- schemas
 
 
+_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 class InviteRequest(BaseModel):
     # plain str + shape check: EmailStr would pull in the email-validator
     # package (not pinned here); GoTrue validates authoritatively on invite.
@@ -111,7 +115,7 @@ class InviteRequest(BaseModel):
     @classmethod
     def _email_shape(cls, v: str) -> str:
         v = v.strip()
-        if "@" not in v[1:-3] or " " in v or "." not in v.rsplit("@", 1)[-1]:
+        if not _EMAIL_SHAPE.match(v):
             raise ValueError("invalid email address")
         return v
 
@@ -350,6 +354,6 @@ async def admin_audit_feed(
             .limit(200)
             .execute()
         )
-        return rows.data or []
+        return cast(List[Dict[str, Any]], rows.data or [])
 
     return {"events": await asyncio.to_thread(_query)}

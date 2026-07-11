@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -98,6 +98,19 @@ async def flush_rows(rows: List[Dict[str, Any]]) -> None:
         )
 
 
+# Strong references to in-flight flush tasks: asyncio only weakly references
+# tasks, so an unreferenced fire-and-forget task can be garbage-collected
+# before it runs — silently dropping rows (fail-open would hide it).
+_INFLIGHT_FLUSHES: set = set()
+
+
+def schedule_flush(rows: List[Dict[str, Any]]) -> "asyncio.Task[None]":
+    task = asyncio.get_running_loop().create_task(flush_rows(rows))
+    _INFLIGHT_FLUSHES.add(task)
+    task.add_done_callback(_INFLIGHT_FLUSHES.discard)
+    return task
+
+
 def _endpoint_group(path: str) -> Optional[str]:
     """'/api/causal/estimate' -> 'causal'. Bounded cardinality by design."""
     parts = path.split("/")
@@ -118,7 +131,7 @@ class ActivityTrackingMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.buffer = buffer or ActivityBuffer()
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         try:
             user = getattr(request.state, "user", None)
@@ -135,7 +148,7 @@ class ActivityTrackingMiddleware(BaseHTTPMiddleware):
                     str(user["id"]), user.get("email"), group, request.method, minute
                 ):
                     rows = self.buffer.drain()
-                    asyncio.get_running_loop().create_task(flush_rows(rows))
+                    schedule_flush(rows)
         except Exception:
             logger.warning("activity tracking failed (fail-open)", exc_info=True)
         return response

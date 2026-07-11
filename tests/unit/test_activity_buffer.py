@@ -56,3 +56,21 @@ def test_time_based_flush(monkeypatch):
     assert buf.record(UID, "a@x.com", "g1", "GET", "2026-07-11T15:00:00+00:00") is False
     t["now"] = 1031.0
     assert buf.record(UID, "a@x.com", "g1", "GET", "2026-07-11T15:00:01+00:00") is True
+
+
+def test_schedule_flush_keeps_strong_reference_until_done():
+    """asyncio.create_task results are GC-eligible if unreferenced — a dropped
+    flush task would silently lose activity rows (fail-open hides it). The
+    scheduler must hold each in-flight task and release it on completion."""
+    import asyncio
+
+    from src.api.middleware import activity_tracking as at
+
+    async def _run():
+        task = at.schedule_flush([])  # empty rows: flush_rows returns fast
+        assert task in at._INFLIGHT_FLUSHES
+        await task
+        await asyncio.sleep(0)  # let the done-callback run
+        assert task not in at._INFLIGHT_FLUSHES
+
+    asyncio.run(_run())

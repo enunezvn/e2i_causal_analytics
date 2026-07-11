@@ -18,7 +18,7 @@ Design facts this code encodes (all live-verified 2026-07-11 — see spec):
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from urllib.parse import quote
 
 from supabase import create_client
@@ -112,7 +112,8 @@ class AdminUserService:
             .select("id, role, total_conversations, total_messages, last_active_at")
             .execute()
         )
-        by_id = {p["id"]: p for p in profiles.data}
+        profile_rows = cast(List[Dict[str, Any]], profiles.data or [])
+        by_id = {p["id"]: p for p in profile_rows}
         out = []
         for u in auth_users:
             meta = u.app_metadata or {}
@@ -180,7 +181,8 @@ class AdminUserService:
         attrs: Dict[str, Any] = {"app_metadata": {"role": role, "brands": brands}}
         if full_name:
             attrs["user_metadata"] = {"full_name": full_name}
-        self.admin_client.auth.admin.update_user_by_id(user.id, attrs)
+        # cast: gotrue's AdminUserAttributes TypedDict rejects plain dicts
+        self.admin_client.auth.admin.update_user_by_id(user.id, cast(Any, attrs))
         self._upsert_profile(user.id, email, role)
         return {
             "user_id": user.id,
@@ -286,7 +288,7 @@ class AdminUserService:
         }
         if full_name is not None:
             attrs["user_metadata"] = {**(user.user_metadata or {}), "full_name": full_name}
-        self.admin_client.auth.admin.update_user_by_id(user_id, attrs)
+        self.admin_client.auth.admin.update_user_by_id(user_id, cast(Any, attrs))
         self._upsert_profile(user_id, user.email, new_role)
         if demoting_admin:
 
@@ -409,7 +411,10 @@ class AdminUserService:
         profiles = (
             self.admin_client.table("chatbot_user_profiles").select("id, role").execute()
         )
-        by_id = {p["id"]: p.get("role") for p in profiles.data}
+        by_id = {
+            p["id"]: p.get("role")
+            for p in cast(List[Dict[str, Any]], profiles.data or [])
+        }
         for u in self._list_all_auth_users():
             meta = dict(u.app_metadata or {})
             if not meta.get("role") and by_id.get(u.id):
