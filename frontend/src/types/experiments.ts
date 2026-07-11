@@ -167,6 +167,18 @@ export interface TriggerMonitorRequest {
    * so the page must opt in to surface it.
    */
   include_synthetic?: boolean;
+  /**
+   * Restrict the sweep to one brand (Remibrutinib / Kisqali / Fabhalta).
+   * Omitted = all platform brands, interleaved so no single generation batch
+   * monopolizes the capped roster (2026-07-11 review).
+   */
+  brand?: string;
+  /**
+   * Hours without a new assignment before an experiment counts as stale.
+   * The page sends 192h (8 days) to match the substrate's WEEKLY refresh
+   * cadence; the backend default (24h) suits live-fed experiments.
+   */
+  stale_data_threshold_hours?: number;
 }
 
 /**
@@ -543,6 +555,14 @@ export interface ExperimentHealthSummary {
   /** Provenance (#894): whether this experiment row is synthetic-gold. The UI
    *  badges synthetic experiments so they are not mistaken for live ones. */
   is_synthetic?: boolean;
+  /** Brand this experiment belongs to (null = not recorded on the row). */
+  brand?: string | null;
+  /** What the experiment tests and why — hypothesis + in-silico design from
+   *  ml_experiments.description. Null = predates the explainability metadata;
+   *  the UI renders honest absence, never fabricated copy. */
+  description?: string | null;
+  /** Digital-twin intervention-taxonomy channel under test (migration 100). */
+  intervention_channel?: string | null;
 }
 
 /**

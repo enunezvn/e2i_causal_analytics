@@ -514,6 +514,78 @@ def write_cohort_frames(out_dir) -> list:
     return written
 
 
+def build_ab_refresh_datasets(sizes: dict, seed: int = 42, id_prefix: str = "scv") -> dict:
+    """Shard-09 A/B substrate refresh — experiments + assignments/enrollments/results ONLY.
+
+    Runs weekly from reseed_synthetic.sh (after the frontier append, which does
+    NOT touch these tables — the /experiments staleness review, 2026-07-11,
+    found the substrate frozen at its last manual full load). All ids are
+    deterministic (uuid5 natural keys), so this upserts the SAME 360 experiment
+    rows + their AB fan-out in place with fresh rolling-enrollment timestamps;
+    MLOps/observability rows reference the same stable experiment ids and are
+    left alone.
+    """
+    exp_n = max(10, sizes.get("trigger", 1200) // 100)
+    exp_frames = []
+    for b in (Brand.REMIBRUTINIB, Brand.KISQALI, Brand.FABHALTA):
+        exp_frames.append(
+            ExperimentGenerator(
+                GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=exp_n, brand=b)
+            ).generate()
+        )
+    experiments = pd.concat(exp_frames, ignore_index=True)
+    datasets: dict = {"ml_experiments": experiments}
+    ab = ABExperimentGenerator(
+        GeneratorConfig(id_prefix=id_prefix, seed=seed + 1),
+        experiments_df=experiments,
+        units_per_experiment=600,
+        true_uplift=0.15,
+    ).generate()
+    datasets.update(ab)  # ab_experiment_assignments / enrollments / results
+    for table_name, df in datasets.items():
+        df["is_synthetic"] = True
+        datasets[table_name] = df
+    return datasets
+
+
+def purge_synthetic_ab_rows(loader) -> None:
+    """Delete synthetic AB child rows before (re)loading the Shard-09 substrate.
+
+    Unit counts are now per-experiment (age × rate) instead of a fixed 600, so
+    an upsert alone would leave orphaned high-index units from earlier loads
+    (stale timestamps, inflated total_enrolled). All AB rows on this deployment
+    are is_synthetic-tagged substrate; real rows (is_synthetic=false) are never
+    touched. FK-safe order: enrollments -> results -> assignments.
+
+    returning="minimal" is load-bearing: postgrest's representation default
+    makes PostgREST json_agg every deleted row inside the same statement, which
+    at deploy scale (216k assignments) measured 7.2-7.7s against the
+    authenticator role's 8s statement_timeout — minimal drops it to ~3s.
+    count="exact" keeps the row count in the response so a 0-row no-op purge
+    is distinguishable from a real one in the cron log.
+
+    NOTE: purge -> reload is non-transactional (separate PostgREST requests).
+    If the reload fails after the purge commits, the AB tables sit empty until
+    a rerun of --refresh-ab — recover with that, not a partial patch.
+    """
+    for table in (
+        "ab_experiment_enrollments",
+        "ab_experiment_results",
+        "ab_experiment_assignments",
+    ):
+        try:
+            result = (
+                loader.client.table(table)
+                .delete(returning="minimal", count="exact")
+                .eq("is_synthetic", True)
+                .execute()
+            )
+            logger.info("  Purged %s synthetic rows from %s", result.count, table)
+        except Exception as e:
+            # Fail loud: continuing would upsert onto a half-purged substrate.
+            raise RuntimeError(f"Synthetic AB purge failed on {table}: {e}") from e
+
+
 def load_to_supabase(datasets: dict, dry_run: bool = False, verbose: bool = False):
     """Load datasets to Supabase."""
     logger.info("")
@@ -540,6 +612,12 @@ def load_to_supabase(datasets: dict, dry_run: bool = False, verbose: bool = Fals
             logger.error(f"  - {error}")
         return None
     logger.info("  Validation passed!")
+
+    # Variable per-experiment unit counts (2026-07-11) mean upsert alone would
+    # strand high-index units from prior fixed-600 loads — purge synthetic AB
+    # rows first whenever this load carries the Shard-09 AB substrate.
+    if "ab_experiment_assignments" in datasets and not dry_run:
+        purge_synthetic_ab_rows(loader)
 
     # Load with progress callback
     def progress_callback(table: str, current: int, total: int):
@@ -636,6 +714,16 @@ def main():
         help="Frontier date (YYYY-MM-DD) for --append-frontier; default today. "
         "Rows dated after it are held back and append on later runs.",
     )
+    parser.add_argument(
+        "--refresh-ab",
+        action="store_true",
+        help="Refresh ONLY the Shard-09 A/B substrate (ml_experiments + "
+        "ab_experiment_assignments/enrollments/results) in place via the "
+        "deterministic uuid5 ids. Weekly companion to --append-frontier, which "
+        "does not touch these tables; without it the experiment_monitor "
+        "staleness checks alarm on a frozen substrate. Ignores --small (the "
+        "purge is all-or-nothing, so the reload must be full-size).",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -666,7 +754,18 @@ def main():
 
     try:
         # Generate datasets
-        if args.append_frontier:
+        if args.refresh_ab:
+            # Always FULL_SIZES: the purge deletes ALL synthetic AB rows, so a
+            # --small-sized reload (36 experiments) would strand the other 324
+            # deployed 'running' rows with zero fan-out. Mirrors
+            # --append-frontier's documented ignoring of --small.
+            datasets = build_ab_refresh_datasets(FULL_SIZES, id_prefix=args.tag)
+            logger.info(
+                "refresh-ab: %d experiments, %d assignments",
+                len(datasets["ml_experiments"]),
+                len(datasets["ab_experiment_assignments"]),
+            )
+        elif args.append_frontier:
             from src.ml.synthetic.frontier_append import build_frontier_datasets
 
             frontier = date.fromisoformat(args.frontier_ref) if args.frontier_ref else None

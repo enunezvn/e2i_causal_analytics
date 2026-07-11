@@ -286,6 +286,8 @@ class TestGetExperiments:
         # client timeout): most-recent N via order+limit.
         mock_query.order = MagicMock(return_value=mock_query)
         mock_query.limit = MagicMock(return_value=mock_query)
+        # Unscoped sweep restricts to the platform brand portfolio (2026-07-11).
+        mock_query.in_ = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
@@ -308,10 +310,44 @@ class TestGetExperiments:
         mock_query.eq.assert_any_call("status", "running")
         # #894: the enumeration default-excludes synthetic experiments
         mock_query.eq.assert_any_call("is_synthetic", False)
+        # 2026-07-11: unscoped = the 3-brand portfolio (scope_definer scaffolding
+        # rows with brand NULL/'competitor' are not A/B experiments).
+        mock_query.in_.assert_called_once_with("brand", ["Remibrutinib", "Kisqali", "Fabhalta"])
         # The sweep fetches a wide newest-first window (then collapses duplicate
         # names via _dedupe_by_name); only the deduped subset incurs checks.
         mock_query.order.assert_called_once_with("created_at", desc=True)
         mock_query.limit.assert_called_once_with(1000)
+
+    @pytest.mark.asyncio
+    async def test_get_experiments_brand_scoped(self, node):
+        """A brand in state scopes the sweep with eq('brand', ...) and skips the
+        portfolio in_ filter (2026-07-11 brand dropdown)."""
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.data = [
+            {"id": "exp-1", "experiment_name": "K1", "status": "running", "brand": "Kisqali"},
+        ]
+        mock_query = MagicMock()
+        mock_query.select.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.order.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_query.in_ = MagicMock(return_value=mock_query)
+        mock_query.execute = AsyncMock(return_value=mock_result)
+        mock_client.table.return_value = mock_query
+
+        state: ExperimentMonitorState = {
+            "check_all_active": True,
+            "experiment_ids": [],
+            "brand": "Kisqali",
+            "status": "pending",
+        }
+
+        result = await node._get_experiments(mock_client, state)
+
+        assert [r["id"] for r in result] == ["exp-1"]
+        mock_query.eq.assert_any_call("brand", "Kisqali")
+        mock_query.in_.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_experiments_dedups_duplicate_names(self, node, monkeypatch):
@@ -338,6 +374,7 @@ class TestGetExperiments:
         mock_query.eq.return_value = mock_query
         mock_query.order.return_value = mock_query
         mock_query.limit.return_value = mock_query
+        mock_query.in_ = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table.return_value = mock_query
 
@@ -866,3 +903,165 @@ class TestEdgeCases:
         )
         # Rate < 5 is warning, rate == 5 is not warning
         assert status == "healthy"
+
+
+class TestInterleaveByBrand:
+    """_interleave_by_brand: brand-balanced roster (2026-07-11 review).
+
+    Newest-first alone let one same-instant generation batch monopolize the
+    capped slice (live incident: the top-25 was 25 Fabhalta rows from one
+    burst); the interleave takes one row per brand per round.
+    """
+
+    def test_round_robins_across_brands(self):
+        rows = (
+            [{"id": f"f{i}", "brand": "Fabhalta"} for i in range(5)]
+            + [{"id": f"k{i}", "brand": "Kisqali"} for i in range(5)]
+            + [{"id": f"r{i}", "brand": "Remibrutinib"} for i in range(5)]
+        )
+        out = HealthCheckerNode._interleave_by_brand(rows, cap=6)
+        assert [r["id"] for r in out] == ["f0", "k0", "r0", "f1", "k1", "r1"]
+
+    def test_monoculture_burst_no_longer_monopolizes(self):
+        # 25 newest same-brand rows followed by older other-brand rows: the cap
+        # must still show every brand.
+        rows = [{"id": f"f{i}", "brand": "Fabhalta"} for i in range(25)] + [
+            {"id": "k0", "brand": "Kisqali"},
+            {"id": "r0", "brand": "Remibrutinib"},
+        ]
+        out = HealthCheckerNode._interleave_by_brand(rows, cap=25)
+        brands = {r["brand"] for r in out}
+        assert brands == {"Fabhalta", "Kisqali", "Remibrutinib"}
+
+    def test_preserves_newest_first_within_brand(self):
+        rows = [
+            {"id": "f0", "brand": "Fabhalta"},
+            {"id": "k0", "brand": "Kisqali"},
+            {"id": "f1", "brand": "Fabhalta"},
+        ]
+        out = HealthCheckerNode._interleave_by_brand(rows, cap=3)
+        f_order = [r["id"] for r in out if r["brand"] == "Fabhalta"]
+        assert f_order == ["f0", "f1"]
+
+    def test_missing_brand_forms_own_group_and_empty_input(self):
+        rows = [{"id": "a"}, {"id": "b", "brand": "Kisqali"}]
+        out = HealthCheckerNode._interleave_by_brand(rows, cap=10)
+        assert {r["id"] for r in out} == {"a", "b"}
+        assert HealthCheckerNode._interleave_by_brand([], cap=25) == []
+
+    def test_exhausted_groups_backfill_from_remaining(self):
+        rows = [{"id": "k0", "brand": "Kisqali"}] + [
+            {"id": f"f{i}", "brand": "Fabhalta"} for i in range(4)
+        ]
+        out = HealthCheckerNode._interleave_by_brand(rows, cap=5)
+        assert len(out) == 5  # cap reached even though Kisqali ran dry
+
+
+class TestStaleSeverityRelativeToThreshold:
+    """_check_stale_data severity scales with the caller's threshold (2026-07-11).
+
+    The old absolute tiers (48h/72h) pinned every experiment critical once the
+    substrate refresh cadence was slower than 3 days (weekly synthetic refresh),
+    regardless of the caller-chosen threshold.
+    """
+
+    @pytest.fixture
+    def node(self):
+        return HealthCheckerNode()
+
+    def _client_with_last_assignment(self, hours_ago: float):
+        result = MagicMock()
+        result.data = [
+            {"assigned_at": (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()}
+        ]
+        query = MagicMock()
+        query.select.return_value = query
+        query.eq.return_value = query
+        query.order.return_value = query
+        query.limit.return_value = query
+        query.execute = AsyncMock(return_value=result)
+        client = MagicMock()
+        client.table.return_value = query
+        return client
+
+    @pytest.mark.asyncio
+    async def test_breach_below_1_5x_is_info(self, node):
+        # 240h stale vs a 192h (weekly-cadence) threshold: breach but < 1.5x.
+        client = self._client_with_last_assignment(hours_ago=240)
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 192.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        issue = await node._check_stale_data({"id": "e1"}, client, state)
+        assert issue is not None
+        assert issue["severity"] == "info"
+        assert issue["threshold_hours"] == 192.0
+
+    @pytest.mark.asyncio
+    async def test_same_staleness_critical_under_default_threshold(self, node):
+        # The SAME 240h staleness under the 24h live-feed default is > 3x: critical.
+        client = self._client_with_last_assignment(hours_ago=240)
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 24.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        issue = await node._check_stale_data({"id": "e1"}, client, state)
+        assert issue is not None
+        assert issue["severity"] == "critical"
+
+    @pytest.mark.asyncio
+    async def test_within_threshold_no_issue(self, node):
+        client = self._client_with_last_assignment(hours_ago=100)
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 192.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        issue = await node._check_stale_data({"id": "e1"}, client, state)
+        assert issue is None
+
+    def _client_with_no_assignments(self):
+        result = MagicMock()
+        result.data = []
+        query = MagicMock()
+        query.select.return_value = query
+        query.eq.return_value = query
+        query.order.return_value = query
+        query.limit.return_value = query
+        query.execute = AsyncMock(return_value=result)
+        client = MagicMock()
+        client.table.return_value = query
+        return client
+
+    @pytest.mark.asyncio
+    async def test_no_assignments_uses_the_same_ladder(self, node):
+        """Never-enrolled experiments must follow the SAME documented contract
+        (breach=info, 1.5x=warning, 3x=critical) — the branch used to jump to
+        warning at breach and critical at 2x, so identical staleness got
+        severities two tiers apart depending on whether any assignment existed."""
+        client = self._client_with_no_assignments()
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 192.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        for hours_ago, expected in ((240, "info"), (385, "warning"), (600, "critical")):
+            created = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+            issue = await node._check_stale_data({"id": "e1", "created_at": created}, client, state)
+            assert issue is not None, hours_ago
+            assert issue["severity"] == expected, (hours_ago, issue["severity"])
+            assert issue["last_data_timestamp"] == "N/A - No assignments"
+
+    @pytest.mark.asyncio
+    async def test_no_assignments_within_threshold_no_issue(self, node):
+        client = self._client_with_no_assignments()
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 192.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        created = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
+        issue = await node._check_stale_data({"id": "e1", "created_at": created}, client, state)
+        assert issue is None
