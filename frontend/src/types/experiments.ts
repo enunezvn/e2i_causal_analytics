@@ -540,12 +540,18 @@ export interface ExperimentHealthSummary {
   experiment_name: string;
   /** Health status */
   health_status: ExperimentHealthStatus;
+  /** WHY the health flag is what it is — hover explanation on the flag.
+   *  Null = the backend recorded no reason (older API). */
+  health_reason?: string | null;
   /** Total enrolled */
   total_enrolled: number;
   /** Enrollment rate per day */
   enrollment_rate_per_day: number;
-  /** Current information fraction (0-1) */
-  current_information_fraction: number;
+  /** Fraction of the recorded enrollment plan (0-1, capped at 1). Null = the
+   *  row carries no enrollment plan — progress unknowable, NOT zero. */
+  current_information_fraction: number | null;
+  /** Planned enrollment (migration 101). Null = no plan recorded. */
+  target_enrollment?: number | null;
   /** Whether SRM detected */
   has_srm: boolean;
   /** Number of active alerts */
@@ -571,6 +577,10 @@ export interface ExperimentHealthSummary {
 export interface MonitorResponse {
   /** Number of experiments checked */
   experiments_checked: number;
+  /** Total running experiments matching the sweep scope — the monitored
+   *  roster is capped (25 newest, brand-interleaved), so experiments_checked
+   *  alone read as a hardcoded portfolio size. 0 = not reported (older API). */
+  total_running?: number;
   /** Healthy count */
   healthy_count: number;
   /** Warning count */

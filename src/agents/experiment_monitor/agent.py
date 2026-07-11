@@ -89,6 +89,9 @@ class ExperimentMonitorOutput:
     experiments: List[ExperimentSummary] = field(default_factory=list)
     alerts: List[MonitorAlert] = field(default_factory=list)
     experiments_checked: int = 0
+    # Total running experiments matching the sweep scope — experiments_checked
+    # is capped at 25 per sweep, so this is the honest portfolio size.
+    total_running: int = 0
     healthy_count: int = 0
     warning_count: int = 0
     critical_count: int = 0
@@ -202,6 +205,7 @@ class ExperimentMonitorAgent:
             experiments=experiments,
             alerts=final_state.get("alerts", []),
             experiments_checked=final_state.get("experiments_checked", 0),
+            total_running=final_state.get("total_running", 0),
             healthy_count=sum(1 for e in experiments if e.get("health_status") == "healthy"),
             warning_count=sum(1 for e in experiments if e.get("health_status") == "warning"),
             critical_count=sum(1 for e in experiments if e.get("health_status") == "critical"),
@@ -246,6 +250,7 @@ class ExperimentMonitorAgent:
                 for a in output.alerts
             ],
             "experiments_checked": output.experiments_checked,
+            "total_running": output.total_running,
             "healthy_count": output.healthy_count,
             "warning_count": output.warning_count,
             "critical_count": output.critical_count,

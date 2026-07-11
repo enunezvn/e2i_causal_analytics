@@ -24,10 +24,19 @@ class ExperimentSummary(TypedDict):
     name: str
     status: str
     health_status: HealthStatus
+    # WHY the health flag is what it is — user-facing hover explanation
+    # (2026-07-11 review: an unexplained all-warning portfolio). Optional so
+    # older fixtures stay valid.
+    health_reason: NotRequired[str | None]
     days_running: int
     total_enrolled: int
     enrollment_rate: float
-    current_information_fraction: float
+    # Fraction of the recorded enrollment plan (migration 101), capped at 1.0.
+    # None = the row carries no plan — progress is unknowable, NOT zero; the
+    # previous float-only field was computed against a fabricated 1000 default.
+    current_information_fraction: Optional[float]
+    # Planned enrollment from the row's recorded plan; None = no plan recorded.
+    target_enrollment: NotRequired[int | None]
     # Provenance (#894): whether this experiment row is synthetic-gold. Optional
     # so older construction sites / fixtures that omit it stay valid.
     is_synthetic: NotRequired[bool]
@@ -177,9 +186,13 @@ class ExperimentMonitorState(TypedDict):
     monitor_summary: NotRequired[str]
     recommended_actions: NotRequired[list[str]]
 
-    # ===== Execution Metadata (2) =====
+    # ===== Execution Metadata (3) =====
     check_latency_ms: NotRequired[int]
     experiments_checked: NotRequired[int]
+    # Total running experiments matching the sweep scope (exact count from the
+    # roster query) — the monitored roster is capped at 25, and without this
+    # the UI presented the cap as if it were the portfolio size.
+    total_running: NotRequired[int]
 
     # ===== Error Handling (3) =====
     errors: list[ErrorDetails]

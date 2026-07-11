@@ -9,7 +9,7 @@
  * @module pages/Experiments
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, type ReactNode } from 'react';
 import {
   BarChart,
   Bar,
@@ -40,6 +40,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+// Aliased: recharts already exports a `Tooltip` (imported above for charts).
+import {
+  Tooltip as UITooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   useTriggerMonitoring,
   useInterimAnalyses,
@@ -75,9 +82,15 @@ interface LocalExperiment {
   experiment_id: string;
   experiment_name: string;
   health_status: ExperimentHealthStatus;
+  /** WHY the flag is what it is — hover explanation (null = not reported). */
+  health_reason?: string | null;
   total_enrolled: number;
   enrollment_rate_per_day: number;
-  current_information_fraction: number;
+  /** Fraction of the recorded enrollment plan (capped at 1). Null = the row
+   *  carries no plan — progress unknowable, rendered as an honest dash. */
+  current_information_fraction: number | null;
+  /** Planned enrollment (migration 101). Null = no plan recorded. */
+  target_enrollment?: number | null;
   has_srm: boolean;
   active_alerts: number;
   last_checked: string;
@@ -125,6 +138,27 @@ const STALE_THRESHOLD_HOURS = 192;
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
+
+/**
+ * Hover explanation for the per-experiment health flag (icon + badge). The
+ * reason string is computed server-side from the experiment's real enrollment
+ * pace and recorded plan — when absent, say so honestly instead of inventing
+ * an explanation.
+ */
+function HealthTooltip({ reason, children }: { reason?: string | null; children: ReactNode }) {
+  return (
+    <TooltipProvider delayDuration={150}>
+      <UITooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex cursor-help">{children}</span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs whitespace-normal">
+          {reason ?? 'No health explanation reported for this experiment.'}
+        </TooltipContent>
+      </UITooltip>
+    </TooltipProvider>
+  );
+}
 
 function getHealthIcon(status: ExperimentHealthStatus) {
   switch (status) {
@@ -423,8 +457,12 @@ export default function Experiments() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
         <KPICard
           title="Active Experiments"
-          value={overviewMetrics.total}
-          description="Currently running"
+          value={monitorData?.total_running || overviewMetrics.total}
+          description={
+            monitorData?.total_running
+              ? `${overviewMetrics.total} newest monitored this sweep`
+              : 'Currently running'
+          }
         />
         <KPICard
           title="Healthy"
@@ -540,10 +578,14 @@ export default function Experiments() {
                 <CardHeader className="pb-2">
                   <div className="flex justify-between items-start">
                     <div className="flex items-center gap-2">
-                      {getHealthIcon(experiment.health_status)}
+                      <HealthTooltip reason={experiment.health_reason}>
+                        {getHealthIcon(experiment.health_status)}
+                      </HealthTooltip>
                       <CardTitle className="text-lg">{experiment.experiment_name}</CardTitle>
                     </div>
-                    {getHealthBadge(experiment.health_status)}
+                    <HealthTooltip reason={experiment.health_reason}>
+                      {getHealthBadge(experiment.health_status)}
+                    </HealthTooltip>
                   </div>
                   {/* Explainability badges: brand + intervention under test.
                       Rendered only when recorded — no fabricated metadata. */}
@@ -581,9 +623,17 @@ export default function Experiments() {
                       <p className="font-semibold">{experiment.enrollment_rate_per_day.toFixed(1)}</p>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">Info Fraction</span>
+                      <span className="text-muted-foreground">Plan Progress</span>
+                      {/* Null = no enrollment plan recorded on the row — show an
+                          honest dash, never a fabricated 0% or 100%. */}
                       <p className="font-semibold">
-                        {(experiment.current_information_fraction * 100).toFixed(0)}%
+                        {experiment.current_information_fraction != null
+                          ? `${(experiment.current_information_fraction * 100).toFixed(0)}%${
+                              experiment.target_enrollment
+                                ? ` of ${experiment.target_enrollment.toLocaleString()}`
+                                : ''
+                            }`
+                          : '—'}
                       </p>
                     </div>
                     <div>

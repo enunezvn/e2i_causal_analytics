@@ -190,6 +190,15 @@ class ExperimentGenerator(BaseGenerator[pd.DataFrame]):
             # The frontier rolls with each weekly refresh, keeping ages bounded.
             days_back = int(self._rng.integers(10, 91))
             created_at = now - timedelta(days=days_back)
+            # Enrollment PLAN (migration 101): every experiment is planned at a
+            # nominal 10 units/day over its planned window, while the REALIZED
+            # rate varies 2.5–15/day (ABExperimentGenerator._units_for). The gap
+            # between plan and reality is what makes the monitor's plan-relative
+            # health checks honest: slow enrollers fall behind plan, fast ones
+            # reach target early, and experiments older than their window show
+            # a genuine overrun — no status is fabricated from a default target.
+            planned_duration_days = int(self._rng.integers(45, 121))
+            target_enrollment = planned_duration_days * 10
             description = (
                 f"In-silico A/B test: does {label.lower()} increase {outcome_label} "
                 f"among {cohort} in the {region} region for {brand.value}? "
@@ -220,6 +229,8 @@ class ExperimentGenerator(BaseGenerator[pd.DataFrame]):
                     "created_by": "synthetic_loader",
                     "created_at": created_at.isoformat(),
                     "status": "running",  # mirrors the 621 real running experiments
+                    "target_enrollment": target_enrollment,
+                    "planned_duration_days": planned_duration_days,
                     "is_synthetic": True,
                 }
             )

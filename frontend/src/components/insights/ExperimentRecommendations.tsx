@@ -36,8 +36,10 @@ interface Experiment {
   title: string;
   /** Total enrolled to date (real). */
   enrolled: number;
-  /** Current information fraction 0..1 from the sequential test (real). */
-  infoFraction: number;
+  /** Current information fraction 0..1 from the sequential test (real).
+   *  Null = the experiment carries no recorded enrollment plan, so progress
+   *  is unknowable — the card omits the progress bar instead of showing 0%. */
+  infoFraction: number | null;
   /** Open monitoring alerts (real). */
   openAlerts: number;
   /** Whether a sample-ratio mismatch was detected (real). */
@@ -101,7 +103,7 @@ function toExperimentCard(summary: ExperimentHealthSummary): Experiment {
     id: summary.experiment_id,
     title: summary.experiment_name,
     enrolled: summary.total_enrolled,
-    infoFraction: summary.current_information_fraction,
+    infoFraction: summary.current_information_fraction ?? null,
     openAlerts: summary.active_alerts,
     hasSrm: summary.has_srm,
     health,
@@ -151,14 +153,17 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
         </div>
       </div>
 
-      {/* Information fraction — real sequential-test progress toward a decision */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between text-xs mb-1">
-          <span className="text-[var(--color-muted-foreground)]">Information fraction</span>
-          <span className="font-medium">{(experiment.infoFraction * 100).toFixed(0)}%</span>
+      {/* Information fraction — real sequential-test progress toward a decision.
+          Omitted (not zeroed) when the experiment has no recorded plan. */}
+      {experiment.infoFraction != null && (
+        <div className="mb-3">
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span className="text-[var(--color-muted-foreground)]">Information fraction</span>
+            <span className="font-medium">{(experiment.infoFraction * 100).toFixed(0)}%</span>
+          </div>
+          <Progress value={experiment.infoFraction * 100} className="h-1.5" />
         </div>
-        <Progress value={experiment.infoFraction * 100} className="h-1.5" />
-      </div>
+      )}
 
       {/* Footer */}
       <div className="flex items-center gap-3 pt-3 border-t border-[var(--color-border)] text-xs text-[var(--color-muted-foreground)]">

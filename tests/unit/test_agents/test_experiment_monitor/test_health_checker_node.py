@@ -393,6 +393,41 @@ class TestGetExperiments:
         mock_query.eq.assert_any_call("is_synthetic", False)
 
     @pytest.mark.asyncio
+    async def test_get_experiments_reports_total_running(self, node):
+        """The sweep records the exact scope-matching count in state so the UI
+        can say "N running, 25 monitored" instead of presenting the roster cap
+        as the portfolio size (2026-07-11 review: '25 seems hardcoded')."""
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.data = [
+            {"id": "exp-1", "experiment_name": "E1", "status": "running"},
+        ]
+        mock_result.count = 955  # exact count from PostgREST Content-Range
+        mock_query = MagicMock()
+        mock_query.select.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.order.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_query.in_ = MagicMock(return_value=mock_query)
+        mock_query.execute = AsyncMock(return_value=mock_result)
+        mock_client.table.return_value = mock_query
+
+        state: ExperimentMonitorState = {
+            "check_all_active": True,
+            "experiment_ids": [],
+            "status": "pending",
+        }
+
+        await node._get_experiments(mock_client, state)
+        assert state["total_running"] == 955
+
+        # A fake result without an int count falls back to the fetched window
+        # size instead of fabricating (or crashing on) a Mock attribute.
+        mock_result.count = None
+        await node._get_experiments(mock_client, state)
+        assert state["total_running"] == 1
+
+    @pytest.mark.asyncio
     async def test_get_experiments_specific_ids(self, node):
         """Test getting specific experiments by ID."""
         mock_client = MagicMock()
@@ -555,7 +590,7 @@ class TestCheckExperimentHealth:
 
     @pytest.mark.asyncio
     async def test_check_health_calculates_information_fraction(self, node):
-        """Test that information fraction is calculated."""
+        """Information fraction comes from the row's REAL recorded plan."""
         mock_client = MagicMock()
         mock_result = MagicMock()
         mock_result.count = 500
@@ -570,75 +605,179 @@ class TestCheckExperimentHealth:
             "id": "exp-001",
             "name": "Test",
             "status": "running",
-            "config": {"target_sample_size": 1000},
+            "target_enrollment": 1000,
+            "planned_duration_days": 60,
             "created_at": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
         }
 
         summary = await node._check_experiment_health(experiment, mock_client)
 
         assert summary["current_information_fraction"] == 0.5  # 500/1000
+        assert summary["target_enrollment"] == 1000
+        assert summary["health_reason"]
+
+    @pytest.mark.asyncio
+    async def test_check_health_fraction_capped_at_one(self, node):
+        """Enrollment past the target reports fraction 1.0, not >1."""
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.count = 1500
+
+        mock_query = MagicMock()
+        mock_query.select = MagicMock(return_value=mock_query)
+        mock_query.eq = MagicMock(return_value=mock_query)
+        mock_query.execute = AsyncMock(return_value=mock_result)
+        mock_client.table = MagicMock(return_value=mock_query)
+
+        experiment = {
+            "id": "exp-001",
+            "name": "Test",
+            "status": "running",
+            "target_enrollment": 1000,
+            "planned_duration_days": 60,
+            "created_at": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
+        }
+
+        summary = await node._check_experiment_health(experiment, mock_client)
+
+        assert summary["current_information_fraction"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_check_health_no_plan_reports_unknown_fraction(self, node):
+        """Regression (2026-07-11): a row WITHOUT a recorded plan reports
+        fraction None — never a fraction of a fabricated default target."""
+        experiment = {
+            "id": "exp-001",
+            "name": "Test",
+            "status": "running",
+            "created_at": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
+        }
+
+        summary = await node._check_experiment_health(experiment, None)
+
+        assert summary["current_information_fraction"] is None
+        assert summary["target_enrollment"] is None
+        assert summary["health_reason"]
 
 
 class TestDetermineHealthStatus:
-    """Tests for _determine_health_status method."""
+    """Tests for _determine_health_status method.
+
+    The method returns (status, reason). Plan-relative checks require a REAL
+    recorded plan (migration 101) — a missing plan must never be substituted
+    with a default target (the fabricated 1000-in-30-days default previously
+    flagged the entire portfolio "warning"; live incident 2026-07-11).
+    """
 
     @pytest.fixture
     def node(self):
         return HealthCheckerNode()
 
     def test_critical_low_enrollment_after_14_days(self, node):
-        """Test critical status for low enrollment after 14 days."""
-        status = node._determine_health_status(
+        """Critical status for stalled enrollment after 14 days, plan or not."""
+        status, reason = node._determine_health_status(
             enrollment_rate=1.5,  # < 2
-            information_fraction=0.1,
             days_running=14,
+            total_enrolled=21,
+            target_enrollment=None,
+            planned_duration_days=None,
         )
         assert status == "critical"
+        assert "stalled" in reason.lower()
 
     def test_warning_low_enrollment_after_7_days(self, node):
-        """Test warning status for low enrollment after 7 days."""
-        status = node._determine_health_status(
+        """Warning status for slow enrollment after 7 days."""
+        status, reason = node._determine_health_status(
             enrollment_rate=3.0,  # < 5
-            information_fraction=0.2,
             days_running=7,
+            total_enrolled=21,
+            target_enrollment=None,
+            planned_duration_days=None,
         )
         assert status == "warning"
+        assert "slow enrollment" in reason.lower()
 
-    def test_warning_behind_schedule(self, node):
-        """Test warning status when behind schedule."""
-        status = node._determine_health_status(
+    def test_no_plan_is_not_behind_schedule(self, node):
+        """Regression (2026-07-11 all-warning incident): a healthy-pace
+        experiment WITHOUT a recorded plan must be healthy — the old code
+        fabricated target_sample_size=1000 and flagged it behind schedule."""
+        status, reason = node._determine_health_status(
             enrollment_rate=10.0,
-            information_fraction=0.1,  # 10% when expected ~33% at day 10
             days_running=10,
-        )
-        assert status == "warning"
-
-    def test_healthy_on_track(self, node):
-        """Test healthy status when on track."""
-        status = node._determine_health_status(
-            enrollment_rate=15.0,
-            information_fraction=0.5,
-            days_running=10,
+            total_enrolled=100,
+            target_enrollment=None,
+            planned_duration_days=None,
         )
         assert status == "healthy"
+        assert "no enrollment plan recorded" in reason
+
+    def test_target_reached_is_healthy(self, node):
+        """Reaching the recorded target is healthy regardless of age."""
+        status, reason = node._determine_health_status(
+            enrollment_rate=30.0,
+            days_running=20,
+            total_enrolled=650,
+            target_enrollment=600,
+            planned_duration_days=60,
+        )
+        assert status == "healthy"
+        assert "target reached" in reason.lower()
+
+    def test_past_planned_duration_under_target_warns(self, node):
+        """Running past the planned window while under target is a warning."""
+        status, reason = node._determine_health_status(
+            enrollment_rate=7.1,
+            days_running=70,
+            total_enrolled=500,
+            target_enrollment=600,
+            planned_duration_days=60,
+        )
+        assert status == "warning"
+        assert "past planned duration" in reason.lower()
+
+    def test_far_behind_plan_warns(self, node):
+        """Under half the expected fraction of a real plan is a warning."""
+        status, reason = node._determine_health_status(
+            enrollment_rate=5.3,  # above the absolute floor
+            days_running=30,
+            total_enrolled=160,  # 8% of target vs 50% expected
+            target_enrollment=2000,
+            planned_duration_days=60,
+        )
+        assert status == "warning"
+        assert "behind plan" in reason.lower()
+
+    def test_on_pace_with_plan_is_healthy(self, node):
+        """On-pace enrollment against a real plan is healthy."""
+        status, reason = node._determine_health_status(
+            enrollment_rate=10.0,
+            days_running=30,
+            total_enrolled=300,
+            target_enrollment=600,
+            planned_duration_days=60,
+        )
+        assert status == "healthy"
+        assert "on pace" in reason.lower()
 
     def test_healthy_early_experiment(self, node):
-        """Test healthy status for early experiment."""
-        status = node._determine_health_status(
+        """A young experiment below the pace floors is still healthy."""
+        status, _reason = node._determine_health_status(
             enrollment_rate=5.0,
-            information_fraction=0.1,
             days_running=3,
+            total_enrolled=15,
+            target_enrollment=None,
+            planned_duration_days=None,
         )
         assert status == "healthy"
 
-    def test_critical_takes_precedence_over_warning(self, node):
-        """Test that critical status takes precedence."""
-        # Very low enrollment after 14 days should be critical
-        # even if information fraction is reasonable
-        status = node._determine_health_status(
-            enrollment_rate=1.0,  # Critical threshold
-            information_fraction=0.4,
+    def test_critical_takes_precedence_over_plan_checks(self, node):
+        """Stalled enrollment is critical even when a plan is present."""
+        status, _reason = node._determine_health_status(
+            enrollment_rate=1.0,
             days_running=14,
+            total_enrolled=14,
+            target_enrollment=600,
+            planned_duration_days=60,
         )
         assert status == "critical"
 
@@ -813,36 +952,38 @@ class TestEdgeCases:
         assert result["experiments_checked"] == 0
 
     @pytest.mark.asyncio
-    async def test_experiment_with_zero_target_sample_size(self, node):
-        """Test experiment with zero target sample size."""
+    async def test_experiment_with_zero_target_enrollment(self, node):
+        """A zero recorded target is treated as no plan (fraction unknowable),
+        never a division by zero or a fabricated fraction."""
         experiment = {
             "id": "exp-zero",
             "name": "Zero Target",
             "status": "running",
-            "config": {"target_sample_size": 0},
+            "target_enrollment": 0,
+            "planned_duration_days": 60,
             "created_at": (datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
         }
 
         summary = await node._check_experiment_health(experiment, None)
 
-        # Should handle division by zero gracefully
-        assert summary["current_information_fraction"] == 0
+        assert summary["current_information_fraction"] is None
 
     @pytest.mark.asyncio
-    async def test_experiment_with_missing_config(self, node):
-        """Test experiment with missing config."""
+    async def test_experiment_with_missing_plan(self, node):
+        """A row without plan columns (real pre-101 experiments) still gets a
+        summary — with fraction None, never a default-target fabrication."""
         experiment = {
-            "id": "exp-no-config",
-            "name": "No Config",
+            "id": "exp-no-plan",
+            "name": "No Plan",
             "status": "running",
             "created_at": (datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
         }
 
         summary = await node._check_experiment_health(experiment, None)
 
-        # Should use default target sample size of 1000
         assert summary is not None
-        assert summary["experiment_id"] == "exp-no-config"
+        assert summary["experiment_id"] == "exp-no-plan"
+        assert summary["current_information_fraction"] is None
 
     @pytest.mark.asyncio
     async def test_experiment_with_iso_date_z_suffix(self, node):
@@ -887,19 +1028,23 @@ class TestEdgeCases:
     def test_health_status_at_exact_boundaries(self, node):
         """Test health status at exact boundary conditions."""
         # Exactly at 14 days with rate exactly 2 (boundary)
-        status = node._determine_health_status(
+        status, _ = node._determine_health_status(
             enrollment_rate=2.0,
-            information_fraction=0.5,
             days_running=14,
+            total_enrolled=28,
+            target_enrollment=None,
+            planned_duration_days=None,
         )
         # Rate < 2 is critical, rate == 2 is not critical
         assert status in ["healthy", "warning"]
 
         # Exactly at 7 days with rate exactly 5 (boundary)
-        status = node._determine_health_status(
+        status, _ = node._determine_health_status(
             enrollment_rate=5.0,
-            information_fraction=0.5,
             days_running=7,
+            total_enrolled=35,
+            target_enrollment=None,
+            planned_duration_days=None,
         )
         # Rate < 5 is warning, rate == 5 is not warning
         assert status == "healthy"
