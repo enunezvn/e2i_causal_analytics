@@ -413,9 +413,16 @@ class ExperimentHealthSummary(BaseModel):
     experiment_id: str
     experiment_name: str
     health_status: HealthStatus
+    # WHY the health flag is what it is — rendered as the hover explanation on
+    # the flag (2026-07-11 review: an unexplained all-warning portfolio).
+    health_reason: Optional[str] = None
     total_enrolled: int
     enrollment_rate_per_day: float
-    current_information_fraction: float
+    # Fraction of the recorded enrollment plan (migration 101), capped at 1.0.
+    # None = no plan recorded on the row — progress unknowable, NOT zero.
+    current_information_fraction: Optional[float] = None
+    # Planned enrollment from the row's recorded plan; None = no plan recorded.
+    target_enrollment: Optional[int] = None
     has_srm: bool
     active_alerts: int
     last_checked: datetime
@@ -435,6 +442,10 @@ class MonitorResponse(BaseModel):
     """Response from experiment monitoring."""
 
     experiments_checked: int
+    # Total running experiments matching the sweep scope. The monitored roster
+    # is capped (25 newest, brand-interleaved), so experiments_checked alone
+    # read as a hardcoded portfolio size in the UI.
+    total_running: int = 0
     healthy_count: int
     warning_count: int
     critical_count: int
@@ -1370,9 +1381,11 @@ async def trigger_experiment_monitoring(
                     experiment_id=exp_id,
                     experiment_name=exp.get("name", ""),
                     health_status=HealthStatus(exp.get("health_status", "unknown")),
+                    health_reason=exp.get("health_reason"),
                     total_enrolled=exp.get("total_enrolled", 0),
                     enrollment_rate_per_day=float(exp.get("enrollment_rate", 0.0)),
-                    current_information_fraction=exp.get("current_information_fraction", 0.0),
+                    current_information_fraction=exp.get("current_information_fraction"),
+                    target_enrollment=exp.get("target_enrollment"),
                     has_srm=any(a.get("alert_type") == "srm" for a in exp_alerts),
                     active_alerts=len(exp_alerts),
                     last_checked=datetime.now(timezone.utc),
@@ -1423,6 +1436,7 @@ async def trigger_experiment_monitoring(
 
         return MonitorResponse(
             experiments_checked=result.experiments_checked,
+            total_running=result.total_running,
             healthy_count=result.healthy_count,
             warning_count=result.warning_count,
             critical_count=result.critical_count,
@@ -1492,9 +1506,11 @@ async def get_experiment_health(
             experiment_id=exp.get("experiment_id", experiment_id),
             experiment_name=exp.get("name", ""),
             health_status=HealthStatus(exp.get("health_status", "unknown")),
+            health_reason=exp.get("health_reason"),
             total_enrolled=exp.get("total_enrolled", 0),
             enrollment_rate_per_day=float(exp.get("enrollment_rate", 0.0)),
-            current_information_fraction=exp.get("current_information_fraction", 0.0),
+            current_information_fraction=exp.get("current_information_fraction"),
+            target_enrollment=exp.get("target_enrollment"),
             has_srm=any(a.get("alert_type") == "srm" for a in exp_alerts),
             active_alerts=len(exp_alerts),
             last_checked=datetime.now(timezone.utc),

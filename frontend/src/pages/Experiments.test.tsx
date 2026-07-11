@@ -512,3 +512,90 @@ describe('Experiments — brand filter + explainability + portfolio insight (202
     );
   });
 });
+
+describe('Experiments — health honesty (2026-07-11 follow-up)', () => {
+  // Roster with one experiment carrying a REAL enrollment plan; overrides let
+  // each test strip the plan or attach a health reason.
+  const rosterWith = (exp: Record<string, unknown>) => ({
+    isPending: false,
+    mutate: vi.fn(),
+    data: {
+      experiments_checked: 1,
+      total_running: 955,
+      healthy_count: 0,
+      warning_count: 1,
+      critical_count: 0,
+      experiments: [
+        {
+          experiment_id: 'exp_h1',
+          experiment_name: 'Health Experiment 1',
+          health_status: 'warning',
+          total_enrolled: 500,
+          enrollment_rate_per_day: 7.1,
+          current_information_fraction: 0.83,
+          target_enrollment: 600,
+          has_srm: false,
+          active_alerts: 0,
+          last_checked: '2026-07-11T00:00:00Z',
+          ...exp,
+        },
+      ],
+      alerts: [],
+      monitor_summary: 'ok',
+      recommended_actions: [],
+      check_latency_ms: 10,
+      timestamp: '2026-07-11T00:00:00Z',
+    },
+  });
+
+  it('shows the running-portfolio size, not the monitored-roster cap, as Active Experiments', async () => {
+    // Live incident: "25 active experiments seems to be hard coded" — the KPI
+    // card showed the 25-roster cap for every scope. It must show the exact
+    // running count, with the monitored-roster size in the card's info tooltip.
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(rosterWith({}));
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('955')).toBeInTheDocument();
+    // KPICard renders `description` behind its info icon — hover it.
+    const header = screen.getByText('Active Experiments').closest('div')!.parentElement!;
+    const infoIcon = header.querySelector('.cursor-help');
+    expect(infoIcon).not.toBeNull();
+    await act(async () => {
+      await user.hover(infoIcon as Element);
+    });
+    const notes = await screen.findAllByText(/1 newest monitored this sweep/i);
+    expect(notes.length).toBeGreaterThan(0);
+  });
+
+  it('explains the health flag on hover via the server-computed reason', async () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      rosterWith({
+        health_reason:
+          'Past planned duration (day 70 of 60) at 83% of the 600 enrollment target',
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.hover(screen.getByText('warning'));
+    });
+    const explanations = await screen.findAllByText(/Past planned duration \(day 70 of 60\)/i);
+    expect(explanations.length).toBeGreaterThan(0);
+  });
+
+  it('renders plan progress as a percentage of the recorded target', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(rosterWith({}));
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('Plan Progress')).toBeInTheDocument();
+    expect(screen.getByText('83% of 600')).toBeInTheDocument();
+  });
+
+  it('renders an honest dash (never a fabricated 0%) when no plan is recorded', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      rosterWith({ current_information_fraction: null, target_enrollment: null }),
+    );
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+});

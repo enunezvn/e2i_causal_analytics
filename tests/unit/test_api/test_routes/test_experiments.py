@@ -289,6 +289,7 @@ def mock_experiment_monitor_agent():
 
         mock_output = MagicMock()
         mock_output.experiments_checked = 5
+        mock_output.total_running = 42
         mock_output.healthy_count = 4
         mock_output.warning_count = 1
         mock_output.critical_count = 0
@@ -870,6 +871,7 @@ async def test_monitor_derives_health_fields_from_agent_contract():
         mock_agent.return_value = instance
         mock_output = MagicMock()
         mock_output.experiments_checked = 2
+        mock_output.total_running = 955
         mock_output.healthy_count = 1
         mock_output.warning_count = 0
         mock_output.critical_count = 1
@@ -878,17 +880,21 @@ async def test_monitor_derives_health_fields_from_agent_contract():
                 "experiment_id": exp_a,
                 "name": "Exp A",
                 "health_status": "critical",
+                "health_reason": "Enrollment stalled: 1.5/day over 20 days (below 2/day after 14+ days)",
                 "total_enrolled": 250,
                 "enrollment_rate": 12.5,
                 "current_information_fraction": 0.4,
+                "target_enrollment": 600,
             },
             {
+                # No recorded enrollment plan: fraction/target must pass
+                # through as None (never coerced to 0.0 / a default target).
                 "experiment_id": exp_b,
                 "name": "Exp B",
                 "health_status": "healthy",
                 "total_enrolled": 90,
                 "enrollment_rate": 4.5,
-                "current_information_fraction": 0.2,
+                "current_information_fraction": None,
             },
         ]
         mock_output.alerts = [
@@ -915,6 +921,14 @@ async def test_monitor_derives_health_fields_from_agent_contract():
     assert by_id[exp_b].enrollment_rate_per_day == 4.5
     assert by_id[exp_b].has_srm is False
     assert by_id[exp_b].active_alerts == 0
+    # 2026-07-11 honesty fields: the health explanation and the recorded plan
+    # pass through; a plan-less experiment stays None (unknowable, not 0.0).
+    assert result.total_running == 955
+    assert "stalled" in (by_id[exp_a].health_reason or "")
+    assert by_id[exp_a].target_enrollment == 600
+    assert by_id[exp_a].current_information_fraction == 0.4
+    assert by_id[exp_b].current_information_fraction is None
+    assert by_id[exp_b].target_enrollment is None
 
 
 @pytest.mark.asyncio

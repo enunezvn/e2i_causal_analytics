@@ -158,7 +158,8 @@ class HealthCheckerNode:
         # the UI card; brand also scopes the sweep and keys the roster interleave.
         _SELECT = (
             "id, experiment_name, status, prediction_target, created_at, "
-            "is_synthetic, brand, description, intervention_channel"
+            "is_synthetic, brand, description, intervention_channel, "
+            "target_enrollment, planned_duration_days"
         )
         brand = state.get("brand")
 
@@ -169,9 +170,12 @@ class HealthCheckerNode:
                 # result so per-experiment checks stay bounded. Without the dedup
                 # the newest-N slice was dominated by duplicate-named synthetic
                 # rows, surfacing many identical cards in the UI.
+                # count="exact" rides the same request (PostgREST Content-Range)
+                # so the UI can say "N running, 25 monitored" instead of showing
+                # the capped roster size as if it were the portfolio size.
                 query = (
                     client.table("ml_experiments")
-                    .select(_SELECT)
+                    .select(_SELECT, count="exact")
                     .eq("status", "running")
                     .order("created_at", desc=True)
                     .limit(_RAW_FETCH_LIMIT)
@@ -189,6 +193,10 @@ class HealthCheckerNode:
                     query = query.in_("brand", _PLATFORM_BRANDS)
                 result = await apply_provenance_filter(query, include_synthetic).execute()
                 deduped = self._dedupe_by_name(result.data or [], cap=_RAW_FETCH_LIMIT)
+                # isinstance guard: unit-test fakes leave .count as a Mock/None;
+                # fall back to the fetched-window size rather than fabricating.
+                total = getattr(result, "count", None)
+                state["total_running"] = total if isinstance(total, int) else len(deduped)
                 # Brand-balanced roster (2026-07-11): newest-first alone let one
                 # generation batch monopolize the capped slice (the live top-25
                 # was 25 same-batch Fabhalta rows). Interleave across brands so
@@ -297,7 +305,6 @@ class HealthCheckerNode:
             ExperimentSummary with health status
         """
         exp_id = experiment["id"]
-        config = experiment.get("config", {})
         created_at = experiment.get("created_at", datetime.now(timezone.utc).isoformat())
 
         # Calculate days running
@@ -324,14 +331,29 @@ class HealthCheckerNode:
             except Exception:
                 pass
 
-        # Calculate metrics
+        # Calculate metrics. The enrollment PLAN (migration 101) is per-row and
+        # nullable — a row without a recorded plan gets NO information fraction
+        # and NO plan-relative health judgement. (The previous code read
+        # config.get("target_sample_size", 1000) from a `config` field that was
+        # never selected and doesn't exist as a column: every experiment was
+        # measured against a fabricated 1000-in-30-days plan, flagging the
+        # whole portfolio "warning" — live incident 2026-07-11.)
         enrollment_rate = total_enrolled / days_running if days_running > 0 else 0
-        target_sample_size = config.get("target_sample_size", 1000)
-        information_fraction = total_enrolled / target_sample_size if target_sample_size > 0 else 0
+        target_enrollment = experiment.get("target_enrollment")
+        planned_duration_days = experiment.get("planned_duration_days")
+        information_fraction: Optional[float] = None
+        if isinstance(target_enrollment, int) and target_enrollment > 0:
+            # Cap at 1.0: past-target enrollment means "target reached", and
+            # the interim milestone ladder (25/50/75/100%) expects [0, 1].
+            information_fraction = min(1.0, total_enrolled / target_enrollment)
 
         # Determine health status
-        health_status = self._determine_health_status(
-            enrollment_rate, information_fraction, days_running
+        health_status, health_reason = self._determine_health_status(
+            enrollment_rate=enrollment_rate,
+            days_running=days_running,
+            total_enrolled=total_enrolled,
+            target_enrollment=target_enrollment,
+            planned_duration_days=planned_duration_days,
         )
 
         return ExperimentSummary(
@@ -341,10 +363,14 @@ class HealthCheckerNode:
             name=experiment.get("experiment_name", experiment.get("name", "Unknown")),
             status=experiment.get("status", "unknown"),
             health_status=health_status,
+            health_reason=health_reason,
             days_running=days_running,
             total_enrolled=total_enrolled,
             enrollment_rate=round(enrollment_rate, 2),
-            current_information_fraction=round(information_fraction, 4),
+            current_information_fraction=(
+                round(information_fraction, 4) if information_fraction is not None else None
+            ),
+            target_enrollment=target_enrollment,
             is_synthetic=bool(experiment.get("is_synthetic", False)),
             # Explainability (2026-07-11): what the experiment tests and why —
             # None (not fabricated text) when the row predates the metadata.
@@ -354,32 +380,71 @@ class HealthCheckerNode:
         )
 
     def _determine_health_status(
-        self, enrollment_rate: float, information_fraction: float, days_running: int
-    ) -> Literal["healthy", "warning", "critical", "unknown"]:
-        """Determine overall health status.
+        self,
+        enrollment_rate: float,
+        days_running: int,
+        total_enrolled: int,
+        target_enrollment: Optional[int],
+        planned_duration_days: Optional[int],
+    ) -> tuple[Literal["healthy", "warning", "critical", "unknown"], str]:
+        """Determine overall health status with a human-readable reason.
 
-        Args:
-            enrollment_rate: Daily enrollment rate
-            information_fraction: Fraction of target sample enrolled
-            days_running: Days since experiment start
+        Two tiers of checks:
+        1. Absolute enrollment-pace checks — need no plan, always run.
+        2. Plan-relative checks — ONLY when the row carries a real enrollment
+           plan (migration 101). A missing plan is reported as such, never
+           substituted with a default target (the fabricated 1000-in-30-days
+           default previously flagged the entire portfolio "warning").
+
+        The reason string is user-facing: it rides to the UI as the hover
+        explanation on the health flag.
 
         Returns:
-            Health status string
+            (health status, reason) tuple.
         """
-        # Critical: Very low enrollment after significant time
+        # Critical: enrollment effectively stalled after significant time
         if days_running >= 14 and enrollment_rate < 2:
-            return "critical"
+            return "critical", (
+                f"Enrollment stalled: {enrollment_rate:.1f}/day over {days_running} days "
+                f"(below 2/day after 14+ days)"
+            )
 
-        # Warning: Below expected enrollment
+        # Warning: enrollment pace below the platform floor
         if days_running >= 7 and enrollment_rate < 5:
-            return "warning"
+            return "warning", (
+                f"Slow enrollment: {enrollment_rate:.1f}/day over {days_running} days "
+                f"(below 5/day after 7+ days)"
+            )
 
-        # Warning: Behind schedule
-        expected_fraction = days_running / 30  # Assuming 30-day experiments
-        if information_fraction < expected_fraction * 0.5:
-            return "warning"
+        # Plan-relative checks (real recorded plan only)
+        if target_enrollment and planned_duration_days:
+            if total_enrolled >= target_enrollment:
+                return "healthy", (
+                    f"Enrollment target reached "
+                    f"({total_enrolled:,} of {target_enrollment:,} enrolled)"
+                )
+            enrolled_pct = 100.0 * total_enrolled / target_enrollment
+            if days_running > planned_duration_days:
+                return "warning", (
+                    f"Past planned duration (day {days_running} of {planned_duration_days}) "
+                    f"at {enrolled_pct:.0f}% of the {target_enrollment:,} enrollment target"
+                )
+            expected_pct = 100.0 * days_running / planned_duration_days
+            if enrolled_pct < expected_pct * 0.5:
+                return "warning", (
+                    f"Far behind plan: {enrolled_pct:.0f}% enrolled vs at least "
+                    f"{expected_pct * 0.5:.0f}% expected by day {days_running} "
+                    f"of {planned_duration_days}"
+                )
+            return "healthy", (
+                f"On pace: {enrollment_rate:.1f}/day, {enrolled_pct:.0f}% of the "
+                f"{target_enrollment:,} target by day {days_running} of {planned_duration_days}"
+            )
 
-        return "healthy"
+        return "healthy", (
+            f"Enrollment rate healthy ({enrollment_rate:.1f}/day); "
+            f"no enrollment plan recorded to measure progress against"
+        )
 
     def _check_enrollment_rate(
         self,

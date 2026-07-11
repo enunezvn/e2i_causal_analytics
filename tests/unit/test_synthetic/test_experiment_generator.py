@@ -50,6 +50,19 @@ def test_experiments_are_meaningful_and_explainable():
     assert len(set(ages)) > 1, "starts must be staggered, not a single burst"
 
 
+def test_experiments_carry_a_real_enrollment_plan():
+    """Migration 101: every synthetic experiment records a REAL enrollment plan
+    (nominal 10 units/day over a 45-120 day window) so the monitor's
+    plan-relative health checks and information fraction have honest inputs —
+    the fabricated config.target_sample_size=1000 default flagged the entire
+    live portfolio "warning" (2026-07-11 incident)."""
+    df = ExperimentGenerator(GeneratorConfig(seed=7, n_records=24, brand=Brand.KISQALI)).generate()
+    assert df["planned_duration_days"].between(45, 120).all()
+    assert (df["target_enrollment"] == df["planned_duration_days"] * 10).all()
+    # Varied plans (not one constant), so the portfolio shows honest variety
+    assert df["planned_duration_days"].nunique() > 1
+
+
 def test_experiment_ids_stay_keyed_on_legacy_slug():
     """REGRESSION GUARD: the id must stay uuid5(legacy 'synth_<brand>_exp_NNNN')
     even though the display name is now meaningful — that identity is what lets

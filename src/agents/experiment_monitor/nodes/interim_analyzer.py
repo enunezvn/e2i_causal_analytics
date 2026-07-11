@@ -113,7 +113,12 @@ class InterimAnalyzerNode:
             InterimTrigger if milestone reached, None otherwise
         """
         exp_id = experiment["experiment_id"]
-        info_fraction = experiment.get("current_information_fraction", 0)
+        # None = the row carries no enrollment plan (migration 101), so progress
+        # toward a milestone is unknowable — never treat it as 0% and never
+        # fabricate a milestone from a default target.
+        info_fraction = experiment.get("current_information_fraction")
+        if info_fraction is None:
+            return None
 
         # Find the highest milestone reached
         current_milestone = None
