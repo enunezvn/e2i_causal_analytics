@@ -33,7 +33,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -228,12 +228,15 @@ class TriggerMonitorRequest(BaseModel):
             "synthetic-gold, so callers must opt in to see it."
         ),
     )
-    brand: Optional[str] = Field(
+    brand: Optional[Literal["Remibrutinib", "Kisqali", "Fabhalta"]] = Field(
         default=None,
         description=(
-            "Restrict the sweep to one brand (Remibrutinib / Kisqali / "
-            "Fabhalta). None = all brands, interleaved so no single generation "
-            "batch monopolizes the capped roster (2026-07-11 review)."
+            "Restrict the sweep to one brand. None = all brands, interleaved "
+            "so no single generation batch monopolizes the capped roster "
+            "(2026-07-11 review). Validated here (422 on anything else): "
+            "ml_experiments.brand is a Postgres enum, and an off-enum value "
+            "would otherwise 22P02 inside the query and surface as an "
+            "honest-looking empty roster."
         ),
     )
     stale_data_threshold_hours: float = Field(
@@ -1349,7 +1352,12 @@ async def trigger_experiment_monitoring(
         # have alert_type="srm"). Reading exp["active_alerts"] / exp["has_srm"]
         # silently yielded 0/False for every experiment, and the rate is keyed
         # "enrollment_rate" (already per-day: total_enrolled / days_running).
-        alerts_by_experiment: Dict[str, List[Dict[str, Any]]] = {}
+        # result.alerts is a list of the agent's MonitorAlert TypedDict (not
+        # assignable to Dict[str, Any] under mypy); alias it — this route has
+        # its own MonitorAlert response model, constructed below.
+        from src.agents.experiment_monitor.state import MonitorAlert as AgentMonitorAlert
+
+        alerts_by_experiment: Dict[str, List[AgentMonitorAlert]] = {}
         for alert in result.alerts:
             alerts_by_experiment.setdefault(alert.get("experiment_id", ""), []).append(alert)
 

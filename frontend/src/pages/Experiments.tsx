@@ -259,7 +259,9 @@ export default function Experiments() {
     const warning = experiments.filter((e) => e.health_status === ExperimentHealthStatus.WARNING).length;
     const critical = experiments.filter((e) => e.health_status === ExperimentHealthStatus.CRITICAL).length;
     const totalEnrolled = experiments.reduce((sum, e) => sum + e.total_enrolled, 0);
-    const avgEnrollmentRate = experiments.reduce((sum, e) => sum + e.enrollment_rate_per_day, 0) / total;
+    // Guard 0/0 -> NaN: the page loads no data until the first monitoring run
+    const avgEnrollmentRate =
+      total > 0 ? experiments.reduce((sum, e) => sum + e.enrollment_rate_per_day, 0) / total : 0;
     const srmCount = experiments.filter((e) => e.has_srm).length;
     const totalAlerts = alerts.length;
     const criticalAlerts = alerts.filter((a) => a.severity === AlertSeverity.CRITICAL).length;
@@ -379,9 +381,9 @@ export default function Experiments() {
       </div>
 
       {/* Synthetic-substrate context banner (honesty). The alerts below are
-          REAL computations, but this deployment runs on static synthetic-gold
-          A/B data with no live feed, so "data staleness" and zero-enrollment
-          alerts reflect the seeded dataset, not a broken pipeline. Surfacing
+          REAL computations, but this deployment runs on the weekly-refreshed
+          synthetic-gold A/B substrate, so "data staleness" and zero-enrollment
+          alerts reflect the refresh cadence, not a broken pipeline. Surfacing
           this prevents the alarms from being mistaken for a live incident. */}
       {syntheticSubstrate && (
         <Alert className="mb-6">
@@ -641,9 +643,9 @@ export default function Experiments() {
         <TabsContent value="alerts" className="space-y-4">
           {syntheticSubstrate && alerts.length > 0 && (
             <p className="text-xs text-muted-foreground">
-              These alerts are computed on static synthetic-gold data (no live
-              feed); freshness and enrollment alerts reflect the seeded dataset,
-              not a live data pipeline.
+              These alerts are computed on the weekly-refreshed synthetic-gold
+              substrate (Mon 3AM); freshness and enrollment alerts are judged
+              against that refresh cadence, not a live data pipeline.
             </p>
           )}
           {alerts.length === 0 ? (

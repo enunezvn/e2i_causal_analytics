@@ -475,21 +475,24 @@ class HealthCheckerNode:
                     ).total_seconds() / 3600
 
                     # If experiment is older than threshold and no data, it's stale.
-                    # Severity is RELATIVE to the caller's threshold (2026-07-11):
-                    # absolute 48h tiers made every alert critical whenever the
-                    # data cadence (e.g. the weekly synthetic refresh) is slower
-                    # than a day, drowning real signals in permanent alarms.
+                    # SAME ladder as the with-assignments branch below: the API
+                    # documents one threshold-relative contract (breach = info,
+                    # 1.5x = warning, 3x = critical) regardless of whether
+                    # staleness is measured from the last assignment or, for a
+                    # never-enrolled experiment, from creation.
                     if hours_since_creation > threshold_hours:
+                        if hours_since_creation > 3 * threshold_hours:
+                            severity = "critical"
+                        elif hours_since_creation > 1.5 * threshold_hours:
+                            severity = "warning"
+                        else:
+                            severity = "info"
                         return StaleDataIssue(
                             experiment_id=exp_id,
                             last_data_timestamp="N/A - No assignments",
                             hours_since_update=hours_since_creation,
                             threshold_hours=threshold_hours,
-                            severity=(
-                                "warning"
-                                if hours_since_creation < 2 * threshold_hours
-                                else "critical"
-                            ),
+                            severity=severity,  # type: ignore
                         )
                 return None
 

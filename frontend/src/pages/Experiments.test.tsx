@@ -376,7 +376,7 @@ describe('Experiments — synthetic-substrate honesty + load CTA', () => {
     ).toBeInTheDocument();
   });
 
-  it('adds a static-synthetic note on the Alerts tab', async () => {
+  it('adds a weekly-refresh provenance note on the Alerts tab (consistent with the banner)', async () => {
     (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
       monitorWith({ synthetic_data_included: true, synthetic_data_forced: false }),
     );
@@ -386,12 +386,22 @@ describe('Experiments — synthetic-substrate honesty + load CTA', () => {
       await user.click(screen.getByRole('tab', { name: /alerts/i }));
     });
     expect(
-      screen.getByText(/computed on static synthetic-gold data/i),
+      screen.getByText(/computed on the weekly-refreshed synthetic-gold/i),
     ).toBeInTheDocument();
+    // The old "static ... no live feed" story contradicted the weekly-refresh
+    // banner on the same page — it must stay gone.
+    expect(screen.queryByText(/static synthetic-gold data/i)).not.toBeInTheDocument();
   });
 });
 
 describe('Experiments — brand filter + explainability + portfolio insight (2026-07-11)', () => {
+  it('never renders NaN in the KPI grid before the first monitoring run (0/0 guard)', () => {
+    // Default mock: data undefined — the on-mount state before Run Monitoring.
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText('Avg Enrollment/Day')).toBeInTheDocument();
+    expect(screen.queryByText('NaN')).not.toBeInTheDocument();
+  });
+
   it('renders the brand selector with All Brands + the three platform brands', () => {
     render(<Experiments />, { wrapper: createWrapper() });
     fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));

@@ -1027,3 +1027,49 @@ class TestStaleSeverityRelativeToThreshold:
         }
         issue = await node._check_stale_data({"id": "e1"}, client, state)
         assert issue is None
+
+    def _client_with_no_assignments(self):
+        result = MagicMock()
+        result.data = []
+        query = MagicMock()
+        query.select.return_value = query
+        query.eq.return_value = query
+        query.order.return_value = query
+        query.limit.return_value = query
+        query.execute = AsyncMock(return_value=result)
+        client = MagicMock()
+        client.table.return_value = query
+        return client
+
+    @pytest.mark.asyncio
+    async def test_no_assignments_uses_the_same_ladder(self, node):
+        """Never-enrolled experiments must follow the SAME documented contract
+        (breach=info, 1.5x=warning, 3x=critical) — the branch used to jump to
+        warning at breach and critical at 2x, so identical staleness got
+        severities two tiers apart depending on whether any assignment existed."""
+        client = self._client_with_no_assignments()
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 192.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        for hours_ago, expected in ((240, "info"), (385, "warning"), (600, "critical")):
+            created = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+            issue = await node._check_stale_data(
+                {"id": "e1", "created_at": created}, client, state
+            )
+            assert issue is not None, hours_ago
+            assert issue["severity"] == expected, (hours_ago, issue["severity"])
+            assert issue["last_data_timestamp"] == "N/A - No assignments"
+
+    @pytest.mark.asyncio
+    async def test_no_assignments_within_threshold_no_issue(self, node):
+        client = self._client_with_no_assignments()
+        state: ExperimentMonitorState = {
+            "stale_data_threshold_hours": 192.0,
+            "include_synthetic": True,
+            "status": "pending",
+        }
+        created = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
+        issue = await node._check_stale_data({"id": "e1", "created_at": created}, client, state)
+        assert issue is None

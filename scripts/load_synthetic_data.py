@@ -556,6 +556,17 @@ def purge_synthetic_ab_rows(loader) -> None:
     (stale timestamps, inflated total_enrolled). All AB rows on this deployment
     are is_synthetic-tagged substrate; real rows (is_synthetic=false) are never
     touched. FK-safe order: enrollments -> results -> assignments.
+
+    returning="minimal" is load-bearing: postgrest's representation default
+    makes PostgREST json_agg every deleted row inside the same statement, which
+    at deploy scale (216k assignments) measured 7.2-7.7s against the
+    authenticator role's 8s statement_timeout — minimal drops it to ~3s.
+    count="exact" keeps the row count in the response so a 0-row no-op purge
+    is distinguishable from a real one in the cron log.
+
+    NOTE: purge -> reload is non-transactional (separate PostgREST requests).
+    If the reload fails after the purge commits, the AB tables sit empty until
+    a rerun of --refresh-ab — recover with that, not a partial patch.
     """
     for table in (
         "ab_experiment_enrollments",
@@ -563,8 +574,13 @@ def purge_synthetic_ab_rows(loader) -> None:
         "ab_experiment_assignments",
     ):
         try:
-            loader.client.table(table).delete().eq("is_synthetic", True).execute()
-            logger.info("  Purged synthetic rows from %s", table)
+            result = (
+                loader.client.table(table)
+                .delete(returning="minimal", count="exact")
+                .eq("is_synthetic", True)
+                .execute()
+            )
+            logger.info("  Purged %s synthetic rows from %s", result.count, table)
         except Exception as e:
             # Fail loud: continuing would upsert onto a half-purged substrate.
             raise RuntimeError(f"Synthetic AB purge failed on {table}: {e}") from e
@@ -705,7 +721,8 @@ def main():
         "ab_experiment_assignments/enrollments/results) in place via the "
         "deterministic uuid5 ids. Weekly companion to --append-frontier, which "
         "does not touch these tables; without it the experiment_monitor "
-        "staleness checks alarm on a frozen substrate.",
+        "staleness checks alarm on a frozen substrate. Ignores --small (the "
+        "purge is all-or-nothing, so the reload must be full-size).",
     )
     args = parser.parse_args()
 
@@ -738,7 +755,11 @@ def main():
     try:
         # Generate datasets
         if args.refresh_ab:
-            datasets = build_ab_refresh_datasets(sizes, id_prefix=args.tag)
+            # Always FULL_SIZES: the purge deletes ALL synthetic AB rows, so a
+            # --small-sized reload (36 experiments) would strand the other 324
+            # deployed 'running' rows with zero fan-out. Mirrors
+            # --append-frontier's documented ignoring of --small.
+            datasets = build_ab_refresh_datasets(FULL_SIZES, id_prefix=args.tag)
             logger.info(
                 "refresh-ab: %d experiments, %d assignments",
                 len(datasets["ml_experiments"]),

@@ -895,6 +895,20 @@ class TestTriggerExperimentMonitoring:
 
         assert response.status_code == 200
 
+    def test_monitor_rejects_off_enum_brand(self):
+        """brand is validated at the route (422), not swallowed downstream:
+        ml_experiments.brand is a Postgres enum, and an off-enum value would
+        22P02 inside the roster query, where the blanket except returns [] —
+        an honest-looking 200 with zero experiments and no error entry."""
+        response = client.post(
+            "/api/experiments/monitor",
+            json={"brand": "kisqali"},  # lowercase — not the enum label
+        )
+        assert response.status_code == 422
+        # main.py's RequestValidationError handler reshapes the body
+        # (schema_errors with field paths), so assert on the text.
+        assert "brand" in response.text
+
 
 class TestGetExperimentHealth:
     """Tests for GET /experiments/{experiment_id}/health."""
