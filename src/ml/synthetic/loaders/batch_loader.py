@@ -351,6 +351,12 @@ TABLE_COLUMNS = {
         # (migration 100) the monitor badge + /insights/experiments group by.
         "target_population",
         "intervention_channel",
+        # Enrollment plan (migration 101): the monitor's plan-relative health
+        # checks + information fraction read these — unregistered they are
+        # silently gated out here and every row loads with a NULL plan
+        # (caught live 2026-07-11: refresh wrote 360 rows, 0 with a target).
+        "target_enrollment",
+        "planned_duration_days",
         "observation_window_days",
         "prediction_horizon_days",
         "minimum_auc",
