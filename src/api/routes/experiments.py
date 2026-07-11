@@ -436,6 +436,14 @@ class ExperimentHealthSummary(BaseModel):
     brand: Optional[str] = None
     description: Optional[str] = None
     intervention_channel: Optional[str] = None
+    # Expected impact (2026-07-11): CI-shrunk OBSERVED effect x planned reach —
+    # the roster is ranked by this (top slots) plus a newest-first reserve.
+    # None = unscorable (no results row / no enrollment plan), NOT zero.
+    expected_impact: Optional[float] = None
+    # high / medium (positive score, split at the median positive) / low (CI
+    # spans zero — no demonstrated effect yet) / None (unscorable). Drives the
+    # UI's impact filter.
+    impact_tier: Optional[str] = None
 
 
 class MonitorResponse(BaseModel):
@@ -1400,6 +1408,8 @@ async def trigger_experiment_monitoring(
                     brand=exp.get("brand"),
                     description=exp.get("description"),
                     intervention_channel=exp.get("intervention_channel"),
+                    expected_impact=exp.get("expected_impact"),
+                    impact_tier=exp.get("impact_tier"),
                 )
             )
 

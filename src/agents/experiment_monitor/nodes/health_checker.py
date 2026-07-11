@@ -34,6 +34,12 @@ _RAW_FETCH_LIMIT = 1000
 _PLATFORM_BRANDS = ["Remibrutinib", "Kisqali", "Fabhalta"]
 _MAX_EXPERIMENTS = 25
 
+# Roster mix (2026-07-11): the capped roster is impact-ranked so the sweep
+# always watches the experiments where a health problem costs the most, with
+# a small newest-first reserve so fresh launches (SRM / launch failures are
+# cheapest to catch early) are never crowded out by established winners.
+_NEWEST_SLOTS = 5
+
 
 class HealthCheckerNode:
     """Checks experiment health and enrollment rates.
@@ -156,10 +162,14 @@ class HealthCheckerNode:
         include_synthetic = coerce_provenance_flag(state.get("include_synthetic"))
         # Explainability columns (2026-07-11): brand/description/channel ride to
         # the UI card; brand also scopes the sweep and keys the roster interleave.
+        # ab_experiment_results embed (to-one in practice: one results row per
+        # experiment): observed effect + CI feed the expected-impact score that
+        # ranks the capped roster — see _rank_by_impact.
         _SELECT = (
             "id, experiment_name, status, prediction_target, created_at, "
             "is_synthetic, brand, description, intervention_channel, "
-            "target_enrollment, planned_duration_days"
+            "target_enrollment, planned_duration_days, "
+            "ab_experiment_results(effect_estimate, effect_ci_lower, effect_ci_upper)"
         )
         brand = state.get("brand")
 
@@ -206,11 +216,12 @@ class HealthCheckerNode:
                 # fall back to the fetched-window size rather than fabricating.
                 total = getattr(result, "count", None)
                 state["total_running"] = total if isinstance(total, int) else len(deduped)
-                # Brand-balanced roster (2026-07-11): newest-first alone let one
-                # generation batch monopolize the capped slice (the live top-25
-                # was 25 same-batch Fabhalta rows). Interleave across brands so
-                # an unscoped sweep represents the whole portfolio.
-                return self._interleave_by_brand(deduped, cap=_MAX_EXPERIMENTS)
+                # Impact-ranked roster (2026-07-11): top slots go to the
+                # highest expected-impact experiments (CI-shrunk observed
+                # effect x planned reach), the reserve to the newest rows
+                # (brand-interleaved — newest-first alone let one generation
+                # batch monopolize the slice). See _rank_by_impact.
+                return self._rank_by_impact(deduped, cap=_MAX_EXPERIMENTS)
             elif state.get("experiment_ids"):
                 # Get specific experiments (a synthetic id must not resolve in
                 # real mode either — same semantics as BaseRepository.get_by_id)
@@ -301,6 +312,85 @@ class HealthCheckerNode:
             round_idx += 1
         return interleaved
 
+    @staticmethod
+    def _expected_impact(row: Dict) -> Optional[float]:
+        """CI-shrunk observed effect x planned reach, or None when unscorable.
+
+        Honest-evidence scoring: uses the OBSERVED effect's confidence bound —
+        never a ground-truth/config prior — so an experiment must earn a high
+        rank with data. The magnitude is the CI bound nearer zero (ci_lower for
+        positive effects, |ci_upper| for confidently-harmful ones — those
+        deserve monitoring priority too); a CI spanning zero scores 0.0 ("no
+        demonstrated effect yet"). Multiplied by the recorded enrollment plan
+        (migration 101) as reach. None (not 0) when the row has no results or
+        no plan — unscorable, NOT evidence of no impact.
+        """
+        results = row.get("ab_experiment_results")
+        if isinstance(results, list):
+            results = results[0] if results else None
+        if not isinstance(results, dict):
+            return None
+        ci_lower = results.get("effect_ci_lower")
+        ci_upper = results.get("effect_ci_upper")
+        target = row.get("target_enrollment")
+        if not isinstance(ci_lower, (int, float)) or not isinstance(ci_upper, (int, float)):
+            return None
+        if not isinstance(target, int) or target <= 0:
+            return None
+        if ci_lower > 0:
+            magnitude = float(ci_lower)
+        elif ci_upper < 0:
+            magnitude = float(-ci_upper)
+        else:
+            magnitude = 0.0
+        return round(magnitude * target, 2)
+
+    @classmethod
+    def _rank_by_impact(cls, rows: List[Dict], cap: int) -> List[Dict]:
+        """Impact-ranked roster: top (cap - reserve) by expected impact, then
+        a newest-first (brand-interleaved) reserve so fresh launches are still
+        monitored while they are cheapest to fix.
+
+        Also stamps ``expected_impact`` and ``impact_tier`` onto every row so
+        the score rides ExperimentSummary -> API -> UI. Tiers are evidence-
+        based rather than blind tertiles (live data: ~half the portfolio's CIs
+        span zero, so a p33 cut would be degenerate at 0):
+          high   — positive score at or above the median positive score
+          medium — positive score below it
+          low    — score 0.0: CI spans zero, no demonstrated effect yet
+          None   — unscorable (no results row / no enrollment plan)
+        """
+        for row in rows:
+            row["expected_impact"] = cls._expected_impact(row)
+
+        positives = sorted(
+            (row["expected_impact"] for row in rows if row["expected_impact"]), reverse=True
+        )
+        # Upper median of the descending list → an even count splits evenly
+        # into high/medium instead of tipping everything at the cut into high.
+        median_positive = positives[(len(positives) - 1) // 2] if positives else None
+        for row in rows:
+            score = row["expected_impact"]
+            if score is None:
+                row["impact_tier"] = None
+            elif score == 0.0:
+                row["impact_tier"] = "low"
+            elif median_positive is not None and score >= median_positive:
+                row["impact_tier"] = "high"
+            else:
+                row["impact_tier"] = "medium"
+
+        impact_slots = max(0, cap - _NEWEST_SLOTS)
+        scored = [r for r in rows if r["expected_impact"] is not None]
+        scored.sort(key=lambda r: r["expected_impact"], reverse=True)
+        roster = scored[:impact_slots]
+        chosen = {id(r) for r in roster}
+        # Reserve: newest rows (input order is created_at desc) not already
+        # picked, brand-interleaved to stay batch-bias-proof.
+        remaining = [r for r in rows if id(r) not in chosen]
+        roster.extend(cls._interleave_by_brand(remaining, cap=cap - len(roster)))
+        return roster
+
     async def _check_experiment_health(
         self, experiment: Dict, client: Optional[Any], include_synthetic: bool = False
     ) -> ExperimentSummary:
@@ -386,6 +476,10 @@ class HealthCheckerNode:
             brand=experiment.get("brand"),
             description=experiment.get("description"),
             intervention_channel=experiment.get("intervention_channel"),
+            # Expected impact (2026-07-11): stamped by _rank_by_impact on the
+            # active sweep; None on the specific-ids path (unranked request).
+            expected_impact=experiment.get("expected_impact"),
+            impact_tier=experiment.get("impact_tier"),
         )
 
     def _determine_health_status(

@@ -569,6 +569,14 @@ export interface ExperimentHealthSummary {
   description?: string | null;
   /** Digital-twin intervention-taxonomy channel under test (migration 100). */
   intervention_channel?: string | null;
+  /** Expected impact: CI-shrunk OBSERVED effect x planned reach — the roster
+   *  is ranked by this (top slots) plus a newest-first reserve. Null =
+   *  unscorable (no results / no enrollment plan yet), NOT zero. */
+  expected_impact?: number | null;
+  /** high / medium (positive score, split at the median positive) / low (CI
+   *  spans zero — no demonstrated effect yet) / null (unscorable). Drives the
+   *  impact filter. */
+  impact_tier?: 'high' | 'medium' | 'low' | null;
 }
 
 /**

@@ -102,6 +102,11 @@ interface LocalExperiment {
   brand?: string | null;
   description?: string | null;
   intervention_channel?: string | null;
+  /** Expected impact: CI-shrunk OBSERVED effect x planned reach. Null =
+   *  unscorable (no results / no plan yet), rendered as an honest dash. */
+  expected_impact?: number | null;
+  /** high / medium / low (CI spans zero) / null (unscorable). */
+  impact_tier?: 'high' | 'medium' | 'low' | null;
 }
 
 // =============================================================================
@@ -125,6 +130,14 @@ const BRANDS = [
   { value: 'Remibrutinib', label: 'Remibrutinib' },
   { value: 'Kisqali', label: 'Kisqali' },
   { value: 'Fabhalta', label: 'Fabhalta' },
+];
+
+/** Expected-impact filter options (tier semantics are server-computed). */
+const IMPACT_TIERS = [
+  { value: 'All', label: 'All Impact' },
+  { value: 'high', label: 'High Impact' },
+  { value: 'medium', label: 'Medium Impact' },
+  { value: 'low', label: 'Low Impact' },
 ];
 
 /**
@@ -200,6 +213,46 @@ function formatTimestamp(timestamp: string): string {
   return date.toLocaleString();
 }
 
+/**
+ * Impact-tier badge with a hover explanation of how the score is earned.
+ * Tier colors mirror the health palette but the semantics are evidence-based:
+ * "low" means the CI spans zero (no demonstrated effect yet), not "unhealthy".
+ */
+function ImpactBadge({
+  tier,
+  score,
+}: {
+  tier?: 'high' | 'medium' | 'low' | null;
+  score?: number | null;
+}) {
+  if (!tier) return null;
+  const styles: Record<'high' | 'medium' | 'low', string> = {
+    high: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
+    medium: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+    low: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+  };
+  const explanation =
+    tier === 'low'
+      ? 'Low impact: the observed effect’s confidence interval spans zero — no demonstrated effect yet.'
+      : `${tier === 'high' ? 'High' : 'Medium'} impact: CI-shrunk observed effect × planned reach${
+          score != null ? ` = ${score.toLocaleString()}` : ''
+        }. The score uses the confidence bound nearer zero, so rank is earned with evidence, not noise.`;
+  return (
+    <TooltipProvider delayDuration={150}>
+      <UITooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex cursor-help">
+            <Badge className={`capitalize ${styles[tier]}`} variant="outline">
+              {tier} impact
+            </Badge>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs whitespace-normal">{explanation}</TooltipContent>
+      </UITooltip>
+    </TooltipProvider>
+  );
+}
+
 /** 'speaker_program_invitation' -> 'Speaker Program Invitation'. */
 function formatChannel(value: string): string {
   return value
@@ -233,6 +286,9 @@ export default function Experiments() {
   // Brand scope for the monitoring sweep ('All' = the 3-brand portfolio,
   // interleaved server-side so one generation batch can't monopolize the roster).
   const [selectedBrand, setSelectedBrand] = useState('All');
+  // Expected-impact filter over the monitored roster (tiers computed
+  // server-side from observed effects — see ImpactBadge for semantics).
+  const [impactFilter, setImpactFilter] = useState('All');
 
   // API hooks. No sample-data fallback — honest empty states only.
   const { data: monitorData, isPending: isLoadingMonitor, mutate: triggerMonitor } = useTriggerMonitoring();
@@ -266,6 +322,8 @@ export default function Experiments() {
         brand: exp.brand ?? null,
         description: exp.description ?? null,
         intervention_channel: exp.intervention_channel ?? null,
+        expected_impact: exp.expected_impact ?? null,
+        impact_tier: exp.impact_tier ?? null,
       }));
     }
     return [];
@@ -275,16 +333,18 @@ export default function Experiments() {
     return monitorData?.alerts ?? [];
   }, [monitorData]);
 
-  // Filter experiments based on search
+  // Filter experiments based on search + expected-impact tier
   const filteredExperiments = useMemo(() => {
-    if (!searchQuery) return experiments;
     const query = searchQuery.toLowerCase();
-    return experiments.filter(
-      (exp) =>
+    return experiments.filter((exp) => {
+      if (impactFilter !== 'All' && exp.impact_tier !== impactFilter) return false;
+      if (!searchQuery) return true;
+      return (
         exp.experiment_name.toLowerCase().includes(query) ||
         exp.experiment_id.toLowerCase().includes(query)
-    );
-  }, [experiments, searchQuery]);
+      );
+    });
+  }, [experiments, searchQuery, impactFilter]);
 
   // Calculate overview metrics
   const overviewMetrics = useMemo(() => {
@@ -460,7 +520,7 @@ export default function Experiments() {
           value={monitorData?.total_running || overviewMetrics.total}
           description={
             monitorData?.total_running
-              ? `${overviewMetrics.total} newest monitored this sweep`
+              ? `${overviewMetrics.total} monitored: top expected impact + newest`
               : 'Currently running'
           }
         />
@@ -531,14 +591,26 @@ export default function Experiments() {
 
         {/* Experiments Tab */}
         <TabsContent value="experiments" className="space-y-6">
-          {/* Search */}
-          <div className="flex gap-4">
+          {/* Search + expected-impact filter */}
+          <div className="flex flex-wrap gap-4">
             <Input
               placeholder="Search experiments..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="max-w-md"
             />
+            <Select value={impactFilter} onValueChange={setImpactFilter}>
+              <SelectTrigger className="w-44" aria-label="Expected impact">
+                <SelectValue placeholder="Expected impact" />
+              </SelectTrigger>
+              <SelectContent>
+                {IMPACT_TIERS.map((tier) => (
+                  <SelectItem key={tier.value} value={tier.value}>
+                    {tier.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {filteredExperiments.length === 0 && (
@@ -587,9 +659,12 @@ export default function Experiments() {
                       {getHealthBadge(experiment.health_status)}
                     </HealthTooltip>
                   </div>
-                  {/* Explainability badges: brand + intervention under test.
-                      Rendered only when recorded — no fabricated metadata. */}
-                  {(experiment.brand || experiment.intervention_channel) && (
+                  {/* Explainability badges: brand + intervention under test +
+                      expected-impact tier. Rendered only when recorded — no
+                      fabricated metadata. */}
+                  {(experiment.brand ||
+                    experiment.intervention_channel ||
+                    experiment.impact_tier) && (
                     <div className="flex flex-wrap items-center gap-2 mt-1">
                       {experiment.brand && (
                         <Badge variant="outline">{experiment.brand}</Badge>
@@ -599,6 +674,10 @@ export default function Experiments() {
                           {formatChannel(experiment.intervention_channel)}
                         </Badge>
                       )}
+                      <ImpactBadge
+                        tier={experiment.impact_tier}
+                        score={experiment.expected_impact}
+                      />
                     </div>
                   )}
                   {/* WHAT this experiment tests and WHY (hypothesis + in-silico
@@ -613,10 +692,20 @@ export default function Experiments() {
                   )}
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-sm">
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 text-sm">
                     <div>
                       <span className="text-muted-foreground">Enrolled</span>
                       <p className="font-semibold">{experiment.total_enrolled.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Expected Impact</span>
+                      {/* Null = unscorable (no results / no plan yet) — honest
+                          dash, never a fabricated 0. */}
+                      <p className="font-semibold">
+                        {experiment.expected_impact != null
+                          ? experiment.expected_impact.toLocaleString()
+                          : '—'}
+                      </p>
                     </div>
                     <div>
                       <span className="text-muted-foreground">Rate/Day</span>
