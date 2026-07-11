@@ -59,6 +59,7 @@ from src.api.dependencies.supabase_client import (
     init_supabase,
     supabase_health_check,
 )
+from src.api.middleware.activity_tracking import ActivityTrackingMiddleware
 from src.api.middleware.auth_middleware import JWTAuthMiddleware
 from src.api.middleware.insight_verifier import InsightVerifierMiddleware
 from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
@@ -843,6 +844,12 @@ app.add_middleware(InsightVerifierMiddleware)
 logger.info(
     "Insight Verifier: ENABLED (JIT provenance check on /api/causal, /api/explain, /api/executive-insights)"
 )
+
+# User activity tracking (admin feature) — bounded per-minute aggregation of
+# authenticated /api requests, flushed in the background. Added BEFORE
+# JWTAuthMiddleware so it is INNER to it (sees request.state.user).
+app.add_middleware(ActivityTrackingMiddleware)
+logger.info("Activity Tracking: ENABLED (per-minute buckets -> user_activity_log)")
 
 # JWT Authentication middleware (Supabase)
 # Protects all routes except public paths (health, docs, read-only endpoints)
