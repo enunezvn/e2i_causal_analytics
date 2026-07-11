@@ -212,8 +212,11 @@ export interface OptimizationResponse {
   // Scenario results
   /** Scenario analysis results */
   scenarios: ScenarioResult[];
-  /** Sensitivity of objective to constraints */
+  /** Per-entity marginal return at the optimized allocation */
   sensitivity_analysis?: Record<string, number>;
+  /** Per-entity marginal return at the current (pre-optimization) allocation;
+   *  paired with sensitivity_analysis for the before->after equalization view */
+  sensitivity_analysis_current?: Record<string, number>;
 
   // Impact projections
   /** Total projected outcome */

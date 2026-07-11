@@ -51,9 +51,18 @@ class ScenarioAnalyzerNode:
                 gamma,
             )
 
-            # Perform sensitivity analysis
+            # Perform sensitivity analysis. Two parallel per-entity marginal-return
+            # maps drive the UI's before->after view: the OPTIMIZED marginals
+            # (equalized at the hurdle — the optimality signature) and the CURRENT
+            # marginals (dispersed by productivity). Showing only the optimized
+            # series renders a wall of identical bars that reads as broken; the
+            # current series is what makes the equalization legible.
             sensitivity = self._analyze_sensitivity(
                 allocations,  # type: ignore[arg-type]
+                targets,  # type: ignore[arg-type]
+                gamma,
+            )
+            sensitivity_current = self._analyze_sensitivity_current(
                 targets,  # type: ignore[arg-type]
                 gamma,
             )
@@ -64,6 +73,7 @@ class ScenarioAnalyzerNode:
                 **state,
                 "scenarios": scenarios,
                 "sensitivity_analysis": sensitivity,
+                "sensitivity_analysis_current": sensitivity_current,
                 "status": "projecting",
             }
 
@@ -188,3 +198,27 @@ class ScenarioAnalyzerNode:
             sensitivity[entity_id] = target_response_marginal(target, x_opt, gamma)
 
         return sensitivity
+
+    def _analyze_sensitivity_current(
+        self,
+        targets: List[Dict[str, Any]],
+        gamma: float | None = None,
+    ) -> Dict[str, float]:
+        """Marginal return per entity at the CURRENT (pre-optimization) allocation.
+
+        Companion to ``_analyze_sensitivity`` (which evaluates at the OPTIMIZED
+        allocation). At the ROI optimum the optimized marginals equalize to the
+        hurdle across all interior entities, so on their own they render as a
+        wall of identical bars. Pairing them with these current marginals — which
+        are dispersed by each territory's productivity — makes the equalization
+        legible: over-productive territories start high and are funded until
+        their marginal falls to the hurdle; under-productive ones start low and
+        are cut until theirs rises to it.
+        """
+        sensitivity_current: Dict[str, float] = {}
+        for i, target in enumerate(targets):
+            entity_id = target.get("entity_id", f"entity_{i}")
+            x_cur = target.get("current_allocation", 0) or 0.0
+            sensitivity_current[entity_id] = target_response_marginal(target, x_cur, gamma)
+
+        return sensitivity_current

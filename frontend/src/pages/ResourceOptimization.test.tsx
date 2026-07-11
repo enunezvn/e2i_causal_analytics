@@ -369,7 +369,36 @@ describe('ResourceOptimization', () => {
     expect(screen.getByText(/Marginal Returns/i)).toBeInTheDocument();
     // The fabricated relaxation claim is gone.
     expect(screen.queryByText(/A 10% relaxation would improve/i)).not.toBeInTheDocument();
+    // Fallback (no current series, e.g. an older cached response): single value.
     expect(screen.getByText(/\+1\.10 outcome units per additional \$1K/i)).toBeInTheDocument();
+  });
+
+  it('renders the before->after equalization when a current-marginal series is present', async () => {
+    mockRun({
+      data: completedResult({
+        // Optimized marginals equalized (~5.00 per $1K); current marginals
+        // dispersed by productivity (south grew, west was cut).
+        sensitivity_analysis: { 'south-T01': 0.005, 'west-T03': 0.005 },
+        sensitivity_analysis_current: { 'south-T01': 0.0055, 'west-T03': 0.0041 },
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+
+    await userEvent.click(screen.getByRole('tab', { name: /Sensitivity/i }));
+
+    // Per-territory detail shows the current -> optimized transition, not a
+    // single flat number.
+    expect(
+      screen.getByText(/\+5\.50 → \+5\.00 outcome units per additional \$1K/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/\+4\.10 → \+5\.00 outcome units per additional \$1K/i)
+    ).toBeInTheDocument();
+    // Direction reads off the concave relationship: current > optimized => grown.
+    expect(screen.getByText('Funded up')).toBeInTheDocument();
+    expect(screen.getByText('Funded down')).toBeInTheDocument();
+    // The misleading "Above/At-below median" ranking of equalized values is gone.
+    expect(screen.queryByText(/median/i)).not.toBeInTheDocument();
   });
 
   it('surfaces degraded storage honestly (cross-worker 404 risk)', () => {
