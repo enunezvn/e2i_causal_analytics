@@ -42,6 +42,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useAlerts, useMonitoringRuns } from '@/hooks/api/use-monitoring';
 import {
   useFullHealthCheck,
@@ -82,16 +89,18 @@ interface ServiceStatus {
 
 // View-model for the Model Health card. Mirrors the backend
 // /health-score/models ModelHealth shape EXACTLY. The real endpoint reports
-// status + (optionally) accuracy / error_rate / predictions_last_24h; it does
-// NOT report a drift score or a performance trend, so those are intentionally
-// absent here rather than fabricated. null = unmeasured -> rendered as "—".
+// status + the latest evaluated metrics (accuracy / auc_roc / f1, sourced from
+// ml_performance_metrics via migration 103). Serving-side fields (error_rate,
+// predictions_last_24h) have NO telemetry source on this platform — the models
+// are weekly-retrained batch models — so the card does not render rows that
+// can never be measured. null = unmeasured -> rendered as "—".
 interface ModelHealthView {
   modelId: string;
   name: string;
   status: 'healthy' | 'warning' | 'critical';
   accuracy: number | null;
-  errorRate: number | null;
-  predictions24h: number | null;
+  aucRoc: number | null;
+  f1: number | null;
 }
 
 // =============================================================================
@@ -119,6 +128,10 @@ const TIER_NAMES: Record<number, string> = {
   4: 'ML Predictions',
   5: 'Learning',
 };
+
+// Selectable windows for the History tab. The backend /health-score/history
+// accepts days=1..90 (durable daily aggregates, migration 096).
+const HISTORY_WINDOWS = [7, 14, 30, 60, 90] as const;
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -201,6 +214,20 @@ function trendFromScores(scores: number[]): 'improving' | 'declining' | 'stable'
   return 'stable';
 }
 
+// "Jul 3" style labels — absolute dates read better than relative ones across
+// a multi-week axis.
+function dailyPointToChartDatum(d: { date: string; avg_score: number; checks_count: number }) {
+  return {
+    date: new Date(`${d.date}T00:00:00Z`).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    }),
+    score: d.avg_score,
+    checks: d.checks_count,
+  };
+}
+
 function formatRelativeTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   const now = new Date();
@@ -222,6 +249,10 @@ function SystemHealth() {
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
+  // Window (days) for the History tab's daily-average view. The Overview
+  // trend chart stays pinned to 30 days; when 30 is selected here both tabs
+  // share one cached query (identical queryKey).
+  const [historyDays, setHistoryDays] = useState<number>(30);
 
   // Fetch alerts from API
   const {
@@ -253,6 +284,12 @@ function SystemHealth() {
   const { data: agentHealthData } = useAgentHealth({ refetchInterval: 60000 });
   const { data: pipelineHealthData } = usePipelineHealth({ refetchInterval: 60000 });
   const { data: healthHistoryData } = useHealthHistory(20, 30, { refetchInterval: 120000 });
+  // History-tab query follows the window dropdown. At the default 30 days this
+  // has the same queryKey as the Overview query above, so TanStack serves both
+  // from one fetch; other windows get their own cache entry.
+  const { data: windowedHistoryData } = useHealthHistory(20, historyDays, {
+    refetchInterval: 120000,
+  });
 
   // Service Status + Model Health are now wired to the real backend endpoints
   // (GET /health-score/components, GET /health-score/models). #927 built these
@@ -293,11 +330,11 @@ function SystemHealth() {
       modelId: m.model_id,
       name: m.model_name,
       status: mapModelStatus(m.status),
-      // null = unmeasured (no ml_performance_metrics source). Preserve null so
-      // the card renders "—" instead of a fabricated 0 / 0% / 0.00.
+      // null = unmeasured. Preserve null so the card renders "—" instead of a
+      // fabricated 0 / 0% / 0.00.
       accuracy: m.accuracy ?? null,
-      errorRate: m.error_rate ?? null,
-      predictions24h: m.predictions_last_24h ?? null,
+      aucRoc: m.auc_roc ?? null,
+      f1: m.f1_score ?? null,
     }));
   }, [modelHealthData]);
 
@@ -364,6 +401,20 @@ function SystemHealth() {
   const healthTrend =
     historyFullyTrusted && !anyUntrustedDaily ? (healthHistoryData?.trend ?? null) : null;
 
+  // History-tab rows follow the selected window — same trust filtering as the
+  // pinned 30-day payload above: untrusted rows/buckets are suppressed, never
+  // replotted as historical truth.
+  const windowedChecks = useMemo(
+    () =>
+      (windowedHistoryData?.checks ?? []).filter((c) => isTrustedProvenance(c.data_provenance)),
+    [windowedHistoryData]
+  );
+  const windowedDaily = useMemo(
+    () =>
+      (windowedHistoryData?.daily ?? []).filter((d) => isTrustedProvenance(d.data_provenance)),
+    [windowedHistoryData]
+  );
+
   // Group agents by tier
   const agentsByTier = useMemo(() => {
     const grouped: Record<number, AgentHealth[]> = {};
@@ -383,40 +434,34 @@ function SystemHealth() {
     [healthHistoryData]
   );
 
-  // Prepare chart data
+  // Prepare chart data (History tab — follows the window dropdown's query)
   const historyChartData = useMemo(() => {
-    return healthHistory.map(item => ({
+    return windowedChecks.map(item => ({
       date: formatDate(item.timestamp),
       score: item.overall_health_score,
       grade: item.health_grade,
     }));
-  }, [healthHistory]);
+  }, [windowedChecks]);
 
   // History-tab stats describe exactly the checks the chart above them draws
   // (the newest `limit` trusted rows) — NOT the full `days` window the
   // backend aggregates cover. On the durable path those differ: mixing them
   // rendered a last-20 chart under a 30-day average/trend (codex round-2
-  // MED). The window-scoped view lives on the Overview daily chart.
-  const shownScores = healthHistory.map((c) => c.overall_health_score);
+  // MED). The window-scoped view is the daily-averages chart above.
+  const shownScores = windowedChecks.map((c) => c.overall_health_score);
   const shownAvgScore =
     shownScores.length > 0
       ? shownScores.reduce((sum, s) => sum + s, 0) / shownScores.length
       : null;
   const shownTrend = trendFromScores(shownScores);
 
-  const dailyChartData = useMemo(() => {
-    return dailyHistory.map((d) => ({
-      // "Jul 3" style labels — absolute dates read better than relative ones
-      // across a 30-day axis.
-      date: new Date(`${d.date}T00:00:00Z`).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        timeZone: 'UTC',
-      }),
-      score: d.avg_score,
-      checks: d.checks_count,
-    }));
-  }, [dailyHistory]);
+  const dailyChartData = useMemo(() => dailyHistory.map(dailyPointToChartDatum), [dailyHistory]);
+
+  // Same daily-average series for the History tab, over the selected window.
+  const windowedDailyChartData = useMemo(
+    () => windowedDaily.map(dailyPointToChartDatum),
+    [windowedDaily]
+  );
 
   const componentScoreData = useMemo(() => {
     // No fabricated scores: show no bars until a real health check loads, and
@@ -676,10 +721,12 @@ function SystemHealth() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={200}>
+                  {/* width 100: at 80 the longest category label ("Components")
+                      was clipped on the y-axis. */}
                   <BarChart data={componentScoreData} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                     <XAxis type="number" domain={[0, 100]} />
-                    <YAxis type="category" dataKey="name" width={80} />
+                    <YAxis type="category" dataKey="name" width={100} />
                     <Tooltip formatter={(value) => [`${value ?? 0}%`, 'Score']} />
                     <Bar dataKey="score" radius={[0, 4, 4, 0]}>
                       {componentScoreData.map((entry, index) => (
@@ -778,7 +825,9 @@ function SystemHealth() {
                   <Brain className="h-5 w-5" />
                   Model Health
                 </CardTitle>
-                <CardDescription>ML model status and live performance</CardDescription>
+                <CardDescription>
+                  ML model status and latest evaluated performance
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 {models.length === 0 ? (
@@ -814,6 +863,11 @@ function SystemHealth() {
                           <StatusBadge status={mapHealthToStatus(model.status)} size="sm" />
                         )}
                       </div>
+                      {/* Rows show the metrics the platform actually measures
+                          (latest weekly evaluation). Serving-side rows (error
+                          rate, predictions/24h) were removed: no online
+                          serving telemetry exists, so they could never be
+                          anything but "—". */}
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-[var(--color-muted-foreground)]">Accuracy</span>
@@ -822,16 +876,12 @@ function SystemHealth() {
                           </span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-[var(--color-muted-foreground)]">Error rate</span>
-                          <span className={model.errorRate !== null && model.errorRate > 0.1 ? 'text-amber-600' : ''}>
-                            {model.errorRate !== null ? `${(model.errorRate * 100).toFixed(1)}%` : '—'}
-                          </span>
+                          <span className="text-[var(--color-muted-foreground)]">AUC-ROC</span>
+                          <span>{model.aucRoc !== null ? model.aucRoc.toFixed(2) : '—'}</span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-[var(--color-muted-foreground)]">Predictions (24h)</span>
-                          <span>
-                            {model.predictions24h !== null ? model.predictions24h.toLocaleString() : '—'}
-                          </span>
+                          <span className="text-[var(--color-muted-foreground)]">F1 score</span>
+                          <span>{model.f1 !== null ? model.f1.toFixed(2) : '—'}</span>
                         </div>
                       </div>
                     </div>
@@ -962,13 +1012,68 @@ function SystemHealth() {
         <TabsContent value="history" className="space-y-6">
           <Card>
             <CardHeader>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-5 w-5" />
+                    Health Score History
+                  </CardTitle>
+                  <CardDescription className="mt-1.5">
+                    Daily average health score over the selected window
+                  </CardDescription>
+                </div>
+                <Select
+                  value={String(historyDays)}
+                  onValueChange={(v) => setHistoryDays(Number(v))}
+                >
+                  <SelectTrigger className="w-36" aria-label="History window">
+                    <SelectValue placeholder="Window" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {HISTORY_WINDOWS.map((d) => (
+                      <SelectItem key={d} value={String(d)}>
+                        Last {d} days
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {windowedDailyChartData.length === 0 ? (
+                <EmptyState
+                  title="No recorded checks in this window"
+                  description="Durable health history accumulates as full checks run (a scheduled check fires every 6 hours). Try a wider window or check back later."
+                />
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={windowedDailyChartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis domain={[60, 100]} />
+                    <Tooltip formatter={(value) => [`${value ?? 0}`, 'Avg Health Score']} />
+                    <Line
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#10b981"
+                      strokeWidth={2}
+                      dot={{ fill: '#10b981', strokeWidth: 2 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Activity className="h-5 w-5" />
-                Health Score History
+                Recent Checks
               </CardTitle>
               <CardDescription>
                 Most recent recorded health checks — the stats below describe the plotted
-                series; the 30-day view lives on the Overview tab
+                series, not the full window
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -991,7 +1096,7 @@ function SystemHealth() {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              {/* All three stats are computed over healthHistory — the same
+              {/* All three stats are computed over windowedChecks — the same
                   trusted rows the chart plots — never the backend's
                   window-wide aggregates, which on the durable path describe
                   up to `days` of checks the capped list doesn't show. */}
@@ -1011,7 +1116,7 @@ function SystemHealth() {
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Checks Shown</p>
-                  <p className="text-2xl font-bold">{healthHistory.length}</p>
+                  <p className="text-2xl font-bold">{windowedChecks.length}</p>
                 </div>
               </div>
             </CardContent>

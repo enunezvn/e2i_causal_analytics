@@ -121,11 +121,13 @@ const measuredComponentHealth = {
 };
 
 // Real-shaped /models payload (mirrors ModelHealthResponse). The backend
-// model_health domain reports status (measured) plus accuracy / error_rate /
-// predictions_last_24h, each of which is left null when ml_performance_metrics
-// has no source row. It does NOT return drift scores or a performance trend.
-// First model = performance sub-fields populated; second = partial (sub-fields
-// null) — exactly the two states the live endpoint emits.
+// model_health domain reports status (measured) plus the latest evaluated
+// metrics (accuracy / auc_roc / f1_score, sourced from ml_performance_metrics
+// via migration 103); each is left null when no evaluation row exists. It does
+// NOT return drift scores, a performance trend, or serving telemetry
+// (error_rate / predictions_last_24h stay null — no online serving exists).
+// First model = eval metrics populated; second = partial (metrics null) —
+// exactly the two states the live endpoint emits.
 const measuredModelHealth = {
   model_health_score: 0.75,
   total_models: 2,
@@ -137,8 +139,10 @@ const measuredModelHealth = {
       model_id: 'mdl-001',
       model_name: 'CSU Initiation Model',
       accuracy: 0.83,
-      error_rate: 0.04,
-      predictions_last_24h: 1500,
+      auc_roc: 0.81,
+      f1_score: 0.74,
+      error_rate: null,
+      predictions_last_24h: null,
       status: 'healthy',
     },
     {
@@ -146,6 +150,8 @@ const measuredModelHealth = {
       model_name: 'Remission Propensity Model',
       // unmeasured performance sub-fields stay null (partial provenance)
       accuracy: null,
+      auc_roc: null,
+      f1_score: null,
       error_rate: null,
       predictions_last_24h: null,
       status: 'degraded',
@@ -545,6 +551,62 @@ describe('SystemHealth', () => {
     expect(screen.queryByText('120')).not.toBeInTheDocument();
   });
 
+  // ===========================================================================
+  // HISTORY WINDOW DROPDOWN: the History tab plots daily averages over a
+  // user-selected window (7/14/30/60/90 days); the dropdown drives the `days`
+  // parameter of the History-tab query. The Overview chart stays pinned to 30.
+  // ===========================================================================
+
+  it('drives the History-tab query days from the window dropdown', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    // Default window: both the Overview and History queries ask for 30 days.
+    expect(useHealthHistory).toHaveBeenCalledWith(20, 30, expect.anything());
+
+    fireEvent.click(screen.getByRole('combobox', { name: /history window/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'Last 7 days' }));
+
+    // The History-tab query now follows the selected window…
+    expect(useHealthHistory).toHaveBeenCalledWith(20, 7, expect.anything());
+    // …while the Overview query stays pinned to 30 days.
+    expect(useHealthHistory).toHaveBeenCalledWith(20, 30, expect.anything());
+  });
+
+  it('renders the windowed daily-average chart from trusted daily buckets on the History tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 8,
+        checks: [historyRow({})],
+        avg_health_score: 88.0,
+        trend: 'stable',
+        daily: [
+          { date: '2026-07-04', avg_score: 87, min_score: 86, max_score: 90, checks_count: 4, data_provenance: 'measured' },
+          { date: '2026-07-05', avg_score: 89, min_score: 86, max_score: 90, checks_count: 4, data_provenance: 'measured' },
+        ],
+        window_days: 30,
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    expect(screen.getByText('Daily average health score over the selected window')).toBeInTheDocument();
+    expect(screen.queryByText('No recorded checks in this window')).not.toBeInTheDocument();
+  });
+
+  it('shows an honest empty state on the History tab when the window has no daily buckets', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    expect(screen.getByText('No recorded checks in this window')).toBeInTheDocument();
+  });
+
   it('suppresses wrapper aggregates on a zero-row history — fabricated trend/average never fail open (codex PR-4 round 7)', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     // The real backend sends trend "unknown" / average null for empty history;
@@ -701,6 +763,26 @@ describe('SystemHealth', () => {
     expect(screen.queryByText(/Drift/i)).not.toBeInTheDocument();
   });
 
+  it('renders the measured eval metrics (accuracy / AUC-ROC / F1) per model card', () => {
+    (useModelHealth as MockFn).mockReturnValue({
+      data: measuredModelHealth,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    // Real values from the latest weekly evaluation (migration 103 columns).
+    // "83%" renders twice (accuracy row + ProgressRing label), so use getAll.
+    expect(screen.getAllByText('83%').length).toBeGreaterThan(0);
+    expect(screen.getByText('0.81')).toBeInTheDocument();
+    expect(screen.getByText('0.74')).toBeInTheDocument();
+    // Serving-telemetry rows were REMOVED: no online serving exists on this
+    // platform, so "Error rate" / "Predictions (24h)" could never be anything
+    // but "—" — the card must not render permanently-dead rows.
+    expect(screen.queryByText('Error rate')).not.toBeInTheDocument();
+    expect(screen.queryByText('Predictions (24h)')).not.toBeInTheDocument();
+  });
+
   it('shows honest "—" for unmeasured model performance sub-fields (no fabricated zeros)', () => {
     (useModelHealth as MockFn).mockReturnValue({
       data: measuredModelHealth,
@@ -709,8 +791,8 @@ describe('SystemHealth', () => {
 
     render(<SystemHealth />, { wrapper: createWrapper() });
 
-    // The 2nd model has null accuracy/error_rate/predictions: those must render
-    // as "—", never as a fabricated 0 / 0% / 0.00.
+    // The 2nd model has null accuracy/auc_roc/f1_score: those must render as
+    // "—", never as a fabricated 0 / 0% / 0.00.
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
