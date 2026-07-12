@@ -2103,10 +2103,11 @@ def test_fetch_model_health_excludes_synthetic_even_with_metric():
 
 
 def test_fetch_model_health_partial_even_with_auc_metric():
-    """A real auc value populates auc_roc, but precision/recall/f1/latency/
-    predictions/error_rate have no source (ml_performance_metrics empty), so the
-    dimension is honestly PARTIAL — never MEASURED — and the unsourced count/rate
-    fields are NULL, not a fabricated 0."""
+    """A real auc value populates auc_roc, but latency/predictions/error_rate
+    have no serving-telemetry source, so the dimension is honestly PARTIAL —
+    never MEASURED — and the unsourced count/rate fields are NULL, not a
+    fabricated 0. (Pre-migration-103 rows without named metric columns still
+    map through the generic latest_metric_value fallback.)"""
     db = _FakeDB(
         {
             "ml_model_health_dashboard": [
@@ -2125,6 +2126,44 @@ def test_fetch_model_health_partial_even_with_auc_metric():
         models, prov = _fetch_model_health()
     assert prov == DataProvenance.PARTIAL
     assert models[0].auc_roc == 0.83
+    assert models[0].predictions_last_24h is None
+    assert models[0].error_rate is None
+
+
+def test_fetch_model_health_named_metrics_beat_generic_latest():
+    """Migration 103: the view's named latest_accuracy/latest_auc_roc/latest_f1
+    columns populate the eval metrics even when the GENERIC latest-metric
+    LATERAL landed on a non-scalar row (primary_metric='confusion_matrix') —
+    the live-data shape that left 8 of 12 gold-standard models with NO
+    displayed accuracy on /system-health."""
+    db = _FakeDB(
+        {
+            "ml_model_health_dashboard": [
+                {
+                    "model_id": "m1",
+                    "model_name": "persistence_kisqali_goldstd_lr_v1",
+                    "model_stage": "staging",
+                    "health_status": "healthy",
+                    # Generic LATERAL landed on a confusion_matrix summary row:
+                    # maps to NOTHING displayable on its own.
+                    "latest_metric_value": 0.71,
+                    "primary_metric": "confusion_matrix",
+                    "is_synthetic": False,
+                    # Named columns (migration 103) carry the real eval metrics.
+                    "latest_accuracy": 0.710256,
+                    "latest_auc_roc": 0.773,
+                    "latest_f1": 0.68,
+                },
+            ]
+        }
+    )
+    with _patch_health_client(db):
+        models, prov = _fetch_model_health()
+    assert prov == DataProvenance.PARTIAL
+    assert models[0].accuracy == pytest.approx(0.710256)
+    assert models[0].auc_roc == pytest.approx(0.773)
+    assert models[0].f1_score == pytest.approx(0.68)
+    # The confusion_matrix generic value must NOT leak into accuracy/auc.
     assert models[0].predictions_last_24h is None
     assert models[0].error_rate is None
 
@@ -2165,6 +2204,41 @@ def test_fetch_pipeline_health_latest_per_pipeline_and_status():
     by_name = {p.pipeline_name: p for p in pipelines}
     assert by_name["rwd_ingest"].status == PipelineStatus.STALE  # 2019 run -> very stale
     assert by_name["broken"].status == PipelineStatus.FAILED
+
+
+def test_fetch_pipeline_health_excludes_synthetic_rows():
+    """Synthetic showcase rows (rwd_ingest, planted for the TTR KPI) must be
+    excluded like _fetch_model_health does — they go stale between reseeds and
+    scored the pipeline dimension at 50% as if a real pipeline were failing.
+    All-synthetic table -> honest empty roster tagged UNKNOWN; a real row
+    alongside synthetic ones survives alone."""
+    synthetic_row = {
+        "pipeline_name": "rwd_ingest",
+        "run_end": "2026-07-08T14:44:00+00:00",
+        "run_start": "2026-07-08T10:00:00+00:00",
+        "records_processed": 50000,
+        "status": "completed",
+        "is_synthetic": True,
+    }
+    db = _FakeDB({"etl_pipeline_metrics": [synthetic_row]})
+    with _patch_health_client(db):
+        pipelines, prov = _fetch_pipeline_health()
+    assert pipelines == []
+    assert prov == DataProvenance.UNKNOWN
+
+    real_row = {
+        "pipeline_name": "real_etl",
+        "run_end": "2026-06-12T00:00:00+00:00",
+        "run_start": "2026-06-12T00:00:00+00:00",
+        "records_processed": 100,
+        "status": "completed",
+        "is_synthetic": False,
+    }
+    db = _FakeDB({"etl_pipeline_metrics": [synthetic_row, real_row]})
+    with _patch_health_client(db):
+        pipelines, prov = _fetch_pipeline_health()
+    assert prov == DataProvenance.MEASURED
+    assert [p.pipeline_name for p in pipelines] == ["real_etl"]
 
 
 def test_fetch_agent_health_partial_null_metrics_without_telemetry():

@@ -839,10 +839,11 @@ async def get_pipeline_health() -> PipelineHealthResponse:
     Checks data freshness, processing success, and row counts.
 
     Behavior: reads REAL pipeline health from etl_pipeline_metrics (latest run
-    per pipeline; freshness computed from run_end), tagged
-    ``data_provenance="measured"``. Only when the backend is unreachable does it
-    fall back to the #429 guard: 503 in production, clearly-tagged placeholder in
-    dev/test.
+    per pipeline; freshness computed from run_end; synthetic showcase rows
+    excluded), tagged ``data_provenance="measured"``. An empty-but-reachable
+    table yields an empty roster tagged ``unknown``. Only when the backend is
+    unreachable does it fall back to the #429 guard: 503 in production,
+    clearly-tagged placeholder in dev/test.
 
     Returns:
         Pipeline health details (measured from etl_pipeline_metrics)
@@ -1313,9 +1314,16 @@ async def _fetch_component_health() -> tuple[List[ComponentHealth], Optional[Dat
 def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
     """Real model health from ml_model_health_dashboard (production stage).
 
-    Performance sub-fields (accuracy/precision/latency/...) have no source while
-    ml_performance_metrics is empty, so they are left null and the provenance is
-    PARTIAL. The status/drift/alert signals are genuinely measured.
+    Eval metrics (accuracy/auc_roc/f1) are measured: the weekly gold-standard
+    retrain writes them to ml_performance_metrics and migration 103 exposes the
+    latest value of each named metric on the view (the generic
+    latest_metric_value LATERAL often lands on a confusion_matrix/roc_curve
+    summary row, which maps to nothing displayable). Serving-side sub-fields
+    (latency/predictions_last_24h/error_rate) still have NO source — the models
+    are weekly-retrained batch models with no online serving telemetry
+    (ml_bentoml_serving_metrics is unwritten) — so they stay null and the
+    provenance is PARTIAL. The status/drift/alert signals are genuinely
+    measured.
     """
     db = _health_source_client()
     if db is None:
@@ -1329,7 +1337,8 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
             .select(
                 "model_id, model_name, model_stage, health_status, latest_metric_value, "
                 "primary_metric, has_active_drift, max_drift_severity, performance_degraded, "
-                "active_alerts, critical_alerts, is_synthetic"
+                "active_alerts, critical_alerts, is_synthetic, "
+                "latest_accuracy, latest_auc_roc, latest_f1"
             )
             # Exclude synthetic experiment artifacts STRUCTURALLY (migration 031
             # exposes is_synthetic on the view). The registry holds 720
@@ -1348,29 +1357,39 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
             .data
             or []
         )
+
+        def _num(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return None
+
         models: List[ModelHealth] = []
         for r in rows:
-            metric_val = r.get("latest_metric_value")
+            # Named latest metrics (migration 103) are the primary source.
+            # Fall back to the generic latest_metric_value mapping only when a
+            # named column is absent (pre-103 view) — never fabricate.
+            acc = _num(r.get("latest_accuracy"))
+            auc = _num(r.get("latest_auc_roc"))
+            f1 = _num(r.get("latest_f1"))
+            generic = _num(r.get("latest_metric_value"))
             primary = (r.get("primary_metric") or "").strip().lower()
-            auc = None
-            acc = None
-            if metric_val is not None:
-                try:
-                    v = float(metric_val)
-                    if "auc" in primary:
-                        auc = v
-                    elif primary in ("accuracy", "acc"):
-                        acc = v
-                except (ValueError, TypeError):
-                    pass
+            if generic is not None:
+                if auc is None and "auc" in primary:
+                    auc = generic
+                elif acc is None and primary in ("accuracy", "acc"):
+                    acc = generic
             models.append(
                 ModelHealth(
                     model_id=str(r.get("model_id") or r.get("model_name") or "unknown"),
                     model_name=str(r.get("model_name") or "unknown"),
                     accuracy=acc,
                     auc_roc=auc,
-                    # precision/recall/f1/latencies/predictions/error_rate have
-                    # NO source (ml_performance_metrics empty) -> left null.
+                    f1_score=f1,
+                    # latencies/predictions_last_24h/error_rate have NO source
+                    # (no online serving telemetry) -> left null.
                     status=_map_model_status(r.get("health_status")),
                 )
             )
@@ -1379,15 +1398,17 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
         return [], None
     if not models:
         return [], DataProvenance.UNKNOWN
-    # ALWAYS PARTIAL: the dashboard view sources status/drift and at most one
-    # metric (auc/accuracy), but precision/recall/f1/latency/predictions/
-    # error_rate have no source, so the dimension is never fully measured. Never
-    # MEASURED here -> we never present those null/structural fields as real.
+    # ALWAYS PARTIAL: the dashboard view sources status/drift and the latest
+    # eval metrics (accuracy/auc_roc/f1), but latency/predictions_last_24h/
+    # error_rate have no serving-telemetry source, so the dimension is never
+    # fully measured. Never MEASURED here -> we never present those
+    # null/structural fields as real.
     return models, DataProvenance.PARTIAL
 
 
 def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvenance]]:
-    """Real pipeline health: latest run per pipeline from etl_pipeline_metrics."""
+    """Real pipeline health: latest run per non-synthetic pipeline from
+    etl_pipeline_metrics."""
     db = _health_source_client()
     if db is None:
         return [], None
@@ -1396,6 +1417,15 @@ def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvena
         rows = (
             db.table("etl_pipeline_metrics")
             .select("pipeline_name, run_start, run_end, records_processed, status, created_at")
+            # Exclude synthetic showcase rows, mirroring _fetch_model_health. The
+            # table's only pipeline (rwd_ingest, 50k rows, ALL is_synthetic=true)
+            # is planted by coverage_tables_generator for the TTR KPI and goes
+            # STALE (>48h) between reseeds — scoring the dimension at 50% as if a
+            # real pipeline were failing. No real ETL telemetry writes this table
+            # yet; an empty result is the honest reading (UNKNOWN provenance, and
+            # the pipeline node scores an empty-but-reachable fleet as measured
+            # healthy).
+            .eq("is_synthetic", False)
             .order("run_end", desc=True)
             .limit(2000)
             .execute()
