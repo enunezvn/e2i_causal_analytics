@@ -445,3 +445,61 @@ def test_fallback_appends_causal_levers_when_present():
     out = generate_insight(g)  # LM off in tests -> deterministic fallback
     assert out["is_fallback"] is True
     assert "rep detailing frequency" in out["insight"]
+
+
+# ---------------------------------------------------------------------------
+# clinical_context (2026-07-12: commercial outputs don't happen in a clinical
+# vacuum — the brief cites the brand's clinical setting qualitatively)
+# ---------------------------------------------------------------------------
+
+CLINICAL_CONTEXT = (
+    "Clinical setting for Remibrutinib (remibrutinib): Bruton tyrosine kinase "
+    "(BTK) inhibitor, indicated for chronic spontaneous urticaria. Key "
+    "competitors (curated reference): Xolair (omalizumab). Context from public "
+    "biomedical and regulatory sources; reference qualitatively."
+)
+
+
+def test_build_grounding_carries_digit_free_clinical_context():
+    """Same contract as the causal levers: the placeholder guard fails closed
+    on ANY numeric character in LM output, so the clinical setting the LM sees
+    must be digit-free by construction, identical on both channels."""
+    g = _grounding(clinical_context=CLINICAL_CONTEXT)
+    assert "BTK" in g["lm_clinical_context"]
+    assert not any(ch.isnumeric() for ch in g["lm_clinical_context"]), g["lm_clinical_context"]
+    assert g["clinical_context"] == g["lm_clinical_context"]
+    assert any(c["label"] == "Clinical context" for c in g["grounding"])
+
+
+def test_build_grounding_drops_digit_bearing_clinical_context_defensively():
+    g = _grounding(clinical_context="Indicated for patients 12 years of age and older.")
+    assert "12" not in g["lm_clinical_context"]
+    assert "no clinical context" in g["lm_clinical_context"].lower()
+    assert not any(c["label"] == "Clinical context" for c in g["grounding"])
+
+
+def test_build_grounding_without_clinical_context_says_none():
+    g = _grounding()
+    assert "no clinical context" in g["lm_clinical_context"].lower()
+    assert not any(ch.isnumeric() for ch in g["lm_clinical_context"])
+
+
+def test_fallback_appends_clinical_context_when_present(monkeypatch):
+    monkeypatch.setattr("src.insights.executive_brief.run_signature", lambda *a, **k: None)
+    g = _grounding(clinical_context=CLINICAL_CONTEXT)
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert "BTK" in out["insight"]
+
+
+def test_generate_insight_passes_clinical_context_to_the_lm(monkeypatch):
+    captured = {}
+
+    def _capture(sig, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr("src.insights.executive_brief.run_signature", _capture)
+    g = _grounding(clinical_context=CLINICAL_CONTEXT)
+    generate_insight(g)
+    assert captured.get("clinical_context") == CLINICAL_CONTEXT

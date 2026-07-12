@@ -19,6 +19,16 @@ def _force_fallback_and_auth(monkeypatch):
         "src.optimization.dspy_lm.ensure_dspy_configured",
         lambda *a, **k: False,
     )
+
+    # Keep the strategic-insight routes HERMETIC: the exec-brief/HTE routes now
+    # fetch clinical context, which fans out to real OpenFDA/ChEMBL/CT.gov/PubMed
+    # REST APIs. Default to the honest fail-open result (None) so tests neither
+    # hit the network nor go flaky; the dedicated clinical-context tests below
+    # override this with a real payload.
+    async def _no_clinical(brand, outcome="TRx"):
+        return None
+
+    monkeypatch.setattr("src.insights.clinical_context.fetch_clinical_payload", _no_clinical)
     app.dependency_overrides[require_analyst] = lambda: {"user_id": "test", "role": "analyst"}
     yield
     app.dependency_overrides.pop(require_analyst, None)
@@ -517,6 +527,71 @@ def test_hte_insight_incomplete_run_degrades_honestly(test_client, monkeypatch):
     assert data["is_fallback"] is True
     assert "'failed'" in data["insight"]
     assert data["provenance"] == "Persisted segment-level CATE analysis (incomplete run)"
+
+
+_CLINICAL_PAYLOAD = {
+    "brand": "Remibrutinib",
+    "drug_name": "remibrutinib",
+    "disease": "chronic spontaneous urticaria",
+    "our_outcome": "persistent_180d",
+    "mapped_endpoint": "UAS7 change",
+    "mechanism": {"mechanism_of_action": "BTK inhibitor", "source": "chembl"},
+    "pivotal_endpoints": {"endpoints": [], "source": "clinicaltrials.gov"},
+    "real_world_evidence": None,
+    "seminal_real_world_evidence": None,
+    "approved_indications": {
+        "indications": [],
+        "limitations_of_use": None,
+        "boxed_warning": None,
+        "source": "openfda",
+    },
+    "competitor_landscape": {
+        "competitors": ["Xolair (omalizumab)"],
+        "count": 1,
+        "source": "curated",
+    },
+    "honesty_label": "label",
+}
+
+
+def test_hte_insight_fallback_surfaces_clinical_context(test_client, monkeypatch):
+    # Commercial outputs don't happen in a clinical vacuum: when the clinical
+    # fetch returns a payload, the (digit-free) clinical setting appears in the
+    # deterministic fallback narrative and grounding chips.
+    async def _get(analysis_id):
+        return _hte_record()
+
+    async def _clinical(brand, outcome="TRx"):
+        assert brand == "Remibrutinib"
+        assert outcome == "persistent_180d"  # the analyzed outcome, not a default
+        return _CLINICAL_PAYLOAD
+
+    monkeypatch.setattr("src.api.routes.segments.get_persisted_analysis", _get)
+    monkeypatch.setattr("src.insights.clinical_context.fetch_clinical_payload", _clinical)
+    _force_insight_cache_miss(monkeypatch)
+    r = test_client.post("/api/insights/hte", json={"analysis_id": "seg_test123"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "BTK inhibitor" in data["insight"]
+    assert any(c["label"] == "Clinical context" for c in data["grounding"])
+
+
+def test_executive_brief_fallback_surfaces_clinical_context(test_client, monkeypatch):
+    async def _feed(**kwargs):
+        return _fake_opportunities_feed()
+
+    async def _clinical(brand, outcome="TRx"):
+        assert brand == "Kisqali"  # the requested brand reaches the fetch
+        return _CLINICAL_PAYLOAD
+
+    monkeypatch.setattr("src.api.routes.gaps.list_opportunities", _feed)
+    monkeypatch.setattr("src.insights.clinical_context.fetch_clinical_payload", _clinical)
+    _force_insight_cache_miss(monkeypatch)
+    r = test_client.post("/api/insights/executive-brief", json={"brand": "Kisqali"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "BTK inhibitor" in data["insight"]
+    assert any(c["label"] == "Clinical context" for c in data["grounding"])
 
 
 # ---- /insights/home-kpis (server-derived KPI grid interpretation) --------------

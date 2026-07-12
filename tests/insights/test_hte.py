@@ -1465,3 +1465,61 @@ class TestCommercialContext:
         g = hte.build_grounding(_record(cate_by_segment={}), causal_drivers=DRIVERS)
         out = hte._fallback(g)
         assert "Registry-modeled" not in out["insight"]
+
+
+# ---------------------------------------------------------------------------
+# clinical_context (2026-07-12: the HTE read cites the brand's clinical
+# setting qualitatively — never with figures, never entering the guard vocab)
+# ---------------------------------------------------------------------------
+
+CLINICAL_CONTEXT = (
+    "Clinical setting for Remibrutinib (remibrutinib): Bruton tyrosine kinase "
+    "(BTK) inhibitor, indicated for chronic spontaneous urticaria. Key "
+    "competitors (curated reference): Xolair (omalizumab). Context from public "
+    "biomedical and regulatory sources; reference qualitatively."
+)
+
+
+class TestClinicalContext:
+    def test_build_grounding_carries_digit_free_clinical_context(self):
+        g = hte.build_grounding(_record(), clinical_context=CLINICAL_CONTEXT)
+        assert g["clinical_context"] == CLINICAL_CONTEXT
+        assert g["has_clinical_context"] is True
+        assert not any(ch.isnumeric() for ch in g["clinical_context"])
+
+    def test_build_grounding_defaults_to_honest_unavailable(self):
+        g = hte.build_grounding(_record())
+        assert "no clinical context" in g["clinical_context"].lower()
+        assert g["has_clinical_context"] is False
+
+    def test_digit_bearing_clinical_context_dropped_defensively(self):
+        # The numeric guard vouches only figures extracted from OUR grounding
+        # strings; a digit-bearing clinical string must be dropped entirely,
+        # never rendered into the prompt.
+        g = hte.build_grounding(_record(), clinical_context="Dosed at 300mg once daily.")
+        assert "300" not in g["clinical_context"]
+        assert g["has_clinical_context"] is False
+
+    def test_clinical_digits_never_enter_the_vouched_vocabulary(self):
+        g = hte.build_grounding(_record(), clinical_context="Dosed at 300mg once daily.")
+        assert "300" not in g["vouched"]
+        assert "300" not in g["global_numbers"]
+
+    def test_fallback_appends_clinical_context_when_present(self, monkeypatch):
+        monkeypatch.setattr("src.insights.hte.run_signature", lambda *a, **k: None)
+        g = hte.build_grounding(_record(), clinical_context=CLINICAL_CONTEXT)
+        out = hte.generate_insight(g)
+        assert out["is_fallback"] is True
+        assert "BTK" in out["insight"]
+
+    def test_generate_insight_passes_clinical_context_to_the_lm(self, monkeypatch):
+        captured = {}
+
+        def _capture(sig, **kwargs):
+            captured.update(kwargs)
+            return None
+
+        monkeypatch.setattr("src.insights.hte.run_signature", _capture)
+        g = hte.build_grounding(_record(), clinical_context=CLINICAL_CONTEXT)
+        hte.generate_insight(g)
+        assert captured.get("clinical_context") == CLINICAL_CONTEXT
