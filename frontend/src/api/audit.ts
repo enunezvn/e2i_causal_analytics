@@ -411,8 +411,11 @@ export async function getLowConfidenceEntries(
   threshold: number = 0.7
 ): Promise<AuditEntryResponse[]> {
   const entries = await getWorkflowEntries(workflowId);
+  // typeof check: the backend sends explicit null for actions that never
+  // record confidence (most of them) — null must not count as "below
+  // threshold" (null < 0.7 coerces null to 0 and is true).
   return entries.filter(
-    (e) => e.confidence_score !== undefined && e.confidence_score < threshold
+    (e) => typeof e.confidence_score === 'number' && e.confidence_score < threshold
   );
 }
 

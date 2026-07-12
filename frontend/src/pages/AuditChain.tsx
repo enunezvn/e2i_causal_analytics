@@ -25,6 +25,7 @@ import {
   Layers,
   Activity,
   FileText,
+  MinusCircle,
 } from 'lucide-react';
 import {
   XAxis,
@@ -414,7 +415,7 @@ function AuditChain() {
                               <Badge variant="outline" className="text-xs">
                                 Tier {entry.agent_tier}
                               </Badge>
-                              {entry.confidence_score !== undefined && (
+                              {typeof entry.confidence_score === 'number' && (
                                 <Badge
                                   variant={entry.confidence_score >= 0.7 ? 'outline' : 'destructive'}
                                   className="text-xs"
@@ -429,10 +430,15 @@ function AuditChain() {
                             </p>
                           </div>
                           <div className="flex-shrink-0">
-                            {entry.validation_passed ? (
+                            {entry.validation_passed === true ? (
                               <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                            ) : (
+                            ) : entry.validation_passed === false ? (
                               <XCircle className="h-5 w-5 text-rose-500" />
+                            ) : (
+                              <MinusCircle
+                                className="h-5 w-5 text-[var(--color-muted-foreground)] opacity-50"
+                                aria-label="No validation for this action"
+                              />
                             )}
                           </div>
                         </div>
@@ -601,9 +607,11 @@ function AuditChain() {
                             <div className="flex items-center gap-2">
                               <span className="font-medium">{entry.agent_name}</span>
                               <Badge variant="outline">Seq #{entry.sequence_number}</Badge>
-                              <Badge variant="secondary" className="bg-amber-100 text-amber-700">
-                                {((entry.confidence_score || 0) * 100).toFixed(0)}% confidence
-                              </Badge>
+                              {typeof entry.confidence_score === 'number' && (
+                                <Badge variant="secondary" className="bg-amber-100 text-amber-700">
+                                  {(entry.confidence_score * 100).toFixed(0)}% confidence
+                                </Badge>
+                              )}
                             </div>
                             <span className="text-sm text-[var(--color-muted-foreground)]">
                               {formatDateTime(entry.created_at)}

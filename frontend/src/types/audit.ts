@@ -39,14 +39,16 @@ export interface AuditEntryResponse {
   action_type: string;
   /** Entry creation timestamp (ISO format) */
   created_at: string;
-  /** Processing duration in milliseconds */
-  duration_ms?: number;
+  /** Processing duration in milliseconds (null when not recorded) */
+  duration_ms?: number | null;
 
-  // Validation & confidence
-  /** Whether validation checks passed */
-  validation_passed?: boolean;
-  /** Confidence score (0-1) */
-  confidence_score?: number;
+  // Validation & confidence — the backend serializes explicit JSON null for
+  // actions where these don't apply (only refutation nodes record
+  // validation_passed; only estimation nodes record confidence_score).
+  /** Whether validation checks passed (null = not applicable to this action) */
+  validation_passed?: boolean | null;
+  /** Confidence score (0-1; null = not recorded for this action) */
+  confidence_score?: number | null;
   /** Results from refutation testing */
   refutation_results?: Record<string, unknown>;
 
@@ -117,8 +119,8 @@ export interface WorkflowSummaryResponse {
   // Aggregated metrics
   /** Total processing time across all entries */
   total_duration_ms: number;
-  /** Average confidence score across entries */
-  avg_confidence_score?: number;
+  /** Average confidence score across entries (null when none recorded) */
+  avg_confidence_score?: number | null;
   /** Count of entries that passed validation */
   validation_passed_count: number;
   /** Count of entries that failed validation */

@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 vi.mock('@/lib/api-client', () => ({ get: vi.fn() }));
 
 import { get } from '@/lib/api-client';
-import { getWorkflowDetails } from './audit';
+import { getWorkflowDetails, getLowConfidenceEntries } from './audit';
 
 describe('getWorkflowDetails — resilient to verify failure', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -53,5 +53,34 @@ describe('getWorkflowDetails — resilient to verify failure', () => {
     });
 
     await expect(getWorkflowDetails('wf1')).rejects.toThrow();
+  });
+});
+
+describe('getLowConfidenceEntries — null confidence is "not recorded", not zero', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('excludes entries whose confidence_score is null (most actions never record one)', async () => {
+    // The backend serializes explicit null for actions that don't record
+    // confidence; `null < 0.7` coerces null to 0, which used to flood the
+    // low-confidence list with fabricated 0% entries.
+    (get as Mock).mockResolvedValue([
+      { entry_id: 'e1', agent_name: 'health_score', confidence_score: null },
+      { entry_id: 'e2', agent_name: 'model_selector', confidence_score: 0.85 },
+      { entry_id: 'e3', agent_name: 'estimator', confidence_score: 0.4 },
+    ]);
+
+    const low = await getLowConfidenceEntries('wf1', 0.7);
+
+    expect(low.map((e) => e.entry_id)).toEqual(['e3']);
+  });
+
+  it('keeps a genuine measured 0 confidence', async () => {
+    (get as Mock).mockResolvedValue([
+      { entry_id: 'e1', agent_name: 'estimator', confidence_score: 0 },
+    ]);
+
+    const low = await getLowConfidenceEntries('wf1', 0.7);
+
+    expect(low.map((e) => e.entry_id)).toEqual(['e1']);
   });
 });
