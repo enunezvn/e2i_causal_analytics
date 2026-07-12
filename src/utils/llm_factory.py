@@ -42,6 +42,8 @@ from typing import Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
+from src.utils.llm_usage_callback import UsageRecorderCallback
+
 # Type alias for LLM providers
 LLMProvider = Literal["anthropic", "openai"]
 
@@ -138,6 +140,9 @@ def _create_anthropic_llm(
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # Usage capture (spec 2026-07-12): construction-time callbacks fire on
+        # invoke AND astream, covering every factory consumer.
+        "callbacks": [UsageRecorderCallback(provider="anthropic", default_model=model)],
     }
     if timeout is not None:
         kwargs["timeout"] = timeout
@@ -168,6 +173,10 @@ def _create_openai_llm(
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # stream_usage: OpenAI omits usage on streamed responses unless asked
+        # (Anthropic streams usage by default).
+        "stream_usage": True,
+        "callbacks": [UsageRecorderCallback(provider="openai", default_model=model)],
     }
     if timeout is not None:
         kwargs["request_timeout"] = timeout

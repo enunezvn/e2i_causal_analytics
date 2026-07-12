@@ -10,3 +10,4 @@ export { ConfirmDeleteDialog } from './ConfirmDeleteDialog';
 export { LinkDialog } from './LinkDialog';
 export { ActivityTab } from './ActivityTab';
 export { RoleLegend } from './RoleLegend';
+export { ObservabilityTab } from './ObservabilityTab';

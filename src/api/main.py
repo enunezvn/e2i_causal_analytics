@@ -294,6 +294,16 @@ async def lifespan(app: FastAPI):
         app.state.supabase_available = False
         logger.warning(f"Supabase initialization failed (degraded mode): {e}")
 
+    # LLM usage capture (admin observability, spec 2026-07-12): one global
+    # litellm logger covers all dspy.LM traffic; LangChain traffic is captured
+    # per-instance inside llm_factory. Fail-open — never blocks startup.
+    try:
+        from src.utils.litellm_usage_logger import register_litellm_usage_logger
+
+        register_litellm_usage_logger()
+    except Exception as e:  # noqa: BLE001 - never block startup on this
+        logger.warning(f"litellm usage logger registration failed (non-critical): {e}")
+
     # Initialize MLflow client (experiment tracking)
     try:
         mlflow_connector = get_mlflow_connector()

@@ -15,6 +15,7 @@ import {
   disableUser,
   enableUser,
   getAuditFeed,
+  getLlmUsage,
   getPlatformActivity,
   getUserActivity,
   inviteUser,
@@ -51,6 +52,13 @@ export function useAuditFeed(days = 30) {
   return useQuery({
     queryKey: queryKeys.admin.auditFeed(days),
     queryFn: () => getAuditFeed(days),
+  });
+}
+
+export function useLlmUsage(days = 30) {
+  return useQuery({
+    queryKey: queryKeys.admin.llmUsage(days),
+    queryFn: () => getLlmUsage(days),
   });
 }
 

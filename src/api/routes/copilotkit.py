@@ -321,6 +321,7 @@ from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
+from src.utils.llm_attribution import drain_run_usage, set_chat_attribution
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -749,6 +750,11 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
+        # Attribute this run's LLM usage to the chat user/session (admin
+        # observability, spec 2026-07-12). Both capture hooks read this
+        # contextvar; the user_id is derived from the session prefix and the
+        # anonymous UUID maps to NULL — attribution is honest-only.
+        set_chat_attribution(persistent_session_id, run_id)
         dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
 
         run_input = RunAgentInput(
@@ -1206,6 +1212,15 @@ def _persist_message_sync(
             "agent_name": agent_name,
             "metadata": row_metadata,
         }
+
+        if role == "assistant":
+            # Drain the run's token accumulator into the row (read-and-reset:
+            # sums across a session's assistant rows never double-count).
+            # None when nothing was captured — honest NULL, never fabricated.
+            drained = drain_run_usage()
+            if drained:
+                message_data["tokens_used"] = drained.input_tokens + drained.output_tokens
+                message_data["model_used"] = drained.last_model
 
         result = client.table("chatbot_messages").insert(message_data).execute()
 

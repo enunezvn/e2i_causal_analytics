@@ -14,8 +14,9 @@ import { UsersTable } from '@/components/admin/UsersTable';
 import { InviteUserDialog } from '@/components/admin/InviteUserDialog';
 import { ActivityTab } from '@/components/admin/ActivityTab';
 import { RoleLegend } from '@/components/admin/RoleLegend';
+import { ObservabilityTab } from '@/components/admin/ObservabilityTab';
 
-type Tab = 'users' | 'activity';
+type Tab = 'users' | 'activity' | 'observability';
 
 export default function Admin() {
   const [tab, setTab] = useState<Tab>('users');
@@ -31,7 +32,7 @@ export default function Admin() {
             Administration
           </h1>
           <p className="text-sm text-[var(--color-muted-foreground)]">
-            Invite users, manage roles and brand access, and review activity.
+            Invite users, manage roles and brand access, review activity and LLM usage.
           </p>
         </div>
         {tab === 'users' && (
@@ -46,7 +47,7 @@ export default function Admin() {
       </div>
 
       <div role="tablist" className="flex gap-2 border-b border-[var(--color-border)]">
-        {(['users', 'activity'] as const).map((t) => (
+        {(['users', 'activity', 'observability'] as const).map((t) => (
           <button
             key={t}
             role="tab"
@@ -75,6 +76,7 @@ export default function Admin() {
         </>
       )}
       {tab === 'activity' && <ActivityTab users={data?.users ?? []} />}
+      {tab === 'observability' && <ObservabilityTab />}
 
       <InviteUserDialog open={inviteOpen} onClose={() => setInviteOpen(false)} />
     </div>

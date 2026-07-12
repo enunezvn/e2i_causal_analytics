@@ -60,6 +60,7 @@ from src.repositories.chatbot_conversation import (
 from src.repositories.chatbot_message import (
     get_chatbot_message_repository,
 )
+from src.utils.llm_attribution import drain_run_usage
 from src.utils.llm_factory import get_chat_llm, get_llm_provider
 
 # MLflow metrics feature flag
@@ -1636,8 +1637,11 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                 )
                 messages_persisted += 1
 
-                # Save assistant message with full context
-                model_used = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+                # Save assistant message with full context. tokens/model come
+                # from the run's capture accumulator (drain = read-and-reset);
+                # None when nothing was captured — honest NULL, never the
+                # env-var fabrication this replaces (spec 2026-07-12).
+                drained = drain_run_usage()
                 await msg_repo.add_message(
                     session_id=session_id,
                     role="assistant",
@@ -1648,7 +1652,8 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                     tool_results=tool_results,
                     rag_context=rag_context,
                     rag_sources=rag_sources,
-                    model_used=model_used,
+                    model_used=drained.last_model if drained else None,
+                    tokens_used=(drained.input_tokens + drained.output_tokens) if drained else None,
                     metadata={
                         "request_id": state.get("request_id"),
                         "intent": state.get("intent"),

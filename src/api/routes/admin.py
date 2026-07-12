@@ -23,6 +23,7 @@ from src.services.admin_user_service import (
     AdminUserService,
     AdminValidationError,
 )
+from src.services.llm_observability_service import LLMObservabilityService
 from src.utils.security_audit import (
     SecurityAuditEvent,
     SecurityEventSeverity,
@@ -42,6 +43,16 @@ def get_admin_service() -> AdminUserService:
     if _service is None:
         _service = AdminUserService()
     return _service
+
+
+_obs_service: Optional[LLMObservabilityService] = None
+
+
+def get_llm_observability_service() -> LLMObservabilityService:
+    global _obs_service
+    if _obs_service is None:
+        _obs_service = LLMObservabilityService()
+    return _obs_service
 
 
 def _audit(
@@ -333,6 +344,24 @@ async def activity_overview(
     service: AdminUserService = Depends(get_admin_service),
 ) -> Dict[str, Any]:
     return await asyncio.to_thread(service.platform_activity, days)
+
+
+@router.get("/observability/llm-usage")
+async def llm_usage_overview(
+    days: int = Query(default=30, ge=1, le=365),
+    admin: Dict[str, Any] = Depends(require_admin),
+    service: AdminUserService = Depends(get_admin_service),
+    obs: LLMObservabilityService = Depends(get_llm_observability_service),
+) -> Dict[str, Any]:
+    """LLM usage/tokens/cost: per-user + per-session (chat) and platform
+    aggregates (spec 2026-07-12). Cost computed at read time from the
+    pricing table; unpriced models surface in unpriced_models."""
+
+    def _query() -> Dict[str, Any]:
+        users = service.list_users()
+        return obs.llm_usage(days, users)
+
+    return await asyncio.to_thread(_query)
 
 
 @router.get("/audit")
