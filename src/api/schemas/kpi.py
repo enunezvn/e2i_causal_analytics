@@ -39,7 +39,24 @@ class KPICalculationContext(BaseModel):
     )
     segment: str | None = Field(
         default=None,
-        description="Customer segment filter",
+        description=(
+            "Filter by patient severity tier (low_severity, medium_severity, "
+            "high_severity), matched case-insensitively against "
+            "patient_journeys.segment_assignment. Mutually exclusive with "
+            "region/therapy_line (the underlying RPC caps positional params at "
+            "4). When set, severity-tier-scoped KPI query variants (migration "
+            "105) are used."
+        ),
+    )
+    therapy_line: str | None = Field(
+        default=None,
+        description=(
+            "Filter by line of therapy ('0'-'3'), matched against "
+            "patient_journeys.prior_therapy_lines. Mutually exclusive with "
+            "region/segment (the underlying RPC caps positional params at 4). "
+            "When set, line-of-therapy-scoped KPI query variants (migration "
+            "105) are used."
+        ),
     )
     extra: dict[str, Any] = Field(
         default_factory=dict,

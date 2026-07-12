@@ -2633,6 +2633,8 @@ You help users with:
 You MUST use tools proactively when users ask about data:
 - Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses, triggers
 - Use kpi_calculate_tool to COMPUTE a KPI value for a brand/period (NRx, TRx, NBRx, market share, conversion rate, ROI). Pass the brand and any time window the user names, and state which brand and window your answer covers.
+- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx patient-segment breakdowns, call `kpi_calculate_tool` once per `segment` ∈ {low_severity, medium_severity, high_severity} (or once per `therapy_line` ∈ {0,1,2,3}) and present the results as a table. The three severity tiers (and the four therapy lines) sum to the total, so the breakdown reconciles with the head-line KPI.
+- HONESTY GUARD: Clinical context is background framing only. NEVER present a clinical sub-population (e.g. biologic-naïve vs. biologic-experienced, IgE tier) as an available data breakdown unless a tool actually returned per-segment values. The ONLY real segment axes are severity tier (`segment`) and line-of-therapy (`therapy_line`) exposed by kpi_calculate_tool, plus geographic `region`.
 - Use `causal_analysis_tool` for understanding metric drivers
 - Use `clinical_context_tool` to fetch a brand's REAL FDA-label indications, mechanism of action, pivotal endpoints, and competitor landscape (OpenFDA / ChEMBL / ClinicalTrials.gov / PubMed) — call it for ANY label / indication / approved-use / mechanism / on-off-label / competitive-landscape question, then frame the answer commercially instead of deflecting.
 - Use `document_retrieval_tool` for searching the knowledge base

@@ -169,3 +169,46 @@ def windowed_query_id(base_query_id: str, *, region: bool) -> str:
     if region:
         qid = f"{qid}_region"
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
+def _axis_query_id(base_query_id: str, suffix: str) -> str:
+    """Shared helper behind :func:`segment_query_id` / :func:`line_query_id`.
+
+    Appends ``suffix`` (``"_segment"`` / ``"_line"``) to ``base_query_id`` and,
+    same as :func:`region_query_id`, tacks on ``_include_synthetic`` HERE under
+    the showcase flag -- the axis variants (migration 105) are ADDITIVE and
+    absent from :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so
+    :func:`resolve_kpi_query_id` will not auto-swap them.
+    """
+    qid = f"{base_query_id}{suffix}"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
+def segment_query_id(base_query_id: str) -> str:
+    """Severity-tier-scoped query id for a base KPI query (migration 105).
+
+    Severity tier is ``patient_journeys.segment_assignment`` (low/medium/high).
+    Parallels :func:`region_query_id`; see :func:`_axis_query_id`.
+    """
+    return _axis_query_id(base_query_id, "_segment")
+
+
+def line_query_id(base_query_id: str) -> str:
+    """Line-of-therapy-scoped query id for a base KPI query (migration 105).
+
+    Line of therapy is ``patient_journeys.prior_therapy_lines`` (0-3).
+    Parallels :func:`region_query_id`; see :func:`_axis_query_id`.
+    """
+    return _axis_query_id(base_query_id, "_line")
+
+
+def windowed_axis_query_id(base_query_id: str, *, axis: str) -> str:
+    """Windowed variant id for a segment/line-scoped base KPI query.
+
+    Canonical suffix order: ``{base}_{axis}_windowed[_include_synthetic]``
+    (mirrors :func:`windowed_query_id`'s ``{base}_windowed[_region]`` order,
+    axis-first since the axis is baked into the query id rather than a
+    trailing modifier). ``axis`` is ``"segment"`` or ``"line"``.
+    """
+    qid = f"{base_query_id}_{axis}_windowed"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid

@@ -241,6 +241,8 @@ Use tools proactively:
 - Use `clinical_context_tool` for a brand's REAL FDA-label indications, mechanism, pivotal endpoints, and competitor landscape (OpenFDA / ChEMBL / ClinicalTrials.gov / PubMed) — call it for any label / indication / mechanism / competitive-landscape question, then frame it commercially
 - Use `document_retrieval_tool` for searching the knowledge base
 - Use `conversation_memory_tool` to reference previous conversation context
+- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx patient-segment breakdowns, call `kpi_calculate_tool` once per `segment` ∈ {low_severity, medium_severity, high_severity} (or once per `therapy_line` ∈ {0,1,2,3}) and present the results as a table. The three severity tiers (and the four therapy lines) sum to the total, so the breakdown reconciles with the head-line KPI.
+- HONESTY GUARD: Clinical context is background framing only. NEVER present a clinical sub-population (e.g. biologic-naïve vs. biologic-experienced, IgE tier) as an available data breakdown unless a tool actually returned per-segment values. The ONLY real segment axes are severity tier (`segment`) and line-of-therapy (`therapy_line`) exposed by `kpi_calculate_tool`, plus geographic `region`.
 
 ## Response Format
 
