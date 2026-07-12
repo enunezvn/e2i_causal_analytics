@@ -2973,7 +2973,7 @@ def create_e2i_chat_agent():
                                     {"name": tc["name"], "args": tc.get("args", {})}
                                     for tc in response.tool_calls  # type: ignore[union-attr]
                                 ],
-                                "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                                "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                             },
                             run_id=state.get("run_id"),
                         )
@@ -3003,7 +3003,7 @@ def create_e2i_chat_agent():
                             agent_name="copilotkit",
                             metadata={
                                 "source": "copilotkit",
-                                "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                                "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                                 "latency_ms": elapsed_ms,
                             },
                             run_id=state.get("run_id"),
@@ -3025,7 +3025,7 @@ def create_e2i_chat_agent():
                     tools_invoked=[],
                     primary_agent="copilotkit",
                     metadata={
-                        "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                        "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                         "direct_response": True,
                     },
                 )
@@ -3206,7 +3206,7 @@ def create_e2i_chat_agent():
                         metadata={
                             "source": "copilotkit",
                             "type": "synthesis",
-                            "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                            "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                             "tool_results": tool_results,
                             "latency_ms": elapsed_ms,
                         },
@@ -3224,7 +3224,7 @@ def create_e2i_chat_agent():
                     tools_invoked=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                     primary_agent="copilotkit",
                     metadata={
-                        "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                        "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                         "tools_used": True,
                         "tool_count": len(tool_results),
                     },
