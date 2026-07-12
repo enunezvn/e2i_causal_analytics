@@ -321,7 +321,11 @@ from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
-from src.utils.llm_attribution import drain_run_usage, set_chat_attribution
+from src.utils.llm_attribution import (
+    drain_run_usage,
+    set_authenticated_user,
+    set_chat_attribution,
+)
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -3446,6 +3450,7 @@ async def _require_auth_for_copilotkit_execution(request: Request) -> Dict[str, 
     """
     if TESTING_MODE:
         request.state.user = TEST_USER
+        set_authenticated_user(TEST_USER.get("id"))
         return TEST_USER
 
     auth_header = request.headers.get("Authorization", "")
@@ -3459,6 +3464,11 @@ async def _require_auth_for_copilotkit_execution(request: Request) -> Dict[str, 
         raise AuthError("Invalid or expired token")
 
     request.state.user = user
+    # CopilotKit threadIds are bare UUIDs, so the adapter's session-prefix
+    # derivation can never attribute chat usage; stash the verified identity
+    # for set_chat_attribution's fallback (contextvar rides the request task
+    # into the streaming/adapter context, same channel as _session_id_context).
+    set_authenticated_user(user.get("id"))
     return user
 
 
