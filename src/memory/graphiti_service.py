@@ -771,13 +771,18 @@ class E2IGraphitiService:
                 internal_id = getattr(node, "id", None)
                 if internal_id is not None:
                     internal_id_to_external[internal_id] = external_id
-                nodes.append(
-                    {
-                        "id": external_id,
-                        "type": list(node.labels)[0] if node.labels else "Unknown",
-                        "name": node.properties.get("name", ""),
-                    }
-                )
+                node_dict: Dict[str, Any] = {
+                    "id": external_id,
+                    "type": list(node.labels)[0] if node.labels else "Unknown",
+                    "name": node.properties.get("name", ""),
+                }
+                # SSOT role stamped by sync_causal_paths_to_falkordb — the
+                # AI-Insights graph colors nodes by it. Only present when
+                # stamped (never an invented/null role).
+                role = node.properties.get("role")
+                if role is not None:
+                    node_dict["role"] = role
+                nodes.append(node_dict)
 
         # Real FalkorDB Path -> .edges(); keep .relationships() as a fallback for
         # any other path-like object that might expose that name.

@@ -16,6 +16,7 @@ connected component.
 from scripts.sync_causal_paths_to_falkordb import (  # type: ignore[import-not-found]
     _VARIABLE_KPI_BRIDGE,
     _mediation_edges,
+    _variable_roles,
 )
 
 
@@ -52,6 +53,35 @@ class TestMediationEdges:
     def test_no_mediators_yields_single_direct_terminal_edge(self):
         edges = _mediation_edges("treatment_arm", [], "treatment_initiated")
         assert edges == [("treatment_arm", "treatment_initiated", True)]
+
+
+class TestVariableRoles:
+    """Role stamping: the AI-Insights graph colors nodes by their position
+    across ALL validated chains. Pure sources (never an effect) are drivers,
+    pure sinks (never a cause) are outcomes, everything else mediates. This is
+    derived from the causal_paths SSOT topology — no hand-curated ontology."""
+
+    def test_source_mediator_sink_roles_from_one_chain(self):
+        edges = _mediation_edges("treatment_arm", ["adherence"], "persistent_180d")
+        assert _variable_roles(edges) == {
+            "treatment_arm": "driver",
+            "adherence": "mediator",
+            "persistent_180d": "outcome",
+        }
+
+    def test_variable_that_causes_in_one_chain_and_is_caused_in_another_is_mediator(self):
+        # nrx_volume is an OUTCOME of chain 1 but the CAUSE in chain 2 —
+        # across the whole SSOT it transmits effects, so it must be a mediator.
+        edges = _mediation_edges("rep_detailing_frequency", [], "nrx_volume") + _mediation_edges(
+            "nrx_volume", [], "trx_volume"
+        )
+        roles = _variable_roles(edges)
+        assert roles["rep_detailing_frequency"] == "driver"
+        assert roles["nrx_volume"] == "mediator"
+        assert roles["trx_volume"] == "outcome"
+
+    def test_empty_edge_list_yields_no_roles(self):
+        assert _variable_roles([]) == {}
 
 
 class TestVariableKpiBridge:

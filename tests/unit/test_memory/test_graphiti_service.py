@@ -915,6 +915,42 @@ class TestPathToChain:
         assert chain["edges"][0]["target_id"] == "n2"
         assert chain["confidence"] == 0.9
 
+    def test_node_role_property_is_carried_into_the_chain(self, graphiti_service):
+        """The AI-Insights graph colors variables by the SSOT `role` stamped by
+        sync_causal_paths_to_falkordb; _path_to_chain must pass it through
+        (it previously emitted only id/type/name, dropping every property)."""
+        mock_node1 = MagicMock()
+        mock_node1.id = 1
+        mock_node1.properties = {
+            "id": "var:treatment_arm",
+            "name": "treatment_arm",
+            "role": "driver",
+        }
+        mock_node1.labels = ["Variable"]
+
+        mock_node2 = MagicMock()
+        mock_node2.id = 2
+        mock_node2.properties = {"id": "var:trx_volume", "name": "trx_volume"}
+        mock_node2.labels = ["Variable"]
+
+        mock_rel = MagicMock()
+        mock_rel.relation = "CAUSES"
+        mock_rel.src_node = 1
+        mock_rel.dest_node = 2
+        mock_rel.properties = {"confidence": 0.8}
+
+        mock_path = MagicMock()
+        mock_path.nodes.return_value = [mock_node1, mock_node2]
+        del mock_path.relationships
+        mock_path.edges.return_value = [mock_rel]
+
+        chain = graphiti_service._path_to_chain(mock_path)
+
+        assert chain["nodes"][0]["role"] == "driver"
+        # Unstamped nodes must NOT grow an invented role (absent, not None —
+        # the route would otherwise serialize properties: {"role": null}).
+        assert "role" not in chain["nodes"][1]
+
     def test_convert_path_empty(self, graphiti_service):
         """Test converting empty path."""
         mock_path = MagicMock()

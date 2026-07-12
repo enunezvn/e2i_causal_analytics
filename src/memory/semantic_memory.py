@@ -1594,7 +1594,7 @@ class FalkorDBSemanticMemory:
         MATCH path = {start_match}-[:CAUSES|IMPACTS*1..{safe_length}]->{end_match}
         WHERE {" AND ".join(where_parts)}
         RETURN
-            [n IN nodes(path) | {{id: n.id, type: labels(n)[0]}}] as nodes,
+            [n IN nodes(path) | {{id: n.id, type: labels(n)[0], name: n.name, role: n.role}}] as nodes,
             [r IN relationships(path) | {{type: type(r), confidence: r.confidence}}] as rels,
             reduce(c = 1.0, r IN relationships(path) | c * coalesce(r.confidence, 1.0)) as conf
         LIMIT 200

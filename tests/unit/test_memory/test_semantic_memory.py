@@ -1071,6 +1071,18 @@ class TestFindCausalChains:
         assert ".name = $kpi_name" in query
         assert ".id = $kpi_name" in query
 
+    def test_find_causal_chains_projects_name_and_role(self, semantic_memory, mock_graph):
+        """The fallback path must project node name and the SSOT `role` (stamped
+        by sync_causal_paths_to_falkordb) so the AI-Insights graph can label and
+        color nodes when Graphiti is unavailable — parity with _path_to_chain."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.find_causal_chains(kpi_name="TRx", max_length=3)
+
+        query = mock_graph.query.call_args[0][0]
+        assert "n.name" in query
+        assert "n.role" in query
+
 
 class TestSemanticSearch:
     """semantic_search (used by /search fallback)."""
