@@ -104,10 +104,10 @@ describe('ObservabilityTab', () => {
     expect(screen.getByText('Kisqali TRx dip')).toBeInTheDocument();
   });
 
-  it('renders the platform (non-chat) section', () => {
+  it('renders the platform & unattributed section', () => {
     mockHook();
     render(<ObservabilityTab />);
-    expect(screen.getByText('Platform LLM usage (non-chat)')).toBeInTheDocument();
+    expect(screen.getByText('Platform & unattributed LLM usage')).toBeInTheDocument();
     expect(screen.getByText('ExecutiveBrief')).toBeInTheDocument();
   });
 

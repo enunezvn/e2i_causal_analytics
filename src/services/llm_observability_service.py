@@ -112,6 +112,7 @@ class LLMObservabilityService:
             "days": days,
             "tracking_since": self._tracking_since(),
         }
+        summary_priced_calls = 0
         daily: Dict[str, Dict[str, Any]] = {}
         per_user: Dict[str, Dict[str, Any]] = {}
         per_session: Dict[str, Dict[str, Any]] = {}
@@ -126,6 +127,8 @@ class LLMObservabilityService:
             summary["calls"] += 1
             summary["input_tokens"] += input_t
             summary["output_tokens"] += output_t
+            if cost is not None:
+                summary_priced_calls += 1
             if cost:
                 summary["total_cost_usd"] += cost
 
@@ -213,7 +216,12 @@ class LLMObservabilityService:
                     platform_row["cost_usd"] += cost
 
         summary["distinct_users"] = len(per_user)
-        summary["total_cost_usd"] = round(summary["total_cost_usd"], 6)
+        if summary["calls"] and not summary_priced_calls:
+            # Every call in the window was unpriced — "$0" would be a lie.
+            # A genuinely empty window keeps 0.0: zero spend is true there.
+            summary["total_cost_usd"] = None
+        else:
+            summary["total_cost_usd"] = round(summary["total_cost_usd"], 6)
 
         conversations = self._conversations(sorted(per_session))
 

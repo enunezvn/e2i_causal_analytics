@@ -1,6 +1,7 @@
 /**
  * ObservabilityTab — LLM model, tokens, and $ cost per user / per session
- * (chat), plus platform (non-chat) spend. GET /api/admin/observability/llm-usage.
+ * (chat), plus platform/unattributed spend (background generation and anonymous
+ * chat). GET /api/admin/observability/llm-usage.
  *
  * Honesty rules (spec 2026-07-12): attribution is chat-only (everything else
  * is the Platform section); pre-feature history is "untracked", never
@@ -230,10 +231,11 @@ export function ObservabilityTab() {
 
           <section>
             <h3 className="mb-1 text-sm font-medium text-[var(--color-foreground)]">
-              Platform LLM usage (non-chat)
+              Platform &amp; unattributed LLM usage
             </h3>
             <p className="mb-2 text-sm text-[var(--color-muted-foreground)]">
-              Insights, agents, and background generation — not attributable to individual users.
+              Background platform spend (insights, agents, generation) plus anonymous chat
+              sessions — spend not attributable to a signed-in user.
             </p>
             <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
               <table className="w-full">

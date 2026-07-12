@@ -100,7 +100,7 @@ export interface AuditFeedResponse {
 // --- LLM observability (mirrors GET /api/admin/observability/llm-usage) ---
 
 export interface LlmUsageSummary {
-  total_cost_usd: number;
+  total_cost_usd: number | null;
   input_tokens: number;
   output_tokens: number;
   calls: number;

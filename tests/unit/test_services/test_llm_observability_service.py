@@ -120,7 +120,7 @@ def test_unpriced_model_counted_but_not_costed():
     svc = _service(events, first_event={"created_at": "2026-07-10T00:00:00+00:00"})
     result = svc.llm_usage(30, USERS)
     assert result["unpriced_models"] == ["mystery-lm-9"]
-    assert result["summary"]["total_cost_usd"] == 0.0  # cost skipped, not faked
+    assert result["summary"]["total_cost_usd"] is None  # all calls unpriced: honest null, not $0
     assert result["summary"]["input_tokens"] == 1000  # tokens still honest
     assert result["by_user"][0]["cost_usd"] is None  # honest "—", never $0
     assert result["sessions"][U1][0]["cost_usd"] is None
