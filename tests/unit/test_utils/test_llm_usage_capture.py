@@ -4,6 +4,7 @@ success payloads; enqueue with current attribution; zero-usage => no event."""
 from types import SimpleNamespace
 
 import src.utils.llm_usage_callback as cb_mod
+from src.utils.litellm_usage_logger import record_litellm_success
 from src.utils.llm_attribution import clear_attribution, drain_run_usage, set_chat_attribution
 from src.utils.llm_usage_callback import UsageRecorderCallback, _extract_usage
 
@@ -114,3 +115,62 @@ def test_factory_attaches_callback_and_stream_usage(monkeypatch):
     factory._create_openai_llm("gpt-4o", 100, 0.3, None)
     assert captured["stream_usage"] is True
     assert any(isinstance(c, UsageRecorderCallback) for c in captured["callbacks"])
+
+
+# ---------------------------------------------------------------- litellm ---
+
+
+def _litellm_response(model="gpt-4o", prompt=9, completion=4):
+    return SimpleNamespace(
+        model=model,
+        usage=SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion),
+    )
+
+
+def test_litellm_success_enqueues(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "src.services.llm_usage_recorder.enqueue", lambda e: events.append(e) or True
+    )
+    record_litellm_success({"model": "gpt-4o"}, _litellm_response())
+    assert len(events) == 1
+    assert events[0].provider == "openai"
+    assert (events[0].input_tokens, events[0].output_tokens) == (9, 4)
+
+
+def test_litellm_anthropic_provider_detection(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "src.services.llm_usage_recorder.enqueue", lambda e: events.append(e) or True
+    )
+    record_litellm_success(
+        {"model": "anthropic/claude-sonnet-4-6"},
+        _litellm_response(model="claude-sonnet-4-6"),
+    )
+    assert events[0].provider == "anthropic"
+
+
+def test_litellm_cache_hit_skipped(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "src.services.llm_usage_recorder.enqueue", lambda e: events.append(e) or True
+    )
+    record_litellm_success({"model": "gpt-4o", "cache_hit": True}, _litellm_response())
+    assert events == []  # cached replay spent no tokens
+
+
+def test_litellm_zero_usage_skipped(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "src.services.llm_usage_recorder.enqueue", lambda e: events.append(e) or True
+    )
+    record_litellm_success({"model": "gpt-4o"}, SimpleNamespace(model="gpt-4o", usage=None))
+    assert events == []
+
+
+def test_litellm_never_raises(monkeypatch):
+    def _boom(_e):
+        raise RuntimeError("recorder exploded")
+
+    monkeypatch.setattr("src.services.llm_usage_recorder.enqueue", _boom)
+    record_litellm_success({"model": "gpt-4o"}, _litellm_response())  # must not raise
