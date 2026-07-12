@@ -37,6 +37,46 @@ def test_enqueue_drops_when_full(monkeypatch):
     assert recorder.enqueue(_event()) is False  # dropped, no exception
 
 
+def _reset_drop_state(monkeypatch, now=1000.0):
+    """Isolate the module-level rate-limit state and freeze the clock."""
+    clock = {"now": now}
+    monkeypatch.setattr(recorder, "_dropped_since_warn", 0)
+    monkeypatch.setattr(recorder, "_last_warn_at", None)
+    monkeypatch.setattr(recorder, "_monotonic", lambda: clock["now"])
+    return clock
+
+
+def test_queue_full_warning_is_rate_limited(monkeypatch, caplog):
+    monkeypatch.setattr(recorder, "_ensure_flusher", lambda: None)
+    monkeypatch.setattr(recorder, "_queue", queue.Queue(maxsize=1))
+    _reset_drop_state(monkeypatch)
+    assert recorder.enqueue(_event()) is True
+
+    with caplog.at_level("WARNING", logger="src.services.llm_usage_recorder"):
+        for _ in range(5):
+            assert recorder.enqueue(_event()) is False  # still drops, still False
+    warnings = [r for r in caplog.records if "queue full" in r.getMessage()]
+    assert len(warnings) == 1  # first drop warns; the next 4 are suppressed
+
+
+def test_queue_full_warning_resumes_with_cumulative_count(monkeypatch, caplog):
+    monkeypatch.setattr(recorder, "_ensure_flusher", lambda: None)
+    monkeypatch.setattr(recorder, "_queue", queue.Queue(maxsize=1))
+    clock = _reset_drop_state(monkeypatch)
+    recorder.enqueue(_event())
+
+    with caplog.at_level("WARNING", logger="src.services.llm_usage_recorder"):
+        for _ in range(3):
+            recorder.enqueue(_event())  # 1 warned ("1 event"), 2 suppressed
+        clock["now"] += recorder._WARN_EVERY_SECONDS + 1
+        recorder.enqueue(_event())  # warns again with the 2 suppressed + this one
+
+    warnings = [r.getMessage() for r in caplog.records if "queue full" in r.getMessage()]
+    assert len(warnings) == 2
+    assert "dropped 1 " in warnings[0]
+    assert "dropped 3 " in warnings[1]
+
+
 def test_insert_batch_success():
     inserted = []
 

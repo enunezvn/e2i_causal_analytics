@@ -10,6 +10,7 @@ shutdown — accepted (telemetry, not billing records).
 import logging
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 _QUEUE_MAX = 1000
 _BATCH_MAX = 50
 _POLL_SECONDS = 2.0
+_WARN_EVERY_SECONDS = 60.0
+
+# Alias so tests can freeze the clock without patching the stdlib module.
+_monotonic = time.monotonic
 
 
 @dataclass
@@ -50,16 +55,42 @@ _queue: "queue.Queue[LLMUsageEvent]" = queue.Queue(maxsize=_QUEUE_MAX)
 _flusher_started = False
 _flusher_lock = threading.Lock()
 
+_drop_lock = threading.Lock()
+_dropped_since_warn = 0
+_last_warn_at: Optional[float] = None
+
 
 def enqueue(event: LLMUsageEvent) -> bool:
     """Never blocks, never raises. False = queue full, event dropped."""
     try:
         _queue.put_nowait(event)
     except queue.Full:
-        logger.warning("llm_usage_recorder: queue full, dropping usage event")
+        _record_drop()
         return False
     _ensure_flusher()
     return True
+
+
+def _record_drop() -> None:
+    """Drop accounting with a rate-limited warning: a sustained outage fills
+    the queue for every request, and one warning per event would flood the
+    logs. Warn at most once per _WARN_EVERY_SECONDS with the cumulative count;
+    events are still dropped (fail-open) either way."""
+    global _dropped_since_warn, _last_warn_at
+    with _drop_lock:
+        _dropped_since_warn += 1
+        now = _monotonic()
+        if _last_warn_at is not None and now - _last_warn_at < _WARN_EVERY_SECONDS:
+            return
+        count = _dropped_since_warn
+        _dropped_since_warn = 0
+        _last_warn_at = now
+    logger.warning(
+        "llm_usage_recorder: queue full, dropped %d usage event(s) "
+        "(warning rate-limited to one per %.0fs)",
+        count,
+        _WARN_EVERY_SECONDS,
+    )
 
 
 def _ensure_flusher() -> None:
