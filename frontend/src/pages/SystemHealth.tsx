@@ -721,12 +721,12 @@ function SystemHealth() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={200}>
-                  {/* width 100: at 80 the longest category label ("Components")
-                      was clipped on the y-axis. */}
+                  {/* width 112: the longest category label ("Components") renders
+                      101px wide (measured live), so 100 still clipped ~4px. */}
                   <BarChart data={componentScoreData} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                     <XAxis type="number" domain={[0, 100]} />
-                    <YAxis type="category" dataKey="name" width={100} />
+                    <YAxis type="category" dataKey="name" width={112} />
                     <Tooltip formatter={(value) => [`${value ?? 0}%`, 'Score']} />
                     <Bar dataKey="score" radius={[0, 4, 4, 0]}>
                       {componentScoreData.map((entry, index) => (
