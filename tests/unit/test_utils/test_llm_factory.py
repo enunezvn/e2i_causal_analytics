@@ -268,12 +268,17 @@ class TestCreateAnthropicLLM:
                     30,  # timeout
                 )
 
-                mock_chat_anthropic_class.assert_called_once_with(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=1024,
-                    temperature=0.3,
-                    timeout=30,
-                )
+                # Exact-kwargs check intentionally relaxed for `callbacks`: the
+                # usage-capture wiring (spec 2026-07-12) attaches a freshly
+                # constructed UsageRecorderCallback instance per call, so
+                # object identity can't be asserted with assert_called_once_with.
+                call_kwargs = mock_chat_anthropic_class.call_args.kwargs
+                assert call_kwargs["model"] == "claude-sonnet-4-20250514"
+                assert call_kwargs["max_tokens"] == 1024
+                assert call_kwargs["temperature"] == 0.3
+                assert call_kwargs["timeout"] == 30
+                assert len(call_kwargs["callbacks"]) == 1
+                assert isinstance(call_kwargs["callbacks"][0], llm_factory.UsageRecorderCallback)
 
     def test_timeout_not_passed_when_none(self):
         """Test timeout is not passed to ChatAnthropic when None."""
@@ -351,12 +356,18 @@ class TestCreateOpenAILLM:
                     30,  # timeout
                 )
 
-                mock_chat_openai_class.assert_called_once_with(
-                    model="gpt-4o",
-                    max_tokens=1024,
-                    temperature=0.3,
-                    request_timeout=30,  # OpenAI uses request_timeout
-                )
+                # Exact-kwargs check intentionally relaxed for `callbacks`: the
+                # usage-capture wiring (spec 2026-07-12) attaches a freshly
+                # constructed UsageRecorderCallback instance per call, so
+                # object identity can't be asserted with assert_called_once_with.
+                call_kwargs = mock_chat_openai_class.call_args.kwargs
+                assert call_kwargs["model"] == "gpt-4o"
+                assert call_kwargs["max_tokens"] == 1024
+                assert call_kwargs["temperature"] == 0.3
+                assert call_kwargs["request_timeout"] == 30  # OpenAI uses request_timeout
+                assert call_kwargs["stream_usage"] is True
+                assert len(call_kwargs["callbacks"]) == 1
+                assert isinstance(call_kwargs["callbacks"][0], llm_factory.UsageRecorderCallback)
 
     def test_request_timeout_not_passed_when_none(self):
         """Test request_timeout is not passed to ChatOpenAI when None."""
