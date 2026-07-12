@@ -4,6 +4,8 @@ unpriced-model honesty."""
 
 from types import SimpleNamespace
 
+import pytest
+
 from src.services.llm_observability_service import LLMObservabilityService
 
 U1 = "11111111-1111-1111-1111-111111111111"
@@ -130,3 +132,11 @@ def test_empty_window():
     assert result["by_user"] == []
     assert result["daily"] == []
     assert result["platform"] == []
+
+
+def test_constructor_rejects_missing_client(monkeypatch):
+    # get_supabase() returns None when Supabase is down; the constructor must
+    # raise so the admin route's singleton getter never caches a dead service.
+    monkeypatch.setattr("src.api.dependencies.supabase_client.get_supabase", lambda: None)
+    with pytest.raises(RuntimeError):
+        LLMObservabilityService()

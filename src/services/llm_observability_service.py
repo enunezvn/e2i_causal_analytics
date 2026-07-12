@@ -31,6 +31,12 @@ class LLMObservabilityService:
             from src.api.dependencies.supabase_client import get_supabase
 
             client = get_supabase()
+        if client is None:
+            # get_supabase() returns None when Supabase is unavailable. Raise
+            # instead of caching a dead client so the route-level singleton
+            # getter stays uncached and self-heals on the next request
+            # (matching AdminUserService semantics).
+            raise RuntimeError("Supabase client unavailable for LLM observability")
         self.client = client
 
     # ------------------------------------------------------------- fetch ----
