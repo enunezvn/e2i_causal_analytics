@@ -119,6 +119,18 @@ describe('ObservabilityTab', () => {
     expect(screen.getByText(/mystery-lm-9/)).toBeInTheDocument();
   });
 
+  it('renders tiny genuine costs as "<$0.0001", never "$0.0000"', () => {
+    mockHook({
+      data: {
+        ...PAYLOAD,
+        platform: [{ ...PAYLOAD.platform[0], cost_usd: 0.000045 }],
+      },
+    });
+    render(<ObservabilityTab />);
+    expect(screen.getByText('<$0.0001')).toBeInTheDocument();
+    expect(screen.queryByText('$0.0000')).not.toBeInTheDocument();
+  });
+
   it('shows an explicit empty state', () => {
     mockHook({
       data: {

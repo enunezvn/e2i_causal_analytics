@@ -25,6 +25,7 @@ const fmtInt = (n: number) => n.toLocaleString();
 const fmtCost = (n: number | null | undefined) => {
   if (n == null) return '—';
   if (n === 0) return '$0';
+  if (n < 0.0001) return '<$0.0001';
   return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
 };
 
