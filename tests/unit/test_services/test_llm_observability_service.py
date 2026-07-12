@@ -126,6 +126,36 @@ def test_unpriced_model_counted_but_not_costed():
     assert result["sessions"][U1][0]["cost_usd"] is None
 
 
+def test_mixed_priced_and_unpriced_costs_only_priced_rows():
+    """Regression guard (#1211): with priced and unpriced calls mixed in one
+    window, cost must equal the priced rows exactly (never None, never
+    inflated) while calls/tokens honestly include both — at summary, per-user,
+    and per-session levels."""
+    events = [
+        _ev("gpt-4o", 1000, 500, user=U1, session=S1),
+        _ev("mystery-lm-9", 2000, 1000, user=U1, session=S1),
+    ]
+    svc = _service(events, first_event={"created_at": "2026-07-10T00:00:00+00:00"})
+    result = svc.llm_usage(30, USERS)
+
+    # gpt-4o only: (1000 * 2.50 + 500 * 10.00) / 1M
+    expected = pytest.approx(0.0075)
+    assert result["summary"]["total_cost_usd"] == expected
+    assert result["summary"]["calls"] == 2
+    assert result["summary"]["input_tokens"] == 3000
+    assert result["summary"]["output_tokens"] == 1500
+    assert result["unpriced_models"] == ["mystery-lm-9"]
+
+    user_row = result["by_user"][0]
+    assert user_row["cost_usd"] == expected
+    assert user_row["calls"] == 2
+    assert user_row["input_tokens"] == 3000
+
+    session_row = result["sessions"][U1][0]
+    assert session_row["cost_usd"] == expected
+    assert session_row["calls"] == 2
+
+
 def test_empty_window():
     svc = _service([], first_event=None)
     result = svc.llm_usage(7, USERS)
