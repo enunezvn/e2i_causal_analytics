@@ -580,6 +580,12 @@ async def executive_brief_insight(
     levers = format_driver_names(
         await fetch_commercial_drivers(req.brand, outcomes=("TRx", "NRx", "market share", "ROI"))
     )
+    # Clinical setting (2026-07-12): commercial moves are not made in a clinical
+    # vacuum. Digit-free by construction; fetch fails open to None -> honest
+    # "no clinical context" grounding, never a blocked brief.
+    from src.insights.clinical_context import fetch_clinical_payload, format_clinical_context
+
+    clinical_context = format_clinical_context(await fetch_clinical_payload(req.brand, "TRx"))
     g = executive_brief.build_grounding(
         brand=req.brand,
         total_addressable_value=feed.total_addressable_value,
@@ -601,9 +607,11 @@ async def executive_brief_insight(
             for o in feed.opportunities
         ],
         causal_drivers=levers,
+        clinical_context=clinical_context,
     )
     # Key on the derived grounding strings (scope + opportunities + caveats +
-    # causal levers) so two portfolios that differ in any figure never collide.
+    # causal levers + clinical context) so two portfolios that differ in any
+    # figure — or in the clinical grounding — never collide.
     key = cache_key(
         "executive-brief",
         req.brand,
@@ -612,6 +620,7 @@ async def executive_brief_insight(
             "o": g["opportunities"],
             "c": g["caveats"],
             "cc": g["lm_causal_context"],
+            "cl": g["lm_clinical_context"],
         },
     )
     cached = await cache_get(key)
@@ -676,9 +685,20 @@ async def hte_insight(
 
     lever_terms = tuple(t for t in (record_dict.get("outcome_var"), "TRx", "NRx") if t)
     drivers = await fetch_commercial_drivers(record_dict.get("brand"), outcomes=lever_terms)
-    g = hte.build_grounding(record_dict, causal_drivers=drivers)
+    # Clinical setting (2026-07-12): the brand's clinical context grounds the
+    # targeting read qualitatively. Digit-free; fetch fails open to None. Keyed
+    # on the analyzed outcome so the mapped endpoint matches the run.
+    from src.insights.clinical_context import fetch_clinical_payload, format_clinical_context
+
+    clinical_context = format_clinical_context(
+        await fetch_clinical_payload(
+            record_dict.get("brand"), record_dict.get("outcome_var") or "TRx"
+        )
+    )
+    g = hte.build_grounding(record_dict, causal_drivers=drivers, clinical_context=clinical_context)
     # Key on the derived grounding strings so two runs differing in any figure
-    # never collide (the analysis_id alone would pin a stale re-run).
+    # — or in the clinical grounding — never collide (the analysis_id alone
+    # would pin a stale re-run).
     key = cache_key(
         "hte",
         req.analysis_id,
@@ -687,6 +707,7 @@ async def hte_insight(
             "s": g["segments"],
             "t": g["targeting"],
             "cc": g["commercial_context"],
+            "cl": g["clinical_context"],
         },
     )
     cached = await cache_get(key)

@@ -51,7 +51,11 @@ try:
         given in `caveats`. Where `causal_context` names modeled causal
         levers, you may connect recommended actions to those levers BY NAME
         with their stated provenance — no figures are provided for them and
-        you must not invent any."""
+        you must not invent any. Where `clinical_context` describes the
+        brand's clinical setting (mechanism, indicated disease, label
+        constraints, competitors), you may ground the strategy in it
+        qualitatively — commercial moves are not made in a clinical vacuum —
+        but it too carries NO figures and you must not invent any."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"
@@ -63,6 +67,13 @@ try:
             desc=(
                 "Registry-modeled causal levers by NAME only (may say none are "
                 "available); reference qualitatively, never with numbers"
+            )
+        )
+        clinical_context: str = dspy.InputField(
+            desc=(
+                "Brand's clinical setting from public biomedical/regulatory "
+                "sources — mechanism, indicated disease, label constraints, "
+                "competitors (may say none available); qualitative, no numbers"
             )
         )
         caveats: str = dspy.InputField(desc="Data caveats that MUST be stated")
@@ -153,6 +164,7 @@ def build_grounding(
     suppressed_count: int,
     opportunities: list[dict[str, Any]],
     causal_drivers: list[str] | None = None,
+    clinical_context: str | None = None,
 ) -> dict[str, Any]:
     mix = (
         f"{quick_wins_count} quick win(s), {steady_plays_count} steady play(s), "
@@ -256,6 +268,15 @@ def build_grounding(
         grounding.append({"label": "Causal levers", "value": str(len(levers))})
     else:
         causal_context = "No modeled causal levers are available for this brand."
+
+    # Clinical setting (2026-07-12): digit-free by construction upstream, but
+    # the placeholder guard fails closed on ANY digit — so drop defensively if
+    # a digit slipped through rather than poisoning every sample into fallback.
+    clinical = (clinical_context or "").strip()
+    has_clinical = bool(clinical) and not any(ch.isnumeric() for ch in clinical)
+    clinical_text = clinical if has_clinical else "No clinical context is available for this brand."
+    if has_clinical:
+        grounding.append({"label": "Clinical context", "value": "included"})
     return {
         "brand": brand,
         "scope": scope,
@@ -271,6 +292,9 @@ def build_grounding(
         "causal_context": causal_context,
         "lm_causal_context": causal_context,
         "has_causal_context": bool(levers),
+        "clinical_context": clinical_text,
+        "lm_clinical_context": clinical_text,
+        "has_clinical_context": has_clinical,
         "injection": injection,
     }
 
@@ -288,9 +312,10 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
             "is_fallback": True,
         }
     causal_line = f" {g['causal_context']}" if g.get("has_causal_context") else ""
+    clinical_line = f" {g['clinical_context']}" if g.get("has_clinical_context") else ""
     insight = (
-        f"Scope: {g['scope']}. Ranked opportunities: {g['opportunities']}{causal_line} "
-        f"{g['caveats']} (Factual summary — LLM interpretation unavailable.)"
+        f"Scope: {g['scope']}. Ranked opportunities: {g['opportunities']}{causal_line}"
+        f"{clinical_line} {g['caveats']} (Factual summary — LLM interpretation unavailable.)"
     )
     return {
         "insight": insight,
@@ -367,6 +392,9 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
             opportunities=g["lm_opportunities"],
             causal_context=g.get(
                 "lm_causal_context", "No modeled causal levers are available for this brand."
+            ),
+            clinical_context=g.get(
+                "lm_clinical_context", "No clinical context is available for this brand."
             ),
             caveats=g["lm_caveats"],
         )
