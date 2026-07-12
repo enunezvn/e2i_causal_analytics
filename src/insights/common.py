@@ -41,6 +41,13 @@ def run_signature(signature_cls: Any, *, lm_cache: bool = True, **inputs: Any):
     if signature_cls is None:
         return None
     try:
+        # Tag this generation's litellm calls as platform-level insights usage
+        # (admin observability, spec 2026-07-12): NULL user/session, but a
+        # meaningful surface/component in the Platform LLM usage table.
+        from src.utils.llm_attribution import set_platform_attribution
+
+        set_platform_attribution("insights", component=signature_cls.__name__)
+
         import dspy
     except ImportError:
         return None
