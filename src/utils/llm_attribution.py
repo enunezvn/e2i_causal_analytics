@@ -40,6 +40,33 @@ _attribution: contextvars.ContextVar[Optional[LLMAttribution]] = contextvars.Con
     "llm_attribution", default=None
 )
 
+# JWT-verified user id for the current request context. The CopilotKit
+# runtime mints bare-UUID threadIds (no user~ prefix on any real chat
+# session), so session-prefix derivation alone leaves every chat row
+# unattributed; the auth gate stashes the verified identity here and
+# set_chat_attribution falls back to it. Verified-or-nothing: never a
+# guessed or fabricated id.
+_authenticated_user_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "llm_authenticated_user_id", default=None
+)
+
+
+def set_authenticated_user(user_id: Optional[str]) -> None:
+    """Stash the token-verified user id for attribution fallback.
+
+    Rejects non-UUID ids (TESTING_MODE's 'test-user-id') and the anonymous
+    UUID — llm_usage_events.user_id is a UUID column and attribution is
+    honest-only.
+    """
+    if user_id and user_id != ANONYMOUS_USER_ID:
+        try:
+            _uuid.UUID(user_id)
+        except ValueError:
+            user_id = None
+    else:
+        user_id = None
+    _authenticated_user_id.set(user_id)
+
 
 def user_id_from_session(session_id: Optional[str]) -> Optional[str]:
     """'<user_id>~<uuid>' -> user_id. Anonymous, malformed, or non-UUID
@@ -55,8 +82,11 @@ def user_id_from_session(session_id: Optional[str]) -> Optional[str]:
 
 
 def set_chat_attribution(session_id: str, request_id: Optional[str] = None) -> LLMAttribution:
+    user_id = user_id_from_session(session_id)
+    if user_id is None:
+        user_id = _authenticated_user_id.get()
     attr = LLMAttribution(
-        user_id=user_id_from_session(session_id),
+        user_id=user_id,
         session_id=session_id,
         surface="chat",
         request_id=request_id,

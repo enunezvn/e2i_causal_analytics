@@ -8,16 +8,20 @@ from src.utils.llm_attribution import (
     drain_run_usage,
     get_attribution,
     record_usage,
+    set_authenticated_user,
     set_chat_attribution,
     set_platform_attribution,
     user_id_from_session,
 )
 
 USER = "11111111-1111-1111-1111-111111111111"
+OTHER = "33333333-3333-3333-3333-333333333333"
+BARE_SESSION = "014ad833-54ed-475e-801a-85c24432137b"  # CopilotKit-minted threadId
 
 
 def setup_function(_fn):
     clear_attribution()
+    set_authenticated_user(None)
 
 
 def test_user_id_from_session_shapes():
@@ -44,6 +48,50 @@ def test_platform_attribution():
     assert attr.user_id is None
     assert attr.surface == "insights"
     assert attr.component == "ExecutiveBrief"
+
+
+def test_authenticated_fallback_when_session_has_no_prefix():
+    # The real chat path: CopilotKit mints bare-UUID threadIds, so the
+    # session prefix never carries the user — the JWT-verified identity is
+    # the only honest source.
+    set_authenticated_user(USER)
+    set_chat_attribution(BARE_SESSION, request_id="run-1")
+    attr = get_attribution()
+    assert attr.user_id == USER
+    assert attr.session_id == BARE_SESSION
+    assert attr.surface == "chat"
+
+
+def test_session_prefix_wins_over_authenticated_fallback():
+    set_authenticated_user(OTHER)
+    set_chat_attribution(f"{USER}~s1")
+    assert get_attribution().user_id == USER
+
+
+def test_no_fallback_without_authenticated_user():
+    set_chat_attribution(BARE_SESSION)
+    assert get_attribution().user_id is None  # honest NULL preserved
+
+
+def test_fallback_rejects_non_uuid_user():
+    # TESTING_MODE's TEST_USER id is "test-user-id"; the DB column is UUID —
+    # a non-UUID must never reach attribution.
+    set_authenticated_user("test-user-id")
+    set_chat_attribution(BARE_SESSION)
+    assert get_attribution().user_id is None
+
+
+def test_fallback_rejects_anonymous_user():
+    set_authenticated_user(ANONYMOUS_USER_ID)
+    set_chat_attribution(BARE_SESSION)
+    assert get_attribution().user_id is None
+
+
+def test_set_authenticated_user_none_clears():
+    set_authenticated_user(USER)
+    set_authenticated_user(None)
+    set_chat_attribution(BARE_SESSION)
+    assert get_attribution().user_id is None
 
 
 def test_record_usage_noop_without_attribution():
