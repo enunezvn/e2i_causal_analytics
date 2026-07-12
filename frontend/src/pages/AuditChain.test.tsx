@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AuditChain from './AuditChain';
 
@@ -88,5 +88,61 @@ describe('AuditChain (H5)', () => {
     render(<AuditChain />, { wrapper: createWrapper() });
 
     expect(screen.getByText(/Failed to load workflows/i)).toBeInTheDocument();
+  });
+});
+
+describe('AuditChain — execution timeline honesty with null validation/confidence', () => {
+  // Most audit entries carry explicit null confidence_score and
+  // validation_passed (only estimation nodes record confidence; only
+  // refutation nodes record validation). Nulls must render as "not
+  // applicable" — never as a fabricated "0% conf" badge or a red failed-X.
+  const baseEntry = {
+    workflow_id: 'live-xyz',
+    agent_tier: 3,
+    action_type: 'execute',
+    created_at: new Date().toISOString(),
+    entry_hash: 'hash',
+  };
+
+  beforeEach(() => {
+    (useRecentWorkflows as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: [
+        { workflow_id: 'live-xyz', started_at: new Date().toISOString(), entry_count: 3, first_agent: 'a', last_agent: 'b' },
+      ],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useWorkflowDetails as ReturnType<typeof vi.fn>).mockReturnValue({
+      isLoading: false,
+      data: {
+        summary: { workflow_id: 'live-xyz', total_entries: 3, total_duration_ms: 1200, agents_involved: ['a', 'b'] },
+        entries: [
+          { ...baseEntry, entry_id: 'e1', sequence_number: 1, agent_name: 'health_score', confidence_score: null, validation_passed: null, duration_ms: 100 },
+          { ...baseEntry, entry_id: 'e2', sequence_number: 2, agent_name: 'estimator', confidence_score: 0.85, validation_passed: true, duration_ms: 50 },
+          { ...baseEntry, entry_id: 'e3', sequence_number: 3, agent_name: 'refuter', confidence_score: 0.4, validation_passed: false, duration_ms: 80 },
+        ],
+        verification: null,
+      },
+    });
+  });
+
+  function renderAndOpenDetails() {
+    render(<AuditChain />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('live-xyz'));
+  }
+
+  it('renders no conf badge for null confidence, real badges for measured scores', () => {
+    renderAndOpenDetails();
+
+    expect(screen.queryByText('0% conf')).not.toBeInTheDocument();
+    expect(screen.getByText('85% conf')).toBeInTheDocument();
+    expect(screen.getByText('40% conf')).toBeInTheDocument();
+  });
+
+  it('renders a neutral not-applicable marker (not a failed X) for null validation', () => {
+    renderAndOpenDetails();
+
+    expect(screen.getByLabelText('No validation for this action')).toBeInTheDocument();
   });
 });
