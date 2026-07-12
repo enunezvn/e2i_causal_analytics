@@ -21,7 +21,14 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id, windowed_query_id
+from src.kpi.synthetic_mode import (
+    line_query_id,
+    region_query_id,
+    resolve_kpi_query_id,
+    segment_query_id,
+    windowed_axis_query_id,
+    windowed_query_id,
+)
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -143,14 +150,43 @@ class BusinessImpactCalculator(KPICalculatorBase):
         brand: str | None,
         region: str | None,
         window: dict[str, Any] | None,
+        segment: str | None = None,
+        therapy_line: int | str | None = None,
     ) -> tuple[str, list[Any]]:
         """Compose (query_id, positional params) for a windowable KPI.
 
         Param order respects the kpi_query 4-param cap:
-          no region:  [brand, start, end]
-          region:     [brand, region, start, end]
+          no axis, no region:  [brand, start, end]
+          region:               [brand, region, start, end]
+          segment/therapy_line: [brand, axis_value(, start, end)]
         With no window, falls back to the existing base / _region behavior.
+
+        PRECEDENCE (migration 105): a patient-segment axis (severity tier via
+        ``segment``, line-of-therapy via ``therapy_line``) takes precedence
+        over ``region`` and the two are NEVER combined -- the kpi_query RPC
+        caps positional params at 4, so brand+region+axis+window can't all
+        fit in one statement. Within the axis family, ``segment`` takes
+        precedence over ``therapy_line`` if a caller somehow supplies both.
+        Region-scoped-AND-segment-scoped reads would need a follow-up
+        migration (a 5th param slot). ``therapy_line`` is checked via
+        ``is not None`` (not truthiness) because line 0 is a real,
+        commonly-populated bucket -- ``if therapy_line:`` would silently drop
+        it.
         """
+        if segment is not None:
+            if window is None:
+                return segment_query_id(base_query_id), [brand, segment]
+            return (
+                windowed_axis_query_id(base_query_id, axis="segment"),
+                [brand, segment, window["start"], window["end"]],
+            )
+        if therapy_line is not None:
+            if window is None:
+                return line_query_id(base_query_id), [brand, therapy_line]
+            return (
+                windowed_axis_query_id(base_query_id, axis="line"),
+                [brand, therapy_line, window["start"], window["end"]],
+            )
         if window is None:
             if region:
                 return region_query_id(base_query_id), [brand, region]
@@ -238,13 +274,18 @@ class BusinessImpactCalculator(KPICalculatorBase):
         Total prescription volume. No threshold (volume metric). When a region
         is supplied, routes to the region-scoped variant (migration 077); brand
         stays an optional filter. When a window is supplied, routes to the
-        `_windowed[_region]` variant with [brand(, region), start, end].
+        `_windowed[_region]` variant with [brand(, region), start, end]. When a
+        severity tier or line-of-therapy is supplied, routes to the
+        `_segment[_windowed]` / `_line[_windowed]` variant instead (migration
+        105; takes precedence over region -- see `_resolve_windowed_call`).
         """
         query_id, params = self._resolve_windowed_call(
             "business_impact_trx",
             brand=context.get("brand"),
             region=context.get("region"),
             window=context.get("window"),
+            segment=context.get("segment"),
+            therapy_line=context.get("therapy_line"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -259,13 +300,18 @@ class BusinessImpactCalculator(KPICalculatorBase):
         When a region is supplied, routes to the region-scoped variant
         (migration 077); brand stays an optional filter. When a window is
         supplied, routes to the `_windowed[_region]` variant with
-        [brand(, region), start, end].
+        [brand(, region), start, end]. When a severity tier or
+        line-of-therapy is supplied, routes to the `_segment[_windowed]` /
+        `_line[_windowed]` variant instead (migration 105; takes precedence
+        over region -- see `_resolve_windowed_call`).
         """
         query_id, params = self._resolve_windowed_call(
             "business_impact_nrx",
             brand=context.get("brand"),
             region=context.get("region"),
             window=context.get("window"),
+            segment=context.get("segment"),
+            therapy_line=context.get("therapy_line"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -277,7 +323,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """Calculate WS3-BI-007: New-to-Brand Prescriptions (NBRx).
 
         First prescription of specific brand for a patient.
-        No threshold (volume metric).
+        No threshold (volume metric). Region/window/segment/therapy_line
+        routing mirrors `_calc_trx` / `_calc_nrx` (migrations 077/084/105).
         """
         brand = context.get("brand")
         if not brand:
@@ -292,6 +339,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
             brand=brand,
             region=context.get("region"),
             window=context.get("window"),
+            segment=context.get("segment"),
+            therapy_line=context.get("therapy_line"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -304,7 +353,11 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_trx_share(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-008: TRx Share.
 
-        Brand prescription share of total category.
+        Brand prescription share of total category. Region/segment/
+        therapy_line routing goes through `_resolve_windowed_call` with
+        `window=None` pinned -- TRx Share has no windowed variant (migrations
+        084/105 never registered one), so `context["window"]` is never read
+        here even if a caller sets it.
         """
         brand = context.get("brand")
         if not brand:
@@ -312,13 +365,15 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # undefined, not zero. Fail loud rather than fabricate a plausible 0% share.
             raise RuntimeError("KPI WS3-BI-008 unavailable: no brand specified for TRx share")
 
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_trx_share"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_trx_share", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_trx_share",
+            brand=brand,
+            region=context.get("region"),
+            window=None,
+            segment=context.get("segment"),
+            therapy_line=context.get("therapy_line"),
+        )
+        result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
         if result and result[0].get("share") is not None:
             return float(result[0]["share"])

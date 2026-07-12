@@ -205,6 +205,32 @@ class TestGetKPIValue:
             context={"brand": "Remibrutinib"},
         )
 
+    def test_get_kpi_value_with_segment_filter(self, mock_calculator):
+        """Should filter by severity tier when segment is provided (migration 105)."""
+        app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
+        response = client.get("/api/kpis/data_freshness_lag", params={"segment": "low_severity"})
+
+        assert response.status_code == 200
+        mock_calculator.calculate.assert_called_with(
+            kpi_id="data_freshness_lag",
+            use_cache=True,
+            force_refresh=False,
+            context={"segment": "low_severity"},
+        )
+
+    def test_get_kpi_value_with_therapy_line_filter(self, mock_calculator):
+        """Should filter by line of therapy when therapy_line is provided (migration 105)."""
+        app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
+        response = client.get("/api/kpis/data_freshness_lag", params={"therapy_line": "0"})
+
+        assert response.status_code == 200
+        mock_calculator.calculate.assert_called_with(
+            kpi_id="data_freshness_lag",
+            use_cache=True,
+            force_refresh=False,
+            context={"therapy_line": "0"},
+        )
+
 
 class TestGetKPIMetadata:
     """Tests for GET /api/kpis/{kpi_id}/metadata."""
@@ -301,6 +327,34 @@ class TestCalculateKPI:
         )
 
         assert response.status_code == 200
+
+    def test_calculate_kpi_with_segment_and_therapy_line_context(self, mock_calculator):
+        """Should thread segment and therapy_line from context into the calculator call
+        (migration 105 patient-segment axes)."""
+        app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
+        response = client.post(
+            "/api/kpis/calculate",
+            json={
+                "kpi_id": "data_freshness_lag",
+                "context": {
+                    "brand": "Kisqali",
+                    "segment": "high_severity",
+                    "therapy_line": "2",
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        mock_calculator.calculate.assert_called_with(
+            kpi_id="data_freshness_lag",
+            use_cache=True,
+            force_refresh=False,
+            context={
+                "brand": "Kisqali",
+                "segment": "high_severity",
+                "therapy_line": "2",
+            },
+        )
 
     def test_calculate_kpi_not_found(self, mock_calculator):
         """Should return 404 for missing KPI."""

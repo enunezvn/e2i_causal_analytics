@@ -513,6 +513,11 @@ async def get_kpi_value(
     force_refresh: bool = Query(default=False, description="Force recalculation"),
     brand: str | None = Query(default=None, description="Brand filter"),
     region: str | None = Query(default=None, description="Geographic region filter"),
+    segment: str | None = Query(
+        default=None,
+        description="Severity tier filter (low_severity, medium_severity, high_severity)",
+    ),
+    therapy_line: str | None = Query(default=None, description="Line-of-therapy filter ('0'-'3')"),
     calculator: KPICalculator = Depends(get_kpi_calculator),
 ) -> KPIResultResponse:
     """Get the calculated value for a specific KPI.
@@ -523,6 +528,8 @@ async def get_kpi_value(
         force_refresh: Force recalculation
         brand: Optional brand filter
         region: Optional geographic region filter
+        segment: Optional severity tier filter
+        therapy_line: Optional line-of-therapy filter
         calculator: KPI calculator instance
 
     Returns:
@@ -537,6 +544,10 @@ async def get_kpi_value(
             context["brand"] = brand
         if region:
             context["region"] = region
+        if segment:
+            context["segment"] = segment
+        if therapy_line:
+            context["therapy_line"] = therapy_line
 
         result = calculator.calculate(
             kpi_id=kpi_id,
@@ -582,7 +593,12 @@ async def get_kpi_history(
     start_date: str | None = Query(default=None, description="Earliest metric_date (YYYY-MM-DD)"),
     end_date: str | None = Query(default=None, description="Latest metric_date (YYYY-MM-DD)"),
 ) -> KPIHistoryResponse:
-    """Return the date-ordered monthly history for a KPI (empty when none exists)."""
+    """Return the date-ordered monthly history for a KPI (empty when none exists).
+
+    No segment/therapy_line params: this reads the materialized kpi_history
+    table (not the calculator/RPC), which has no patient-segment dimension —
+    threading an axis here would silently return unsegmented history.
+    """
     from src.repositories.kpi_history import get_kpi_history_repository
 
     repo = await get_kpi_history_repository()
@@ -644,6 +660,8 @@ async def calculate_kpi(
                 context["territory"] = request.context.territory
             if request.context.segment:
                 context["segment"] = request.context.segment
+            if request.context.therapy_line:
+                context["therapy_line"] = request.context.therapy_line
             context.update(request.context.extra)
 
         result = calculator.calculate(

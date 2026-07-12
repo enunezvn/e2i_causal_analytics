@@ -291,3 +291,57 @@ async def test_kpi_calculate_tool_passes_region_into_context(monkeypatch):
     assert ctx["region"] == "northeast"
     assert "territory" not in ctx  # the dead key must be gone
     assert resp["region"] == "northeast"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
+    """A severity-tier filter must reach the calculator under ``context['segment']``
+    (migration 105 -- BusinessImpactCalculator._resolve_windowed_call routes on it)."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=855.0, status=KPIStatus.UNKNOWN)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke(
+        {"kpi_name": "NRx", "brand": "Remibrutinib", "segment": "low_severity"}
+    )
+    assert resp["success"] is True
+    ctx = captured["context"]
+    assert ctx["segment"] == "low_severity"
+    assert "therapy_line" not in ctx
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
+    """A line-of-therapy filter must reach the calculator under
+    ``context['therapy_line']`` (migration 105). Line 0 is a real, commonly-populated
+    bucket -- the tool threads it with a truthy check on the (non-empty) string, so
+    "0" is included, mirroring how the base compute core guards with ``is not None``."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=822.0, status=KPIStatus.UNKNOWN)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke(
+        {"kpi_name": "NRx", "brand": "Remibrutinib", "therapy_line": "0"}
+    )
+    assert resp["success"] is True
+    ctx = captured["context"]
+    assert ctx["therapy_line"] == "0"
+    assert "segment" not in ctx

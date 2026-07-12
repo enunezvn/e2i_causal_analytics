@@ -1410,6 +1410,21 @@ class KpiCalculateInput(BaseModel):
         description="Brand filter (e.g. Remibrutinib, Fabhalta, Kisqali), case-insensitive.",
     )
     region: Optional[str] = Field(default=None, description="Optional region/territory filter.")
+    segment: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional severity tier filter: one of low_severity, "
+            "medium_severity, high_severity. Mutually exclusive with "
+            "region/therapy_line."
+        ),
+    )
+    therapy_line: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional line-of-therapy filter: one of '0', '1', '2', '3'. "
+            "Mutually exclusive with region/segment."
+        ),
+    )
     window: Optional[str] = Field(
         default=None,
         description=(
@@ -1581,6 +1596,8 @@ async def kpi_calculate_tool(
     kpi_name: str,
     brand: Optional[str] = None,
     region: Optional[str] = None,
+    segment: Optional[str] = None,
+    therapy_line: Optional[str] = None,
     window: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute a DEFINED KPI on demand via the KPI engine (the registry's calculable KPIs).
@@ -1616,6 +1633,10 @@ async def kpi_calculate_tool(
         kpi_name: the KPI to compute (resolved against the defined KPI registry).
         brand: optional brand filter (case-insensitive).
         region: optional region/territory filter.
+        segment: optional severity tier filter (low_severity, medium_severity,
+            high_severity); mutually exclusive with region/therapy_line.
+        therapy_line: optional line-of-therapy filter ('0'-'3'); mutually
+            exclusive with region/segment.
         window: optional time window (rolling or absolute); omit for the
             engine's default window (most recent 30 days of data).
 
@@ -1665,6 +1686,10 @@ async def kpi_calculate_tool(
         # region filter silently dropped -> region-agnostic windowed query while
         # the response still echoed the region. Pass the key the engine reads.
         context["region"] = region
+    if segment:
+        context["segment"] = segment
+    if therapy_line:
+        context["therapy_line"] = therapy_line
     if parsed is not None:
         context["window"] = parsed.as_dict()
 
