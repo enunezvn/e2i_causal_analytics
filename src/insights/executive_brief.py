@@ -53,9 +53,12 @@ try:
         with their stated provenance — no figures are provided for them and
         you must not invent any. Where `clinical_context` describes the
         brand's clinical setting (mechanism, indicated disease, label
-        constraints, competitors), you may ground the strategy in it
-        qualitatively — commercial moves are not made in a clinical vacuum —
-        but it too carries NO figures and you must not invent any."""
+        constraints, competitors), you MUST devote exactly one sentence to
+        grounding the strategy in that setting — commercial moves are not made
+        in a clinical vacuum — placed after the action sequence and before the
+        closing caveat; it carries NO figures and you must not invent any. If
+        `clinical_context` states that no clinical context is available, omit
+        any clinical sentence entirely — never invent one."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"

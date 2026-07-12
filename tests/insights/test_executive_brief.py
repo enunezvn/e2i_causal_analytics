@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
+import pytest
+
 from src.insights.executive_brief import (
+    ExecutiveBriefInsightSignature,
     _fallback,
     _inject,
     _placeholder_violation,
@@ -110,6 +113,34 @@ def test_generate_insight_fallback_surfaces_real_figures():
 def test_fallback_states_suppression_caveat():
     out = _fallback(_grounding(suppressed_count=1))
     assert "1 low-value opportunity was suppressed" in out["insight"]
+
+
+_CLINICAL = (
+    "Clinical setting for Remibrutinib: BTK inhibitor, indicated for chronic "
+    "spontaneous urticaria. Key competitors (curated reference): Xolair; Dupixent."
+)
+
+
+@pytest.mark.skipif(ExecutiveBriefInsightSignature is None, reason="DSPy not installed in this env")
+def test_signature_mandates_one_clinical_sentence_when_available_and_omits_otherwise():
+    # The user's directive (2026-07-12): the brief must VISIBLY reflect clinical
+    # context, not merely have it fed as optional LM color. The instruction must
+    # REQUIRE exactly one clinical-setting sentence when a setting is provided,
+    # and FORBID inventing one when the brand has no clinical context.
+    instr = (ExecutiveBriefInsightSignature.instructions or "").lower()
+    assert "clinical" in instr
+    assert "exactly one sentence" in instr  # a mandate, not "you may"
+    assert "omit" in instr  # never fabricated when none is available
+
+
+def test_fallback_surfaces_clinical_context_when_available():
+    # The deterministic (no-LM) path must ALSO carry the clinical setting, so the
+    # brief reflects it even when the LM is unavailable/guard-rejected.
+    g = _grounding(clinical_context=_CLINICAL)
+    assert g["has_clinical_context"] is True
+    out = _fallback(g)
+    assert "BTK inhibitor" in out["insight"]
+    assert any(c["label"] == "Clinical context" for c in out["grounding"])
 
 
 # ---- Placeholder inputs + injection map ------------------------------------------

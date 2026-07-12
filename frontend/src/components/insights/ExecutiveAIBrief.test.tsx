@@ -118,6 +118,64 @@ describe('ExecutiveAIBrief — real crystallized insights', () => {
   });
 });
 
+describe('ExecutiveAIBrief — server grounding chips (clinical context visibility)', () => {
+  it('renders the server grounding chips, including clinical context, under the distillation', () => {
+    mockBrief({
+      data: {
+        ...DISTILLATION,
+        grounding: [
+          { label: 'Brand', value: 'Remibrutinib' },
+          { label: 'Clinical context', value: 'included' },
+        ],
+      },
+      variables: { brand: 'Remibrutinib' },
+    } as unknown as Partial<BriefMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+
+    const chipLabel = screen.getByText('Clinical context');
+    expect(chipLabel).toBeInTheDocument();
+    // the outer chip (parent of the bolded label) carries label AND value
+    expect(chipLabel.parentElement?.textContent).toContain('included');
+  });
+
+  it('renders no grounding row when the brief carries no grounding chips', () => {
+    mockBrief({
+      data: { ...DISTILLATION, grounding: [] },
+      variables: { brand: 'Remibrutinib' },
+    } as unknown as Partial<BriefMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+    expect(screen.queryByTestId('brief-grounding')).not.toBeInTheDocument();
+  });
+
+  it('does not surface distillation grounding chips when crystallized insights take precedence', () => {
+    mockExec({
+      data: [
+        {
+          insight_id: 'ei_1',
+          title: 'Detailing drives TRx',
+          narrative: 'Detailing frequency is the strongest driver.',
+          brand: 'Remibrutinib',
+          crystallized_at: '2026-06-08T00:00:00Z',
+          source_count: 3,
+        },
+      ],
+    } as unknown as Partial<ExecQuery>);
+    mockBrief({
+      data: {
+        ...DISTILLATION,
+        grounding: [{ label: 'Clinical context', value: 'included' }],
+      },
+      variables: { brand: 'Remibrutinib' },
+    } as unknown as Partial<BriefMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+    // crystallized path is shown; the distillation's grounding must not leak in
+    expect(screen.queryByTestId('brief-grounding')).not.toBeInTheDocument();
+  });
+});
+
 describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
   it('renders an honest empty state (not SAMPLE_BRIEF) when nothing has loaded', () => {
     render(<ExecutiveAIBrief brand="Remibrutinib" />);
