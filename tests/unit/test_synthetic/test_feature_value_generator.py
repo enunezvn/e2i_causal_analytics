@@ -510,6 +510,59 @@ class TestFreshnessStatusAssignment:
         assert len(statuses) >= 2
 
 
+class TestFreshnessDeterminism:
+    """Freshness must be a pure function of the seeded timestamps + frontier,
+    never the wall clock (regression guard for the flaky determinism gate
+    test_week_cohort_is_deterministic — a boundary row flipped fresh/stale
+    between two identically-seeded generations because freshness read
+    datetime.now())."""
+
+    @pytest.fixture
+    def features_df(self):
+        config = GeneratorConfig(seed=42)
+        _, features_df = FeatureStoreSeeder(config).seed()
+        return features_df
+
+    def test_freshness_anchored_to_frontier_not_wall_clock(self, features_df):
+        """Rows at the data frontier read 'fresh' even when that frontier is
+        long past. With a static end_date 30 days ago, EVERY row is >30 days
+        old by the wall clock, so wall-clock freshness would never emit 'fresh'
+        — anchoring to end_date makes the frontier rows fresh (RED on the old
+        datetime.now() code, GREEN after)."""
+        end = date.today() - timedelta(days=30)
+        start = end - timedelta(days=60)
+        config = GeneratorConfig(n_records=500, seed=42, start_date=start, end_date=end)
+        gen = FeatureValueGenerator(config, features_df=features_df)
+
+        df = gen.generate()
+
+        assert (df["freshness_status"] == "fresh").any(), (
+            "no row read 'fresh' — freshness is still measured against the wall "
+            "clock instead of the data frontier"
+        )
+        # The newest row (at the frontier) must be the fresh one.
+        newest_idx = pd.to_datetime(df["event_timestamp"], format="ISO8601").idxmax()
+        assert df.loc[newest_idx, "freshness_status"] == "fresh"
+
+    def test_freshness_is_deterministic_across_generations(self, features_df):
+        """Two identically-seeded generations agree on freshness_status row-for-row
+        (the exact invariant the determinism gate asserts on the cohort frame)."""
+        end = date.today() - timedelta(days=5)  # boundary-rich: spans the 24h/168h cuts
+        start = end - timedelta(days=30)
+
+        def gen() -> pd.DataFrame:
+            config = GeneratorConfig(n_records=500, seed=42, start_date=start, end_date=end)
+            return FeatureValueGenerator(config, features_df=features_df).generate()
+
+        df1, df2 = gen(), gen()
+
+        assert (
+            df1["freshness_status"]
+            .reset_index(drop=True)
+            .equals(df2["freshness_status"].reset_index(drop=True))
+        )
+
+
 class TestFeatureValueTypes:
     """Test feature value types match definitions."""
 
