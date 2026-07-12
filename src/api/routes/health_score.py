@@ -1356,6 +1356,7 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
             .data
             or []
         )
+
         def _num(value: Any) -> Optional[float]:
             if value is None:
                 return None
