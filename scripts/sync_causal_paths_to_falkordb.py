@@ -85,6 +85,31 @@ def _mediation_edges(start: str, mediators: List[str], end: str) -> List[Tuple[s
     return edges
 
 
+def _variable_roles(edges: List[Tuple[str, str, bool]]) -> Dict[str, str]:
+    """Per-variable role from position across ALL chain edges (SSOT topology).
+
+    ``driver``  — only ever a cause (pure source: interventions and exogenous
+    drivers such as ``treatment_arm`` or ``competitor_activity``);
+    ``outcome`` — only ever an effect (pure sink);
+    ``mediator`` — both (transmits effects somewhere in the DAG).
+
+    The AI-Insights graph colors nodes by this property. It is deliberately
+    topology-derived — no hand-curated lever ontology — so it can never
+    contradict the validated causal_paths rows it is computed from.
+    """
+    causes = {c for c, _, _ in edges}
+    effects = {e for _, e, _ in edges}
+    roles: Dict[str, str] = {}
+    for name in causes | effects:
+        if name in causes and name not in effects:
+            roles[name] = "driver"
+        elif name in effects and name not in causes:
+            roles[name] = "outcome"
+        else:
+            roles[name] = "mediator"
+    return roles
+
+
 # Terminal patient-journey outcomes -> the commercial KPI they drive, matched by
 # KPI *name* (live KPI nodes carry no ``id``). These bridge edges connect the
 # variable layer to the KPI layer so the gold standard renders as ONE connected
@@ -154,12 +179,19 @@ def main() -> int:
     chain_edges = [(row, _mediation_edges(seq[0], seq[1:-1], seq[-1])) for row, seq in chains]
     distinct_nodes = {n for _, seq in chains for n in seq}
     edge_count = sum(len(edges) for _, edges in chain_edges)
+    roles = _variable_roles([e for _, edges in chain_edges for e in edges])
+    role_counts = {
+        r: sum(1 for v in roles.values() if v == r) for r in ("driver", "mediator", "outcome")
+    }
     print(f"causal_paths (validated): {len(rows)}")
     print(f"chains with >=2 nodes:    {len(chains)}")
     print(f"distinct variable nodes:  {len(distinct_nodes)}")
     print(f"CAUSES edges to MERGE:     {edge_count} (parallel mediation, no mediator->mediator)")
     print(
         f"variable->KPI bridges:     {len(_VARIABLE_KPI_BRIDGE)} (matched by KPI name if present)"
+    )
+    print(
+        f"variable roles to stamp:   {role_counts} (topology-derived, colors the AI-Insights graph)"
     )
 
     if not args.execute:
@@ -211,6 +243,19 @@ def main() -> int:
             )
             written += 1
 
+    # Stamp the topology-derived role on every variable node just written —
+    # the AI-Insights "Active Causal Chains" graph colors nodes by it. MATCH
+    # (never MERGE) so a role can only land on nodes this sync owns; SET is
+    # idempotent and self-corrects when new chains change a node's position.
+    stamped = 0
+    for var_name, role in roles.items():
+        res = g.query(
+            "MATCH (v:Variable {id: $vid}) SET v.role = $role RETURN count(v)",
+            params={"vid": f"var:{var_name}", "role": role},
+        )
+        touched = res.result_set[0][0] if getattr(res, "result_set", None) else 0
+        stamped += int(touched or 0)
+
     # Bridge the terminal variable outcomes into the KPI layer so the variable
     # graph and the KPI graph are one connected component. MATCH both endpoints
     # (never CREATE a bare KPI or orphan variable); MERGE a single, idempotent,
@@ -233,7 +278,8 @@ def main() -> int:
         bridged += int(touched or 0)
 
     print(
-        f"\nEXECUTED — MERGEd {written} causal edges across {len(chains)} chains "
+        f"\nEXECUTED — MERGEd {written} causal edges across {len(chains)} chains, "
+        f"stamped roles on {stamped} variable node(s) "
         f"+ {bridged} variable->KPI bridge(s) into '{graph_name}'."
     )
     return 0

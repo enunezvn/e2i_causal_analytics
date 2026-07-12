@@ -33,6 +33,17 @@ interface SelectedNode {
   type: string;
 }
 
+interface SelectedEdge {
+  id: string;
+  sourceLabel: string;
+  targetLabel: string;
+  relType: string;
+  /** Edge confidence (0-1) when the API reported one; absent = unknown. */
+  weight?: number;
+  /** ATE estimate riding the terminal edge of a validated causal path. */
+  ate?: number;
+}
+
 // NOTE: SAMPLE_ELEMENTS (a fabricated "Detailing Frequency -> ... -> TRx"
 // demo graph with invented edge weights) was DELETED. The graph initializes
 // EMPTY and renders only real chains from POST /api/graph/causal-chains;
@@ -44,36 +55,44 @@ interface SelectedNode {
 
 /**
  * Maps API node types to visualization categories for styling.
- * - intervention: Actions/triggers that start causal chains (blue)
+ * - driver: Sources of causal chains — interventions and exogenous causes (blue)
  * - mediator: Intermediate entities that transmit effects (violet)
- * - moderator: Factors that modify effect strength (amber)
  * - outcome: End results/metrics (emerald)
+ *
+ * There is deliberately NO moderator category: moderation (effect
+ * modification) is not representable as a cause→effect edge in this DAG —
+ * it lives in the HTE segment analysis, not the knowledge graph.
  */
 const NODE_TYPE_MAP: Record<string, string> = {
   // API types → visualization types
-  Trigger: 'intervention',
-  Action: 'intervention',
-  Campaign: 'intervention',
+  Trigger: 'driver',
+  Action: 'driver',
+  Campaign: 'driver',
   HCP: 'mediator',
   Brand: 'mediator',
   Treatment: 'mediator',
-  Patient: 'moderator',
-  Region: 'moderator',
-  Segment: 'moderator',
+  Patient: 'mediator',
+  Region: 'mediator',
+  Segment: 'mediator',
   KPI: 'outcome',
   Metric: 'outcome',
   Conversion: 'outcome',
   // Identity mappings for already-canonical visualization types
-  intervention: 'intervention',
+  driver: 'driver',
   mediator: 'mediator',
-  moderator: 'moderator',
   outcome: 'outcome',
 };
 
+/** Roles stamped on causal_paths variables by sync_causal_paths_to_falkordb. */
+const KNOWN_ROLES = new Set(['driver', 'mediator', 'outcome']);
+
 /**
- * Get the visualization type for a node, with fallback to 'mediator'
+ * Get the visualization type for a node. The SSOT `role` property stamped on
+ * causal-path variables wins (it encodes the node's actual position across
+ * validated chains); the entity-type map is the fallback, then 'mediator'.
  */
-function getNodeVisualizationType(apiType: string | undefined): string {
+function getNodeVisualizationType(apiType: string | undefined, role?: unknown): string {
+  if (typeof role === 'string' && KNOWN_ROLES.has(role)) return role;
   if (!apiType) return 'mediator';
   return NODE_TYPE_MAP[apiType] ?? 'mediator';
 }
@@ -85,7 +104,7 @@ function getNodeVisualizationType(apiType: string | undefined): string {
 const customStyles: StylesheetStyle[] = [
   ...defaultCytoscapeStyles,
   {
-    selector: 'node[vizType="intervention"]',
+    selector: 'node[vizType="driver"]',
     style: {
       'background-color': '#3b82f6', // blue-500
       'border-color': '#2563eb',
@@ -96,13 +115,6 @@ const customStyles: StylesheetStyle[] = [
     style: {
       'background-color': '#8b5cf6', // violet-500
       'border-color': '#7c3aed',
-    },
-  },
-  {
-    selector: 'node[vizType="moderator"]',
-    style: {
-      'background-color': '#f59e0b', // amber-500
-      'border-color': '#d97706',
     },
   },
   {
@@ -138,6 +150,7 @@ const customStyles: StylesheetStyle[] = [
 
 export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
 
   // Fetch causal chains from API
   const { mutate: fetchChains, data: chainsResponse, error: chainsError, isPending } = useCausalChains();
@@ -162,14 +175,27 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
     },
     {
       onNodeClick: (nodeId, nodeData) => {
+        setSelectedEdge(null);
         setSelectedNode({
           id: nodeId,
           label: (nodeData.label as string) || nodeId,
           type: (nodeData.type as string) || 'unknown',
         });
       },
+      onEdgeClick: (edgeId, edgeData) => {
+        setSelectedNode(null);
+        setSelectedEdge({
+          id: edgeId,
+          sourceLabel: (edgeData.sourceLabel as string) || (edgeData.source as string) || '',
+          targetLabel: (edgeData.targetLabel as string) || (edgeData.target as string) || '',
+          relType: (edgeData.relType as string) || 'CAUSES',
+          weight: typeof edgeData.weight === 'number' ? edgeData.weight : undefined,
+          ate: typeof edgeData.ate === 'number' ? edgeData.ate : undefined,
+        });
+      },
       onBackgroundClick: () => {
         setSelectedNode(null);
+        setSelectedEdge(null);
       },
     }
   );
@@ -187,6 +213,7 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
 
     const elements: ElementDefinition[] = [];
     const nodeIds = new Set<string>();
+    const nodeLabels = new Map<string, string>();
     const edgeIds = new Set<string>();
     let skipped = 0;
 
@@ -201,13 +228,14 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
         }
         if (!nodeIds.has(node.id)) {
           nodeIds.add(node.id);
+          nodeLabels.set(node.id, node.name || node.id);
           const apiType = node.type || 'entity';
           elements.push({
             data: {
               id: node.id,
               label: node.name || node.id,
               type: apiType,
-              vizType: getNodeVisualizationType(apiType),
+              vizType: getNodeVisualizationType(apiType, node.properties?.role),
             },
           });
         }
@@ -234,14 +262,21 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
         edgeIds.add(edgeId);
         // confidence is optional on the wire: when absent it stays absent
         // (rendered as a thin dashed unknown-strength edge), never invented.
+        // relType/labels/ate feed the click panel — ate_estimate rides the
+        // terminal edge of a validated causal path (absent elsewhere).
+        const ate = rel.properties?.ate_estimate;
         elements.push({
           data: {
             id: edgeId,
             source: rel.source_id,
             target: rel.target_id,
+            relType: rel.type,
+            sourceLabel: nodeLabels.get(rel.source_id) ?? rel.source_id,
+            targetLabel: nodeLabels.get(rel.target_id) ?? rel.target_id,
             ...(typeof rel.confidence === 'number'
               ? { weight: rel.confidence }
               : {}),
+            ...(typeof ate === 'number' ? { ate } : {}),
           },
         });
       });
@@ -379,6 +414,30 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
               </p>
             </div>
           )}
+
+          {/* Selected Edge Info — causal strength from real edge data only */}
+          {selectedEdge && (
+            <div className="absolute bottom-4 left-4 p-3 rounded-lg bg-[var(--color-card)] border border-[var(--color-border)] shadow-lg">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-medium text-sm">
+                  {selectedEdge.sourceLabel} → {selectedEdge.targetLabel}
+                </span>
+                <Badge variant="outline" className="text-xs">
+                  {selectedEdge.relType}
+                </Badge>
+              </div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                {typeof selectedEdge.weight === 'number'
+                  ? `Causal strength (confidence): ${selectedEdge.weight.toFixed(2)}`
+                  : 'Causal strength: unknown (no confidence recorded)'}
+              </p>
+              {typeof selectedEdge.ate === 'number' && (
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  ATE estimate: {selectedEdge.ate.toFixed(3)}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Legend */}
@@ -386,15 +445,11 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
           <span className="text-xs text-[var(--color-muted-foreground)]">Legend:</span>
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 rounded-full bg-blue-500" />
-            <span className="text-xs">Intervention</span>
+            <span className="text-xs">Driver</span>
           </div>
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 rounded-full bg-violet-500" />
             <span className="text-xs">Mediator</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 rounded-full bg-amber-500" />
-            <span className="text-xs">Moderator</span>
           </div>
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 rounded-full bg-emerald-500" />
