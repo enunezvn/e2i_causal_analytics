@@ -41,6 +41,7 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useExecutiveBriefInsight } from '@/hooks/api/use-insights';
 import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
+import type { GroundingChip } from '@/types/insights';
 
 // =============================================================================
 // TYPES
@@ -121,6 +122,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     : null;
 
   const sections: BriefSection[] = crystallizedSections ?? briefSections ?? [];
+
+  // Server-derived grounding chips (the provenance the distillation was
+  // grounded in — brand, addressable value, causal levers, and the brand's
+  // clinical setting). Shown ONLY for the distillation path: crystallized
+  // insights carry no grounding, so a chip row there would misattribute the
+  // distillation's provenance to a different source.
+  const groundingChips: GroundingChip[] =
+    !crystallizedSections && briefInsight?.grounding ? briefInsight.grounding : [];
 
   // Synchronous (render-time) detection of a brand switch. The reset below is a
   // passive effect that runs AFTER paint, so on a brand switch the prior
@@ -280,6 +289,22 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
                   </ul>
                 )}
               </div>
+            ))}
+          </div>
+        )}
+
+        {/* Grounding chips — what the distillation was grounded in, surfaced so
+            the clinical setting (and other provenance) is VISIBLE, not just fed
+            to the LM. Mirrors the HTE card's StrategicInsightCard chip row. */}
+        {!isBusy && groundingChips.length > 0 && (
+          <div className="flex flex-wrap gap-2" data-testid="brief-grounding">
+            {groundingChips.map((c, i) => (
+              <span
+                key={i}
+                className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-muted-foreground)]"
+              >
+                <span className="font-medium">{c.label}</span>: {c.value}
+              </span>
             ))}
           </div>
         )}
