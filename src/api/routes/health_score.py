@@ -839,10 +839,11 @@ async def get_pipeline_health() -> PipelineHealthResponse:
     Checks data freshness, processing success, and row counts.
 
     Behavior: reads REAL pipeline health from etl_pipeline_metrics (latest run
-    per pipeline; freshness computed from run_end), tagged
-    ``data_provenance="measured"``. Only when the backend is unreachable does it
-    fall back to the #429 guard: 503 in production, clearly-tagged placeholder in
-    dev/test.
+    per pipeline; freshness computed from run_end; synthetic showcase rows
+    excluded), tagged ``data_provenance="measured"``. An empty-but-reachable
+    table yields an empty roster tagged ``unknown``. Only when the backend is
+    unreachable does it fall back to the #429 guard: 503 in production,
+    clearly-tagged placeholder in dev/test.
 
     Returns:
         Pipeline health details (measured from etl_pipeline_metrics)
@@ -1406,7 +1407,8 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
 
 
 def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvenance]]:
-    """Real pipeline health: latest run per pipeline from etl_pipeline_metrics."""
+    """Real pipeline health: latest run per non-synthetic pipeline from
+    etl_pipeline_metrics."""
     db = _health_source_client()
     if db is None:
         return [], None
@@ -1415,6 +1417,15 @@ def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvena
         rows = (
             db.table("etl_pipeline_metrics")
             .select("pipeline_name, run_start, run_end, records_processed, status, created_at")
+            # Exclude synthetic showcase rows, mirroring _fetch_model_health. The
+            # table's only pipeline (rwd_ingest, 50k rows, ALL is_synthetic=true)
+            # is planted by coverage_tables_generator for the TTR KPI and goes
+            # STALE (>48h) between reseeds — scoring the dimension at 50% as if a
+            # real pipeline were failing. No real ETL telemetry writes this table
+            # yet; an empty result is the honest reading (UNKNOWN provenance, and
+            # the pipeline node scores an empty-but-reachable fleet as measured
+            # healthy).
+            .eq("is_synthetic", False)
             .order("run_end", desc=True)
             .limit(2000)
             .execute()

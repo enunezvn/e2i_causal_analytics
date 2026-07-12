@@ -2206,6 +2206,41 @@ def test_fetch_pipeline_health_latest_per_pipeline_and_status():
     assert by_name["broken"].status == PipelineStatus.FAILED
 
 
+def test_fetch_pipeline_health_excludes_synthetic_rows():
+    """Synthetic showcase rows (rwd_ingest, planted for the TTR KPI) must be
+    excluded like _fetch_model_health does — they go stale between reseeds and
+    scored the pipeline dimension at 50% as if a real pipeline were failing.
+    All-synthetic table -> honest empty roster tagged UNKNOWN; a real row
+    alongside synthetic ones survives alone."""
+    synthetic_row = {
+        "pipeline_name": "rwd_ingest",
+        "run_end": "2026-07-08T14:44:00+00:00",
+        "run_start": "2026-07-08T10:00:00+00:00",
+        "records_processed": 50000,
+        "status": "completed",
+        "is_synthetic": True,
+    }
+    db = _FakeDB({"etl_pipeline_metrics": [synthetic_row]})
+    with _patch_health_client(db):
+        pipelines, prov = _fetch_pipeline_health()
+    assert pipelines == []
+    assert prov == DataProvenance.UNKNOWN
+
+    real_row = {
+        "pipeline_name": "real_etl",
+        "run_end": "2026-06-12T00:00:00+00:00",
+        "run_start": "2026-06-12T00:00:00+00:00",
+        "records_processed": 100,
+        "status": "completed",
+        "is_synthetic": False,
+    }
+    db = _FakeDB({"etl_pipeline_metrics": [synthetic_row, real_row]})
+    with _patch_health_client(db):
+        pipelines, prov = _fetch_pipeline_health()
+    assert prov == DataProvenance.MEASURED
+    assert [p.pipeline_name for p in pipelines] == ["real_etl"]
+
+
 def test_fetch_agent_health_partial_null_metrics_without_telemetry():
     """Roster present, no telemetry rows -> PARTIAL with NULL runtime metrics,
     NOT a fabricated success_rate."""
