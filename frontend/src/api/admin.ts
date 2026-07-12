@@ -14,6 +14,7 @@ import type {
   AuditFeedResponse,
   InviteRequest,
   LinkResponse,
+  LlmUsageResponse,
   PlatformActivityResponse,
   UpdateUserRequest,
   UserActivityResponse,
@@ -73,4 +74,8 @@ export function getPlatformActivity(days = 30): Promise<PlatformActivityResponse
 
 export function getAuditFeed(days = 30): Promise<AuditFeedResponse> {
   return get<AuditFeedResponse>(`${BASE}/audit`, { params: { days } });
+}
+
+export function getLlmUsage(days = 30): Promise<LlmUsageResponse> {
+  return get<LlmUsageResponse>(`${BASE}/observability/llm-usage`, { params: { days } });
 }

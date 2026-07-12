@@ -96,3 +96,64 @@ export interface AuditFeedResponse {
     metadata: Record<string, unknown>;
   }[];
 }
+
+// --- LLM observability (mirrors GET /api/admin/observability/llm-usage) ---
+
+export interface LlmUsageSummary {
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  calls: number;
+  distinct_users: number;
+  days: number;
+  tracking_since: string | null;
+}
+
+export interface LlmDailyUsage {
+  date: string;
+  chat_cost_usd: number;
+  platform_cost_usd: number;
+  tokens: number;
+}
+
+export interface LlmUserUsage {
+  user_id: string;
+  email: string | null;
+  sessions: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  models: string[];
+}
+
+export interface LlmSessionUsage {
+  session_id: string;
+  title: string | null;
+  started_at: string | null;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  models: string[];
+}
+
+export interface LlmPlatformUsage {
+  surface: string;
+  component: string | null;
+  model: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+export interface LlmUsageResponse {
+  summary: LlmUsageSummary;
+  daily: LlmDailyUsage[];
+  by_user: LlmUserUsage[];
+  sessions: Record<string, LlmSessionUsage[]>;
+  platform: LlmPlatformUsage[];
+  pricing_version: string;
+  unpriced_models: string[];
+}
