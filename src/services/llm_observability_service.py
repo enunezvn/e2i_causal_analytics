@@ -147,6 +147,7 @@ class LLMObservabilityService:
                         "email": emails.get(user_id),
                         "session_ids": set(),
                         "calls": 0,
+                        "priced_calls": 0,
                         "input_tokens": 0,
                         "output_tokens": 0,
                         "cost_usd": 0.0,
@@ -158,6 +159,8 @@ class LLMObservabilityService:
                 user_row["calls"] += 1
                 user_row["input_tokens"] += input_t
                 user_row["output_tokens"] += output_t
+                if cost is not None:
+                    user_row["priced_calls"] += 1
                 if cost:
                     user_row["cost_usd"] += cost
                 user_row["models"].add(model)
@@ -169,6 +172,7 @@ class LLMObservabilityService:
                         "user_id": user_id,
                         "first_event_at": event.get("created_at"),
                         "calls": 0,
+                        "priced_calls": 0,
                         "input_tokens": 0,
                         "output_tokens": 0,
                         "cost_usd": 0.0,
@@ -178,6 +182,8 @@ class LLMObservabilityService:
                 session_row["calls"] += 1
                 session_row["input_tokens"] += input_t
                 session_row["output_tokens"] += output_t
+                if cost is not None:
+                    session_row["priced_calls"] += 1
                 if cost:
                     session_row["cost_usd"] += cost
                 session_row["models"].add(model)
@@ -192,6 +198,7 @@ class LLMObservabilityService:
                         "component": key[1],
                         "model": model,
                         "calls": 0,
+                        "priced_calls": 0,
                         "input_tokens": 0,
                         "output_tokens": 0,
                         "cost_usd": 0.0,
@@ -200,6 +207,8 @@ class LLMObservabilityService:
                 platform_row["calls"] += 1
                 platform_row["input_tokens"] += input_t
                 platform_row["output_tokens"] += output_t
+                if cost is not None:
+                    platform_row["priced_calls"] += 1
                 if cost:
                     platform_row["cost_usd"] += cost
 
@@ -218,11 +227,11 @@ class LLMObservabilityService:
                     "calls": row["calls"],
                     "input_tokens": row["input_tokens"],
                     "output_tokens": row["output_tokens"],
-                    "cost_usd": round(row["cost_usd"], 6),
+                    "cost_usd": round(row["cost_usd"], 6) if row["priced_calls"] else None,
                     "models": sorted(row["models"]),
                 }
             )
-        by_user.sort(key=lambda r: r["cost_usd"], reverse=True)
+        by_user.sort(key=lambda r: r["cost_usd"] or 0.0, reverse=True)
 
         sessions: Dict[str, List[Dict[str, Any]]] = {}
         for row in per_session.values():
@@ -235,7 +244,7 @@ class LLMObservabilityService:
                     "calls": row["calls"],
                     "input_tokens": row["input_tokens"],
                     "output_tokens": row["output_tokens"],
-                    "cost_usd": round(row["cost_usd"], 6),
+                    "cost_usd": round(row["cost_usd"], 6) if row["priced_calls"] else None,
                     "models": sorted(row["models"]),
                 }
             )
@@ -243,9 +252,18 @@ class LLMObservabilityService:
             rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
 
         platform_rows = [
-            {**row, "cost_usd": round(row["cost_usd"], 6)} for row in platform.values()
+            {
+                "surface": row["surface"],
+                "component": row["component"],
+                "model": row["model"],
+                "calls": row["calls"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "cost_usd": round(row["cost_usd"], 6) if row["priced_calls"] else None,
+            }
+            for row in platform.values()
         ]
-        platform_rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+        platform_rows.sort(key=lambda r: r["cost_usd"] or 0.0, reverse=True)
 
         return {
             "summary": summary,

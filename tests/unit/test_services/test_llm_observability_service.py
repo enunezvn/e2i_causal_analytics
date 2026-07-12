@@ -122,6 +122,8 @@ def test_unpriced_model_counted_but_not_costed():
     assert result["unpriced_models"] == ["mystery-lm-9"]
     assert result["summary"]["total_cost_usd"] == 0.0  # cost skipped, not faked
     assert result["summary"]["input_tokens"] == 1000  # tokens still honest
+    assert result["by_user"][0]["cost_usd"] is None  # honest "—", never $0
+    assert result["sessions"][U1][0]["cost_usd"] is None
 
 
 def test_empty_window():

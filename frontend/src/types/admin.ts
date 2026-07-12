@@ -123,7 +123,7 @@ export interface LlmUserUsage {
   calls: number;
   input_tokens: number;
   output_tokens: number;
-  cost_usd: number;
+  cost_usd: number | null;
   models: string[];
 }
 
@@ -134,7 +134,7 @@ export interface LlmSessionUsage {
   calls: number;
   input_tokens: number;
   output_tokens: number;
-  cost_usd: number;
+  cost_usd: number | null;
   models: string[];
 }
 
@@ -145,7 +145,7 @@ export interface LlmPlatformUsage {
   calls: number;
   input_tokens: number;
   output_tokens: number;
-  cost_usd: number;
+  cost_usd: number | null;
 }
 
 export interface LlmUsageResponse {
