@@ -260,6 +260,16 @@ export default function CausalAnalysis() {
       ),
     [variables, treatmentVar, outcomeVar]
   );
+  // #1188: curated PRE-TREATMENT baselines (RCT grains only). When present the
+  // panel offers an OPT-IN variance-reduction adjustment — distinct from the
+  // confounders above, which de-bias observational questions.
+  const baselineCandidates = useMemo(() => variables?.baseline_candidates ?? [], [variables]);
+  const [adjustBaselines, setAdjustBaselines] = useState(false);
+  // Opt-in is dataset-scoped: reset on grain switch so a choice made for the
+  // Trigger RCT never silently rides into another grain.
+  useEffect(() => {
+    setAdjustBaselines(false);
+  }, [dataset]);
   // Keep the manual panel's treatment/outcome valid for the active dataset. The
   // candidate sets are dataset-specific (e.g. HCP's only outcome is `adopted`,
   // Trigger's treatments are control_group_flag/acceptance_status), so the
@@ -319,6 +329,9 @@ export default function CausalAnalysis() {
         dataset,
         estimator: estimator === AUTO_ESTIMATOR ? undefined : estimator,
         brand: brandArg ?? undefined,
+        // #1188: opt-in RCT baseline adjustment (only meaningful when the
+        // dataset offers curated baselines; false otherwise).
+        adjust_baselines: adjustBaselines && baselineCandidates.length > 0,
       });
     } catch (error) {
       console.error('Causal agent analysis failed:', error);
@@ -838,6 +851,25 @@ export default function CausalAnalysis() {
                     Controlling for (confounders, data-driven):{' '}
                     <span className="font-medium">{confounders.join(', ')}</span>
                   </p>
+                )}
+                {baselineCandidates.length > 0 && (
+                  <div className="space-y-1">
+                    <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={adjustBaselines}
+                        onChange={(e) => setAdjustBaselines(e.target.checked)}
+                      />
+                      <span>
+                        Adjust for baseline covariates (variance reduction) —{' '}
+                        <span className="font-medium">{baselineCandidates.join(', ')}</span>.
+                        Treatment is randomized on this grain, so the point estimate is unbiased
+                        either way; pre-treatment baselines only tighten the confidence interval
+                        (ANCOVA-style precision, not de-confounding).
+                      </span>
+                    </label>
+                  </div>
                 )}
                 <div className="flex items-center gap-3">
                   <Button onClick={handleRunManual} disabled={runAgent.isPending}>

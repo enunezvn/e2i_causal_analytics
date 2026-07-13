@@ -126,6 +126,10 @@ export interface CausalVariablesResponse {
   outcome_candidates: string[];
   /** Columns suitable as covariates / controls */
   covariate_candidates: string[];
+  /** #1188: curated PRE-TREATMENT baselines available for opt-in RCT variance
+   * reduction (ANCOVA efficiency adjustment, NOT de-confounding). Empty /
+   * absent for observational datasets. */
+  baseline_candidates?: string[];
   /** All columns available in the dataset */
   columns: string[];
 }
@@ -168,6 +172,13 @@ export interface AgentCausalAnalysisRequest {
   limit?: number;
   /** Learn the DAG from data via guided structure discovery (default true). */
   auto_discover?: boolean;
+  /**
+   * #1188 OPT-IN: on a randomized dataset with a curated baseline role
+   * (nba_triggers), join pre-treatment baselines and let the covariate
+   * estimators use them as EFFICIENCY controls (ANCOVA-style variance
+   * reduction — tighter intervals, unchanged unbiased point estimate).
+   */
+  adjust_baselines?: boolean;
 }
 
 /** The causal DAG the agent's graph_builder constructed. */
@@ -264,6 +275,16 @@ export interface AgentCausalAnalysisResponse {
   naive_ate_ci_upper?: number | null;
   /** naive_ate - ate (> 0 means the naive estimate overstated the effect). */
   confounding_bias_removed?: number | null;
+  /**
+   * #1188: what covariate adjustment MEANT for this run — 'confounding'
+   * (observational de-biasing), 'efficiency' (RCT baseline variance
+   * reduction: unbiased either way, interval tightened), 'none' (unadjusted
+   * contrast), or null for legacy results (unknown).
+   */
+  adjustment_type?: 'confounding' | 'efficiency' | 'none' | null;
+  /** #1188: pre-treatment baselines adjusted for efficiency (empty unless
+   * adjustment_type === 'efficiency'). */
+  baseline_covariates?: string[];
   /** Estimator the agent actually used (data-driven or forced) */
   selected_estimator?: string | null;
   /** The data-driven estimator evaluation (null when only one was evaluated). */

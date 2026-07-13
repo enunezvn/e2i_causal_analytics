@@ -78,7 +78,14 @@ function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): 
 // The agent fits and energy-scores several estimators and picks the lowest score
 // with a robust-over-fast tie-break. Surface that evaluation so the analyst sees
 // WHAT was compared and WHY the winner won — not just the winner's name.
-function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorComparison }) {
+function EstimatorComparisonPanel({
+  comparison,
+  efficiency = false,
+}: {
+  comparison: EstimatorComparison;
+  /** #1188: RCT variance-reduction run — OLS is the unbiased anchor. */
+  efficiency?: boolean;
+}) {
   // Rank fit estimators by energy score; sink skipped/failed ones to the bottom
   // (a skipped estimator has no score and is not-applicable, not a loser).
   const ranked = [...comparison.candidates].sort((a, b) => {
@@ -131,6 +138,11 @@ function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorCompari
                       Not applicable
                     </Badge>
                   )}
+                  {efficiency && c.estimator === 'ols' && (
+                    <Badge variant="outline" className="ml-2 align-middle font-normal">
+                      Unbiased anchor
+                    </Badge>
+                  )}
                 </td>
                 <td className="p-2">{c.energy_score != null ? c.energy_score.toFixed(4) : '—'}</td>
                 <td className="p-2">{c.ate != null ? c.ate.toFixed(4) : '—'}</td>
@@ -166,6 +178,46 @@ function ConfoundingAdjustmentPanel({ result }: { result: AgentCausalAnalysisRes
   const hasNaive = naive !== null && naive !== undefined && !Number.isNaN(naive);
   const delta = result.confounding_bias_removed;
   const hasDelta = delta !== null && delta !== undefined && !Number.isNaN(delta);
+
+  // #1188: on a randomized (RCT) run the baselines are EFFICIENCY controls —
+  // adjustment tightens the interval, it does not remove confounding bias.
+  // Presenting it with the observational "bias removed" prose would misstate
+  // what happened, so the panel switches to an honest precision framing with
+  // BOTH intervals visible (the tightening IS the deliverable).
+  if (result.adjustment_type === 'efficiency') {
+    const baselines = result.baseline_covariates ?? [];
+    return (
+      <div className="rounded-md border bg-muted/30 p-3 space-y-1">
+        <p className="text-sm font-medium">Precision adjustment (randomized design)</p>
+        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+          <span className="text-muted-foreground">
+            Unadjusted (anchor):{' '}
+            <span className="font-semibold text-foreground">{formatEffect(naive)}</span>{' '}
+            <span className="text-xs">
+              95% CI {formatCI(result.naive_ate_ci_lower, result.naive_ate_ci_upper)}
+            </span>
+          </span>
+          <span className="text-muted-foreground">
+            Adjusted:{' '}
+            <span className="font-semibold text-primary">{formatEffect(result.ate)}</span>{' '}
+            <span className="text-xs">95% CI {formatCI(result.ate_ci_lower, result.ate_ci_upper)}</span>
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Treatment is randomized here, so both point estimates are unbiased — the baseline
+          covariates enter only for variance reduction (ANCOVA-style precision), tightening the
+          confidence interval around the same effect. The unadjusted difference-in-means stays the
+          reference anchor.
+        </p>
+        {baselines.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            <span className="font-medium">Baseline covariates (pre-treatment):</span>{' '}
+            {baselines.join(', ')}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-md border bg-muted/30 p-3 space-y-1">
@@ -326,7 +378,10 @@ export function CausalAnalysisDetail({
       )}
 
       {result.estimator_comparison && (
-        <EstimatorComparisonPanel comparison={result.estimator_comparison} />
+        <EstimatorComparisonPanel
+          comparison={result.estimator_comparison}
+          efficiency={result.adjustment_type === 'efficiency'}
+        />
       )}
 
       {clinicalContext.data && <ClinicalContextPanel context={clinicalContext.data} />}
