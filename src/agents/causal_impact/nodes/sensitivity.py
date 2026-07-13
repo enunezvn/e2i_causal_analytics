@@ -73,21 +73,38 @@ class SensitivityNode:
                 1.0 if ci_straddles_null else self._calculate_e_value(ci_bound, outcome_std)
             )
 
-            # Interpret E-value (point estimate drives the human narrative).
-            interpretation = self._interpret_e_value(e_value_point)
-
-            # M-stat2: the robust/strength decision uses the CONSERVATIVE CI
-            # E-value, not the point estimate, so a wide / null-crossing CI is
-            # correctly flagged as non-robust.
-            robust = e_value_ci > 2.0  # Common threshold
-
-            # Classify unmeasured confounder strength needed (off the CI bound).
-            if e_value_ci < 1.5:
-                strength = "weak"
-            elif e_value_ci < 3.0:
-                strength = "moderate"
+            if state.get("randomized_design"):
+                # DESIGN declaration (dataset spec via the API layer): the
+                # treatment is genuinely randomized, so unmeasured confounding
+                # of assignment is excluded by construction. Narrating "the
+                # effect could be explained by moderate confounding" here is
+                # misleading — the E-value numbers stay reported, but as
+                # information, and robustness-to-confounding holds by design.
+                interpretation = (
+                    "Randomized design: treatment assignment is exogenous by "
+                    "construction, so unmeasured confounding of assignment is "
+                    f"excluded by design. E-value {e_value_point:.2f} "
+                    f"(CI bound {e_value_ci:.2f}) is reported for information "
+                    "only and does not indicate a validity risk."
+                )
+                robust = True
+                strength = "not_applicable_randomized"
             else:
-                strength = "strong"
+                # Interpret E-value (point estimate drives the human narrative).
+                interpretation = self._interpret_e_value(e_value_point)
+
+                # M-stat2: the robust/strength decision uses the CONSERVATIVE CI
+                # E-value, not the point estimate, so a wide / null-crossing CI
+                # is correctly flagged as non-robust.
+                robust = e_value_ci > 2.0  # Common threshold
+
+                # Classify unmeasured confounder strength needed (off the CI bound).
+                if e_value_ci < 1.5:
+                    strength = "weak"
+                elif e_value_ci < 3.0:
+                    strength = "moderate"
+                else:
+                    strength = "strong"
 
             sensitivity_analysis: SensitivityAnalysis = {
                 "e_value": e_value_point,

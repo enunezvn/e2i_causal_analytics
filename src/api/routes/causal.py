@@ -872,9 +872,31 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
         "treatment": ["control_group_flag", "acceptance_status"],
         "outcome": ["action_taken", "conversion_flag"],
         "covariate": [],
+        # DESIGN declaration, per-TREATMENT: only the holdout flag is a
+        # randomized assignment (the DGP draws it as a pure coin flip);
+        # acceptance_status is a rep CHOICE and keeps the full observational
+        # unmeasured-confounding gate. Consumed by _is_randomized_treatment →
+        # the agent state's ``randomized_design`` channel → the refutation
+        # E-value gate + sensitivity/interpretation wording.
+        "randomized_treatment": ["control_group_flag"],
     },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+
+def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool:
+    """Whether this question's treatment is RANDOMIZED by design.
+
+    Reads the curated spec's ``randomized_treatment`` list — a per-TREATMENT
+    design declaration (nba_triggers carries both the randomized holdout and
+    the rep-chosen acceptance_status; only the former qualifies). Fail-closed:
+    unknown dataset / unlisted treatment → False, and this must NEVER be
+    inferred from an empty discovered backdoor (an observational question where
+    discovery found nothing still deserves the unmeasured-confounding gate).
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset or _DEFAULT_CAUSAL_DATASET, {})
+    return treatment_var in spec.get("randomized_treatment", [])
+
 
 # --- Brand-aware clinical covariate gating (Phase 2) --------------------------------
 # After the DGP brand-gating (src.ml.synthetic.clinical_codes.BRAND_ELIGIBILITY_FIELDS)
@@ -2376,6 +2398,11 @@ async def _run_agent_analysis_task(
         "parameters": parameters,
         "interpretation_depth": "standard",
         "brand": request.brand,
+        # DESIGN declaration from the dataset spec (per-treatment): a genuinely
+        # randomized assignment reports the E-value sensitivity as information
+        # instead of an unmeasured-confounding BLOCK gate, and the narrative
+        # stops calling the RCT "observational data". Fail-closed default False.
+        "randomized_design": _is_randomized_treatment(request.dataset, request.treatment_var),
         # Cooperative compute deadline so the refutation suite self-terminates
         # before the hard wait_for cap below (orphan-fix): timed-out runs return
         # cleanly instead of orphaning an uncancellable to_thread refutation.
