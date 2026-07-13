@@ -160,5 +160,30 @@ describe('Causal API Client', () => {
       expect(params.get('dataset')).toBe('patient_journeys');
       expect(params.get('params[dataset]')).toBeNull();
     });
+
+    it('getCausalVariables sends the brand as a flat param and omits it when null', async () => {
+      const seen: Array<string | null> = [];
+      server.use(
+        http.get(`${env.apiUrl}/causal/variables`, ({ request }) => {
+          seen.push(new URL(request.url).searchParams.get('brand'));
+          return HttpResponse.json({
+            dataset: 'patient_journeys',
+            treatment_candidates: [],
+            outcome_candidates: [],
+            covariate_candidates: [],
+            columns: [],
+            clinical_biomarkers: [],
+          });
+        })
+      );
+
+      await getCausalVariables('patient_journeys', 'Fabhalta');
+      await getCausalVariables('patient_journeys', null);
+      await getCausalVariables('patient_journeys');
+
+      // Brand rides as a flat param when set; all-brands sends NO brand param
+      // (the backend's brand=None keeps the universals only).
+      expect(seen).toEqual(['Fabhalta', null, null]);
+    });
   });
 });

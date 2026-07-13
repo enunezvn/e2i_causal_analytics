@@ -1156,6 +1156,15 @@ async def list_causal_variables(
         _DEFAULT_CAUSAL_DATASET,
         description="Gold-standard dataset to enumerate (e.g. patient_journeys)",
     ),
+    brand: Optional[str] = Query(
+        None,
+        description=(
+            "Brand the analysis will be scoped to. Covariate candidates are "
+            "brand-scoped: a brand's own clinical biomarkers are offered only "
+            "for that brand; omitted (all-brands) offers the universals only — "
+            "mirroring what the estimation paths actually adjust for."
+        ),
+    ),
     user: Dict[str, Any] = Depends(require_analyst),
 ) -> CausalVariablesResponse:
     """Return treatment/outcome/covariate candidates for the causal-discovery
@@ -1164,6 +1173,14 @@ async def list_causal_variables(
     Candidates are the curated causally-meaningful columns for ``dataset``,
     intersected with the columns actually present in the live table — so the
     dropdowns are data-driven and never offer a non-existent column.
+
+    Covariate candidates are additionally BRAND-scoped through the same
+    ``_brand_scoped_covariates`` gate the estimation paths use. Before this
+    (2026-07-13 clinical-faithfulness review) the candidate surface was
+    brand-blind: a Fabhalta (PNH) question was offered ``urticaria_severity_uas7``
+    — an urticaria activity score whose column is NULL for every Fabhalta row —
+    which estimation then silently dropped. Offer and estimation now agree.
+    ``columns`` (the raw schema inventory) is deliberately NOT scoped.
     """
     spec = _CAUSAL_DATASET_SPECS.get(dataset)
     if spec is None:
@@ -1179,16 +1196,18 @@ async def list_causal_variables(
     # lists ARE the candidate variables (derived columns like centrality_z live
     # on no table). Return them directly instead of 500-ing on a missing relation.
     if dataset in _JOIN_DATASETS:
+        covariate_candidates = _brand_scoped_covariates(list(spec["covariate"]), brand)
         all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
-        _offered = list(spec["treatment"]) + list(spec["outcome"]) + list(spec["covariate"])
+        _offered = list(spec["treatment"]) + list(spec["outcome"]) + covariate_candidates
         labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
         return CausalVariablesResponse(
             dataset=dataset,
             treatment_candidates=list(spec["treatment"]),
             outcome_candidates=list(spec["outcome"]),
-            covariate_candidates=list(spec["covariate"]),
+            covariate_candidates=covariate_candidates,
             columns=all_cols,
             labels=labels,
+            clinical_biomarkers=sorted(_ALL_CLINICAL_COVARIATES),
         )
 
     from src.memory.services.factories import get_async_supabase_client
@@ -1214,26 +1233,27 @@ async def list_causal_variables(
             return list(spec[role])
         return [c for c in spec[role] if c in present]
 
+    covariate_candidates = _brand_scoped_covariates(_available("covariate"), brand)
+
     # #1188: baselines are JOINED from patient_journeys, not columns of this
     # dataset's physical table — the probe cannot vet them, so the curated
-    # list is returned directly (like the JOIN-dataset branch above).
+    # list is returned directly (like the JOIN-dataset branch above). The list
+    # is universal patient_journeys columns only, so it needs no brand scoping.
     baseline_candidates = list(spec.get("baseline_covariate", []))
 
     _offered = (
-        _available("treatment")
-        + _available("outcome")
-        + _available("covariate")
-        + baseline_candidates
+        _available("treatment") + _available("outcome") + covariate_candidates + baseline_candidates
     )
     labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
     return CausalVariablesResponse(
         dataset=dataset,
         treatment_candidates=_available("treatment"),
         outcome_candidates=_available("outcome"),
-        covariate_candidates=_available("covariate"),
+        covariate_candidates=covariate_candidates,
         baseline_candidates=baseline_candidates,
         columns=sorted(present),
         labels=labels,
+        clinical_biomarkers=sorted(_ALL_CLINICAL_COVARIATES),
     )
 
 

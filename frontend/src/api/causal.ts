@@ -235,22 +235,27 @@ export async function routeQuery(
  * defaults).
  *
  * @param dataset - Dataset to introspect (default: 'patient_journeys')
+ * @param brand - Brand the analysis is scoped to. Covariate candidates are
+ *   brand-scoped server-side (a Fabhalta question is never offered UAS7);
+ *   null/undefined = all brands (universal confounders only).
  * @returns Candidate variable lists and the full column set
  *
  * @example
  * ```typescript
- * const vars = await getCausalVariables('patient_journeys');
- * console.log(vars.treatment_candidates); // ['treatment_arm', 'treatment_initiated']
+ * const vars = await getCausalVariables('patient_journeys', 'Fabhalta');
+ * console.log(vars.covariate_candidates); // universals + egfr/proteinuria/ldh
  * ```
  */
 export async function getCausalVariables(
-  dataset: string = 'patient_journeys'
+  dataset: string = 'patient_journeys',
+  brand?: string | null
 ): Promise<CausalVariablesResponse> {
   // `get(endpoint, params)` takes a FLAT params object and wraps it for axios
   // itself. Passing `{ params: {...} }` here double-wraps it into
   // `params[dataset]=...`, which the backend ignores (dataset has a default).
   return get<CausalVariablesResponse>(`${CAUSAL_BASE}/variables`, {
     dataset,
+    ...(brand ? { brand } : {}),
   });
 }
 

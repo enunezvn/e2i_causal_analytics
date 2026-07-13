@@ -399,6 +399,16 @@ class CausalVariablesResponse(BaseModel):
         default_factory=dict,
         description="Human-readable display labels keyed by column name",
     )
+    clinical_biomarkers: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Union of the indication-specific clinical biomarker columns across "
+            "all brands (UAS7, ECOG, eGFR, ...). Brand-independent: frontends "
+            "split covariate_candidates (and HTE feature-importance keys) against "
+            "this set to distinguish generic cross-brand confounders from "
+            "indication-specific biomarkers in displays."
+        ),
+    )
 
 
 class CausalBrandsResponse(BaseModel):

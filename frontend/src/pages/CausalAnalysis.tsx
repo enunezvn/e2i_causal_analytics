@@ -241,7 +241,10 @@ export default function CausalAnalysis() {
 
   // ── Manual "Pose your own question" panel ──────────────────────────────────
   const [manualOpen, setManualOpen] = useState(false);
-  const { data: variables } = useCausalVariables(dataset);
+  // Brand-scoped candidates: the offered covariates must match what estimation
+  // will actually adjust for (a Fabhalta question is never offered UAS7 — the
+  // off-brand gated column is NULL for that cohort and estimation drops it).
+  const { data: variables } = useCausalVariables(dataset, brandArg);
   const treatmentCandidates = useMemo(
     () => variables?.treatment_candidates ?? ['treatment_arm'],
     [variables]
@@ -260,6 +263,7 @@ export default function CausalAnalysis() {
       ),
     [variables, treatmentVar, outcomeVar]
   );
+<<<<<<< HEAD
   // #1188: curated PRE-TREATMENT baselines (RCT grains only). When present the
   // panel offers an OPT-IN variance-reduction adjustment — distinct from the
   // confounders above, which de-bias observational questions.
@@ -270,6 +274,17 @@ export default function CausalAnalysis() {
   useEffect(() => {
     setAdjustBaselines(false);
   }, [dataset]);
+=======
+  // Split the adjustment set for display: generic cross-brand confounders vs
+  // the selected brand's own indication biomarkers (server-classified via the
+  // brand-independent clinical_biomarkers union — no hardcoded column list).
+  const biomarkerSet = useMemo(
+    () => new Set(variables?.clinical_biomarkers ?? []),
+    [variables]
+  );
+  const genericConfounders = confounders.filter((c) => !biomarkerSet.has(c));
+  const brandBiomarkers = confounders.filter((c) => biomarkerSet.has(c));
+>>>>>>> origin/main
   // Keep the manual panel's treatment/outcome valid for the active dataset. The
   // candidate sets are dataset-specific (e.g. HCP's only outcome is `adopted`,
   // Trigger's treatments are control_group_flag/acceptance_status), so the
@@ -848,8 +863,14 @@ export default function CausalAnalysis() {
                 </div>
                 {confounders.length > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    Controlling for (confounders, data-driven):{' '}
-                    <span className="font-medium">{confounders.join(', ')}</span>
+                    {'Controlling for — generic confounders (all brands): '}
+                    <span className="font-medium">{genericConfounders.join(', ')}</span>
+                    {brandBiomarkers.length > 0 && (
+                      <>
+                        {` · indication-specific biomarkers (${brandArg}): `}
+                        <span className="font-medium">{brandBiomarkers.join(', ')}</span>
+                      </>
+                    )}
                   </p>
                 )}
                 {baselineCandidates.length > 0 && (
