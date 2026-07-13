@@ -895,7 +895,7 @@ def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool
     discovery found nothing still deserves the unmeasured-confounding gate).
     """
     spec = _CAUSAL_DATASET_SPECS.get(dataset or _DEFAULT_CAUSAL_DATASET, {})
-    return treatment_var in spec.get("randomized_treatment", ())
+    return treatment_var in spec.get("randomized_treatment", [])
 
 
 # Human-readable display labels for the curated columns (data-driven FE; keeps
