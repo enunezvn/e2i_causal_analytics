@@ -198,14 +198,14 @@ class TestAgentStatusResponse:
 class TestAgentRegistry:
     """Tests for the agent registry."""
 
-    def test_registry_has_21_agents(self):
-        """Test that registry contains 21 agents."""
-        assert len(AGENT_REGISTRY) == 21
+    def test_registry_has_22_agents(self):
+        """Test that registry contains 22 agents."""
+        assert len(AGENT_REGISTRY) == 22
 
-    def test_tier_0_has_8_agents(self):
-        """Test that Tier 0 (ML Foundation) has 8 agents."""
+    def test_tier_0_has_9_agents(self):
+        """Test that Tier 0 (ML Foundation) has 9 agents."""
         tier_0 = [a for a in AGENT_REGISTRY if a.tier == 0]
-        assert len(tier_0) == 8
+        assert len(tier_0) == 9
 
     def test_tier_1_has_2_agents(self):
         """Test that Tier 1 (Orchestration) has 2 agents."""
@@ -254,6 +254,7 @@ class TestAgentRegistry:
             "model-deployer",
             "observability-connector",
             "cohort-constructor",
+            "cohort-profiler",
             "orchestrator",
             "tool-composer",
             "causal-impact",
@@ -298,12 +299,12 @@ class TestGetAgentStatusEndpoint:
         assert "timestamp" in data
 
     def test_response_agent_count(self, test_client):
-        """Test that response contains 21 agents."""
+        """Test that response contains 22 agents."""
         response = test_client.get("/agents/status")
         data = response.json()
 
-        assert data["total_agents"] == 21
-        assert len(data["agents"]) == 21
+        assert data["total_agents"] == 22
+        assert len(data["agents"]) == 22
 
     def test_response_counts_are_valid(self, test_client):
         """Test that status counts are non-negative and sum correctly."""
@@ -503,9 +504,9 @@ class TestDeriveLiveStatuses:
 
 
 class TestApplyLiveStatuses:
-    def test_returns_all_21_agents(self):
+    def test_returns_all_22_agents(self):
         agents = _apply_live_statuses({})
-        assert len(agents) == 21
+        assert len(agents) == 22
 
     def test_unmapped_agents_are_idle_with_no_activity(self):
         agents = _apply_live_statuses({})
@@ -662,4 +663,4 @@ class TestLiveAgentStatus:
         data = test_client.get("/agents/status").json()
         assert data["active_count"] == 0
         assert all(a["status"] == "idle" for a in data["agents"])
-        assert data["total_agents"] == 21
+        assert data["total_agents"] == 22
