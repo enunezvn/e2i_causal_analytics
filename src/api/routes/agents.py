@@ -5,7 +5,7 @@ E2I Agent Orchestration API
 FastAPI endpoints for agent status monitoring and orchestration.
 
 Endpoints:
-- GET /agents/status: Get status of all 21 agents in the tier hierarchy
+- GET /agents/status: Get status of all 22 agents in the tier hierarchy
 
 Author: E2I Causal Analytics Team
 Version: 4.2.0
@@ -546,7 +546,7 @@ async def get_agent_status() -> AgentStatusResponse:
     """
     Get status of all agents in the orchestration system.
 
-    Returns all 21 agents across 6 tiers with their capabilities. Status and
+    Returns all 22 agents across 6 tiers with their capabilities. Status and
     ``last_activity`` are derived live from ``audit_chain_entries`` — an agent
     that recorded an action within the last 15 minutes is ACTIVE; otherwise
     IDLE. When telemetry is unavailable every agent reports IDLE (the registry's

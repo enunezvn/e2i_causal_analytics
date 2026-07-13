@@ -782,7 +782,7 @@ async def agent_routing_tool(
     """
     Route a query to the appropriate E2I agent tier using DSPy.
 
-    The E2I system has 21 agents organized in 6 tiers:
+    The E2I system has 22 agents organized in 6 tiers:
     - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, etc.)
     - Tier 1: Orchestration (orchestrator, tool_composer)
     - Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
