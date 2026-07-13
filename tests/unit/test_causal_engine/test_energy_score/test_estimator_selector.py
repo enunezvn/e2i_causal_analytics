@@ -1444,3 +1444,43 @@ class TestHonestAteCi:
         assert width >= 0.5 * analytic, (
             f"CausalForestDML CI width {width:.5f} vs analytic {analytic:.5f} — fake-precise"
         )
+
+
+class TestOlsAnchorHonestCi:
+    """#1188 codex iter-1 LOW: the anchor-vs-adjusted CI comparison must be
+    apples-to-apples and deterministic. Empty-backdoor OLS uses the analytic
+    Welch (per-arm variance) interval; covariate OLS keeps a SEEDED bootstrap."""
+
+    def test_empty_backdoor_ci_matches_welch_analytic(self):
+        rng = np.random.default_rng(21)
+        n = 5000
+        treatment = (rng.random(n) < 0.6).astype(int)
+        outcome = (rng.random(n) < np.where(treatment == 1, 0.42, 0.30)).astype(float)
+        empty = pd.DataFrame(index=range(n))
+
+        r = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, empty)
+
+        assert r.success, r.error_message
+        y1, y0 = outcome[treatment == 1], outcome[treatment == 0]
+        welch_se = float(np.sqrt(y1.var(ddof=1) / len(y1) + y0.var(ddof=1) / len(y0)))
+        assert r.ate_std == pytest.approx(welch_se, rel=1e-9)
+        assert r.ate_ci_lower == pytest.approx(r.ate - 1.96 * welch_se, rel=1e-9)
+        assert r.ate_ci_upper == pytest.approx(r.ate + 1.96 * welch_se, rel=1e-9)
+
+    def test_ols_ci_deterministic_across_runs(self):
+        """Two identical fits must produce identical CIs — an unseeded bootstrap
+        made the anchor width jitter run-to-run."""
+        rng = np.random.default_rng(22)
+        n = 1200
+        treatment = rng.integers(0, 2, n)
+        covariates = pd.DataFrame({"x1": rng.normal(0, 1, n)})
+        outcome = (
+            0.3 * treatment + 0.5 * covariates["x1"].to_numpy() + rng.normal(0, 0.3, n)
+        ).astype(float)
+
+        r1 = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+        r2 = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+
+        assert r1.success and r2.success
+        assert r1.ate_ci_lower == r2.ate_ci_lower
+        assert r1.ate_ci_upper == r2.ate_ci_upper

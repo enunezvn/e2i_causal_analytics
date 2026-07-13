@@ -691,16 +691,27 @@ class OLSWrapper(BaseEstimatorWrapper):
 
             ate = float(model.coef_[0])  # Treatment coefficient
 
-            # Bootstrap standard error
-            n_boot = 100
-            boot_ates = []
-            for _ in range(n_boot):
-                idx = np.random.choice(len(treatment), len(treatment), replace=True)
-                m = LinearRegression()
-                m.fit(X_with_treatment[idx], outcome[idx])
-                boot_ates.append(m.coef_[0])
-
-            ate_std = float(np.std(boot_ates))
+            if empty_backdoor:
+                # #1188 (codex iter-1): the unadjusted anchor uses the ANALYTIC
+                # Welch (per-arm variance) standard error — deterministic and
+                # apples-to-apples with the covariate estimators' analytic
+                # ``ate_inference`` intervals, unlike the jittery 100-draw
+                # bootstrap it replaces.
+                y1 = outcome[treatment == 1]
+                y0 = outcome[treatment == 0]
+                ate_std = float(np.sqrt(y1.var(ddof=1) / len(y1) + y0.var(ddof=1) / len(y0)))
+            else:
+                # Bootstrap standard error — SEEDED so two identical fits give
+                # identical CIs (the anchor comparison must not jitter).
+                rng = np.random.default_rng(42)
+                n_boot = 100
+                boot_ates = []
+                for _ in range(n_boot):
+                    idx = rng.choice(len(treatment), len(treatment), replace=True)
+                    m = LinearRegression()
+                    m.fit(X_with_treatment[idx], outcome[idx])
+                    boot_ates.append(m.coef_[0])
+                ate_std = float(np.std(boot_ates))
             ate_ci_lower = ate - 1.96 * ate_std
             ate_ci_upper = ate + 1.96 * ate_std
 

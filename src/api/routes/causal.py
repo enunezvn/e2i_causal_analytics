@@ -2083,21 +2083,41 @@ def _resolve_requested_baselines(dataset: str, adjust_baselines: bool) -> List[s
 # (same _one_hot_categoricals machinery as patient_journeys).
 _NBA_BASELINE_CATEGORICALS: frozenset = frozenset({"geographic_region"})
 
+# Page cap for the baseline-join reads. Deliberately LARGER than _TE_MAX_PAGES
+# (20 -> 20k rows): the live triggers table is ~37.5k rows and patient_journeys
+# ~25k — a 20-page cap would silently truncate both, dropping ~5k patients'
+# triggers from the joined sample (codex iter-1 MED). 60 pages x 1000 = 60k
+# rows of headroom per read.
+_NBA_JOIN_MAX_PAGES = 60
+
 
 async def _load_trigger_question_rows(
-    client: Any, select_cols: List[str], brand: Optional[str], limit: int
+    client: Any, select_cols: List[str], brand: Optional[str]
 ) -> List[Dict[str, Any]]:
-    """Raw triggers read for the baseline join: question columns + patient_id
-    (the join key), provenance- and brand-aware."""
+    """PAGED triggers read for the baseline join: question columns + patient_id
+    (the join key), provenance- and brand-aware.
+
+    Reads the WHOLE (brand-scoped) table rather than ``.limit(limit)``: the
+    request limit is applied POST-join by the frame builder, after orphan /
+    missing-baseline rows are dropped — a pre-join cap would underfill (and
+    order-bias) the joined sample (codex iter-1 MED)."""
     fetch_cols = list(dict.fromkeys([*select_cols, "patient_id"]))
-    query = client.table(_CAUSAL_PHYSICAL_TABLE.get("nba_triggers", "triggers")).select(
-        ",".join(fetch_cols)
-    )
-    query = apply_provenance_filter(query)
-    if brand:
-        query = query.eq(_CAUSAL_BRAND_COLUMN.get("nba_triggers", "brand"), brand)
-    result = await query.limit(limit).execute()
-    return result.data or []
+    rows: List[Dict[str, Any]] = []
+    for page in range(_NBA_JOIN_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = client.table(_CAUSAL_PHYSICAL_TABLE.get("nba_triggers", "triggers")).select(
+            ",".join(fetch_cols)
+        )
+        query = apply_provenance_filter(query)
+        if brand:
+            query = query.eq(_CAUSAL_BRAND_COLUMN.get("nba_triggers", "brand"), brand)
+        query = query.range(offset, offset + _TE_PAGE_SIZE - 1)
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
 
 
 async def _load_patient_baseline_rows(
@@ -2105,10 +2125,11 @@ async def _load_patient_baseline_rows(
 ) -> List[Dict[str, Any]]:
     """Paged patient_journeys read of patient_id + the requested PRE-TREATMENT
     baseline columns (provenance-aware; patient_journeys is not paged by brand
-    here — the trigger read already scopes the cohort)."""
+    here — the trigger read already scopes the cohort). Pages up to
+    _NBA_JOIN_MAX_PAGES so the whole ~25k-patient table is covered."""
     cols = ",".join(["patient_id", *baseline_cols])
     rows: List[Dict[str, Any]] = []
-    for page in range(_TE_MAX_PAGES):
+    for page in range(_NBA_JOIN_MAX_PAGES):
         offset = page * _TE_PAGE_SIZE
         query = client.table("patient_journeys").select(cols)
         query = apply_provenance_filter(query)
@@ -2169,7 +2190,7 @@ async def _load_nba_triggers_baseline_frame(
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
     question_cols = list(dict.fromkeys([treatment_var, outcome_var]))
-    trigger_rows = await _load_trigger_question_rows(client, question_cols, brand, limit)
+    trigger_rows = await _load_trigger_question_rows(client, question_cols, brand)
     if not trigger_rows:
         raise HTTPException(
             status_code=503,

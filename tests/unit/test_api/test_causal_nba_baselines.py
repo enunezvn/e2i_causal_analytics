@@ -289,3 +289,89 @@ async def test_list_causal_variables_nba_includes_baseline_candidates():
     assert "age_at_diagnosis" in resp.baseline_candidates
     # The de-confounding covariate list stays empty for the RCT.
     assert resp.covariate_candidates == []
+
+
+@pytest.mark.asyncio
+async def test_trigger_question_rows_paged_beyond_single_limit():
+    """codex iter-1 MED: the trigger read must PAGE the full table (post-join
+    capping happens in the builder) — a single .limit(limit) read underfills
+    the joined sample whenever orphans / missing baselines are dropped, and a
+    20-page cap would silently truncate 37.5k live rows."""
+    calls = []
+
+    class _FakeQuery:
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def range(self, lo, hi):
+            calls.append((lo, hi))
+            return self
+
+        def limit(self, *_a, **_k):
+            raise AssertionError("trigger read must page with .range(), not .limit()")
+
+        async def execute(self):
+            lo, hi = calls[-1]
+            page_size = hi - lo + 1
+
+            class _R:
+                data = [{"control_group_flag": True, "action_taken": None, "patient_id": "p"}] * (
+                    page_size if lo == 0 else 5
+                )
+
+            return _R()
+
+    class _FakeClient:
+        def table(self, _name):
+            return _FakeQuery()
+
+    rows = await causal_routes._load_trigger_question_rows(
+        _FakeClient(), ["control_group_flag", "action_taken"], None
+    )
+    # First page full -> second page requested; second page short -> stop.
+    assert len(calls) == 2
+    assert len(rows) == (calls[0][1] - calls[0][0] + 1) + 5
+
+
+@pytest.mark.asyncio
+async def test_patient_baseline_rows_page_past_te_cap():
+    """The patient read must cover the WHOLE patient_journeys table (25k+ rows
+    live) — capping at _TE_MAX_PAGES(20)x1000 silently drops ~5k patients'
+    triggers from the joined sample."""
+    calls = []
+
+    class _FakeQuery:
+        def select(self, *_a, **_k):
+            return self
+
+        def range(self, lo, hi):
+            calls.append((lo, hi))
+            return self
+
+        async def execute(self):
+            lo, hi = calls[-1]
+            page_size = hi - lo + 1
+            # 25 full pages then a short one (~25k rows like live).
+            n_full = 25
+
+            class _R:
+                data = (
+                    [{"patient_id": f"p{lo}", "disease_severity": 5.0}] * page_size
+                    if lo < n_full * page_size
+                    else [{"patient_id": "plast", "disease_severity": 5.0}] * 18
+                )
+
+            return _R()
+
+    class _FakeClient:
+        def table(self, _name):
+            return _FakeQuery()
+
+    rows = await causal_routes._load_patient_baseline_rows(_FakeClient(), ["disease_severity"])
+    page = calls[0][1] - calls[0][0] + 1
+    assert len(rows) == 25 * page + 18, (
+        f"paged read stopped early: {len(rows)} rows over {len(calls)} pages"
+    )
