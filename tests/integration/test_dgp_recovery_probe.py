@@ -86,7 +86,7 @@ def test_adherent_recoverable_under_causal_route_default_adjustment_set():
     Remibrutinib — so it now also proves the real brand-aware adjustment set recovers
     the ATE on gated data.
     """
-    from src.api.routes.causal import _brand_scoped_covariates, _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _brand_scoped_covariates
 
     spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
     default_adj = [c for c in spec["covariate"] if c not in ("treatment_arm", "adherent_180d")]
