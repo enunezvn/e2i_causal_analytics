@@ -1373,6 +1373,23 @@ _SEGMENT_HTE_EFFECT_MODIFIERS = [
     "urticaria_severity_uas7",
 ]
 
+
+def _segment_effect_modifiers(brand: Optional[str]) -> List[str]:
+    """Brand-aware heterogeneity features (X) for the HTE run (Phase 2 brand-gating).
+
+    The 5 indication-specific clinical modifiers (ecog/egfr/proteinuria/ldh/uas7) are
+    populated for only their own brand's rows after gating; feeding an off-brand
+    (NULL) column to CausalForestDML raises ``Input contains NaN``. Reuses the causal
+    route's SSOT ``_brand_scoped_covariates`` so a single map governs both surfaces:
+    universals (disease_severity/age/academic_hcp) always survive; a brand's own
+    clinical modifier survives only when that brand is the row filter; brand=None
+    (all brands) keeps the universals only.
+    """
+    from src.api.routes.causal import _brand_scoped_covariates
+
+    return _brand_scoped_covariates(list(_SEGMENT_HTE_EFFECT_MODIFIERS), brand)
+
+
 # Confounders (W -> pure controls routed into the DML nuisance model, NOT in X).
 _SEGMENT_HTE_CONFOUNDERS = ["engagement_score"]
 
@@ -1452,6 +1469,7 @@ async def _load_segment_hte_frame(
     brand: Optional[str],
     treatment_var: str,
     outcome_var: str,
+    effect_modifiers: Optional[List[str]] = None,
 ) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
     """Load the REAL gold-standard ``patient_journeys`` frame for the HTE agent.
 
@@ -1501,11 +1519,16 @@ async def _load_segment_hte_frame(
     # confounders (W — engagement_score is W-ONLY, not in X, so it must be loaded
     # here explicitly), and raw geographic_region. Constrained to the allowlist so
     # a typo cannot inject an arbitrary column into the select (42703 — codex HIGH-3).
+    # Brand-aware effect modifiers (Phase 2): default to the full curated list, but
+    # the orchestrator passes the brand-scoped subset so an off-brand (gated NULL)
+    # clinical column is never selected → never reaches CausalForestDML as NaN.
+    modifiers = (
+        list(effect_modifiers)
+        if effect_modifiers is not None
+        else list(_SEGMENT_HTE_EFFECT_MODIFIERS)
+    )
     base_cols = (
-        [treatment_var, outcome_var]
-        + _SEGMENT_HTE_EFFECT_MODIFIERS
-        + _SEGMENT_HTE_CONFOUNDERS
-        + ["geographic_region"]
+        [treatment_var, outcome_var] + modifiers + _SEGMENT_HTE_CONFOUNDERS + ["geographic_region"]
     )
     select_cols = [c for c in dict.fromkeys(base_cols) if c in allowed]
 
@@ -1644,10 +1667,22 @@ async def _execute_segment_analysis(
     # guard so the 400 fires even if the agent package is importable.
     treatment_var = request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT
     outcome_var = request.outcome_var or _SEGMENT_HTE_DEFAULT_OUTCOME
+    # Brand-aware X + segment dimensions (Phase 2): the SAME scoping drives the
+    # loader's column selection AND the agent's effect_modifiers/segment_vars, so the
+    # prepared frame and the CATE feature/breakdown sets stay in lock-step (no
+    # off-brand NULL clinical column is loaded, so none reaches EconML or the
+    # post-hoc grouping). ecog is a segment dimension only for Kisqali; the banded
+    # (disease_severity_band/age_band) + universal (geographic_region/academic_hcp)
+    # dimensions always survive.
+    from src.api.routes.causal import _brand_scoped_covariates
+
+    effect_modifiers = _segment_effect_modifiers(request.brand)
+    segment_vars = _brand_scoped_covariates(list(_SEGMENT_HTE_SEGMENT_VARS), request.brand)
     tier0_frame = await _load_segment_hte_frame(
         brand=request.brand,
         treatment_var=treatment_var,
         outcome_var=outcome_var,
+        effect_modifiers=effect_modifiers,
     )
 
     try:
@@ -1671,8 +1706,8 @@ async def _execute_segment_analysis(
                 "query": request.query,
                 "treatment_var": treatment_var,
                 "outcome_var": outcome_var,
-                "segment_vars": list(_SEGMENT_HTE_SEGMENT_VARS),
-                "effect_modifiers": list(_SEGMENT_HTE_EFFECT_MODIFIERS),
+                "segment_vars": list(segment_vars),
+                "effect_modifiers": list(effect_modifiers),
                 # Explicit confounders take precedence-1 in cate_estimator's
                 # _resolve_confounders and are residualized as the DML W (issue
                 # #237).
