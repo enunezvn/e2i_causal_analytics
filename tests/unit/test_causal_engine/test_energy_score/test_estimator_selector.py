@@ -1366,9 +1366,7 @@ class TestEfficiencyControls:
         outcome = (0.3 * treatment + 0.8 * x1 + rng.normal(0, 0.3, n)).astype(float)
         covariates = pd.DataFrame({"x1": x1})
 
-        result = EstimatorSelector(_fast_dml_ols_config()).select(
-            treatment, outcome, covariates
-        )
+        result = EstimatorSelector(_fast_dml_ols_config()).select(treatment, outcome, covariates)
 
         assert result.adjustment_type == "confounding"
 

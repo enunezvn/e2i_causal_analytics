@@ -70,9 +70,7 @@ def _fake_patient_baseline_rows():
 
 def _patched_reads():
     return (
-        patch.object(
-            causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())
-        ),
+        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
         patch.object(
             causal_routes,
             "_load_trigger_question_rows",
@@ -138,9 +136,7 @@ async def test_nba_baseline_join_drops_rows_missing_baseline():
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
-        patch.object(
-            causal_routes, "_load_patient_baseline_rows", AsyncMock(return_value=rows)
-        ),
+        patch.object(causal_routes, "_load_patient_baseline_rows", AsyncMock(return_value=rows)),
     ):
         df, _ = await causal_routes._load_agent_estimation_frame(
             dataset="nba_triggers",
@@ -285,9 +281,7 @@ async def test_list_causal_variables_nba_includes_baseline_candidates():
     original = factories.get_async_supabase_client
     factories.get_async_supabase_client = _fake_factory
     try:
-        resp = await causal_routes.list_causal_variables(
-            dataset="nba_triggers", user=TEST_USER
-        )
+        resp = await causal_routes.list_causal_variables(dataset="nba_triggers", user=TEST_USER)
     finally:
         factories.get_async_supabase_client = original
 

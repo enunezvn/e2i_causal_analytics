@@ -2422,9 +2422,7 @@ async def run_causal_agent_analysis(
 
     # #1188: opt-in RCT baseline adjustment — resolve the flag to the curated
     # baseline list (400 on datasets without a baseline role).
-    baseline_covariates = _resolve_requested_baselines(
-        request.dataset, request.adjust_baselines
-    )
+    baseline_covariates = _resolve_requested_baselines(request.dataset, request.adjust_baselines)
 
     # Load synchronously -> fail-closed early (400 bad column / 404 dataset /
     # 503 no data) before scheduling the heavy run. ``brand`` (optional) scopes

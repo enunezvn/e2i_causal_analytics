@@ -1239,9 +1239,7 @@ class EstimatorSelector:
         # than surfacing that raw traceback per-estimator in the UI comparison.
         empty_backdoor = covariates.shape[1] == 0
         efficiency_mode = (
-            empty_backdoor
-            and efficiency_controls is not None
-            and efficiency_controls.shape[1] > 0
+            empty_backdoor and efficiency_controls is not None and efficiency_controls.shape[1] > 0
         )
         if efficiency_mode:
             adjustment_type = "efficiency"

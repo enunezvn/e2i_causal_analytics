@@ -4,7 +4,7 @@ Trigger Generator.
 Generates synthetic triggers for patient/HCP targeting actions.
 """
 
-from typing import Dict, Optional, cast
+from typing import Any, Dict, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -61,7 +61,7 @@ _ACTION_P_CEIL = 0.95
 
 
 def _prognostic_action_probability(
-    arm_base: float, disease_severity: object, age_at_diagnosis: object
+    arm_base: float, disease_severity: Any, age_at_diagnosis: Any
 ) -> float:
     """P(action present | arm, baselines) for one trigger.
 
