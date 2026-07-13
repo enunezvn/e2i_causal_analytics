@@ -64,6 +64,38 @@ _SELECTOR_TO_DOWHY_METHOD = {
 }
 
 
+def _effective_reconstruction_common_causes(
+    common_causes: List[str], estimation_result: Dict[str, Any]
+) -> List[str]:
+    """#1188: the columns the DoWhy reconstruction must condition on so the
+    refuters critique the SAME model whose ATE is on screen.
+
+    An efficiency run (randomized design, baselines as variance-reduction
+    controls) fits the selected covariate estimator with the baselines as X=W
+    while ``confounders``/``covariates_adjusted`` stay honestly empty.
+    Rebuilding that estimator with no columns would refute a DIFFERENT
+    (unadjusted) model — or fail closed on the ATE-mismatch guard below. So
+    for an efficiency run whose selected estimator is covariate-based, thread
+    the baselines into the reconstruction. An OLS-selected efficiency run
+    reported the UNADJUSTED anchor, so it reconstructs with no columns
+    (adding baselines would fit an ANCOVA — a different model, off by the
+    chance-imbalance correction). Inside the DoWhy graph the baselines act as
+    adjustment columns for MODEL FIDELITY only; adjusting for pre-treatment
+    covariates of a randomized treatment stays unbiased, and the response
+    labeling (adjustment_type='efficiency', covariates_adjusted=[]) is
+    untouched.
+    """
+    if estimation_result.get("adjustment_type") != "efficiency":
+        return common_causes
+    baselines = list(estimation_result.get("baseline_covariates_adjusted") or [])
+    if not baselines:
+        return common_causes
+    method = _resolve_dowhy_method(estimation_result)
+    if method in ("backdoor.linear_regression", "backdoor.propensity_score_weighting"):
+        return common_causes
+    return baselines
+
+
 def _resolve_dowhy_method(estimation_result: Dict[str, Any]) -> str:
     """Resolve the DoWhy method_name to refute against.
 
@@ -133,13 +165,13 @@ def _reconstruction_nuisance_init_params(
     linear substitution existed does not apply to it), so mirroring production is
     both correct-by-construction AND within the time budget.
 
-    Applied ONLY to ``LinearDML``. Returns ``{}`` (leave econml defaults) for
-    every other method:
+    Applied to ``LinearDML`` and ``DRLearner`` (#1188 codex iter-1 MED — the
+    DR wrapper now uses GradientBoosting nuisances + a
+    ``StatsModelsLinearRegression`` final stage for honest ATE inference, so
+    the rebuild mirrors those EXACT models; econml's DR defaults would refit a
+    different surface and trip the tolerance guard). Returns ``{}`` (leave
+    econml defaults) for every other method:
       * ``CausalForestDML`` — forest nuisance is scale-invariant (no lbfgs grind).
-      * ``DRLearner`` — its reconstruction is NOT yet validated against the
-        selector's GradientBoosting nuisance, so we do NOT ship an unvalidated
-        numeric change here. A DRLearner-winner run that diverges still
-        fails-closed cleanly (PR #1028), as it did before. (Follow-up.)
       * plain ``linear_regression`` / IPW — no iterative nuisance to converge.
     """
     if "LinearDML" in dowhy_method:
@@ -167,6 +199,17 @@ def _reconstruction_nuisance_init_params(
                 if discrete_treatment
                 else _rf_regressor()
             ),
+        }
+    if "DRLearner" in dowhy_method:
+        from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
+        from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+
+        # Mirror production's DRLearnerWrapper models EXACTLY
+        # (src/causal_engine/energy_score/estimator_selector.py).
+        return {
+            "model_regression": GradientBoostingRegressor(n_estimators=50, random_state=42),
+            "model_propensity": GradientBoostingClassifier(n_estimators=50, random_state=42),
+            "model_final": StatsModelsLinearRegression(),
         }
     return {}
 
@@ -765,6 +808,13 @@ class RefutationNode:
             common_causes = cast(
                 List[str],
                 state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
+            )
+            # #1188: on an efficiency (RCT baseline) run the reported estimator
+            # conditioned on the baselines even though the confounder set is
+            # honestly empty — the reconstruction must condition on the SAME
+            # columns or the refuters critique a different model.
+            common_causes = _effective_reconstruction_common_causes(
+                common_causes, cast(Dict[str, Any], estimation_result)
             )
             # Cooperative compute deadline (orphan-fix): the offloaded refutation
             # suite runs in a worker thread that the API task's asyncio.wait_for

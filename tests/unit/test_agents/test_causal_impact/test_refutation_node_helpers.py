@@ -47,15 +47,17 @@ class TestReconstructionNuisanceInitParams:
         assert isinstance(p["model_t"], RandomForestRegressor)
         assert not is_classifier(p["model_t"])
 
-    def test_drlearner_left_at_defaults(self):
-        # DRLearner reconstruction is not yet validated against the selector's
-        # GradientBoosting nuisance, so we don't ship a numeric change. Follow-up.
-        assert (
-            _reconstruction_nuisance_init_params(
-                "backdoor.econml.dr.DRLearner", discrete_treatment=True
-            )
-            == {}
+    def test_drlearner_mirrors_selector_models(self):
+        # #1188: the deferred DRLearner mirror shipped — the selector's DR
+        # wrapper now uses GB nuisances + a StatsModelsLinearRegression final
+        # stage (honest ATE inference), and the reconstruction mirrors those
+        # EXACT models so the tolerance guard validates the actual estimate.
+        # (Supersedes the old left-at-defaults deferral; full assertions in
+        # test_refutation_efficiency.py::TestDrLearnerNuisanceMirror.)
+        params = _reconstruction_nuisance_init_params(
+            "backdoor.econml.dr.DRLearner", discrete_treatment=True
         )
+        assert set(params) == {"model_regression", "model_propensity", "model_final"}
 
     def test_forest_and_linear_methods_get_no_override(self):
         # CausalForestDML uses scale-invariant forest nuisance -> no override needed.

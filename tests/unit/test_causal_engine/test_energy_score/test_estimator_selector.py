@@ -19,11 +19,14 @@ import pytest
 
 from src.causal_engine.energy_score.estimator_selector import (
     ESTIMATOR_WRAPPERS,
+    CausalForestWrapper,
+    DRLearnerWrapper,
     EstimatorConfig,
     EstimatorResult,
     EstimatorSelector,
     EstimatorSelectorConfig,
     EstimatorType,
+    LinearDMLWrapper,
     OLSWrapper,
     SelectionResult,
     SelectionStrategy,
@@ -1259,3 +1262,225 @@ class TestEmptyBackdoorSkip:
         ).astype(float)
         result = EstimatorSelector().select(treatment, outcome, covariates)
         assert all(r.skipped is False for r in result.all_results)
+
+
+# =============================================================================
+# #1188: RCT efficiency controls (ANCOVA-style variance reduction)
+# =============================================================================
+
+
+def _prognostic_rct_frame(n=3000, seed=0, tau=0.3):
+    """Randomized T, STRONGLY prognostic baseline x1 (pure outcome signal,
+    no confounding): the substrate where baseline adjustment buys precision."""
+    rng = np.random.default_rng(seed)
+    treatment = rng.integers(0, 2, n)
+    x1 = rng.normal(0.0, 1.0, n)
+    x2 = rng.normal(0.0, 1.0, n)  # pure-noise stratum
+    outcome = (tau * treatment + 1.0 * x1 + rng.normal(0, 0.3, n)).astype(float)
+    baselines = pd.DataFrame({"disease_severity": x1, "age_at_diagnosis": x2})
+    diff = float(outcome[treatment == 1].mean() - outcome[treatment == 0].mean())
+    return treatment, outcome, baselines, diff
+
+
+def _fast_dml_ols_config():
+    """LinearDML + OLS only — keeps the statistical tests fast."""
+    return EstimatorSelectorConfig(
+        estimators=[
+            EstimatorConfig(EstimatorType.LINEAR_DML, priority=1),
+            EstimatorConfig(EstimatorType.OLS, priority=2),
+        ]
+    )
+
+
+class TestEfficiencyControls:
+    """#1188: on a randomized (empty-backdoor) design, curated pre-treatment
+    baselines may be supplied as EFFICIENCY CONTROLS. Covariate estimators then
+    become applicable FOR PRECISION (variance reduction); OLS stays the
+    UNADJUSTED diff-in-means anchor; labeling must say efficiency, never
+    confounding."""
+
+    def test_efficiency_controls_make_covariate_estimators_applicable(self):
+        treatment, outcome, baselines, _ = _prognostic_rct_frame()
+        empty = pd.DataFrame(index=range(len(treatment)))
+
+        result = EstimatorSelector(_fast_dml_ols_config()).select(
+            treatment, outcome, empty, efficiency_controls=baselines
+        )
+
+        dml = next(r for r in result.all_results if r.estimator_type == EstimatorType.LINEAR_DML)
+        assert dml.skipped is False, "efficiency controls must un-skip covariate estimators"
+        assert dml.success is True, dml.error_message
+
+    def test_ols_anchor_stays_unadjusted_diff_in_means(self):
+        """OLS must NOT absorb the efficiency controls — it anchors the
+        comparison at the raw randomized contrast."""
+        treatment, outcome, baselines, diff = _prognostic_rct_frame()
+        empty = pd.DataFrame(index=range(len(treatment)))
+
+        result = EstimatorSelector(_fast_dml_ols_config()).select(
+            treatment, outcome, empty, efficiency_controls=baselines
+        )
+
+        ols = next(r for r in result.all_results if r.estimator_type == EstimatorType.OLS)
+        assert ols.success is True, ols.error_message
+        assert ols.ate == pytest.approx(diff, abs=1e-9)
+
+    def test_adjustment_type_efficiency_and_reason(self):
+        treatment, outcome, baselines, _ = _prognostic_rct_frame()
+        empty = pd.DataFrame(index=range(len(treatment)))
+
+        result = EstimatorSelector(_fast_dml_ols_config()).select(
+            treatment, outcome, empty, efficiency_controls=baselines
+        )
+
+        assert result.adjustment_type == "efficiency"
+        reason = result.selection_reason.lower()
+        assert "variance reduction" in reason or "precision" in reason
+        assert "confound" not in reason, (
+            "efficiency adjustment must never be framed as de-confounding"
+        )
+
+    def test_adjustment_type_none_on_plain_empty_backdoor(self):
+        """No efficiency controls => the existing skip behavior and labeling
+        are untouched."""
+        rng = np.random.default_rng(3)
+        n = 400
+        treatment = rng.integers(0, 2, n)
+        outcome = (0.4 * treatment + rng.normal(0, 0.3, n)).astype(float)
+        empty = pd.DataFrame(index=range(n))
+
+        result = EstimatorSelector().select(treatment, outcome, empty)
+
+        assert result.adjustment_type == "none"
+        skipped = {r.estimator_type for r in result.all_results if r.skipped}
+        assert EstimatorType.LINEAR_DML in skipped
+
+    def test_adjustment_type_confounding_with_real_covariates(self):
+        """A non-empty de-confounding covariate set keeps today's semantics and
+        labels the run as confounding adjustment; efficiency controls are a
+        strictly empty-backdoor feature."""
+        rng = np.random.default_rng(4)
+        n = 600
+        x1 = rng.normal(0, 1, n)
+        treatment = (rng.random(n) < 1 / (1 + np.exp(-x1))).astype(int)
+        outcome = (0.3 * treatment + 0.8 * x1 + rng.normal(0, 0.3, n)).astype(float)
+        covariates = pd.DataFrame({"x1": x1})
+
+        result = EstimatorSelector(_fast_dml_ols_config()).select(treatment, outcome, covariates)
+
+        assert result.adjustment_type == "confounding"
+
+    def test_adjusted_ci_narrower_than_unadjusted_anchor(self):
+        """THE #1188 point: with a strongly prognostic baseline, the adjusted
+        estimator's HONEST CI must be strictly narrower than the unadjusted OLS
+        anchor CI, while the point estimates stay statistically
+        indistinguishable (randomization keeps both unbiased)."""
+        treatment, outcome, baselines, diff = _prognostic_rct_frame(n=4000, seed=5)
+        empty = pd.DataFrame(index=range(len(treatment)))
+
+        result = EstimatorSelector(_fast_dml_ols_config()).select(
+            treatment, outcome, empty, efficiency_controls=baselines
+        )
+
+        ols = next(r for r in result.all_results if r.estimator_type == EstimatorType.OLS)
+        dml = next(r for r in result.all_results if r.estimator_type == EstimatorType.LINEAR_DML)
+        assert ols.success and dml.success
+        ols_width = ols.ate_ci_upper - ols.ate_ci_lower
+        dml_width = dml.ate_ci_upper - dml.ate_ci_lower
+        assert dml_width < ols_width, (
+            f"adjusted CI must be narrower: dml={dml_width:.4f} ols={ols_width:.4f}"
+        )
+        # Unbiasedness: the adjusted point recovers the PLANTED tau=0.3 (it may
+        # differ from the raw contrast by the chance-imbalance correction — the
+        # very thing baseline adjustment is for on a strongly prognostic x1).
+        assert dml.ate == pytest.approx(0.3, abs=0.06)
+
+
+class TestHonestAteCi:
+    """#1188 prerequisite: the wrapper ATE CIs must be SAMPLING intervals, not
+    the fake-precise std(cate)/sqrt(n) heterogeneity spread the (silently
+    failing) legacy inference path fell back to. Analytic truth for
+    y = tau*T + 1.0*x1 + N(0,0.3): adjusted SE ~= 0.3*sqrt(1/n1+1/n0)."""
+
+    def _frame(self, n=3000, seed=8):
+        treatment, outcome, baselines, diff = _prognostic_rct_frame(n=n, seed=seed)
+        n1 = int(treatment.sum())
+        n0 = n - n1
+        analytic_width = 2 * 1.96 * 0.3 * np.sqrt(1.0 / n1 + 1.0 / n0)
+        return treatment, outcome, baselines, analytic_width
+
+    def test_lineardml_ate_ci_is_honest_sampling_interval(self):
+        treatment, outcome, baselines, analytic = self._frame()
+        r = LinearDMLWrapper(EstimatorConfig(EstimatorType.LINEAR_DML)).fit(
+            treatment, outcome, baselines
+        )
+        assert r.success, r.error_message
+        width = r.ate_ci_upper - r.ate_ci_lower
+        assert 0.5 * analytic <= width <= 2.5 * analytic, (
+            f"LinearDML CI width {width:.5f} vs analytic {analytic:.5f} — "
+            "fake-precise (or absurdly wide) ATE interval"
+        )
+
+    def test_drlearner_ate_ci_is_honest_sampling_interval(self):
+        treatment, outcome, baselines, analytic = self._frame()
+        r = DRLearnerWrapper(EstimatorConfig(EstimatorType.DRLEARNER)).fit(
+            treatment, outcome, baselines
+        )
+        assert r.success, r.error_message
+        width = r.ate_ci_upper - r.ate_ci_lower
+        assert width >= 0.5 * analytic, (
+            f"DRLearner CI width {width:.5f} vs analytic {analytic:.5f} — fake-precise"
+        )
+
+    def test_causalforest_ate_ci_not_fake_precise(self):
+        """CausalForestDML's population interval is a conservative upper bound —
+        wide is acceptable, fake-narrow is not."""
+        treatment, outcome, baselines, analytic = self._frame()
+        r = CausalForestWrapper(EstimatorConfig(EstimatorType.CAUSAL_FOREST)).fit(
+            treatment, outcome, baselines
+        )
+        assert r.success, r.error_message
+        width = r.ate_ci_upper - r.ate_ci_lower
+        assert width >= 0.5 * analytic, (
+            f"CausalForestDML CI width {width:.5f} vs analytic {analytic:.5f} — fake-precise"
+        )
+
+
+class TestOlsAnchorHonestCi:
+    """#1188 codex iter-1 LOW: the anchor-vs-adjusted CI comparison must be
+    apples-to-apples and deterministic. Empty-backdoor OLS uses the analytic
+    Welch (per-arm variance) interval; covariate OLS keeps a SEEDED bootstrap."""
+
+    def test_empty_backdoor_ci_matches_welch_analytic(self):
+        rng = np.random.default_rng(21)
+        n = 5000
+        treatment = (rng.random(n) < 0.6).astype(int)
+        outcome = (rng.random(n) < np.where(treatment == 1, 0.42, 0.30)).astype(float)
+        empty = pd.DataFrame(index=range(n))
+
+        r = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, empty)
+
+        assert r.success, r.error_message
+        y1, y0 = outcome[treatment == 1], outcome[treatment == 0]
+        welch_se = float(np.sqrt(y1.var(ddof=1) / len(y1) + y0.var(ddof=1) / len(y0)))
+        assert r.ate_std == pytest.approx(welch_se, rel=1e-9)
+        assert r.ate_ci_lower == pytest.approx(r.ate - 1.96 * welch_se, rel=1e-9)
+        assert r.ate_ci_upper == pytest.approx(r.ate + 1.96 * welch_se, rel=1e-9)
+
+    def test_ols_ci_deterministic_across_runs(self):
+        """Two identical fits must produce identical CIs — an unseeded bootstrap
+        made the anchor width jitter run-to-run."""
+        rng = np.random.default_rng(22)
+        n = 1200
+        treatment = rng.integers(0, 2, n)
+        covariates = pd.DataFrame({"x1": rng.normal(0, 1, n)})
+        outcome = (
+            0.3 * treatment + 0.5 * covariates["x1"].to_numpy() + rng.normal(0, 0.3, n)
+        ).astype(float)
+
+        r1 = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+        r2 = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+
+        assert r1.success and r2.success
+        assert r1.ate_ci_lower == r2.ate_ci_lower
+        assert r1.ate_ci_upper == r2.ate_ci_upper

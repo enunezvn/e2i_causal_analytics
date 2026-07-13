@@ -282,6 +282,99 @@ describe('CausalAnalysis — unified agent-led page', () => {
     );
   }, 20000);
 
+  // ── #1188: opt-in RCT baseline adjustment toggle ──────────────────────────
+  it('offers the baseline-adjustment toggle only when the dataset has baselines, and posts adjust_baselines', async () => {
+    const user = userEvent.setup();
+    const mutateAsync = vi.fn().mockResolvedValue({ analysis_id: 'b1', status: 'completed' });
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync,
+      reset: vi.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    (useCausalVariables as ReturnType<typeof vi.fn>).mockImplementation((ds: string) => ({
+      data:
+        ds === 'nba_triggers'
+          ? {
+              dataset: 'nba_triggers',
+              treatment_candidates: ['control_group_flag'],
+              outcome_candidates: ['action_taken'],
+              covariate_candidates: [],
+              baseline_candidates: ['disease_severity', 'age_at_diagnosis'],
+              columns: [],
+            }
+          : VARIABLES,
+    }));
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Switch grain to the Trigger RCT FIRST (existing-test pattern), then open
+    // the manual panel: the toggle must be offered there.
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'Trigger' }));
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    const toggle = await screen.findByLabelText(/baseline covariates/i);
+    expect(toggle).toBeInTheDocument();
+    // Opt in and run: the POST body carries adjust_baselines: true.
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataset: 'nba_triggers',
+        adjust_baselines: true,
+      })
+    );
+  }, 20000);
+
+  it('hides the baseline toggle on datasets without a curated baseline role', () => {
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync: vi.fn(),
+      reset: vi.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // patient_journeys (no baseline role): toggle absent.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    expect(screen.queryByLabelText(/baseline covariates/i)).toBeNull();
+  }, 20000);
+
+  it('defaults the baseline toggle OFF (unadjusted RCT stays the default)', async () => {
+    const user = userEvent.setup();
+    const mutateAsync = vi.fn().mockResolvedValue({ analysis_id: 'b2', status: 'completed' });
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync,
+      reset: vi.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    (useCausalVariables as ReturnType<typeof vi.fn>).mockImplementation((ds: string) => ({
+      data:
+        ds === 'nba_triggers'
+          ? {
+              dataset: 'nba_triggers',
+              treatment_candidates: ['control_group_flag'],
+              outcome_candidates: ['action_taken'],
+              covariate_candidates: [],
+              baseline_candidates: ['disease_severity', 'age_at_diagnosis'],
+              columns: [],
+            }
+          : VARIABLES,
+    }));
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'Trigger' }));
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ dataset: 'nba_triggers', adjust_baselines: false })
+    );
+  }, 20000);
+
   it('explains why the candidate-question set is the size it is', () => {
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });

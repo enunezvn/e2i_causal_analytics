@@ -179,4 +179,67 @@ describe('CausalAnalysisDetail', () => {
     );
     expect(screen.getByText(/not applicable/i)).toBeInTheDocument();
   });
+
+  // ── #1188: RCT baseline adjustment must be framed as VARIANCE REDUCTION ──
+  const EFFICIENCY_RESULT: AgentCausalAnalysisResponse = {
+    ...RESULT,
+    treatment_var: 'control_group_flag',
+    outcome_var: 'action_taken',
+    dataset: 'nba_triggers',
+    ate: 0.0752,
+    ate_ci_lower: 0.0657,
+    ate_ci_upper: 0.0848,
+    naive_ate: 0.0819,
+    naive_ate_ci_lower: 0.0716,
+    naive_ate_ci_upper: 0.0921,
+    confounding_bias_removed: 0.0067,
+    adjustment_type: 'efficiency',
+    baseline_covariates: ['disease_severity', 'age_at_diagnosis'],
+    selected_estimator: 'linear_dml',
+    estimator_comparison: {
+      candidates: [
+        { estimator: 'linear_dml', success: true, energy_score: 0.44, ate: 0.0752, error: null, is_selected: true },
+        { estimator: 'ols', success: true, energy_score: 0.46, ate: 0.0819, error: null, is_selected: false },
+      ],
+      selection_reason:
+        'Randomized design: baseline covariates enter only for variance reduction.',
+      energy_score_gap: 0.02,
+      n_evaluated: 2,
+      n_succeeded: 2,
+      quality_tier: 'good',
+      requires_review: false,
+    },
+  };
+
+  it('frames an efficiency run as precision adjustment, never confounding removal', () => {
+    renderWithProviders(<CausalAnalysisDetail result={EFFICIENCY_RESULT} />);
+    // Panel header switches to the precision framing.
+    expect(screen.getByText(/precision adjustment/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Confounding adjustment$/)).toBeNull();
+    // Copy explains variance reduction + unbiasedness; the confounding-bias
+    // prose ('overstated'/'bias removed') must NOT appear for an RCT.
+    expect(screen.getAllByText(/variance reduction/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/unbiased/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/overstated|bias removed/i)).toBeNull();
+  });
+
+  it('shows the unadjusted anchor with BOTH intervals so the tightening is visible', () => {
+    renderWithProviders(<CausalAnalysisDetail result={EFFICIENCY_RESULT} />);
+    // Anchor labeled as the unadjusted reference, with its CI; adjusted CI too.
+    expect(screen.getByText(/unadjusted \(anchor\)/i)).toBeInTheDocument();
+    expect(screen.getAllByText('0.0819').length).toBeGreaterThan(0);
+    // formatCI renders 3 decimals.
+    expect(screen.getAllByText(/\[0\.072, 0\.092\]/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\[0\.066, 0\.085\]/).length).toBeGreaterThan(0);
+  });
+
+  it('lists the baseline covariates the run adjusted for', () => {
+    renderWithProviders(<CausalAnalysisDetail result={EFFICIENCY_RESULT} />);
+    expect(screen.getByText(/disease_severity, age_at_diagnosis/)).toBeInTheDocument();
+  });
+
+  it('badges OLS as the unbiased anchor in the estimator comparison', () => {
+    renderWithProviders(<CausalAnalysisDetail result={EFFICIENCY_RESULT} />);
+    expect(screen.getByText('Unbiased anchor')).toBeInTheDocument();
+  });
 });

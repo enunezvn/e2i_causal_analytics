@@ -84,6 +84,12 @@ class EstimationResult(TypedDict, total=False):
     p_value: float
     sample_size: int
     covariates_adjusted: List[str]
+    # #1188: honest adjustment framing — "efficiency" (RCT baseline variance
+    # reduction), "confounding" (observational de-biasing) or "none"; the
+    # baseline columns live in baseline_covariates_adjusted, kept OUT of
+    # covariates_adjusted (which stays the backdoor set).
+    adjustment_type: NotRequired[str]
+    baseline_covariates_adjusted: NotRequired[List[str]]
     heterogeneity_detected: bool  # Whether CATE varies significantly
 
     # V4.2 Enhancement: Energy Score-based Selection
@@ -224,6 +230,12 @@ class CausalImpactState(TypedDict):
     # constants. Declared so LangGraph persists it across nodes (undeclared channels
     # are dropped).
     modeled_confounders: NotRequired[List[str]]
+    # #1188: pre-treatment baseline covariates for a randomized (empty-backdoor)
+    # question — routed to the estimator selector's efficiency_controls channel
+    # (ANCOVA-style variance reduction), NEVER merged into confounders /
+    # adjustment sets. Declared so LangGraph persists it across nodes
+    # (undeclared channels are dropped).
+    baseline_covariates: NotRequired[List[str]]
     # Cooperative compute deadline (absolute ``time.monotonic()`` seconds). When
     # set, the refutation node stops launching refuters that would not finish
     # before it, so a timed-out run returns cleanly instead of orphaning the

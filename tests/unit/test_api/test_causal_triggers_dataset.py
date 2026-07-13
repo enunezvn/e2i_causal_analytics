@@ -121,3 +121,46 @@ def test_coerce_row_patient_outcome_null_still_drops():
         numeric_cols=_CAUSAL_NUMERIC_COLUMNS["patient_journeys"],
     )
     assert rec is None
+
+
+# ---------------------------------------------------------------------------
+# #1188: curated BASELINE covariates (RCT efficiency / ANCOVA), distinct from
+# the de-confounding covariate set (which stays EMPTY — the RCT has no
+# confounders by design).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_nba_triggers_baseline_covariates_registered():
+    spec = _CAUSAL_DATASET_SPECS["nba_triggers"]
+    baselines = spec["baseline_covariate"]
+    # Pre-treatment prognostic covariates joined from patient_journeys.
+    assert "disease_severity" in baselines
+    assert "age_at_diagnosis" in baselines
+    # Balanced strata offered per the issue (no prognostic signal expected).
+    assert "academic_hcp" in baselines
+    assert "geographic_region" in baselines
+
+
+@pytest.mark.unit
+def test_nba_triggers_baselines_exclude_post_treatment_descendants():
+    """Post-treatment descendants would overcontrol (2026-06-29 lesson) and
+    engagement_score accumulates over the journey (post-trigger contamination)
+    — none may EVER be offered as an RCT baseline."""
+    baselines = set(_CAUSAL_DATASET_SPECS["nba_triggers"]["baseline_covariate"])
+    assert not {"adherence_rate", "gap_days", "engagement_score"} & baselines
+
+
+@pytest.mark.unit
+def test_nba_triggers_deconfounding_covariates_stay_empty():
+    """The RCT's DE-CONFOUNDING covariate set stays empty (randomized treatment
+    == empty backdoor is CORRECT); baselines are a separate, opt-in role."""
+    assert _CAUSAL_DATASET_SPECS["nba_triggers"]["covariate"] == []
+
+
+@pytest.mark.unit
+def test_other_datasets_have_no_baseline_role_or_empty():
+    """baseline_covariate is an RCT-only role today; observational grains must
+    not silently gain one."""
+    for ds in ("patient_journeys", "hcp_adoption"):
+        assert not _CAUSAL_DATASET_SPECS[ds].get("baseline_covariate", [])

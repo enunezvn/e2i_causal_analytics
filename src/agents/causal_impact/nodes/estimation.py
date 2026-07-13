@@ -169,6 +169,7 @@ class EstimationNode:
         adjustment_set: Optional[List[str]],
         strategy: str = "best_energy",
         explicit_method: Optional[str] = None,
+        baseline_covariates: Optional[List[str]] = None,
     ) -> tuple[EstimationResult, Dict[str, Any], float]:
         """Select best estimator using energy score.
 
@@ -187,6 +188,11 @@ class EstimationNode:
                 set identified, fall back to the all-other-columns design matrix.
             strategy: Selection strategy (first_success, best_energy, ensemble)
             explicit_method: If set, run only this estimator (legacy compat).
+            baseline_covariates: #1188 — pre-treatment baseline columns for an
+                RCT question. Only consumed when the backdoor is a VALIDATED
+                EMPTY set (``[]``): the columns present in ``data`` are handed
+                to the selector as efficiency controls (variance reduction);
+                they never join the de-confounding adjustment set.
 
         Returns:
             Tuple of (EstimationResult, selection_result_dict, latency_ms)
@@ -261,11 +267,27 @@ class EstimationNode:
         restrict_to = method_to_type.get(explicit_method) if explicit_method else None
         selector = self._get_estimator_selector(selection_strategy, restrict_to=restrict_to)
 
+        # #1188: RCT efficiency controls. Consumed ONLY on a VALIDATED EMPTY
+        # backdoor (adjustment_set == []) — with a real (or missing) backdoor
+        # the baselines are ignored so observational semantics stay untouched.
+        # Provenance columns are sanitized here too (same rule as covariates).
+        baseline_cols: List[str] = []
+        efficiency_frame: Optional[pd.DataFrame] = None
+        if adjustment_set == [] and baseline_covariates:
+            baseline_cols = [
+                c
+                for c in baseline_covariates
+                if c in data.columns and c not in PROVENANCE_DROP_COLS
+            ]
+            if baseline_cols:
+                efficiency_frame = data[baseline_cols]
+
         try:
             selection_result: SelectionResult = selector.select(
                 treatment=treatment_binary,
                 outcome=outcome_col,
                 covariates=covariates,
+                efficiency_controls=efficiency_frame,
             )
         except Exception as e:
             logger.warning(f"Energy score selection failed: {e}, falling back to legacy")
@@ -515,6 +537,15 @@ class EstimationNode:
             "p_value": p_value_real,
             "sample_size": len(data),
             "covariates_adjusted": covariate_cols,
+            # #1188: honest adjustment framing. adjustment_type comes from the
+            # selector ("efficiency" only when baselines actually entered as
+            # variance-reduction controls on a randomized question);
+            # baseline_covariates_adjusted lists them (empty otherwise) —
+            # kept OUT of covariates_adjusted, which stays the backdoor set.
+            "adjustment_type": selection_result.adjustment_type,
+            "baseline_covariates_adjusted": (
+                baseline_cols if selection_result.adjustment_type == "efficiency" else []
+            ),
             "heterogeneity_detected": heterogeneity_detected,
             "cate_segments": cate_segments,
             # V4.2: Energy score fields
@@ -716,6 +747,9 @@ class EstimationNode:
                     adjustment_set,
                     selection_strategy,
                     explicit_method=explicit_method,
+                    # #1188: RCT baselines (efficiency controls); only consumed
+                    # on a validated EMPTY backdoor.
+                    baseline_covariates=list(state.get("baseline_covariates") or []),
                 )
             except Exception as e:
                 # F-006 fail-closed: re-raise as EstimationError so the caller
