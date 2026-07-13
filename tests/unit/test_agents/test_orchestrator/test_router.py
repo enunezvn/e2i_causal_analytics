@@ -224,11 +224,16 @@ class TestRouterNode:
 
         result = await router.execute(state)
 
-        assert result["dispatch_plan"][0]["agent_name"] == "cohort_constructor"
+        # cohort_definition chat queries route to cohort_profiler (real per-segment
+        # counts), NOT cohort_constructor (ML-pipeline agent that can't run from a
+        # chat payload — it dead-ended). See router.py cohort_definition dispatch.
+        assert result["dispatch_plan"][0]["agent_name"] == "cohort_profiler"
         assert result["dispatch_plan"][0]["priority"] == "critical"
-        assert result["dispatch_plan"][0]["timeout_ms"] == 120000  # 120s SLA for 100K patients
-        assert result["dispatch_plan"][0]["parameters"] == {"validation_mode": "strict"}
-        assert result["dispatch_plan"][0]["fallback_agent"] == "explainer"
+        assert result["dispatch_plan"][0]["timeout_ms"] == 30000  # ≤8 DB KPI calls/brand
+        assert result["dispatch_plan"][0]["parameters"] == {}
+        # No fallback: profiling either has real data or fails closed honestly; an
+        # explainer fallback would only re-fail with nothing to explain.
+        assert result["dispatch_plan"][0]["fallback_agent"] is None
         assert result["current_phase"] == "dispatching"
 
     @pytest.mark.asyncio

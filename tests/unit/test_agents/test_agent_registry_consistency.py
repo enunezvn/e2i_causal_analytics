@@ -1,4 +1,4 @@
-"""Drift-guard: the runtime agent registries must agree on the 21-agent roster.
+"""Drift-guard: the runtime agent registries must agree on the 22-agent roster.
 
 Issue #607 (follow-up to #601). #601 fixed a doc/UI/API drift where the agent
 count had splintered into "12 / 18 / 19 / 20" across many surfaces, all omitting
@@ -29,9 +29,13 @@ FACTORY_TIER_1_5 = {name for name, cfg in AGENT_REGISTRY_CONFIG.items() if cfg["
 CONTESTED = {"experiment_monitor", "cohort_constructor", "tool_composer"}
 
 
-def test_factory_registry_has_21_agents():
-    """factory.AGENT_REGISTRY_CONFIG is the de-facto runtime source of truth (21 agents)."""
-    assert len(AGENT_REGISTRY_CONFIG) == 21
+def test_factory_registry_has_22_agents():
+    """factory.AGENT_REGISTRY_CONFIG is the de-facto runtime source of truth (22 agents).
+
+    22 = the original 21-agent roster + cohort_profiler (Tier 0), the chat
+    companion that answers cohort/segment queries with real per-segment counts.
+    """
+    assert len(AGENT_REGISTRY_CONFIG) == 22
 
 
 def test_contested_agents_present_in_factory():
@@ -62,8 +66,9 @@ def test_method_map_equals_factory_tier_1_5():
     assert len(AGENT_METHOD_MAP) == 13
 
 
-def test_tier_0_count_is_8():
-    """Tier 0 (ML Foundation) must be 8 agents (incl. cohort_constructor)."""
+def test_tier_0_count_is_9():
+    """Tier 0 must be 9 agents: 8 ML-foundation + cohort_profiler (chat companion)."""
     tier_0 = {name for name, cfg in AGENT_REGISTRY_CONFIG.items() if cfg["tier"] == 0}
-    assert len(tier_0) == 8
+    assert len(tier_0) == 9
     assert "cohort_constructor" in tier_0
+    assert "cohort_profiler" in tier_0

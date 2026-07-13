@@ -105,8 +105,10 @@ class TestSingleAndParallelStaySingleAgent:
         [
             # clean single causal
             ("What was the impact of the Q3 Kisqali campaign on prescriptions?", "causal_impact"),
-            # clean single cohort
-            ("Build a cohort of CSU patients eligible for Remibrutinib.", "cohort_constructor"),
+            # clean single cohort — routes to cohort_profiler (real per-segment
+            # counts), the chat companion that replaced the cohort_constructor
+            # dead-end for chat queries.
+            ("Build a cohort of CSU patients eligible for Remibrutinib.", "cohort_profiler"),
             # clean single experiment design (no sequence marker)
             ("Design an A/B test for the new outreach program", "experiment_designer"),
         ],

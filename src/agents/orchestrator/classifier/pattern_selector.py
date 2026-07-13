@@ -31,7 +31,10 @@ DOMAIN_TO_AGENT = {
     Domain.PREDICTION: "prediction_synthesizer",
     Domain.MONITORING: "drift_monitor",
     Domain.EXPLANATION: "explainer",
-    Domain.COHORT_DEFINITION: "cohort_constructor",
+    # Chat cohort queries → population profiling with real per-segment counts.
+    # cohort_constructor materializes patient rows for the ML pipeline and cannot
+    # run from a chat payload; cohort_profiler answers the chat form honestly.
+    Domain.COHORT_DEFINITION: "cohort_profiler",
 }
 
 

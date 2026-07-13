@@ -136,7 +136,7 @@ class AgentActivityResponse(BaseModel):
 
 # Default agent configuration matching the 21-agent tier hierarchy
 AGENT_REGISTRY = [
-    # Tier 0 - ML Foundation (8 agents)
+    # Tier 0 - ML Foundation (9 agents)
     AgentInfo(
         id="scope-definer",
         name="Scope Definer",
@@ -200,6 +200,14 @@ AGENT_REGISTRY = [
         status=AgentStatusEnum.ACTIVE,
         last_activity=None,
         capabilities=["cohort_definition", "patient_eligibility", "inclusion_exclusion"],
+    ),
+    AgentInfo(
+        id="cohort-profiler",
+        name="Cohort Profiler",
+        tier=0,
+        status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
+        capabilities=["cohort_sizing", "segment_breakdown", "population_profiling"],
     ),
     # Tier 1 - Orchestration (2 agents)
     AgentInfo(

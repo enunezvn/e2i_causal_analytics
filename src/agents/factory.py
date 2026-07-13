@@ -73,6 +73,16 @@ AGENT_REGISTRY_CONFIG = {
         "class_name": "CohortConstructorAgent",
         "enabled": True,
     },
+    # Chat companion to cohort_constructor: profiles the eligible population by
+    # clinical segment (severity + line-of-therapy) with REAL KPI counts. The
+    # orchestrator routes COHORT_DEFINITION chat queries here (cohort_constructor
+    # materializes patient rows for the ML pipeline and cannot run from chat).
+    "cohort_profiler": {
+        "tier": 0,
+        "module": "src.agents.cohort_profiler",
+        "class_name": "CohortProfilerAgent",
+        "enabled": True,
+    },
     # Tier 1: Coordination
     "orchestrator": {
         "tier": 1,

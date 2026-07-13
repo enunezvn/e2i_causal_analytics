@@ -61,6 +61,12 @@ class AgentMethodSpec:
 # a legacy alias. Per #252 unification, both the production dispatcher and
 # the harness now use ``.run()`` so they exercise the same code path.
 AGENT_METHOD_MAP: Dict[str, AgentMethodSpec] = {
+    # NOTE: cohort_profiler (Tier 0) is intentionally NOT here. AGENT_METHOD_MAP
+    # is the Tier 1-5 dispatcher contract (13 agents, pinned by
+    # test_agent_registry_consistency). Tier-0 chat-dispatched agents use the
+    # default ``analyze`` method spec (get_method_spec fall-through), same as
+    # cohort_constructor; its dispatch timeout comes from the router's
+    # AgentDispatch.timeout_ms, and its narrative field from AGENT_RESPONSE_FIELDS.
     # Tier 1: Coordination
     "orchestrator": AgentMethodSpec(
         method="run",
@@ -200,6 +206,7 @@ AGENT_METHOD_MAP: Dict[str, AgentMethodSpec] = {
 # When multiple keys match the first non-empty one wins. Fallback path in the
 # synthesizer adds ``narrative`` and ``response`` for legacy agents.
 AGENT_RESPONSE_FIELDS: Dict[str, List[str]] = {
+    "cohort_profiler": ["narrative"],
     "orchestrator": ["response_text", "synthesized_response", "narrative"],
     "tool_composer": ["response", "synthesis_response", "answer"],
     "causal_impact": ["executive_summary", "narrative", "interpretation"],
