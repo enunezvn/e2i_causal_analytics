@@ -1425,6 +1425,25 @@ class KpiCalculateInput(BaseModel):
             "Mutually exclusive with region/segment."
         ),
     )
+    biologic: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional biologic-status filter: 'naive' or 'experienced'. "
+            "AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
+            "returns an error (the data is 100% NULL by design); do NOT retry "
+            "or fabricate a split. Mutually exclusive with "
+            "region/segment/therapy_line/ige_tier."
+        ),
+    )
+    ige_tier: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional IgE-tertile filter: 'low', 'medium', or 'high' "
+            "(data-driven tertiles, not a clinical threshold). AVAILABLE FOR "
+            "REMIBRUTINIB ONLY -- other brands return an error; do NOT fabricate. "
+            "Mutually exclusive with region/segment/therapy_line/biologic."
+        ),
+    )
     window: Optional[str] = Field(
         default=None,
         description=(
@@ -1598,6 +1617,8 @@ async def kpi_calculate_tool(
     region: Optional[str] = None,
     segment: Optional[str] = None,
     therapy_line: Optional[str] = None,
+    biologic: Optional[str] = None,
+    ige_tier: Optional[str] = None,
     window: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute a DEFINED KPI on demand via the KPI engine (the registry's calculable KPIs).
@@ -1637,6 +1658,12 @@ async def kpi_calculate_tool(
             high_severity); mutually exclusive with region/therapy_line.
         therapy_line: optional line-of-therapy filter ('0'-'3'); mutually
             exclusive with region/segment.
+        biologic: optional biologic-status filter ('naive'/'experienced'),
+            REMIBRUTINIB ONLY -- returns an error for other brands (data is
+            NULL by design); mutually exclusive with the other axes.
+        ige_tier: optional IgE-tertile filter ('low'/'medium'/'high',
+            data-driven), REMIBRUTINIB ONLY -- returns an error for other
+            brands; mutually exclusive with the other axes.
         window: optional time window (rolling or absolute); omit for the
             engine's default window (most recent 30 days of data).
 
@@ -1690,6 +1717,10 @@ async def kpi_calculate_tool(
         context["segment"] = segment
     if therapy_line:
         context["therapy_line"] = therapy_line
+    if biologic:
+        context["biologic"] = biologic
+    if ige_tier:
+        context["ige_tier"] = ige_tier
     if parsed is not None:
         context["window"] = parsed.as_dict()
 

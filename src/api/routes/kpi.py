@@ -518,6 +518,14 @@ async def get_kpi_value(
         description="Severity tier filter (low_severity, medium_severity, high_severity)",
     ),
     therapy_line: str | None = Query(default=None, description="Line-of-therapy filter ('0'-'3')"),
+    biologic: str | None = Query(
+        default=None,
+        description="Biologic-status filter ('naive'/'experienced'); Remibrutinib only",
+    ),
+    ige_tier: str | None = Query(
+        default=None,
+        description="IgE-tertile filter ('low'/'medium'/'high'); Remibrutinib only",
+    ),
     calculator: KPICalculator = Depends(get_kpi_calculator),
 ) -> KPIResultResponse:
     """Get the calculated value for a specific KPI.
@@ -530,6 +538,8 @@ async def get_kpi_value(
         region: Optional geographic region filter
         segment: Optional severity tier filter
         therapy_line: Optional line-of-therapy filter
+        biologic: Optional biologic-status filter (Remibrutinib only)
+        ige_tier: Optional IgE-tertile filter (Remibrutinib only)
         calculator: KPI calculator instance
 
     Returns:
@@ -548,6 +558,10 @@ async def get_kpi_value(
             context["segment"] = segment
         if therapy_line:
             context["therapy_line"] = therapy_line
+        if biologic:
+            context["biologic"] = biologic
+        if ige_tier:
+            context["ige_tier"] = ige_tier
 
         result = calculator.calculate(
             kpi_id=kpi_id,
@@ -662,6 +676,10 @@ async def calculate_kpi(
                 context["segment"] = request.context.segment
             if request.context.therapy_line:
                 context["therapy_line"] = request.context.therapy_line
+            if request.context.biologic:
+                context["biologic"] = request.context.biologic
+            if request.context.ige_tier:
+                context["ige_tier"] = request.context.ige_tier
             context.update(request.context.extra)
 
         result = calculator.calculate(

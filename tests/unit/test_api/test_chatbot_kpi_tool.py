@@ -345,3 +345,55 @@ async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
     ctx = captured["context"]
     assert ctx["therapy_line"] == "0"
     assert "segment" not in ctx
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
+    """A biologic-status filter must reach the calculator under
+    ``context['biologic']`` (migration 108 -- Remibrutinib-only axis)."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=1258.0, status=KPIStatus.UNKNOWN)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke(
+        {"kpi_name": "NRx", "brand": "Remibrutinib", "biologic": "experienced"}
+    )
+    assert resp["success"] is True
+    ctx = captured["context"]
+    assert ctx["biologic"] == "experienced"
+    assert "ige_tier" not in ctx and "segment" not in ctx
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_passes_ige_tier_into_context(monkeypatch):
+    """An IgE-tertile filter must reach the calculator under
+    ``context['ige_tier']`` (migration 108 -- Remibrutinib-only axis)."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=1060.0, status=KPIStatus.UNKNOWN)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke(
+        {"kpi_name": "NRx", "brand": "Remibrutinib", "ige_tier": "low"}
+    )
+    assert resp["success"] is True
+    ctx = captured["context"]
+    assert ctx["ige_tier"] == "low"
+    assert "biologic" not in ctx and "segment" not in ctx

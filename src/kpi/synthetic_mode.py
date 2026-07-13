@@ -202,13 +202,35 @@ def line_query_id(base_query_id: str) -> str:
     return _axis_query_id(base_query_id, "_line")
 
 
+def biologic_query_id(base_query_id: str) -> str:
+    """Biologic-status-scoped query id for a base KPI query (migration 108).
+
+    Biologic status is ``patient_journeys.biologic_experienced`` mapped to
+    ``'naive'`` / ``'experienced'``; populated for Remibrutinib (CSU) rows only.
+    Parallels :func:`region_query_id`; see :func:`_axis_query_id`.
+    """
+    return _axis_query_id(base_query_id, "_biologic")
+
+
+def ige_tier_query_id(base_query_id: str) -> str:
+    """IgE-tertile-scoped query id for a base KPI query (migration 108).
+
+    IgE tertile bins ``patient_journeys.ige_level`` into data-driven
+    ``'low'`` / ``'medium'`` / ``'high'`` (empirical p33/p66 of the Remibrutinib
+    distribution); populated for Remibrutinib rows only.
+    Parallels :func:`region_query_id`; see :func:`_axis_query_id`.
+    """
+    return _axis_query_id(base_query_id, "_ige_tier")
+
+
 def windowed_axis_query_id(base_query_id: str, *, axis: str) -> str:
-    """Windowed variant id for a segment/line-scoped base KPI query.
+    """Windowed variant id for a segment/line/biologic/ige_tier-scoped base query.
 
     Canonical suffix order: ``{base}_{axis}_windowed[_include_synthetic]``
     (mirrors :func:`windowed_query_id`'s ``{base}_windowed[_region]`` order,
     axis-first since the axis is baked into the query id rather than a
-    trailing modifier). ``axis`` is ``"segment"`` or ``"line"``.
+    trailing modifier). ``axis`` is ``"segment"`` / ``"line"`` (migration 105)
+    or ``"biologic"`` / ``"ige_tier"`` (migration 108).
     """
     qid = f"{base_query_id}_{axis}_windowed"
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
