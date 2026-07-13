@@ -13,7 +13,7 @@ from scipy.special import expit
 
 from src.ml.synthetic.dgp.adherence_outcomes import generate_adherence_outcomes
 
-from ..clinical_codes import brand_codes
+from ..clinical_codes import BRAND_ELIGIBILITY_FIELDS, brand_codes
 from ..config import (
     DGP_CONFIGS,
     Brand,
@@ -208,20 +208,30 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # Brand-specific eligibility (Shard 04 M5). Generated to pass the
         # cohort_constructor inclusion gates (configs.py required_fields) so each
         # brand's cohort is populated (non-empty); the OUTCOME prevalence within the
-        # cohort is the DGP's banded treatment_initiated (Shard 03). All 10 columns
-        # are populated on every row (nullable in DB) — cohort_constructor only reads
-        # the brand-relevant subset. primary_diagnosis_code is brand-correct per row.
+        # cohort is the DGP's banded treatment_initiated (Shard 03).
+        #
+        # Phase 2 brand-gating: every field is DRAWN for every row (so the RNG
+        # stream is byte-for-byte identical to the pre-gating generator — this is
+        # the LAST RNG consumer in generate(), so draw-then-discard preserves the
+        # whole causal substrate + every other column), but each value is then kept
+        # ONLY for the brand whose indication it belongs to (BRAND_ELIGIBILITY_FIELDS)
+        # and NULLed otherwise. So a Kisqali row no longer carries a fabricated CSU
+        # UAS7, a Remibrutinib row no longer carries a fabricated renal eGFR, etc.
+        # cohort_constructor already reads only the brand-relevant subset;
+        # segments/causal select the brand-relevant effect-modifiers so a now-NULL
+        # off-brand column never reaches EconML as NaN. primary_diagnosis_code stays
+        # the row's own brand-correct diagnosis (never gated).
         primary_dx: List[str] = []
-        uas7: List[int] = []
-        prior_ah: List[bool] = []
-        hr_status: List[str] = []
-        her2_status: List[str] = []
-        stage: List[str] = []
-        ecog: List[int] = []
-        ldh: List[float] = []
-        comp_inh: List[str] = []
-        proteinuria: List[float] = []
-        egfr: List[float] = []
+        uas7: List[Optional[int]] = []
+        prior_ah: List[Optional[bool]] = []
+        hr_status: List[Optional[str]] = []
+        her2_status: List[Optional[str]] = []
+        stage: List[Optional[str]] = []
+        ecog: List[Optional[int]] = []
+        ldh: List[Optional[float]] = []
+        comp_inh: List[Optional[str]] = []
+        proteinuria: List[Optional[float]] = []
+        egfr: List[Optional[float]] = []
         _stage_pool = ["advanced", "metastatic", "locally_advanced", "stage_iv"]
         for b in brands:
             codes = (
@@ -229,20 +239,48 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 if b in ("Remibrutinib", "Kisqali", "Fabhalta")
                 else {"icd10": ["L50.9"]}
             )
-            primary_dx.append(str(self._rng.choice(cast("list[str]", codes["icd10"]))))
-            # Remi: UAS7 16-42 (inclusion >=16); prior antihistamine always present
-            uas7.append(int(self._rng.integers(16, 43)))
-            prior_ah.append(True)
-            # Kisqali: HR+/HER2- gates
-            hr_status.append("positive")
-            her2_status.append("negative")
-            stage.append(str(self._rng.choice(_stage_pool)))
-            ecog.append(int(self._rng.integers(0, 2)))
-            # Fabhalta: PNH/C3G gates
-            ldh.append(round(float(self._rng.uniform(1.5, 5.0)), 2))
-            comp_inh.append(str(self._rng.choice(["current", "prior"])))
-            proteinuria.append(round(float(self._rng.uniform(1.0, 6.0)), 2))
-            egfr.append(round(float(self._rng.uniform(30.0, 110.0)), 2))
+            fields = BRAND_ELIGIBILITY_FIELDS.get(b, frozenset())
+            # DRAW every field unconditionally (identical order/consumption to the
+            # pre-gating generator) …
+            dx_v = str(self._rng.choice(cast("list[str]", codes["icd10"])))
+            uas7_v = int(self._rng.integers(16, 43))  # Remi: UAS7 16-42 (inclusion >=16)
+            stage_v = str(self._rng.choice(_stage_pool))
+            ecog_v = int(self._rng.integers(0, 2))
+            ldh_v = round(float(self._rng.uniform(1.5, 5.0)), 2)
+            comp_v = str(self._rng.choice(["current", "prior"]))
+            prot_v = round(float(self._rng.uniform(1.0, 6.0)), 2)
+            egfr_v = round(float(self._rng.uniform(30.0, 110.0)), 2)
+            # … then KEEP only the brand-relevant columns (draw-then-discard).
+            primary_dx.append(dx_v)
+            uas7.append(uas7_v if "urticaria_severity_uas7" in fields else None)
+            prior_ah.append(True if "prior_antihistamine_therapy" in fields else None)
+            hr_status.append("positive" if "hr_status" in fields else None)
+            her2_status.append("negative" if "her2_status" in fields else None)
+            stage.append(stage_v if "disease_stage" in fields else None)
+            ecog.append(ecog_v if "ecog_performance_status" in fields else None)
+            ldh.append(ldh_v if "ldh_ratio" in fields else None)
+            comp_inh.append(comp_v if "complement_inhibitor_status" in fields else None)
+            proteinuria.append(prot_v if "proteinuria_g_day" in fields else None)
+            egfr.append(egfr_v if "egfr" in fields else None)
+
+        # Phase 2: biologic-experience + baseline serum IgE — the real anti-IgE
+        # clinical axis for CSU/Remibrutinib (the axis the chatbot used to invent).
+        # Drawn in a SEPARATE loop AFTER the eligibility loop (the previously-last
+        # RNG consumer) so the existing per-row stream is untouched; drawn for every
+        # row so the stream itself is brand-independent, then kept for Remibrutinib
+        # only (correlational Phase 2 columns — differential causal effects are
+        # Phase 3). ~40% biologic-experienced; IgE lognormal (median ~150 IU/mL).
+        biologic_experienced: List[Optional[int]] = []
+        ige_level: List[Optional[float]] = []
+        for b in brands:
+            bio_v = int(self._rng.random() < 0.40)
+            ige_v = round(float(np.clip(self._rng.lognormal(mean=5.0, sigma=0.8), 2.0, 2000.0)), 1)
+            if "biologic_experienced" in BRAND_ELIGIBILITY_FIELDS.get(b, frozenset()):
+                biologic_experienced.append(bio_v)
+                ige_level.append(ige_v)
+            else:
+                biologic_experienced.append(None)
+                ige_level.append(None)
 
         # Build DataFrame
         df = pd.DataFrame(
@@ -274,6 +312,10 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "complement_inhibitor_status": comp_inh,
                 "proteinuria_g_day": proteinuria,
                 "egfr": egfr,
+                # Phase 2 anti-IgE axis (migration 107) — Remibrutinib/CSU only,
+                # NULL for the oncology/PNH brands (gated above).
+                "biologic_experienced": biologic_experienced,
+                "ige_level": ige_level,
                 # Causal substrate columns (Shard 01 M2 DDL). Populated by Shard
                 # 03's DGP: treatment_arm/propensity_score/segment_assignment are
                 # the confounded arm + estimable propensity + per-unit CATE segment;
