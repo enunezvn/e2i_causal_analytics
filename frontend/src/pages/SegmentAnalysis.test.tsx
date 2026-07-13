@@ -41,6 +41,7 @@ vi.mock('@/hooks/api', () => ({
   useSegmentDatasets: vi.fn(),
   useRunSegmentAnalysisAndWait: vi.fn(),
   usePolicies: vi.fn(),
+  useCausalVariables: vi.fn(),
 }));
 
 vi.mock('@/hooks/use-query-error', () => ({
@@ -53,6 +54,7 @@ import {
   useSegmentDatasets,
   useRunSegmentAnalysisAndWait,
   usePolicies,
+  useCausalVariables,
 } from '@/hooks/api';
 
 function createWrapper() {
@@ -85,6 +87,24 @@ function primeBaseHooks() {
     error: null,
   });
   mockHook(usePolicies).mockReturnValue({ data: { recommendations: [] }, error: null });
+  // Biomarker union for the feature-importance display grouping (mirrors the
+  // backend's clinical_biomarkers field on GET /causal/variables).
+  mockHook(useCausalVariables).mockReturnValue({
+    data: {
+      dataset: 'patient_journeys',
+      treatment_candidates: [],
+      outcome_candidates: [],
+      covariate_candidates: [],
+      columns: [],
+      clinical_biomarkers: [
+        'ecog_performance_status',
+        'egfr',
+        'ldh_ratio',
+        'proteinuria_g_day',
+        'urticaria_severity_uas7',
+      ],
+    },
+  });
 }
 
 const profile = (over: Partial<SegmentProfile> = {}): SegmentProfile => ({
@@ -195,6 +215,50 @@ describe('SegmentAnalysis — F-002 empty state + F-010 warnings', () => {
 
     render(<SegmentAnalysis />, { wrapper: createWrapper() });
     expect(screen.queryByTestId('warning-banner')).not.toBeInTheDocument();
+  });
+});
+
+describe('SegmentAnalysis — feature-importance biomarker grouping', () => {
+  it('labels indication-specific biomarkers apart from generic confounders', () => {
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        feature_importance: {
+          disease_severity: 0.5,
+          urticaria_severity_uas7: 0.3,
+          age_at_diagnosis: 0.2,
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    // The card explains the split, and the legend appears because a biomarker
+    // (UAS7) is present among the modifiers.
+    expect(screen.getByText('Feature Importance for CATE')).toBeInTheDocument();
+    expect(screen.getByText(/indication-specific biomarkers/i)).toBeInTheDocument();
+    expect(screen.getByText(/Indication-specific biomarker/)).toBeInTheDocument();
+    expect(screen.getByText(/Generic confounder \(all brands\)/)).toBeInTheDocument();
+  });
+
+  it('renders no grouping legend when all modifiers are generic (all-brands run)', () => {
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        feature_importance: { disease_severity: 0.6, age_at_diagnosis: 0.4 },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Feature Importance for CATE')).toBeInTheDocument();
+    expect(screen.queryByText(/Indication-specific biomarker$/)).not.toBeInTheDocument();
   });
 });
 

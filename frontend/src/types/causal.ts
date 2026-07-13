@@ -113,9 +113,12 @@ export enum CausalAnalysisStatus {
 /**
  * Candidate treatment / outcome / covariate variables for a dataset.
  *
- * Returned by `GET /causal/variables?dataset=...`. Drives the page's
+ * Returned by `GET /causal/variables?dataset=...&brand=...`. Drives the page's
  * treatment / outcome / covariate selectors so they only offer columns that
- * actually exist in the estimation frame (no fictional defaults).
+ * actually exist in the estimation frame (no fictional defaults). Covariate
+ * candidates are brand-scoped server-side: a brand's own clinical biomarkers
+ * are offered only for that brand; no brand (all-brands) offers the universal
+ * confounders only — matching what estimation actually adjusts for.
  */
 export interface CausalVariablesResponse {
   /** Dataset the candidates were derived from (e.g. 'patient_journeys') */
@@ -124,10 +127,17 @@ export interface CausalVariablesResponse {
   treatment_candidates: string[];
   /** Columns suitable as the outcome variable */
   outcome_candidates: string[];
-  /** Columns suitable as covariates / controls */
+  /** Columns suitable as covariates / controls (brand-scoped) */
   covariate_candidates: string[];
   /** All columns available in the dataset */
   columns: string[];
+  /**
+   * Union of the indication-specific clinical biomarker columns across all
+   * brands (UAS7, ECOG, eGFR, ...). Brand-independent: split
+   * covariate_candidates (or HTE feature-importance keys) against this set to
+   * distinguish generic cross-brand confounders from indication biomarkers.
+   */
+  clinical_biomarkers: string[];
 }
 
 /**
