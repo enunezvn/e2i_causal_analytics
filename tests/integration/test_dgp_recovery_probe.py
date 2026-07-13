@@ -68,6 +68,40 @@ def test_adherence_outcome_recoverable_on_existing_arm(brand, outcome):
     assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"]
 
 
+def test_biologic_experience_differential_recovers_for_remibrutinib():
+    """Phase 3 (CLIN-SEG-P3): the planted biologic-experience differential CATE
+    (experienced ~0.625x the naive effect — a mean-preserving 2x spread) must be
+    RECOVERABLE by CausalForestDML for Remibrutinib, ON TOP of the severity CATE,
+    while the severity ordering + ATE recovery are UNCHANGED by the mean-preserving
+    construction.
+
+    n=8000, not the n=3000 severity gate: the biologic gap is a SECOND, ~40/60 axis
+    and needs more units to resolve (cheapest-disproof measured 5/5 seeds @ n>=8000;
+    a spread below ~2x sign-flips). Remibrutinib ONLY — ``biologic_experienced`` is
+    100% NULL for Kisqali/Fabhalta, so no biologic axis exists for them.
+    """
+    cfg = GeneratorConfig(
+        seed=21, n_records=8000, brand=Brand.REMIBRUTINIB, dgp_type=DGPType.HETEROGENEOUS
+    )
+    df = PatientGenerator(cfg).generate()
+    assert df["biologic_experienced"].notna().all()  # Remibrutinib => populated
+
+    # planted ground truth IS a real gap (naive effect > experienced effect)
+    gt = df.attrs["cate_by_biologic"]
+    assert gt["naive"] > gt["experienced"]
+
+    out = recover_ate_and_cate(df, modifier_col="biologic_experienced")
+
+    # RECOVERED biologic ordering: naive (0) recovered effect > experienced (1)
+    bio = out["cate_by_modifier_estimate"]
+    assert bio["0"] > bio["1"], out
+
+    # severity ordering + ATE recovery survive the mean-preserving spread
+    cate = out["cate_by_segment_estimate"]
+    assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+
+
 def test_adherent_recoverable_under_causal_route_default_adjustment_set():
     """Guard for the overcontrol blocker: recovering treatment_arm -> adherent_180d
     using the causal page's DEFAULT adjustment set (the full covariate allowlist

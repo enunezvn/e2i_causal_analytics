@@ -90,6 +90,40 @@ _BRAND_CATE_SCALE: Dict[Brand, float] = {
 _INIT_LATENT_CATE_BOOST = 1.30
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 (CLIN-SEG-P3, 2026-07-13): biologic-experience differential CATE.
+# ---------------------------------------------------------------------------
+# Remibrutinib ONLY (biologic_experienced is 100% NULL for Kisqali/Fabhalta by
+# design — see BRAND_ELIGIBILITY_FIELDS). A per-unit MULTIPLICATIVE modifier on
+# the severity latent CATE: biologic-EXPERIENCED patients (prior omalizumab /
+# anti-IgE exposure => refractory CSU) carry an ATTENUATED BTK-inhibitor effect;
+# biologic-NAIVE carry a boosted one. The two multipliers are a MEAN-PRESERVING
+# spread at the ~40% experienced prevalence (0.60*1.25 + 0.40*0.625 = 1.00), so
+# the population-mean Remibrutinib effect — and therefore the existing
+# severity-CATE recovery gate — is UNCHANGED, while a large, RECOVERABLE biologic
+# gap (~0.10 RD, ~2x ratio) opens up. Both values are a SYNTHETIC DESIGN CHOICE
+# (like the 0.70/0.30/0.10 severity map), NOT a number from real Remibrutinib
+# trials. Validated recoverable 5/5 across seeds at n>=8000 by the cheapest-
+# disproof harness (scratchpad/phase3_biologic_cate_disproof.py, 2026-07-13);
+# a subtle spread (<1.5x) sign-flips and is NOT recoverable. IgE stays DESCRIPTIVE
+# (Remibrutinib is a BTK inhibitor, not anti-IgE) — no IgE causal axis is planted.
+_BIOLOGIC_NAIVE_MULT = 1.25
+_BIOLOGIC_EXPERIENCED_MULT = 0.625
+# Independent SeedSequence spawn_key for the Remibrutinib biologic-outcome
+# recompute, so it never perturbs the generator's main self._rng stream.
+_BIOLOGIC_SPAWN_KEY = 0xB10C
+
+
+def biologic_cate_modifier(biologic_experienced: np.ndarray) -> np.ndarray:
+    """Per-unit multiplicative CATE modifier from biologic-experience.
+
+    biologic_experienced is 0 (naive) / 1 (experienced). Returns
+    _BIOLOGIC_NAIVE_MULT for naive, _BIOLOGIC_EXPERIENCED_MULT for experienced.
+    """
+    bio = np.asarray(biologic_experienced, dtype=float)
+    return np.where(bio >= 0.5, _BIOLOGIC_EXPERIENCED_MULT, _BIOLOGIC_NAIVE_MULT)
+
+
 def brand_scaled_cate(brand: Brand) -> Dict[str, float]:
     """Return the per-brand CATE-by-segment map (base map x brand scale).
 
@@ -219,6 +253,7 @@ def binary_outcome_rd(
     target_prevalence: float = ...,
     noise_std: float = ...,
     return_score: Literal[False] = ...,
+    cate_modifier: np.ndarray | None = ...,
 ) -> Tuple[np.ndarray, np.ndarray]: ...
 @overload
 def binary_outcome_rd(
@@ -231,6 +266,7 @@ def binary_outcome_rd(
     target_prevalence: float = ...,
     noise_std: float = ...,
     return_score: Literal[True],
+    cate_modifier: np.ndarray | None = ...,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: ...
 def binary_outcome_rd(
     arm: np.ndarray,
@@ -242,6 +278,7 @@ def binary_outcome_rd(
     target_prevalence: float = 0.35,
     noise_std: float = 0.6,
     return_score: bool = False,
+    cate_modifier: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, ...]:
     """General binary outcome Y + per-unit RECOVERABLE segment RD-scale CATE.
 
@@ -258,18 +295,34 @@ def binary_outcome_rd(
     latent score Y was thresholded from — so a caller can build a noisy continuous
     PROXY of Y from the SAME latent (shared noise), keeping the proxy consistent
     with the authoritative binary; the default 2-tuple (y, tau_i) is unchanged.
+
+    ``cate_modifier`` (Phase 3, optional) is a per-unit MULTIPLIER on the segment
+    latent CATE — used to plant a SECOND heterogeneity dimension (biologic-
+    experience) orthogonal to the severity segment. When given, tau_latent becomes
+    per-unit (``cate_map[segment] * cate_modifier``) and the recoverable RD is
+    collapsed over the COMPOSITE (segment x modifier-level) grouping, so tau_i
+    keeps the modifier dimension distinct instead of averaging it away. ``None``
+    (default) is byte-identical to the pre-Phase-3 behaviour (group == segment).
     """
     if not (0.20 <= target_prevalence <= 0.50):
         target_prevalence = float(np.clip(target_prevalence, 0.20, 0.50))
     baseline = np.asarray(baseline, dtype=float)
     tau_latent = np.array([cate_map[str(s)] for s in segment], dtype=float)
+    if cate_modifier is None:
+        group = np.asarray(segment)
+    else:
+        mod = np.asarray(cate_modifier, dtype=float)
+        tau_latent = tau_latent * mod
+        # composite grouping keeps each (segment, modifier-level) cell a distinct
+        # RD value — otherwise binarize_score averages the biologic gap back out.
+        group = np.array([f"{s}|{m:.4f}" for s, m in zip(segment, mod, strict=False)])
     noise = rng.normal(0.0, noise_std, len(arm))
     score = baseline + arm.astype(float) * tau_latent + noise
     y, tau_i = binarize_score(
         score,
         baseline,
         tau_latent,
-        segment,
+        group,
         target_prevalence=target_prevalence,
         noise_std=noise_std,
     )
@@ -289,6 +342,7 @@ def binary_outcome_with_cate(
     baseline_academic_coef: float = 0.15,
     noise_std: float = 0.6,
     prognostic_offset: np.ndarray | None = None,
+    cate_modifier: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Binary outcome Y + per-unit RECOVERABLE segment CATE.
 
@@ -314,6 +368,9 @@ def binary_outcome_with_cate(
 
     The returned `tau_i` has exactly 3 distinct values; the generator derives the
     {segment: rd} ground-truth map directly from (tau_i, segment) — no re-draw.
+    (Phase 3: when ``cate_modifier`` is passed, tau_i carries segment x modifier-
+    level cells — e.g. 6 values for the 3 severity x 2 biologic-experience groups —
+    and rd_map_from_tau averages over the modifier to recover the severity map.)
 
     Default coefs (baseline_severity_coef=0.10, baseline_academic_coef=0.15,
     noise_std=0.6) were TUNED by the Task 03.5 recovery probe (cheapest-disproof):
@@ -348,6 +405,7 @@ def binary_outcome_with_cate(
         rng,
         target_prevalence=target_prevalence,
         noise_std=noise_std,
+        cate_modifier=cate_modifier,
     )
 
 
@@ -372,5 +430,9 @@ def rd_map_from_tau(segment: np.ndarray, tau_i: np.ndarray) -> Dict[str, float]:
     tau_i carries the per-segment counterfactual risk difference (3 distinct
     values from binary_outcome_rd / binarize_score), so this is a lossless collapse — the
     RD-scale ground-truth CATE map the generator persists to attrs + JSON sidecar.
+
+    Uses the per-segment MEAN so that a Phase-3 frame (where tau_i varies WITHIN a
+    severity segment by biologic-experience) collapses to the severity-MARGINAL RD;
+    identical to the old ``[0]`` when tau_i is constant within the segment.
     """
-    return {str(s): float(tau_i[segment == s][0]) for s in np.unique(segment)}
+    return {str(s): float(np.mean(tau_i[segment == s])) for s in np.unique(segment)}

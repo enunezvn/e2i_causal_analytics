@@ -843,6 +843,13 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ldh_ratio",
             "urticaria_severity_uas7",
             "ecog_performance_status",
+            # Phase 3 (CLIN-SEG-P3): biologic-experience is a Remibrutinib-only
+            # pre-treatment EFFECT MODIFIER (the DGP plants a differential CATE on
+            # it — biologic-experienced patients respond less). Brand-scoped below
+            # so it is offered only when Remibrutinib is the row filter (NULL for the
+            # other brands). ige_level is NOT here — it stays a descriptive KPI axis
+            # (Remibrutinib is a BTK inhibitor, not anti-IgE; no IgE causal effect).
+            "biologic_experienced",
             # adherence_rate and gap_days are NOT listed here: they are
             # post-treatment descendants of treatment_arm (near-deterministic
             # proxies of adherent_180d / low_gap_180d). Adjusting on them
@@ -936,7 +943,10 @@ _UNIVERSAL_COVARIATES: frozenset = frozenset(
     }
 )
 _BRAND_CLINICAL_COVARIATES: Dict[str, frozenset] = {
-    "Remibrutinib": frozenset({"urticaria_severity_uas7"}),
+    # biologic_experienced (Phase 3) is Remibrutinib's planted CATE effect-modifier;
+    # it is in BRAND_ELIGIBILITY_FIELDS["Remibrutinib"] so the subset-consistency
+    # gate stays green. ige_level is intentionally NOT here (descriptive only).
+    "Remibrutinib": frozenset({"urticaria_severity_uas7", "biologic_experienced"}),
     "Kisqali": frozenset({"ecog_performance_status"}),
     "Fabhalta": frozenset({"egfr", "proteinuria_g_day", "ldh_ratio"}),
 }
@@ -978,6 +988,7 @@ _COLUMN_LABELS: Dict[str, str] = {
     "age_at_diagnosis": "Age at diagnosis",
     "academic_hcp": "Academic HCP",
     "geographic_region": "Geographic region",
+    "biologic_experienced": "Biologic-experienced (prior anti-IgE)",
 }
 
 # Datasets that are NOT a single physical table — built by a JOIN-aware loader
@@ -1004,6 +1015,7 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "ldh_ratio",
         "urticaria_severity_uas7",
         "ecog_performance_status",
+        "biologic_experienced",  # Phase 3: 0/1, float-coerced like the other flags
         "adherent_180d",
         "low_gap_180d",
         "adherence_rate",

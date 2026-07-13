@@ -481,6 +481,10 @@ def write_cohort_frames(out_dir) -> list:
                 "segment_assignment",
                 "propensity_score",
                 "treatment_effect_estimate",
+                # Phase 3 (CLIN-SEG-P3): Remibrutinib's biologic-experience effect
+                # modifier rides the causal frame so /causal-analysis can split the
+                # CATE on it. NULL (absent) for the other brands' frames.
+                "biologic_experienced",
                 "brand",
                 "is_synthetic",
             ]

@@ -25,6 +25,7 @@ _FULL = [
     "proteinuria_g_day",
     "ldh_ratio",
     "urticaria_severity_uas7",
+    "biologic_experienced",
 ]
 _UNIVERSALS = ["disease_severity", "age_at_diagnosis", "academic_hcp"]
 
@@ -38,7 +39,7 @@ def test_all_brands_keeps_universals_only():
 @pytest.mark.parametrize(
     "brand,expected_clinical",
     [
-        ("Remibrutinib", ["urticaria_severity_uas7"]),
+        ("Remibrutinib", ["urticaria_severity_uas7", "biologic_experienced"]),
         ("Kisqali", ["ecog_performance_status"]),
         ("Fabhalta", ["egfr", "proteinuria_g_day", "ldh_ratio"]),
     ],
