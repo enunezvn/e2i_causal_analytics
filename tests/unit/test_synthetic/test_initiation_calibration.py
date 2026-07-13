@@ -67,6 +67,20 @@ def faithful() -> dict:
     return {b: _faithful(b) for b in Brand}
 
 
+# Per-brand initiation AUC ceiling. Remibrutinib carries a HIGHER ceiling because
+# Phase 3 (CLIN-SEG-P3, PR pending 2026-07-13) plants a recoverable biologic-
+# experience differential CATE on its initiation outcome: boosting the naive
+# majority's effect (mean-preserving 2x spread) SHARPENS the severity->initiation
+# gradient the leakage-safe 7-covariate model reads, lifting the faithful holdout
+# AUC 0.804 -> ~0.839 (measured seed=42, n=20000). This is a DELIBERATE DGP change,
+# not leakage: biologic_experienced is NOT a model feature (it's not in the
+# initiation spec) and is orthogonal to every covariate (corr<0.002 vs severity/arm;
+# control init-rate is identical naive-vs-experienced). Re-baselined here in the
+# same commit per the band's re-base protocol. Kisqali/Fabhalta are byte-identical
+# to pre-P3 (biologic 100% NULL for them) and keep the original 0.83 ceiling.
+_INIT_AUC_CEILING = {"Remibrutinib": 0.85}
+
+
 def test_initiation_auc_in_target_band(faithful):
     for b, m in faithful.items():
         # prevalence-banded construction pins initiation prevalence at ~0.35
@@ -75,8 +89,9 @@ def test_initiation_auc_in_target_band(faithful):
         assert m["n_features"] >= 15, (
             f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
         )
-        assert 0.78 <= m["auc"] <= 0.83, (
-            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.78, 0.83]"
+        ceiling = _INIT_AUC_CEILING.get(b.value, 0.83)
+        assert 0.78 <= m["auc"] <= ceiling, (
+            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.78, {ceiling}]"
         )
 
 

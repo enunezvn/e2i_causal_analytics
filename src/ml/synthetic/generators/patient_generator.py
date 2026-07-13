@@ -22,10 +22,12 @@ from ..config import (
     RegionEnum,
 )
 from ..dgp.treatment_arm import (
+    _BIOLOGIC_SPAWN_KEY,
     _BRAND_CATE_SCALE,
     assign_segment,
     assign_treatment_arm,
     binary_outcome_with_cate,
+    biologic_cate_modifier,
     brand_scaled_cate,
     initiation_prognostic_offset,
     rd_map_from_tau,
@@ -134,15 +136,16 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # per-unit RD-scale (de-confounded, recoverable) segment CATE. T11: the 4
         # prognostic drivers enter via prognostic_offset (⊥ arm) so the goldstd
         # initiation model gains real signal while ATE/CATE recovery is preserved.
+        prognostic_offset = initiation_prognostic_offset(
+            insurance_type, age_at_diagnosis, comorbidity_burden, prior_therapy_lines
+        )
         treatment_initiated, tau_i = binary_outcome_with_cate(
             treatment_arm,
             confounders,
             segment,
             latent_cate_map,
             self._rng,
-            prognostic_offset=initiation_prognostic_offset(
-                insurance_type, age_at_diagnosis, comorbidity_burden, prior_therapy_lines
-            ),
+            prognostic_offset=prognostic_offset,
         )
         # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
         cate_map = rd_map_from_tau(segment, tau_i)
@@ -349,13 +352,27 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             }
         )
 
+        # Phase 3 (CLIN-SEG-P3): plant the biologic-experience differential CATE on
+        # the Remibrutinib initiation outcome. Post-hoc + an independent substream so
+        # the main self._rng stream — and every non-Remibrutinib row — stays
+        # byte-identical (only Remibrutinib treatment_initiated /
+        # treatment_effect_estimate / days_to_treatment are rewritten). No-op (returns
+        # tau_i unchanged, cate_by_biologic=None) when the frame carries no
+        # Remibrutinib rows with a populated biologic_experienced.
+        tau_i, cate_by_biologic = self._apply_biologic_differential(
+            df, np.asarray(segment), confounders, prognostic_offset, latent_cate_map, tau_i
+        )
+        cate_map = rd_map_from_tau(np.asarray(segment), tau_i)
+
         # Store ground truth metadata (realized values from the wired DGP)
         df.attrs["true_ate"] = float(np.mean(tau_i))
         df.attrs["cate_by_segment"] = cate_map
         df.attrs["brand"] = brand_enum.value
         df.attrs["dgp_type"] = dgp_type.value
-        df.attrs["prevalence"] = float(np.mean(treatment_initiated))
+        df.attrs["prevalence"] = float(np.mean(df["treatment_initiated"].to_numpy()))
         df.attrs["confounders"] = dgp_config.confounders if dgp_config else []
+        if cate_by_biologic is not None:
+            df.attrs["cate_by_biologic"] = cate_by_biologic
 
         # Per-arm/outcome recoverable ground truth (commercial-arms enrichment).
         # Existing arm: treatment_initiated (scalar above) + the Phase 0 adherence
@@ -365,6 +382,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "treatment_initiated": {
                     "ate": float(np.mean(tau_i)),
                     "cate_by_segment": cate_map,
+                    **({"cate_by_biologic": cate_by_biologic} if cate_by_biologic else {}),
                 },
                 "adherent_180d": {
                     "ate": float(
@@ -381,6 +399,85 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
         return df
+
+    def _apply_biologic_differential(
+        self,
+        df: pd.DataFrame,
+        segment: np.ndarray,
+        confounders: Dict[str, np.ndarray],
+        prognostic_offset: np.ndarray,
+        latent_cate_map: Dict[str, float],
+        tau_i: np.ndarray,
+    ) -> tuple[np.ndarray, Optional[Dict[str, float]]]:
+        """Phase 3 (CLIN-SEG-P3): plant the biologic-experience differential CATE on
+        the Remibrutinib initiation outcome.
+
+        Rebuilds ``treatment_initiated`` + ``treatment_effect_estimate`` for the
+        Remibrutinib rows (where ``biologic_experienced`` is populated) with a
+        per-unit CATE modifier (biologic-experienced ~0.625x the naive effect — a
+        mean-preserving 2x spread, see ``treatment_arm._BIOLOGIC_*``). Runs POST-HOC
+        on the already-built frame, drawing its fresh noise from an INDEPENDENT
+        deterministic substream, so:
+          * the generator's main ``self._rng`` stream is never perturbed, and
+          * every non-Remibrutinib row (biologic NULL) is byte-identical to pre-P3.
+        Returns the frame-wide per-unit tau (Remibrutinib rows updated) and the
+        {naive,experienced} RD ground-truth map (or ``None`` when no Remibrutinib
+        rows carry biologic-experience).
+        """
+        biologic = df["biologic_experienced"].to_numpy()
+        mask = (df["brand"].to_numpy() == Brand.REMIBRUTINIB.value) & ~pd.isna(biologic)
+        if not mask.any():
+            return tau_i, None
+        idx = np.where(mask)[0]
+        bio = biologic[idx].astype(float)  # 0=naive, 1=experienced
+        modifier = biologic_cate_modifier(bio)
+
+        # Independent substream keyed off the frame seed — reproducible AND orthogonal
+        # to the main stream (spawn_key guarantees non-overlap with self._rng).
+        bio_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(_BIOLOGIC_SPAWN_KEY,))
+        )
+        y_new, tau_new = binary_outcome_with_cate(
+            df["treatment_arm"].to_numpy()[idx].astype(int),
+            {
+                "disease_severity": confounders["disease_severity"][idx],
+                "academic_hcp": confounders["academic_hcp"][idx],
+            },
+            segment[idx],
+            latent_cate_map,
+            bio_rng,
+            prognostic_offset=np.asarray(prognostic_offset)[idx],
+            cate_modifier=modifier,
+        )
+
+        # Reconcile days_to_treatment ONLY for rows whose initiation flipped, so
+        # unchanged initiators keep their original day and non-initiators stay NaN.
+        old_init = df["treatment_initiated"].to_numpy()[idx].astype(int)
+        days = df["days_to_treatment"].to_numpy(dtype=float).copy()
+        up = (old_init == 0) & (y_new == 1)
+        down = (old_init == 1) & (y_new == 0)
+        d_sub = days[idx]
+        d_sub[down] = np.nan
+        if up.any():
+            d_sub[up] = bio_rng.integers(7, 91, int(up.sum())).astype(float)
+        days[idx] = d_sub
+
+        # Write the rebuilt columns back (Remibrutinib rows only).
+        ti = df["treatment_initiated"].to_numpy().copy()
+        ti[idx] = y_new
+        df["treatment_initiated"] = ti
+        tee = df["treatment_effect_estimate"].to_numpy(dtype=float).copy()
+        tee[idx] = np.round(tau_new, 4)
+        df["treatment_effect_estimate"] = tee
+        df["days_to_treatment"] = days
+
+        final_tau = np.asarray(tau_i, dtype=float).copy()
+        final_tau[idx] = tau_new
+        cate_by_biologic = {
+            "naive": float(np.mean(tau_new[bio < 0.5])),
+            "experienced": float(np.mean(tau_new[bio >= 0.5])),
+        }
+        return final_tau, cate_by_biologic
 
     def _generate_confounders(
         self,

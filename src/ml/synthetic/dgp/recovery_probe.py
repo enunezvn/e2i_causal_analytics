@@ -35,16 +35,32 @@ def recover_ate_and_cate(
     segment_col: str = "segment_assignment",
     true_ate: float | None = None,
     cate_map: Dict[str, float] | None = None,
+    modifier_col: str | None = None,
 ) -> Dict[str, Any]:
     """Recover ATE (LinearDML) + per-segment CATE (CausalForestDML) from a
     synthetic patient frame. Defaults reproduce the original treatment_arm ->
     treatment_initiated probe; pass the keyword args to validate any other arm/
-    outcome/confounder/segment tuple (commercial-arms enrichment)."""
+    outcome/confounder/segment tuple (commercial-arms enrichment).
+
+    ``modifier_col`` (Phase 3, optional) names a SECOND heterogeneity axis
+    (e.g. ``biologic_experienced``) that is added to the CausalForestDML effect-
+    modifier matrix so the forest can split on it; when set the result carries
+    ``cate_by_modifier_estimate`` = {level: mean recovered effect}. The LinearDML
+    ATE + propensity AUC keep using the confounder-only X, so their values are
+    unchanged from the modifier-less call."""
     covars = list(confounders) if confounders is not None else _COVARS
     Y = df[outcome_col].to_numpy(dtype=float)
     T = df[treatment_col].to_numpy(dtype=int)
     X = df[covars].to_numpy(dtype=float)
     seg = df[segment_col].to_numpy()
+    # Forest effect-modifier matrix: confounders + the optional extra axis. Kept
+    # separate from X so ATE/propensity (confounder-only) are byte-identical.
+    if modifier_col is not None:
+        mod = df[modifier_col].to_numpy(dtype=float)
+        X_cate = np.column_stack([X, mod])
+    else:
+        mod = None
+        X_cate = X
 
     n_treated, n_control = int(T.sum()), int(len(T) - T.sum())
     propensity_auc = float(
@@ -71,13 +87,13 @@ def recover_ate_and_cate(
         min_samples_leaf=10,
         random_state=42,
     )
-    cf.fit(Y, T, X=X, W=None)
-    eff = cf.effect(X)
+    cf.fit(Y, T, X=X_cate, W=None)
+    eff = cf.effect(X_cate)
     cate_by_segment_estimate = {
         s: float(np.mean(eff[seg == s])) for s in _SEGMENTS if np.any(seg == s)
     }
 
-    return {
+    result: Dict[str, Any] = {
         "true_ate": float(true_ate)
         if true_ate is not None
         else float(df.attrs.get("true_ate", np.mean(eff))),
@@ -87,3 +103,8 @@ def recover_ate_and_cate(
         "n_treated": n_treated,
         "n_control": n_control,
     }
+    if mod is not None:
+        result["cate_by_modifier_estimate"] = {
+            f"{lvl:.0f}": float(np.mean(eff[mod == lvl])) for lvl in np.unique(mod)
+        }
+    return result
