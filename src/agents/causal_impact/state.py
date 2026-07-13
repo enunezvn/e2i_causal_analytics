@@ -242,6 +242,15 @@ class CausalImpactState(TypedDict):
     # to_thread compute past the route's hard wall-clock cap. Set by the API
     # background task (see causal.py ``_REFUTATION_COMPUTE_BUDGET_S``).
     compute_deadline: NotRequired[float]
+    # DESIGN declaration: the question's treatment assignment is genuinely
+    # randomized (set by the API layer from the dataset spec's
+    # ``randomized_treatment`` list — e.g. nba_triggers.control_group_flag,
+    # the platform's one true RCT holdout). Consumed by refutation (E-value
+    # gate → informational SKIP), sensitivity, and interpretation. NEVER
+    # inferred from an empty discovered backdoor (that would fail-open
+    # observational questions where discovery simply found nothing). Declared
+    # so LangGraph persists it (undeclared channels are dropped).
+    randomized_design: NotRequired[bool]
 
     # Contract: Orchestrator pass-through fields (BaseAgentState)
     session_id: NotRequired[str]  # Contract: Session identifier from working memory

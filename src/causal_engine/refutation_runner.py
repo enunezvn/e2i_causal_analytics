@@ -278,6 +278,14 @@ class RefutationSuite:
         # Build Dict with test names as keys (contract requirement)
         individual_tests: Dict[str, Dict[str, Any]] = {}
         for t in self.tests:
+            # SKIPPED (not-applicable) tests are OMITTED: this legacy dict is
+            # pass/fail-shaped (``passed: bool``), so a skipped test — e.g. the
+            # E-value on a randomized design — would surface as a FAILED row in
+            # the FE while ``total_tests`` already excludes it. Absent key →
+            # consumers three-state to None (audit chain) / not-narrated
+            # (interpretation), the honest rendering for "did not gate".
+            if t.status == RefutationStatus.SKIPPED:
+                continue
             # Map test name to contract key
             # Note: sensitivity_e_value maps to unobserved_common_cause per contract
             key = t.test_name.value
@@ -488,6 +496,7 @@ class RefutationRunner:
         trace_id: Optional[str] = None,
         deadline: Optional[float] = None,
         per_refit_hint: Optional[float] = None,
+        randomized_design: bool = False,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -521,6 +530,16 @@ class RefutationRunner:
                 still straddle the hard cap and orphan one thread. Only used
                 when no refuter has run yet; ignored once a real per-refit time
                 is observed.
+            randomized_design: DESIGN declaration that the treatment assignment
+                is genuinely randomized (threaded from the dataset spec by the
+                caller — never inferred from an empty discovered backdoor, which
+                would fail-open observational questions). When True the
+                ``sensitivity_e_value`` test is reported as SKIPPED/not
+                applicable (its threat model — unmeasured confounding of
+                assignment — is excluded by construction) with the computed
+                E-value kept in details for information. The four
+                data-perturbation refuters (placebo, random_common_cause,
+                data_subset, bootstrap) still run and still gate.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -709,6 +728,7 @@ class RefutationRunner:
                     original_effect=original_effect,
                     original_ci=original_ci,
                     outcome_std=outcome_std,
+                    randomized_design=randomized_design,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1322,6 +1342,7 @@ class RefutationRunner:
         original_effect: float,
         original_ci: Tuple[float, float],
         outcome_std: Optional[float] = None,
+        randomized_design: bool = False,
     ) -> RefutationResult:
         """Run E-value sensitivity analysis.
 
@@ -1334,6 +1355,14 @@ class RefutationRunner:
         the E-value is scale-dependent (near 1 on a 0–1 outcome, exploding on a
         dollar/count outcome) and ``sensitivity_e_value`` is a critical gate, so a
         meaningless number can hard-BLOCK or wave through depending only on units.
+
+        ``randomized_design=True`` (a DESIGN declaration threaded from the dataset
+        spec — never inferred from an empty discovered backdoor) marks the E-value
+        NOT APPLICABLE as a gate: unmeasured confounding of assignment is excluded
+        by randomization, so the test returns status=SKIPPED (no confidence weight,
+        never a critical failure) while still computing the numbers into details
+        for information. Verified live: the honest 8pp nba_triggers RCT effect has
+        E-value(CI) < 2.0 and was hard-BLOCKed by this gate (PR #1217 follow-up).
         """
         import time
 
@@ -1378,7 +1407,21 @@ class RefutationRunner:
         # M-stat2: the PASS/WARNING/FAILED decision uses the CONSERVATIVE CI
         # E-value (e_value_ci), not the point estimate. A strong point effect
         # with a wide / null-crossing CI must not wave the gate through.
-        if e_value_ci >= threshold:
+        if randomized_design:
+            # Randomized design: the E-value's threat model (unmeasured
+            # confounding of assignment) is excluded by construction, so the
+            # gate is NOT APPLICABLE — SKIPPED carries no confidence weight and
+            # never trips the critical-failure BLOCK. The computed numbers stay
+            # in details as information, not as evidence for/against validity.
+            status = RefutationStatus.SKIPPED
+            message = (
+                "not applicable: randomized design — treatment assignment is "
+                "exogenous by construction, so the unmeasured-confounding gate "
+                f"does not apply; E-value (CI bound) {e_value_ci:.2f} reported "
+                "for information only"
+            )
+            strength = "not_applicable_randomized"
+        elif e_value_ci >= threshold:
             status = RefutationStatus.PASSED
             message = (
                 f"E-value (CI bound) {e_value_ci:.2f} indicates robustness to "
@@ -1419,6 +1462,9 @@ class RefutationRunner:
                 # for a comparable one.
                 "standardized": standardized,
                 "outcome_std": outcome_std,
+                # Randomized designs report the E-value as information only —
+                # the unmeasured-confounding gate does not apply to them.
+                "gate_applicable": not randomized_design,
             },
             execution_time_ms=execution_time,
         )

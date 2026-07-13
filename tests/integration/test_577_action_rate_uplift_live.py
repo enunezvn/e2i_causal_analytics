@@ -16,7 +16,11 @@ proofs were verified live in rolled-back txns at design time (flip→-0.2158, eq
 empty arm→fail-loud) and the empty-arm fail-loud contract is locked by the hermetic unit tests.
 
 CAPABILITY-GATED: skips unless SUPABASE_* is set AND the action-rate-uplift query_id exists
-(migration 051 applied).
+(migration 051 applied) AND rows are visible under the instance's synthetic-visibility mode.
+All raw reads route through ``resolve_kpi_query_id`` — the SAME resolution the calculator
+applies — so on a synthetic-gold showcase box (E2I_INCLUDE_SYNTHETIC) the per-arm
+recomputation reads the ``*_include_synthetic`` twin the calculator actually used, instead
+of the migration-066 strict gate returning honest-empty (which IndexError'd here).
 """
 
 import os
@@ -24,6 +28,7 @@ import os
 import pytest
 
 from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
+from src.kpi.synthetic_mode import resolve_kpi_query_id
 
 HAS_SUPABASE = bool(os.getenv("SUPABASE_URL")) and bool(os.getenv("SUPABASE_ANON_KEY"))
 pytestmark = [
@@ -39,16 +44,27 @@ def calc():
     c = TriggerPerformanceCalculator()
     if c.db_client is None:
         pytest.skip("no Supabase client")
+    qid = resolve_kpi_query_id(_QUERY_ID)
     try:
-        c.db_client.rpc("kpi_query", {"query_id": _QUERY_ID, "params": []}).execute()
+        resp = c.db_client.rpc("kpi_query", {"query_id": qid, "params": []}).execute()
     except Exception as e:
         pytest.skip(f"#577 action-rate-uplift query unavailable (migration 051 not applied?): {e}")
+    if not resp.data:
+        pytest.skip(
+            f"#577 no rows visible via {qid} under this instance's synthetic-visibility mode "
+            "(strict migration-066 gate on a synthetic-only box?) — nothing to assert on"
+        )
     return c
 
 
 def _arm_row(calc):
-    """The full registered row: {action_rate_uplift, treatment_rate, control_rate}."""
-    resp = calc.db_client.rpc("kpi_query", {"query_id": _QUERY_ID, "params": []}).execute()
+    """The full registered row: {action_rate_uplift, treatment_rate, control_rate}.
+
+    Resolved through the same synthetic-visibility mapping as the calculator so the
+    recomputation check compares against the registry row the calculator actually read.
+    """
+    qid = resolve_kpi_query_id(_QUERY_ID)
+    resp = calc.db_client.rpc("kpi_query", {"query_id": qid, "params": []}).execute()
     return resp.data[0]
 
 

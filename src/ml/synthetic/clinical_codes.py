@@ -79,6 +79,49 @@ def brand_codes(brand: str) -> dict[str, object]:
     }
 
 
+# --- Brand -> clinically-valid patient eligibility columns (Phase 2 DGP gating) -----
+# SSOT for which indication-specific ``patient_journeys`` eligibility columns are
+# clinically real for each brand. Before Phase 2 the generator stamped ALL of these
+# on every row regardless of brand (a Kisqali oncology patient carried a fabricated
+# CSU UAS7, a Remibrutinib CSU patient carried a fabricated renal eGFR, etc.). The
+# generator now draws every field for the shared RNG stream but NULLs the columns
+# that do NOT belong to a row's brand (draw-then-discard), so off-brand attributes
+# are ABSENT rather than fabricated. Consumers that read these as causal
+# effect-modifiers (``src/api/routes/segments.py`` HTE, ``causal.py`` covariates)
+# select the brand-relevant subset so a now-NULL off-brand column never reaches
+# EconML as NaN. Keyed by ``Brand.value``. ``primary_diagnosis_code`` is always the
+# row's own brand-correct diagnosis and is intentionally NOT gated here.
+#
+# The API-side covariate map (causal._BRAND_CLINICAL_COVARIATES) is a SUBSET of this
+# (only the numeric adjustment candidates); a consistency test locks them together.
+BRAND_ELIGIBILITY_FIELDS: dict[str, frozenset[str]] = {
+    "Remibrutinib": frozenset(
+        {
+            "urticaria_severity_uas7",
+            "prior_antihistamine_therapy",
+            "biologic_experienced",  # Phase 2: prior anti-IgE (e.g. omalizumab) exposure
+            "ige_level",  # Phase 2: baseline total serum IgE (IU/mL)
+        }
+    ),
+    "Kisqali": frozenset(
+        {
+            "hr_status",
+            "her2_status",
+            "disease_stage",
+            "ecog_performance_status",
+        }
+    ),
+    "Fabhalta": frozenset(
+        {
+            "ldh_ratio",
+            "complement_inhibitor_status",
+            "proteinuria_g_day",
+            "egfr",
+        }
+    ),
+}
+
+
 # --- H1-antihistamine baseline therapy (CSU first-line) -----------------------------
 # ATC R06A "Antihistamines for systemic use" is the drug_class anchor; RxCUIs identify
 # the specific agents.
