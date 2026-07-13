@@ -69,6 +69,7 @@ import {
   useSegmentDatasets,
   useRunSegmentAnalysisAndWait,
   usePolicies,
+  useCausalVariables,
 } from '@/hooks/api';
 import { useQueryErrorToast, useMutationError } from '@/hooks/use-query-error';
 import type {
@@ -92,6 +93,9 @@ const ALL_BRANDS = '__all__';
 // These are fallbacks only — the real options come from GET /segments/datasets.
 const DEFAULT_TREATMENT = 'treatment_arm';
 const DEFAULT_OUTCOME = 'persistent_180d';
+// The HTE run's dataset is FIXED server-side (segments.py _SEGMENT_HTE_DATASET);
+// used here only to fetch the clinical-biomarker union for display grouping.
+const SEGMENT_DATASET = 'patient_journeys';
 
 const titleCase = (s: string) =>
   s.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
@@ -190,44 +194,69 @@ function CATEBarChart({ cateResults, segmentName: _segmentName }: CATEChartProps
 
 interface FeatureImportanceChartProps {
   importance: Record<string, number>;
+  /** Indication-specific biomarker columns (union across brands, from the
+   *  causal-variables SSOT). Bars for these are colored apart from the generic
+   *  cross-brand confounders; omitted/empty = ungrouped rendering. */
+  biomarkers?: ReadonlySet<string>;
 }
 
-function FeatureImportanceChart({ importance }: FeatureImportanceChartProps) {
+function FeatureImportanceChart({ importance, biomarkers }: FeatureImportanceChartProps) {
   const chartData = Object.entries(importance)
     .sort(([, a], [, b]) => b - a)
     .map(([feature, value]) => ({
       name: titleCase(feature),
       importance: value * 100,
+      isBiomarker: biomarkers?.has(feature) ?? false,
     }));
+  const hasBiomarker = chartData.some((d) => d.isBiomarker);
 
   return (
-    <ResponsiveContainer width="100%" height={Math.max(280, chartData.length * 36 + 40)}>
-      <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 16, bottom: 24 }}>
-        <CartesianGrid strokeDasharray="3 3" />
-        {/* A bare 'dataMax' domain makes recharts render the exact data max as the
-            last tick (e.g. "79.66264674939283"); ceiling to the next multiple of 10
-            keeps every tick a round number at its true position. */}
-        <XAxis
-          type="number"
-          domain={[0, (dataMax: number) => Math.ceil(dataMax / 10) * 10]}
-          label={{ value: 'Importance (%)', position: 'bottom' }}
-        />
+    <div>
+      <ResponsiveContainer width="100%" height={Math.max(280, chartData.length * 36 + 40)}>
+        <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 16, bottom: 24 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {/* A bare 'dataMax' domain makes recharts render the exact data max as the
+              last tick (e.g. "79.66264674939283"); ceiling to the next multiple of 10
+              keeps every tick a round number at its true position. */}
+          <XAxis
+            type="number"
+            domain={[0, (dataMax: number) => Math.ceil(dataMax / 10) * 10]}
+            label={{ value: 'Importance (%)', position: 'bottom' }}
+          />
 
-        {/* interval={0} forces a tick+label for EVERY feature — recharts otherwise
-            auto-skips category ticks under limited height (the "8 bars, 4 labels"
-            bug). width=180 + a longer-name tickFormatter stop the left-edge clip. */}
-        <YAxis
-          type="category"
-          dataKey="name"
-          width={180}
-          interval={0}
-          tick={{ fontSize: 12 }}
-          tickFormatter={(v: string) => (v.length > 26 ? `${v.slice(0, 24)}…` : v)}
-        />
-        <Tooltip formatter={(value) => [`${Number(value ?? 0).toFixed(1)}%`, 'Importance']} />
-        <Bar dataKey="importance" fill={COLORS.secondary} />
-      </BarChart>
-    </ResponsiveContainer>
+          {/* interval={0} forces a tick+label for EVERY feature — recharts otherwise
+              auto-skips category ticks under limited height (the "8 bars, 4 labels"
+              bug). width=180 + a longer-name tickFormatter stop the left-edge clip. */}
+          <YAxis
+            type="category"
+            dataKey="name"
+            width={180}
+            interval={0}
+            tick={{ fontSize: 12 }}
+            tickFormatter={(v: string) => (v.length > 26 ? `${v.slice(0, 24)}…` : v)}
+          />
+          <Tooltip formatter={(value) => [`${Number(value ?? 0).toFixed(1)}%`, 'Importance']} />
+          {/* Generic cross-brand confounders vs the brand's own indication
+              biomarkers — the shared modifiers (severity/age/academic) are NOT
+              disease-specific "clinical indicators" and must not read as such. */}
+          <Bar dataKey="importance" fill={COLORS.secondary}>
+            {chartData.map((entry) => (
+              <Cell
+                key={entry.name}
+                fill={entry.isBiomarker ? COLORS.primary : COLORS.secondary}
+              />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+      {hasBiomarker && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          <span style={{ color: COLORS.secondary }}>■</span> Generic confounder (all brands)
+          <span className="ml-3" style={{ color: COLORS.primary }}>■</span> Indication-specific
+          biomarker
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -562,6 +591,17 @@ export default function SegmentAnalysis() {
   // Only render real API results. No fabricated fallback. Surface API warnings.
   const analysisResult = runAnalysis.data;
   const apiWarnings = analysisResult?.warnings ?? [];
+
+  // Indication-biomarker union from the causal-variables SSOT (brand-INDEPENDENT,
+  // so a post-run brand-dropdown change can never misclassify a bar). Splits the
+  // feature-importance bars into generic cross-brand confounders vs the brand's
+  // own biomarkers. Graceful fallback: while loading/on error the chart simply
+  // renders ungrouped (no fabricated classification).
+  const { data: causalVariables } = useCausalVariables(SEGMENT_DATASET);
+  const biomarkerSet = useMemo(
+    () => new Set(causalVariables?.clinical_biomarkers ?? []),
+    [causalVariables]
+  );
 
   // Default-safe responder buckets (mid_responders may be absent on older runs).
   const highResponders = analysisResult?.high_responders ?? [];
@@ -921,11 +961,15 @@ export default function SegmentAnalysis() {
               <CardHeader>
                 <CardTitle>Feature Importance for CATE</CardTitle>
                 <CardDescription>
-                  Which clinical covariates drive treatment-effect heterogeneity
+                  Which covariates drive treatment-effect heterogeneity — generic confounders
+                  shared by every brand vs the brand&apos;s own indication-specific biomarkers
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <FeatureImportanceChart importance={analysisResult.feature_importance} />
+                <FeatureImportanceChart
+                  importance={analysisResult.feature_importance}
+                  biomarkers={biomarkerSet}
+                />
               </CardContent>
             </Card>
           )}

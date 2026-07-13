@@ -684,6 +684,78 @@ class TestCausalVariablesAndEstimationData:
         assert "zip_code" not in data["treatment_candidates"]
         assert "zip_code" in data["columns"]
 
+    # One probe row carrying EVERY curated candidate column (values are
+    # irrelevant — the endpoint only reads the keys), so the brand-scoping
+    # assertions below exercise the full clinical set.
+    _FULL_ROW = {
+        "treatment_arm": 1,
+        "treatment_initiated": 0,
+        "persistent_180d": 1,
+        "discontinued_180d": 0,
+        "adherent_180d": 1,
+        "low_gap_180d": 0,
+        "disease_severity": 3.2,
+        "engagement_score": 8.1,
+        "age_at_diagnosis": 60,
+        "academic_hcp": 1,
+        "geographic_region": "Northeast",
+        "egfr": 74.0,
+        "proteinuria_g_day": 1.2,
+        "ldh_ratio": 2.1,
+        "urticaria_severity_uas7": 28.0,
+        "ecog_performance_status": 1,
+    }
+    _UNIVERSALS = [
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+        "academic_hcp",
+        "geographic_region",
+    ]
+    _ALL_BIOMARKERS = {
+        "urticaria_severity_uas7",
+        "ecog_performance_status",
+        "egfr",
+        "proteinuria_g_day",
+        "ldh_ratio",
+    }
+
+    def test_variables_brand_scopes_covariate_candidates(self):
+        """brand=Fabhalta is offered its OWN biomarkers and never an off-brand
+        one. UAS7 is an urticaria activity score — offering it for a PNH cohort
+        (where the gated column is 100% NULL) was the 2026-07-13
+        clinical-faithfulness defect: the candidate surface was brand-blind
+        while estimation silently dropped the column. Mirrors
+        tests/unit/test_api/test_brand_scoped_covariates.py at the route level."""
+        with patch(_FACTORY, AsyncMock(return_value=_fake_async_client([self._FULL_ROW]))):
+            response = client.get("/api/causal/variables?dataset=patient_journeys&brand=Fabhalta")
+        assert response.status_code == 200
+        data = response.json()
+        assert "urticaria_severity_uas7" not in data["covariate_candidates"]
+        assert "ecog_performance_status" not in data["covariate_candidates"]
+        for own in ("egfr", "proteinuria_g_day", "ldh_ratio"):
+            assert own in data["covariate_candidates"]
+        # Universals always survive, order preserved ahead of the clinical cols.
+        assert data["covariate_candidates"][: len(self._UNIVERSALS)] == self._UNIVERSALS
+        # The brand-independent biomarker union ships for FE display grouping
+        # (generic confounders vs indication-specific biomarkers).
+        assert set(data["clinical_biomarkers"]) == self._ALL_BIOMARKERS
+        # The raw schema inventory is deliberately NOT brand-scoped.
+        assert "urticaria_severity_uas7" in data["columns"]
+
+    def test_variables_no_brand_offers_universals_only(self):
+        """No brand (all-brands cohort): every indication biomarker is dropped
+        from the candidates — each is populated for only one brand, and the
+        estimation path's brand=None scoping would drop them anyway. Offer and
+        estimation must agree."""
+        with patch(_FACTORY, AsyncMock(return_value=_fake_async_client([self._FULL_ROW]))):
+            response = client.get("/api/causal/variables?dataset=patient_journeys")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["covariate_candidates"] == self._UNIVERSALS
+        assert not self._ALL_BIOMARKERS & set(data["covariate_candidates"])
+        assert set(data["clinical_biomarkers"]) == self._ALL_BIOMARKERS
+
     def test_estimation_data_disallowed_column_400(self):
         """A column outside the dataset allowlist is rejected (no arbitrary reads)."""
         response = client.get(

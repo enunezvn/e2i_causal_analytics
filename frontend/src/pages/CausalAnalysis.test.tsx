@@ -59,12 +59,23 @@ import {
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 
+// Biomarker union mirroring the backend's clinical_biomarkers response field
+// (brand-independent; classifies covariates for the display split).
+const BIOMARKERS = [
+  'ecog_performance_status',
+  'egfr',
+  'ldh_ratio',
+  'proteinuria_g_day',
+  'urticaria_severity_uas7',
+];
+
 const VARIABLES = {
   dataset: 'patient_journeys',
   treatment_candidates: ['treatment_arm', 'treatment_initiated'],
   outcome_candidates: ['persistent_180d', 'discontinued_180d'],
   covariate_candidates: ['disease_severity', 'engagement_score'],
   columns: [],
+  clinical_biomarkers: BIOMARKERS,
 };
 
 const EFFECTS = [
@@ -406,6 +417,58 @@ describe('CausalAnalysis — unified agent-led page', () => {
     await user.click(screen.getByRole('combobox', { name: 'Brand' }));
     await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
     expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
+  // ── Brand-scoped covariate candidates (2026-07-13 clinical-faithfulness fix):
+  // the offered adjustment set must match what estimation actually uses. The
+  // variables query is keyed on the ACTIVE brand, and the manual panel labels
+  // generic cross-brand confounders apart from the brand's own indication
+  // biomarkers (a Fabhalta question must never show UAS7).
+  it('requests brand-scoped variables and re-requests when the brand changes', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // All-brands default: the query is made with brand=null (universals only).
+    expect(useCausalVariables).toHaveBeenCalledWith('patient_journeys', null);
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+    expect(useCausalVariables).toHaveBeenCalledWith('patient_journeys', 'Kisqali');
+  }, 20000);
+
+  it('labels the brand’s indication biomarkers apart from the generic confounders', async () => {
+    const user = userEvent.setup();
+    (useCausalVariables as ReturnType<typeof vi.fn>).mockImplementation(
+      (_dataset: string, brand?: string | null) => ({
+        data:
+          brand === 'Kisqali'
+            ? {
+                ...VARIABLES,
+                // Server-scoped: Kisqali's own biomarker only, never UAS7.
+                covariate_candidates: [
+                  'disease_severity',
+                  'engagement_score',
+                  'ecog_performance_status',
+                ],
+              }
+            : VARIABLES,
+      })
+    );
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    // Generic universals and the brand's own biomarker are labeled apart.
+    expect(screen.getByText(/generic confounders \(all brands\)/)).toBeInTheDocument();
+    expect(screen.getByText(/indication-specific biomarkers \(Kisqali\)/)).toBeInTheDocument();
+    expect(screen.getByText('ecog_performance_status')).toBeInTheDocument();
+    // An off-brand biomarker is never displayed for this brand.
+    expect(screen.queryByText(/urticaria_severity_uas7/)).not.toBeInTheDocument();
+  }, 20000);
+
+  it('shows only generic confounders (no biomarker group) for the all-brands scope', () => {
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    expect(screen.getByText(/generic confounders \(all brands\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/indication-specific biomarkers/)).not.toBeInTheDocument();
   }, 20000);
 
   it('renders the live estimator-registry total on the overview card', () => {
