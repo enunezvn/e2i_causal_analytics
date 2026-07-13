@@ -347,6 +347,9 @@ async def test_patient_baseline_rows_page_past_te_cap():
         def select(self, *_a, **_k):
             return self
 
+        def eq(self, *_a, **_k):
+            return self
+
         def range(self, lo, hi):
             calls.append((lo, hi))
             return self
