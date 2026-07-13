@@ -969,7 +969,12 @@ _COLUMN_LABELS: Dict[str, str] = {
     "adherence_rate": "Adherence rate (PDC)",
     "gap_days": "Refill gap (days)",
     # #1188 RCT baseline covariates (joined from patient_journeys).
-    "disease_severity": "Disease severity (baseline)",
+    # disease_severity is a UNIVERSAL confounder: one generic normal(5,2)-clipped
+    # 0–10 index applied identically to every brand (CSU / breast cancer / PNH), NOT
+    # a per-disease clinical instrument like UAS7 / ECOG / eGFR. The label states the
+    # cross-indication nature so it never reads as an indication-specific severity
+    # score next to the real per-brand biomarkers (Part C, 2026-07-13).
+    "disease_severity": "Disease severity (cross-indication 0–10 index)",
     "age_at_diagnosis": "Age at diagnosis",
     "academic_hcp": "Academic HCP",
     "geographic_region": "Geographic region",

@@ -10,6 +10,8 @@ import pytest
 from src.api.routes.causal import (
     _ALL_CLINICAL_COVARIATES,
     _BRAND_CLINICAL_COVARIATES,
+    _COLUMN_LABELS,
+    _UNIVERSAL_COVARIATES,
     _brand_scoped_covariates,
 )
 from src.ml.synthetic.clinical_codes import BRAND_ELIGIBILITY_FIELDS
@@ -60,6 +62,23 @@ def test_order_preserved_and_nonclinical_passthrough():
         "engagement_score",
         "ecog_performance_status",
     ]
+
+
+def test_disease_severity_label_states_cross_indication():
+    """Part C (2026-07-13): disease_severity is a UNIVERSAL confounder — one generic
+    0–10 index shared identically across CSU / breast cancer / PNH, not a per-disease
+    clinical instrument. Its display label MUST make the cross-indication nature
+    explicit so it never reads as an indication-specific severity score next to the
+    real per-brand biomarkers (UAS7 / ECOG / eGFR). Locks the honest label."""
+    assert "disease_severity" in _UNIVERSAL_COVARIATES
+    label = _COLUMN_LABELS["disease_severity"]
+    assert "cross-indication" in label.lower(), (
+        f"disease_severity label {label!r} must state its cross-indication nature"
+    )
+    # The per-brand indication biomarkers must NOT be relabeled as cross-indication.
+    for col in _ALL_CLINICAL_COVARIATES:
+        if col in _COLUMN_LABELS:
+            assert "cross-indication" not in _COLUMN_LABELS[col].lower()
 
 
 def test_api_map_is_subset_of_dgp_ssot():
