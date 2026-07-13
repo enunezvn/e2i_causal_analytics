@@ -435,3 +435,105 @@ class TestTriggerSchemaEndToEnd:
                 f"#1125: TriggerSchema rejected real generator output ({label}); "
                 f"failing (column, check) pairs: {failing}"
             )
+
+
+def _make_prognostic_patient_df(n: int = 4000, seed: int = 11) -> pd.DataFrame:
+    """Patient frame carrying the PRE-TREATMENT baselines (#1188): a bimodal
+    disease_severity (2.0 vs 8.0) so the prognostic action signal is cleanly
+    measurable, plus age_at_diagnosis. Baselines are fixed BEFORE any trigger
+    fires — they must never influence arm assignment, only outcome propensity."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame(
+        [
+            {
+                "patient_id": f"pt_{i:06d}",
+                "hcp_id": f"hcp_{i % 40:05d}",
+                "engagement_score": 3.0 + (i % 7),
+                "treatment_initiated": i % 2,
+                "journey_start_date": "2023-06-01",
+                "brand": BRANDS[i % len(BRANDS)],
+                "disease_severity": 2.0 if i % 2 == 0 else 8.0,
+                "age_at_diagnosis": int(rng.integers(18, 86)),
+            }
+            for i in range(n)
+        ]
+    )
+
+
+class TestActionPrognosticBaselines:
+    """#1188: action_taken must be PROGNOSTIC on pre-treatment baselines
+    (disease_severity primary, age_at_diagnosis secondary) while the arm
+    assignment stays a pure coin flip — an ANCOVA-style variance-reduction
+    substrate for the nba_triggers RCT. The arm contrast (~8pp) is preserved."""
+
+    def _generated(self, seed: int = 42):
+        patient_df = _make_prognostic_patient_df()
+        config = GeneratorConfig(seed=seed, n_records=len(patient_df))
+        gen = TriggerGenerator(config, patient_df=patient_df)
+        df = gen.generate()
+        merged = df.merge(
+            patient_df[["patient_id", "disease_severity"]], on="patient_id", how="left"
+        )
+        merged["action_bin"] = merged["action_taken"].notna()
+        return merged
+
+    def test_within_arm_action_rate_increases_with_severity(self):
+        """THE #1188 red-first behavior: within EACH arm, high-severity patients'
+        triggers must show a materially higher action rate than low-severity —
+        the prognostic signal ANCOVA adjustment will exploit. Zero severity
+        dependence (the pre-#1188 DGP) must fail here."""
+        merged = self._generated()
+        for arm_flag, arm_name in ((True, "control"), (False, "treatment")):
+            arm = merged[merged["control_group_flag"] == arm_flag]
+            hi = arm[arm["disease_severity"] >= 7.0]["action_bin"].mean()
+            lo = arm[arm["disease_severity"] <= 3.0]["action_bin"].mean()
+            assert hi - lo > 0.10, (
+                f"{arm_name} arm: action rate must rise with severity "
+                f"(prognostic baseline), got hi={hi:.3f} lo={lo:.3f}"
+            )
+
+    def test_arm_contrast_preserved_with_prognostic_baselines(self):
+        """Guard: the randomized ~8pp treatment-vs-control action contrast (the
+        WS2-TR-003 incrementality signal) survives the prognostic rework."""
+        merged = self._generated()
+        t_rate = merged[~merged["control_group_flag"]]["action_bin"].mean()
+        c_rate = merged[merged["control_group_flag"]]["action_bin"].mean()
+        assert t_rate > c_rate, "treatment arm must keep a higher action rate"
+        assert 0.04 <= t_rate - c_rate <= 0.12, (
+            f"arm contrast drifted: treatment={t_rate:.3f} control={c_rate:.3f}"
+        )
+
+    def test_assignment_stays_randomized_wrt_baselines(self):
+        """Guard (#1188 non-goal): baselines must NOT influence arm assignment.
+        Control share is ~28% in BOTH severity strata."""
+        merged = self._generated()
+        for sev in (2.0, 8.0):
+            stratum = merged[merged["disease_severity"] == sev]
+            share = stratum["control_group_flag"].mean()
+            assert 0.24 <= share <= 0.32, (
+                f"severity={sev}: control share {share:.3f} suggests assignment "
+                "depends on a baseline — that would destroy the RCT"
+            )
+
+    def test_missing_baselines_fall_back_to_arm_only(self):
+        """Backward-compat guard: patient frames WITHOUT baseline columns (every
+        pre-#1188 caller) still generate arm-conditioned action_taken in the
+        0.30/0.38 bands, with no exception."""
+        patient_df = _make_canonical_patient_df(n=2000)
+        config = GeneratorConfig(seed=42, n_records=len(patient_df))
+        df = TriggerGenerator(config, patient_df=patient_df).generate()
+        action_bin = df["action_taken"].notna()
+        t_rate = action_bin[~df["control_group_flag"]].mean()
+        c_rate = action_bin[df["control_group_flag"]].mean()
+        assert 0.34 <= t_rate <= 0.42
+        assert 0.26 <= c_rate <= 0.34
+
+    def test_action_generation_deterministic_per_seed(self):
+        """Guard: same seed => identical action_taken stream (reseed idempotency;
+        the prognostic term must only move the THRESHOLD, never consume extra
+        RNG draws)."""
+        a = self._generated(seed=7)["action_taken"]
+        b = self._generated(seed=7)["action_taken"]
+        assert a.fillna("<null>").tolist() == b.fillna("<null>").tolist()

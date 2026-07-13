@@ -789,3 +789,79 @@ class TestDegenerateQueryGuard:
         assert result["status"] == "failed"
         blob = f"{result.get('estimation_error', '')} {result.get('error_message', '')}"
         assert "egenerate" in blob  # "Degenerate"/"degenerate"
+
+
+class TestEfficiencyBaselineEstimation:
+    """#1188: an RCT question (empty adjustment set) with curated PRE-TREATMENT
+    baselines runs the covariate estimators as EFFICIENCY controls (ANCOVA-style
+    variance reduction): estimators fit (not skipped), the result is labeled
+    adjustment_type='efficiency' with the baseline list, and the de-confounding
+    set stays honestly empty."""
+
+    def _prognostic_frame(self, n=1500, seed=0):
+        import numpy as np
+        import pandas as pd
+
+        rng = np.random.default_rng(seed)
+        t = (rng.random(n) < 0.5).astype(int)
+        sev = rng.normal(0.0, 1.0, n)
+        y = (0.3 * t + 1.0 * sev + rng.normal(0, 0.3, n)).astype(float)
+        data = pd.DataFrame(
+            {
+                "control_group_flag": t,
+                "action_taken": y,
+                "disease_severity": sev,
+                "age_at_diagnosis": rng.integers(18, 86, n).astype(float),
+            }
+        )
+        naive = float(y[t == 1].mean() - y[t == 0].mean())
+        return data, naive
+
+    @pytest.mark.heavy_ml
+    def test_baselines_flow_as_efficiency_controls_and_label(self):
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        data, naive = self._prognostic_frame()
+        node = EstimationNode()
+        result, _sel, _lat = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="control_group_flag",
+            outcome="action_taken",
+            adjustment_set=[],  # RCT: empty backdoor stays correct
+            strategy="best_energy",
+            baseline_covariates=["disease_severity", "age_at_diagnosis"],
+        )
+
+        assert result["adjustment_type"] == "efficiency"
+        assert result["baseline_covariates_adjusted"] == [
+            "disease_severity",
+            "age_at_diagnosis",
+        ]
+        # De-confounding set stays EMPTY — baselines are not confounders.
+        assert result["covariates_adjusted"] == []
+        # Covariate estimators actually fit (not skipped-not-applicable).
+        evaluated = result["all_estimators_evaluated"]
+        assert not any(e.get("skipped") for e in evaluated), evaluated
+        # The naive foil remains the raw randomized contrast.
+        if result.get("naive_ate") is not None:
+            assert result["naive_ate"] == pytest.approx(naive, abs=1e-9)
+        # Unbiasedness: reported (adjusted) ATE ~= raw contrast.
+        assert result["ate"] == pytest.approx(naive, abs=0.08)
+
+    @pytest.mark.heavy_ml
+    def test_no_baselines_keeps_empty_backdoor_semantics(self):
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        data, naive = self._prognostic_frame(seed=1)
+        node = EstimationNode()
+        result, _sel, _lat = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="control_group_flag",
+            outcome="action_taken",
+            adjustment_set=[],
+            strategy="best_energy",
+        )
+        assert result["adjustment_type"] == "none"
+        assert result.get("baseline_covariates_adjusted", []) == []
+        assert result["selected_estimator"] == "ols"
+        assert result["ate"] == pytest.approx(naive, abs=1e-9)

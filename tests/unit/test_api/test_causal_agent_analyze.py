@@ -582,3 +582,83 @@ async def test_agent_analyze_passes_expanded_geo_dummies_as_covariates():
     # Treatment/outcome are never covariates.
     assert "treatment_arm" not in captured["covariates"]
     assert "persistent_180d" not in captured["covariates"]
+
+
+# ---------------------------------------------------------------------------
+# #1188: opt-in RCT baseline (ANCOVA) adjustment — request flag + honest
+# response labeling (efficiency vs confounding).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_adjust_baselines_request_field_defaults_false():
+    """Baseline adjustment is OPT-IN: the default request must keep today's
+    unadjusted RCT behavior."""
+    req = _req()
+    assert req.adjust_baselines is False
+    on = AgentCausalAnalysisRequest(
+        treatment_var="control_group_flag",
+        outcome_var="action_taken",
+        dataset="nba_triggers",
+        adjust_baselines=True,
+    )
+    assert on.adjust_baselines is True
+
+
+@pytest.mark.unit
+def test_adjustment_type_and_baselines_map_to_response():
+    """An efficiency run must reach the client labeled as VARIANCE REDUCTION —
+    never as confounding adjustment — with the baseline set it adjusted for."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["estimation_result"].update(
+        {
+            "adjustment_type": "efficiency",
+            "baseline_covariates_adjusted": ["disease_severity", "age_at_diagnosis"],
+        }
+    )
+    resp = _agent_state_to_response(
+        analysis_id="e1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=37541,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.adjustment_type == "efficiency"
+    assert resp.baseline_covariates == ["disease_severity", "age_at_diagnosis"]
+
+
+@pytest.mark.unit
+def test_adjustment_type_defaults_none_for_legacy_states():
+    """Old agent states carry no adjustment_type — the response must surface
+    None (unknown), never fabricate a label."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    resp = _agent_state_to_response(
+        analysis_id="l1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=100,
+        final_state=_base_state(),
+        latency_ms=5,
+    )
+    assert resp.adjustment_type is None
+    assert resp.baseline_covariates == []
+
+
+@pytest.mark.unit
+def test_variables_response_carries_baseline_candidates_field():
+    from src.api.schemas.causal import CausalVariablesResponse
+
+    resp = CausalVariablesResponse(
+        dataset="nba_triggers",
+        treatment_candidates=["control_group_flag"],
+        outcome_candidates=["action_taken"],
+        covariate_candidates=[],
+        baseline_candidates=["disease_severity", "age_at_diagnosis"],
+        columns=["control_group_flag", "action_taken"],
+        labels={},
+    )
+    assert resp.baseline_candidates == ["disease_severity", "age_at_diagnosis"]
