@@ -57,3 +57,17 @@ def test_user_row_never_stamped(captured):
     # user persist must not consume the accumulator either
     _persist_message_sync(SESSION, "assistant", "answer")
     assert captured[1]["tokens_used"] == 15
+
+
+def test_model_used_key_reserved_for_response_derived_stamp():
+    """Guard (#1210): 'model_used' means the model that actually served the
+    call — the drain-accumulator column stamp above. Config-derived intent
+    (f"{provider}:{MODEL_MAPPINGS...}") must ride metadata as
+    'configured_model', never 'model_used', so stored rows can't claim a
+    model that provider fallback or mapping drift didn't actually use."""
+    import inspect
+
+    import src.api.routes.copilotkit as ck
+
+    source = inspect.getsource(ck)
+    assert '"model_used": f"{provider}' not in source
