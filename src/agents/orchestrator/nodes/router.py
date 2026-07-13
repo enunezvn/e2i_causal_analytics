@@ -161,14 +161,20 @@ class RouterNode:
                 fallback_agent="explainer",
             )
         ],
-        # Tier 0: Patient cohort construction for ML pipelines
+        # Tier 0: cohort/segment chat queries → population profiling with REAL
+        # per-segment counts. Routed to cohort_profiler, NOT cohort_constructor:
+        # the latter materializes patient rows for the ML pipeline and cannot run
+        # from a chat payload (it fell through to a dead-end whose explainer
+        # fallback also failed closed — verified by container replay). No fallback:
+        # profiling either has real data or fails closed honestly; an explainer
+        # fallback would only re-fail with nothing to explain.
         "cohort_definition": [
             AgentDispatch(
-                agent_name="cohort_constructor",
+                agent_name="cohort_profiler",
                 priority="critical",
-                parameters={"validation_mode": "strict"},
-                timeout_ms=120000,  # SLA: <120s for 100K patients
-                fallback_agent="explainer",
+                parameters={},
+                timeout_ms=30000,  # ≤8 sequential DB-backed KPI calls per brand
+                fallback_agent=None,
             )
         ],
     }

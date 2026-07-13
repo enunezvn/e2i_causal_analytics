@@ -243,6 +243,11 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
         # Generate timestamps across the date range
         timestamps = self._generate_timestamps(n_values)
 
+        # Age is measured against the dataset frontier (deterministic), NOT the
+        # wall clock — otherwise two identically-seeded generations disagree on
+        # rows sitting exactly on a boundary (see _freshness_reference).
+        freshness_ref = self._freshness_reference()
+
         for i in range(n_values):
             # Generate entity values
             entity_values = self._generate_entity_values(entity_keys)
@@ -252,7 +257,7 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
 
             # Determine freshness based on timestamp age
             ts = timestamps[i]
-            age_hours = (datetime.now() - ts).total_seconds() / 3600
+            age_hours = (freshness_ref - ts).total_seconds() / 3600
             if age_hours < 24:
                 freshness = "fresh"
             elif age_hours < 168:  # 7 days
@@ -313,6 +318,31 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
 
         timestamps = [end - timedelta(seconds=float(offset)) for offset in offsets]
         return sorted(timestamps)
+
+    def _freshness_reference(self) -> datetime:
+        """Deterministic 'as-of' instant that freshness age is measured against.
+
+        Freshness is the age of a row's event_timestamp relative to the dataset's
+        frontier (``end_date`` / ``anchor_reference``) — NOT ``datetime.now()``.
+
+        Using the wall clock made freshness non-deterministic: two identically
+        seeded generations run milliseconds apart, and any row whose age sits
+        exactly on the 24h/168h boundary flips fresh↔stale↔expired as the clock
+        advances between them. That flaked ``test_week_cohort_is_deterministic``
+        (the timestamps themselves are seeded and stable; only freshness moved).
+
+        Anchoring to the configured frontier makes freshness a pure function of
+        the seeded timestamps and matches the data-frontier anchoring the rest of
+        the substrate uses (mig 089): a calendar-fixed synthetic row reads "fresh"
+        when it is recent relative to its OWN frontier, not relative to how long
+        ago the seed happened to run. Timestamp generation is unchanged — it keeps
+        its own wall-clock clamp so it never emits a future ``event_timestamp``
+        (the DB CHECK event_timestamp <= now(), #852).
+        """
+        if self.config.anchor_to_now:
+            ref = self.config.anchor_reference or date.today()
+            return datetime.combine(ref, datetime.max.time())
+        return datetime.combine(self.config.end_date, datetime.max.time())
 
     def _generate_entity_values(self, entity_keys: List[str]) -> Dict:
         """Generate entity values for given keys."""

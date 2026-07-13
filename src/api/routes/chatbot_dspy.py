@@ -184,8 +184,8 @@ if DSPY_AVAILABLE:
         """
         Route user queries to the appropriate E2I tier agent.
 
-        The E2I system has 21 agents organized in 6 tiers:
-        - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector, cohort_constructor)
+        The E2I system has 22 agents organized in 6 tiers:
+        - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector, cohort_constructor, cohort_profiler)
         - Tier 1: Orchestration (orchestrator, tool_composer)
         - Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
         - Tier 3: Monitoring (drift_monitor, experiment_designer, experiment_monitor, health_score)
@@ -204,6 +204,7 @@ if DSPY_AVAILABLE:
         - resource_optimizer: Resource allocation, optimization recommendations
         - explainer: Natural language explanations, summaries, interpretations
         - feedback_learner: Learns from feedback, improves over time
+        - cohort_profiler: Profiles the eligible patient population for a brand — size plus severity-tier and line-of-therapy breakdowns (chat-facing; cohort_constructor materializes the actual patient list)
         """
 
         query: str = dspy.InputField(desc="User's query to route to an agent")
@@ -678,6 +679,7 @@ CHATBOT_DSPY_ROUTING_ENABLED = os.getenv("CHATBOT_DSPY_ROUTING", "true").lower()
 # Valid agents for routing
 VALID_AGENTS = {
     "cohort_constructor",
+    "cohort_profiler",
     "causal_impact",
     "gap_analyzer",
     "heterogeneous_optimizer",
@@ -706,6 +708,14 @@ AGENT_CAPABILITIES = {
         "create cohort",
         "define cohort",
     ],
+    "cohort_profiler": [
+        "population breakdown",
+        "eligible population",
+        "population size",
+        "how many patients",
+        "cohort profile",
+        "population profile",
+    ],
     "causal_impact": ["why", "cause", "caused", "effect", "impact", "driver", "factor", "causal"],
     "gap_analyzer": ["gap", "opportunity", "roi", "underperforming", "potential", "growth"],
     "heterogeneous_optimizer": ["segment", "cate", "heterogeneous", "subgroup", "treatment effect"],
@@ -729,9 +739,10 @@ def _normalize_agent(agent: str) -> str:
 
     # Handle common variations
     mappings = {
-        "cohort": "cohort_constructor",
+        "cohort": "cohort_profiler",
         "cohort_builder": "cohort_constructor",
-        "patient_cohort": "cohort_constructor",
+        "patient_cohort": "cohort_profiler",
+        "cohort_profile": "cohort_profiler",
         "causal": "causal_impact",
         "causal_analysis": "causal_impact",
         "gap": "gap_analyzer",

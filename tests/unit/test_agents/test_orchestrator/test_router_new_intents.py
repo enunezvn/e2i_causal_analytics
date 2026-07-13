@@ -66,4 +66,6 @@ async def test_router_still_handles_existing_cohort_intent() -> None:
     }
     result = await router.execute(state)
     plan = result["dispatch_plan"]
-    assert plan[0]["agent_name"] == "cohort_constructor"
+    # Re-pointed to cohort_profiler (chat companion with real per-segment counts);
+    # cohort_constructor is the ML-pipeline agent and can't run from a chat payload.
+    assert plan[0]["agent_name"] == "cohort_profiler"

@@ -880,9 +880,11 @@ class TestNormalizeAgent:
 
     def test_cohort_variations(self):
         """Test cohort agent variations."""
-        assert _normalize_agent("cohort") == "cohort_constructor"
+        assert _normalize_agent("cohort") == "cohort_profiler"
         assert _normalize_agent("cohort_builder") == "cohort_constructor"
-        assert _normalize_agent("patient_cohort") == "cohort_constructor"
+        assert _normalize_agent("patient_cohort") == "cohort_profiler"
+        assert _normalize_agent("cohort_profile") == "cohort_profiler"
+        assert _normalize_agent("cohort_profiler") == "cohort_profiler"
 
     def test_unknown_defaults_to_explainer(self):
         """Test unknown agent defaults to explainer."""
@@ -948,6 +950,11 @@ class TestRouteAgentHardcoded:
         """Test cohort keywords route to cohort_constructor."""
         primary, _, _, _ = route_agent_hardcoded("Build a patient cohort")
         assert primary == "cohort_constructor"
+
+    def test_population_keywords_route_to_cohort_profiler(self):
+        """Population-profiling keywords route to cohort_profiler (chat breakdown)."""
+        primary, _, _, _ = route_agent_hardcoded("What is the eligible population size?")
+        assert primary == "cohort_profiler"
 
     def test_explain_keywords_route_to_explainer(self):
         """Test explain keywords route to explainer."""
@@ -1059,6 +1066,7 @@ class TestConstants:
             "explainer",
             "feedback_learner",
             "cohort_constructor",
+            "cohort_profiler",
         ]
         for agent in expected_agents:
             assert agent in VALID_AGENTS

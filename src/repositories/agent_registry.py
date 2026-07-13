@@ -35,8 +35,8 @@ class AgentRegistryRepository(BaseRepository):
     """
     Repository for agent_registry table.
 
-    Roster: 21 agents (source of truth = src/agents/factory.py AGENT_REGISTRY_CONFIG):
-    - Tier 0: scope_definer, cohort_constructor, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
+    Roster: 22 agents (source of truth = src/agents/factory.py AGENT_REGISTRY_CONFIG):
+    - Tier 0: scope_definer, cohort_constructor, cohort_profiler, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
     - Tier 1: orchestrator, tool_composer
     - Tier 2: causal_impact, gap_analyzer, heterogeneous_optimizer
     - Tier 3: drift_monitor, experiment_designer, experiment_monitor, health_score

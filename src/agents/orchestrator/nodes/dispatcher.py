@@ -1181,6 +1181,59 @@ def _resolve_feedback_learner_input(
     return out
 
 
+def _resolve_cohort_constructor_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """cohort_constructor (Tier 0) always fails closed from a chat dispatch.
+
+    Its ``run(patient_df, brand, ...)`` entry point requires a real patient
+    ``DataFrame`` plus a brand/indication config to apply FDA/EMA eligibility
+    filters — inputs the conversational orchestrator payload never carries. It is
+    a pipeline agent (scope_definer → cohort_constructor → data_preparer) driven
+    by structured study parameters, not a free-text query, and was deliberately
+    never added to ``AGENT_METHOD_MAP`` (Tier 1–5 conversational agents only).
+
+    Without this resolver a routed cohort query fell through to the default
+    ``analyze`` method the agent doesn't implement, leaking the raw "registered
+    but has no method 'analyze'. Check AGENT_METHOD_MAP" registry error straight
+    to the user. Failing closed here — the resolver runs BEFORE the method lookup
+    (`_dispatch_agent`) — returns an actionable message and fabricates nothing
+    (#814); it self-activates into real execution the moment the ML pipeline (not
+    chat) supplies the structured inputs, so nothing needs revisiting later.
+    """
+    return NeedsStructuredInput(
+        agent_name="cohort_constructor",
+        missing=("patient_df", "brand"),
+        reason=(
+            "cohort construction applies clinical eligibility filters to a real "
+            "patient dataset for a specific brand/indication, which a chat query "
+            "cannot supply"
+        ),
+        rest_endpoint="the ML cohort pipeline (scope_definer → cohort_constructor)",
+    )
+
+
+def _resolve_cohort_profiler_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Ground ``cohort_profiler``'s brand from the chat context; never fail closed.
+
+    cohort_profiler answers a chat cohort query with REAL per-segment counts, so
+    it needs no structured upload — only an optional brand. We bind the brand the
+    NLP layer / chat caller supplied (``parsed_query.entities`` → ``user_context``,
+    via :func:`_extract_brand_region`, canonicalised inside the agent); when none
+    is named the agent profiles every supported brand rather than fabricate a
+    default. Unlike cohort_constructor (which materializes patient rows and fails
+    closed from chat), profiling always has real data to report, so this resolver
+    always returns inputs.
+    """
+    brand, _region = _extract_brand_region(agent_input)
+    out: Dict[str, Any] = {"query": agent_input.get("query") or ""}
+    if brand:
+        out["brand"] = brand
+    return out
+
+
 # Single source of truth: agent_name -> input resolver. Add a resolver here, not
 # an ``if`` branch in ``_dispatch_agent`` (#F12/F13/F14).
 INPUT_RESOLVERS: Dict[str, InputResolver] = {
@@ -1189,6 +1242,13 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "heterogeneous_optimizer": _resolve_heterogeneous_optimizer_input,
     "resource_optimizer": _resolve_resource_optimizer_input,
     "prediction_synthesizer": _resolve_prediction_synthesizer_input,
+    # Tier-0 pipeline agent reachable via chat routing (VALID_AGENTS) but not
+    # executable from a chat payload — fails closed instead of the raw registry
+    # "no method 'analyze'" error (see resolver docstring).
+    "cohort_constructor": _resolve_cohort_constructor_input,
+    # Tier-0 chat companion: grounds an optional brand, then profiles the eligible
+    # population by real per-segment KPI counts (COHORT_DEFINITION routes here).
+    "cohort_profiler": _resolve_cohort_profiler_input,
     # #883 §3 — the last three ``uses_kwargs`` agents with neither a resolver
     # nor an input_model (the generic-payload splat raised TypeError on every
     # chat dispatch): explainer (the 'explanation' primary AND universal
@@ -1231,6 +1291,10 @@ _FAIL_CLOSED_ON_FAILED_STATUS = frozenset(
         "explainer",
         "health_score",
         "feedback_learner",
+        # Emits status="failed" only on a genuine empty/error state (no
+        # prescribing population, calculator unavailable) — must fail closed
+        # rather than launder an empty profile into a success.
+        "cohort_profiler",
     }
 )
 

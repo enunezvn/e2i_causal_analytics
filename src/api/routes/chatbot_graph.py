@@ -908,7 +908,7 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
     Route complex queries through the orchestrator for agent dispatch.
 
     The orchestrator provides:
-    - Multi-agent coordination (21 agents across 6 tiers)
+    - Multi-agent coordination (22 agents across 6 tiers)
     - Tool composer for multi-faceted queries
     - Specialized agent dispatch (causal_impact, experiment_designer, etc.)
 
