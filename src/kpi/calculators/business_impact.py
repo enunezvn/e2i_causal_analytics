@@ -22,6 +22,8 @@ from src.kpi.models import (
     Workstream,
 )
 from src.kpi.synthetic_mode import (
+    biologic_query_id,
+    ige_tier_query_id,
     line_query_id,
     region_query_id,
     resolve_kpi_query_id,
@@ -29,6 +31,17 @@ from src.kpi.synthetic_mode import (
     windowed_axis_query_id,
     windowed_query_id,
 )
+
+# Brands for which the biologic-status / IgE-tertile axes are REAL. The
+# ``biologic_experienced`` and ``ige_level`` columns are populated ONLY for these
+# brands in the DGP (``clinical_codes.BRAND_ELIGIBILITY_FIELDS`` -- Remibrutinib /
+# CSU); every other brand is 100% NULL by design. A breakdown on those axes for a
+# non-eligible brand would be fabricated, so the calculator fails closed rather
+# than return a silent 0 (which is indistinguishable from a genuine zero). Kept
+# as a local constant (not imported from the synthetic DGP module) to keep the
+# serving path decoupled -- a consistency test locks it to the SSOT, mirroring
+# ``causal._BRAND_CLINICAL_COVARIATES``.
+_BIOLOGIC_AXIS_BRANDS: frozenset[str] = frozenset({"Remibrutinib"})
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -143,6 +156,35 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if result and isinstance(result[0], dict) and result[0].get("data_through") is not None:
             context["data_through"] = result[0]["data_through"]
 
+    @staticmethod
+    def _guard_brand_scoped_axis(axis_label: str, brand: str | None) -> None:
+        """Fail closed when a biologic-status / IgE breakdown is requested for a
+        brand whose DGP does not populate those columns.
+
+        ``biologic_experienced`` and ``ige_level`` are REAL only for
+        :data:`_BIOLOGIC_AXIS_BRANDS` (Remibrutinib / CSU); every other brand is
+        100% NULL by design. Rather than return a silent 0 (indistinguishable
+        from a genuine zero), raise so BOTH ``/api/kpis`` and the chatbot surface
+        an explicit "not available for <brand>" -- parity with the #1216 refusal
+        to fabricate a biologic/IgE sub-population. The membership check is
+        case-insensitive; the underlying SQL ``brand::text = $1`` is
+        case-sensitive, so a canonical-cased brand ("Remibrutinib") is expected.
+        """
+        eligible = ", ".join(sorted(_BIOLOGIC_AXIS_BRANDS))
+        norm = (brand or "").strip()
+        if not norm:
+            raise RuntimeError(
+                f"{axis_label} breakdown requires a brand and is available only for "
+                f"{eligible}: the biologic-status / IgE columns are unpopulated for "
+                f"every other brand by design."
+            )
+        if norm.title() not in _BIOLOGIC_AXIS_BRANDS:
+            raise RuntimeError(
+                f"{axis_label} breakdown is not available for {norm}: biologic-status / "
+                f"IgE data exists only for {eligible} (other brands are 100% NULL by "
+                f"design -- reporting a split would fabricate it)."
+            )
+
     def _resolve_windowed_call(
         self,
         base_query_id: str,
@@ -152,26 +194,32 @@ class BusinessImpactCalculator(KPICalculatorBase):
         window: dict[str, Any] | None,
         segment: str | None = None,
         therapy_line: int | str | None = None,
+        biologic: str | None = None,
+        ige_tier: str | None = None,
     ) -> tuple[str, list[Any]]:
         """Compose (query_id, positional params) for a windowable KPI.
 
         Param order respects the kpi_query 4-param cap:
           no axis, no region:  [brand, start, end]
           region:               [brand, region, start, end]
-          segment/therapy_line: [brand, axis_value(, start, end)]
+          segment/therapy_line/biologic/ige_tier: [brand, axis_value(, start, end)]
         With no window, falls back to the existing base / _region behavior.
 
-        PRECEDENCE (migration 105): a patient-segment axis (severity tier via
-        ``segment``, line-of-therapy via ``therapy_line``) takes precedence
-        over ``region`` and the two are NEVER combined -- the kpi_query RPC
-        caps positional params at 4, so brand+region+axis+window can't all
-        fit in one statement. Within the axis family, ``segment`` takes
-        precedence over ``therapy_line`` if a caller somehow supplies both.
-        Region-scoped-AND-segment-scoped reads would need a follow-up
-        migration (a 5th param slot). ``therapy_line`` is checked via
-        ``is not None`` (not truthiness) because line 0 is a real,
-        commonly-populated bucket -- ``if therapy_line:`` would silently drop
-        it.
+        PRECEDENCE (migrations 105/108): a patient axis -- severity tier
+        (``segment``), line-of-therapy (``therapy_line``), biologic status
+        (``biologic``), or IgE tertile (``ige_tier``) -- takes precedence over
+        ``region`` and NONE are ever combined: the kpi_query RPC caps positional
+        params at 4, so brand+region+axis+window can't all fit in one statement.
+        Within the axis family the order is segment > therapy_line > biologic >
+        ige_tier if a caller somehow supplies more than one. Region-scoped-AND-
+        axis-scoped reads would need a follow-up migration (a 5th param slot).
+        ``therapy_line`` is checked via ``is not None`` (not truthiness) because
+        line 0 is a real, commonly-populated bucket -- ``if therapy_line:`` would
+        silently drop it.
+
+        The biologic/ige_tier axes are brand-gated (columns exist only for
+        :data:`_BIOLOGIC_AXIS_BRANDS`); :meth:`_guard_brand_scoped_axis` fails
+        closed for any other brand BEFORE a query is built.
         """
         if segment is not None:
             if window is None:
@@ -186,6 +234,22 @@ class BusinessImpactCalculator(KPICalculatorBase):
             return (
                 windowed_axis_query_id(base_query_id, axis="line"),
                 [brand, therapy_line, window["start"], window["end"]],
+            )
+        if biologic is not None:
+            self._guard_brand_scoped_axis("biologic-status", brand)
+            if window is None:
+                return biologic_query_id(base_query_id), [brand, biologic]
+            return (
+                windowed_axis_query_id(base_query_id, axis="biologic"),
+                [brand, biologic, window["start"], window["end"]],
+            )
+        if ige_tier is not None:
+            self._guard_brand_scoped_axis("IgE-tier", brand)
+            if window is None:
+                return ige_tier_query_id(base_query_id), [brand, ige_tier]
+            return (
+                windowed_axis_query_id(base_query_id, axis="ige_tier"),
+                [brand, ige_tier, window["start"], window["end"]],
             )
         if window is None:
             if region:
@@ -286,6 +350,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=context.get("window"),
             segment=context.get("segment"),
             therapy_line=context.get("therapy_line"),
+            biologic=context.get("biologic"),
+            ige_tier=context.get("ige_tier"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -312,6 +378,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=context.get("window"),
             segment=context.get("segment"),
             therapy_line=context.get("therapy_line"),
+            biologic=context.get("biologic"),
+            ige_tier=context.get("ige_tier"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -341,6 +409,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=context.get("window"),
             segment=context.get("segment"),
             therapy_line=context.get("therapy_line"),
+            biologic=context.get("biologic"),
+            ige_tier=context.get("ige_tier"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -372,6 +442,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=None,
             segment=context.get("segment"),
             therapy_line=context.get("therapy_line"),
+            biologic=context.get("biologic"),
+            ige_tier=context.get("ige_tier"),
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)

@@ -58,6 +58,29 @@ class KPICalculationContext(BaseModel):
             "105) are used."
         ),
     )
+    biologic: str | None = Field(
+        default=None,
+        description=(
+            "Filter by biologic status ('naive' or 'experienced'), from "
+            "patient_journeys.biologic_experienced. AVAILABLE FOR REMIBRUTINIB "
+            "ONLY (the column is 100% NULL for other brands by design) -- a "
+            "biologic breakdown for any other brand fails closed rather than "
+            "return a fabricated split. Mutually exclusive with "
+            "region/segment/therapy_line/ige_tier (RPC 4-param cap). When set, "
+            "biologic-status-scoped KPI query variants (migration 108) are used."
+        ),
+    )
+    ige_tier: str | None = Field(
+        default=None,
+        description=(
+            "Filter by IgE tertile ('low', 'medium', 'high') -- data-driven "
+            "tertiles of patient_journeys.ige_level (NOT a clinical threshold). "
+            "AVAILABLE FOR REMIBRUTINIB ONLY (100% NULL for other brands); a "
+            "breakdown for any other brand fails closed. Mutually exclusive with "
+            "region/segment/therapy_line/biologic (RPC 4-param cap). When set, "
+            "IgE-tertile-scoped KPI query variants (migration 108) are used."
+        ),
+    )
     extra: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional context parameters",
