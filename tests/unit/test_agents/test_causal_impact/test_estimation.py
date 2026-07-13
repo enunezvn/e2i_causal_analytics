@@ -845,8 +845,11 @@ class TestEfficiencyBaselineEstimation:
         # The naive foil remains the raw randomized contrast.
         if result.get("naive_ate") is not None:
             assert result["naive_ate"] == pytest.approx(naive, abs=1e-9)
-        # Unbiasedness: reported (adjusted) ATE ~= raw contrast.
-        assert result["ate"] == pytest.approx(naive, abs=0.08)
+        # Unbiasedness: the adjusted ATE recovers the PLANTED tau=0.3. (It can
+        # legitimately differ from the raw contrast by the chance-imbalance
+        # correction beta*d(sev) — with a strongly prognostic baseline that
+        # correction is exactly what ANCOVA is for, so compare to truth.)
+        assert result["ate"] == pytest.approx(0.3, abs=0.08)
 
     @pytest.mark.heavy_ml
     def test_no_baselines_keeps_empty_backdoor_semantics(self):

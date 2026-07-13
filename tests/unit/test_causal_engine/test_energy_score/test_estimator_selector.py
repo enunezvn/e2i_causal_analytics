@@ -1392,8 +1392,10 @@ class TestEfficiencyControls:
         assert dml_width < ols_width, (
             f"adjusted CI must be narrower: dml={dml_width:.4f} ols={ols_width:.4f}"
         )
-        # Unbiasedness: adjusted point stays ~= the raw randomized contrast.
-        assert dml.ate == pytest.approx(diff, abs=0.06)
+        # Unbiasedness: the adjusted point recovers the PLANTED tau=0.3 (it may
+        # differ from the raw contrast by the chance-imbalance correction — the
+        # very thing baseline adjustment is for on a strongly prognostic x1).
+        assert dml.ate == pytest.approx(0.3, abs=0.06)
 
 
 class TestHonestAteCi:

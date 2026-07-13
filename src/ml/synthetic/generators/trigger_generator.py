@@ -39,6 +39,50 @@ _PRIORITY_LIFT_FACTOR = {"critical": 1.3, "high": 1.3, "medium": 1.0, "low": 0.7
 # with TR-001 precision ~0.38-0.43 CRITICAL from the same table+window.
 _P_FALSE_POSITIVE_MARKED = 0.60
 
+# #1188 (WS2-TR-003 + nba_triggers RCT): arm-conditioned, baseline-PROGNOSTIC
+# action probability. Arm assignment stays a pure coin flip (~28% control) —
+# the RCT's empty backdoor is untouched — but P(action | arm) now also depends
+# on PRE-TREATMENT patient baselines (disease_severity primary,
+# age_at_diagnosis secondary). This plants the prognostic outcome signal an
+# ANCOVA-style baseline adjustment exploits for variance reduction (measured
+# on the planted DGP: baseline R^2 ~0.1 -> the adjusted ATE interval is ~10%
+# narrower than the unadjusted diff-in-means while both stay unbiased).
+# Balanced across arms by construction => the ~8pp arm contrast is preserved
+# (clipping erodes it slightly; the realized WS2-TR-003 relative uplift stays
+# above the 0.15 YAML target). Mirrored by migration 106 for live rows.
+_P_ACTION_CONTROL = 0.30
+_P_ACTION_TREATMENT = 0.38
+_ACTION_SEVERITY_SLOPE = 0.12  # per severity unit, centered at 5.0 (~N(5,2))
+_ACTION_SEVERITY_CENTER = 5.0
+_ACTION_AGE_SLOPE = -0.002  # per year, centered at 50 (uniform 18-85)
+_ACTION_AGE_CENTER = 50.0
+_ACTION_P_FLOOR = 0.02
+_ACTION_P_CEIL = 0.95
+
+
+def _prognostic_action_probability(
+    arm_base: float, disease_severity: object, age_at_diagnosis: object
+) -> float:
+    """P(action present | arm, baselines) for one trigger.
+
+    Missing / non-numeric baselines fall back to the arm base (pre-#1188
+    callers pass patient frames without baseline columns). Only the THRESHOLD
+    changes with baselines — callers must keep their single RNG draw so the
+    per-record stream shape stays reseed-deterministic.
+    """
+    p = arm_base
+    try:
+        if disease_severity is not None and not pd.isna(disease_severity):
+            p += _ACTION_SEVERITY_SLOPE * (float(disease_severity) - _ACTION_SEVERITY_CENTER)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if age_at_diagnosis is not None and not pd.isna(age_at_diagnosis):
+            p += _ACTION_AGE_SLOPE * (float(age_at_diagnosis) - _ACTION_AGE_CENTER)
+    except (TypeError, ValueError):
+        pass
+    return float(min(max(p, _ACTION_P_FLOOR), _ACTION_P_CEIL))
+
 
 class TriggerGenerator(BaseGenerator[pd.DataFrame]):
     """
@@ -312,14 +356,21 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
 
         # #577 WS2-TR-003: randomized control-arm holdout + arm-conditioned
         # action_taken. This generator is the LOADER OF RECORD for triggers (via
-        # scripts/load_synthetic_data.py), so it must mirror migration 051 +
+        # scripts/load_synthetic_data.py), so it must mirror migrations 051/106 +
         # data_generator.py or a fresh load reverts action_taken to all-NULL and
         # re-breaks the metric. control_group_flag=True => CONTROL (NBA withheld);
         # False => TREATMENT (NBA shown). Treatment draws a higher P(action
         # present) than control so a real incrementality signal exists; the
         # registry query COMPUTES the realized uplift — these P's only seed data.
+        # #1188: the probability is additionally PROGNOSTIC on the patient's
+        # pre-treatment baselines (same single draw — stream shape unchanged;
+        # assignment stays a pure coin flip).
         control_group_flag = bool(self._rng.random() < 0.28)
-        p_action = 0.30 if control_group_flag else 0.38
+        p_action = _prognostic_action_probability(
+            _P_ACTION_CONTROL if control_group_flag else _P_ACTION_TREATMENT,
+            patient.get("disease_severity"),
+            patient.get("age_at_diagnosis"),
+        )
         action_taken = (
             str(self._rng.choice(["called_patient", "scheduled_visit", "sent_info"]))
             if self._rng.random() < p_action
@@ -582,8 +633,14 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         # (mirrors _generate_trigger_record + migration 051). control_group_flag=True =>
         # CONTROL (NBA withheld); False => TREATMENT (NBA shown). Treatment draws a higher
         # P(action present) than control so a real incrementality signal exists.
+        # #1188: deliberately NOT baseline-prognostic here — standalone triggers
+        # fabricate patient_ids with no patient_journeys row to join baselines
+        # from, so a prognostic term would be unobservable noise. The prognostic
+        # substrate lives on the LINKED path (the load path of record).
         control_group_flags = self._rng.random(n) < 0.28
-        action_present = self._rng.random(n) < np.where(control_group_flags, 0.30, 0.38)
+        action_present = self._rng.random(n) < np.where(
+            control_group_flags, _P_ACTION_CONTROL, _P_ACTION_TREATMENT
+        )
         action_choices = self._rng.choice(
             ["called_patient", "scheduled_visit", "sent_info"], size=n
         )

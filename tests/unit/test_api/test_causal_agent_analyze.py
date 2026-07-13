@@ -543,8 +543,11 @@ async def test_agent_analyze_passes_expanded_geo_dummies_as_covariates():
 
     captured: dict = {}
 
-    async def _fake_task(analysis_id, request, df, covariates, data_source):
+    async def _fake_task(
+        analysis_id, request, df, covariates, data_source, baseline_covariates=None
+    ):
         captured["covariates"] = covariates
+        captured["baseline_covariates"] = baseline_covariates
 
     req = AgentCausalAnalysisRequest(
         treatment_var="treatment_arm",

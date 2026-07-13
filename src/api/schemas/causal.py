@@ -384,6 +384,14 @@ class CausalVariablesResponse(BaseModel):
     covariate_candidates: List[str] = Field(
         default_factory=list, description="Columns valid as covariates/confounders"
     )
+    baseline_candidates: List[str] = Field(
+        default_factory=list,
+        description=(
+            "#1188: curated PRE-TREATMENT baseline covariates available for "
+            "opt-in RCT variance reduction (ANCOVA-style efficiency adjustment, "
+            "NOT de-confounding). Empty for observational datasets."
+        ),
+    )
     columns: List[str] = Field(
         default_factory=list, description="All columns present in the dataset sample"
     )
@@ -466,6 +474,18 @@ class AgentCausalAnalysisRequest(BaseModel):
         ),
     )
     brand: Optional[str] = Field(default=None, description="Optional brand context")
+    adjust_baselines: bool = Field(
+        default=False,
+        description=(
+            "#1188: OPT-IN. On a randomized dataset with a curated baseline "
+            "role (nba_triggers), join the pre-treatment baselines from "
+            "patient_journeys and let the covariate estimators use them as "
+            "EFFICIENCY controls (ANCOVA-style variance reduction — tighter "
+            "intervals, unchanged unbiased point estimate). 400 on datasets "
+            "without a baseline role. Default False keeps the unadjusted RCT "
+            "behavior."
+        ),
+    )
     # 1500 keeps the default (Causal Forest) run tractable async (~4 min); the
     # planted effect is clearly recovered at this size (probe: p~0 at 1200 rows).
     limit: int = Field(1500, ge=100, le=20000, description="Max rows to load")
@@ -651,6 +671,23 @@ class AgentCausalAnalysisResponse(BaseModel):
             "naive_ate - ate: how much the unadjusted estimate was inflated by "
             "confounding (> 0 means the naive estimate overstated the effect). "
             "None when no naive contrast applies."
+        ),
+    )
+    adjustment_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "#1188: what covariate adjustment MEANT for this run — "
+            "'confounding' (observational de-biasing), 'efficiency' (RCT "
+            "baseline variance reduction: the point estimate is unbiased with "
+            "or without adjustment; the interval is tightened), 'none' "
+            "(unadjusted contrast), or None for legacy results (unknown)."
+        ),
+    )
+    baseline_covariates: List[str] = Field(
+        default_factory=list,
+        description=(
+            "#1188: pre-treatment baseline columns adjusted for efficiency "
+            "(empty unless adjustment_type == 'efficiency')."
         ),
     )
     selected_estimator: Optional[str] = Field(

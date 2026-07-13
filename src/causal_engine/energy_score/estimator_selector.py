@@ -120,6 +120,36 @@ _EMPTY_BACKDOOR_SKIP_REASON = (
 )
 
 
+def _honest_ate_ci(
+    model: Any, X: Optional[NDArray[np.float64]]
+) -> Optional[tuple[float, float, float]]:
+    """Population ATE SAMPLING interval from econml's ``ate_inference``.
+
+    Returns ``(ci_lower, ci_upper, stderr_mean)`` or None when the estimator
+    exposes no inference (the caller must then surface an honest absent CI,
+    NEVER a fabricated one).
+
+    Why this exists (#1188): the previous ``effect_inference(X).conf_int_mean()``
+    call raises AttributeError on econml 0.16 (``effect_inference`` returns
+    ``NormalInferenceResults``; ``conf_int_mean`` lives on
+    ``PopulationSummaryResults``), so every wrapper silently fell into an
+    ``ate ± 1.96·std(cate)/sqrt(n)`` fallback. That quantity is the spread of
+    the HETEROGENEOUS effect distribution divided by sqrt(n) — not a sampling
+    interval for the ATE — and measured ~50x too narrow (0.0008 vs an MC-truth
+    ~0.043 on a planted DGP). ``ate_inference(X).conf_int_mean()`` is the
+    calibrated population-ATE interval (validated against a seed-varied Monte
+    Carlo; CausalForestDML's is a conservative upper bound by construction).
+    """
+    try:
+        pop = model.ate_inference(X) if X is not None else model.ate_inference()
+        lo, hi = pop.conf_int_mean()
+        stderr = float(np.squeeze(pop.stderr_mean))
+        return float(np.squeeze(lo)), float(np.squeeze(hi)), stderr
+    except Exception as e:  # noqa: BLE001 — absence of inference is a valid state
+        logger.warning(f"ATE inference unavailable ({type(e).__name__}: {e}); CI omitted.")
+        return None
+
+
 class SelectionStrategy(str, Enum):
     """Strategy for selecting among estimators."""
 
@@ -218,6 +248,13 @@ class SelectionResult:
     exceeded_max_energy_score: bool = False
     requires_review: bool = False
 
+    # #1188: what the covariates MEAN for this run. "confounding" = a non-empty
+    # backdoor was adjusted (observational de-biasing); "efficiency" = a
+    # randomized/empty-backdoor design where curated pre-treatment baselines
+    # entered as variance-reduction controls (ANCOVA-style precision — the
+    # point estimate is unbiased either way); "none" = unadjusted contrast.
+    adjustment_type: str = "none"
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
         return {
@@ -233,6 +270,7 @@ class SelectionResult:
             "n_estimators_succeeded": sum(1 for r in self.all_results if r.success),
             "exceeded_max_energy_score": self.exceeded_max_energy_score,
             "requires_review": self.requires_review,
+            "adjustment_type": self.adjustment_type,
         }
 
 
@@ -380,16 +418,15 @@ class CausalForestWrapper(BaseEstimatorWrapper):
             # Get estimates
             cate = model.effect(X)
             ate = float(np.mean(cate))
-            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
 
-            # Get confidence intervals
-            try:
-                ate_inf = model.effect_inference(X)
-                ci = ate_inf.conf_int_mean()
-                ate_ci_lower, ate_ci_upper = float(ci[0]), float(ci[1])
-            except Exception:
-                ate_ci_lower = ate - 1.96 * ate_std
-                ate_ci_upper = ate + 1.96 * ate_std
+            # Population ATE SAMPLING interval (honest; #1188). For the forest
+            # this is a conservative upper bound (RMS of pointwise stderrs) —
+            # wide is honest, the old fake-narrow fallback was not.
+            inference = _honest_ate_ci(model, X)
+            if inference is not None:
+                ate_ci_lower, ate_ci_upper, ate_std = inference
+            else:
+                ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Estimate propensity scores for energy score
             from sklearn.linear_model import LogisticRegressionCV
@@ -473,16 +510,13 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
             # Get estimates
             cate = model.effect(X)
             ate = float(np.mean(cate))
-            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
 
-            # Confidence intervals
-            try:
-                ate_inf = model.effect_inference(X)
-                ci = ate_inf.conf_int_mean()
-                ate_ci_lower, ate_ci_upper = float(ci[0]), float(ci[1])
-            except Exception:
-                ate_ci_lower = ate - 1.96 * ate_std
-                ate_ci_upper = ate + 1.96 * ate_std
+            # Population ATE SAMPLING interval (honest; #1188).
+            inference = _honest_ate_ci(model, X)
+            if inference is not None:
+                ate_ci_lower, ate_ci_upper, ate_std = inference
+            else:
+                ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
@@ -541,12 +575,18 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
 
         try:
             from econml.dr import DRLearner
+            from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
             from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
+            # model_final is the LINEAR statsmodels regression (not GBR): it is
+            # the only final stage exposing prediction stderr, i.e. the only way
+            # DRLearner yields an honest population-ATE sampling interval
+            # (#1188). Nuisances (outcome regression + propensity) stay
+            # gradient-boosted; only the CATE(X) surface becomes linear-in-X.
             model = DRLearner(
                 model_regression=GradientBoostingRegressor(n_estimators=50, random_state=42),
                 model_propensity=GradientBoostingClassifier(n_estimators=50, random_state=42),
-                model_final=GradientBoostingRegressor(n_estimators=50, random_state=42),
+                model_final=StatsModelsLinearRegression(),
                 random_state=42,
             )
             X = covariates.values
@@ -554,9 +594,14 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
 
             cate = model.effect(X)
             ate = float(np.mean(cate))
-            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
-            ate_ci_lower = ate - 1.96 * ate_std
-            ate_ci_upper = ate + 1.96 * ate_std
+
+            # Population ATE SAMPLING interval (honest; #1188). The previous
+            # ate ± 1.96·std(cate)/sqrt(n) was a heterogeneity spread, not a CI.
+            inference = _honest_ate_ci(model, X)
+            if inference is not None:
+                ate_ci_lower, ate_ci_upper, ate_std = inference
+            else:
+                ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
@@ -1157,6 +1202,8 @@ class EstimatorSelector:
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
+        *,
+        efficiency_controls: Optional[pd.DataFrame] = None,
         **kwargs,
     ) -> SelectionResult:
         """
@@ -1165,7 +1212,15 @@ class EstimatorSelector:
         Args:
             treatment: Binary treatment indicator
             outcome: Observed outcomes
-            covariates: Covariate DataFrame
+            covariates: DE-CONFOUNDING covariate DataFrame (the backdoor
+                adjustment set; zero-width on a randomized design)
+            efficiency_controls: #1188 — curated PRE-TREATMENT baselines for a
+                randomized (empty-backdoor) design. Ignored unless ``covariates``
+                is empty. When present, the covariate estimators fit on these
+                controls FOR PRECISION (ANCOVA-style variance reduction —
+                randomization already guarantees unbiasedness) while OLS keeps
+                the zero-width frame and anchors the comparison at the raw
+                unadjusted difference-in-means.
             **kwargs: Additional arguments passed to estimators
 
         Returns:
@@ -1183,10 +1238,25 @@ class EstimatorSelector:
         # feature(s)"), so skip them with an honest not-applicable reason rather
         # than surfacing that raw traceback per-estimator in the UI comparison.
         empty_backdoor = covariates.shape[1] == 0
+        efficiency_mode = (
+            empty_backdoor
+            and efficiency_controls is not None
+            and efficiency_controls.shape[1] > 0
+        )
+        if efficiency_mode:
+            adjustment_type = "efficiency"
+        elif not empty_backdoor:
+            adjustment_type = "confounding"
+        else:
+            adjustment_type = "none"
 
         # Evaluate each estimator
         for wrapper in self.estimators:
-            if empty_backdoor and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
+            if (
+                empty_backdoor
+                and not efficiency_mode
+                and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE
+            ):
                 logger.info(
                     "Skipping %s: empty backdoor (0 covariates) — not applicable.",
                     wrapper.estimator_type.value,
@@ -1204,7 +1274,15 @@ class EstimatorSelector:
 
             logger.info(f"Evaluating {wrapper.estimator_type.value}...")
 
-            result = wrapper.fit(treatment, outcome, covariates, **kwargs)
+            # Efficiency mode: covariate estimators absorb the baselines as
+            # X=W controls (their mean CATE is the standardized MARGINAL ATE);
+            # the empty-backdoor-capable anchor (OLS) keeps the zero-width
+            # frame so its estimate stays the raw unadjusted contrast.
+            fit_frame = covariates
+            if efficiency_mode and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
+                fit_frame = efficiency_controls  # type: ignore[assignment]
+
+            result = wrapper.fit(treatment, outcome, fit_frame, **kwargs)
 
             # Compute energy score for successful estimations
             if result.success and result.cate is not None:
@@ -1217,7 +1295,10 @@ class EstimatorSelector:
                     energy_result = self.energy_calculator.compute(
                         treatment=treatment,
                         outcome=outcome,
-                        covariates=covariates,
+                        # The frame the estimator actually conditioned on
+                        # (efficiency mode hands baselines to the covariate
+                        # estimators while OLS keeps the zero-width anchor).
+                        covariates=fit_frame,
                         estimated_effects=result.cate,
                         propensity_scores=result.propensity_scores,
                         estimator_name=wrapper.estimator_type.value,
@@ -1264,6 +1345,7 @@ class EstimatorSelector:
             total_time_ms=total_time,
             energy_scores=energy_scores,
             energy_score_gap=energy_score_gap,
+            adjustment_type=adjustment_type,
         )
 
     def _build_selection_result(
@@ -1273,6 +1355,7 @@ class EstimatorSelector:
         total_time_ms: float,
         energy_scores: Optional[dict[str, float]] = None,
         energy_score_gap: float = 0.0,
+        adjustment_type: str = "none",
     ) -> SelectionResult:
         """Assemble a SelectionResult and compute the M-est3 reliability gate.
 
@@ -1291,12 +1374,13 @@ class EstimatorSelector:
             selected=selection,
             selection_strategy=self.config.strategy,
             all_results=results,
-            selection_reason=self._get_selection_reason(selection, results),
+            selection_reason=self._get_selection_reason(selection, results, adjustment_type),
             total_time_ms=total_time_ms,
             energy_scores=energy_scores,
             energy_score_gap=energy_score_gap,
             exceeded_max_energy_score=exceeded,
             requires_review=exceeded,
+            adjustment_type=adjustment_type,
         )
 
     def _select_best_energy(self, results: list[EstimatorResult]) -> EstimatorResult:
@@ -1415,7 +1499,10 @@ class EstimatorSelector:
         )
 
     def _get_selection_reason(
-        self, selected: EstimatorResult, all_results: list[EstimatorResult]
+        self,
+        selected: EstimatorResult,
+        all_results: list[EstimatorResult],
+        adjustment_type: str = "none",
     ) -> str:
         """Generate human-readable selection reason."""
         if not selected.success:
@@ -1423,6 +1510,25 @@ class EstimatorSelector:
 
         successful = [r for r in all_results if r.success]
         skipped = [r for r in all_results if r.skipped]
+
+        # #1188 efficiency mode: a randomized design where pre-treatment
+        # baselines entered as variance-reduction controls. Frame the covariate
+        # estimators as PRECISION tools — randomization already de-biases; the
+        # unadjusted OLS contrast stays the unbiased anchor. (Deliberately no
+        # de-biasing language here — that would misstate what adjustment does
+        # on an RCT.)
+        if adjustment_type == "efficiency":
+            best_line = (
+                f"Selected {selected.estimator_type.value} by lowest energy score. "
+                if selected.estimator_type not in _EMPTY_BACKDOOR_CAPABLE
+                else f"Selected the unadjusted contrast ({selected.estimator_type.value}). "
+            )
+            return best_line + (
+                "Randomized design: baseline covariates enter only for variance "
+                "reduction (ANCOVA-style precision — they tighten the interval "
+                "while randomization keeps every point estimate unbiased); the "
+                "unadjusted contrast (ols) remains the reference anchor."
+            )
 
         # Empty-backdoor (randomized / exogenous treatment) case: the covariate-
         # requiring estimators were skipped as not-applicable, so the unadjusted
