@@ -263,7 +263,6 @@ export default function CausalAnalysis() {
       ),
     [variables, treatmentVar, outcomeVar]
   );
-<<<<<<< HEAD
   // #1188: curated PRE-TREATMENT baselines (RCT grains only). When present the
   // panel offers an OPT-IN variance-reduction adjustment — distinct from the
   // confounders above, which de-bias observational questions.
@@ -274,7 +273,6 @@ export default function CausalAnalysis() {
   useEffect(() => {
     setAdjustBaselines(false);
   }, [dataset]);
-=======
   // Split the adjustment set for display: generic cross-brand confounders vs
   // the selected brand's own indication biomarkers (server-classified via the
   // brand-independent clinical_biomarkers union — no hardcoded column list).
@@ -284,7 +282,6 @@ export default function CausalAnalysis() {
   );
   const genericConfounders = confounders.filter((c) => !biomarkerSet.has(c));
   const brandBiomarkers = confounders.filter((c) => biomarkerSet.has(c));
->>>>>>> origin/main
   // Keep the manual panel's treatment/outcome valid for the active dataset. The
   // candidate sets are dataset-specific (e.g. HCP's only outcome is `adopted`,
   // Trigger's treatments are control_group_flag/acceptance_status), so the
