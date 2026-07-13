@@ -425,20 +425,35 @@ class InterpretationNode:
             ),
         ]
 
-        # Assumptions
-        assumptions_made = [
-            "No unmeasured confounding (given observed covariates)",
-            "Positivity: All subgroups have non-zero treatment probability",
-            "SUTVA: No interference between units",
-            "Correct causal graph specification",
-        ]
-
-        # Limitations
-        limitations = [
-            "Analysis based on observational data, not randomized experiment",
-            "E-value indicates potential for unmeasured confounding",
-            "Assumes causal graph accurately represents true relationships",
-        ]
+        # Assumptions / limitations are DESIGN-aware: a genuinely randomized
+        # treatment (state.randomized_design, declared by the API layer from
+        # the dataset spec) makes "no unmeasured confounding" a design
+        # GUARANTEE, not an assumption — and claiming the analysis is
+        # observational would be plainly false for the RCT holdout.
+        if state.get("randomized_design"):
+            assumptions_made = [
+                "Randomized treatment assignment (no unmeasured confounding by design)",
+                "Positivity: All subgroups have non-zero treatment probability",
+                "SUTVA: No interference between units",
+                "Correct causal graph specification",
+            ]
+            limitations = [
+                "Randomized experiment: E-value reported for information only "
+                "(unmeasured confounding of assignment excluded by design)",
+                "Assumes randomization was executed as designed (no assignment leakage)",
+            ]
+        else:
+            assumptions_made = [
+                "No unmeasured confounding (given observed covariates)",
+                "Positivity: All subgroups have non-zero treatment probability",
+                "SUTVA: No interference between units",
+                "Correct causal graph specification",
+            ]
+            limitations = [
+                "Analysis based on observational data, not randomized experiment",
+                "E-value indicates potential for unmeasured confounding",
+                "Assumes causal graph accurately represents true relationships",
+            ]
 
         # Recommendations — GROUNDED in the actual treatment -> outcome, the
         # estimated direction/magnitude, and the brand (the user asked HOW). See

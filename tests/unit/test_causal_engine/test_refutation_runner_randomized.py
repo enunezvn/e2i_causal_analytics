@@ -150,3 +150,28 @@ class TestSkippedEvalueGateMechanics:
         runner = RefutationRunner()
         decision = runner._determine_gate_decision(self._tests(), confidence_score=1.0)
         assert decision == GateDecision.PROCEED
+
+    def test_legacy_format_omits_skipped_tests(self):
+        """A SKIPPED (not-applicable) test must NOT appear in individual_tests:
+        the legacy dict is pass/fail-shaped (``passed: bool``), so a skipped
+        e-value would render as a red FAILED row in the FE while total_tests
+        already excludes it (the #1205 misleading-state class). Absent key →
+        every consumer three-states to None/not-narrated."""
+        from src.causal_engine.refutation_runner import RefutationSuite
+
+        suite = RefutationSuite(
+            passed=True,
+            confidence_score=1.0,
+            tests=self._tests(),
+            gate_decision=GateDecision.PROCEED,
+        )
+        legacy = suite.to_legacy_format()
+        assert "unobserved_common_cause" not in legacy["individual_tests"]
+        assert set(legacy["individual_tests"]) == {
+            "placebo_treatment",
+            "random_common_cause",
+            "data_subset",
+            "bootstrap",
+        }
+        assert legacy["total_tests"] == 4
+        assert legacy["tests_passed"] == 4

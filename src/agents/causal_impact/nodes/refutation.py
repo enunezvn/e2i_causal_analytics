@@ -820,6 +820,11 @@ class RefutationNode:
                 estimate=estimate,
                 deadline=deadline,
                 per_refit_hint=per_refit_hint,
+                # DESIGN declaration from the API layer (dataset spec): a
+                # genuinely randomized treatment reports the E-value as
+                # information instead of an unmeasured-confounding BLOCK gate.
+                # Fail-closed: absent/False keeps the full observational gate.
+                randomized_design=bool(state.get("randomized_design")),
             )
 
             # Convert to legacy format for backward compatibility
