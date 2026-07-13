@@ -876,6 +876,48 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
+# --- Brand-aware clinical covariate gating (Phase 2) --------------------------------
+# After the DGP brand-gating (src.ml.synthetic.clinical_codes.BRAND_ELIGIBILITY_FIELDS)
+# the indication-specific clinical columns are populated ONLY for their own brand's
+# rows and NULL off-brand. Adjusting on a column that is NULL across the cohort feeds
+# NaN straight into EconML (`ValueError: Input contains NaN`) — so the adjustment set
+# must be brand-aware:
+#   * UNIVERSAL covariates are populated for EVERY brand's rows (never NULL) -> always safe.
+#   * a brand's own clinical covariates are safe ONLY when that brand is the row filter;
+#     for the all-brands cohort (brand=None) they are ~2/3 NULL, so they are excluded.
+# _BRAND_CLINICAL_COVARIATES is the numeric-adjustment SUBSET of the DGP SSOT
+# BRAND_ELIGIBILITY_FIELDS (test_brand_covariate_consistency locks the two together so
+# this map cannot silently drift from the generator's gating).
+_UNIVERSAL_COVARIATES: frozenset = frozenset(
+    {
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+        "academic_hcp",
+        "geographic_region",
+    }
+)
+_BRAND_CLINICAL_COVARIATES: Dict[str, frozenset] = {
+    "Remibrutinib": frozenset({"urticaria_severity_uas7"}),
+    "Kisqali": frozenset({"ecog_performance_status"}),
+    "Fabhalta": frozenset({"egfr", "proteinuria_g_day", "ldh_ratio"}),
+}
+# Union of every indication-specific clinical covariate — the columns that must be
+# dropped from the adjustment set unless the selected brand vouches for them.
+_ALL_CLINICAL_COVARIATES: frozenset = frozenset().union(*_BRAND_CLINICAL_COVARIATES.values())
+
+
+def _brand_scoped_covariates(covariates: List[str], brand: Optional[str]) -> List[str]:
+    """Drop indication-specific clinical covariates that are NULL for the selected
+    brand cohort (Phase 2 brand-gating). Universals and any non-clinical column pass
+    through unchanged; a brand's own clinical columns survive only when that brand is
+    the row filter. Order-preserving. brand=None (all-brands) keeps ONLY the universals
+    among the clinical set, since each clinical column is populated for just one brand.
+    """
+    valid_clinical = _BRAND_CLINICAL_COVARIATES.get(brand or "", frozenset())
+    return [c for c in covariates if c not in _ALL_CLINICAL_COVARIATES or c in valid_clinical]
+
+
 # Human-readable display labels for the curated columns (data-driven FE; keeps
 # the frontend free of a humanizer). Columns absent here fall back to the raw
 # name title-cased by the caller.
@@ -1236,7 +1278,10 @@ async def propose_causal_questions(
             ),
         )
 
-    covariates_all = list(spec["covariate"])
+    # Brand-agnostic screening: exclude the indication-specific clinical covariates
+    # (each is populated for only one brand, so cross-brand they are ~2/3 NaN and
+    # would poison the FWL residualization). Universals are always populated.
+    covariates_all = _brand_scoped_covariates(list(spec["covariate"]), None)
     pairs = [(t, o) for t in spec["treatment"] for o in spec["outcome"] if t != o]
 
     async def _score(t: str, o: str) -> Optional[ProposedQuestion]:
@@ -1341,7 +1386,10 @@ async def _discover_candidate_questions(
         # whose treatment AND outcome are in THIS dataset's spec. No-op for patient.
         if t not in spec["treatment"] or o not in spec["outcome"]:
             continue
-        adj = [c for c in r.get("confounders", []) if c in allowed_cov and c not in (t, o)]
+        adj = _brand_scoped_covariates(
+            [c for c in r.get("confounders", []) if c in allowed_cov and c not in (t, o)],
+            brand,
+        )
         out.append(
             _CandidateQuestion(treatment=t, outcome=o, brand=r.get("brand"), adjustment_set=adj)
         )
@@ -2125,6 +2173,30 @@ async def _load_agent_estimation_frame(
     import pandas as pd
 
     frame = pd.DataFrame(records)
+
+    # Defensive net (Phase 2 brand-gating): after gating, an off-brand clinical
+    # covariate can reach here 100% NULL (e.g. a stale/direct request that bypassed
+    # the brand-aware adjustment-set selection). An all-NULL covariate carries no
+    # information and would crash EconML ("Input contains NaN"), so drop it from the
+    # adjustment set — NEVER the treatment/outcome (those already drop rows on a
+    # missing value via _coerce_estimation_row).
+    protected = {treatment_var, outcome_var}
+    dropped_null = [
+        c
+        for c in select_cols
+        if c not in protected and c in frame.columns and bool(frame[c].isna().all())
+    ]
+    if dropped_null:
+        logger.warning(
+            "causal loader: dropping all-NULL covariate(s) %s for dataset '%s' "
+            "brand=%s (brand-gated off-brand clinical column)",
+            dropped_null,
+            dataset,
+            brand,
+        )
+        frame = frame.drop(columns=dropped_null)
+        select_cols = [c for c in select_cols if c not in dropped_null]
+
     requested_categoricals = [c for c in select_cols if c in categorical_cols]
     frame, dummy_names = _one_hot_categoricals(frame, requested_categoricals)
     expanded_cols = [c for c in select_cols if c not in categorical_cols] + dummy_names
@@ -2178,9 +2250,16 @@ async def run_causal_agent_analysis(
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
             ),
         )
+    # Brand-aware adjustment set (Phase 2): drop indication-specific clinical
+    # covariates that are NULL for this brand cohort so a gated off-brand column
+    # never reaches EconML as NaN. Applies to BOTH the analyst's explicit picks and
+    # the curated default. brand=None (all-brands) keeps universals only.
     covariates = [
         c
-        for c in (request.covariates if request.covariates is not None else spec["covariate"])
+        for c in _brand_scoped_covariates(
+            (request.covariates if request.covariates is not None else spec["covariate"]),
+            request.brand,
+        )
         if c not in (request.treatment_var, request.outcome_var)
     ]
 

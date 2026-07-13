@@ -76,11 +76,24 @@ def test_adherent_recoverable_under_causal_route_default_adjustment_set():
 
     Only Remibrutinib here (bound memory/time); the parametrized tests above cover
     all three brands with the hand-picked ARM_CONFOUNDERS.
+
+    Phase 2 brand-gating: the causal route now applies ``_brand_scoped_covariates``
+    to the allowlist before estimation, dropping indication-specific clinical
+    covariates that are NULL off-brand (a Remibrutinib cohort has NULL egfr /
+    proteinuria_g_day / ldh_ratio / ecog_performance_status after the DGP gating).
+    Feeding those all-NULL columns to EconML raises ``Input contains NaN``. This test
+    mirrors the production path exactly by brand-scoping the adjustment set to
+    Remibrutinib — so it now also proves the real brand-aware adjustment set recovers
+    the ATE on gated data.
     """
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _brand_scoped_covariates
 
     spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
     default_adj = [c for c in spec["covariate"] if c not in ("treatment_arm", "adherent_180d")]
+
+    # Mirror the causal route: brand-scope the adjustment set to the analyzed brand so
+    # off-brand clinical columns (NULL under the Phase 2 gating) never reach EconML.
+    default_adj = _brand_scoped_covariates(default_adj, "Remibrutinib")
 
     # geographic_region is categorical (string enum values) — the causal route
     # handles encoding separately from this probe. Filter it so recover_ate_and_cate

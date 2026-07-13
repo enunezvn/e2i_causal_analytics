@@ -153,6 +153,11 @@ TABLE_COLUMNS = {
         "complement_inhibitor_status",
         "proteinuria_g_day",
         "egfr",
+        # Phase 2 anti-IgE axis (migration 107) — Remibrutinib/CSU only, NULL for
+        # the oncology/PNH brands. Registered here so the loader carries them (an
+        # unregistered generator column is silently dropped at load, line ~885).
+        "biologic_experienced",
+        "ige_level",
         "data_split",
         # causal substrate (Shard 01 M2 DDL; values filled by Shard 03/06).
         # Emitted as NULL placeholders by PatientGenerator so validate_datasets

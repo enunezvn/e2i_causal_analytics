@@ -273,9 +273,11 @@ async def test_execute_defaults_optional_fields_when_absent(stub_request):
 async def test_execute_passes_clinical_contract_as_tier0_initial_state(
     stub_request, rich_graph_result
 ):
-    """The route must pass the loaded frame as tier0_data and set the fixed
-    clinical contract (effect_modifiers numeric, confounders=engagement_score
-    with NO X/W overlap, banded segment_vars, data_source=patient_journeys)."""
+    """The route must pass the loaded frame as tier0_data and set the (Phase 2
+    brand-aware) clinical contract. stub_request has brand=None (all brands), so the
+    indication-specific clinical columns — NULL off-brand after gating — are excluded:
+    effect_modifiers collapse to the universals, and ecog drops out of segment_vars.
+    engagement_score stays the W confounder (no X/W overlap); data_source unchanged."""
     frame = _make_stub_frame()
     captured = {}
 
@@ -304,18 +306,14 @@ async def test_execute_passes_clinical_contract_as_tier0_initial_state(
     assert captured["treatment_var"] == "treatment_arm"
     assert captured["outcome_var"] == "persistent_180d"
 
-    # effect_modifiers (X) = numeric clinical covariates, region NOT among them,
-    # and engagement_score NOT among them (it is the W confounder — no X/W overlap).
+    # brand=None: effect_modifiers (X) collapse to the universals (populated for every
+    # brand). The 5 indication-specific clinical modifiers are excluded because each
+    # is NULL for ~2/3 of an all-brands cohort after gating (would crash EconML).
     assert "geographic_region" not in captured["effect_modifiers"]
     assert set(captured["effect_modifiers"]) == {
         "disease_severity",
         "age_at_diagnosis",
         "academic_hcp",
-        "ecog_performance_status",
-        "egfr",
-        "proteinuria_g_day",
-        "ldh_ratio",
-        "urticaria_severity_uas7",
     }
 
     # confounders (W) = pure control engagement_score; must NOT also be in X
@@ -324,7 +322,52 @@ async def test_execute_passes_clinical_contract_as_tier0_initial_state(
     assert captured["confounders"] == ["engagement_score"]
     assert "engagement_score" not in captured["effect_modifiers"]
 
-    # segment_vars are the banded / raw categoricals.
+    # segment_vars are the banded / universal categoricals; ecog (clinical) drops for
+    # the all-brands cohort.
+    assert captured["segment_vars"] == [
+        "disease_severity_band",
+        "age_band",
+        "geographic_region",
+        "academic_hcp",
+    ]
+    assert "engagement_score" not in captured["segment_vars"]
+
+
+@pytest.mark.asyncio
+async def test_execute_brand_scoped_contract_includes_own_clinical(rich_graph_result):
+    """Phase 2: a single-brand request keeps THAT brand's clinical modifier/segment
+    dimension. Kisqali -> ecog_performance_status is a valid X and segment var; the
+    other brands' clinical columns (uas7, egfr, …) stay excluded (NULL for Kisqali)."""
+    request = RunSegmentAnalysisRequest(
+        query="Which Kisqali segments respond best?", brand="Kisqali"
+    )
+    frame = _make_stub_frame()
+    captured = {}
+    mock_graph = MagicMock()
+
+    async def _capture(initial_state):
+        captured.update(initial_state)
+        return rich_graph_result
+
+    mock_graph.ainvoke = AsyncMock(side_effect=_capture)
+    with (
+        _patch_loader(frame),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        await _execute_segment_analysis(request)
+
+    assert set(captured["effect_modifiers"]) == {
+        "disease_severity",
+        "age_at_diagnosis",
+        "academic_hcp",
+        "ecog_performance_status",
+    }
+    # No off-brand clinical column leaks in.
+    for off in ("egfr", "urticaria_severity_uas7", "ldh_ratio", "proteinuria_g_day"):
+        assert off not in captured["effect_modifiers"]
     assert captured["segment_vars"] == [
         "disease_severity_band",
         "age_band",
@@ -332,7 +375,6 @@ async def test_execute_passes_clinical_contract_as_tier0_initial_state(
         "ecog_performance_status",
         "academic_hcp",
     ]
-    assert "engagement_score" not in captured["segment_vars"]
 
 
 # =============================================================================
