@@ -140,6 +140,13 @@ TABLE_COLUMNS = {
         "treatment_initiated",
         "days_to_treatment",
         "age_at_diagnosis",
+        # T9 prognostic drivers (migration 087) — gold-standard model covariates.
+        # The base substrate got them via regenerate_cohort_outcomes.py --execute,
+        # but weekly frontier-append cohorts flow ONLY through this loader: left
+        # unregistered they were silently dropped (line ~889), so appended rows
+        # carried NULL and cohort scoring crashed on NaN (2026-07-14).
+        "comorbidity_burden",
+        "prior_therapy_lines",
         # Shard 04 M5 eligibility columns (migration 068). primary_diagnosis_code
         # pre-existed; the other 10 are cohort_constructor required_fields.
         "primary_diagnosis_code",
@@ -192,6 +199,10 @@ TABLE_COLUMNS = {
         "treatment_event_id",
         "patient_journey_id",
         "patient_id",
+        # FK -> hcp_profiles (generator draws from the loaded base HCP universe).
+        # Base rows carry it (~76%) and business_impact_hcp_reach counts DISTINCT
+        # hcp_id here; unregistered it was dropped for frontier-append cohorts.
+        "hcp_id",
         "brand",
         "event_date",
         "event_type",

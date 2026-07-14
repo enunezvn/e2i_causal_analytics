@@ -30,6 +30,31 @@ from src.api.routes import predictions as pred
 
 
 # =============================================================================
+# _native scalar conversion (no mocks, light import)
+# =============================================================================
+class TestNativeScalar:
+    """NaN -> None so a NULL holdout covariate rides the serving contract's
+    __isna missingness path instead of crashing httpx's ``allow_nan=False``
+    JSON encoding (the 2026-07-14 'Out of range float values' cohort failure)."""
+
+    def test_python_nan_becomes_none(self):
+        assert pred._native(float("nan")) is None
+
+    def test_numpy_nan_becomes_none(self):
+        import numpy as np
+
+        assert pred._native(np.float64("nan")) is None
+
+    def test_ordinary_values_pass_through(self):
+        import numpy as np
+
+        assert pred._native(np.float64(0.5)) == 0.5
+        assert pred._native(np.int64(3)) == 3
+        assert pred._native("northeast") == "northeast"
+        assert pred._native(None) is None
+
+
+# =============================================================================
 # Pure ranking + distribution (no mocks, light import)
 # =============================================================================
 class TestCohortRanking:
@@ -184,12 +209,20 @@ def test_resolve_cohort_spec_rejects_non_goldstd_model():
 # Full-app submit -> poll endpoint (imports app LAZILY -> CI; -k skip locally)
 # =============================================================================
 def _fake_holdout_frame() -> pd.DataFrame:
+    # Full T11 7-covariate set (cohort_spec._BASE7). p2's comorbidity_burden is
+    # NaN on purpose: a NULL holdout covariate must ride the NaN->None path in
+    # _native (JSON has no NaN) instead of failing the whole job — the
+    # 2026-07-14 production incident.
     return pd.DataFrame(
         {
             "patient_id": ["p1", "p2", "p3"],
             "disease_severity": [5.6, 2.1, 8.0],
             "academic_hcp": [0, 1, 0],
             "geographic_region": ["northeast", "west", "south"],
+            "insurance_type": ["commercial", "medicare", "medicaid"],
+            "age_at_diagnosis": [54, 71, 39],
+            "comorbidity_burden": [2.0, float("nan"), 1.0],
+            "prior_therapy_lines": [0, 3, 1],
         }
     )
 
@@ -239,6 +272,10 @@ class TestCohortScoreEndpoint:
             assert len(done["top_rows"]) == 2  # top_n
             assert "disease_severity" in done["top_rows"][0]["covariates"]
             assert done["distribution"]["n"] == 3
+            # The NaN covariate arrived as JSON null (None), not a crashed job.
+            by_id = {r["entity_id"]: r["covariates"] for r in done["top_rows"]}
+            if "p2" in by_id:
+                assert by_id["p2"]["comorbidity_burden"] is None
         finally:
             app.dependency_overrides.clear()
 

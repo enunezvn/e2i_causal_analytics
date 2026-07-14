@@ -15,6 +15,7 @@ Version: 1.0.0
 """
 
 import logging
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -1330,8 +1331,18 @@ def _resolve_cohort_spec(model_name: str):
 
 def _native(value: Any) -> Any:
     """Convert a numpy scalar to a native Python scalar so it is JSON-serializable
-    (the bentoml client posts ``json=``, which cannot encode numpy types)."""
-    return value.item() if hasattr(value, "item") else value
+    (the bentoml client posts ``json=``, which cannot encode numpy types).
+
+    NaN (a DB NULL covariate after ``to_dict("records")``) becomes None: JSON has
+    no NaN (httpx encodes with ``allow_nan=False`` and raises), and None rides the
+    serving contract's DESIGNED missingness path — the bundled FeatureBuilder
+    transform median-imputes and sets the ``<col>__isna`` flag, exactly as at fit
+    time. Crashing here instead turned one NULL holdout covariate into a failed
+    cohort-scoring job (2026-07-14)."""
+    value = value.item() if hasattr(value, "item") else value
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
 
 
 _cohort_score_store: "DurableJobStore[CohortScoreResponse]" = DurableJobStore(
