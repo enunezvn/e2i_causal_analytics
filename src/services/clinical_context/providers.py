@@ -17,6 +17,7 @@ from typing import Any, List, Optional, Protocol
 
 from src.services.clinical_context.brand_map import BrandClinicalProfile
 from src.services.clinical_context.clients import (
+    CTGovEndpoint,
     PubMedArticle,
 )
 
@@ -37,7 +38,7 @@ class MechanismFragment:
 
 @dataclass(frozen=True)
 class EndpointsFragment:
-    endpoints: List[str] = field(default_factory=list)
+    endpoints: List[CTGovEndpoint] = field(default_factory=list)
     source: str = "static_fallback"  # "clinicaltrials.gov" | "static_fallback"
 
 
@@ -75,7 +76,7 @@ class _ChEMBLLike(Protocol):
 class _CTGovLike(Protocol):
     def primary_endpoints(
         self, intervention: str, condition: str, *, limit: int = 8
-    ) -> List[str]: ...
+    ) -> List[CTGovEndpoint]: ...
 
 
 class _PubMedLike(Protocol):
@@ -178,11 +179,13 @@ class ClinicalTrialsEndpointProvider(ClinicalContextProvider):
             endpoints = []
         # Keep only efficacy endpoints; a live result that is all-safety degrades to
         # the curated efficacy fallback (the documented "only safety endpoints" path).
-        efficacy = [e for e in endpoints if not _is_safety_endpoint(e)]
+        efficacy = [e for e in endpoints if not _is_safety_endpoint(e.measure)]
         if efficacy:
             return EndpointsFragment(endpoints=efficacy, source="clinicaltrials.gov")
+        # Curated fallback strings have no source trial, so time_frame / nct_id are None.
         return EndpointsFragment(
-            endpoints=list(profile.pivotal_endpoints_fallback), source="static_fallback"
+            endpoints=[CTGovEndpoint(measure=m) for m in profile.pivotal_endpoints_fallback],
+            source="static_fallback",
         )
 
 

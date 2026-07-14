@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from src.services.clinical_context.brand_map import resolve_brand_profile
+from src.services.clinical_context.clients import CTGovEndpoint
 from src.services.clinical_context.providers import (
     ChEMBLMechanismProvider,
     ClinicalTrialsEndpointProvider,
@@ -32,7 +33,8 @@ class _FakeCTGov:
     def primary_endpoints(self, intervention, condition, *, limit=8):
         if isinstance(self._eps, Exception):
             raise self._eps
-        return list(self._eps)
+        # Accept bare measure strings for brevity; the real client returns CTGovEndpoint.
+        return [e if isinstance(e, CTGovEndpoint) else CTGovEndpoint(measure=e) for e in self._eps]
 
 
 class _FakePubMed:
@@ -76,7 +78,7 @@ def test_ctgov_provider_prefers_live_then_falls_back():
     live = ClinicalTrialsEndpointProvider(
         client=_FakeCTGov(["Transfusion avoidance", "LDH normalization"])
     ).enrich(profile)
-    assert live.endpoints == ["Transfusion avoidance", "LDH normalization"]
+    assert [e.measure for e in live.endpoints] == ["Transfusion avoidance", "LDH normalization"]
     assert live.source == "clinicaltrials.gov"
 
     from src.services.clinical_context.clients import ClinicalTrialsError
@@ -84,7 +86,9 @@ def test_ctgov_provider_prefers_live_then_falls_back():
     down = ClinicalTrialsEndpointProvider(client=_FakeCTGov(ClinicalTrialsError("503"))).enrich(
         profile
     )
-    assert down.endpoints == profile.pivotal_endpoints_fallback
+    assert [e.measure for e in down.endpoints] == list(profile.pivotal_endpoints_fallback)
+    # Curated fallback endpoints have no source trial.
+    assert all(e.time_frame is None and e.nct_id is None for e in down.endpoints)
     assert down.source == "static_fallback"
 
 
@@ -92,7 +96,7 @@ def test_ctgov_provider_prefers_live_then_falls_back():
 def test_ctgov_provider_empty_live_uses_fallback():
     profile = resolve_brand_profile("Remibrutinib")
     frag = ClinicalTrialsEndpointProvider(client=_FakeCTGov([])).enrich(profile)
-    assert frag.endpoints == profile.pivotal_endpoints_fallback
+    assert [e.measure for e in frag.endpoints] == list(profile.pivotal_endpoints_fallback)
     assert frag.source == "static_fallback"
 
 
@@ -143,9 +147,39 @@ def test_ctgov_provider_drops_safety_endpoints_keeps_efficacy():
         )
     ).enrich(profile)
     assert frag.source == "clinicaltrials.gov"
-    assert frag.endpoints == [
+    assert [e.measure for e in frag.endpoints] == [
         "Mean Change From Baseline in Weekly Urticaria Activity Score (UAS7) at Week 12"
     ]
+
+
+@pytest.mark.unit
+def test_ctgov_provider_carries_time_frame_and_nct_through_fragment():
+    """The provider must preserve each surviving endpoint's time_frame + nct_id (not
+    just the measure), and drop safety endpoints by their .measure text."""
+    profile = resolve_brand_profile("Remibrutinib")
+    frag = ClinicalTrialsEndpointProvider(
+        client=_FakeCTGov(
+            [
+                CTGovEndpoint(
+                    "Number of Participants With Treatment-emergent Adverse Events (AEs)",
+                    "Baseline up to 56 weeks",
+                    "NCT05048342",
+                ),
+                CTGovEndpoint(
+                    "Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12",
+                    "Baseline, Week 12",
+                    "NCT05030311",
+                ),
+            ]
+        )
+    ).enrich(profile)
+    assert frag.source == "clinicaltrials.gov"
+    # Safety endpoint dropped by .measure; the efficacy one survives WITH provenance.
+    assert [e.measure for e in frag.endpoints] == [
+        "Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12"
+    ]
+    assert frag.endpoints[0].time_frame == "Baseline, Week 12"
+    assert frag.endpoints[0].nct_id == "NCT05030311"
 
 
 @pytest.mark.unit
@@ -162,7 +196,7 @@ def test_ctgov_provider_all_safety_falls_back_to_curated_efficacy():
             ]
         )
     ).enrich(profile)
-    assert frag.endpoints == profile.pivotal_endpoints_fallback
+    assert [e.measure for e in frag.endpoints] == list(profile.pivotal_endpoints_fallback)
     assert frag.source == "static_fallback"
 
 

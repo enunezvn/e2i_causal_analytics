@@ -134,15 +134,33 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
               </Tooltip>
             </TooltipProvider>
           </div>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+          <ul className="mt-1 list-disc space-y-1 pl-5">
             {pivotal_endpoints.endpoints.map((ep) => (
-              <li key={ep}>{ep}</li>
+              <li key={ep.measure}>
+                <span>{ep.measure}</span>
+                {ep.time_frame && (
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Time frame: {ep.time_frame}
+                  </span>
+                )}
+                {ep.nct_id && (
+                  <a
+                    href={`https://clinicaltrials.gov/study/${ep.nct_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-0.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    {ep.nct_id}
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                )}
+              </li>
             ))}
           </ul>
-          {/* Interim provenance footnote (Fix B-1). Plain text, no links — the NCT
-              deep-link + structured time_frame arrive in the follow-up PR. Copy is
-              provenance-aware: it only claims CT.gov "verbatim" provenance when the
-              source actually IS the live ClinicalTrials.gov result. */}
+          {/* Provenance footnote. The per-endpoint time frame + NCT deep-link are
+              rendered inline above; this footnote adds the plain-language gloss (what
+              "Week N" / "Scenario N" mean). Copy is provenance-aware: it only claims
+              CT.gov "verbatim" provenance when the source IS the live CT.gov result. */}
           {endpointsFromCtgov ? (
             <p className="mt-1 text-xs text-muted-foreground">
               These are real primary endpoints from the drug&rsquo;s registered pivotal

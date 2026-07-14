@@ -12,6 +12,7 @@ import pytest
 from src.services.clinical_context.clients import (
     ClinicalTrialsClient,
     ClinicalTrialsError,
+    CTGovEndpoint,
     PubMedArticle,
     PubMedClient,
     PubMedError,
@@ -66,8 +67,115 @@ def test_clinical_trials_primary_endpoints_dedup_and_order() -> None:
 
     with _ctgov(handler) as client:
         eps = client.primary_endpoints("ribociclib", "breast cancer", limit=5)
-    # Deduped, first-seen order preserved.
-    assert eps == ["Overall Survival (OS)", "Progression-Free Survival (PFS)"]
+    # Deduped, first-seen order preserved (compared on the measure text).
+    assert [e.measure for e in eps] == [
+        "Overall Survival (OS)",
+        "Progression-Free Survival (PFS)",
+    ]
+    # First-seen study's NCT id rides along.
+    assert eps[0].nct_id == "NCT01"
+
+
+def test_clinical_trials_primary_endpoints_carry_time_frame_and_nct_id() -> None:
+    """Faithful replay of the live CT.gov v2 shape (verified live 2026-07-14 for
+    remibrutinib / CSU): each primary outcome carries a ``timeFrame`` and the study
+    carries its ``nctId`` under ``identificationModule`` — both must ride through as
+    structured ``CTGovEndpoint`` fields, not be discarded."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = request.url.query.decode("utf-8")
+        # The client must now REQUEST the time-frame field.
+        assert "PrimaryOutcomeTimeFrame" in q
+        return httpx.Response(
+            200,
+            json={
+                "studies": [
+                    {
+                        "protocolSection": {
+                            "identificationModule": {"nctId": "NCT05030311"},
+                            "outcomesModule": {
+                                "primaryOutcomes": [
+                                    {
+                                        "measure": (
+                                            "Change From Baseline in Weekly Urticaria "
+                                            "Score (UAS7) at Week 12 (Scenario 1 With "
+                                            "UAS7 as Primary Efficacy Endpoint)"
+                                        ),
+                                        "timeFrame": "Baseline, Week 12",
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                ]
+            },
+        )
+
+    with _ctgov(handler) as client:
+        eps = client.primary_endpoints("remibrutinib", "chronic spontaneous urticaria", limit=5)
+    assert len(eps) == 1
+    assert isinstance(eps[0], CTGovEndpoint)
+    assert eps[0].measure.startswith("Change From Baseline in Weekly Urticaria Score (UAS7)")
+    assert eps[0].time_frame == "Baseline, Week 12"
+    assert eps[0].nct_id == "NCT05030311"
+
+
+def test_clinical_trials_malformed_study_skipped_not_whole_batch() -> None:
+    """A malformed study (truthy non-dict protocolSection / nested module) must skip
+    only THAT study, not raise and drop the whole batch to the curated fallback. The
+    nested isinstance guards keep the well-formed studies' endpoints instead of losing
+    an entire live response because one study in it was malformed."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "studies": [
+                    # protocolSection is a non-dict (truthy string) -> skip study.
+                    {"protocolSection": "bad"},
+                    # outcomesModule is a non-dict -> skip study.
+                    {
+                        "protocolSection": {
+                            "identificationModule": {"nctId": "NCT_SKIP"},
+                            "outcomesModule": "bad",
+                        }
+                    },
+                    # identificationModule is a non-dict -> measure still surfaces,
+                    # nct_id degrades to None (not a crash).
+                    {
+                        "protocolSection": {
+                            "identificationModule": "bad",
+                            "outcomesModule": {
+                                "primaryOutcomes": [{"measure": "Duration of Response"}]
+                            },
+                        }
+                    },
+                    # Fully well-formed -> both fields ride through.
+                    {
+                        "protocolSection": {
+                            "identificationModule": {"nctId": "NCT_GOOD"},
+                            "outcomesModule": {
+                                "primaryOutcomes": [
+                                    {
+                                        "measure": "Overall Survival (OS)",
+                                        "timeFrame": "Up to 5 years",
+                                    }
+                                ]
+                            },
+                        }
+                    },
+                ]
+            },
+        )
+
+    with _ctgov(handler) as client:
+        eps = client.primary_endpoints("ribociclib", "breast cancer", limit=5)
+    # Malformed studies skipped; well-formed endpoints survive, first-seen order kept.
+    assert [e.measure for e in eps] == ["Duration of Response", "Overall Survival (OS)"]
+    # Bad identificationModule -> measure kept, nct_id None (graceful, not dropped).
+    assert eps[0].nct_id is None
+    assert eps[1].nct_id == "NCT_GOOD"
+    assert eps[1].time_frame == "Up to 5 years"
 
 
 def test_clinical_trials_empty_inputs_skip_network() -> None:

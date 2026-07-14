@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.clinical_context.clients import PubMedArticle
+from src.services.clinical_context.clients import CTGovEndpoint, PubMedArticle
 from src.services.clinical_context.providers import (
     CitationFragment,
     CompetitorFragment,
@@ -34,6 +34,12 @@ def _clear() -> None:
     reset_caches()
 
 
+def _eps(measures, source="clinicaltrials.gov"):
+    """Build an EndpointsFragment from bare measure strings (the real client returns
+    CTGovEndpoint; time_frame / nct_id default to None here)."""
+    return EndpointsFragment([CTGovEndpoint(m) for m in measures], source)
+
+
 def _service(moa_frag, ep_frag, cite_frag, counters=None, ind_frag=None, comp_frag=None):
     counters = counters or {}
     # Default the two new fragments to their live/intended sources so the existing
@@ -53,7 +59,7 @@ def test_get_context_assembles_all_three_sources():
     art = PubMedArticle(pmid="35642282", title="RWE", journal="J", doi="10.1/x")
     svc = _service(
         MechanismFragment("CDK4/6 inhibitor", "chembl"),
-        EndpointsFragment(["Overall Survival (OS)", "PFS"], "clinicaltrials.gov"),
+        _eps(["Overall Survival (OS)", "PFS"], "clinicaltrials.gov"),
         CitationFragment(art, "pubmed"),
     )
     ctx = svc.get_context("Kisqali", "persistent_180d")
@@ -62,7 +68,7 @@ def test_get_context_assembles_all_three_sources():
     assert ctx["disease"] == "Malignant neoplasm of breast"
     assert ctx["mechanism"]["mechanism_of_action"] == "CDK4/6 inhibitor"
     assert ctx["mechanism"]["source"] == "chembl"
-    assert ctx["pivotal_endpoints"]["endpoints"][0] == "Overall Survival (OS)"
+    assert ctx["pivotal_endpoints"]["endpoints"][0]["measure"] == "Overall Survival (OS)"
     assert ctx["pivotal_endpoints"]["source"] == "clinicaltrials.gov"
     # The synthetic outcome is mapped to the real endpoint framing.
     assert "persist" in ctx["mapped_endpoint"].lower()
@@ -80,10 +86,34 @@ def test_get_context_assembles_all_three_sources():
     assert ctx["competitor_landscape"]["source"] == "curated"
 
 
+def test_get_context_carries_endpoint_time_frame_and_nct():
+    """Structured endpoint provenance (time_frame + nct_id) must survive the service
+    payload assembly as a dict, not just the measure text."""
+    svc = _service(
+        MechanismFragment("BTK inhibitor", "chembl"),
+        EndpointsFragment(
+            [
+                CTGovEndpoint(
+                    "Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12",
+                    "Baseline, Week 12",
+                    "NCT05030311",
+                )
+            ],
+            "clinicaltrials.gov",
+        ),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Remibrutinib", "treatment_initiated")
+    ep = ctx["pivotal_endpoints"]["endpoints"][0]
+    assert ep["measure"].startswith("Change From Baseline in Weekly Urticaria Score (UAS7)")
+    assert ep["time_frame"] == "Baseline, Week 12"
+    assert ep["nct_id"] == "NCT05030311"
+
+
 def test_degrades_when_all_providers_fall_back():
     svc = _service(
         MechanismFragment("complement Factor B inhibitor", "static_fallback"),
-        EndpointsFragment(["Transfusion avoidance"], "static_fallback"),
+        _eps(["Transfusion avoidance"], "static_fallback"),
         CitationFragment(None, "unavailable"),
         ind_frag=IndicationsFragment(["PNH"], None, "boxed warning", "static_fallback"),
     )
@@ -101,7 +131,7 @@ def test_cache_is_per_brand_disease_not_per_outcome():
     counters = {"moa": {"n": 0}, "ep": {"n": 0}, "cite": {"n": 0}}
     svc = _service(
         MechanismFragment("CDK4/6 inhibitor", "chembl"),
-        EndpointsFragment(["OS"], "clinicaltrials.gov"),
+        _eps(["OS"], "clinicaltrials.gov"),
         CitationFragment(None, "unavailable"),
         counters,
     )
@@ -117,7 +147,7 @@ def test_cache_is_per_brand_disease_not_per_outcome():
 def test_unknown_brand_raises_keyerror():
     svc = _service(
         MechanismFragment("x", "static_fallback"),
-        EndpointsFragment([], "static_fallback"),
+        _eps([], "static_fallback"),
         CitationFragment(None, "unavailable"),
     )
     with pytest.raises(KeyError):
@@ -146,7 +176,7 @@ def test_degraded_result_self_heals_not_cached_permanently(monkeypatch):
 
     svc = ClinicalContextService(
         mechanism_provider=_HealingMechProvider(),
-        endpoints_provider=_StubProvider(EndpointsFragment(["UAS7"], "clinicaltrials.gov")),
+        endpoints_provider=_StubProvider(_eps(["UAS7"], "clinicaltrials.gov")),
         citation_provider=_StubProvider(CitationFragment(None, "unavailable")),
         indications_provider=_StubProvider(
             IndicationsFragment(["CSU"], "Not indicated for other forms", None, "openfda")
@@ -173,7 +203,7 @@ def test_fully_live_result_is_cached_indefinitely(monkeypatch):
     art = PubMedArticle(pmid="35642282", title="RWE", journal="J", doi="10.1/x")
     svc = _service(
         MechanismFragment("CDK4/6 inhibitor", "chembl"),
-        EndpointsFragment(["OS"], "clinicaltrials.gov"),
+        _eps(["OS"], "clinicaltrials.gov"),
         CitationFragment(art, "pubmed"),
         counters,
     )
@@ -195,7 +225,7 @@ def test_competitors_curated_does_not_block_fully_live_cache(monkeypatch):
     art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
     svc = _service(
         MechanismFragment("CDK4/6 inhibitor", "chembl"),
-        EndpointsFragment(["OS"], "clinicaltrials.gov"),
+        _eps(["OS"], "clinicaltrials.gov"),
         CitationFragment(art, "pubmed"),
         counters,
         ind_frag=IndicationsFragment(["BC"], None, None, "openfda"),
@@ -225,7 +255,7 @@ def test_openfda_down_degrades_and_self_heals(monkeypatch):
     art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
     svc = ClinicalContextService(
         mechanism_provider=_StubProvider(MechanismFragment("BTK inhibitor", "chembl")),
-        endpoints_provider=_StubProvider(EndpointsFragment(["UAS7"], "clinicaltrials.gov")),
+        endpoints_provider=_StubProvider(_eps(["UAS7"], "clinicaltrials.gov")),
         citation_provider=_StubProvider(CitationFragment(art, "pubmed")),
         indications_provider=_HealingIndProvider(),
         competitor_provider=_StubProvider(CompetitorFragment([], 0, "curated")),
