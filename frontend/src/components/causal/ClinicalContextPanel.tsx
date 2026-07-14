@@ -12,9 +12,23 @@
  * @module components/causal/ClinicalContextPanel
  */
 
-import { AlertTriangle, BookText, Building2, ExternalLink, FlaskConical, Stethoscope } from 'lucide-react';
+import {
+  AlertTriangle,
+  BookText,
+  Building2,
+  ExternalLink,
+  FlaskConical,
+  Info,
+  Stethoscope,
+} from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import type { ClinicalContext } from '@/types/causal';
 
 function sourceChip(source: string) {
@@ -62,6 +76,10 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
     approved_indications,
     competitor_landscape,
   } = context;
+  // Provenance-aware copy: the endpoint section renders for BOTH the live CT.gov
+  // result and the curated static fallback, so the explanatory text must not claim
+  // ClinicalTrials.gov / "verbatim" provenance when the source is the fallback.
+  const endpointsFromCtgov = pivotal_endpoints.source === 'clinicaltrials.gov';
   return (
     <div className="space-y-4 rounded-md border p-4">
       <div className="flex items-center gap-2">
@@ -97,12 +115,49 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
             <FlaskConical className="h-3.5 w-3.5" />
             Real pivotal endpoints
             {sourceChip(pivotal_endpoints.source)}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="About these trial endpoints"
+                    className="ml-0.5 inline-flex items-center text-muted-foreground hover:text-foreground"
+                  >
+                    <Info className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs font-normal">
+                  {endpointsFromCtgov
+                    ? 'Endpoint titles are shown verbatim from ClinicalTrials.gov. A time such as “Week 12” is measured from trial baseline, and “Scenario 1/2” marks the trial’s own pre-declared analysis scenario — not anything defined in this app.'
+                    : 'These are the disease’s established pivotal efficacy endpoints, shown as a curated reference because the live ClinicalTrials.gov lookup was unavailable.'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           <ul className="mt-1 list-disc space-y-0.5 pl-5">
             {pivotal_endpoints.endpoints.map((ep) => (
               <li key={ep}>{ep}</li>
             ))}
           </ul>
+          {/* Interim provenance footnote (Fix B-1). Plain text, no links — the NCT
+              deep-link + structured time_frame arrive in the follow-up PR. Copy is
+              provenance-aware: it only claims CT.gov "verbatim" provenance when the
+              source actually IS the live ClinicalTrials.gov result. */}
+          {endpointsFromCtgov ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              These are real primary endpoints from the drug&rsquo;s registered pivotal
+              trials (via ClinicalTrials.gov). A label like &ldquo;Week 12&rdquo; means 12
+              weeks after trial baseline &mdash; not a calendar date &mdash; and
+              &ldquo;Scenario 1/2&rdquo; refers to a trial&rsquo;s pre-specified analysis
+              scenario (e.g. which endpoint is primary), shown verbatim.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">
+              These are the disease&rsquo;s established pivotal efficacy endpoints, shown as
+              a curated reference because the live ClinicalTrials.gov lookup was
+              unavailable.
+            </p>
+          )}
         </div>
       )}
 
