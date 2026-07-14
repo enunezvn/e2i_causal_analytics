@@ -282,8 +282,26 @@ class PolicyLearnerNode:
         ci_lower = result.get("cate_ci_lower")
         ci_upper = result.get("cate_ci_upper")
 
-        # Determine recommended treatment rate change
-        current_rate = 0.5  # Assume current 50% coverage
+        # Current rate = the segment's OBSERVED treated share, measured by
+        # cate_estimator on the same rows the forest was fit on. The former flat
+        # 0.5 was an unmeasured scaffold assumption: live cohorts sit anywhere
+        # from ~15% (medicaid) to ~60% (high-severity), so both the displayed
+        # baseline and the DECREASE lift (which scales with current - 0.1) were
+        # fabricated. Results predating the field fall back to 0.5 — loudly, so
+        # a fabricated baseline never silently looks measured again.
+        raw_rate = result.get("treatment_rate")
+        if raw_rate is None:
+            logger.warning(
+                "CATE result carries no observed treatment_rate; falling back to "
+                "the legacy 50%% baseline assumption",
+                extra={
+                    "node": "policy_learner",
+                    "segment": f"{segment_name}={segment_value}",
+                },
+            )
+            current_rate = 0.5
+        else:
+            current_rate = float(raw_rate)
 
         if ci_lower is not None and ci_lower > ate and ci_lower > 0:
             # CI lies entirely ABOVE the ATE *and* above zero -> a significantly
@@ -292,10 +310,16 @@ class PolicyLearnerNode:
             # above a negative ATE but straddling zero has UNCONFIRMED benefit and
             # must not be escalated (review H2). On the common positive-ATE path
             # ci_lower > ate > 0 already implies ci_lower > 0, so this is a no-op.
-            recommended_rate = min(0.9, current_rate + 0.2)
+            # The outer max() keeps this monotone with a REAL baseline: a segment
+            # already treated above the 0.9 ceiling must be maintained, not
+            # nudged DOWN by the cap (a direction flip the flat 0.5 could never hit).
+            recommended_rate = max(current_rate, min(0.9, current_rate + 0.2))
         elif ci_upper is not None and ci_upper < 0:
             # CI lies entirely BELOW zero -> significantly harmful subgroup; minimise.
-            recommended_rate = 0.1
+            # min() rather than a flat 0.1: a segment already treated BELOW the
+            # 10% floor must stay where it is — raising it toward 0.1 would
+            # INCREASE exposure of a provably harmful subgroup.
+            recommended_rate = min(current_rate, 0.1)
         else:
             # Statistically average (CI overlaps the ATE) / not harmful — maintain.
             recommended_rate = current_rate

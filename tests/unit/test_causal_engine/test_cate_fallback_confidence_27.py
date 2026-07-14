@@ -66,15 +66,19 @@ async def test_cate_fallback_half_width_tracks_alpha():
     sigma = float(np.std(effects))
     assert sigma > 0  # guard: the test is only meaningful with real dispersion
 
+    # 25% treated share, planted so the observed treatment_rate is asserted below.
+    T = np.array(([1.0] + [0.0] * 3) * (n // 4))
+
     # alpha=0.05 (95% CI) -> half-width ~ 1.96 * sigma (legacy, unchanged)
-    res_95 = await node._calculate_cate_by_segment(df, cf, ["segment"], ["mod"], 0.05)
+    res_95 = await node._calculate_cate_by_segment(df, cf, ["segment"], ["mod"], 0.05, T)
     seg95 = res_95["segment"][0]
     hw_95 = seg95["cate_ci_upper"] - seg95["cate_estimate"]
     assert pytest.approx(seg95["cate_estimate"], abs=1e-9) == cate_mean
     assert pytest.approx(hw_95, rel=1e-3) == 1.96 * sigma
+    assert seg95["treatment_rate"] == pytest.approx(0.25)
 
     # alpha=0.10 (90% CI) -> half-width ~ 1.645 * sigma, NOT 1.96 * sigma
-    res_90 = await node._calculate_cate_by_segment(df, cf, ["segment"], ["mod"], 0.10)
+    res_90 = await node._calculate_cate_by_segment(df, cf, ["segment"], ["mod"], 0.10, T)
     seg90 = res_90["segment"][0]
     hw_90 = seg90["cate_ci_upper"] - seg90["cate_estimate"]
     assert pytest.approx(hw_90, rel=1e-3) == 1.645 * sigma

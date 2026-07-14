@@ -1,5 +1,6 @@
 """Tests for CATE Estimator Node."""
 
+import numpy as np
 import pytest
 
 from src.agents.heterogeneous_optimizer.connectors import MockDataConnector
@@ -140,17 +141,26 @@ class TestCATEEstimatorNode:
                 e = self.effect(X)
                 return (e - 0.1, e + 0.1)
 
+        # Planted per-segment treated shares: every "high" row treated, every
+        # "low" row untreated — the observed rates must come back 1.0 / 0.0.
+        T = (df["severity"] == "high").to_numpy().astype(float)
+
         result = await node._calculate_cate_by_segment(
             df,
             _FakeForest(),
             segment_vars=["severity"],
             effect_modifiers=["channel", "tenure"],
             alpha=0.05,
+            T=T,
         )
 
         # Both severity segments computed without a string->float crash.
         assert "severity" in result
         assert len(result["severity"]) == 2
+
+        # Observed treated share is measured per segment, not assumed.
+        rates = {r["segment_value"]: r["treatment_rate"] for r in result["severity"]}
+        assert rates == {"high": 1.0, "low": 0.0}
 
     @pytest.mark.asyncio
     async def test_cate_result_structure(self):
@@ -174,6 +184,8 @@ class TestCATEEstimatorNode:
             assert "cate_ci_upper" in cate_result
             assert "sample_size" in cate_result
             assert "statistical_significance" in cate_result
+            assert "treatment_rate" in cate_result
+            assert 0.0 <= cate_result["treatment_rate"] <= 1.0
 
     @pytest.mark.asyncio
     async def test_confidence_interval(self):
@@ -485,7 +497,12 @@ class TestSegmentMeanInference:
         df, cf = self._make_frame_and_forest(8000, {"high": 0.15, "low": 0.08})
 
         result = await node._calculate_cate_by_segment(
-            df, cf, segment_vars=["segment"], effect_modifiers=["modifier"], alpha=0.05
+            df,
+            cf,
+            segment_vars=["segment"],
+            effect_modifiers=["modifier"],
+            alpha=0.05,
+            T=np.arange(len(df)) % 2,
         )
 
         rows = {r["segment_value"]: r for r in result["segment"]}
@@ -506,7 +523,12 @@ class TestSegmentMeanInference:
         for n in (500, 8000):
             df, cf = self._make_frame_and_forest(n, {"only": 0.11}, seed=1)
             result = await node._calculate_cate_by_segment(
-                df, cf, segment_vars=["segment"], effect_modifiers=["modifier"], alpha=0.05
+                df,
+                cf,
+                segment_vars=["segment"],
+                effect_modifiers=["modifier"],
+                alpha=0.05,
+                T=np.arange(len(df)) % 2,
             )
             row = result["segment"][0]
             widths[n] = row["cate_ci_upper"] - row["cate_ci_lower"]
@@ -539,6 +561,7 @@ class TestSegmentMeanInference:
             segment_vars=["segment"],
             effect_modifiers=["modifier"],
             alpha=0.05,
+            T=np.arange(n) % 2,
         )
 
         for row in result["segment"]:
@@ -571,6 +594,7 @@ class TestSegmentMeanInference:
             segment_vars=["segment"],
             effect_modifiers=["modifier"],
             alpha=0.05,
+            T=np.arange(n) % 2,
         )
 
         row = result["segment"][0]
