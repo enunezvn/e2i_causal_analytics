@@ -31,6 +31,13 @@ class CATEResult(TypedDict):
     cate_ci_upper: float
     sample_size: int
     statistical_significance: bool
+    # Observed treated fraction within the segment (mean of the estimation-time
+    # treatment vector T over the segment mask). For a continuous treatment T is
+    # binarized at the cohort median upstream, so this reads "share of the segment
+    # with above-median exposure". NotRequired: results serialized before this
+    # field existed lack it; policy_learner falls back (loudly) to the legacy
+    # 50% assumption in that case.
+    treatment_rate: NotRequired[float]
 
 
 class SegmentProfile(TypedDict):

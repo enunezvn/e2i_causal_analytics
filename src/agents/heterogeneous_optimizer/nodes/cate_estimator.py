@@ -471,6 +471,7 @@ class CATEEstimatorNode:
                 state["segment_vars"],
                 effect_modifiers,
                 state.get("significance_level", 0.05),
+                T,
             )
 
             estimation_time = int((time.time() - start_time) * 1000)
@@ -812,6 +813,7 @@ class CATEEstimatorNode:
         segment_vars: List[str],
         effect_modifiers: List[str],
         alpha: float,
+        T: np.ndarray,
     ) -> Dict[str, List[CATEResult]]:
         """Calculate the segment-mean CATE + CI for each segment value.
 
@@ -910,6 +912,13 @@ class CATEEstimatorNode:
                         cate_ci_upper=ci_upper,
                         sample_size=len(segment_df),
                         statistical_significance=significant,
+                        # Observed treated share in this segment, from the SAME
+                        # T the forest was fit on (positionally aligned with df
+                        # via the finite-mask reset above). Replaces the former
+                        # policy_learner assumption of a flat 50% baseline. For
+                        # a binarized continuous treatment this is the share
+                        # above the cohort median.
+                        treatment_rate=float(np.mean(T[mask])),
                     )
                 )
 

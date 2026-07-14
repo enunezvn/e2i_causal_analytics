@@ -20,9 +20,15 @@ class TestPolicyLearnerNode:
         cate: float,
         sample_size: int = 100,
         significant: bool = True,
+        treatment_rate: float | None = 0.5,
     ) -> CATEResult:
-        """Create test CATE result."""
-        return {
+        """Create test CATE result.
+
+        treatment_rate=0.5 by default so legacy numeric assertions (written
+        against the old flat-50% baseline) stay valid; pass None to exercise
+        the loud legacy-fallback path in policy_learner.
+        """
+        result: CATEResult = {
             "segment_name": segment_name,
             "segment_value": segment_value,
             "cate_estimate": cate,
@@ -31,6 +37,9 @@ class TestPolicyLearnerNode:
             "sample_size": sample_size,
             "statistical_significance": significant,
         }
+        if treatment_rate is not None:
+            result["treatment_rate"] = treatment_rate
+        return result
 
     def _create_segment_profile(
         self, segment_id: str, responder_type: str, cate: float, size: int = 100
@@ -635,3 +644,78 @@ class TestPolicyLearnerEdgeCases:
         assert result["policy_recommendations"]
         rec = result["policy_recommendations"][0]
         assert rec["recommended_treatment_rate"] >= 0.7
+
+
+class TestObservedTreatmentRate:
+    """The current rate is the segment's OBSERVED treated share, not a flat 50%."""
+
+    def _result(self, cate: float, treatment_rate: float | None, **kw) -> CATEResult:
+        result: CATEResult = {
+            "segment_name": "insurance_type",
+            "segment_value": "medicaid",
+            "cate_estimate": cate,
+            "cate_ci_lower": kw.get("ci_lower", cate - 0.1),
+            "cate_ci_upper": kw.get("ci_upper", cate + 0.1),
+            "sample_size": kw.get("sample_size", 1000),
+            "statistical_significance": True,
+        }
+        if treatment_rate is not None:
+            result["treatment_rate"] = treatment_rate
+        return result
+
+    def test_maintain_reports_observed_baseline(self):
+        """MAINTAIN keeps the segment at its measured rate (CI overlaps the ATE)."""
+        node = PolicyLearnerNode()
+        rec = node._generate_recommendation(self._result(0.25, 0.35), ate=0.25)
+        assert rec["current_treatment_rate"] == pytest.approx(0.35)
+        assert rec["recommended_treatment_rate"] == pytest.approx(0.35)
+        assert rec["expected_incremental_outcome"] == pytest.approx(0.0)
+
+    def test_increase_steps_up_from_observed_baseline(self):
+        """INCREASE = observed + 0.2, and the lift uses the real rate change."""
+        node = PolicyLearnerNode()
+        # ci_lower 0.40 > ate 0.25 and > 0 -> significantly above average.
+        rec = node._generate_recommendation(self._result(0.50, 0.35), ate=0.25)
+        assert rec["current_treatment_rate"] == pytest.approx(0.35)
+        assert rec["recommended_treatment_rate"] == pytest.approx(0.55)
+        assert rec["expected_incremental_outcome"] == pytest.approx(0.2 * 0.50 * 1000)
+
+    def test_increase_capped_at_ceiling(self):
+        node = PolicyLearnerNode()
+        rec = node._generate_recommendation(self._result(0.50, 0.85), ate=0.25)
+        assert rec["recommended_treatment_rate"] == pytest.approx(0.9)
+
+    def test_increase_never_flips_direction_above_ceiling(self):
+        """A segment already above the 0.9 cap is maintained, not nudged down."""
+        node = PolicyLearnerNode()
+        rec = node._generate_recommendation(self._result(0.50, 0.95), ate=0.25)
+        assert rec["recommended_treatment_rate"] == pytest.approx(0.95)
+        assert rec["expected_incremental_outcome"] == pytest.approx(0.0)
+
+    def test_decrease_lift_scales_with_observed_baseline(self):
+        """DECREASE targets the 0.1 floor from the REAL rate: cutting a harmful
+        segment from 15% avoids far less exposure than the fabricated 50->10."""
+        node = PolicyLearnerNode()
+        # ci_upper -0.10 < 0 -> significantly harmful.
+        rec = node._generate_recommendation(self._result(-0.20, 0.15), ate=0.25)
+        assert rec["current_treatment_rate"] == pytest.approx(0.15)
+        assert rec["recommended_treatment_rate"] == pytest.approx(0.1)
+        # (0.1 - 0.15) * -0.20 * 1000 = +10 avoided-harm lift.
+        assert rec["expected_incremental_outcome"] == pytest.approx(10.0)
+
+    def test_decrease_never_raises_a_segment_below_the_floor(self):
+        """A harmful segment already under 10% treated must NOT be raised to 0.1."""
+        node = PolicyLearnerNode()
+        rec = node._generate_recommendation(self._result(-0.20, 0.05), ate=0.25)
+        assert rec["recommended_treatment_rate"] == pytest.approx(0.05)
+        assert rec["expected_incremental_outcome"] == pytest.approx(0.0)
+
+    def test_missing_rate_falls_back_loudly_to_legacy_half(self, caplog):
+        """Results predating the field use the legacy 0.5 — with a warning."""
+        import logging
+
+        node = PolicyLearnerNode()
+        with caplog.at_level(logging.WARNING):
+            rec = node._generate_recommendation(self._result(0.25, None), ate=0.25)
+        assert rec["current_treatment_rate"] == pytest.approx(0.5)
+        assert any("treatment_rate" in r.message for r in caplog.records)
