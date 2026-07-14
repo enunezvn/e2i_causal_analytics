@@ -832,20 +832,23 @@ describe('RefutationTests', () => {
       expect(screen.getByText('-6.7%')).toBeInTheDocument();
     });
 
-    it('highlights large changes in red', () => {
-      const resultsWithLargeChange: RefutationResult[] = [
+    it('colors the change cell by pass/fail, not by raw change magnitude', () => {
+      // A passing placebo legitimately shows a LARGE change (the fake effect could
+      // not be reproduced) — it must not be colored as a failure.
+      const passingLargeChange: RefutationResult[] = [
         {
-          id: 'ref1',
-          method: 'bootstrap',
+          id: 'plc',
+          method: 'placebo_treatment',
           originalEstimate: 0.15,
-          refutedEstimate: 0.05, // -66.7% change
-          pValue: 0.02,
-          passed: false,
+          refutedEstimate: 0.01, // -93.3% change, but PASSES
+          pValue: 0.28,
+          passed: true,
         },
       ];
-      const { container } = render(<RefutationTests results={resultsWithLargeChange} />);
-      const changeCell = container.querySelector('.text-\\[var\\(--color-destructive\\)\\]');
-      expect(changeCell).toBeInTheDocument();
+      render(<RefutationTests results={passingLargeChange} />);
+      const changeCell = screen.getByText('-93.3%');
+      expect(changeCell).not.toHaveClass('text-[var(--color-destructive)]');
+      expect(changeCell).toHaveClass('text-[var(--color-muted-foreground)]');
     });
   });
 
@@ -924,9 +927,13 @@ describe('RefutationTests', () => {
       expect(container.querySelector('.custom-refutation')).toBeInTheDocument();
     });
 
-    it('shows significance threshold in description', () => {
-      render(<RefutationTests results={mockRefutationResults} significanceThreshold={0.01} />);
-      expect(screen.getByText(/threshold: 0.01/)).toBeInTheDocument();
+    it('explains inverted refutation p-value semantics in the description', () => {
+      render(<RefutationTests results={mockRefutationResults} />);
+      // The card must frame these as robustness checks, NOT as an ordinary
+      // significance test with a threshold.
+      expect(screen.getByText(/robustness checks, not significance tests/i)).toBeInTheDocument();
+      expect(screen.getByText(/non-significant p-value is\s+therefore not a failure/i)).toBeInTheDocument();
+      expect(screen.queryByText(/threshold:/i)).toBeNull();
     });
   });
 

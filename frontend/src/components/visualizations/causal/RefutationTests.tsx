@@ -22,6 +22,12 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { CheckCircle, XCircle, AlertCircle, Info } from 'lucide-react';
 
 // =============================================================================
@@ -62,8 +68,6 @@ export interface RefutationTestsProps {
   results: RefutationResult[];
   /** Whether data is loading */
   isLoading?: boolean;
-  /** Significance threshold for pass/fail determination */
-  significanceThreshold?: number;
   /** Number of decimal places for estimates */
   decimalPlaces?: number;
   /** Show summary statistics card */
@@ -470,7 +474,6 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
     {
       results,
       isLoading = false,
-      significanceThreshold = 0.05,
       decimalPlaces = 3,
       showSummary = true,
       showChart = true,
@@ -525,7 +528,7 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Estimate Comparison</CardTitle>
               <CardDescription>
-                Original vs refuted effect estimates across all tests
+                Original vs refuted effect estimates across all refutation tests that ran
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -539,7 +542,12 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Refutation Test Results</CardTitle>
             <CardDescription>
-              Individual test results with p-values (threshold: {significanceThreshold})
+              Robustness checks, not significance tests. Each one probes whether the
+              estimate holds up when challenged, and different checks use different
+              pass criteria — a placebo passes when its effect is statistically
+              indistinguishable from zero (a high p-value), while a random-common-cause
+              passes when the estimate barely moves. A non-significant p-value is
+              therefore not a failure here.
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
@@ -560,7 +568,29 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                     <TableHead className="text-right">Original</TableHead>
                     <TableHead className="text-right">Refuted</TableHead>
                     <TableHead className="text-right">Change</TableHead>
-                    <TableHead className="text-right">P-value</TableHead>
+                    <TableHead className="text-right">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label="How to read refutation p-values"
+                              className="inline-flex items-center gap-1"
+                            >
+                              <span>Robustness p</span>
+                              <Info className="h-3.5 w-3.5 text-[var(--color-muted-foreground)]" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs text-xs font-normal">
+                            Refutation p-values are inverted vs significance. Placebo and
+                            dummy-outcome checks PASS when p is high (the fake effect could
+                            not be reproduced from noise); random-common-cause passes when
+                            the estimate barely moves. A low p is only a problem for the
+                            checks that rely on it.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </TableHead>
                     <TableHead className="text-center">Result</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -612,9 +642,12 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                         <TableCell
                           className={cn(
                             'text-right font-mono text-xs',
-                            Math.abs(changePercent) > 20
-                              ? 'text-[var(--color-destructive)]'
-                              : 'text-[var(--color-muted-foreground)]'
+                            // Color follows the test's PASS/FAIL verdict, never the raw
+                            // change magnitude — a passing placebo legitimately shows a
+                            // large change and must not read as a failure.
+                            result.passed
+                              ? 'text-[var(--color-muted-foreground)]'
+                              : 'text-[var(--color-destructive)]'
                           )}
                         >
                           {changePercent >= 0 ? '+' : ''}
