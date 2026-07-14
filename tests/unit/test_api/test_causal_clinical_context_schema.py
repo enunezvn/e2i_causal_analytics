@@ -13,6 +13,7 @@ from src.api.schemas.causal import (
     DiscoveredEffect,
     MechanismOfAction,
     PivotalEndpoint,
+    PivotalEndpointItem,
 )
 
 
@@ -24,7 +25,14 @@ def _clinical_context() -> ClinicalContext:
         our_outcome="persistent_180d",
         mechanism=MechanismOfAction(mechanism_of_action="CDK4/6 inhibitor", source="chembl"),
         pivotal_endpoints=PivotalEndpoint(
-            endpoints=["Overall Survival (OS)"], source="clinicaltrials.gov"
+            endpoints=[
+                PivotalEndpointItem(
+                    measure="Overall Survival (OS)",
+                    time_frame="Up to 5 years",
+                    nct_id="NCT01958021",
+                )
+            ],
+            source="clinicaltrials.gov",
         ),
         approved_indications=ApprovedIndications(
             indications=["HR+/HER2- breast cancer"],
@@ -45,6 +53,29 @@ def _clinical_context() -> ClinicalContext:
 def test_discovered_effect_clinical_context_defaults_none():
     e = DiscoveredEffect(treatment="treatment_arm", outcome="persistent_180d", status="completed")
     assert e.clinical_context is None
+
+
+@pytest.mark.unit
+def test_pivotal_endpoint_item_carries_measure_time_frame_and_nct():
+    """A pivotal endpoint is now structured: verbatim measure + time frame + NCT id,
+    and it round-trips through the FastAPI response serialization."""
+    item = PivotalEndpointItem(
+        measure="Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12",
+        time_frame="Baseline, Week 12",
+        nct_id="NCT05030311",
+    )
+    assert item.time_frame == "Baseline, Week 12"
+    assert item.nct_id == "NCT05030311"
+    # time_frame / nct_id are optional (curated fallback has neither).
+    bare = PivotalEndpointItem(measure="UCT7 (Urticaria Control Test)")
+    assert bare.time_frame is None and bare.nct_id is None
+
+    cc = _clinical_context()
+    dumped = cc.model_dump()
+    ep0 = dumped["pivotal_endpoints"]["endpoints"][0]
+    assert ep0["measure"] == "Overall Survival (OS)"
+    assert ep0["time_frame"] == "Up to 5 years"
+    assert ep0["nct_id"] == "NCT01958021"
 
 
 @pytest.mark.unit

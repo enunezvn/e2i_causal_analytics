@@ -16,7 +16,10 @@ _PAYLOAD = {
     "our_outcome": "persistent_180d",
     "mapped_endpoint": None,
     "mechanism": {"mechanism_of_action": "CDK4/6 inhibitor", "source": "chembl"},
-    "pivotal_endpoints": {"endpoints": ["Overall Survival (OS)"], "source": "clinicaltrials.gov"},
+    "pivotal_endpoints": {
+        "endpoints": [{"measure": "Overall Survival (OS)"}],
+        "source": "clinicaltrials.gov",
+    },
     "real_world_evidence": None,
     "approved_indications": {
         "indications": ["HR+/HER2- breast cancer"],

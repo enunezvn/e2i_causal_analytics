@@ -66,6 +66,23 @@ class PubMedArticle:
         return f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/"
 
 
+@dataclass(frozen=True)
+class CTGovEndpoint:
+    """One pivotal primary endpoint from ClinicalTrials.gov.
+
+    ``measure`` is the verbatim primary-outcome measure text (e.g. the UAS7-at-Week-12
+    title). ``time_frame`` is the trial's own outcome time frame ("Baseline, Week 12" —
+    weeks from randomization/baseline, NOT a calendar date), or None when absent.
+    ``nct_id`` is the source study id ("NCT05030311"), or None for a curated fallback
+    endpoint that has no single source study. The two extra fields let the UI surface
+    provenance (a deep-link + a time-frame sub-line) instead of discarding them.
+    """
+
+    measure: str
+    time_frame: Optional[str] = None
+    nct_id: Optional[str] = None
+
+
 class ClinicalTrialsClient:
     """Synchronous ClinicalTrials.gov API v2 client."""
 
@@ -90,24 +107,27 @@ class ClinicalTrialsClient:
         if self._owns_client:
             self._client.close()
 
-    def primary_endpoints(self, intervention: str, condition: str, *, limit: int = 8) -> List[str]:
-        """Return the distinct primary outcome measures across COMPLETED studies
-        of ``intervention`` for ``condition`` (the disease's pivotal endpoints),
-        first-seen order preserved. Empty intervention/condition skip the network."""
+    def primary_endpoints(
+        self, intervention: str, condition: str, *, limit: int = 8
+    ) -> List[CTGovEndpoint]:
+        """Return the distinct primary outcome endpoints across COMPLETED studies of
+        ``intervention`` for ``condition`` (the disease's pivotal endpoints), first-seen
+        order preserved. Each carries its verbatim measure, the trial's outcome time
+        frame, and the source NCT id. Empty intervention/condition skip the network."""
         if not intervention or not condition:
             return []
         return list(_ctgov_primary_endpoints_cached(self, intervention, condition, limit))
 
     def _primary_endpoints_uncached(
         self, intervention: str, condition: str, limit: int
-    ) -> tuple[str, ...]:
+    ) -> tuple[CTGovEndpoint, ...]:
         try:
             response = self._client.get(
                 f"{self._base}/studies",
                 params={
                     "query.intr": intervention,
                     "query.cond": condition,
-                    "fields": "NCTId,PrimaryOutcomeMeasure",
+                    "fields": "NCTId,PrimaryOutcomeMeasure,PrimaryOutcomeTimeFrame",
                     "pageSize": limit,
                     "filter.overallStatus": "COMPLETED",
                 },
@@ -125,17 +145,34 @@ class ClinicalTrialsClient:
             raise ClinicalTrialsError(
                 f"ClinicalTrials non-JSON body: {response.text[:200]!r}"
             ) from exc
-        seen: list[str] = []
+        # Dedup by measure text, first-seen wins (so the first study contributing a
+        # measure also owns its time_frame + nct_id).
+        seen: dict[str, CTGovEndpoint] = {}
         for study in payload.get("studies") or []:
+            if not isinstance(study, dict):
+                continue
+            protocol = study.get("protocolSection")
+            if not isinstance(protocol, dict):
+                continue
+            ident = protocol.get("identificationModule")
+            nct_raw = ident.get("nctId") if isinstance(ident, dict) else None
+            nct_id = nct_raw if isinstance(nct_raw, str) and nct_raw else None
+            outcomes_module = protocol.get("outcomesModule")
             outcomes = (
-                study.get("protocolSection", {}).get("outcomesModule", {}).get("primaryOutcomes")
-                or []
-            )
+                outcomes_module.get("primaryOutcomes")
+                if isinstance(outcomes_module, dict)
+                else None
+            ) or []
             for outcome in outcomes:
-                measure = outcome.get("measure") if isinstance(outcome, dict) else None
-                if isinstance(measure, str) and measure and measure not in seen:
-                    seen.append(measure)
-        return tuple(seen)
+                if not isinstance(outcome, dict):
+                    continue
+                measure = outcome.get("measure")
+                if not (isinstance(measure, str) and measure) or measure in seen:
+                    continue
+                tf_raw = outcome.get("timeFrame")
+                time_frame = tf_raw if isinstance(tf_raw, str) and tf_raw else None
+                seen[measure] = CTGovEndpoint(measure=measure, time_frame=time_frame, nct_id=nct_id)
+        return tuple(seen.values())
 
 
 class PubMedClient:
@@ -498,7 +535,7 @@ class _OpenFDAClient:
 @lru_cache(maxsize=_LRU_MAXSIZE)
 def _ctgov_primary_endpoints_cached(
     client: ClinicalTrialsClient, intervention: str, condition: str, limit: int
-) -> tuple[str, ...]:
+) -> tuple[CTGovEndpoint, ...]:
     return client._primary_endpoints_uncached(intervention, condition, limit)
 
 

@@ -843,12 +843,30 @@ class MechanismOfAction(BaseModel):
     source: str = Field(..., description="chembl / static_fallback")
 
 
+class PivotalEndpointItem(BaseModel):
+    """One pivotal primary endpoint from ClinicalTrials.gov (verbatim measure + the
+    trial's outcome time frame + the source NCT id)."""
+
+    measure: str = Field(..., description="Verbatim primary outcome measure text.")
+    time_frame: Optional[str] = Field(
+        default=None,
+        description=(
+            "The trial's outcome time frame, e.g. 'Baseline, Week 12' — weeks from "
+            "trial baseline, NOT a calendar date. None when the source omits it."
+        ),
+    )
+    nct_id: Optional[str] = Field(
+        default=None,
+        description="Source ClinicalTrials.gov NCT id (e.g. 'NCT05030311'); None for a curated fallback.",
+    )
+
+
 class PivotalEndpoint(BaseModel):
     """The disease's real pivotal endpoints (from ClinicalTrials.gov) + source."""
 
-    endpoints: List[str] = Field(
+    endpoints: List[PivotalEndpointItem] = Field(
         default_factory=list,
-        description="Real primary outcome measures from registered trials (e.g. OS/PFS).",
+        description="Real primary outcome endpoints from registered trials (measure + time frame + NCT id).",
     )
     source: str = Field(..., description="clinicaltrials.gov / static_fallback")
 

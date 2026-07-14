@@ -173,7 +173,10 @@ class ClinicalContextService:
                 "source": moa.source,
             },
             "pivotal_endpoints": {
-                "endpoints": list(eps.endpoints),
+                "endpoints": [
+                    {"measure": e.measure, "time_frame": e.time_frame, "nct_id": e.nct_id}
+                    for e in eps.endpoints
+                ],
                 "source": eps.source,
             },
             "real_world_evidence": citation_payload,

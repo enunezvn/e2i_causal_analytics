@@ -22,7 +22,10 @@ def test_clinical_context_model_round_trips():
         our_outcome="persistent_180d",
         mapped_endpoint="Treatment persistence / duration of therapy",
         mechanism={"mechanism_of_action": "CDK4/6 inhibitor", "source": "chembl"},
-        pivotal_endpoints={"endpoints": ["Overall Survival (OS)"], "source": "clinicaltrials.gov"},
+        pivotal_endpoints={
+            "endpoints": [{"measure": "Overall Survival (OS)"}],
+            "source": "clinicaltrials.gov",
+        },
         real_world_evidence={
             "pmid": "35642282",
             "title": "RWE",
@@ -49,7 +52,7 @@ async def test_endpoint_returns_assembled_context_for_known_brand():
         "mapped_endpoint": "Treatment persistence / duration of therapy",
         "mechanism": {"mechanism_of_action": "CDK4/6 inhibitor", "source": "chembl"},
         "pivotal_endpoints": {
-            "endpoints": ["Overall Survival (OS)"],
+            "endpoints": [{"measure": "Overall Survival (OS)"}],
             "source": "clinicaltrials.gov",
         },
         "real_world_evidence": None,
@@ -87,7 +90,7 @@ async def test_endpoint_surfaces_seminal_rwe_through_schema():
         "mapped_endpoint": "Treatment persistence / duration of therapy",
         "mechanism": {"mechanism_of_action": "CDK4/6 inhibitor", "source": "chembl"},
         "pivotal_endpoints": {
-            "endpoints": ["Overall Survival (OS)"],
+            "endpoints": [{"measure": "Overall Survival (OS)"}],
             "source": "clinicaltrials.gov",
         },
         "real_world_evidence": None,
@@ -147,7 +150,10 @@ async def test_endpoint_stays_200_when_service_degrades():
             "mechanism_of_action": "complement Factor B inhibitor",
             "source": "static_fallback",
         },
-        "pivotal_endpoints": {"endpoints": ["Transfusion avoidance"], "source": "static_fallback"},
+        "pivotal_endpoints": {
+            "endpoints": [{"measure": "Transfusion avoidance"}],
+            "source": "static_fallback",
+        },
         "real_world_evidence": None,
         "honesty_label": "estimate = synthetic; context = real, cited",
     }

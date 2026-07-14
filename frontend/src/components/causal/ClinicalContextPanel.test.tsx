@@ -12,7 +12,10 @@ const FULL: ClinicalContext = {
   mapped_endpoint: 'Treatment persistence / duration of therapy',
   mechanism: { mechanism_of_action: 'CDK4/6 inhibitor', source: 'chembl' },
   pivotal_endpoints: {
-    endpoints: ['Overall Survival (OS)', 'Progression-Free Survival (PFS)'],
+    endpoints: [
+      { measure: 'Overall Survival (OS)', time_frame: 'Up to 5 years', nct_id: 'NCT01958021' },
+      { measure: 'Progression-Free Survival (PFS)', time_frame: null, nct_id: 'NCT01958021' },
+    ],
     source: 'clinicaltrials.gov',
   },
   real_world_evidence: {
@@ -62,11 +65,16 @@ describe('ClinicalContextPanel', () => {
     const degraded: ClinicalContext = {
       ...FULL,
       mechanism: { mechanism_of_action: 'complement Factor B inhibitor', source: 'static_fallback' },
-      pivotal_endpoints: { endpoints: ['Transfusion avoidance'], source: 'static_fallback' },
+      pivotal_endpoints: {
+        endpoints: [{ measure: 'Transfusion avoidance', time_frame: null, nct_id: null }],
+        source: 'static_fallback',
+      },
       real_world_evidence: null,
     };
     render(<ClinicalContextPanel context={degraded} />);
     expect(screen.getAllByText(/curated|fallback/i).length).toBeGreaterThan(0);
+    // Curated-fallback endpoints carry no nct_id, so no CT.gov deep-link is rendered,
+    // and with RWE null there is no citation link either.
     expect(screen.queryByRole('link')).toBeNull();
   });
 
@@ -150,7 +158,12 @@ describe('ClinicalContextPanel', () => {
         ...FULL,
         pivotal_endpoints: {
           endpoints: [
-            'Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12 (Scenario 1 With UAS7 as Primary Efficacy Endpoint)',
+            {
+              measure:
+                'Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12 (Scenario 1 With UAS7 as Primary Efficacy Endpoint)',
+              time_frame: 'Baseline, Week 12',
+              nct_id: 'NCT05030311',
+            },
           ],
           source: 'clinicaltrials.gov',
         },
@@ -161,15 +174,29 @@ describe('ClinicalContextPanel', () => {
       ).toBeInTheDocument();
     });
 
-    it('adds NO hyperlink in this interim FE-only step (links come later)', () => {
-      const degraded: ClinicalContext = {
+    it('renders the per-endpoint time frame and an NCT.gov deep-link when present (Fix B-2)', () => {
+      const withScenario: ClinicalContext = {
         ...FULL,
         real_world_evidence: null,
         seminal_real_world_evidence: undefined,
+        pivotal_endpoints: {
+          endpoints: [
+            {
+              measure:
+                'Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12 (Scenario 1 With UAS7 as Primary Efficacy Endpoint)',
+              time_frame: 'Baseline, Week 12',
+              nct_id: 'NCT05030311',
+            },
+          ],
+          source: 'clinicaltrials.gov',
+        },
       };
-      render(<ClinicalContextPanel context={degraded} />);
-      // The endpoint footnote must be plain text — no anchor introduced here.
-      expect(screen.queryByRole('link')).toBeNull();
+      render(<ClinicalContextPanel context={withScenario} />);
+      // Time-frame sub-line surfaces the previously-dropped "Baseline, Week 12".
+      expect(screen.getByText(/Time frame:\s*Baseline, Week 12/i)).toBeInTheDocument();
+      // The NCT id is a real deep-link to the source trial.
+      const nctLink = screen.getByRole('link', { name: /NCT05030311/i });
+      expect(nctLink).toHaveAttribute('href', 'https://clinicaltrials.gov/study/NCT05030311');
     });
 
     it('omits the endpoint footnote when there are no pivotal endpoints', () => {
@@ -187,7 +214,13 @@ describe('ClinicalContextPanel', () => {
       const fallback: ClinicalContext = {
         ...FULL,
         pivotal_endpoints: {
-          endpoints: ['Change from baseline in UAS7 (Urticaria Activity Score over 7 days)'],
+          endpoints: [
+            {
+              measure: 'Change from baseline in UAS7 (Urticaria Activity Score over 7 days)',
+              time_frame: null,
+              nct_id: null,
+            },
+          ],
           source: 'static_fallback',
         },
       };
@@ -199,6 +232,8 @@ describe('ClinicalContextPanel', () => {
       expect(screen.queryByText(/via ClinicalTrials\.gov/i)).toBeNull();
       expect(screen.queryByText(/weeks after trial baseline/i)).toBeNull();
       expect(screen.queryByText(/pre-specified analysis scenario/i)).toBeNull();
+      // A curated-fallback endpoint has no nct_id -> no CT.gov deep-link.
+      expect(screen.queryByRole('link', { name: /NCT/i })).toBeNull();
     });
   });
 

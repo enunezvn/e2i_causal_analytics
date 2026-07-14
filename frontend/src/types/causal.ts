@@ -380,9 +380,19 @@ export interface MechanismOfAction {
   source: string;
 }
 
+/** One pivotal primary endpoint from ClinicalTrials.gov: the verbatim measure plus
+ *  the trial's outcome time frame and source NCT id (both null for a curated fallback). */
+export interface PivotalEndpointItem {
+  measure: string;
+  /** e.g. "Baseline, Week 12" — weeks from trial baseline, NOT a calendar date. */
+  time_frame?: string | null;
+  /** Source ClinicalTrials.gov NCT id (e.g. "NCT05030311"); null for a curated fallback. */
+  nct_id?: string | null;
+}
+
 /** The disease's real pivotal endpoints (clinicaltrials.gov | static_fallback). */
 export interface PivotalEndpoint {
-  endpoints: string[];
+  endpoints: PivotalEndpointItem[];
   /** clinicaltrials.gov / static_fallback */
   source: string;
 }
