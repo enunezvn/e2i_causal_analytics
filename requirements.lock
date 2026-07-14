@@ -1944,9 +1944,9 @@ joblib==1.5.3 \
     #   osqp
     #   scikit-learn
     #   scikit-survival
-json-repair==0.54.3 \
-    --hash=sha256:4cdc132ee27d4780576f71bf27a113877046224a808bfc17392e079cb344fb81 \
-    --hash=sha256:e50feec9725e52ac91f12184609754684ac1656119dfbd31de09bdaf9a1d8bf6
+json-repair==0.60.1 \
+    --hash=sha256:841661cdd2df507c9a4e189097f38ca6bc372e06d4b4e36d72e590f68176c290 \
+    --hash=sha256:ba6ff974f2a8bef2f7768144a7f03f870a816443f03da27a49cdd0ec31a78049
     # via
     #   -r requirements.txt
     #   dspy
@@ -5455,9 +5455,9 @@ sentry-sdk==2.48.0 \
     # via
     #   -r requirements.txt
     #   opik
-setuptools==80.9.0 \
-    --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922 \
-    --hash=sha256:f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c
+setuptools==83.0.0 \
+    --hash=sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef \
+    --hash=sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
     # via
     #   -r requirements.txt
     #   fasttext

@@ -142,7 +142,7 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 jiter==0.11.1
 joblib==1.5.3
-json_repair==0.54.3
+json_repair==0.60.1
 jsonpatch==1.33
 jsonpointer==3.0.0
 jsonschema==4.23.0
@@ -303,7 +303,7 @@ scipy==1.15.3
 scs==3.2.9
 sentence-transformers==5.2.0
 sentry-sdk==2.48.0
-setuptools==80.9.0
+setuptools==83.0.0
 shap==0.48.0
 shellingham==1.5.4
 simple-di==0.1.5
