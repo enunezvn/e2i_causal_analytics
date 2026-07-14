@@ -129,6 +129,79 @@ describe('ClinicalContextPanel', () => {
     expect(screen.queryByText(/rivals/i)).toBeNull();
   });
 
+  describe('pivotal-endpoint provenance (Fix B-1)', () => {
+    it('explains that endpoints are real trial endpoints, that Week N is weeks-from-baseline, and what Scenario N means', () => {
+      render(<ClinicalContextPanel context={FULL} />);
+      // The user saw endpoint titles like "...UAS7 at Week 12 (Scenario 1 ...)" with no
+      // explanation anywhere. An always-visible footnote must clarify all three.
+      expect(screen.getByText(/registered pivotal trials/i)).toBeInTheDocument();
+      expect(screen.getByText(/weeks after trial baseline/i)).toBeInTheDocument();
+      expect(screen.getByText(/not a calendar date/i)).toBeInTheDocument();
+      expect(screen.getByText(/pre-specified analysis scenario/i)).toBeInTheDocument();
+    });
+
+    it('exposes an accessible tooltip affordance about the endpoints', () => {
+      render(<ClinicalContextPanel context={FULL} />);
+      expect(screen.getByLabelText(/about these trial endpoints/i)).toBeInTheDocument();
+    });
+
+    it('keeps the verbatim endpoint text (does not strip a Scenario suffix)', () => {
+      const withScenario: ClinicalContext = {
+        ...FULL,
+        pivotal_endpoints: {
+          endpoints: [
+            'Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12 (Scenario 1 With UAS7 as Primary Efficacy Endpoint)',
+          ],
+          source: 'clinicaltrials.gov',
+        },
+      };
+      render(<ClinicalContextPanel context={withScenario} />);
+      expect(
+        screen.getByText(/Scenario 1 With UAS7 as Primary Efficacy Endpoint/i)
+      ).toBeInTheDocument();
+    });
+
+    it('adds NO hyperlink in this interim FE-only step (links come later)', () => {
+      const degraded: ClinicalContext = {
+        ...FULL,
+        real_world_evidence: null,
+        seminal_real_world_evidence: undefined,
+      };
+      render(<ClinicalContextPanel context={degraded} />);
+      // The endpoint footnote must be plain text — no anchor introduced here.
+      expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('omits the endpoint footnote when there are no pivotal endpoints', () => {
+      const noEndpoints: ClinicalContext = {
+        ...FULL,
+        pivotal_endpoints: { endpoints: [], source: 'static_fallback' },
+      };
+      render(<ClinicalContextPanel context={noEndpoints} />);
+      expect(screen.queryByText(/weeks after trial baseline/i)).toBeNull();
+    });
+
+    it('does NOT claim ClinicalTrials.gov "verbatim" provenance for curated-fallback endpoints', () => {
+      // The section renders for static_fallback too (CT.gov was unreachable). The
+      // footnote must stay honest — no verbatim/CT.gov-provenance or Week/Scenario claim.
+      const fallback: ClinicalContext = {
+        ...FULL,
+        pivotal_endpoints: {
+          endpoints: ['Change from baseline in UAS7 (Urticaria Activity Score over 7 days)'],
+          source: 'static_fallback',
+        },
+      };
+      render(<ClinicalContextPanel context={fallback} />);
+      expect(screen.getByText(/curated reference/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/live ClinicalTrials\.gov lookup was\s+unavailable/i)
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/via ClinicalTrials\.gov/i)).toBeNull();
+      expect(screen.queryByText(/weeks after trial baseline/i)).toBeNull();
+      expect(screen.queryByText(/pre-specified analysis scenario/i)).toBeNull();
+    });
+  });
+
   it('renders a curated brand-specific seminal RWE and demotes the live one to "Additional"', () => {
     const withSeminal: ClinicalContext = {
       ...FULL,
