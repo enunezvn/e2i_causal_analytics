@@ -318,17 +318,30 @@ function PolicyScatterChart({ policies }: PolicyChartProps) {
 
   return (
     <ResponsiveContainer width="100%" height={300}>
-      <ScatterChart margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+      <ScatterChart margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
         <CartesianGrid strokeDasharray="3 3" />
+        {/* Rates are percentages: both axes MUST be numeric with a fixed 0-100
+            domain. Without type="number" the XAxis is a category axis, so runs
+            where every segment shares one current rate (the common all-maintain
+            case) render N duplicate "50" slots and the (0,0)->(100,100)
+            no-change diagonal can't resolve at all. */}
         <XAxis
           dataKey="current"
+          type="number"
+          domain={[0, 100]}
+          ticks={[0, 25, 50, 75, 100]}
           name="Current Rate"
-          label={{ value: 'Current Treatment Rate (%)', position: 'bottom' }}
+          fontSize={12}
+          label={{ value: 'Current Treatment Rate (%)', position: 'bottom', offset: 0 }}
         />
         <YAxis
           dataKey="recommended"
+          type="number"
+          domain={[0, 100]}
+          ticks={[0, 25, 50, 75, 100]}
           name="Recommended Rate"
-          label={{ value: 'Recommended Rate (%)', angle: -90, position: 'insideLeft' }}
+          fontSize={12}
+          label={{ value: 'Recommended Rate (%)', angle: -90, position: 'left', offset: 0, style: { textAnchor: 'middle' } }}
         />
         <Tooltip
           content={({ payload }) => {
@@ -719,7 +732,7 @@ export default function SegmentAnalysis() {
     ];
     if (analysisResult) {
       lines.push(
-        `Analysis result on screen: overall ATE ${analysisResult.overall_ate?.toFixed(4) ?? 'n/a'}, heterogeneity score ${analysisResult.heterogeneity_score?.toFixed(2) ?? 'n/a'}, ${highResponders.length} high-responder and ${lowResponders.length} low-responder segments.`
+        `Analysis result on screen: overall ATE ${analysisResult.overall_ate?.toFixed(4) ?? 'n/a'}, heterogeneity score ${analysisResult.heterogeneity_score?.toFixed(2) ?? 'n/a'}, ${highResponders.length} high-responder segments.`
       );
       const topHigh = highResponders[0];
       if (topHigh) {
@@ -733,7 +746,7 @@ export default function SegmentAnalysis() {
       lines.push('No analysis has been run yet on this visit.');
     }
     return lines.join('\n');
-  }, [selectedBrand, selectedTreatment, selectedOutcome, analysisResult, highResponders, lowResponders]);
+  }, [selectedBrand, selectedTreatment, selectedOutcome, analysisResult, highResponders]);
   usePageChatContext(pageChatSummary);
 
   return (
@@ -975,9 +988,13 @@ export default function SegmentAnalysis() {
           )}
         </TabsContent>
 
-        {/* Responders Tab — High / Mid / Low with per-card drill-down. */}
+        {/* Responders Tab — High / Mid with per-card drill-down. Harmful
+            (low) responders are intentionally NOT shown here: adverse-event
+            handling has its own dedicated workflow. They remain in the JSON
+            export (low_responders) and in Policies-tab DECREASE
+            recommendations when they occur. */}
         <TabsContent value="responders" className="space-y-4">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <ResponderColumn
               title="Above-Average Responders"
               titleClass="text-green-700"
@@ -992,14 +1009,6 @@ export default function SegmentAnalysis() {
               description="CI overlaps the ATE — statistically indistinguishable from the average effect"
               emptyText="No average-band segments for this run"
               profiles={midResponders}
-              onSelect={setSelectedProfile}
-            />
-            <ResponderColumn
-              title="Harmful Responders"
-              titleClass="text-red-700"
-              description="CI lies entirely below zero — treatment is significantly harmful for this segment"
-              emptyText="No segment is statistically harmful"
-              profiles={lowResponders}
               onSelect={setSelectedProfile}
             />
           </div>
