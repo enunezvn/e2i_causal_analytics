@@ -30,8 +30,7 @@ import {
   PieChart,
   Pie,
   Cell,
-  ScatterChart,
-  Scatter,
+  LabelList,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -135,8 +134,21 @@ interface ScenarioChartProps {
   scenarios: ScenarioResult[];
 }
 
+const fmtWhole = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
 function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
+  // Every generated scenario reallocates the SAME fixed budget (the backend
+  // seeds budget = sum of current allocations), so total allocation is
+  // near-identical across scenarios. The previous allocation-vs-outcome
+  // scatter therefore collapsed onto one vertical line whose ticks rendered
+  // float noise (3358.5000000000005). With spend held constant the only
+  // differentiating dimension is OUTCOME — bars, with the shared budget
+  // stated once below and per-scenario detail in the tooltip.
   const chartData = scenarios.map((s) => ({
+    // Compact tick label — "Current Allocation (Baseline)" would clip in the
+    // half-width card; the tooltip keeps the full name.
+    label: (s.scenario_name.replace(/\s*allocation\s*/i, ' ').trim() || s.scenario_name)
+      + (s.constraint_violations.length > 0 ? ' ⚠' : ''),
     name: s.scenario_name,
     allocation: s.total_allocation / 1000,
     outcome: s.projected_outcome,
@@ -144,66 +156,89 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
     hasViolations: s.constraint_violations.length > 0,
   }));
 
+  if (chartData.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No scenarios yet — run an optimization with scenarios enabled.
+      </p>
+    );
+  }
+
+  const allocations = chartData.map((d) => d.allocation);
+  const maxAllocation = Math.max(...allocations);
+  const sharedBudget =
+    maxAllocation > 0 && (maxAllocation - Math.min(...allocations)) / maxAllocation < 0.005;
+
+  // Emphasis: the optimized scenario is the point; the rest are context. When
+  // no scenario is named "optimized" (custom feeds), a single hue for all.
+  const isOptimized = (name: string) => /optimi[sz]ed/i.test(name);
+  const hasEmphasis = chartData.some((d) => isOptimized(d.name));
+
   return (
-    <ResponsiveContainer width="100%" height={300}>
-      <ScatterChart margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis
-          dataKey="allocation"
-          name="Allocation"
-          label={{ value: 'Total Allocation ($K)', position: 'bottom' }}
-        />
-        <YAxis
-          dataKey="outcome"
-          name="Outcome"
-          label={{
-            value: 'Projected Outcome (units)',
-            angle: -90,
-            position: 'insideLeft',
-          }}
-        />
-        <Tooltip
-          content={({ payload }) => {
-            if (!payload || payload.length === 0) return null;
-            const data = payload[0].payload;
-            return (
-              <div className="bg-background border rounded-lg p-3 shadow-lg">
-                <p className="font-medium">{data.name}</p>
-                <p className="text-sm text-muted-foreground">
-                  Allocation: ${data.allocation.toFixed(0)}K
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Outcome: {data.outcome.toFixed(0)} units
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Return: {data.returnPer1k.toFixed(2)} units per $1K
-                </p>
-                {data.hasViolations && (
-                  <p className="text-sm text-destructive">Has constraint violations</p>
-                )}
-              </div>
-            );
-          }}
-        />
-        <Scatter
+    <>
+      {/* Height tracks content (bars + x-axis band + axis label) so the axis
+          legend is never clipped by a fixed container. */}
+      <ResponsiveContainer width="100%" height={chartData.length * 56 + 64}>
+        <BarChart
           data={chartData}
-          fill={COLORS.primary}
-          shape={(props: unknown) => {
-            const { cx, cy, payload } = props as { cx: number; cy: number; payload: { hasViolations: boolean } };
-            return (
-              <circle
-                cx={cx}
-                cy={cy}
-                r={8}
-                fill={payload.hasViolations ? COLORS.warning : COLORS.success}
-                stroke={COLORS.primary}
-                strokeWidth={2}
+          layout="vertical"
+          margin={{ top: 8, right: 56, left: 8, bottom: 24 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+          <XAxis
+            type="number"
+            tickFormatter={fmtWhole}
+            label={{ value: 'Projected outcome (TRx-equivalents)', position: 'bottom' }}
+          />
+          <YAxis type="category" dataKey="label" width={130} interval={0} tick={{ fontSize: 12 }} />
+          <Tooltip
+            cursor={{ fill: 'rgba(107, 114, 128, 0.08)' }}
+            content={({ payload }) => {
+              if (!payload || payload.length === 0) return null;
+              const data = payload[0].payload;
+              return (
+                <div className="bg-background border rounded-lg p-3 shadow-lg">
+                  <p className="font-medium">{data.name}</p>
+                  <p className="text-sm text-muted-foreground">
+                    Allocation: ${fmtWhole(data.allocation)}K
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Outcome: {fmtWhole(data.outcome)} TRx-equivalents
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Return: {data.returnPer1k.toFixed(2)} TRx-eq per $1K
+                  </p>
+                  {data.hasViolations && (
+                    <p className="text-sm text-destructive">Has constraint violations</p>
+                  )}
+                </div>
+              );
+            }}
+          />
+          <Bar dataKey="outcome" barSize={22} radius={[0, 4, 4, 0]}>
+            <LabelList
+              dataKey="outcome"
+              position="right"
+              formatter={(value) => fmtWhole(Number(value))}
+              fontSize={12}
+              fill={COLORS.muted}
+            />
+            {chartData.map((d) => (
+              <Cell
+                key={d.name}
+                fill={!hasEmphasis || isOptimized(d.name) ? COLORS.primary : COLORS.muted}
               />
-            );
-          }}
-        />
-      </ScatterChart>
-    </ResponsiveContainer>
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+      {sharedBudget && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          All scenarios deploy the same ${fmtWhole(maxAllocation)}K total budget, so bars
+          compare outcome at equal spend; hover for return per $1K.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -707,7 +742,7 @@ export default function ResourceOptimization() {
                       <th className="text-right p-2">Current</th>
                       <th className="text-right p-2">Optimized</th>
                       <th className="text-right p-2">Change</th>
-                      <th className="text-right p-2">Projected Outcome (units)</th>
+                      <th className="text-right p-2">Projected Outcome (TRx-eq)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -761,7 +796,7 @@ export default function ResourceOptimization() {
               <CardHeader>
                 <CardTitle>Scenario Comparison</CardTitle>
                 <CardDescription>
-                  Compare allocation vs outcome across scenarios
+                  Projected outcome (TRx-equivalents) by allocation strategy
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -790,19 +825,19 @@ export default function ResourceOptimization() {
                               : 'default'
                           }
                         >
-                          {(scenario.roi * 1000).toFixed(2)} units/$1K
+                          {(scenario.roi * 1000).toFixed(2)} TRx-eq/$1K
                         </Badge>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                         <div>
-                          Allocation: ${(scenario.total_allocation / 1000).toFixed(0)}K
+                          Allocation: ${fmtWhole(scenario.total_allocation / 1000)}K
                         </div>
                         <div>
                           Outcome:{' '}
                           {scenario.projected_outcome.toLocaleString(undefined, {
                             maximumFractionDigits: 0,
                           })}{' '}
-                          units
+                          TRx-equivalents
                         </div>
                       </div>
                       {scenario.constraint_violations.length > 0 && (
