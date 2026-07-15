@@ -46,9 +46,11 @@ class KnowledgeUpdaterNode:
             proposed_updates = self._generate_updates(cast(List[Dict[str, Any]], recommendations))
 
             # Apply only on explicit opt-in. Fail-closed: absent/False means
-            # the cycle PROPOSES updates and a human applies them via the
-            # API's manual apply endpoint — the request's auto_apply flag was
-            # previously ignored here, silently applying every update.
+            # the cycle PROPOSES updates and a human approves them via the
+            # API's manual apply endpoint (which today records the approval;
+            # wiring it to the real knowledge stores is tracked as a
+            # follow-up) — the request's auto_apply flag was previously
+            # ignored here, silently applying every update.
             auto_apply = bool(state.get("auto_apply", False))
             applied: List[str] = []
             if auto_apply:

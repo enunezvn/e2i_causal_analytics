@@ -1201,3 +1201,54 @@ async def test_persist_learning_cycle_output_failed_status():
 
     assert resp.status.value == "failed"
     assert resp.errors and isinstance(resp.errors[0], str)
+
+
+def test_convert_updates_maps_graph_state_keys():
+    """_convert_updates must read the node's KnowledgeUpdate TypedDict keys.
+
+    KnowledgeUpdaterNode emits knowledge_type/key/old_value/new_value/
+    justification (src/agents/feedback_learner/state.py). The converter read
+    only API-style keys, so every real proposed update rendered as a
+    contentless card with a fabricated default type on the Updates tab.
+    """
+    from src.api.routes.feedback import UpdateType, _convert_updates
+
+    node_update = {
+        "update_id": "U_R1",
+        "knowledge_type": "threshold",
+        "key": "gap_analyzer",
+        "old_value": 0.5,
+        "new_value": "0.2",
+        "justification": "drift detected in weekly ratings",
+        "effective_date": "2026-07-15T00:00:00+00:00",
+    }
+    converted = _convert_updates([node_update])
+    assert len(converted) == 1
+    u = converted[0]
+    assert u.update_id == "U_R1"
+    assert u.update_type == UpdateType.PARAMETER_TUNING
+    assert u.target_agent == "gap_analyzer"
+    assert u.target_component == "threshold"
+    assert u.current_value == "0.5"
+    assert u.proposed_value == "0.2"
+    assert u.rationale == "drift detected in weekly ratings"
+
+
+def test_convert_updates_still_accepts_api_style_dicts():
+    """API-style dicts (explicit update_type/target_agent/...) keep working."""
+    from src.api.routes.feedback import UpdateType, _convert_updates
+
+    api_update = {
+        "update_id": "upd_1",
+        "update_type": "prompt_refinement",
+        "target_agent": "causal_impact",
+        "proposed_value": "new prompt",
+        "rationale": "clarity",
+    }
+    converted = _convert_updates([api_update])
+    assert len(converted) == 1
+    u = converted[0]
+    assert u.update_type == UpdateType.PROMPT_REFINEMENT
+    assert u.target_agent == "causal_impact"
+    assert u.proposed_value == "new prompt"
+    assert u.rationale == "clarity"
