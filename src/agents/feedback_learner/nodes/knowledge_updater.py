@@ -45,12 +45,17 @@ class KnowledgeUpdaterNode:
             # Generate proposed updates
             proposed_updates = self._generate_updates(cast(List[Dict[str, Any]], recommendations))
 
-            # Apply updates (with validation)
-            applied = []
-            for update in proposed_updates:
-                success = await self._apply_update(update)
-                if success:
-                    applied.append(update["update_id"])
+            # Apply only on explicit opt-in. Fail-closed: absent/False means
+            # the cycle PROPOSES updates and a human applies them via the
+            # API's manual apply endpoint — the request's auto_apply flag was
+            # previously ignored here, silently applying every update.
+            auto_apply = bool(state.get("auto_apply", False))
+            applied: List[str] = []
+            if auto_apply:
+                for update in proposed_updates:
+                    success = await self._apply_update(update)
+                    if success:
+                        applied.append(update["update_id"])
 
             # Generate summary
             summary = self._generate_summary(state, proposed_updates, applied)
@@ -195,7 +200,11 @@ class KnowledgeUpdaterNode:
             f"Processed {feedback_count} feedback items.",
             f"Detected {pattern_count} patterns.",
             f"Generated {rec_count} recommendations.",
-            f"Applied {len(applied)} of {len(proposed)} proposed updates.",
+            (
+                f"Applied {len(applied)} of {len(proposed)} proposed updates."
+                if bool(state.get("auto_apply", False))
+                else f"Proposed {len(proposed)} updates; awaiting manual apply (auto_apply=false)."
+            ),
         ]
 
         # Add top priorities if available
