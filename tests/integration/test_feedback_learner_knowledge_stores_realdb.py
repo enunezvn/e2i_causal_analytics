@@ -117,6 +117,37 @@ async def test_store_update_persists_reads_back_and_bumps_version():
         await _cleanup(client, keys)
 
 
+async def test_store_delete_removes_row_and_confirms_absence():
+    """#1243: delete() (endpoint rollback of a first-ever apply) removes the
+    recorded row and returns True only after read-back confirms absence.
+    Deleting an absent key is idempotent-True (the desired state holds)."""
+    client = await get_async_supabase_client()
+    stores = build_knowledge_stores(client)
+
+    tag = uuid.uuid4().hex[:10]
+    key = f"f1243_{tag}"
+    keys = [("prompt", key)]
+    try:
+        store = stores["prompt"]
+        assert await store.update(key=key, value="applied prompt", justification="j") is True
+        assert await store.get(key) == "applied prompt"
+
+        assert await store.delete(key) is True
+        assert await store.get(key) is None
+        assert (
+            await client.table(_TABLE)
+            .select("key")
+            .eq("knowledge_type", "prompt")
+            .eq("key", key)
+            .execute()
+        ).data == []
+
+        # Idempotent: deleting an already-absent key is still True.
+        assert await store.delete(key) is True
+    finally:
+        await _cleanup(client, keys)
+
+
 async def test_node_with_real_stores_yields_positive_effectiveness():
     """The acceptance criterion: real stores → a proposed update is applied +
     persisted → the real finalize emits update_effectiveness > 0."""

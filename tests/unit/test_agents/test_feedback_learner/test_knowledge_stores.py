@@ -76,6 +76,21 @@ async def test_update_with_meaningless_value_returns_false_without_db_access(emp
 
 
 @pytest.mark.asyncio
+async def test_delete_fails_closed_on_db_error():
+    """#1243: delete() (rollback of a first-ever apply) must fail CLOSED — a DB
+    error returns False (row possibly still present) and never raises into the
+    endpoint. The real remove + read-back-absence path is proven in
+    tests/integration/test_feedback_learner_knowledge_stores_realdb.py."""
+
+    class _BrokenClient:
+        def table(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("db down")
+
+    store = SupabaseKnowledgeStore(_BrokenClient(), "prompt")
+    assert await store.delete("agent_x") is False
+
+
+@pytest.mark.asyncio
 async def test_node_unwired_effectiveness_is_none():
     """With no stores wired (build_knowledge_stores(None)), the node reports
     update_backend_wired=False and the real finalize emits update_effectiveness

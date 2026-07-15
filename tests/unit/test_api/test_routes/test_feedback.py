@@ -182,11 +182,56 @@ def sample_knowledge_update():
         update_type=UpdateType.PROMPT_REFINEMENT,
         status=UpdateStatus.PROPOSED,
         target_agent="causal_impact",
-        target_component="system_prompt",
+        # #1243: target_component IS the knowledge_type routed to the real
+        # store (KNOWLEDGE_TYPES) — real records (e.g. prod U_R1) use "prompt".
+        target_component="prompt",
         proposed_value="Improved prompt",
         rationale="Better accuracy",
         expected_improvement="10% better",
     )
+
+
+class _FakeKnowledgeStore:
+    """In-memory stand-in honoring the SupabaseKnowledgeStore contract:
+    update() returns True only after the value is actually recorded (or False
+    in fail-mode without recording); get()/delete() read/mutate the record.
+    The real persist + read-back path is proven in
+    tests/integration/test_feedback_learner_knowledge_stores_realdb.py."""
+
+    def __init__(self, fail: bool = False):
+        self.values: dict = {}
+        self.justifications: dict = {}
+        self.fail = fail
+
+    async def update(self, key, value, justification=None):
+        if self.fail:
+            return False
+        self.values[key] = value
+        self.justifications[key] = justification
+        return True
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def delete(self, key):
+        if self.fail:
+            return False
+        self.values.pop(key, None)
+        return True
+
+
+@pytest.fixture
+def fake_knowledge_stores(monkeypatch):
+    """Route apply/rollback at in-memory stores; returns the dict for asserts."""
+    from src.agents.feedback_learner.knowledge_stores import KNOWLEDGE_TYPES
+
+    stores = {kt: _FakeKnowledgeStore() for kt in KNOWLEDGE_TYPES}
+
+    async def _stores():
+        return stores
+
+    monkeypatch.setattr("src.api.routes.feedback._get_knowledge_stores", _stores)
+    return stores
 
 
 # =============================================================================
@@ -638,8 +683,8 @@ async def test_list_updates_filter_by_status(sample_knowledge_update):
 
 
 @pytest.mark.asyncio
-async def test_apply_update_success(sample_knowledge_update):
-    """Test applying a knowledge update."""
+async def test_apply_update_success(sample_knowledge_update, fake_knowledge_stores):
+    """#1243: apply performs a REAL store write, not just a status flip."""
     from src.api.routes.feedback import (
         ApplyUpdateRequest,
         UpdateStatus,
@@ -656,6 +701,124 @@ async def test_apply_update_success(sample_knowledge_update):
 
     assert result.status == UpdateStatus.APPLIED
     assert result.applied_at is not None
+    # The recorded learning actually landed in the target store.
+    store = fake_knowledge_stores["prompt"]
+    assert store.values.get("causal_impact") == "Improved prompt"
+    assert store.justifications.get("causal_impact") == "Better accuracy"
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
+async def test_apply_update_store_write_fails_stays_proposed(
+    sample_knowledge_update, fake_knowledge_stores
+):
+    """#1243 fail-honest: a failed store write must NOT mark the update APPLIED."""
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
+
+    fake_knowledge_stores["prompt"].fail = True
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+
+    request = ApplyUpdateRequest(update_id=sample_knowledge_update.update_id, force=False)
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_update(sample_knowledge_update.update_id, request, user)
+
+    assert exc_info.value.status_code == 502
+    assert sample_knowledge_update.status == UpdateStatus.PROPOSED
+    assert sample_knowledge_update.applied_at is None
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
+async def test_apply_update_unmapped_component_is_422(
+    sample_knowledge_update, fake_knowledge_stores
+):
+    """#1243: a target_component with no real store cannot be honestly applied."""
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
+
+    sample_knowledge_update.target_component = "not_a_knowledge_type"
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+
+    request = ApplyUpdateRequest(update_id=sample_knowledge_update.update_id, force=False)
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_update(sample_knowledge_update.update_id, request, user)
+
+    assert exc_info.value.status_code == 422
+    assert sample_knowledge_update.status == UpdateStatus.PROPOSED
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
+async def test_apply_update_stores_unavailable_is_503(sample_knowledge_update, monkeypatch):
+    """#1243 fail-honest: no reachable store backend => 503, never a silent flip."""
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
+
+    async def _no_stores():
+        return {}
+
+    monkeypatch.setattr("src.api.routes.feedback._get_knowledge_stores", _no_stores)
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+
+    request = ApplyUpdateRequest(update_id=sample_knowledge_update.update_id, force=False)
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_update(sample_knowledge_update.update_id, request, user)
+
+    assert exc_info.value.status_code == 503
+    assert sample_knowledge_update.status == UpdateStatus.PROPOSED
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
+async def test_apply_update_captures_prior_value_for_rollback(
+    sample_knowledge_update, fake_knowledge_stores
+):
+    """#1243: the pre-apply store value is captured so rollback can restore it."""
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
+
+    fake_knowledge_stores["prompt"].values["causal_impact"] = "The prior prompt"
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+
+    request = ApplyUpdateRequest(update_id=sample_knowledge_update.update_id, force=False)
+    user = {"user_id": "test_user", "role": "operator"}
+
+    result = await apply_update(sample_knowledge_update.update_id, request, user)
+
+    assert result.status == UpdateStatus.APPLIED
+    assert result.current_value == "The prior prompt"
+    assert fake_knowledge_stores["prompt"].values["causal_impact"] == "Improved prompt"
 
     # Cleanup
     del _updates_store[sample_knowledge_update.update_id]
@@ -701,7 +864,7 @@ async def test_apply_update_invalid_status(sample_knowledge_update):
 
 
 @pytest.mark.asyncio
-async def test_apply_update_force(sample_knowledge_update):
+async def test_apply_update_force(sample_knowledge_update, fake_knowledge_stores):
     """Test force applying update regardless of status."""
     from src.api.routes.feedback import (
         ApplyUpdateRequest,
@@ -725,11 +888,13 @@ async def test_apply_update_force(sample_knowledge_update):
 
 
 @pytest.mark.asyncio
-async def test_rollback_update_success(sample_knowledge_update):
-    """Test rolling back an applied update."""
+async def test_rollback_update_restores_prior_value(sample_knowledge_update, fake_knowledge_stores):
+    """#1243: rollback restores the captured pre-apply value in the real store."""
     from src.api.routes.feedback import UpdateStatus, _updates_store, rollback_update
 
     sample_knowledge_update.status = UpdateStatus.APPLIED
+    sample_knowledge_update.current_value = "The prior prompt"
+    fake_knowledge_stores["prompt"].values["causal_impact"] = "Improved prompt"
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
     user = {"user_id": "test_user", "role": "operator"}
@@ -737,6 +902,53 @@ async def test_rollback_update_success(sample_knowledge_update):
     result = await rollback_update(sample_knowledge_update.update_id, user)
 
     assert result.status == UpdateStatus.ROLLED_BACK
+    assert fake_knowledge_stores["prompt"].values["causal_impact"] == "The prior prompt"
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
+async def test_rollback_first_apply_removes_recorded_row(
+    sample_knowledge_update, fake_knowledge_stores
+):
+    """#1243: rolling back a first-ever apply (no prior value) removes the row —
+    restoring the true pre-apply state (no recorded learning)."""
+    from src.api.routes.feedback import UpdateStatus, _updates_store, rollback_update
+
+    sample_knowledge_update.status = UpdateStatus.APPLIED
+    sample_knowledge_update.current_value = None
+    fake_knowledge_stores["prompt"].values["causal_impact"] = "Improved prompt"
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+
+    user = {"user_id": "test_user", "role": "operator"}
+
+    result = await rollback_update(sample_knowledge_update.update_id, user)
+
+    assert result.status == UpdateStatus.ROLLED_BACK
+    assert "causal_impact" not in fake_knowledge_stores["prompt"].values
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
+async def test_rollback_store_failure_stays_applied(sample_knowledge_update, fake_knowledge_stores):
+    """#1243 fail-honest: a failed rollback write keeps the record APPLIED."""
+    from src.api.routes.feedback import UpdateStatus, _updates_store, rollback_update
+
+    sample_knowledge_update.status = UpdateStatus.APPLIED
+    sample_knowledge_update.current_value = "The prior prompt"
+    fake_knowledge_stores["prompt"].fail = True
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await rollback_update(sample_knowledge_update.update_id, user)
+
+    assert exc_info.value.status_code == 502
+    assert sample_knowledge_update.status == UpdateStatus.APPLIED
 
     # Cleanup
     del _updates_store[sample_knowledge_update.update_id]
@@ -758,6 +970,31 @@ async def test_rollback_update_not_applied(sample_knowledge_update):
 
     # Cleanup
     del _updates_store[sample_knowledge_update.update_id]
+
+
+def test_convert_updates_applied_records_stamped_applied():
+    """#1243 (PR #1241 final-review minor a): applied_updates entries from a
+    learning cycle must convert with status='applied', not the 'proposed'
+    default — graph-state dicts carry no status key."""
+    from src.api.routes.feedback import UpdateStatus, _convert_updates
+
+    graph_update = {
+        "update_id": "U_R1",
+        "knowledge_type": "prompt",
+        "key": "cognitive_investigator",
+        "old_value": None,
+        "new_value": "Update system prompts",
+        "justification": "Improve relevance",
+        "effective_date": "2026-07-15T22:13:29+00:00",
+    }
+
+    proposed = _convert_updates([graph_update])
+    assert proposed[0].status == UpdateStatus.PROPOSED
+    assert proposed[0].applied_at is None
+
+    applied = _convert_updates([graph_update], applied=True)
+    assert applied[0].status == UpdateStatus.APPLIED
+    assert applied[0].applied_at is not None
 
 
 # =============================================================================
