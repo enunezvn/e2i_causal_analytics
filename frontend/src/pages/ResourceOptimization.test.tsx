@@ -352,6 +352,66 @@ describe('ResourceOptimization', () => {
     expect(screen.getByText(/Share of projected outcome by region/i)).toBeInTheDocument();
   });
 
+  it('shows honest TRx-eq units and the shared-budget note on the scenarios tab', async () => {
+    // Real backend shape: all scenarios reallocate the SAME fixed budget, so
+    // totals differ only by float noise (this is what rendered as
+    // 3358.5000000000005 ticks on the old scatter's axis).
+    mockRun({
+      data: completedResult({
+        scenarios: [
+          {
+            scenario_name: 'Current Allocation (Baseline)',
+            total_allocation: 3358500,
+            projected_outcome: 3359,
+            roi: 0.001,
+            constraint_violations: [],
+          },
+          {
+            scenario_name: 'Optimized Allocation',
+            total_allocation: 3358500.0000000005,
+            projected_outcome: 3911,
+            roi: 0.0011645,
+            constraint_violations: [],
+          },
+          {
+            scenario_name: 'Equal Distribution',
+            total_allocation: 3358500,
+            projected_outcome: 3247,
+            roi: 0.000967,
+            constraint_violations: [],
+          },
+        ],
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+
+    await userEvent.click(screen.getByRole('tab', { name: /Scenarios/i }));
+
+    // Units are named (TRx-equivalents), never a bare "units".
+    expect(
+      screen.getByText(/Projected outcome \(TRx-equivalents\) by allocation strategy/i)
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/TRx-eq\/\$1K/i)).toHaveLength(3);
+    expect(screen.getAllByText(/TRx-equivalents/i).length).toBeGreaterThanOrEqual(3);
+
+    // The identical totals are stated as a fact instead of rendering as
+    // float-noise axis ticks.
+    expect(
+      screen.getByText(/All scenarios deploy the same \$3,359K total budget/i)
+    ).toBeInTheDocument();
+  });
+
+  it('shows an honest empty state on the scenarios tab when no scenarios exist', async () => {
+    mockRun({ data: completedResult({ scenarios: [] }) });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+
+    await userEvent.click(screen.getByRole('tab', { name: /Scenarios/i }));
+
+    expect(
+      screen.getByText(/No scenarios yet — run an optimization with scenarios enabled/i)
+    ).toBeInTheDocument();
+  });
+
   it('shows outcome units (not $K) and marginal-return copy on the sensitivity tab', async () => {
     mockRun({
       data: completedResult({
