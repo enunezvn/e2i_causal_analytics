@@ -668,6 +668,20 @@ class GapDetectorNode:
             "gap_type": gap_type,  # type: ignore
         }
 
+        # market_share gaps: attach the segment's current TRx so the ROI
+        # calculator can convert share points to TRx-equivalents (share points
+        # are NOT scripts — without this context they were fed into the $/TRx
+        # multiplier raw, valuing every share gap at ~$1 vs a ~$12.5k cost
+        # floor and structurally suppressing it for every brand). The pivoted
+        # current frame is the only place trx and market_share share a row.
+        if metric == "market_share" and "trx" in current_row.columns:
+            try:
+                segment_trx = float(current_row["trx"].iloc[0])
+            except (TypeError, ValueError):
+                segment_trx = 0.0
+            if segment_trx > 0.0:
+                gap["segment_trx"] = segment_trx
+
         return gap
 
     async def _get_memory_context(

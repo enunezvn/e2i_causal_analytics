@@ -25,6 +25,13 @@ class PerformanceGap(TypedDict):
     gap_size: float  # Absolute gap (target - current)
     gap_percentage: float  # Percentage gap ((target - current) / target * 100)
     gap_type: Literal["vs_target", "vs_benchmark", "vs_potential", "temporal"]
+    # market_share gaps only: the brand's current TRx in this segment (same
+    # window/aggregation as current_value). ROI valuation converts share points
+    # to TRx-equivalents via relative share growth x this volume; without it a
+    # share gap cannot be valued in dollars (share points are NOT scripts) and
+    # the ROI calculator fails closed to $0. Attached by GapDetectorNode, the
+    # only place the segment's trx and market_share sit on the same frame row.
+    segment_trx: NotRequired[float]
 
 
 class ConfidenceIntervalDict(TypedDict):
