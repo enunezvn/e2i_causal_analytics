@@ -1458,6 +1458,91 @@ def _record_analytics_sync(
         return None
 
 
+def _grade_copilot_turn(response: str, tool_count: int, synthesis_error: bool = False) -> float:
+    """Grade one completed copilot turn on observable outcome quality (#1240).
+
+    Mirrors the cognitive workflow's ``agent_reward`` derivation
+    (``cognitive_rag_dspy._collect_training_signals``) with tool results as
+    the evidence-board analog: base 0.5 for producing a synthesized response
+    (keeps completed turns inside the GEPA fuel band, reward >= 0.5),
+    + 0.2 * min(1, tool_results/4) evidence grounding, + 0.1 substantive
+    length. A failed synthesis (raw tool-dump fallback served) forfeits the
+    base — the response exists but is not a synthesis — leaving only the
+    observable components (max 0.3). No response at all is 0.0.
+    """
+    if not response:
+        return 0.0
+    reward = 0.0 if synthesis_error else 0.5
+    reward += 0.2 * min(1.0, tool_count / 4.0)
+    reward += 0.1 if len(response) >= 200 else 0.0
+    return min(1.0, reward)
+
+
+async def _collect_copilot_learning_signal(
+    query: str,
+    response: str,
+    tool_names: List[str],
+    conversation_id: Optional[str],
+    synthesis_error: bool = False,
+) -> None:
+    """Persist one honestly graded learning signal for a copilot turn (#1240).
+
+    Writes the same ``learning_signals`` row shape the cognitive workflow's
+    Phase-4 Reflector produces (``signal_details`` carrying
+    type/query/response/reward/metadata + ``domain_signal='dspy_signal'``,
+    ``is_synthetic=false`` via DB default) — the ONLY substrate
+    ``LearningSignalsFeedbackStore`` feeds the Tier-5 feedback learner. Only
+    the ``agent`` (synthesis) component is graded: the copilot path runs no
+    summarizer/investigator, and fabricating signals for components that
+    never executed would be dishonest attribution. ``routed_agents`` credits
+    ``copilotkit`` (the surface actually graded); the tools invoked are kept
+    in metadata for finer-grained future grading.
+
+    Best-effort: any failure is logged and swallowed — signal collection
+    must never unwind into the chat response path.
+    """
+    try:
+        from src.memory import procedural_memory
+        from src.memory.procedural_memory import LearningSignalInput
+
+        reward = _grade_copilot_turn(
+            response, tool_count=len(tool_names), synthesis_error=synthesis_error
+        )
+        metadata: Dict[str, Any] = {
+            "routed_agents": ["copilotkit"],
+            "tools_invoked": list(tool_names),
+            "conversation_id": conversation_id,
+            "source_path": "copilotkit",
+        }
+        if synthesis_error:
+            metadata["synthesis_error"] = True
+        signal = LearningSignalInput(
+            signal_type="rating",
+            signal_value=reward,
+            is_training_example=True,
+            training_input=query,
+            training_output=response[:500],
+            signal_details={
+                "type": "agent",
+                "query": query,
+                "response": response[:500],
+                "reward": reward,
+                "feedback": None,
+                "metadata": metadata,
+                "domain_signal": "dspy_signal",
+            },
+        )
+        # Late-bound module attribute so tests (and future writers) can patch
+        # record_learning_signal at its home module.
+        await procedural_memory.record_learning_signal(signal=signal, cycle_id=None)
+        logger.debug(
+            f"[CopilotKit] Collected learning signal (reward={reward:.2f}, "
+            f"tools={len(tool_names)}, conversation={conversation_id})"
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort by design
+        logger.warning(f"[CopilotKit] Learning-signal collection failed (non-critical): {e}")
+
+
 async def _ensure_conversation_exists(session_id: str) -> bool:
     """
     Ensure a conversation record exists for the given session_id.
@@ -3030,6 +3115,16 @@ def create_e2i_chat_agent():
                     },
                 )
 
+            # #1240: a completed direct-answer turn is graded learning
+            # substrate for the Tier-5 feedback learner (no tools invoked).
+            if full_content:
+                await _collect_copilot_learning_signal(
+                    query=last_human_message or "",
+                    response=full_content,
+                    tool_names=[],
+                    conversation_id=session_id,
+                )
+
             # CoAgent State Sync: Emit completion state for direct responses
             state["current_node"] = "idle"
             state["progress_steps"].append("Response complete")
@@ -3230,6 +3325,15 @@ def create_e2i_chat_agent():
                     },
                 )
 
+            # #1240: a completed tool-grounded turn is graded learning
+            # substrate for the Tier-5 feedback learner.
+            await _collect_copilot_learning_signal(
+                query=original_query,
+                response=full_content,
+                tool_names=[tr["tool"] for tr in tool_results],
+                conversation_id=session_id,
+            )
+
             # CoAgent State Sync: Emit completion state
             state["current_node"] = "idle"
             state["progress_steps"].append("Response complete")
@@ -3282,6 +3386,17 @@ def create_e2i_chat_agent():
                         "tool_count": len(tool_results),
                     },
                 )
+
+            # #1240: grade the degraded turn too — skipping failures would
+            # select only good turns into the learning substrate. The raw
+            # tool-dump fallback forfeits the synthesis base reward.
+            await _collect_copilot_learning_signal(
+                query=original_query,
+                response=result_text,
+                tool_names=[tr["tool"] for tr in tool_results],
+                conversation_id=session_id,
+                synthesis_error=True,
+            )
             return {"messages": [AIMessage(content=result_text)]}
 
     # Build the graph with tool calling support
