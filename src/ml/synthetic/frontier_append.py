@@ -362,8 +362,9 @@ def build_frontier_datasets(
     for ws in week_starts:
         for table, df in generate_week_cohort(ws, hcp_df).items():
             if table in ("feature_groups", "features"):
-                # Canonical metadata — identical every cohort after natural-key
-                # reconciliation; keep a single copy.
+                # Canonical metadata — byte-identical every cohort (deterministic
+                # uuid5 ids); keep a single copy. Every cohort's feature_values
+                # resolve against it, so the loader's #852 reconcile covers them all.
                 merged.setdefault(table, [])
                 if not merged[table]:
                     merged[table].append(df)

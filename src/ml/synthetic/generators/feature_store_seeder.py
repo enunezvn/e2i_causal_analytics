@@ -12,6 +12,22 @@ import pandas as pd
 
 from .base import BaseGenerator, GeneratorConfig
 
+# Fixed namespace for DETERMINISTIC ids (cf. coverage_tables_generator._COVERAGE_ID_NS,
+# experiment_generator._EXP_ID_NS). The catalog below is a fixed constant set, so ids
+# must be a pure function of the natural key: frontier_append seeds one
+# FeatureStoreSeeder PER weekly cohort but keeps only the first cohort's frames, and
+# the loader's #852 reconcile can only remap feature_values.feature_id for ids present
+# in that kept frame — random minting sent the other cohorts' feature_values to the DB
+# with orphaned feature_ids (FK 23503, whole batch fails). Deterministic ids make
+# every mint identical; the reconcile stays, because DBs seeded before this change
+# hold legacy random canonical ids.
+_FEATURE_STORE_ID_NS = uuid.UUID("9c1e7b52-6f38-4d0a-8b47-e2a91c5d3f60")
+
+
+def _det_id(*parts: str) -> str:
+    """Deterministic uuid5 from a natural key (stable across runs and instances)."""
+    return str(uuid.uuid5(_FEATURE_STORE_ID_NS, "|".join(parts)))
+
 
 class FeatureStoreSeeder(BaseGenerator[pd.DataFrame]):
     """
@@ -230,7 +246,7 @@ class FeatureStoreSeeder(BaseGenerator[pd.DataFrame]):
         group_id_map = {}
 
         for group_name, group_config in self.FEATURE_GROUPS.items():
-            group_id = str(uuid.uuid4())
+            group_id = _det_id("feature_group", group_name)
             group_id_map[group_name] = group_id
 
             feature_groups_records.append(
@@ -259,7 +275,7 @@ class FeatureStoreSeeder(BaseGenerator[pd.DataFrame]):
             for feature_config in features:
                 features_records.append(
                     {
-                        "id": str(uuid.uuid4()),
+                        "id": _det_id("feature", group_name, feature_config["name"]),
                         "feature_group_id": group_id,
                         "name": feature_config["name"],
                         "description": feature_config["description"],
