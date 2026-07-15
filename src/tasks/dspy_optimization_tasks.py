@@ -178,6 +178,10 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     # and update_effectiveness becomes a real measured ratio. One shared builder
     # (used by this task, the /feedback/learn route, and process_feedback_batch)
     # fails closed to (None, None) — the honest unwired path (F15).
+    # Post-auto_apply-gate note: this scheduled path runs propose-only — the
+    # state built below carries no `auto_apply`, so KnowledgeUpdaterNode withholds
+    # every apply and update_effectiveness is honestly None on this path even
+    # when knowledge_stores is wired.
     from src.agents.feedback_learner.agent import build_production_feedback_stores
 
     # #883 deferred: the third element (shared async client) arms the rubric

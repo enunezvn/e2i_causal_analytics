@@ -69,7 +69,10 @@ class KnowledgeUpdaterNode:
             )
 
             logger.info(
-                f"Knowledge update complete: applied {len(applied)} of {len(proposed_updates)} updates"
+                "Knowledge update complete: applied %d of %d updates (auto_apply=%s)",
+                len(applied),
+                len(proposed_updates),
+                auto_apply,
             )
 
             return {

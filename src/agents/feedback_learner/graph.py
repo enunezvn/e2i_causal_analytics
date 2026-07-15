@@ -310,9 +310,12 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     # term and redistributes its weight, rather than anchoring the
     # self-improvement reward on a misleading 0.0. A real knowledge_stores
     # backend is a separate feature (see F15 follow-up).
+    # ... AND application was actually attempted: with auto_apply=False the
+    # updater withholds every apply, so applied/proposed would fabricate a
+    # 0.0 "ineffective" when effectiveness is simply unmeasurable this cycle.
     _proposed = state.get("proposed_updates") or []
     update_effectiveness: float | None
-    if state.get("update_backend_wired") and _proposed:
+    if state.get("update_backend_wired") and _proposed and state.get("auto_apply"):
         update_effectiveness = len(applied_updates) / len(_proposed)
     else:
         update_effectiveness = None
