@@ -677,9 +677,9 @@ OPTIONAL_COLUMNS = frozenset(
 
 # Per-table conflict targets for the upsert (#852). The default PostgREST upsert
 # conflicts on the PRIMARY KEY (``id``). For the feature-store tables that is WRONG:
-# the seeder mints fresh random ids every run, but the four canonical group names
-# (and their features) already exist in the DB with DIFFERENT ids. An upsert-by-id
-# therefore INSERTs and collides with the *secondary* UNIQUE constraints
+# the seeder mints deterministic uuid5 ids, but the four canonical group names
+# (and their features) already exist in the DB with DIFFERENT (legacy random) ids.
+# An upsert-by-id therefore INSERTs and collides with the *secondary* UNIQUE constraints
 # (feature_groups_name_key, unique_feature_per_group, feature_entity_timestamp_unique)
 # -> 23505 -> the whole batch fails -> 0 loaded -> children orphaned. Declaring the
 # NATURAL KEY as the conflict target makes the upsert idempotent (INSERT-or-UPDATE on
@@ -735,8 +735,9 @@ class BatchLoader:
         """Remap generated feature-store ids onto the EXISTING DB ids by natural key,
         in place, so a re-load is idempotent AND FK-coherent (#852).
 
-        The seeder mints fresh random UUIDs every run, but the four canonical feature
-        groups and their 15 features already exist in the DB (registered out-of-band).
+        The seeder mints deterministic uuid5 ids, but the four canonical feature
+        groups and their 15 features already exist in the DB (registered out-of-band,
+        before deterministic minting) under different legacy random ids.
         Upserting on the natural key (see TABLE_ON_CONFLICT) is necessary but NOT
         sufficient: if the payload still carries a *fresh* ``id``, the ``ON CONFLICT
         (name) DO UPDATE`` tries to rewrite the existing row's PRIMARY KEY, which the

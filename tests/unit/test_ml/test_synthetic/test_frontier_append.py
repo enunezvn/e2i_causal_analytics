@@ -48,14 +48,16 @@ WEEK_B = date(2026, 7, 13)  # 2026-W29
 # Wall-clock stamp columns excluded from frame-equality checks.
 VOLATILE = {"created_at", "updated_at", "generated_at", "inserted_at"}
 
-# FeatureStoreSeeder mints fresh uuid4 ids every run BY DESIGN (#852): the
-# loader reconciles groups/features onto the canonical DB rows by NATURAL KEY
-# before load and remaps feature_values.feature_id, so minted ids never reach
-# the DB. Determinism for these tables is therefore over natural keys+values.
+# FeatureStoreSeeder mints DETERMINISTIC uuid5 ids (pure function of the natural
+# key), so group/feature ids are stable across seeder instances and cohorts —
+# build_frontier_datasets keeps only the FIRST cohort's features frame, and every
+# cohort's feature_values must resolve against it (the loader's #852 reconcile can
+# only remap ids it finds in that frame). feature_values row PKs are still random
+# per generation (FeatureValueGenerator uuid4); the loader upserts them on the
+# natural key (feature_id, entity_values, event_timestamp), so only that PK column
+# stays excluded from determinism checks.
 VOLATILE_BY_TABLE = {
-    "feature_groups": {"id"},
-    "features": {"id", "feature_group_id"},
-    "feature_values": {"id", "feature_id", "feature_value_id"},
+    "feature_values": {"id", "feature_value_id"},
 }
 
 # The one PK column the loader upserts on, per fact table.
@@ -180,6 +182,23 @@ def test_cohorts_are_not_value_clones(cohort_a, cohort_b):
     a = cohort_a["patient_journeys"]["propensity_score"].reset_index(drop=True)
     b = cohort_b["patient_journeys"]["propensity_score"].reset_index(drop=True)
     assert not a.equals(b)
+
+
+def test_feature_values_resolve_against_any_cohorts_features_frame(cohort_a, cohort_b):
+    """THE 23503 regression (2026-07-15 append run: feature_values 0/340).
+
+    build_frontier_datasets keeps only the FIRST cohort's feature_groups/features
+    frames but concatenates feature_values from EVERY cohort. The loader's #852
+    reconcile remaps feature_id only for ids present in the kept features frame,
+    so any cohort minting different feature ids sends orphaned feature_ids to the
+    DB -> FK 23503 -> the whole batch fails atomically. Feature ids must therefore
+    be identical across cohorts (deterministic from the natural key), making every
+    cohort's feature_values resolvable against whichever frame is kept."""
+    kept_ids = set(cohort_a["features"]["id"])
+    for cohort in (cohort_a, cohort_b):
+        referenced = set(cohort["feature_values"]["feature_id"])
+        orphans = referenced - kept_ids
+        assert not orphans, f"{len(orphans)} feature_ids unresolvable against the kept frame"
 
 
 def test_ids_fit_varchar20(cohort_a):
