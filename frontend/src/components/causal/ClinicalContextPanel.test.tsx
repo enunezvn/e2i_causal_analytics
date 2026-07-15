@@ -85,10 +85,10 @@ describe('ClinicalContextPanel', () => {
     expect(screen.getByText(/Limitations of use/i)).toBeInTheDocument();
   });
 
-  it('renders the boxed warning with emphasis', () => {
+  it('does NOT surface the boxed warning (this panel grounds the commercial signal, not safety labeling)', () => {
     render(<ClinicalContextPanel context={FULL} />);
-    expect(screen.getByText(/BOXED WARNING/i)).toBeInTheDocument();
-    expect(screen.getByText(/QT interval prolongation/i)).toBeInTheDocument();
+    expect(screen.queryByText(/BOXED WARNING/i)).toBeNull();
+    expect(screen.queryByText(/QT interval prolongation/i)).toBeNull();
   });
 
   it('labels static_fallback approved_indications as curated fallback, not live FDA', () => {
@@ -137,45 +137,19 @@ describe('ClinicalContextPanel', () => {
     expect(screen.queryByText(/rivals/i)).toBeNull();
   });
 
-  describe('pivotal-endpoint provenance (Fix B-1)', () => {
-    it('explains that endpoints are real trial endpoints, that Week N is weeks-from-baseline, and what Scenario N means', () => {
+  describe('trial endpoints as grounding (not a parameter dump)', () => {
+    it('surfaces endpoint measures as clinical ground truth for the outcome definition', () => {
       render(<ClinicalContextPanel context={FULL} />);
-      // The user saw endpoint titles like "...UAS7 at Week 12 (Scenario 1 ...)" with no
-      // explanation anywhere. An always-visible footnote must clarify all three.
-      expect(screen.getByText(/registered pivotal trials/i)).toBeInTheDocument();
-      expect(screen.getByText(/weeks after trial baseline/i)).toBeInTheDocument();
-      expect(screen.getByText(/not a calendar date/i)).toBeInTheDocument();
-      expect(screen.getByText(/pre-specified analysis scenario/i)).toBeInTheDocument();
+      // Exact match targets the section heading only; the panel's intro sentence also
+      // contains the words "real trial endpoints" as prose, so a regex would collide.
+      expect(screen.getByText('Real trial endpoints')).toBeInTheDocument();
+      expect(screen.getByText(/Overall Survival/)).toBeInTheDocument();
+      expect(screen.getByText(/clinical ground truth our synthetic outcome stands in for/i))
+        .toBeInTheDocument();
     });
 
-    it('exposes an accessible tooltip affordance about the endpoints', () => {
-      render(<ClinicalContextPanel context={FULL} />);
-      expect(screen.getByLabelText(/about these trial endpoints/i)).toBeInTheDocument();
-    });
-
-    it('keeps the verbatim endpoint text (does not strip a Scenario suffix)', () => {
-      const withScenario: ClinicalContext = {
-        ...FULL,
-        pivotal_endpoints: {
-          endpoints: [
-            {
-              measure:
-                'Change From Baseline in Weekly Urticaria Score (UAS7) at Week 12 (Scenario 1 With UAS7 as Primary Efficacy Endpoint)',
-              time_frame: 'Baseline, Week 12',
-              nct_id: 'NCT05030311',
-            },
-          ],
-          source: 'clinicaltrials.gov',
-        },
-      };
-      render(<ClinicalContextPanel context={withScenario} />);
-      expect(
-        screen.getByText(/Scenario 1 With UAS7 as Primary Efficacy Endpoint/i)
-      ).toBeInTheDocument();
-    });
-
-    it('renders the per-endpoint time frame and an NCT.gov deep-link when present (Fix B-2)', () => {
-      const withScenario: ClinicalContext = {
+    it('does NOT surface per-endpoint parameters (time frame, NCT deep-link, analysis scenario)', () => {
+      const withParams: ClinicalContext = {
         ...FULL,
         real_world_evidence: null,
         seminal_real_world_evidence: undefined,
@@ -191,26 +165,36 @@ describe('ClinicalContextPanel', () => {
           source: 'clinicaltrials.gov',
         },
       };
-      render(<ClinicalContextPanel context={withScenario} />);
-      // Time-frame sub-line surfaces the previously-dropped "Baseline, Week 12".
-      expect(screen.getByText(/Time frame:\s*Baseline, Week 12/i)).toBeInTheDocument();
-      // The NCT id is a real deep-link to the source trial.
-      const nctLink = screen.getByRole('link', { name: /NCT05030311/i });
-      expect(nctLink).toHaveAttribute('href', 'https://clinicaltrials.gov/study/NCT05030311');
-    });
-
-    it('omits the endpoint footnote when there are no pivotal endpoints', () => {
-      const noEndpoints: ClinicalContext = {
-        ...FULL,
-        pivotal_endpoints: { endpoints: [], source: 'static_fallback' },
-      };
-      render(<ClinicalContextPanel context={noEndpoints} />);
+      render(<ClinicalContextPanel context={withParams} />);
+      // The raw parameters the user asked us to stop surfacing must be gone.
+      expect(screen.queryByText(/Time frame:/i)).toBeNull();
+      expect(screen.queryByRole('link', { name: /NCT05030311/i })).toBeNull();
+      expect(screen.queryByLabelText(/about these trial endpoints/i)).toBeNull();
       expect(screen.queryByText(/weeks after trial baseline/i)).toBeNull();
+      expect(screen.queryByText(/pre-specified analysis scenario/i)).toBeNull();
+      // The measure title itself is still shown (as grounding).
+      expect(screen.getByText(/UAS7/)).toBeInTheDocument();
     });
 
-    it('does NOT claim ClinicalTrials.gov "verbatim" provenance for curated-fallback endpoints', () => {
-      // The section renders for static_fallback too (CT.gov was unreachable). The
-      // footnote must stay honest — no verbatim/CT.gov-provenance or Week/Scenario claim.
+    it('caps the endpoint list and discloses how many more exist', () => {
+      const many: ClinicalContext = {
+        ...FULL,
+        pivotal_endpoints: {
+          endpoints: Array.from({ length: 8 }, (_, i) => ({
+            measure: `Endpoint measure ${i + 1}`,
+            time_frame: null,
+            nct_id: null,
+          })),
+          source: 'clinicaltrials.gov',
+        },
+      };
+      render(<ClinicalContextPanel context={many} />);
+      expect(screen.getByText('Endpoint measure 5')).toBeInTheDocument();
+      expect(screen.queryByText('Endpoint measure 6')).toBeNull();
+      expect(screen.getByText(/\+ 3 more registered\s+trial endpoints/i)).toBeInTheDocument();
+    });
+
+    it('keeps the grounding line honest for a curated fallback (no CT.gov claim)', () => {
       const fallback: ClinicalContext = {
         ...FULL,
         pivotal_endpoints: {
@@ -226,14 +210,18 @@ describe('ClinicalContextPanel', () => {
       };
       render(<ClinicalContextPanel context={fallback} />);
       expect(screen.getByText(/curated reference/i)).toBeInTheDocument();
-      expect(
-        screen.getByText(/live ClinicalTrials\.gov lookup was\s+unavailable/i)
-      ).toBeInTheDocument();
-      expect(screen.queryByText(/via ClinicalTrials\.gov/i)).toBeNull();
-      expect(screen.queryByText(/weeks after trial baseline/i)).toBeNull();
-      expect(screen.queryByText(/pre-specified analysis scenario/i)).toBeNull();
-      // A curated-fallback endpoint has no nct_id -> no CT.gov deep-link.
-      expect(screen.queryByRole('link', { name: /NCT/i })).toBeNull();
+      expect(screen.queryByText(/actually measured/i)).toBeNull();
+    });
+
+    it('omits the endpoint section entirely when there are no endpoints', () => {
+      const noEndpoints: ClinicalContext = {
+        ...FULL,
+        pivotal_endpoints: { endpoints: [], source: 'static_fallback' },
+      };
+      render(<ClinicalContextPanel context={noEndpoints} />);
+      // Exact match: the intro sentence (always shown) also mentions "real trial
+      // endpoints" as prose, so only the exact section heading should be absent.
+      expect(screen.queryByText('Real trial endpoints')).toBeNull();
     });
   });
 
