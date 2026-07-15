@@ -7,7 +7,7 @@
  * page calls (`GET /api/feedback/health`, `GET /api/feedback/patterns`,
  * `GET /api/feedback/updates`) and assert HONEST states:
  *   - agent available -> "Online" status; unavailable -> "Offline"
- *   - empty updates -> "No knowledge updates available"
+ *   - empty updates -> "No knowledge updates proposed"
  *
  * These endpoints are plain (non-Zod) gets; the stubs mirror the real wire
  * shapes the page consumes.

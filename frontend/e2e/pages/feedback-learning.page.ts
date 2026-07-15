@@ -8,7 +8,7 @@ import { gotoAndWaitForHeading } from '../fixtures/page-harness'
  * Tier-5 self-improvement dashboard (pattern detection + knowledge updates).
  * Honest states:
  *  - agent status "Online"/"Offline" from GET /api/feedback/health
- *  - "Knowledge Updates" tab -> "No knowledge updates available" when empty
+ *  - "Knowledge Updates" tab -> "No knowledge updates proposed" when empty
  */
 export class FeedbackLearningPage extends BasePage {
   readonly url = '/feedback-learning'
@@ -43,7 +43,7 @@ export class FeedbackLearningPage extends BasePage {
   }
 
   get noUpdatesEmptyState(): Locator {
-    return this.page.getByText('No knowledge updates available', { exact: true }).first()
+    return this.page.getByText('No knowledge updates proposed', { exact: true }).first()
   }
 
   async openUpdatesTab(): Promise<void> {
