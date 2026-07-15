@@ -346,4 +346,46 @@ describe('FeedbackLearning — #1244 Recent Activity pattern attribution', () =>
     // detected_at (2h old) renders as a relative time, not N/A.
     expect(screen.getByText(/•\s*2h ago/)).toBeInTheDocument();
   });
+
+  it('sorts a weeks-old pattern below a fresh Knowledge Update (detected_at-aware)', () => {
+    // codex-1244 MEDIUM: the Recent Activity comparator only knew
+    // last_seen/created_at; real API patterns carry neither, so an old
+    // pattern fell through to "now" and displaced genuinely-recent updates
+    // — self-contradicting the row's own "3 weeks ago" label.
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        patterns: [
+          {
+            ...realPattern,
+            detected_at: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString(),
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        updates: [
+          {
+            update_id: 'U1',
+            update_type: 'prompt_refinement',
+            status: 'proposed',
+            target_agent: 'cognitive_investigator',
+            description: 'Refine investigator prompt for relevance',
+            created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    const rowLabels = screen
+      .getAllByText(/^(Pattern Detected|Knowledge Update)$/)
+      .map((el) => el.textContent);
+    expect(rowLabels).toEqual(['Knowledge Update', 'Pattern Detected']);
+  });
 });

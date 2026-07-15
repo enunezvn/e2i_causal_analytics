@@ -566,9 +566,17 @@ function FeedbackLearning() {
               <div className="space-y-4">
                 {[...patterns.slice(0, 3), ...updates.slice(0, 2)]
                   .sort((a, b) => {
-                    const aDate = 'last_seen' in a && a.last_seen ? a.last_seen : ('created_at' in a ? a.created_at : new Date().toISOString());
-                    const bDate = 'last_seen' in b && b.last_seen ? b.last_seen : ('created_at' in b ? b.created_at : new Date().toISOString());
-                    return new Date(bDate).getTime() - new Date(aDate).getTime();
+                    // #1244: real API patterns carry detected_at (never
+                    // last_seen/created_at) — an unknown timestamp sorts
+                    // LAST, not as "just now" displacing fresh updates.
+                    const ts = (item: PatternItem | UpdateItem): number => {
+                      const raw =
+                        'pattern_id' in item
+                          ? (item.last_seen ?? item.detected_at)
+                          : item.created_at;
+                      return raw ? new Date(raw).getTime() : 0;
+                    };
+                    return ts(b) - ts(a);
                   })
                   .slice(0, 5)
                   .map((item) => {
