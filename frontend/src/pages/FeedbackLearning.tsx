@@ -73,6 +73,8 @@ interface PatternItem {
   frequency?: number;
   affected_agents?: string[];
   confidence?: number;
+  /** When the pattern was detected (persistence created_at; #1244) */
+  detected_at?: string | null;
   // UI/sample fields
   agent_name?: string;
   occurrences?: number;
@@ -605,8 +607,16 @@ function FeedbackLearning() {
                           </p>
                           <p className="text-xs text-[var(--color-muted-foreground)] mt-1">
                             {isPattern
-                              ? `${(item as PatternItem).agent_name ?? 'N/A'} • ${(item as PatternItem).last_seen ? formatRelativeTime((item as PatternItem).last_seen!) : 'N/A'}`
-                              : `${(item as UpdateItem).agent_name ?? 'N/A'} • ${formatRelativeTime((item as UpdateItem).created_at)}`}
+                              ? (() => {
+                                  // #1244: real API patterns carry affected_agents +
+                                  // detected_at, never agent_name / last_seen (UI/sample-era
+                                  // fields) — same fallback chain as the Patterns tab.
+                                  const p = item as PatternItem;
+                                  const agent = p.agent_name ?? p.affected_agents?.[0] ?? 'N/A';
+                                  const ts = p.last_seen ?? p.detected_at;
+                                  return `${agent} • ${ts ? formatRelativeTime(ts) : 'N/A'}`;
+                                })()
+                              : `${(item as UpdateItem).agent_name ?? (item as UpdateItem).target_agent ?? 'N/A'} • ${formatRelativeTime((item as UpdateItem).created_at)}`}
                           </p>
                         </div>
                       </div>
@@ -668,6 +678,9 @@ function FeedbackLearning() {
                           <span>Agent: <strong>{pattern.agent_name ?? pattern.affected_agents?.[0] ?? 'N/A'}</strong></span>
                           {pattern.first_seen && <span>First seen: {formatRelativeTime(pattern.first_seen)}</span>}
                           {pattern.last_seen && <span>Last seen: {formatRelativeTime(pattern.last_seen)}</span>}
+                          {!pattern.first_seen && !pattern.last_seen && pattern.detected_at && (
+                            <span>Detected: {formatRelativeTime(pattern.detected_at)}</span>
+                          )}
                         </div>
                       </div>
                     ))}

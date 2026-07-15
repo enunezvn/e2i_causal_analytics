@@ -74,10 +74,20 @@ class FeedbackRepository:
         await asyncio.to_thread(query.execute)
 
     async def list_patterns(self) -> List[DetectedPattern]:
-        query = self._client.table(_PATTERNS).select("payload")
+        query = self._client.table(_PATTERNS).select("payload, created_at")
         result = await asyncio.to_thread(query.execute)
         rows = (result.data) or []
-        return [DetectedPattern.model_validate(r["payload"]) for r in rows]
+        patterns = []
+        for r in rows:
+            payload = dict(r["payload"])
+            # #1244: legacy payloads carry no detected_at — backfill from the
+            # row's created_at (DB default now() at insert) so the API always
+            # reports when the pattern was detected. Payload-carried values
+            # (post-#1244 writers) win.
+            if not payload.get("detected_at") and r.get("created_at"):
+                payload["detected_at"] = r["created_at"]
+            patterns.append(DetectedPattern.model_validate(payload))
+        return patterns
 
     # ---- knowledge updates (_updates_store) --------------------------------
     async def upsert_update(self, update: KnowledgeUpdate) -> None:

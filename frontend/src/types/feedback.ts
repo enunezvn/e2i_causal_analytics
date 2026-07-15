@@ -203,6 +203,8 @@ export interface DetectedPattern {
   root_cause_hypothesis: string;
   /** Detection confidence (0-1) */
   confidence: number;
+  /** When the pattern was detected (backfilled from persistence created_at; #1244) */
+  detected_at?: string | null;
 }
 
 /**

@@ -292,3 +292,58 @@ describe('FeedbackLearning — StrategicInsightCard', () => {
     expect(screen.getByText('Cycles 24h')).toBeInTheDocument();
   });
 });
+
+describe('FeedbackLearning — #1244 Recent Activity pattern attribution', () => {
+  // Shaped like the REAL prod pattern row (fb_c7189882e96d cycle): the API's
+  // DetectedPattern carries affected_agents + detected_at, but never
+  // agent_name / last_seen (those are UI/sample-era fields).
+  const realPattern = {
+    pattern_id: 'P1',
+    pattern_type: 'relevance_issue',
+    severity: 'high',
+    description: "Agent 'cognitive_investigator' has high negative feedback rate",
+    frequency: 10,
+    confidence: 0.7,
+    affected_agents: ['cognitive_investigator'],
+    example_feedback_ids: ['d36dcc05'],
+    root_cause_hypothesis: 'May need retraining or prompt updates',
+    detected_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { agent_available: true, cycles_24h: 1 },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { patterns: [realPattern] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { updates: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useQuickLearningCycle as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+    (useApplyUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useRollbackUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useFeedbackLearningInsight as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false, data: undefined, error: null });
+  });
+
+  it('falls back to affected_agents[0] and detected_at instead of N/A • N/A', () => {
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    // Recent Activity (Overview tab, default) renders the pattern row with
+    // real attribution, not the N/A • N/A placeholder.
+    expect(screen.getByText('Pattern Detected')).toBeInTheDocument();
+    expect(screen.queryByText(/N\/A\s*•\s*N\/A/)).not.toBeInTheDocument();
+    expect(screen.getByText(/cognitive_investigator\s*•/)).toBeInTheDocument();
+    // detected_at (2h old) renders as a relative time, not N/A.
+    expect(screen.getByText(/•\s*2h ago/)).toBeInTheDocument();
+  });
+});

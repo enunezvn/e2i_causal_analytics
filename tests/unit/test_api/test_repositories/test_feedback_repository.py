@@ -111,3 +111,68 @@ async def test_pattern_and_update_listing():
     upd.status = UpdateStatus.APPLIED
     await repo.upsert_update(upd)
     assert (await repo.get_update("u1")).status == UpdateStatus.APPLIED
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_injects_detected_at_from_row_created_at():
+    """#1244: DetectedPattern.detected_at is plumbed from the persistence
+    row's created_at (DB default now()) when the payload doesn't carry one —
+    the frontend's Recent Activity timestamp has no other source (patterns
+    written before this field existed have created_at but no payload field).
+    """
+    from src.api.repositories.feedback_repository import FeedbackRepository
+
+    client = _FakeClient()
+    repo = FeedbackRepository(client=client)
+    await repo.upsert_pattern(
+        DetectedPattern(
+            pattern_id="p_ts",
+            pattern_type=PatternType.ACCURACY_ISSUE,
+            severity=PatternSeverity.HIGH,
+            description="x",
+            frequency=2,
+            affected_agents=["cognitive_investigator"],
+            example_feedback_ids=["f1"],
+            root_cause_hypothesis="y",
+            confidence=0.8,
+        )
+    )
+    # Simulate the DB default: the stored row gains created_at server-side.
+    client.stores["feedback_patterns"]["p_ts"]["created_at"] = "2026-07-15T22:13:29+00:00"
+
+    patterns = await repo.list_patterns()
+    assert len(patterns) == 1
+    got = patterns[0]
+    assert got.detected_at is not None
+    assert got.detected_at.isoformat().startswith("2026-07-15T22:13:29")
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_payload_detected_at_wins_over_row_created_at():
+    """A payload that already carries detected_at (written by post-#1244 code)
+    must keep it — the row's created_at only backfills legacy payloads."""
+    from datetime import datetime, timezone
+
+    from src.api.repositories.feedback_repository import FeedbackRepository
+
+    client = _FakeClient()
+    repo = FeedbackRepository(client=client)
+    stamped = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    await repo.upsert_pattern(
+        DetectedPattern(
+            pattern_id="p_keep",
+            pattern_type=PatternType.ACCURACY_ISSUE,
+            severity=PatternSeverity.MEDIUM,
+            description="x",
+            frequency=1,
+            affected_agents=["gap_analyzer"],
+            example_feedback_ids=[],
+            root_cause_hypothesis="z",
+            confidence=0.7,
+            detected_at=stamped,
+        )
+    )
+    client.stores["feedback_patterns"]["p_keep"]["created_at"] = "2026-07-15T00:00:00+00:00"
+
+    got = (await repo.list_patterns())[0]
+    assert got.detected_at == stamped
