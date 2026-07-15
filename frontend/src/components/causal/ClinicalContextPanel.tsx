@@ -12,24 +12,15 @@
  * @module components/causal/ClinicalContextPanel
  */
 
-import {
-  AlertTriangle,
-  BookText,
-  Building2,
-  ExternalLink,
-  FlaskConical,
-  Info,
-  Stethoscope,
-} from 'lucide-react';
+import { BookText, Building2, ExternalLink, FlaskConical, Stethoscope } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import type { ClinicalContext } from '@/types/causal';
+
+// The endpoint list grounds outcome definitions; it is NOT a data table. Cap how
+// many measures we surface so a brand with many registered trial endpoints
+// (Fabhalta has 13) reads as light clinical grounding, not a parameter dump.
+const MAX_ENDPOINTS_SHOWN = 5;
 
 function sourceChip(source: string) {
   const live =
@@ -82,9 +73,16 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
   const endpointsFromCtgov = pivotal_endpoints.source === 'clinicaltrials.gov';
   return (
     <div className="space-y-4 rounded-md border p-4">
-      <div className="flex items-center gap-2">
-        <Stethoscope className="h-4 w-4 text-muted-foreground" />
-        <p className="text-sm font-medium">Clinical context</p>
+      <div>
+        <div className="flex items-center gap-2">
+          <Stethoscope className="h-4 w-4 text-muted-foreground" />
+          <p className="text-sm font-medium">Clinical context</p>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Grounds this commercial signal in the brand&rsquo;s clinical reality — its mechanism,
+          the real trial endpoints our outcomes stand in for, and the approved labeling that
+          keeps any read on-label.
+        </p>
       </div>
 
       {/* Drug + mechanism of action */}
@@ -108,74 +106,34 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
         </div>
       )}
 
-      {/* The disease's real pivotal endpoints */}
+      {/* The disease's real trial endpoints — grounding for the outcome definition,
+          NOT a data table. We surface the measures (capped) so they read as clinical
+          ground truth; the per-endpoint time frame / NCT id / analysis-scenario
+          parameters are intentionally NOT surfaced here (they belong to the raw
+          trial record, not to a commercial read). */}
       {pivotal_endpoints.endpoints.length > 0 && (
         <div className="text-sm">
           <div className="flex items-center gap-1 text-muted-foreground">
             <FlaskConical className="h-3.5 w-3.5" />
-            Real pivotal endpoints
+            Real trial endpoints
             {sourceChip(pivotal_endpoints.source)}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="About these trial endpoints"
-                    className="ml-0.5 inline-flex items-center text-muted-foreground hover:text-foreground"
-                  >
-                    <Info className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs text-xs font-normal">
-                  {endpointsFromCtgov
-                    ? 'Endpoint titles are shown verbatim from ClinicalTrials.gov. A time such as “Week 12” is measured from trial baseline, and “Scenario 1/2” marks the trial’s own pre-declared analysis scenario — not anything defined in this app.'
-                    : 'These are the disease’s established pivotal efficacy endpoints, shown as a curated reference because the live ClinicalTrials.gov lookup was unavailable.'}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
           </div>
-          <ul className="mt-1 list-disc space-y-1 pl-5">
-            {pivotal_endpoints.endpoints.map((ep) => (
-              <li key={ep.measure}>
-                <span>{ep.measure}</span>
-                {ep.time_frame && (
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    Time frame: {ep.time_frame}
-                  </span>
-                )}
-                {ep.nct_id && (
-                  <a
-                    href={`https://clinicaltrials.gov/study/${ep.nct_id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-0.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                  >
-                    {ep.nct_id}
-                    <ExternalLink className="h-3 w-3 shrink-0" />
-                  </a>
-                )}
-              </li>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {pivotal_endpoints.endpoints.slice(0, MAX_ENDPOINTS_SHOWN).map((ep) => (
+              <li key={ep.measure}>{ep.measure}</li>
             ))}
           </ul>
-          {/* Provenance footnote. The per-endpoint time frame + NCT deep-link are
-              rendered inline above; this footnote adds the plain-language gloss (what
-              "Week N" / "Scenario N" mean). Copy is provenance-aware: it only claims
-              CT.gov "verbatim" provenance when the source IS the live CT.gov result. */}
-          {endpointsFromCtgov ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              These are real primary endpoints from the drug&rsquo;s registered pivotal
-              trials (via ClinicalTrials.gov). A label like &ldquo;Week 12&rdquo; means 12
-              weeks after trial baseline &mdash; not a calendar date &mdash; and
-              &ldquo;Scenario 1/2&rdquo; refers to a trial&rsquo;s pre-specified analysis
-              scenario (e.g. which endpoint is primary), shown verbatim.
-            </p>
-          ) : (
-            <p className="mt-1 text-xs text-muted-foreground">
-              These are the disease&rsquo;s established pivotal efficacy endpoints, shown as
-              a curated reference because the live ClinicalTrials.gov lookup was
-              unavailable.
+          {pivotal_endpoints.endpoints.length > MAX_ENDPOINTS_SHOWN && (
+            <p className="mt-1 pl-5 text-xs text-muted-foreground">
+              + {pivotal_endpoints.endpoints.length - MAX_ENDPOINTS_SHOWN} more registered
+              trial endpoints
             </p>
           )}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {endpointsFromCtgov
+              ? 'What this brand’s pivotal trials actually measured — the clinical ground truth our synthetic outcome stands in for.'
+              : 'The disease’s established pivotal efficacy measures (curated reference) — the clinical ground truth our synthetic outcome stands in for.'}
+          </p>
         </div>
       )}
 
@@ -244,12 +202,15 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
         )
       )}
 
-      {/* Regulatory / Label — approved indications from the FDA drug label (openFDA) */}
+      {/* Approved labeling — the on-label gate. The FDA-approved indications keep any
+          commercial read inside approved use. Safety detail (boxed warning, warnings)
+          is intentionally NOT surfaced here — this panel grounds the commercial signal,
+          it is not a safety-labeling reproduction. */}
       {approved_indications && approved_indications.indications.length > 0 && (
         <div className="text-sm">
           <div className="flex items-center gap-1 text-muted-foreground">
             <Stethoscope className="h-3.5 w-3.5" />
-            Regulatory / Label
+            Approved use — the on-label gate
             {sourceChip(approved_indications.source)}
           </div>
           <ul className="mt-1 list-disc space-y-0.5 pl-5">
@@ -262,15 +223,6 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
               <span className="font-medium">Limitations of use: </span>
               {approved_indications.limitations_of_use}
             </p>
-          )}
-          {approved_indications.boxed_warning && (
-            <div className="mt-2 flex items-start gap-1.5 rounded border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                <span className="font-semibold">BOXED WARNING: </span>
-                {approved_indications.boxed_warning}
-              </span>
-            </div>
           )}
         </div>
       )}

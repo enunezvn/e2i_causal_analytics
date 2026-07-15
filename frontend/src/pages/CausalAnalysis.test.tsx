@@ -17,6 +17,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
+import { ApiError } from '@/lib/api-client';
 
 // Stub the shared deep view — assert the page mounts it for the selected row /
 // manual result (its internals are covered by CausalAnalysisDetail.test.tsx).
@@ -246,12 +247,33 @@ describe('CausalAnalysis — unified agent-led page', () => {
     expect(getCausalAgentAnalysis).toHaveBeenCalledWith('a1');
   }, 20000);
 
-  it('shows an honest error (not an infinite spinner) when the drill-down fetch fails', async () => {
-    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('not found'));
+  it('shows a retryable error (not an infinite spinner) when a transient drill-down fetch fails', async () => {
+    // A non-404 failure (network blip, 5xx, auth lapse) is transient: the record is
+    // likely still cached, so the UI offers a plain Retry instead of sending the user
+    // to re-run a multi-minute discovery.
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     fireEvent.click(screen.getByText('persistent_180d'));
     expect(await screen.findByText(/Could not load this analysis/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
+  it('tells the user to re-run discovery only when the analysis genuinely expired (404)', async () => {
+    // A 404 means the cached detail expired (leaderboard outlived its drill-down
+    // record). THAT is the only case where re-running discovery is the right fix.
+    const notFound = new ApiError({
+      response: { status: 404 },
+    } as unknown as ConstructorParameters<typeof ApiError>[0]);
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(notFound);
+    mockDiscover({ job: COMPLETED_JOB });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+    expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Re-run discovery to regenerate it/i)).toBeInTheDocument();
+    // No blind Retry button for a genuine expiry — retrying the same id just 404s again.
+    expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument();
     expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
   }, 20000);
 

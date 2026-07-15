@@ -229,8 +229,18 @@ _validation_cache: Dict[str, CrossValidationResponse] = {}
 # Cross-worker job store (Redis-backed; in-memory fallback). The API runs
 # multiple gunicorn workers, so a module-level dict would 404 on poll when the
 # GET lands on a different worker than the POST. See DurableJobStore.
+# Job records live long enough to outlast a working session, not just the run.
+# The ranked-effects leaderboard stays on-screen in the browser indefinitely (it
+# is React state, not reloaded), but each drilled-in effect re-fetches its full
+# detail (DAG + refutation) from this store. At the old 1h TTL the leaderboard
+# would still be visible while its drill-downs had silently expired — clicking a
+# row then 404'd with "this analysis may have expired". An 8h window (a workday)
+# keeps the leaderboard and its drill-downs alive together. The discover-effects
+# job store below uses the SAME TTL so the two never diverge.
+_CAUSAL_JOB_TTL_SECONDS = 8 * 3600  # 8h — a full working session
+
 _agent_analysis_store: DurableJobStore["AgentCausalAnalysisResponse"] = DurableJobStore(
-    "causal:agent_analyze", AgentCausalAnalysisResponse
+    "causal:agent_analyze", AgentCausalAnalysisResponse, ttl_seconds=_CAUSAL_JOB_TTL_SECONDS
 )
 
 
@@ -1415,7 +1425,7 @@ async def propose_causal_questions(
 # Cross-worker job store (Redis-backed; mirrors _agent_analysis_store). Each job
 # runs the agent for a set of candidate questions and ranks the VALIDATED effects.
 _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJobStore(
-    "causal:discover_effects", DiscoverEffectsResponse
+    "causal:discover_effects", DiscoverEffectsResponse, ttl_seconds=_CAUSAL_JOB_TTL_SECONDS
 )
 
 # Complementary outcomes are 1 - each other (persistent_180d vs discontinued_180d);

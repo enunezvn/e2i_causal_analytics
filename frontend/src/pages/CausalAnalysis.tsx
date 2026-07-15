@@ -31,6 +31,7 @@ import {
   Loader2,
   Network,
   Play,
+  RotateCw,
   Settings,
   Sparkles,
   TrendingUp,
@@ -81,6 +82,7 @@ import {
   useTreatmentEffectInsight,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
+import { ApiError } from '@/lib/api-client';
 import type { DiscoveredEffect, CohortName, TreatmentEffectResponse } from '@/types/causal';
 import type { TreatmentEffectInsightRequest } from '@/types/insights';
 
@@ -766,14 +768,40 @@ export default function CausalAnalysis() {
               </CardHeader>
               <CardContent>
                 {detail.isError ? (
-                  <Alert variant="destructive">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>Could not load this analysis</AlertTitle>
-                    <AlertDescription>
-                      Its result may have expired (analyses are kept for about an hour). Re-run
-                      discovery to regenerate it.
-                    </AlertDescription>
-                  </Alert>
+                  // A 404 means the cached detail genuinely expired (the leaderboard
+                  // outlived its drill-down record) — re-running discovery is the fix.
+                  // Any other error (auth token lapse, network blip, 5xx) is transient:
+                  // the record is likely still there, so offer a plain retry instead of
+                  // sending the user to re-run a multi-minute discovery.
+                  detail.error instanceof ApiError && detail.error.isNotFound ? (
+                    <Alert variant="destructive">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>This analysis is no longer available</AlertTitle>
+                      <AlertDescription>
+                        Its cached result has expired. Re-run discovery to regenerate it.
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
+                    <Alert variant="destructive">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Could not load this analysis</AlertTitle>
+                      <AlertDescription className="space-y-2">
+                        <p>Something went wrong loading the validated result. This is usually
+                          temporary — try again.</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => detail.refetch()}
+                          disabled={detail.isFetching}
+                        >
+                          <RotateCw
+                            className={`mr-1.5 h-3.5 w-3.5 ${detail.isFetching ? 'animate-spin' : ''}`}
+                          />
+                          Retry
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  )
                 ) : detail.isLoading || !detailResult ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading the validated analysis…
