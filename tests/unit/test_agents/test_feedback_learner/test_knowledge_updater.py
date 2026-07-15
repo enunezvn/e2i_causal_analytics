@@ -210,6 +210,7 @@ class TestKnowledgeUpdaterNode:
             ],
             "priority_improvements": [],
             "status": "updating",
+            "auto_apply": True,
         }
         node = KnowledgeUpdaterNode(knowledge_stores=mock_knowledge_stores)
 
@@ -218,6 +219,99 @@ class TestKnowledgeUpdaterNode:
         # Should have applied the update
         assert len(result["applied_updates"]) >= 1
         mock_knowledge_stores["baseline"].update.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_apply_absent_withholds_apply(self, base_state, mock_knowledge_stores):
+        """Fail-closed default: no auto_apply in state -> propose only, never touch stores."""
+        state = {
+            **base_state,
+            "feedback_items": [],
+            "detected_patterns": [],
+            "learning_recommendations": [
+                {
+                    "recommendation_id": "R1",
+                    "category": "data_update",
+                    "description": "Update baseline",
+                    "affected_agents": ["agent1"],
+                    "expected_impact": "Better accuracy",
+                    "implementation_effort": "medium",
+                    "priority": 1,
+                    "proposed_change": "New value",
+                }
+            ],
+            "priority_improvements": [],
+            "status": "updating",
+        }
+        node = KnowledgeUpdaterNode(knowledge_stores=mock_knowledge_stores)
+
+        result = await node.execute(state)
+
+        assert result["status"] == "completed"
+        assert len(result["proposed_updates"]) == 1
+        assert result["applied_updates"] == []
+        mock_knowledge_stores["baseline"].update.assert_not_called()
+        assert "awaiting manual apply" in result["learning_summary"]
+
+    @pytest.mark.asyncio
+    async def test_auto_apply_false_withholds_apply(self, base_state, mock_knowledge_stores):
+        """Explicit auto_apply=False (what the UI sends) -> propose only."""
+        state = {
+            **base_state,
+            "feedback_items": [],
+            "detected_patterns": [],
+            "learning_recommendations": [
+                {
+                    "recommendation_id": "R1",
+                    "category": "data_update",
+                    "description": "Update baseline",
+                    "affected_agents": ["agent1"],
+                    "expected_impact": "Better accuracy",
+                    "implementation_effort": "medium",
+                    "priority": 1,
+                    "proposed_change": "New value",
+                }
+            ],
+            "priority_improvements": [],
+            "status": "updating",
+            "auto_apply": False,
+        }
+        node = KnowledgeUpdaterNode(knowledge_stores=mock_knowledge_stores)
+
+        result = await node.execute(state)
+
+        assert result["applied_updates"] == []
+        mock_knowledge_stores["baseline"].update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_apply_true_applies(self, base_state, mock_knowledge_stores):
+        """Explicit opt-in preserves the original apply behavior."""
+        state = {
+            **base_state,
+            "feedback_items": [],
+            "detected_patterns": [],
+            "learning_recommendations": [
+                {
+                    "recommendation_id": "R1",
+                    "category": "data_update",
+                    "description": "Update baseline",
+                    "affected_agents": ["agent1"],
+                    "expected_impact": "Better accuracy",
+                    "implementation_effort": "medium",
+                    "priority": 1,
+                    "proposed_change": "New value",
+                }
+            ],
+            "priority_improvements": [],
+            "status": "updating",
+            "auto_apply": True,
+        }
+        node = KnowledgeUpdaterNode(knowledge_stores=mock_knowledge_stores)
+
+        result = await node.execute(state)
+
+        assert len(result["applied_updates"]) == 1
+        mock_knowledge_stores["baseline"].update.assert_called()
+        assert "Applied 1 of 1" in result["learning_summary"]
 
     @pytest.mark.asyncio
     async def test_store_update_failure_handled(self, base_state):
@@ -243,6 +337,7 @@ class TestKnowledgeUpdaterNode:
             ],
             "priority_improvements": [],
             "status": "updating",
+            "auto_apply": True,
         }
         node = KnowledgeUpdaterNode(knowledge_stores=mock_stores)
 
@@ -372,6 +467,7 @@ class TestKnowledgeUpdaterNode:
             ],
             "priority_improvements": [],
             "status": "updating",
+            "auto_apply": True,
         }
         node = KnowledgeUpdaterNode(knowledge_stores=mock_stores)
 

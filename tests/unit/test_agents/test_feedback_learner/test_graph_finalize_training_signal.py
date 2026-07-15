@@ -193,3 +193,46 @@ class TestNoPlaceholderCommentInGraph:
         assert "0.85 if patterns" not in source, (
             "Detected re-introduction of hardcoded pattern_accuracy=0.85 anchor. See #424 / F-015."
         )
+
+
+class TestUpdateEffectivenessWithheldApply:
+    """auto_apply=False makes applied_updates structurally empty — 0/N would be
+    a fabricated 'ineffective'; the honest value is None (unmeasurable)."""
+
+    def test_none_when_apply_withheld_despite_wired_backend(self) -> None:
+        state = _make_state()
+        state["update_backend_wired"] = True
+        state["proposed_updates"] = [
+            {
+                "update_id": "U1",
+                "knowledge_type": "baseline",
+                "key": "agent1",
+                "old_value": None,
+                "new_value": "v",
+                "justification": "j",
+                "effective_date": "2026-07-15T00:00:00+00:00",
+            }
+        ]
+        state["applied_updates"] = []
+        # auto_apply absent -> withheld (fail-closed default)
+        result = _run(_finalize_training_signal(state))
+        assert result["training_signal"].update_effectiveness is None
+
+    def test_measured_when_auto_apply_true(self) -> None:
+        state = _make_state()
+        state["update_backend_wired"] = True
+        state["auto_apply"] = True
+        state["proposed_updates"] = [
+            {
+                "update_id": "U1",
+                "knowledge_type": "baseline",
+                "key": "agent1",
+                "old_value": None,
+                "new_value": "v",
+                "justification": "j",
+                "effective_date": "2026-07-15T00:00:00+00:00",
+            }
+        ]
+        state["applied_updates"] = ["U1"]
+        result = _run(_finalize_training_signal(state))
+        assert result["training_signal"].update_effectiveness == 1.0

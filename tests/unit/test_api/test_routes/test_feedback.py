@@ -372,6 +372,47 @@ async def test_get_learning_results_success():
 
 
 @pytest.mark.asyncio
+async def test_execute_learning_cycle_threads_auto_apply_into_state():
+    """The request's auto_apply flag must reach the graph's initial state.
+
+    It was silently dropped: RunLearningRequest.auto_apply existed but
+    _execute_learning_cycle never put it in initial_state, so
+    KnowledgeUpdaterNode applied every update regardless of the request.
+    """
+    from src.api.routes.feedback import RunLearningRequest, _execute_learning_cycle
+
+    result_state = {
+        "status": "completed",
+        "detected_patterns": [],
+        "learning_recommendations": [],
+        "priority_improvements": [],
+        "proposed_updates": [],
+        "applied_updates": [],
+        "learning_summary": "ok",
+        "collection_latency_ms": 0,
+        "analysis_latency_ms": 0,
+        "errors": [],
+        "warnings": [],
+    }
+
+    for flag in (False, True):
+        fake_graph = AsyncMock()
+        fake_graph.ainvoke.return_value = result_state
+        request = RunLearningRequest(auto_apply=flag)
+        with patch(
+            "src.agents.feedback_learner.graph.build_feedback_learner_graph",
+            return_value=fake_graph,
+        ):
+            with patch(
+                "src.agents.feedback_learner.agent.build_production_feedback_stores",
+                new=AsyncMock(return_value=(None, None, None)),
+            ):
+                await _execute_learning_cycle(request)
+        initial_state = fake_graph.ainvoke.call_args.args[0]
+        assert initial_state["auto_apply"] is flag
+
+
+@pytest.mark.asyncio
 async def test_get_learning_results_not_found():
     """Test getting learning results for non-existent batch."""
     from src.api.routes.feedback import get_learning_results
@@ -1160,3 +1201,54 @@ async def test_persist_learning_cycle_output_failed_status():
 
     assert resp.status.value == "failed"
     assert resp.errors and isinstance(resp.errors[0], str)
+
+
+def test_convert_updates_maps_graph_state_keys():
+    """_convert_updates must read the node's KnowledgeUpdate TypedDict keys.
+
+    KnowledgeUpdaterNode emits knowledge_type/key/old_value/new_value/
+    justification (src/agents/feedback_learner/state.py). The converter read
+    only API-style keys, so every real proposed update rendered as a
+    contentless card with a fabricated default type on the Updates tab.
+    """
+    from src.api.routes.feedback import UpdateType, _convert_updates
+
+    node_update = {
+        "update_id": "U_R1",
+        "knowledge_type": "threshold",
+        "key": "gap_analyzer",
+        "old_value": 0.5,
+        "new_value": "0.2",
+        "justification": "drift detected in weekly ratings",
+        "effective_date": "2026-07-15T00:00:00+00:00",
+    }
+    converted = _convert_updates([node_update])
+    assert len(converted) == 1
+    u = converted[0]
+    assert u.update_id == "U_R1"
+    assert u.update_type == UpdateType.PARAMETER_TUNING
+    assert u.target_agent == "gap_analyzer"
+    assert u.target_component == "threshold"
+    assert u.current_value == "0.5"
+    assert u.proposed_value == "0.2"
+    assert u.rationale == "drift detected in weekly ratings"
+
+
+def test_convert_updates_still_accepts_api_style_dicts():
+    """API-style dicts (explicit update_type/target_agent/...) keep working."""
+    from src.api.routes.feedback import UpdateType, _convert_updates
+
+    api_update = {
+        "update_id": "upd_1",
+        "update_type": "prompt_refinement",
+        "target_agent": "causal_impact",
+        "proposed_value": "new prompt",
+        "rationale": "clarity",
+    }
+    converted = _convert_updates([api_update])
+    assert len(converted) == 1
+    u = converted[0]
+    assert u.update_type == UpdateType.PROMPT_REFINEMENT
+    assert u.target_agent == "causal_impact"
+    assert u.proposed_value == "new prompt"
+    assert u.rationale == "clarity"

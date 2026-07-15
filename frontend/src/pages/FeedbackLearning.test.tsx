@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import FeedbackLearning from './FeedbackLearning';
 
@@ -51,7 +52,8 @@ function createWrapper() {
 }
 
 describe('FeedbackLearning — F-002 empty state', () => {
-  it('does not render fabricated SAMPLE_PATTERNS / SAMPLE_UPDATES when API empty', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
     (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { agent_available: true, cycles_24h: 0 },
       refetch: vi.fn().mockResolvedValue({}),
@@ -73,7 +75,9 @@ describe('FeedbackLearning — F-002 empty state', () => {
     (useApplyUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
     (useRollbackUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
     (useFeedbackLearningInsight as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false, data: undefined, error: null });
+  });
 
+  it('does not render fabricated SAMPLE_PATTERNS / SAMPLE_UPDATES when API empty', () => {
     render(<FeedbackLearning />, { wrapper: createWrapper() });
 
     // Former SAMPLE_PATTERNS descriptions must not appear in DOM.
@@ -83,6 +87,16 @@ describe('FeedbackLearning — F-002 empty state', () => {
     expect(
       screen.queryByText(/Refine causal impact explanation template/),
     ).not.toBeInTheDocument();
+  });
+
+  it('explains WHY the patterns/updates tabs can be empty (window-bounded cycles)', async () => {
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Patterns$/i }));
+    expect(screen.getByText(/bounded lookback window/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Knowledge Updates/i }));
+    expect(screen.getByText(/wait here for manual review/i)).toBeInTheDocument();
   });
 
 });

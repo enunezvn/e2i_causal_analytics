@@ -673,9 +673,16 @@ function FeedbackLearning() {
                     ))}
                 </div>
               ) : (
-                <div className="flex items-center justify-center gap-2 py-8 text-[var(--color-muted-foreground)]">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                  No patterns detected
+                <div className="flex flex-col items-center justify-center gap-2 py-8 text-center text-[var(--color-muted-foreground)]">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                    No patterns detected in the analyzed window
+                  </div>
+                  <p className="max-w-md text-xs">
+                    Feedback signals accrue per chat turn, and each learning cycle scans a
+                    bounded lookback window — an empty tab can also mean the last cycle&apos;s
+                    window contained no feedback (see cycle warnings above).
+                  </p>
                 </div>
               )}
             </CardContent>
@@ -755,9 +762,15 @@ function FeedbackLearning() {
                   ))}
                 </div>
               ) : (
-                <div className="flex items-center justify-center gap-2 py-8 text-[var(--color-muted-foreground)]">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                  No knowledge updates available
+                <div className="flex flex-col items-center justify-center gap-2 py-8 text-center text-[var(--color-muted-foreground)]">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                    No knowledge updates proposed
+                  </div>
+                  <p className="max-w-md text-xs">
+                    Updates are generated from patterns detected by a learning cycle and
+                    wait here for manual review and apply.
+                  </p>
                 </div>
               )}
             </CardContent>

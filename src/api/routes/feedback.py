@@ -1396,6 +1396,9 @@ async def _execute_learning_cycle(
                 "time_range_start": time_range_start,
                 "time_range_end": time_range_end,
                 "focus_agents": request.focus_agents or [],
+                # Previously dropped here — the updater then applied every
+                # update regardless of the request (see KnowledgeUpdaterNode).
+                "auto_apply": request.auto_apply,
                 "status": "pending",
                 "errors": [],
                 "warnings": [],
@@ -1525,21 +1528,42 @@ def _convert_recommendations(recommendations: List[Dict[str, Any]]) -> List[Lear
     return result
 
 
+# KnowledgeUpdaterNode emits the graph-state KnowledgeUpdate shape
+# (knowledge_type/key/old_value/new_value/justification, see
+# src/agents/feedback_learner/state.py) — map its knowledge_type onto the
+# API's UpdateType so real cycle output doesn't collapse to a fabricated
+# "prompt_refinement" default with empty content fields.
+_KNOWLEDGE_TYPE_TO_UPDATE_TYPE: Dict[str, UpdateType] = {
+    "prompt": UpdateType.PROMPT_REFINEMENT,
+    "threshold": UpdateType.PARAMETER_TUNING,
+    "agent_config": UpdateType.PARAMETER_TUNING,
+    "baseline": UpdateType.RULE_MODIFICATION,
+}
+
+
 def _convert_updates(updates: List[Dict[str, Any]]) -> List[KnowledgeUpdate]:
-    """Convert agent output to API response format."""
+    """Convert agent output (graph-state or API-style dicts) to API format."""
     result = []
     for u in updates:
         try:
+            if "update_type" in u:
+                update_type = UpdateType(u["update_type"])
+            else:
+                update_type = _KNOWLEDGE_TYPE_TO_UPDATE_TYPE.get(
+                    str(u.get("knowledge_type", "")), UpdateType.PROMPT_REFINEMENT
+                )
+            current_value = u.get("old_value", u.get("current_value"))
+            proposed_value = u.get("new_value", u.get("proposed_value", ""))
             result.append(
                 KnowledgeUpdate(
                     update_id=u.get("update_id", f"upd_{uuid4().hex[:8]}"),
-                    update_type=UpdateType(u.get("update_type", "prompt_refinement")),
+                    update_type=update_type,
                     status=UpdateStatus(u.get("status", "proposed")),
-                    target_agent=u.get("target_agent", ""),
-                    target_component=u.get("target_component", ""),
-                    current_value=u.get("current_value"),
-                    proposed_value=u.get("proposed_value", ""),
-                    rationale=u.get("rationale", ""),
+                    target_agent=str(u.get("key") or u.get("target_agent", "")),
+                    target_component=str(u.get("knowledge_type") or u.get("target_component", "")),
+                    current_value=None if current_value is None else str(current_value),
+                    proposed_value="" if proposed_value is None else str(proposed_value),
+                    rationale=str(u.get("justification") or u.get("rationale", "")),
                     expected_improvement=u.get("expected_improvement", ""),
                 )
             )

@@ -445,6 +445,11 @@ async def process_feedback_batch(
     # #837: wire the real feedback + knowledge stores so update_effectiveness is
     # measurable on this public convenience path too (fail-closed → unwired/None).
     # #883 deferred: the shared client also arms the rubric persistence path.
+    # Post-auto_apply-gate note: `learn()` (below) has no `auto_apply` parameter
+    # and never threads one into `initial_state`, so this path is unconditionally
+    # propose-only — update_effectiveness is honestly None here regardless of
+    # knowledge_stores wiring, until a future change (see API route auto_apply
+    # threading) adds a way to opt in.
     feedback_store, knowledge_stores, db_client = await build_production_feedback_stores()
     agent = FeedbackLearnerAgent(
         feedback_store=feedback_store,

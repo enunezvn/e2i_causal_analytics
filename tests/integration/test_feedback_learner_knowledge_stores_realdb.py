@@ -159,7 +159,8 @@ async def test_node_with_real_stores_yields_positive_effectiveness():
     try:
         node = KnowledgeUpdaterNode(stores)
         out = await node.execute(
-            {"status": "running", "learning_recommendations": recommendations}  # type: ignore[arg-type]
+            # auto_apply: this test verifies the REAL apply path end-to-end.
+            {"status": "running", "learning_recommendations": recommendations, "auto_apply": True}  # type: ignore[arg-type]
         )
         assert out["status"] == "completed"
         assert out["update_backend_wired"] is True

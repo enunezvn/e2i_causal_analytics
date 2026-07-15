@@ -167,6 +167,11 @@ class FeedbackLearnerState(TypedDict):
     time_range_start: NotRequired[str]
     time_range_end: NotRequired[str]
     focus_agents: NotRequired[List[str]]
+    # When absent/False (fail-closed default), the knowledge updater only
+    # PROPOSES updates — a human approves them via the API's manual apply
+    # endpoint (store-write wiring is a tracked follow-up). True = apply
+    # immediately (original pre-gate behavior).
+    auto_apply: NotRequired[bool]
 
     # === COGNITIVE CONTEXT (From CognitiveRAG) ===
     cognitive_context: NotRequired[FeedbackLearnerCognitiveContext]
