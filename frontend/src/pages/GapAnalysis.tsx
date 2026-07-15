@@ -506,10 +506,30 @@ function GapAnalysis() {
 
       {/* Tabs — only show when opportunities are loaded (F-002). */}
       {opportunities.length === 0 && !opportunitiesLoading ? (
+        suppressedCount > 0 ? (
+          // Every candidate was found and then suppressed as value-destroying —
+          // an economic conclusion, NOT a missing or failed analysis. Without
+          // this branch the generic "Click Run Analysis" copy implied nothing
+          // ran (the live Fabhalta case), and the suppressed-notice inside the
+          // Tabs was unreachable in exactly the state it was built for.
+          <div data-testid="all-suppressed-empty-state">
+            <EmptyState
+              title="No opportunities above break-even"
+              description={`The latest analysis identified ${suppressedCount} candidate gap${
+                suppressedCount === 1 ? '' : 's'
+              }, but ${
+                suppressedCount === 1 ? 'it falls' : 'all fall'
+              } at or below the break-even ROI threshold — closing ${
+                suppressedCount === 1 ? 'it' : 'each'
+              } would cost at least as much as it returns, so no action is recommended.`}
+            />
+          </div>
+        ) : (
         <EmptyState
           title="No gap opportunities available"
           description="Click Run Analysis to identify ROI-prioritized performance gaps for the selected brand."
         />
+        )
       ) : (
       <Tabs defaultValue="opportunities" className="space-y-4">
         <TabsList>

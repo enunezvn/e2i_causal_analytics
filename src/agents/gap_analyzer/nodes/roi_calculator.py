@@ -27,6 +27,7 @@ from src.services.roi_calculation import (
     RiskLevel,
     ROICalculationService,
     ROIResult,
+    TRxLiftCalculator,
     ValueDriverInput,
     ValueDriverType,
 )
@@ -77,6 +78,73 @@ def _coerce_capture_rate(rate: object) -> float:
         )
         return DEFAULT_CAPTURE_RATE
     return value
+
+
+# Generic $/TRx anchor (Kisqali-scale oncology brand). Brands with materially
+# different per-script economics override it via gap_analyzer.yaml
+# economic_assumptions.value_per_trx_by_brand — a flat rate structurally zeroes
+# rare-disease brands (tiny script volumes x generic $/unit can never clear the
+# intervention cost floor), which is exactly how Fabhalta ended up with a
+# permanent "No gap opportunities available" on the live page.
+DEFAULT_VALUE_PER_TRX = TRxLiftCalculator.VALUE_PER_TRX
+
+
+def _coerce_value_per_trx(value: object) -> Optional[float]:
+    """Coerce a per-brand $/TRx to a positive float, else None (drop entry).
+
+    Same fail-soft discipline as capture_rate: a 0, negative, or non-numeric
+    config value must never zero out or corrupt ROI — it falls back to the
+    generic default with a warning.
+    """
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        logger.warning("value_per_trx %r not numeric; entry ignored", value)
+        return None
+    if result <= 0.0:
+        logger.warning("value_per_trx %s not positive; entry ignored", result)
+        return None
+    return result
+
+
+def _normalize_value_per_trx_by_brand(raw: object) -> Dict[str, float]:
+    """Lower-case brand keys and drop invalid $/TRx values (fail-soft)."""
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning("value_per_trx_by_brand %r not a mapping; ignored", raw)
+        return {}
+    normalized: Dict[str, float] = {}
+    for brand, value in raw.items():
+        coerced = _coerce_value_per_trx(value)
+        if coerced is not None:
+            normalized[str(brand).lower()] = coerced
+    return normalized
+
+
+def _load_value_per_trx_by_brand(config_path: Optional[str] = None) -> Dict[str, float]:
+    """Load per-brand $/TRx overrides from gap_analyzer.yaml, default {}.
+
+    Reads ``gap_analyzer.economic_assumptions.value_per_trx_by_brand``. Any
+    read/parse failure falls back to an empty map (fail-soft — every brand then
+    uses :data:`DEFAULT_VALUE_PER_TRX`).
+    """
+    if config_path is None:
+        config_path = "config/agents/gap_analyzer.yaml"
+    try:
+        path = Path(config_path)
+        if not path.exists():
+            return {}
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+        raw = (
+            cfg.get("gap_analyzer", {})
+            .get("economic_assumptions", {})
+            .get("value_per_trx_by_brand", {})
+        )
+        return _normalize_value_per_trx_by_brand(raw)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("Failed to load value_per_trx_by_brand (%s); using defaults", e)
+        return {}
 
 
 def _load_capture_rate(config_path: Optional[str] = None) -> float:
@@ -147,6 +215,7 @@ class ROICalculatorNode:
         use_bootstrap: bool = True,
         n_simulations: int = 1000,
         capture_rate: Optional[float] = None,
+        value_per_trx_by_brand: Optional[Dict[str, float]] = None,
     ):
         """Initialize ROI calculator with service.
 
@@ -157,12 +226,25 @@ class ROICalculatorNode:
             capture_rate: Fraction of a gap an initiative realistically closes
                 (see :data:`DEFAULT_CAPTURE_RATE`). When None, loaded from
                 gap_analyzer.yaml (default 0.30).
+            value_per_trx_by_brand: Per-brand $ value of one incremental
+                TRx-equivalent unit (case-insensitive keys). When None, loaded
+                from gap_analyzer.yaml. Brands absent from the map use
+                :data:`DEFAULT_VALUE_PER_TRX`.
         """
         self.roi_service = roi_service or ROICalculationService(n_simulations=n_simulations)
         self.use_bootstrap = use_bootstrap
         self.capture_rate = (
             _coerce_capture_rate(capture_rate) if capture_rate is not None else _load_capture_rate()
         )
+        self.value_per_trx_by_brand = (
+            _normalize_value_per_trx_by_brand(value_per_trx_by_brand)
+            if value_per_trx_by_brand is not None
+            else _load_value_per_trx_by_brand()
+        )
+
+    def _resolve_value_per_trx(self, brand: Optional[str]) -> float:
+        """Brand-scoped $/TRx (case-insensitive), else the generic default."""
+        return self.value_per_trx_by_brand.get((brand or "").lower(), DEFAULT_VALUE_PER_TRX)
 
     async def execute(self, state: GapAnalyzerState) -> Dict[str, Any]:
         """Execute ROI calculation workflow.
@@ -202,11 +284,17 @@ class ROICalculatorNode:
             # Extract uplift context if available (from heterogeneous_optimizer)
             uplift_context = self._extract_uplift_context(state)
 
+            # Brand-scoped $/TRx — resolved once per run (same idiom as the
+            # competitor-density surface below).
+            value_per_trx = self._resolve_value_per_trx(state.get("brand"))
+
             # Calculate ROI for each gap using ROICalculationService
             roi_estimates: List[ROIEstimate] = []
 
             for gap in gaps_detected:
-                roi_estimate = self._calculate_roi(gap, uplift_context=uplift_context)
+                roi_estimate = self._calculate_roi(
+                    gap, uplift_context=uplift_context, value_per_trx=value_per_trx
+                )
                 roi_estimates.append(roi_estimate)
 
             # Surface-only competitor density for this brand (curated, no network,
@@ -322,6 +410,7 @@ class ROICalculatorNode:
         self,
         gap: PerformanceGap,
         uplift_context: Optional[Dict[str, Any]] = None,
+        value_per_trx: Optional[float] = None,
     ) -> ROIEstimate:
         """Calculate ROI estimate for a single gap using ROICalculationService.
 
@@ -336,10 +425,14 @@ class ROICalculatorNode:
         Args:
             gap: Performance gap to analyze
             uplift_context: Optional uplift context from heterogeneous_optimizer
+            value_per_trx: Brand-scoped $ per incremental TRx-equivalent unit
+                (see :data:`DEFAULT_VALUE_PER_TRX`); None uses the generic default
 
         Returns:
             ROI estimate with confidence interval, attribution, risk adjustment
         """
+        if value_per_trx is None:
+            value_per_trx = DEFAULT_VALUE_PER_TRX
         metric = gap["metric"]
         # Raw gap magnitude drives the COST and RISK of the initiative (closing a
         # gap means tackling its full size). The VALUE is only the fraction we
@@ -358,14 +451,18 @@ class ROICalculatorNode:
         # Pass BOTH the captured improvement and the raw gap: capture applies to
         # the value-bearing improvement, NOT to base/population fields (else the
         # haircut compounds for non-linear drivers — see _create_value_driver_input).
-        value_driver = self._create_value_driver_input(driver_type, captured_units, gap_size, gap)
+        value_driver = self._create_value_driver_input(
+            driver_type, captured_units, gap_size, gap, value_per_trx
+        )
 
         # Build list of value drivers (may include uplift)
         value_drivers = [value_driver]
 
         # Add uplift targeting value driver if context available
         if uplift_context:
-            uplift_driver = self._create_uplift_value_driver(gap, uplift_context, captured_units)
+            uplift_driver = self._create_uplift_value_driver(
+                gap, uplift_context, captured_units, value_per_trx
+            )
             if uplift_driver:
                 value_drivers.append(uplift_driver)
 
@@ -446,6 +543,7 @@ class ROICalculatorNode:
         captured_units: float,
         raw_gap_size: float,
         gap: PerformanceGap,
+        value_per_trx: Optional[float] = None,
     ) -> ValueDriverInput:
         """Create value driver input for ROI calculation.
 
@@ -481,6 +579,8 @@ class ROICalculatorNode:
             # TRX_LIFT / PATIENT_IDENTIFICATION / ACTION_RATE / INTENT_TO_PRESCRIBE
             # read value off `quantity` (the latter two as the pp improvement).
             quantity=captured_units,
+            # Brand-scoped $/unit — consumed by the TRX_LIFT calculator only.
+            unit_value=value_per_trx if driver_type == ValueDriverType.TRX_LIFT else None,
             # Base/population fields = existing market size, NOT the gap we close
             # -> derive from the RAW gap so capture is not applied a second time.
             hcp_count=(
@@ -510,6 +610,7 @@ class ROICalculatorNode:
         gap: PerformanceGap,
         uplift_context: Dict[str, Any],
         captured_units: float,
+        value_per_trx: Optional[float] = None,
     ) -> Optional[ValueDriverInput]:
         """Create uplift targeting value driver from uplift context.
 
@@ -552,9 +653,11 @@ class ROICalculatorNode:
                 scores = [s.get("mean_uplift_score", 0) for s in segment_data]
                 sum(scores) / len(scores) if scores else None
 
-        # Calculate baseline treatment value from gap size
-        # Assume $850/unit (TRx equivalent)
-        baseline_value = gap_size * 850
+        # Calculate baseline treatment value from gap size at the brand-scoped
+        # $/unit (TRx equivalent) — consistent with the base TRX_LIFT driver.
+        baseline_value = gap_size * (
+            value_per_trx if value_per_trx is not None else DEFAULT_VALUE_PER_TRX
+        )
 
         return ValueDriverInput(
             driver_type=ValueDriverType.UPLIFT_TARGETING,

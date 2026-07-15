@@ -70,6 +70,25 @@ class TestTRxLiftCalculator:
         result = calc.calculate(10.5)
         assert result == pytest.approx(8_925.0)  # 10.5 * $850
 
+    def test_brand_scoped_value_override(self):
+        """A per-brand $/TRx (rare-disease economics) overrides the default."""
+        calc = TRxLiftCalculator()
+        # Fabhalta-style ultra-orphan per-script value.
+        assert calc.calculate(10, value_per_trx=2350.0) == 23_500.0
+        # None keeps the methodology default.
+        assert calc.calculate(10, value_per_trx=None) == 8_500.0
+
+    def test_unit_value_flows_through_service_driver(self):
+        """ValueDriverInput.unit_value reaches the TRX_LIFT calculator."""
+        service = ROICalculationService(n_simulations=10, seed=42)
+        driver = ValueDriverInput(
+            driver_type=ValueDriverType.TRX_LIFT, quantity=10, unit_value=2350.0
+        )
+        assert service.calculate_value_driver(driver) == 23_500.0
+        # Without unit_value the default $850 applies.
+        default_driver = ValueDriverInput(driver_type=ValueDriverType.TRX_LIFT, quantity=10)
+        assert service.calculate_value_driver(default_driver) == 8_500.0
+
 
 class TestPatientIdentificationCalculator:
     """Tests for patient identification value calculation."""
