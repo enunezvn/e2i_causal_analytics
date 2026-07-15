@@ -372,7 +372,7 @@ export async function getFeedbackStatus(): Promise<{
 /**
  * Run quick feedback analysis on recent items.
  *
- * Simplified interface for processing feedback from the last 7 days.
+ * Simplified interface for processing feedback from the last 30 days.
  *
  * @param focusAgents - Optional agents to focus on
  * @returns Learning results
@@ -386,13 +386,14 @@ export async function getFeedbackStatus(): Promise<{
 export async function quickLearningCycle(
   focusAgents?: string[]
 ): Promise<LearningResponse> {
-  // 7-day window: the backend default (last 24h) starves the cycle — real
-  // feedback (chat thumbs + cognitive reward signals) accrues per active chat
-  // day, and chat activity is not daily.
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // 30-day window: real feedback (chat thumbs + cognitive reward signals)
+  // accrues per active chat day and is bursty — a short lookback (backend
+  // default 24h; previously 7d here) can structurally miss every signal
+  // and report "No feedback items collected" forever.
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   return runLearningCycle(
     {
-      time_range_start: sevenDaysAgo,
+      time_range_start: thirtyDaysAgo,
       focus_agents: focusAgents,
       min_feedback_count: 5,
       pattern_threshold: 0.1,
