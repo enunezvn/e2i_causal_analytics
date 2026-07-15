@@ -476,3 +476,46 @@ class TestGapDetectorExcludesOverPerformance:
         seg_vals = {g["segment_value"] for g in gaps}
         assert "Declined" in seg_vals
         assert "Grew" not in seg_vals
+
+
+class TestMarketShareSegmentTrxContext:
+    """market_share gaps must carry same-segment TRx volume as ``segment_trx``.
+
+    The ROI calculator converts share-point gaps to TRx-equivalents via
+    relative share growth x segment TRx (market size constant). The detector
+    is the only place that still holds the pivoted frame where the segment's
+    trx and market_share sit on the same row, so it attaches the context.
+    """
+
+    def _frames(self, with_trx=True):
+        cols = {"region": ["northeast"], "market_share": [0.49]}
+        target_cols = {"region": ["northeast"], "market_share": [0.5367]}
+        if with_trx:
+            cols["trx"] = [217347.31]
+            target_cols["trx"] = [233805.51]
+        return pd.DataFrame(cols), pd.DataFrame(target_cols)
+
+    def test_share_gap_carries_segment_trx(self):
+        node = GapDetectorNode(use_mock=True)
+        current, target = self._frames()
+        gap = node._calculate_gap(
+            current, target, "region", "northeast", "market_share", "temporal"
+        )
+        assert gap is not None
+        assert gap["segment_trx"] == pytest.approx(217347.31)
+
+    def test_trx_gap_does_not_carry_context_field(self):
+        node = GapDetectorNode(use_mock=True)
+        current, target = self._frames()
+        gap = node._calculate_gap(current, target, "region", "northeast", "trx", "temporal")
+        assert gap is not None
+        assert "segment_trx" not in gap
+
+    def test_share_gap_without_trx_column_omits_context(self):
+        node = GapDetectorNode(use_mock=True)
+        current, target = self._frames(with_trx=False)
+        gap = node._calculate_gap(
+            current, target, "region", "northeast", "market_share", "temporal"
+        )
+        assert gap is not None
+        assert "segment_trx" not in gap

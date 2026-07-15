@@ -1082,3 +1082,113 @@ class TestBrandScopedTRxValue:
         node = ROICalculatorNode(use_bootstrap=False)
         assert node._resolve_value_per_trx("Fabhalta") == 2350.0
         assert node._resolve_value_per_trx("Kisqali") == 850.0
+
+
+class TestMarketShareUnitTranslation:
+    """market_share gaps must be valued in script volume, not raw share points.
+
+    The METRIC_TO_DRIVER map sends market_share to TRX_LIFT with the comment
+    "Translates to TRx impact" — but no translation existed: a share gap of
+    0.05 (fraction points) was fed into the $/TRx multiplier as if it were
+    0.05 SCRIPTS, producing ~$1 revenue against a ~$12.5k cost floor. Every
+    market_share opportunity was therefore structurally suppressed for EVERY
+    brand (faithful prod-DB runs 2026-07-15: Kisqali $1.19, Fabhalta $1.17,
+    Remibrutinib $0.51 — all vs ~$12.5k). The fix converts share points to
+    TRx-equivalents via relative share growth x same-segment TRx volume
+    (market size constant — already a documented assumption), attached by the
+    gap detector as ``segment_trx``.
+    """
+
+    def _share_gap(self, current=0.49, target=0.5367, segment_trx=217347.31):
+        gap = {
+            "gap_id": "region_northeast_market_share_temporal",
+            "metric": "market_share",
+            "segment": "region",
+            "segment_value": "northeast",
+            "current_value": current,
+            "target_value": target,
+            "gap_size": target - current,
+            "gap_percentage": (target - current) / target * 100.0,
+            "gap_type": "temporal",
+        }
+        if segment_trx is not None:
+            gap["segment_trx"] = segment_trx
+        return gap
+
+    def _state(self, gap, brand="Kisqali"):
+        return {
+            "query": "test",
+            "metrics": ["trx", "market_share"],
+            "segments": ["region"],
+            "brand": brand,
+            "time_period": "current_quarter",
+            "filters": None,
+            "gap_type": "temporal",
+            "min_gap_threshold": 5.0,
+            "max_opportunities": 10,
+            "gaps_detected": [gap],
+            "detection_latency_ms": 0,
+            "roi_latency_ms": 0,
+            "total_latency_ms": 0,
+            "segments_analyzed": 1,
+            "errors": [],
+            "warnings": [],
+            "status": "calculating",
+        }
+
+    @pytest.mark.asyncio
+    async def test_share_gap_valued_at_script_volume(self):
+        # Kisqali northeast, faithful prod shape: share 0.49 -> 0.5367 with
+        # 217,347 segment TRx. Translated units = gap/current x trx; value =
+        # units x capture(0.30) x $850 x temporal attribution(0.10).
+        node = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        gap = self._share_gap()
+        result = await node.execute(self._state(gap))
+        est = result["roi_estimates"][0]
+        units = abs(gap["gap_size"]) / gap["current_value"] * gap["segment_trx"]
+        assert est["estimated_revenue_impact"] == pytest.approx(units * 0.30 * 850.0 * 0.10)
+        # The whole point: a real share gap must be able to clear the cost floor.
+        assert est["expected_roi"] > 0
+
+    @pytest.mark.asyncio
+    async def test_share_translation_is_unit_scale_invariant(self):
+        # business_metrics stores share as a FRACTION (0-1) but the tier0 path
+        # derives 0-100. The relative-growth formula must not care.
+        node = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        frac = await node.execute(self._state(self._share_gap(0.49, 0.5367)))
+        pct = await node.execute(self._state(self._share_gap(49.0, 53.67)))
+        assert frac["roi_estimates"][0]["estimated_revenue_impact"] == pytest.approx(
+            pct["roi_estimates"][0]["estimated_revenue_impact"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_share_translation_composes_with_brand_value(self):
+        # Fabhalta's brand-scoped $/TRx must apply to translated share units too.
+        node = ROICalculatorNode(
+            use_bootstrap=False,
+            capture_rate=0.30,
+            value_per_trx_by_brand={"fabhalta": 2550.0},
+        )
+        gap = self._share_gap(0.1333, 0.15, segment_trx=20000.0)
+        fab = await node.execute(self._state(gap, brand="Fabhalta"))
+        kis = await node.execute(self._state(dict(gap), brand="Kisqali"))
+        assert fab["roi_estimates"][0]["estimated_revenue_impact"] == pytest.approx(
+            kis["roi_estimates"][0]["estimated_revenue_impact"] * 3.0
+        )
+
+    @pytest.mark.asyncio
+    async def test_share_gap_without_volume_context_fails_closed(self):
+        # No segment_trx context -> the gap must be valued at $0 with an explicit
+        # assumption note, NOT silently mis-valued at pp x $/TRx (~$1 fake revenue).
+        node = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        result = await node.execute(self._state(self._share_gap(segment_trx=None)))
+        est = result["roi_estimates"][0]
+        assert est["estimated_revenue_impact"] == 0.0
+        assert any("not valued" in a.lower() for a in est["assumptions"])
+
+    @pytest.mark.asyncio
+    async def test_share_gap_with_zero_share_fails_closed(self):
+        # current share 0 -> relative growth undefined -> fail closed, no crash.
+        node = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        result = await node.execute(self._state(self._share_gap(current=0.0, target=0.05)))
+        assert result["roi_estimates"][0]["estimated_revenue_impact"] == 0.0

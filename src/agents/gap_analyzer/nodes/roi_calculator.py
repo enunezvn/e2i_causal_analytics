@@ -441,6 +441,31 @@ class ROICalculatorNode:
         # expected realized value. (Previously value used the full gap_size, an
         # implicit 100% capture that inflated ROI without bound as gaps grew.)
         gap_size = abs(gap["gap_size"])
+        # market_share is mapped to TRX_LIFT but its gap_size is in SHARE POINTS,
+        # not scripts — feed it raw into $/TRx and a 0.05-point gap is "worth"
+        # $42.50, below any cost floor, so every share gap was structurally
+        # suppressed for every brand. Convert to TRx-equivalents first; the
+        # translated units then drive value, cost, and risk consistently (the
+        # size thresholds in those methods are calibrated to script volumes).
+        share_note: Optional[str] = None
+        if metric == "market_share":
+            translated = self._market_share_to_trx_equivalents(gap)
+            if translated is None:
+                # Fail CLOSED: without segment TRx context a share gap cannot be
+                # valued in dollars. $0 (suppressed, with an explicit note) is
+                # honest; pp x $/TRx would be a plausible-looking fake value.
+                gap_size = 0.0
+                share_note = (
+                    "market_share gap NOT valued: no segment TRx context available "
+                    "to convert share points to script volume (valued at $0 rather "
+                    "than mis-reading share points as scripts)"
+                )
+            else:
+                gap_size = translated
+                share_note = (
+                    f"market_share gap converted to ~{translated:,.0f} TRx-equivalents "
+                    "(relative share growth x segment TRx; market size assumed constant)"
+                )
         captured_units = gap_size * self.capture_rate
         gap_type = gap["gap_type"]
 
@@ -472,8 +497,10 @@ class ROICalculatorNode:
         # Determine attribution level from gap type
         attribution = self._determine_attribution(gap_type)
 
-        # Assess risks based on gap characteristics
-        risk_assessment = self._assess_risks(gap)
+        # Assess risks based on gap characteristics (size in effective units —
+        # for market_share that is the translated script volume, so the
+        # script-calibrated size thresholds keep their meaning)
+        risk_assessment = self._assess_risks(gap, effective_gap_size=gap_size)
 
         # Calculate ROI using the full service
         roi_result: ROIResult = self.roi_service.calculate_roi(
@@ -496,7 +523,11 @@ class ROICalculatorNode:
             }
 
         # Build assumptions list
-        assumptions = self._build_assumptions(metric, driver_type, attribution, risk_assessment)
+        assumptions = self._build_assumptions(
+            metric, driver_type, attribution, risk_assessment, value_per_trx
+        )
+        if share_note is not None:
+            assumptions.append(share_note)
 
         # Legacy confidence (use probability_positive if available)
         legacy_confidence = (
@@ -525,6 +556,28 @@ class ROICalculatorNode:
         }
 
         return roi_estimate
+
+    @staticmethod
+    def _market_share_to_trx_equivalents(gap: PerformanceGap) -> Optional[float]:
+        """Convert a market_share gap to incremental TRx-equivalent units.
+
+        Closing a share gap S -> T on a constant market of M scripts yields
+        (T - S)/100 * M incremental scripts, and M = segment_trx / (S/100), so
+        incremental scripts = |gap_size| / current_share * segment_trx — the
+        RELATIVE share growth times the brand's current segment volume. The
+        ratio form is deliberately unit-scale invariant: business_metrics
+        stores share as a 0-1 fraction while the tier0 fallback derives 0-100,
+        and both cancel out identically.
+
+        Returns None when the gap carries no usable context (no positive
+        ``segment_trx`` from the detector, or current share <= 0 so relative
+        growth is undefined) — the caller fails closed to $0.
+        """
+        segment_trx = gap.get("segment_trx")
+        current_share = gap["current_value"]
+        if segment_trx is None or segment_trx <= 0.0 or current_share <= 0.0:
+            return None
+        return abs(gap["gap_size"]) / current_share * segment_trx
 
     def _get_value_driver(self, metric: str) -> ValueDriverType:
         """Map KPI metric to primary value driver type.
@@ -787,7 +840,9 @@ class ROICalculatorNode:
         }
         return attribution_mapping.get(gap_type, AttributionLevel.PARTIAL)
 
-    def _assess_risks(self, gap: PerformanceGap) -> RiskAssessment:
+    def _assess_risks(
+        self, gap: PerformanceGap, effective_gap_size: Optional[float] = None
+    ) -> RiskAssessment:
         """Assess risk factors for closing a gap.
 
         Risk factors:
@@ -798,12 +853,16 @@ class ROICalculatorNode:
 
         Args:
             gap: Performance gap
+            effective_gap_size: Gap size in effective (script-equivalent) units
+                when the raw gap_size is in a different unit — market_share gaps
+                are share points, and the >100/>500 size thresholds below are
+                calibrated to script volumes. None falls back to the raw size.
 
         Returns:
             Risk assessment for ROI adjustment
         """
         metric = gap["metric"]
-        gap_size = abs(gap["gap_size"])
+        gap_size = effective_gap_size if effective_gap_size is not None else abs(gap["gap_size"])
         gap_pct = abs(gap["gap_percentage"])
 
         # Technical complexity
@@ -877,6 +936,7 @@ class ROICalculatorNode:
         driver_type: ValueDriverType,
         attribution: AttributionLevel,
         risk: RiskAssessment,
+        value_per_trx: Optional[float] = None,
     ) -> List[str]:
         """Build list of assumptions for transparency.
 
@@ -885,13 +945,17 @@ class ROICalculatorNode:
             driver_type: Value driver used
             attribution: Attribution level
             risk: Risk assessment
+            value_per_trx: Brand-resolved $/TRx actually used for TRX_LIFT —
+                the displayed assumption must reflect it, not a hardcoded $850
 
         Returns:
             List of assumption statements
         """
         # Get unit value from service
         unit_values = {
-            ValueDriverType.TRX_LIFT: "$850/TRx",
+            ValueDriverType.TRX_LIFT: (
+                f"${(value_per_trx if value_per_trx is not None else DEFAULT_VALUE_PER_TRX):,.0f}/TRx"
+            ),
             ValueDriverType.PATIENT_IDENTIFICATION: "$1,200/patient",
             ValueDriverType.ACTION_RATE: "$45/pp/1000 triggers",
             ValueDriverType.INTENT_TO_PRESCRIBE: "$320/HCP/pp",
