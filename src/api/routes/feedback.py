@@ -1396,6 +1396,9 @@ async def _execute_learning_cycle(
                 "time_range_start": time_range_start,
                 "time_range_end": time_range_end,
                 "focus_agents": request.focus_agents or [],
+                # Previously dropped here — the updater then applied every
+                # update regardless of the request (see KnowledgeUpdaterNode).
+                "auto_apply": request.auto_apply,
                 "status": "pending",
                 "errors": [],
                 "warnings": [],

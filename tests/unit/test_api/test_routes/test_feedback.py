@@ -372,6 +372,47 @@ async def test_get_learning_results_success():
 
 
 @pytest.mark.asyncio
+async def test_execute_learning_cycle_threads_auto_apply_into_state():
+    """The request's auto_apply flag must reach the graph's initial state.
+
+    It was silently dropped: RunLearningRequest.auto_apply existed but
+    _execute_learning_cycle never put it in initial_state, so
+    KnowledgeUpdaterNode applied every update regardless of the request.
+    """
+    from src.api.routes.feedback import RunLearningRequest, _execute_learning_cycle
+
+    result_state = {
+        "status": "completed",
+        "detected_patterns": [],
+        "learning_recommendations": [],
+        "priority_improvements": [],
+        "proposed_updates": [],
+        "applied_updates": [],
+        "learning_summary": "ok",
+        "collection_latency_ms": 0,
+        "analysis_latency_ms": 0,
+        "errors": [],
+        "warnings": [],
+    }
+
+    for flag in (False, True):
+        fake_graph = AsyncMock()
+        fake_graph.ainvoke.return_value = result_state
+        request = RunLearningRequest(auto_apply=flag)
+        with patch(
+            "src.agents.feedback_learner.graph.build_feedback_learner_graph",
+            return_value=fake_graph,
+        ):
+            with patch(
+                "src.agents.feedback_learner.agent.build_production_feedback_stores",
+                new=AsyncMock(return_value=(None, None, None)),
+            ):
+                await _execute_learning_cycle(request)
+        initial_state = fake_graph.ainvoke.call_args.args[0]
+        assert initial_state["auto_apply"] is flag
+
+
+@pytest.mark.asyncio
 async def test_get_learning_results_not_found():
     """Test getting learning results for non-existent batch."""
     from src.api.routes.feedback import get_learning_results
