@@ -498,7 +498,9 @@ class TestMarketShareSegmentTrxContext:
     def test_share_gap_carries_segment_trx(self):
         node = GapDetectorNode(use_mock=True)
         current, target = self._frames()
-        gap = node._calculate_gap(current, target, "region", "northeast", "market_share", "temporal")
+        gap = node._calculate_gap(
+            current, target, "region", "northeast", "market_share", "temporal"
+        )
         assert gap is not None
         assert gap["segment_trx"] == pytest.approx(217347.31)
 
@@ -512,6 +514,8 @@ class TestMarketShareSegmentTrxContext:
     def test_share_gap_without_trx_column_omits_context(self):
         node = GapDetectorNode(use_mock=True)
         current, target = self._frames(with_trx=False)
-        gap = node._calculate_gap(current, target, "region", "northeast", "market_share", "temporal")
+        gap = node._calculate_gap(
+            current, target, "region", "northeast", "market_share", "temporal"
+        )
         assert gap is not None
         assert "segment_trx" not in gap
