@@ -21,6 +21,23 @@ gap_analyzer:
     # (_load_capture_rate / DEFAULT_CAPTURE_RATE); see docs/Archive/roi_methodology.md
     # "Capture Rate".
     capture_rate: 0.30
+    # Per-brand $ value of one incremental TRx-equivalent unit. The service
+    # default ($850/TRx, src/services/roi_calculation.py TRxLiftCalculator) is
+    # calibrated to a solid-tumor oncology brand (Kisqali-scale, ~$200k/yr WAC).
+    # A flat rate structurally zeroes rare-disease brands: Fabhalta (PNH,
+    # ultra-orphan, ~$550k/yr WAC) moves ~10-25x fewer scripts than Kisqali, so
+    # at $850/unit every candidate gap fell at/below the intervention cost floor
+    # (~$75k saturated) and the brand could NEVER surface an opportunity — the
+    # live /gap-analysis page showed "No gap opportunities available" for
+    # Fabhalta on every run. Scale by annual-WAC ratio: 850 x (~550k/~200k)
+    # ≈ 2350. Brands not listed use the $850 default (Kisqali IS the
+    # calibration anchor; Remibrutinib launch pricing is not established, so it
+    # deliberately stays on the default). Demo-scale anchors, not gross-to-net
+    # figures — the RELATIVE brand magnitudes are what matter. Consumed by
+    # roi_calculator.py (_load_value_per_trx_by_brand / _resolve_value_per_trx);
+    # keys are case-insensitive.
+    value_per_trx_by_brand:
+      Fabhalta: 2350.0
 
   # Gap severity thresholds (as percentages)
   gap_thresholds:

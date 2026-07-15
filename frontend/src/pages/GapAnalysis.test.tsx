@@ -171,6 +171,34 @@ describe('GapAnalysis — F-002 empty state', () => {
     expect(screen.queryByText(/Add 2 field reps/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Northeast/)).not.toBeInTheDocument();
   });
+
+  it('explains an all-suppressed run instead of implying no analysis exists', () => {
+    // Fabhalta live case: the analysis COMPLETED, found candidates, and the
+    // prioritizer suppressed every one as below break-even. The generic
+    // "Click Run Analysis" copy here reads as "nothing ran / page broken" —
+    // the empty state must surface the economic conclusion instead.
+    (useOpportunities as MockFn).mockReturnValue({
+      data: {
+        opportunities: [],
+        total_addressable_value: 0,
+        quick_wins_count: 0,
+        steady_plays_count: 0,
+        strategic_bets_count: 0,
+        suppressed_count: 4,
+      },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    const empty = screen.getByTestId('all-suppressed-empty-state');
+    expect(empty).toHaveTextContent(/4 candidate gaps/i);
+    expect(empty).toHaveTextContent(/break-even/i);
+    // The misleading "no analysis" copy must NOT render in this state.
+    expect(screen.queryByText(/No gap opportunities available/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Click Run Analysis/)).not.toBeInTheDocument();
+  });
 });
 
 describe('GapAnalysis — Run Analysis wiring (poll-to-completion)', () => {

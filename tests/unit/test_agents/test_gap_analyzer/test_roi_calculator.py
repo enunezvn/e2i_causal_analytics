@@ -992,3 +992,93 @@ class TestROIValueRealism:
         # Valid fractions (incl. the inclusive upper bound) pass through unchanged.
         assert ROICalculatorNode(use_bootstrap=False, capture_rate=0.40).capture_rate == 0.40
         assert ROICalculatorNode(use_bootstrap=False, capture_rate=1.0).capture_rate == 1.0
+
+
+class TestBrandScopedTRxValue:
+    """Per-brand $/TRx (Fabhalta zero-opportunity fix).
+
+    A flat $850/TRx across brands structurally locks rare-disease brands out of
+    ever clearing the intervention cost floor: Fabhalta (PNH, ultra-orphan) has
+    script volumes ~10-25x smaller than Kisqali while its real per-script value
+    is several times HIGHER — so every candidate gap suppressed as below
+    break-even, and the live page showed "No gap opportunities available"
+    forever. These tests pin the brand-scoped value override.
+    """
+
+    def _gap(self, gap_size=4000.0, metric="trx"):
+        return {
+            "gap_id": "x",
+            "metric": metric,
+            "segment": "region",
+            "segment_value": "x",
+            "current_value": 1000.0,
+            "target_value": 1000.0 + gap_size,
+            "gap_size": float(gap_size),
+            "gap_percentage": gap_size / (1000.0 + gap_size) * 100.0,
+            "gap_type": "vs_target",
+        }
+
+    def _state(self, brand: str):
+        return {
+            "query": "test",
+            "metrics": ["trx"],
+            "segments": ["region"],
+            "brand": brand,
+            "time_period": "current_quarter",
+            "filters": None,
+            "gap_type": "vs_target",
+            "min_gap_threshold": 5.0,
+            "max_opportunities": 10,
+            "gaps_detected": [self._gap()],
+            "detection_latency_ms": 0,
+            "roi_latency_ms": 0,
+            "total_latency_ms": 0,
+            "segments_analyzed": 1,
+            "errors": [],
+            "warnings": [],
+            "status": "calculating",
+        }
+
+    @pytest.mark.asyncio
+    async def test_brand_override_scales_trx_value(self):
+        # 2550 = 3x the $850 default -> revenue impact scales exactly 3x
+        # (attribution/capture/risk factors are identical multiplicative terms).
+        node = ROICalculatorNode(
+            use_bootstrap=False,
+            capture_rate=0.30,
+            value_per_trx_by_brand={"fabhalta": 2550.0},
+        )
+        # Case-insensitive: state carries the canonical capitalized brand.
+        fab = await node.execute(self._state("Fabhalta"))
+        kis = await node.execute(self._state("kisqali"))
+        v_fab = fab["roi_estimates"][0]["estimated_revenue_impact"]
+        v_kis = kis["roi_estimates"][0]["estimated_revenue_impact"]
+        assert v_kis == 663000.0  # unchanged default path (4000 x 0.30 x 850 x 0.65)
+        assert v_fab == pytest.approx(v_kis * 3.0)
+
+    @pytest.mark.asyncio
+    async def test_unknown_brand_falls_back_to_default(self):
+        node = ROICalculatorNode(
+            use_bootstrap=False,
+            capture_rate=0.30,
+            value_per_trx_by_brand={"fabhalta": 2550.0},
+        )
+        result = await node.execute(self._state("SomeNewBrand"))
+        assert result["roi_estimates"][0]["estimated_revenue_impact"] == 663000.0
+
+    def test_invalid_brand_values_fall_back_to_default(self):
+        # 0 / negative / non-numeric per-brand values must never zero out or
+        # corrupt ROI — same fail-soft discipline as capture_rate.
+        node = ROICalculatorNode(
+            use_bootstrap=False,
+            value_per_trx_by_brand={"a": 0.0, "b": -5, "c": "oops"},
+        )
+        for brand in ("a", "b", "c", None):
+            assert node._resolve_value_per_trx(brand) == 850.0
+
+    def test_config_loaded_brand_values(self):
+        # Default construction reads config/agents/gap_analyzer.yaml — Fabhalta
+        # must carry the documented ultra-orphan override, Kisqali the default.
+        node = ROICalculatorNode(use_bootstrap=False)
+        assert node._resolve_value_per_trx("Fabhalta") == 2350.0
+        assert node._resolve_value_per_trx("Kisqali") == 850.0

@@ -76,6 +76,10 @@ class ValueDriverInput:
     driver_type: ValueDriverType
     quantity: float  # Number of units (TRx, patients, pp, etc.)
 
+    # Per-unit $ override (brand-scoped economics). Consumed by TRX_LIFT only;
+    # None keeps each calculator's methodology default.
+    unit_value: Optional[float] = None
+
     # Optional parameters for specific drivers
     hcp_count: Optional[int] = None  # For ITP calculations
     trigger_count: Optional[int] = None  # For action rate calculations
@@ -201,19 +205,25 @@ class ROIResult:
 class TRxLiftCalculator:
     """Calculate value from TRx lift."""
 
-    VALUE_PER_TRX = 850.0  # $850 per incremental TRx
+    VALUE_PER_TRX = 850.0  # $850 per incremental TRx (generic anchor)
 
-    def calculate(self, incremental_trx: float) -> float:
+    def calculate(self, incremental_trx: float, value_per_trx: Optional[float] = None) -> float:
         """
         Calculate TRx lift value.
 
         Args:
             incremental_trx: Number of incremental prescriptions
+            value_per_trx: Per-brand $ value of one incremental TRx. The class
+                default is calibrated to a Kisqali-scale oncology brand; a flat
+                rate misvalues brands with very different per-script economics
+                (an ultra-orphan PNH script is worth several times more), so
+                callers with brand context pass the brand-scoped rate here.
 
         Returns:
             Dollar value of TRx lift
         """
-        return incremental_trx * self.VALUE_PER_TRX
+        unit = value_per_trx if value_per_trx is not None else self.VALUE_PER_TRX
+        return incremental_trx * unit
 
 
 class PatientIdentificationCalculator:
@@ -803,7 +813,7 @@ class ROICalculationService:
             Dollar value for this driver
         """
         if driver.driver_type == ValueDriverType.TRX_LIFT:
-            return self.trx_lift.calculate(driver.quantity)
+            return self.trx_lift.calculate(driver.quantity, value_per_trx=driver.unit_value)
 
         elif driver.driver_type == ValueDriverType.PATIENT_IDENTIFICATION:
             return self.patient_id.calculate(driver.quantity)
