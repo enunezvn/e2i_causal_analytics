@@ -2001,28 +2001,37 @@ class TestCopilotLearningSignals:
         assert _grade_copilot_turn(response="", tool_count=3) == 0.0
 
     def test_grade_direct_answer_baseline(self) -> None:
-        """A substantive direct answer (no tools): base 0.5 + 0.1 length."""
+        """A substantive direct answer (no tools): (base 0.5 + 0.1 length)
+        rescaled by the 0.8 surface max (codex-1240 M2 calibration)."""
         from src.api.routes.copilotkit import _grade_copilot_turn
 
         reward = _grade_copilot_turn(response="x" * 250, tool_count=0)
-        assert reward == pytest.approx(0.6)
+        assert reward == pytest.approx(0.75)
 
-    def test_grade_tool_grounded_answer(self) -> None:
-        """Tool results are the evidence analog: 0.2 * min(1, n/4)."""
+    def test_grade_tool_grounded_answer_reaches_full_band(self) -> None:
+        """Tool results are the evidence analog: 0.2 * min(1, n/4). A
+        best-possible copilot turn (synthesis + full grounding + substantive
+        length) must map to 1.0 — the copilot surface has no evidence-board/
+        visualization analog, so its raw composite max is 0.8; both surfaces
+        feed the same rating_1to5 = 1 + 4*reward mapping and the same
+        avg_rating < 3.0 low-ratings gate, so an uncalibrated 0.8 cap would
+        structurally depress the shared agent-quality average (codex-1240 M2)."""
         from src.api.routes.copilotkit import _grade_copilot_turn
 
         reward = _grade_copilot_turn(response="x" * 250, tool_count=4)
-        assert reward == pytest.approx(0.8)
+        assert reward == pytest.approx(1.0)
         # Never exceeds 1.0
         assert _grade_copilot_turn(response="x" * 250, tool_count=12) <= 1.0
 
     def test_grade_synthesis_error_drops_base(self) -> None:
         """A failed synthesis serves a raw tool dump — not a synthesis. The
-        0.5 base is forfeited; only the observable components remain."""
+        0.5 base is forfeited; only the observable components remain (raw
+        0.3), still normalized by the FULL surface max so degraded turns
+        can never reach the top band."""
         from src.api.routes.copilotkit import _grade_copilot_turn
 
         reward = _grade_copilot_turn(response="x" * 250, tool_count=4, synthesis_error=True)
-        assert reward == pytest.approx(0.3)
+        assert reward == pytest.approx(0.375)
 
     @pytest.mark.asyncio
     async def test_collect_signal_matches_learner_contract(self, monkeypatch) -> None:
@@ -2085,14 +2094,18 @@ class TestCopilotLearningSignals:
         )
 
     def test_graph_nodes_wire_signal_collection(self) -> None:
-        """Wiring guard: both terminal paths (synthesize + direct chat answer)
-        call the collector. Source-level check because the nodes are closures
-        inside create_e2i_chat_agent; the live flow is verified post-deploy."""
+        """Wiring guard: ALL THREE terminal paths call the collector —
+        synthesize success, synthesize error-fallback (the degraded-turn
+        site that prevents selection bias; codex-1240 LOW: a >= 2 guard let
+        it be silently removed), and chat_node's direct answer. Source-level
+        check because the nodes are closures inside create_e2i_chat_agent;
+        the live flow is verified post-deploy."""
         import inspect
 
         import src.api.routes.copilotkit as mod
 
         source = inspect.getsource(mod.create_e2i_chat_agent)
-        assert source.count("_collect_copilot_learning_signal") >= 2, (
-            "both synthesize_node and chat_node's direct-answer path must collect a learning signal"
+        assert source.count("_collect_copilot_learning_signal") == 3, (
+            "synthesize_node (success AND error-fallback) and chat_node's "
+            "direct-answer path must each collect a learning signal"
         )

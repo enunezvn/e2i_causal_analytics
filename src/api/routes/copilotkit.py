@@ -1468,14 +1468,24 @@ def _grade_copilot_turn(response: str, tool_count: int, synthesis_error: bool = 
     + 0.2 * min(1, tool_results/4) evidence grounding, + 0.1 substantive
     length. A failed synthesis (raw tool-dump fallback served) forfeits the
     base — the response exists but is not a synthesis — leaving only the
-    observable components (max 0.3). No response at all is 0.0.
+    observable components. No response at all is 0.0.
+
+    Calibration (codex-1240 M2): the copilot surface has no evidence-board/
+    visualization analog, so its raw composite max is 0.8 while the
+    cognitive path reaches 1.0. Both feed the same
+    ``rating_1to5 = 1 + 4*reward`` mapping and the same ``avg_rating < 3.0``
+    low-ratings gate, so an uncalibrated 0.8 cap would structurally depress
+    the shared agent-quality average even on turns that are good for this
+    surface. The composite is therefore normalized by the full surface max
+    (0.8) — a best-possible copilot turn maps to 1.0; degraded-synthesis
+    turns (raw max 0.3) stay in the low band (0.375).
     """
     if not response:
         return 0.0
     reward = 0.0 if synthesis_error else 0.5
     reward += 0.2 * min(1.0, tool_count / 4.0)
     reward += 0.1 if len(response) >= 200 else 0.0
-    return min(1.0, reward)
+    return min(1.0, reward / 0.8)
 
 
 async def _collect_copilot_learning_signal(

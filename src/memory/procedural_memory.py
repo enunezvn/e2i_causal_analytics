@@ -37,6 +37,7 @@ Usage:
     )
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -556,7 +557,11 @@ async def record_learning_signal(
     # Remove None values
     record = {k: v for k, v in record.items() if v is not None}
 
-    client.table("learning_signals").insert(record).execute()
+    # The sync supabase .execute() is a blocking HTTP round-trip; this
+    # coroutine is awaited on request/graph hot paths (cognitive Reflector,
+    # copilot turn collection #1240), so run it off the event loop
+    # (#953 RC2 idiom) — only WHERE the work runs changes.
+    await asyncio.to_thread(lambda: client.table("learning_signals").insert(record).execute())
 
     logger.info(f"Recorded learning signal {signal_id} (type={signal.signal_type})")
     return signal_id
