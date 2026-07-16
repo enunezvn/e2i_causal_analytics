@@ -77,12 +77,66 @@ proven separately on the labeled CSU_remibrutinib golden cohort (Phase 1, PR #54
 3. **`months_since_first_dx` and `csu_chronicity` are degenerate constants** in the current converter (no patient-level variation). Authored to their true clinical meaning (duration/chronicity drive escalation) per the authoring guide's "author the real mechanism" rule; ACCEPT regardless.
 4. **`has_nsaid_hypersensitivity`** — Asero (PMID 34284571) found NSAID hypersensitivity is independent of CSU severity/pathogenesis, weakening its `feature→Y` arm (confounder vs near-null ancestor). ACCEPT either way.
 
-## Deferred (NOT in this PR)
+## D4 empirical crosscheck — MEASURED (2026-06-02)
 
-Per the explicit scope decision: the faithful-Optum **D4 empirical crosscheck run**
-(`compare_structural_vs_empirical` on a real ~1294-patient initiation run) and the
-**cohort-scoped activation ramp**. The all-ACCEPT result + the EnsembleVoter precedence
-(an empirical-high veto wins *before* the structural rule) already guarantee
-`missed_leaks == 0`, so the heavy run would confirm a structural certainty; and activation
-on this all-ACCEPT cohort is functionally a no-op. The decider stays dark; the wiring
-(`adaptive_structural_decider_enabled`, PR #541) and the no-label crosscheck gate are in place.
+The faithful crosscheck that was previously deferred as an "argued structural certainty"
+has now been **run on the real cohort** — converting the argument into measured evidence
+(cheapest-disproof: the structural-preclusion claim was a hypothesis until the empirical
+signal confirmed it).
+
+**Runs (two — same result):** real Optum CSU biologic-initiation cohort, n=1294 (37 positive, 2.9%).
+1. **`--step 2` data-prep** (`run_optum_tier0_test.py --cohort initiation --step 2`, 215 s).
+2. **FU-A — full manifest-ON pipeline** (`--cohort initiation --disable-mlflow --hpo-trials 1`,
+   165 s): step-1 scope_definer engages the `optum` manifest into `state.scope_spec`
+   (artifact `feature_manifest_source = optum`) — the exact production config (#545).
+
+Structural roles re-derived offline via `derive_structural_role` at current `main`; empirical
+per-feature severities taken from each run's `adaptive_verdicts` (Layer-1 / Layer-3 FDR);
+paired by `compare_structural_vs_empirical`.
+
+**Result — `gate_passed = True`, `missed_leaks = 0`:**
+
+| quantity | value |
+|---|---|
+| structural roles (110 SAFE) | 93 confounder + 17 instrument; **0 leak, 0 unclassifiable** (all ACCEPT) |
+| empirical verdicts | 84 total — 79 `info`, 1 `moderate`, **4 `high`** |
+| empirical `high` features | `discontinued_180d`, `persistent_at_180d`, `treatment_initiated`, `discontinuation_flag` — **all forbidden post-index targets; NONE in the SAFE set** |
+| SAFE features flagged high/critical | **0** |
+| `missed_leaks` (structural ACCEPT ∧ empirical leak) | **0** |
+| `disagreements` | 0 |
+
+So **no SAFE attested feature is empirically a leak** — the structural decider's ACCEPT of
+all 110 agrees with the data-driven signal, **confirmed under the production manifest-ON
+config** (FU-A, `feature_manifest_source = optum`).
+
+**Honesty notes:**
+1. **Manifest-invariant for this cohort.** The two runs are byte-identical (84 verdicts,
+   79 `info` / 1 `moderate` / 4 `high`, same drops) whether the artifact reports
+   `feature_manifest_source = None` (`--step 2`-alone — state not written back) or `= optum`
+   (FU-A full run with step-1 scope_definer). Declared-safe σ-inflation has nothing to act on
+   here — every SAFE feature scores `info`/`moderate`, far below the σ-band where manifest
+   protection matters — so the gate does not depend on the manifest. (This **supersedes** the
+   earlier "manifest-OFF stricter regime, holds *a fortiori*" framing: FU-A confirms the gate
+   *directly* under production config, not by inference.)
+2. **Coverage 80/110 is a DATA-fidelity ceiling, not a config gap.** The 30 unscored SAFE
+   features are degenerate/all-null Optum-converter columns (`pearsonr` undefined on constant
+   input) — dropped pre-scan and **incapable of leaking**. FU-A confirmed this is invariant to
+   the manifest: full coverage of all 110 is unreachable without converter changes (a constant
+   column has no signal to score) and needs none (a constant column cannot leak the outcome).
+3. **The QC block is a data-quality artifact** — only 9 clean features survive the all-null
+   drops + the rare 2.9% positive rate; identical under manifest-ON and -OFF, and orthogonal to
+   the leakage crosscheck (the leakage verdicts are produced by the scan before/independent of
+   the completeness gate).
+4. **Undetectable case (unchanged):** a feature where structural ACCEPTs *and* the empirical
+   signal also misses a real leak is not detectable by this crosscheck; it is mitigated by the
+   per-feature domain review (D3) and by EnsembleVoter precedence (empirical-high wins before
+   the structural rule fires).
+
+## Still deferred (NOT in this PR)
+
+The **cohort-scoped activation ramp** (D5.1 flip `adaptive_structural_decider_enabled` for
+Optum only, D5.2 monitoring, D5.3 rollback runbook) and the **D3/D6 human domain sign-off**.
+Activation on this all-ACCEPT cohort is functionally a no-op for leak-catching (its only
+effect is replacing the LLM with the deterministic decision for these features). The decider
+stays **dark**; the wiring (`adaptive_structural_decider_enabled`, PR #541) and the no-label
+crosscheck gate are in place, and the gate is now **measured**, not argued.
