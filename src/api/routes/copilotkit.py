@@ -1470,22 +1470,28 @@ def _grade_copilot_turn(response: str, tool_count: int, synthesis_error: bool = 
     base — the response exists but is not a synthesis — leaving only the
     observable components. No response at all is 0.0.
 
-    Calibration (codex-1240 M2): the copilot surface has no evidence-board/
-    visualization analog, so its raw composite max is 0.8 while the
-    cognitive path reaches 1.0. Both feed the same
-    ``rating_1to5 = 1 + 4*reward`` mapping and the same ``avg_rating < 3.0``
-    low-ratings gate, so an uncalibrated 0.8 cap would structurally depress
-    the shared agent-quality average even on turns that are good for this
-    surface. The composite is therefore normalized by the full surface max
-    (0.8) — a best-possible copilot turn maps to 1.0; degraded-synthesis
-    turns (raw max 0.3) stay in the low band (0.375).
+    Calibration (codex-1240 M2, iter-2): the composite is intentionally NOT
+    rescaled to [0, 1]. The copilot surface has no evidence-board/
+    visualization analog, so its honest ceiling is 0.8 while the cognitive
+    path reaches 1.0 — but every hard consumer of the shared
+    ``rating_1to5 = 1 + 4*reward`` mapping is bottom-anchored
+    (``avg_rating < 3.0`` pooled gate, per-agent ``num < 3`` negative
+    counting, ``< 2.0`` severity), and the raw scale already agrees with the
+    cognitive path there: 0.5 = acceptable synthesis = rating 3.0 on BOTH
+    surfaces. A linear rescale (``/0.8``) would inflate exactly that consumed
+    region — a mediocre ungrounded copilot turn (raw 0.5) would outscore an
+    identical-quality cognitive turn 3.5 vs 3.0 and mask low-rating
+    patterns in mixed pools. The unreachable top band (0.8–1.0) is the
+    honest statement that this surface cannot exhibit those two extra
+    quality axes; raw reward is preserved in signal metadata for any future
+    source-aware aggregation.
     """
     if not response:
         return 0.0
     reward = 0.0 if synthesis_error else 0.5
     reward += 0.2 * min(1.0, tool_count / 4.0)
     reward += 0.1 if len(response) >= 200 else 0.0
-    return min(1.0, reward / 0.8)
+    return reward
 
 
 async def _collect_copilot_learning_signal(

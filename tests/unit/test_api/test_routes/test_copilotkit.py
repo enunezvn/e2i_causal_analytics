@@ -2001,37 +2001,39 @@ class TestCopilotLearningSignals:
         assert _grade_copilot_turn(response="", tool_count=3) == 0.0
 
     def test_grade_direct_answer_baseline(self) -> None:
-        """A substantive direct answer (no tools): (base 0.5 + 0.1 length)
-        rescaled by the 0.8 surface max (codex-1240 M2 calibration)."""
+        """A substantive direct answer (no tools): base 0.5 + 0.1 length,
+        UNrescaled — raw 0.5 = acceptable synthesis = rating 3.0 on both
+        surfaces, so identical quality must map to identical reward
+        (codex-1240 M2 iter-2: a /0.8 rescale inflated exactly the
+        bottom-anchored region the learner's gates consume)."""
         from src.api.routes.copilotkit import _grade_copilot_turn
 
         reward = _grade_copilot_turn(response="x" * 250, tool_count=0)
-        assert reward == pytest.approx(0.75)
+        assert reward == pytest.approx(0.6)
 
-    def test_grade_tool_grounded_answer_reaches_full_band(self) -> None:
+    def test_grade_tool_grounded_answer_caps_at_surface_max(self) -> None:
         """Tool results are the evidence analog: 0.2 * min(1, n/4). A
         best-possible copilot turn (synthesis + full grounding + substantive
-        length) must map to 1.0 — the copilot surface has no evidence-board/
-        visualization analog, so its raw composite max is 0.8; both surfaces
-        feed the same rating_1to5 = 1 + 4*reward mapping and the same
-        avg_rating < 3.0 low-ratings gate, so an uncalibrated 0.8 cap would
-        structurally depress the shared agent-quality average (codex-1240 M2)."""
+        length) caps at the surface's honest ceiling 0.8 — the copilot path
+        has no evidence-board/visualization analog, and every hard learner
+        gate is bottom-anchored, so the unreachable top band is honest, not
+        a defect (codex-1240 M2 iter-2)."""
         from src.api.routes.copilotkit import _grade_copilot_turn
 
         reward = _grade_copilot_turn(response="x" * 250, tool_count=4)
-        assert reward == pytest.approx(1.0)
-        # Never exceeds 1.0
-        assert _grade_copilot_turn(response="x" * 250, tool_count=12) <= 1.0
+        assert reward == pytest.approx(0.8)
+        # Grounding bonus saturates at 4 tools; ceiling holds
+        assert _grade_copilot_turn(response="x" * 250, tool_count=12) == pytest.approx(0.8)
 
     def test_grade_synthesis_error_drops_base(self) -> None:
         """A failed synthesis serves a raw tool dump — not a synthesis. The
-        0.5 base is forfeited; only the observable components remain (raw
-        0.3), still normalized by the FULL surface max so degraded turns
-        can never reach the top band."""
+        0.5 base is forfeited; only the observable components remain (0.3),
+        landing in the low band (rating 2.2 < 3) so degraded turns count as
+        negative signal on the raw scale."""
         from src.api.routes.copilotkit import _grade_copilot_turn
 
         reward = _grade_copilot_turn(response="x" * 250, tool_count=4, synthesis_error=True)
-        assert reward == pytest.approx(0.375)
+        assert reward == pytest.approx(0.3)
 
     @pytest.mark.asyncio
     async def test_collect_signal_matches_learner_contract(self, monkeypatch) -> None:
