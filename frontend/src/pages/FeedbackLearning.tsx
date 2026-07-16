@@ -73,6 +73,8 @@ interface PatternItem {
   frequency?: number;
   affected_agents?: string[];
   confidence?: number;
+  /** When the pattern was detected (persistence created_at; #1244) */
+  detected_at?: string | null;
   // UI/sample fields
   agent_name?: string;
   occurrences?: number;
@@ -564,9 +566,17 @@ function FeedbackLearning() {
               <div className="space-y-4">
                 {[...patterns.slice(0, 3), ...updates.slice(0, 2)]
                   .sort((a, b) => {
-                    const aDate = 'last_seen' in a && a.last_seen ? a.last_seen : ('created_at' in a ? a.created_at : new Date().toISOString());
-                    const bDate = 'last_seen' in b && b.last_seen ? b.last_seen : ('created_at' in b ? b.created_at : new Date().toISOString());
-                    return new Date(bDate).getTime() - new Date(aDate).getTime();
+                    // #1244: real API patterns carry detected_at (never
+                    // last_seen/created_at) — an unknown timestamp sorts
+                    // LAST, not as "just now" displacing fresh updates.
+                    const ts = (item: PatternItem | UpdateItem): number => {
+                      const raw =
+                        'pattern_id' in item
+                          ? (item.last_seen ?? item.detected_at)
+                          : item.created_at;
+                      return raw ? new Date(raw).getTime() : 0;
+                    };
+                    return ts(b) - ts(a);
                   })
                   .slice(0, 5)
                   .map((item) => {
@@ -605,8 +615,16 @@ function FeedbackLearning() {
                           </p>
                           <p className="text-xs text-[var(--color-muted-foreground)] mt-1">
                             {isPattern
-                              ? `${(item as PatternItem).agent_name ?? 'N/A'} • ${(item as PatternItem).last_seen ? formatRelativeTime((item as PatternItem).last_seen!) : 'N/A'}`
-                              : `${(item as UpdateItem).agent_name ?? 'N/A'} • ${formatRelativeTime((item as UpdateItem).created_at)}`}
+                              ? (() => {
+                                  // #1244: real API patterns carry affected_agents +
+                                  // detected_at, never agent_name / last_seen (UI/sample-era
+                                  // fields) — same fallback chain as the Patterns tab.
+                                  const p = item as PatternItem;
+                                  const agent = p.agent_name ?? p.affected_agents?.[0] ?? 'N/A';
+                                  const ts = p.last_seen ?? p.detected_at;
+                                  return `${agent} • ${ts ? formatRelativeTime(ts) : 'N/A'}`;
+                                })()
+                              : `${(item as UpdateItem).agent_name ?? (item as UpdateItem).target_agent ?? 'N/A'} • ${formatRelativeTime((item as UpdateItem).created_at)}`}
                           </p>
                         </div>
                       </div>
@@ -668,6 +686,9 @@ function FeedbackLearning() {
                           <span>Agent: <strong>{pattern.agent_name ?? pattern.affected_agents?.[0] ?? 'N/A'}</strong></span>
                           {pattern.first_seen && <span>First seen: {formatRelativeTime(pattern.first_seen)}</span>}
                           {pattern.last_seen && <span>Last seen: {formatRelativeTime(pattern.last_seen)}</span>}
+                          {!pattern.first_seen && !pattern.last_seen && pattern.detected_at && (
+                            <span>Detected: {formatRelativeTime(pattern.detected_at)}</span>
+                          )}
                         </div>
                       </div>
                     ))}

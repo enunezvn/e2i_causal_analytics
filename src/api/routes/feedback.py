@@ -239,6 +239,13 @@ class DetectedPattern(BaseModel):
     example_feedback_ids: List[str] = Field(..., description="Example feedback IDs")
     root_cause_hypothesis: str = Field(..., description="Hypothesized root cause")
     confidence: float = Field(..., description="Detection confidence (0-1)", ge=0.0, le=1.0)
+    # #1244: when the pattern was detected. Backfilled from the persistence
+    # row's created_at for payloads written before this field existed; the
+    # frontend Recent Activity timestamp has no other source (agent output
+    # carries no timestamp).
+    detected_at: Optional[datetime] = Field(
+        default=None, description="When the pattern was detected"
+    )
 
 
 class LearningRecommendation(BaseModel):
