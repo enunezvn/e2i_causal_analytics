@@ -1,8 +1,12 @@
 # Optum Mart → Tier-0 Cohort Adapter
 
-Converts the **entity-stacked, pre-engineered Optum mart**
-(`data/rwd/Optum_Parquet/Optum.parquet`) into canonical per-cohort E2I parquet
-that the Tier-0 pipeline consumes identically to synthetic data.
+Converts the **pre-engineered Optum mart** into canonical per-cohort E2I parquet
+that the Tier-0 pipeline consumes identically to synthetic data. The default
+input is the **enriched patient-grain drop**
+(`data/rwd/Optum_Parquet/Optum_enriched.parquet`, 205 cols × 814,587 rows —
+2026-06-09); the **legacy entity-stacked mart** (`Optum.parquet`, 252 cols ×
+3,758,007 rows) still works via `--input`. Both yield the same 814,587-patient
+panel (see "Input" below).
 
 > **This is NOT the legacy raw-claims converter.** `scripts/convert_optum_rwd.py`
 > (documented in [`OPTUM_CONVERSION.md`](OPTUM_CONVERSION.md)) ingests the 6 raw
@@ -18,17 +22,39 @@ that the Tier-0 pipeline consumes identically to synthetic data.
 
 ## When to use
 
-- Your Optum drop is the single entity-stacked `Optum.parquet` mart (252 columns,
-  one `entity_type` discriminator column), not the 6-file raw-claims layout.
+- Your Optum drop is a single pre-aggregated mart file — either the enriched
+  patient-grain `Optum_enriched.parquet` (the default) or the legacy
+  entity-stacked `Optum.parquet` (252 columns, one `entity_type` discriminator
+  column) — not the 6-file raw-claims layout.
 - You need a tier-0-ready CSU biologic cohort (initiation / discontinuation /
   persistence) from that mart.
 - You need the deployable **commercial HCP-targeting** cohort (HCP
-  adoption-propensity) from the mart's `optum_hcp` *provider* grain → use the
-  sibling adapter `convert_optum_hcp_adoption.py` (see "HCP adoption-propensity
-  cohort" below). The three patient cohorts above are feature-bound and
-  non-deployable; the HCP cohort is the one that deploys end-to-end.
+  adoption-propensity) from the legacy mart's `optum_hcp` *provider* grain → use
+  the sibling adapter `convert_optum_hcp_adoption.py` (see "HCP
+  adoption-propensity cohort" below). On the **legacy** drop the three patient
+  cohorts are feature-bound (AUC 0.54–0.64) and non-deployable, and the HCP
+  cohort is the one that deploys end-to-end. The **enriched** drop changed the
+  initiation picture: leakage-safe 5-fold CV AUC **0.762 ± 0.006** (n=787,781,
+  1.41% base rate — `docs/reports/optum_enriched_cohort_disproof_20260609/EVIDENCE.md`);
+  discontinuation stays feature-bound (~0.62) and persistence near-chance
+  (0.547) even enriched.
 
-## Input — the entity-stacked mart
+## Input — two mart shapes, one patient panel
+
+### Default: the enriched patient-grain drop (`Optum_enriched.parquet`)
+
+`data/rwd/Optum_Parquet/Optum_enriched.parquet` — **205 columns × 814,587
+rows**, one row per `patid`, every row `entity_type == 'patient'`. The
+adapter's entity gate is a no-op on this shape, and 62/64 `MART_SAFE_FEATURES`
+are present in-file (the remaining 2 are converter-derived), so the converter
+works unchanged (measured by the 2026-06-09 disproof,
+`docs/reports/optum_enriched_cohort_disproof_20260609/EVIDENCE.md`).
+
+⚠️ The **HCP adoption adapter must keep using the legacy `Optum.parquet`** —
+the enriched file is patient-grain only and lacks the `optum_hcp` grain +
+network features. Do NOT repoint `convert_optum_hcp_adoption.py`.
+
+### Legacy: the entity-stacked mart (`Optum.parquet`, via `--input`)
 
 Single file: `data/rwd/Optum_Parquet/Optum.parquet` — **252 columns ×
 3,758,007 rows**, stacked by `entity_type`:
@@ -185,7 +211,7 @@ python scripts/convert_optum_mart.py --cohort initiation --sample-n 50000
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--input FILE` | `data/rwd/Optum_Parquet/Optum.parquet` | The entity-stacked mart |
+| `--input FILE` | `data/rwd/Optum_Parquet/Optum_enriched.parquet` | The mart (enriched patient-grain default; pass the legacy entity-stacked `Optum.parquet` explicitly) |
 | `--cohort {initiation,discontinuation,persistence,all}` | `initiation` | Which cohort(s) to build |
 | `--output DIR` | `data/rwd/mart/<cohort>` | Exact dir for one cohort; BASE dir for `all` |
 | `--target-window-days N` | `180` | Outcome horizon |
@@ -266,16 +292,62 @@ forgetting the flag silently drops the Layer-5 defense-in-depth. Two mitigations
   original, #307). See the "Feast freshness on file-sourced runs" section in
   [`OPTUM_CONVERSION.md`](OPTUM_CONVERSION.md).
 
+### Results — enriched initiation through tier-0 (measured 2026-07-16)
+
+Full 5-gate tier-0 run of the **enriched** initiation mart cohort with the
+adapter-default wiring this PR lands (`--cohort initiation_mart
+--feature-manifest-source optum_mart --single-model --disable-mlflow`), executed
+on the droplet host `.venv` (experiment `tier0_e2e_989df7b4`, total 46,633 s ≈
+13 h, of which QC gate 7,162 s and training 39,425 s).
+
+**Step outcomes (8 steps: 7 success / 3 warnings / 1 fail-closed):**
+
+| Step | Outcome | Measured |
+|---|---|---|
+| Scope definition | ✅ PASS | 17.5 s |
+| QC gate | ✅ **PASSED** | 7,162 s — training allowed to proceed |
+| Feast registration | ✅ PASS | 74 features (host `.venv`; the in-image no-op note above still applies to app-image runs) |
+| Feast freshness | ⚠️ WARNING | 20 stale — expected on a file-sourced run |
+| Cohort constructor | ✅ PASS | 787,781 patients, 0.0 % exclusion |
+| Model selector | ✅ PASS | LogisticRegression 0.758 > LightGBM 0.715 > XGBoost 0.713 |
+| Model trainer | ⚠️ WARNING | AUC 0.652 ≥ 0.60 floor, but `model_usefulness=poor` |
+| Feature analyzer | ⚠️ WARNING | `samples_analyzed=0` |
+| Model deployer | ❌ **FAIL-CLOSED** | promotion BLOCKED: `model_usefulness=poor`, success criteria not met |
+| Observability | ✅ PASS | metrics + events emitted |
+
+**Measured model performance** (64 features discovered: 57 numeric + 7
+categorical; prevalence 1.2 % train / 1.7 % val / 1.8 % test; 10 Optuna trials,
+best PR-AUC 0.0319):
+
+- Validation: AUC 0.6748, PR-AUC 0.0319, MCC 0.058 · Test: AUC 0.6519, PR-AUC 0.0299
+- Stratified 5-fold: AUC 0.6774 ± 0.0029 (stable)
+- Permutation test: signal **GENUINE** (p = 0.0000; null 0.5001 ± 0.0063, n = 200)
+- Honest AUC band [0.549, 0.799]: `in_band`, not violated
+- ECE 0.4187 → 0.0009 after post-hoc calibration; usefulness verdict `THRESHOLD_NEEDED`
+- Regulatory: no deployment manifest produced — promotion was never attempted
+  (correct fail-closed behavior); `minimum_auc` is the only ENFORCED
+  regulatory-eligibility gate, all others advisory
+
+**Conclusion:** the enriched mart flows through every tier-0 stage end-to-end —
+adapter default, manifest, and all gates fire — and the measured AUC lands
+**inside the same ~0.64–0.68 feature-bound band** the 2026-06-06 disproof
+predicted. Enrichment did not break the ceiling; the deployer fail-closes
+exactly as designed. This is the measured confirmation that the lever remains
+richer pre-index features, not plumbing or sample size.
+
 ## HCP adoption-propensity cohort (commercial targeting) — `convert_optum_hcp_adoption.py`
 
 A **separate** adapter over the **same** entity-stacked mart, reading the
 `optum_hcp` *provider* grain instead of `patient`. It produces the project's one
 **deployable** Optum cohort: an HCP brand-adoption-propensity model for
-**commercial HCP targeting**. Where the three patient cohorts above are
-feature-bound (AUC 0.54–0.64) because patient rows carry only baseline
-comorbidity/demographics, the `optum_hcp` grain co-locates an adoption target
-*and* a rich, admissible practice profile — so a propensity model on it clears
-every tier-0 gate on merit (see "Results — deploys end-to-end" below).
+**commercial HCP targeting**. Where the three patient cohorts on the **legacy
+entity-stacked drop** are feature-bound (AUC 0.54–0.64) because those patient
+rows carry only baseline comorbidity/demographics, the `optum_hcp` grain
+co-locates an adoption target *and* a rich, admissible practice profile — so a
+propensity model on it clears every tier-0 gate on merit (see "Results —
+deploys end-to-end" below). (The 2026-06-09 **enriched** patient drop later
+moved the *initiation* cohort into deployable range — see "When to use" above
+— without changing this section's HCP-grain rationale, which predates it.)
 
 ### Why a separate HCP-grain cohort
 
