@@ -1483,8 +1483,10 @@ def _grade_copilot_turn(response: str, tool_count: int, synthesis_error: bool = 
     identical-quality cognitive turn 3.5 vs 3.0 and mask low-rating
     patterns in mixed pools. The unreachable top band (0.8–1.0) is the
     honest statement that this surface cannot exhibit those two extra
-    quality axes; raw reward is preserved in signal metadata for any future
-    source-aware aggregation.
+    quality axes; raw reward is preserved in signal metadata and the
+    ``source_path`` marker below drives the source-aware aggregation
+    (#1251: ``feedback_learner.rating_utils.rating_surface`` groups rating
+    pools per surface so mixed pools can't mask a low surface).
     """
     if not response:
         return 0.0

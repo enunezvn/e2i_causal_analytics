@@ -381,3 +381,219 @@ class TestLLMEnumValidation:
         patterns = self._analyzer()._parse_patterns(content)
         assert patterns[0]["pattern_type"] == "latency_issue"
         assert patterns[0]["severity"] == "critical"
+
+
+def _rating_item(i: int, rating, agent: str = "agent1", metadata=None) -> dict:
+    """One rating-type feedback item; metadata omitted entirely when None
+    (mirrors legacy items that predate surface metadata)."""
+    item = {
+        "feedback_id": f"F{i:03d}",
+        "source_agent": agent,
+        "query": f"Query {i}",
+        "agent_response": f"Response {i}",
+        "user_feedback": rating,
+        "feedback_type": "rating",
+        "timestamp": f"2024-01-{15 + i % 15:02d}T10:00:00Z",
+    }
+    if metadata is not None:
+        item["metadata"] = metadata
+    return item
+
+
+# Metadata shapes as LearningSignalsFeedbackStore emits them: cognitive rows
+# carry source_path=None (the Reflector never sets it), copilot rows carry
+# the explicit marker written by _collect_copilot_learning_signal (#1240).
+_COPILOT_META = {
+    "source": "learning_signals",
+    "signal_component": "agent",
+    "source_path": "copilotkit",
+    "reward": 0.35,
+}
+_COGNITIVE_META = {
+    "source": "learning_signals",
+    "signal_component": "agent",
+    "source_path": None,
+    "reward": 0.95,
+}
+
+
+class TestRatingSurface:
+    """#1251: surface derivation + ceiling map live at the aggregation layer."""
+
+    def test_copilot_metadata_maps_to_copilot_surface(self):
+        from src.agents.feedback_learner.rating_utils import rating_surface
+
+        assert rating_surface(_COPILOT_META) == "copilotkit"
+
+    def test_learning_signals_without_source_path_is_cognitive(self):
+        from src.agents.feedback_learner.rating_utils import rating_surface
+
+        assert rating_surface(_COGNITIVE_META) == "cognitive"
+        assert rating_surface({"source": "learning_signals"}) == "cognitive"
+
+    def test_everything_else_is_explicit(self):
+        from src.agents.feedback_learner.rating_utils import rating_surface
+
+        assert rating_surface(None) == "explicit"
+        assert rating_surface({}) == "explicit"
+        assert rating_surface({"source": "chatbot_ui"}) == "explicit"
+
+    def test_ceiling_map_pins_copilot_honest_ceiling(self):
+        """Copilot's reward ceiling is 0.8 (#1240) → rating ceiling 4.2; the
+        other surfaces reach the full 5.0. Any future top-anchored consumer
+        must read these, so pin them."""
+        from src.agents.feedback_learner.rating_utils import (
+            SURFACE_RATING_CEILINGS,
+            rating_surface,
+        )
+
+        assert SURFACE_RATING_CEILINGS["copilotkit"] == pytest.approx(4.2)
+        assert SURFACE_RATING_CEILINGS["cognitive"] == 5.0
+        assert SURFACE_RATING_CEILINGS["explicit"] == 5.0
+        # every derivable surface has a declared ceiling (fail-closed pairing)
+        for meta in (None, _COPILOT_META, _COGNITIVE_META):
+            assert rating_surface(meta) in SURFACE_RATING_CEILINGS
+
+
+class TestSourceAwareRatingAggregation:
+    """#1251: the low-ratings gate groups by reward surface so a low pool on
+    one surface is never masked by a high pool on another (the pooled mean's
+    distance-to-gate must not depend on source mix)."""
+
+    @pytest.mark.asyncio
+    async def test_low_copilot_pool_not_masked_by_high_cognitive_pool(self, base_state):
+        """Headline #1251 case: 6 cognitive items @4.8 + 4 copilot items @2.4
+        pool to 3.84 — today's pooled gate stays silent and the copilot low
+        streak is invisible. Source-aware grouping must flag the copilot pool."""
+        feedback_items = [
+            _rating_item(i, 4.8, agent="gap_analyzer", metadata=dict(_COGNITIVE_META))
+            for i in range(6)
+        ] + [
+            _rating_item(10 + i, 2.4, agent="copilotkit", metadata=dict(_COPILOT_META))
+            for i in range(4)
+        ]
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 10,
+                "by_type": {"rating": 10},
+                "by_agent": {"gap_analyzer": 6, "copilotkit": 4},
+                "average_rating": 3.84,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False, prefer_optimized=False)
+
+        result = await node.execute(state)
+
+        low_rating = [
+            p
+            for p in result["detected_patterns"]
+            if p["pattern_type"] == "accuracy_issue" and "Low average" in p["description"]
+        ]
+        assert len(low_rating) == 1
+        pattern = low_rating[0]
+        assert pattern["frequency"] == 4  # copilot pool only, not all 10
+        assert pattern["affected_agents"] == ["copilotkit"]
+        assert pattern["severity"] == "medium"  # pool avg 2.4 (>= 2.0)
+        assert "copilotkit" in pattern["description"]
+
+    @pytest.mark.asyncio
+    async def test_single_surface_pool_behavior_unchanged(self, base_state):
+        """Acceptance #2 regression: a single-surface pool must gate exactly
+        as before — one pattern over the whole pool, severity from pool avg."""
+        feedback_items = [_rating_item(i, 1.5, agent="explainer") for i in range(4)]
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 4,
+                "by_type": {"rating": 4},
+                "by_agent": {"explainer": 4},
+                "average_rating": 1.5,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False, prefer_optimized=False)
+
+        result = await node.execute(state)
+
+        low_rating = [
+            p
+            for p in result["detected_patterns"]
+            if p["pattern_type"] == "accuracy_issue" and "Low average" in p["description"]
+        ]
+        assert len(low_rating) == 1
+        assert low_rating[0]["frequency"] == 4
+        assert low_rating[0]["severity"] == "high"  # pool avg 1.5 < 2.0
+        assert low_rating[0]["affected_agents"] == ["explainer"]
+
+    @pytest.mark.asyncio
+    async def test_two_low_surfaces_emit_one_pattern_each(self, base_state):
+        """Each low pool gates independently with ITS OWN severity: pooled
+        (today) this collapses into ONE high-severity pattern over all 6."""
+        feedback_items = [_rating_item(i, 1.0, agent="expl_agent") for i in range(3)] + [
+            _rating_item(10 + i, 2.5, agent="copilotkit", metadata=dict(_COPILOT_META))
+            for i in range(3)
+        ]
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 6,
+                "by_type": {"rating": 6},
+                "by_agent": {"expl_agent": 3, "copilotkit": 3},
+                "average_rating": 1.75,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False, prefer_optimized=False)
+
+        result = await node.execute(state)
+
+        low_rating = [
+            p
+            for p in result["detected_patterns"]
+            if p["pattern_type"] == "accuracy_issue" and "Low average" in p["description"]
+        ]
+        assert len(low_rating) == 2
+        # deterministic surface order: copilotkit sorts before explicit
+        assert low_rating[0]["affected_agents"] == ["copilotkit"]
+        assert low_rating[0]["severity"] == "medium"  # copilot pool avg 2.5
+        assert low_rating[1]["affected_agents"] == ["expl_agent"]
+        assert low_rating[1]["severity"] == "high"  # explicit pool avg 1.0
+        assert low_rating[0]["pattern_id"] != low_rating[1]["pattern_id"]
+
+    @pytest.mark.asyncio
+    async def test_healthy_pools_on_both_surfaces_stay_silent(self, base_state):
+        """Grouping must not FABRICATE patterns: two healthy pools (each avg
+        >= 3.0) emit nothing, exactly as the pooled gate did."""
+        feedback_items = [
+            _rating_item(i, 4.6, agent="gap_analyzer", metadata=dict(_COGNITIVE_META))
+            for i in range(3)
+        ] + [
+            _rating_item(10 + i, 3.8, agent="copilotkit", metadata=dict(_COPILOT_META))
+            for i in range(3)
+        ]
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 6,
+                "by_type": {"rating": 6},
+                "by_agent": {"gap_analyzer": 3, "copilotkit": 3},
+                "average_rating": 4.2,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False, prefer_optimized=False)
+
+        result = await node.execute(state)
+
+        low_rating = [
+            p
+            for p in result["detected_patterns"]
+            if p["pattern_type"] == "accuracy_issue" and "Low average" in p["description"]
+        ]
+        assert low_rating == []
