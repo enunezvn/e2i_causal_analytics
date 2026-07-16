@@ -83,7 +83,8 @@ class KnowledgeUpdate(TypedDict):
     """Update to knowledge base."""
 
     update_id: str
-    knowledge_type: Literal["experiment", "baseline", "agent_config", "prompt", "threshold"]
+    # Mirrors KNOWLEDGE_TYPES (knowledge_stores.py) — the real store routes.
+    knowledge_type: Literal["baseline", "agent_config", "prompt", "threshold"]
     key: str
     old_value: Any
     new_value: Any

@@ -930,7 +930,13 @@ async def apply_update(
         logger.info(f"Applying update {update_id} to {update.target_agent}")
         # Capture the pre-apply store value so rollback can restore the true
         # prior state (None => no prior row => rollback deletes the row).
-        prior = await store.get(update.target_agent)
+        # On a force re-apply of an already-APPLIED update the store holds
+        # this update's own proposed_value — re-capturing would stomp the
+        # true prior and rollback would restore the wrong state, so keep the
+        # original capture. (From ROLLED_BACK the store holds the restored
+        # prior, so re-capturing there is correct.)
+        already_applied = update.status == UpdateStatus.APPLIED
+        prior = None if already_applied else await store.get(update.target_agent)
         applied = await store.update(
             key=update.target_agent,
             value=update.proposed_value,
@@ -941,7 +947,8 @@ async def apply_update(
                 status_code=502,
                 detail=("Knowledge-store write failed or read-back mismatch — update NOT applied"),
             )
-        update.current_value = None if prior is None else str(prior)
+        if not already_applied:
+            update.current_value = None if prior is None else str(prior)
         update.status = UpdateStatus.APPLIED
         update.applied_at = datetime.now(timezone.utc)
         await _persist_update(update)

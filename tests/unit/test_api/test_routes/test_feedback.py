@@ -888,6 +888,53 @@ async def test_apply_update_force(sample_knowledge_update, fake_knowledge_stores
 
 
 @pytest.mark.asyncio
+async def test_apply_update_force_reapply_keeps_original_prior(
+    sample_knowledge_update, fake_knowledge_stores
+):
+    """#1243 codex M: force re-applying an already-APPLIED update must not
+    re-capture 'prior' from the store — the store now holds this update's own
+    proposed_value, so re-capturing stomps current_value and a later rollback
+    would restore the wrong (post-apply) state instead of the true original."""
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+        rollback_update,
+    )
+
+    fake_knowledge_stores["prompt"].values["causal_impact"] = "The prior prompt"
+    _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
+    user = {"user_id": "test_user", "role": "operator"}
+
+    first = await apply_update(
+        sample_knowledge_update.update_id,
+        ApplyUpdateRequest(update_id=sample_knowledge_update.update_id, force=False),
+        user,
+    )
+    assert first.current_value == "The prior prompt"
+    assert fake_knowledge_stores["prompt"].values["causal_impact"] == "Improved prompt"
+
+    forced = await apply_update(
+        sample_knowledge_update.update_id,
+        ApplyUpdateRequest(update_id=sample_knowledge_update.update_id, force=True),
+        user,
+    )
+    assert forced.status == UpdateStatus.APPLIED
+    assert forced.current_value == "The prior prompt", (
+        "force re-apply from APPLIED must keep the original pre-apply capture, "
+        "not the update's own proposed_value"
+    )
+
+    rolled = await rollback_update(sample_knowledge_update.update_id, user)
+    assert rolled.status == UpdateStatus.ROLLED_BACK
+    assert fake_knowledge_stores["prompt"].values["causal_impact"] == "The prior prompt"
+
+    # Cleanup
+    del _updates_store[sample_knowledge_update.update_id]
+
+
+@pytest.mark.asyncio
 async def test_rollback_update_restores_prior_value(sample_knowledge_update, fake_knowledge_stores):
     """#1243: rollback restores the captured pre-apply value in the real store."""
     from src.api.routes.feedback import UpdateStatus, _updates_store, rollback_update
