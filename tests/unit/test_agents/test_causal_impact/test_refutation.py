@@ -159,16 +159,40 @@ class TestRefutationNode:
         assert "refutation_results" in result
         ref = result["refutation_results"]
 
-        # Iter-6 codex H-iter5-2/3 (#416): data_subset + bootstrap now mark
+        # Iter-6 codex H-iter5-2/3 (#416): data_subset + bootstrap mark
         # SKIPPED when DoWhy doesn't expose ``subset_effects`` /
-        # ``bootstrap_estimates`` (real DoWhy 0.10+ behavior on our fixture).
-        # ``total_tests`` excludes SKIPPED per the existing contract, so
-        # the count is 3-5 depending on DoWhy version. ``individual_tests``
-        # always carries all 5 entries (including SKIPPED).
+        # ``bootstrap_estimates`` (real DoWhy 0.10+ behavior on our fixture),
+        # so ``total_tests`` (which excludes SKIPPED) is 3-5 depending on
+        # DoWhy version. #1219 (ef2e16dd): SKIPPED tests are OMITTED from
+        # ``individual_tests`` — the legacy dict is pass/fail-shaped, so a
+        # SKIPPED entry would render as a FAILED row downstream; absent key
+        # three-states to None (audit chain) / not-narrated (interpretation).
+        # The omission semantics are pinned fast-lane in
+        # tests/unit/test_causal_engine/test_refutation_runner_randomized.py;
+        # here we assert the node-level consistency invariant.
         assert ref["total_tests"] in (3, 4, 5), (
             f"Expected 3-5 non-skipped tests, got {ref['total_tests']}"
         )
-        assert len(ref["individual_tests"]) == 5
+        assert len(ref["individual_tests"]) == ref["total_tests"], (
+            "individual_tests must carry exactly the non-SKIPPED tests "
+            f"(got {sorted(ref['individual_tests'])} vs total_tests={ref['total_tests']})"
+        )
+        valid_keys = {
+            "placebo_treatment",
+            "random_common_cause",
+            "data_subset",
+            "bootstrap",
+            "unobserved_common_cause",
+        }
+        assert set(ref["individual_tests"]) <= valid_keys
+        # placebo + random_common_cause always run on this fixture; the
+        # E-value (unobserved_common_cause) gate only skips for randomized
+        # designs (#1219) and this fixture is observational.
+        assert {
+            "placebo_treatment",
+            "random_common_cause",
+            "unobserved_common_cause",
+        } <= set(ref["individual_tests"])
         assert result["current_phase"] in ["analyzing_sensitivity", "failed"]
 
     @pytest.mark.asyncio
@@ -462,9 +486,16 @@ class TestRefutationPassCriteria:
 
     @pytest.mark.asyncio
     async def test_all_tests_run(self):
-        """Test that all 5 refutation tests are run.
+        """Test that every APPLICABLE refutation test lands in individual_tests.
 
-        Contract: individual_tests is Dict with test names as keys.
+        Contract: individual_tests is Dict with test names as keys, carrying
+        exactly the non-SKIPPED tests (#1219/ef2e16dd: SKIPPED tests are
+        omitted — the pass/fail-shaped legacy dict would render them as
+        FAILED rows downstream). data_subset / bootstrap are SKIPPED when
+        DoWhy doesn't expose ``subset_effects`` / ``bootstrap_estimates``
+        (real DoWhy 0.10+ behavior on this fixture), so their presence is
+        DoWhy-version-dependent; the three always-applicable tests must be
+        present on this observational fixture.
         """
         node = RefutationNode()
 
@@ -486,21 +517,34 @@ class TestRefutationPassCriteria:
         ref = result["refutation_results"]
 
         # Contract: individual_tests is Dict, get keys for test names
-        test_keys = list(ref["individual_tests"].keys())
+        test_keys = set(ref["individual_tests"].keys())
 
-        # All 5 test types should be present (as Dict keys or test_name values)
-        expected_tests = [
+        # Always-applicable on this observational fixture: placebo,
+        # random_common_cause, and the E-value gate (which only skips for
+        # randomized designs, #1219). sensitivity_e_value maps to
+        # unobserved_common_cause per contract.
+        for expected in ("placebo_treatment", "random_common_cause"):
+            assert expected in test_keys, f"Missing test: {expected}"
+        assert "unobserved_common_cause" in test_keys, (
+            "Missing test: unobserved_common_cause (the E-value gate; "
+            "sensitivity_e_value maps to this key in the legacy dict)"
+        )
+
+        # data_subset / bootstrap are DoWhy-version-dependent (SKIPPED →
+        # omitted per #1219); when present they must be well-formed keys,
+        # and the dict must stay consistent with total_tests.
+        valid_keys = {
             "placebo_treatment",
             "random_common_cause",
             "data_subset",
             "bootstrap",
-        ]
-        # sensitivity_e_value maps to unobserved_common_cause per contract
-        for expected in expected_tests:
-            found = expected in test_keys or any(
-                t.get("test_name") == expected for t in ref["individual_tests"].values()
-            )
-            assert found, f"Missing test: {expected}"
+            "unobserved_common_cause",
+        }
+        assert test_keys <= valid_keys, f"Unexpected test keys: {test_keys - valid_keys}"
+        assert len(test_keys) == ref["total_tests"], (
+            "individual_tests must carry exactly the non-SKIPPED tests "
+            f"(got {sorted(test_keys)} vs total_tests={ref['total_tests']})"
+        )
 
 
 class TestRefutationWithDifferentEffectSizes:
