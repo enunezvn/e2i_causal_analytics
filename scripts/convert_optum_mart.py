@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 """Convert the Optum MART into a tier-0-ready INITIATION cohort (split-and-map).
 
-The new Optum drop ``data/rwd/Optum_Parquet/Optum.parquet`` is an entity-stacked,
-pre-engineered mart (252 cols x 3.76M rows) — NOT the 6 raw claims files
-``scripts/convert_optum_rwd.py`` consumes. Every feature is already a precomputed
-aggregate, so this is a SPLIT-AND-MAP adapter: select the patient entity, shape
-the leakage-safe initiation cohort, and emit the canonical tier-0 contract,
-reusing the pure helpers in ``scripts/rwd_common.py``.
+Default input is the enriched Optum drop ``data/rwd/Optum_Parquet/Optum_enriched.parquet``
+— a patient-grain, pre-engineered mart (205 cols x 814,587 rows, one row per
+``patid``, all ``entity_type=patient``) — NOT the 6 raw claims files
+``scripts/convert_optum_rwd.py`` consumes. (The legacy entity-stacked drop
+``Optum.parquet`` (252 cols x 3.76M rows, patient + optum_hcp + veeva_hcp + market
+grains) still works via ``--input``; this adapter selects the patient entity, so
+both inputs yield the same 814,587-patient panel.) Every feature is already a
+precomputed aggregate, so this is a SPLIT-AND-MAP adapter: select the patient
+entity, shape the leakage-safe initiation cohort, and emit the canonical tier-0
+contract, reusing the pure helpers in ``scripts/rwd_common.py``.
 
 Leakage governance is positive-enumeration: only the owner-approved 64-column
 pre-index allow-list (``src.data.manifests.MART_SAFE_FEATURES``) + the supervised
@@ -17,9 +21,10 @@ flags at tier-0 time.
 Design: ``.claude/plans/optum-initiation-adapter/IMPLEMENTATION-PLAN.md``.
 
 Usage (smoke on a stratified sample):
-    python scripts/convert_optum_mart.py --sample-n 50000
-    # then: python scripts/run_tier0_test.py --data-dir data/rwd/mart/initiation \
-    #         --feature-manifest-source optum_mart --target-outcome initiated_biologic_180d
+    python scripts/convert_optum_mart.py --cohort initiation --sample-n 50000
+    # then run tier-0 via the Optum wrapper (sets target + manifest + AUC bar):
+    #   python scripts/run_optum_tier0_test.py --cohort initiation_mart \
+    #     --feature-manifest-source optum_mart --single-model
 """
 
 from __future__ import annotations
@@ -59,13 +64,19 @@ TARGET_PERSISTENT = "persistent_at_180d"
 # aggregated coverage/gap columns; disc180 validated 98.2% vs discontinued_90d_flag.
 DISCONT_GAP_DAYS = 90
 PERSIST_GAP_DAYS = 60
-DEFAULT_INPUT = "data/rwd/Optum_Parquet/Optum.parquet"
+DEFAULT_INPUT = "data/rwd/Optum_Parquet/Optum_enriched.parquet"
 DEFAULT_OUTPUT = "data/rwd/mart/initiation"
 _DERIVED = ("geographic_region", "enrollment_duration_days")
 # Raw mart columns the cohort logic needs beyond the allow-list features.
 _GATING_COLS = (
-    "patid", "entity_type", "index_biologic_brand", "treatment_start_date",
-    "index_date", "claim_record_count", "elig_start_date", "zipcode_5",
+    "patid",
+    "entity_type",
+    "index_biologic_brand",
+    "treatment_start_date",
+    "index_date",
+    "claim_record_count",
+    "elig_start_date",
+    "zipcode_5",
 )
 
 
@@ -159,8 +170,7 @@ def select_discontinuation_cohort(
     gap = df["max_internal_gap_days"].fillna(0)
     term = df["terminal_gap_days"].fillna(0)
     df[TARGET_DISCONTINUED] = (
-        (cov_to_end < window_days)
-        & ((gap >= DISCONT_GAP_DAYS) | (term >= DISCONT_GAP_DAYS))
+        (cov_to_end < window_days) & ((gap >= DISCONT_GAP_DAYS) | (term >= DISCONT_GAP_DAYS))
     ).astype("int64")
     attrition.append(("target_positives", int(df[TARGET_DISCONTINUED].sum())))
     return df, attrition
@@ -182,9 +192,9 @@ def select_persistence_cohort(
     lce = pd.to_datetime(df["last_coverage_end"])
     cov_to_end = (lce - ts).dt.days
     gap = df["max_internal_gap_days"].fillna(0)
-    df[TARGET_PERSISTENT] = (
-        (cov_to_end >= window_days) & (gap <= PERSIST_GAP_DAYS)
-    ).astype("int64")
+    df[TARGET_PERSISTENT] = ((cov_to_end >= window_days) & (gap <= PERSIST_GAP_DAYS)).astype(
+        "int64"
+    )
     attrition.append(("target_positives", int(df[TARGET_PERSISTENT].sum())))
     return df, attrition
 
@@ -203,9 +213,7 @@ def build_journey_records(
     discontinuation/persistence cohorts (the 64 baseline features are measured at
     the dx index, which is <= treatment-start, so they remain pre-index there).
     """
-    raw_features = [
-        c for c in MART_SAFE_FEATURES if c not in _DERIVED and c in df.columns
-    ]
+    raw_features = [c for c in MART_SAFE_FEATURES if c not in _DERIVED and c in df.columns]
     records: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         index_date = pd.to_datetime(row[anchor_col])
@@ -230,9 +238,7 @@ def build_journey_records(
             rec[col] = row[col]
         elig_raw = row.get("elig_start_date")
         elig = pd.to_datetime(elig_raw) if elig_raw is not None else pd.NaT
-        rec["enrollment_duration_days"] = (
-            int((index_date - elig).days) if pd.notna(elig) else None
-        )
+        rec["enrollment_duration_days"] = int((index_date - elig).days) if pd.notna(elig) else None
         zip5 = row.get("zipcode_5")
         rec["geographic_region"] = map_zipcode_to_region(zip5) if isinstance(zip5, str) else None
         # Transparent data-quality score: the populated fraction of THIS
@@ -245,9 +251,7 @@ def build_journey_records(
         model_inputs.append(rec["enrollment_duration_days"])
         model_inputs.append(rec["geographic_region"])
         present = sum(1 for v in model_inputs if pd.notna(v))
-        rec["data_quality_score"] = (
-            round(present / len(model_inputs), 4) if model_inputs else 0.0
-        )
+        rec["data_quality_score"] = round(present / len(model_inputs), 4) if model_inputs else 0.0
         records.append(rec)
     return records
 
@@ -265,7 +269,8 @@ def _data_dictionary_entries(target: str = TARGET) -> list[dict[str, Any]]:
                 "lookback_window": ref,
                 "null_rate": "",
                 "notes": (
-                    "supervised label (post-index)" if name == target
+                    "supervised label (post-index)"
+                    if name == target
                     else "pre-index admissible; data_quality_band is upstream-opaque, NOT used as a gate"
                 ),
             }
@@ -305,8 +310,10 @@ _OUTPUT_BY_COHORT = {
 _TREATMENT_ANCHORED = ("discontinuation", "persistence")
 # Coverage/gap columns the treatment-anchored cohorts need beyond the allow-list.
 _OUTCOME_COLS = (
-    "last_observed_date", "last_coverage_end",
-    "max_internal_gap_days", "terminal_gap_days",
+    "last_observed_date",
+    "last_coverage_end",
+    "max_internal_gap_days",
+    "terminal_gap_days",
 )
 
 
@@ -353,9 +360,7 @@ def _read_patient_frame(
         # Frugal path: read only the gating columns, decide the eligible/sampled
         # patids via the cohort's own selector, then read the full projection for
         # those only (stratified-by-target sample preserves the positive rate).
-        gate = dset.to_table(
-            columns=sorted(gating & schema_names), filter=flt
-        ).to_pandas()
+        gate = dset.to_table(columns=sorted(gating & schema_names), filter=flt).to_pandas()
         cohort_df, _ = selector(gate)
         if len(cohort_df) > sample_n:
             frac = sample_n / len(cohort_df)
@@ -369,22 +374,23 @@ def _read_patient_frame(
 
 
 def convert(
-    *, input_path: str, output_dir: str, cohort: str = "initiation",
-    window_days: int = 180, min_claim_count: int = 2, sample_n: int | None = None,
+    *,
+    input_path: str,
+    output_dir: str,
+    cohort: str = "initiation",
+    window_days: int = 180,
+    min_claim_count: int = 2,
+    sample_n: int | None = None,
 ) -> dict[str, Any]:
     """Run ONE cohort's conversion: read -> shape -> split -> write canonical files."""
     if cohort not in COHORT_TARGETS:
-        raise ValueError(
-            f"unknown cohort {cohort!r}; expected one of {sorted(COHORT_TARGETS)}"
-        )
+        raise ValueError(f"unknown cohort {cohort!r}; expected one of {sorted(COHORT_TARGETS)}")
     target = COHORT_TARGETS[cohort]
     selector = _SELECTOR_BY_COHORT[cohort]
     anchor = _ANCHOR_BY_COHORT[cohort]
 
     df = _read_patient_frame(input_path, cohort=cohort, sample_n=sample_n)
-    cohort_df, attrition = selector(
-        df, window_days=window_days, min_claim_count=min_claim_count
-    )
+    cohort_df, attrition = selector(df, window_days=window_days, min_claim_count=min_claim_count)
     if cohort in _TREATMENT_ANCHORED and sample_n is None:
         # The read pushed down to initiators; record the full patient denominator
         # as the funnel top so the attrition report stays transparent.
@@ -422,12 +428,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Optum mart -> tier-0 cohort adapter")
     parser.add_argument("--input", default=DEFAULT_INPUT)
     parser.add_argument(
-        "--cohort", default="initiation",
+        "--cohort",
+        default="initiation",
         choices=("initiation", "discontinuation", "persistence", "all"),
         help="Which cohort to build ('all' builds every cohort).",
     )
     parser.add_argument(
-        "--output", default=None,
+        "--output",
+        default=None,
         help=(
             "Output dir. Single cohort: the exact dir (default "
             "data/rwd/mart/<cohort>). With --cohort all: a BASE dir whose "
@@ -436,15 +444,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--target-window-days", type=int, default=180)
     parser.add_argument("--min-claim-count", type=int, default=2)
-    parser.add_argument("--sample-n", type=int, default=None,
-                        help="Stratified (by target) sample size for a smoke run.")
+    parser.add_argument(
+        "--sample-n",
+        type=int,
+        default=None,
+        help="Stratified (by target) sample size for a smoke run.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
 
     cohorts = (
-        ["initiation", "discontinuation", "persistence"]
-        if args.cohort == "all" else [args.cohort]
+        ["initiation", "discontinuation", "persistence"] if args.cohort == "all" else [args.cohort]
     )
     for cohort in cohorts:
         if args.cohort == "all":
@@ -452,8 +463,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             output_dir = args.output or _OUTPUT_BY_COHORT[cohort]
         summary = convert(
-            input_path=args.input, output_dir=output_dir, cohort=cohort,
-            window_days=args.target_window_days, min_claim_count=args.min_claim_count,
+            input_path=args.input,
+            output_dir=output_dir,
+            cohort=cohort,
+            window_days=args.target_window_days,
+            min_claim_count=args.min_claim_count,
             sample_n=args.sample_n,
         )
         print(summary)

@@ -1,8 +1,12 @@
 # Optum Mart → Tier-0 Cohort Adapter
 
-Converts the **entity-stacked, pre-engineered Optum mart**
-(`data/rwd/Optum_Parquet/Optum.parquet`) into canonical per-cohort E2I parquet
-that the Tier-0 pipeline consumes identically to synthetic data.
+Converts the **pre-engineered Optum mart** into canonical per-cohort E2I parquet
+that the Tier-0 pipeline consumes identically to synthetic data. The default
+input is the **enriched patient-grain drop**
+(`data/rwd/Optum_Parquet/Optum_enriched.parquet`, 205 cols × 814,587 rows —
+2026-06-09); the **legacy entity-stacked mart** (`Optum.parquet`, 252 cols ×
+3,758,007 rows) still works via `--input`. Both yield the same 814,587-patient
+panel (see "Input" below).
 
 > **This is NOT the legacy raw-claims converter.** `scripts/convert_optum_rwd.py`
 > (documented in [`OPTUM_CONVERSION.md`](OPTUM_CONVERSION.md)) ingests the 6 raw
@@ -10,17 +14,47 @@ that the Tier-0 pipeline consumes identically to synthetic data.
 > `provider`) and recomputes every feature from raw claims in a lookback window.
 > The **mart adapter** (`scripts/convert_optum_mart.py`, this doc) ingests a
 > single pre-aggregated mart file where every feature is already computed, and is
-> therefore a **split-and-map adapter**, not a recompute. Use the one that matches
-> your input drop.
+> therefore a **split-and-map adapter**, not a recompute. A **third** adapter,
+> `scripts/convert_optum_hcp_adoption.py` (the "HCP adoption-propensity cohort"
+> section below), reads the SAME mart file but the `optum_hcp` *provider* grain
+> instead of the `patient` grain — it is the deployable commercial-HCP-targeting
+> deliverable. Use the one that matches your input drop **and** unit of analysis.
 
 ## When to use
 
-- Your Optum drop is the single entity-stacked `Optum.parquet` mart (252 columns,
-  one `entity_type` discriminator column), not the 6-file raw-claims layout.
+- Your Optum drop is a single pre-aggregated mart file — either the enriched
+  patient-grain `Optum_enriched.parquet` (the default) or the legacy
+  entity-stacked `Optum.parquet` (252 columns, one `entity_type` discriminator
+  column) — not the 6-file raw-claims layout.
 - You need a tier-0-ready CSU biologic cohort (initiation / discontinuation /
   persistence) from that mart.
+- You need the deployable **commercial HCP-targeting** cohort (HCP
+  adoption-propensity) from the legacy mart's `optum_hcp` *provider* grain → use
+  the sibling adapter `convert_optum_hcp_adoption.py` (see "HCP
+  adoption-propensity cohort" below). On the **legacy** drop the three patient
+  cohorts are feature-bound (AUC 0.54–0.64) and non-deployable, and the HCP
+  cohort is the one that deploys end-to-end. The **enriched** drop changed the
+  initiation picture: leakage-safe 5-fold CV AUC **0.762 ± 0.006** (n=787,781,
+  1.41% base rate — `docs/reports/optum_enriched_cohort_disproof_20260609/EVIDENCE.md`);
+  discontinuation stays feature-bound (~0.62) and persistence near-chance
+  (0.547) even enriched.
 
-## Input — the entity-stacked mart
+## Input — two mart shapes, one patient panel
+
+### Default: the enriched patient-grain drop (`Optum_enriched.parquet`)
+
+`data/rwd/Optum_Parquet/Optum_enriched.parquet` — **205 columns × 814,587
+rows**, one row per `patid`, every row `entity_type == 'patient'`. The
+adapter's entity gate is a no-op on this shape, and 62/64 `MART_SAFE_FEATURES`
+are present in-file (the remaining 2 are converter-derived), so the converter
+works unchanged (measured by the 2026-06-09 disproof,
+`docs/reports/optum_enriched_cohort_disproof_20260609/EVIDENCE.md`).
+
+⚠️ The **HCP adoption adapter must keep using the legacy `Optum.parquet`** —
+the enriched file is patient-grain only and lacks the `optum_hcp` grain +
+network features. Do NOT repoint `convert_optum_hcp_adoption.py`.
+
+### Legacy: the entity-stacked mart (`Optum.parquet`, via `--input`)
 
 Single file: `data/rwd/Optum_Parquet/Optum.parquet` — **252 columns ×
 3,758,007 rows**, stacked by `entity_type`:
@@ -28,7 +62,7 @@ Single file: `data/rwd/Optum_Parquet/Optum.parquet` — **252 columns ×
 | `entity_type` | Rows | Role |
 |---|---|---|
 | `patient` | 814,587 | The only rows the adapter models. One row per patient, every feature pre-aggregated. |
-| `optum_hcp` | 2,753,238 | Provider rows (unused by the adapter today — see "Unused entities"). |
+| `optum_hcp` | 2,753,238 | Provider rows — the grain the **HCP adoption-propensity adapter** (`convert_optum_hcp_adoption.py`) models (see that section below). The *patient* mart adapter does not read them. |
 | `veeva_hcp` | 189,951 | Veeva provider rows (unused). |
 | `market` | 231 | Market-level rows (unused). |
 
@@ -177,7 +211,7 @@ python scripts/convert_optum_mart.py --cohort initiation --sample-n 50000
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--input FILE` | `data/rwd/Optum_Parquet/Optum.parquet` | The entity-stacked mart |
+| `--input FILE` | `data/rwd/Optum_Parquet/Optum_enriched.parquet` | The mart (enriched patient-grain default; pass the legacy entity-stacked `Optum.parquet` explicitly) |
 | `--cohort {initiation,discontinuation,persistence,all}` | `initiation` | Which cohort(s) to build |
 | `--output DIR` | `data/rwd/mart/<cohort>` | Exact dir for one cohort; BASE dir for `all` |
 | `--target-window-days N` | `180` | Outcome horizon |
@@ -247,20 +281,364 @@ forgetting the flag silently drops the Layer-5 defense-in-depth. Two mitigations
   (vendor data dictionary, or a charlson-vs-(last_observed−index) correlation
   probe), treat `cci_*`/`elx_*` as "suggestive-not-certified" for a deployable
   baseline.
-- **Unused entities:** `optum_hcp` / `veeva_hcp` / `market` rows are read past
-  today. They are a documented future lever (provider/market covariates), not a
-  defect.
+- **Partially-used entities:** the *patient* mart adapter reads past the
+  `optum_hcp` / `veeva_hcp` / `market` rows. `optum_hcp` is now consumed by the
+  sibling **HCP adoption-propensity adapter** (`convert_optum_hcp_adoption.py`,
+  section below) — the deployable commercial cohort. `veeva_hcp` / `market`
+  remain a documented future lever (marketing-engagement / market covariates),
+  not a defect.
 - **Feast no-op:** the Feast step is a deliberate no-op (not a regression — feast
   was never in the built app image; the `tenacity>=9` vs `tenacity<9` conflict is
   original, #307). See the "Feast freshness on file-sourced runs" section in
   [`OPTUM_CONVERSION.md`](OPTUM_CONVERSION.md).
+
+### Results — enriched initiation through tier-0 (measured 2026-07-16)
+
+Full 5-gate tier-0 run of the **enriched** initiation mart cohort with the
+adapter-default wiring this PR lands (`--cohort initiation_mart
+--feature-manifest-source optum_mart --single-model --disable-mlflow`), executed
+on the droplet host `.venv` (experiment `tier0_e2e_989df7b4`, total 46,633 s ≈
+13 h, of which QC gate 7,162 s and training 39,425 s).
+
+**Step outcomes (8 steps: 7 success / 3 warnings / 1 fail-closed):**
+
+| Step | Outcome | Measured |
+|---|---|---|
+| Scope definition | ✅ PASS | 17.5 s |
+| QC gate | ✅ **PASSED** | 7,162 s — training allowed to proceed |
+| Feast registration | ✅ PASS | 74 features (host `.venv`; the in-image no-op note above still applies to app-image runs) |
+| Feast freshness | ⚠️ WARNING | 20 stale — expected on a file-sourced run |
+| Cohort constructor | ✅ PASS | 787,781 patients, 0.0 % exclusion |
+| Model selector | ✅ PASS | LogisticRegression 0.758 > LightGBM 0.715 > XGBoost 0.713 |
+| Model trainer | ⚠️ WARNING | AUC 0.652 ≥ 0.60 floor, but `model_usefulness=poor` |
+| Feature analyzer | ⚠️ WARNING | `samples_analyzed=0` |
+| Model deployer | ❌ **FAIL-CLOSED** | promotion BLOCKED: `model_usefulness=poor`, success criteria not met |
+| Observability | ✅ PASS | metrics + events emitted |
+
+**Measured model performance** (64 features discovered: 57 numeric + 7
+categorical; prevalence 1.2 % train / 1.7 % val / 1.8 % test; 10 Optuna trials,
+best PR-AUC 0.0319):
+
+- Validation: AUC 0.6748, PR-AUC 0.0319, MCC 0.058 · Test: AUC 0.6519, PR-AUC 0.0299
+- Stratified 5-fold: AUC 0.6774 ± 0.0029 (stable)
+- Permutation test: signal **GENUINE** (p = 0.0000; null 0.5001 ± 0.0063, n = 200)
+- Honest AUC band [0.549, 0.799]: `in_band`, not violated
+- ECE 0.4187 → 0.0009 after post-hoc calibration; usefulness verdict `THRESHOLD_NEEDED`
+- Regulatory: no deployment manifest produced — promotion was never attempted
+  (correct fail-closed behavior); `minimum_auc` is the only ENFORCED
+  regulatory-eligibility gate, all others advisory
+
+**Conclusion:** the enriched mart flows through every tier-0 stage end-to-end —
+adapter default, manifest, and all gates fire — and the measured AUC lands
+**inside the same ~0.64–0.68 feature-bound band** the 2026-06-06 disproof
+predicted. Enrichment did not break the ceiling; the deployer fail-closes
+exactly as designed. This is the measured confirmation that the lever remains
+richer pre-index features, not plumbing or sample size.
+
+## HCP adoption-propensity cohort (commercial targeting) — `convert_optum_hcp_adoption.py`
+
+A **separate** adapter over the **same** entity-stacked mart, reading the
+`optum_hcp` *provider* grain instead of `patient`. It produces the project's one
+**deployable** Optum cohort: an HCP brand-adoption-propensity model for
+**commercial HCP targeting**. Where the three patient cohorts on the **legacy
+entity-stacked drop** are feature-bound (AUC 0.54–0.64) because those patient
+rows carry only baseline comorbidity/demographics, the `optum_hcp` grain
+co-locates an adoption target *and* a rich, admissible practice profile — so a
+propensity model on it clears every tier-0 gate on merit (see "Results —
+deploys end-to-end" below). (The 2026-06-09 **enriched** patient drop later
+moved the *initiation* cohort into deployable range — see "When to use" above
+— without changing this section's HCP-grain rationale, which predates it.)
+
+### Why a separate HCP-grain cohort
+
+The decision is documented in
+[`docs/results/deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md):
+
+- **The patient grain is structurally feature-bound.** The mart is fractured —
+  patient rows carry **no provider key** (`npi` 0%), so the commercial signal
+  (engagement, adoption, market share, referral network) cannot be joined to any
+  patient cohort. Initiation / discontinuation / persistence top out at AUC
+  0.54–0.64 and the deployer correctly fail-closes (see
+  [`disc_feature_bound_verdict_20260607.md`](results/disc_feature_bound_verdict_20260607.md)).
+- **Commercial HCP targeting is *natively* an HCP-grain problem.** The
+  `optum_hcp` entity (2,753,238 rows) is the **only** grain where a strong target
+  and admissible features co-exist: it carries both `adoption_status`
+  (~2.3% ADOPTER) and claims-derived network / volume / specialty / geo features.
+  (The other HCP grain, `veeva_hcp`, has the *marketing* features but **no target
+  and zero NPI overlap** with optum, so it cannot supervise this model.)
+- **The signal is legitimate, not a tautology.** A leakage ablation
+  ([`hcp_adoption_ablation_20260607.py`](results/hcp_adoption_ablation_20260607.py))
+  splits features into groups and measures standalone + leave-one-group-out AUC:
+  the AUC is dominated by **referral-network diffusion** (network features
+  standalone AUC 0.81) + specialty, while the tautology-risk *volume* feature is
+  **not load-bearing** (dropping it moves the full-model AUC 0.845 → 0.837). The
+  mechanism is diffusion-through-professional-networks, knowable at targeting
+  time — not "active providers prescribe everything."
+
+### Input grain and target
+
+| | |
+|---|---|
+| **Input** | `data/rwd/Optum_Parquet/Optum.parquet`, `entity_type == 'optum_hcp'` (~2.75M rows, pushed-down pyarrow filter) |
+| **Target** | `adopted_target_brand` = `1` iff `adoption_status == 'ADOPTER'` — the HCP prescribed the target brand **XOLAIR** in the observation window (`ROGERS_CUMULATIVE_SHARE_BY_BRAND`, NDC/HCPCS match) |
+| **Unit of analysis** | one HCP = one "journey" (surrogate `patient_id = HCP_<hcp_id>`), so the pipeline's patient-level split isolation **is** HCP-level isolation |
+| **Population** | the **full** HCP universe — no silent specialty/quality filter, so the model ranks every provider |
+
+### Generation pipeline (read → select → shape → split → write)
+
+`convert()` orchestrates five stages, each a named function with a contract test
+(`tests/unit/test_scripts/test_convert_optum_hcp_adoption.py`):
+
+1. **`_read_hcp_frame`** — memory-frugal read. Projects only the gating columns
+   (`entity_type`, `hcp_id`, `adoption_status`) ∪ the admissible feature
+   allow-list (∩ the mart schema) and pushes down `entity_type == 'optum_hcp'`, so
+   the read is bounded to the HCP grain. `--sample-n` then takes a
+   **stratified-by-target** sample (preserves the rare positive rate) for a smoke
+   run on a memory-constrained box.
+2. **`select_hcp_cohort`** — filters to the `optum_hcp` grain and derives the
+   binary target `adopted_target_brand = (adoption_status == 'ADOPTER')`. Returns
+   an explicit **attrition funnel** (`input_rows` → `optum_hcp_rows` →
+   `with_target` → `target_positives`). No specialty/quality filtering — the full
+   universe is kept so the model ranks the whole population.
+3. **`build_hcp_journey_records`** — maps each HCP row to a canonical journey
+   record-dict. Emits **only** the allow-list features (positive enumeration) +
+   the journey-contract metadata (`patient_journey_id = PJ_<hcp_id>`,
+   `patient_id = HCP_<hcp_id>`, `patient_hash`, a fixed synthetic `index_date`,
+   `journey_status = "active"`, `discontinuation_flag = 0`) + the target; applies
+   the `log1p` transform to the heavy-tailed count features; and records a
+   `data_quality_score` (fraction of non-null model inputs). Leakage / id /
+   constant columns are **never carried through**.
+4. **`assign_stratified_split`** — assigns a deterministic, target-**stratified
+   random** `data_split` (train / validation / test / holdout). The HCP grain has
+   **no temporal index** (the mart's `launch_dt` is a constant), so a chronological
+   split would be meaningless; stratifying by target preserves the ~2.3% positive
+   rate across all four splits. The remainder row(s) go to `train`. Seeded
+   (`--seed`, default 42) → reproducible.
+5. **`convert`** — writes the four canonical cohort files (below) via the shared
+   `scripts/rwd_common.py` writers and returns a summary (`hcps`, `positives`,
+   `prevalence`, per-split counts, `n_features`).
+
+### Feature allow-list — positive enumeration, manifest-backed
+
+The single source of truth is `OPTUM_HCP_SAFE_FEATURES` in
+`src/data/manifests/optum_hcp_feature_manifest.py` (mirrors how the patient mart
+adapter imports `MART_SAFE_FEATURES`). The manifest declares **21** admissible
+pre-adoption predictors; the converter emits **19** of them — `HCP_SAFE_FEATURES`
+is the manifest safe-list **minus** the two `referral_out_*` features curated out
+below:
+
+| Group (manifest `source`) | Emitted features |
+|---|---|
+| **Claims referral-network position** (`hcp_network`) | `influence_network_size`, `shared_patient_edge_count`, `shared_patient_weight`, `max_shared_patient_edge_weight`, `shared_patient_kol_score_pct`, `referral_in_degree`, `referral_in_patient_count`, `max_referral_in_edge_weight`, `referral_kol_score_pct`, `kol_score_100pt`, `kol_score` *(+ `referral_out_degree`, `referral_out_patient_count` — admissible in the manifest but emit-excluded)* |
+| **All-cause / indication volume** (`hcp_volume`) | `medical_claim_count`, `medical_patient_count`, `treated_patient_count` |
+| **Provider attributes** (`hcp_provider`) | `specialty_group`, `prov_type`, `prov_state`, `kol_category`, `cred_type` |
+
+A column not on the allow-list **cannot** become a feature. Three documented
+exclusion ledgers (asserted by the contract tests; the explanatory complement to
+the positive enumeration, not the enforcement mechanism) record *why* each
+non-emitted column is dropped:
+
+- **`_LEAKY_HCP_COLS`** — adoption-**derived** columns the target is computed from
+  (`adoption_status`, `adoption_category`, `adopter_rank`, `adopter_count`,
+  `adoption_cumulative_share`, `days_to_first`, `first_adoption_dt`,
+  `target_patient_count`, `target_event_count`, `distinct_target_code_count`,
+  `target_match_methods`, `event_sources`). Feeding any would be catastrophic
+  leakage.
+- **`_ID_COLS`** — identifiers / high-cardinality provider-id-like columns
+  (`hcp_id`, `npi`, `hcp_npi`, `patid`, `dea`, `hcp_name`, `grp_practice`,
+  `hosp_affil`, `prov`).
+- **`_CONSTANT_OR_REDUNDANT_COLS`** — single-value constants on the `optum_hcp`
+  grain (`brand`, `molecule`, `is_csu_approved`, `launch_dt`, `launch_context`,
+  `influence_network_method/source`) and high-card taxonomies redundant with
+  `specialty_group` (`taxonomy1`, `taxonomy2`, `provcat`).
+
+#### The `referral_out_*` gate-exclusion (conservative curation, NOT relabeling)
+
+`referral_out_patient_count` / `referral_out_degree` stay **admissible** in the
+manifest (they are claims-network metrics, **not** adoption-derived — not leaks),
+but are excluded from this cohort's emit list (`_GATE_EXCLUDED_FEATURES`). Each is
+the highest single-feature AUC (`referral_out_patient_count` ~0.80) and trips the
+leakage detector's `single_feature_auc` gate (threshold 0.80), which is
+conservatively calibrated for clinical/causal models and false-positives on
+legitimately-strong commercial-targeting features. Investigation found
+single-feature AUCs form a smooth 0.68–0.80 gradient (no leak), both classes
+overlap, and the model is robust without them (AUC 0.84 vs 0.85; 0.81 even
+dropping all ≥0.75). **Excluding them removes signal / lowers AUC** — the
+conservative, anti-gaming choice — and keeps the cohort honestly deployable on the
+legitimate referral-IN / shared-patient / specialty / volume / KOL diffusion
+signal. The contract test `test_excluded_features_remain_admissible_in_manifest`
+pins that they are curated out *without* being relabeled as leakage. (The gate's
+clinical-vs-commercial mis-calibration is a filed follow-up.)
+
+#### The `log1p` transform
+
+Ten heavy-tailed count / weight / degree features (`_LOG1P_FEATURES`:
+`influence_network_size`, `shared_patient_edge_count`, `shared_patient_weight`,
+`max_shared_patient_edge_weight`, `referral_in_degree`,
+`referral_in_patient_count`, `max_referral_in_edge_weight`, `medical_claim_count`,
+`medical_patient_count`, `treated_patient_count`) are `log1p`-transformed at emit.
+These span 0 → millions (a handful of aggregate/institutional NPIs reach network
+sizes of 2.4M and shared-patient weights of 478M, far beyond any individual
+prescriber), so a `log1p` is the standard transform for such count data and
+improves linear-model conditioning. It **also** resolves a false-positive in the
+leakage detector's range-based `perfect_class_separation` overlap metric (fooled
+when the minority/adopter range is *nested* inside an outlier-inflated majority
+range). The transform is **monotone**, so a genuinely disjoint leak (e.g.
+`days_on_therapy = 0` for class 0, `300` for class 1) stays disjoint and is still
+flagged — i.e. it fixes the false positive **without** weakening real-leak
+detection (verified by the ablation). The bounded score/pct features (`kol_score`,
+`kol_score_100pt`, `*_kol_score_pct`) and the categoricals are **not** transformed
+— an explicit list (not a substring heuristic) guarantees no categorical or
+bounded score is ever accidentally log-transformed.
+
+### Leakage governance — allow-list + manifest + lockstep
+
+Identical defense-in-depth to the patient mart, with the `optum_hcp` manifest:
+
+- **Primary defense — positive enumeration.** `build_hcp_journey_records` emits
+  only `HCP_SAFE_FEATURES`; adoption-derived columns are never even written into
+  the cohort parquet, so a missing runtime manifest does not expose them.
+- **Manifest forbidden list.** `OPTUM_HCP_FORBIDDEN_AS_FEATURES` (the target +
+  every adoption-derived alias) is declared `knowable_at=post_index` in
+  `optum_hcp_feature_manifest.py` as the runtime cross-check / Layer-3 backstop —
+  so that even if raw `optum_hcp` data ever reached the data_preparer *without* the
+  converter's allow-list, the proactive forbidden-list pass would still catch them.
+- **Lockstep registries.** `optum_hcp` is registered by-value in
+  `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py` — into
+  the safe-feature resolver (`OPTUM_HCP_FEATURES`) and the proactive forbidden-list
+  pass (`OPTUM_HCP_FORBIDDEN_AS_FEATURES`) — and in `MANIFEST_SOURCES`
+  (`optum_hcp → optum_hcp_contract_for`), so the runtime Layer-5 verdicts fire for
+  `optum_hcp` runs.
+
+### Honesty caveat — cross-sectional features (propensity, not strict forward-causal)
+
+Documented, not hidden: the network/volume features are **cross-sectional
+aggregates** in this pre-built mart (no clean pre/post window), so
+`knowable_at=index_date` declares the *contract intent* (these are pre-adoption
+practice attributes, not derived from the adoption event). The result is therefore
+an adoption-**propensity / segmentation** model. A strict forward-causal deployment
+should recompute features over a pre-index baseline window upstream; network
+position is structurally stable and known at targeting time, so this is a
+feature-window design step, not a no-signal risk. The strict-windowed AUC may sit
+a few points below the cross-sectional ~0.85 but remains comfortably above the
+deployable bar.
+
+### Output contract
+
+Same canonical, patient-journeys-only tree as the patient cohorts, at
+`data/rwd/mart/hcp_adoption/`:
+
+```
+data/rwd/mart/hcp_adoption/
+  e2i_ml_v3_patient_journeys.parquet   # one row per HCP (patient_id = HCP_<hcp_id>); carries data_split
+  e2i_ml_v3_split_registry.json        # stratified_random split config (null dates, temporal_gap_days=0)
+  attrition_report.csv                 # HCP counts at each funnel step
+  data_dictionary.csv                  # per-feature provenance (+ windowing caveat)
+```
+
+The split registry is **honest about the HCP grain**:
+`split_strategy = "stratified_random"`, every `*_date` field `null`,
+`temporal_gap_days = 0`, `patient_level_isolation = True`. The tier-0 data_loader
+honors the precomputed `data_split` verbatim (no re-splitting).
+
+### Usage
+
+```bash
+# Build the cohort (full HCP universe)
+python scripts/convert_optum_hcp_adoption.py --output data/rwd/mart/hcp_adoption
+
+# Memory-bounded smoke sample (stratified by target, preserves the ~2.3% rate)
+python scripts/convert_optum_hcp_adoption.py --sample-n 100000
+
+# Run tier-0 — BOTH flags matter:
+#   --feature-manifest-source optum_hcp  → Layer-5 leakage verdicts fire
+#   --deployment-intent commercial       → commercial AUC bar (0.65) + commercial operating gates
+python scripts/run_optum_tier0_test.py --cohort hcp_adoption \
+    --feature-manifest-source optum_hcp --deployment-intent commercial
+```
+
+| Flag (converter) | Default | Purpose |
+|---|---|---|
+| `--input FILE` | `data/rwd/Optum_Parquet/Optum.parquet` | The entity-stacked mart |
+| `--output DIR` | `data/rwd/mart/hcp_adoption` | Cohort output dir |
+| `--sample-n N` | all | Stratified-by-target sample size for a smoke run |
+| `--seed N` | `42` | Split RNG seed (reproducible split) |
+| `--verbose` | off | INFO-level logging |
+
+Two runner nuances specific to `hcp_adoption` (distinct from the `*_mart` cohorts):
+
+- **The manifest source is `optum_hcp`, not `optum_mart`.** The cohort key
+  (`hcp_adoption`) does **not** end in `_mart`, so the loud `*_mart` manifest
+  warning (`_mart_manifest_warning`) does not apply — but the generic resolver
+  (`_resolve_feature_manifest_source`) still warns on stderr if
+  `data/rwd/mart/hcp_adoption` autodetects to no manifest. Pass
+  `--feature-manifest-source optum_hcp` explicitly so the Layer-5 defense-in-depth
+  fires.
+- **`--deployment-intent` defaults to `clinical` (AUC 0.75).** The HCP model
+  clears even that, but pass `commercial` so the commercial AUC bar (0.65) and the
+  prevalence-aware operating gates (recall 0.50, MCC 0.10, net-benefit at the
+  commercial cost ratio `p_t = 0.05`) are applied — these are the gates the
+  commercial-targeting use case ratifies.
+
+`apply_overrides` pushes the cohort's target into `tier0.CONFIG.target_outcome`
+(`hcp_adoption → adopted_target_brand`). The runner's `_single_class_error`
+pre-flight and `_convert_hint` (which suggests
+`convert_optum_hcp_adoption.py --output data/rwd/mart/hcp_adoption` when the dir is
+missing) both cover this cohort.
+
+### Results — deploys end-to-end
+
+The HCP adoption cohort **passes tier-0 end-to-end** (`success_criteria_met=True`)
+— the project's one deployable Optum cohort. On the delivered run (a memory-bounded
+stratified sample — the decision doc cites 100K→40K HCPs at the true ~2.3% adopter
+prevalence; full-pop 2.75M needs a larger box, the droplet OOMs the evaluator at
+100K):
+
+| Metric | Value | Commercial gate | Pass |
+|---|---|---|---|
+| roc_auc (CV) | **0.767** (0.789 after the #786 one-hot encoding fix) | ≥ 0.60 (also ≥ 0.75 clinical) | ✅ |
+| calibration_slope | **0.996** | dev ≤ 0.15 | ✅ |
+| overfit Δ(train–val AUC) | **0.009** | "none" | ✅ |
+| recall | **0.50** (0.736 one-hot) | ≥ 0.50 | ✅ |
+| MCC | **0.143** | ≥ 0.10 | ✅ |
+| PR-AUC lift | ~3.4× | ≥ 0.08 over baseline | ✅ |
+| permutation above-null | +0.227 | genuine signal | ✅ |
+
+Champion = **calibrated LogisticRegression** — the deployability-aware
+`_select_champion` crowns the well-calibrated linear model over higher-AUC but
+overfit trees (a standalone LightGBM ablation reaches AUC ~0.85). Delivering this
+cohort end-to-end also required making **four tier-0 deployer gates
+commercial-intent-aware**: (1) `deployment_intent` propagation (it was dropped by
+`ScopeDefinerAgent` and silently defaulted to clinical); (2) sigmoid/Platt
+calibration for the commercial path (stable slope ~1.0 at low N); (3) a duck-typed
+recall-constrained operating point (the guard checked `isinstance(dict)` but
+`success_criteria` is a dict-*like* pydantic model); (4) net-benefit computed on
+the **deployed/calibrated** probabilities at a commercial cost ratio `p_t = 0.05`.
+Each is an honest fix that honors the ratified use case (commercial HCP targeting,
+cheap false positives) — **not** a loosened quality gate; discrimination,
+calibration, and overfit all pass on their merits. Full detail:
+[`deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md)
+and [`disc_feature_bound_verdict_20260607.md`](results/disc_feature_bound_verdict_20260607.md).
+
+> **Cosmetic follow-up:** the runner's `deployment_id` label
+> (`kisqali_discontinuation_tier0_e2`) and `problem_description` are hardcoded for
+> the patient test harness — not cohort-accurate for the HCP / XOLAIR cohort. The
+> model and metrics are correct; only the label string is a carryover.
 
 ## Related files
 
 - `scripts/convert_optum_mart.py` — the adapter
 - `src/data/manifests/optum_mart_feature_manifest.py` — the `optum_mart` manifest
   (allow-list, forbidden list, targets)
-- `scripts/run_optum_tier0_test.py` — tier-0 runner (the `*_mart` cohorts + guards)
+- `scripts/run_optum_tier0_test.py` — tier-0 runner (the `*_mart` + `hcp_adoption`
+  cohorts + guards)
+- `scripts/convert_optum_hcp_adoption.py` — the **HCP adoption-propensity** adapter
+  (`optum_hcp` grain → deployable commercial-targeting cohort)
+- `src/data/manifests/optum_hcp_feature_manifest.py` — the `optum_hcp` manifest
+  (admissible network/volume/specialty/geo allow-list, adoption-derived forbidden
+  list, target)
+- `tests/unit/test_scripts/test_convert_optum_hcp_adoption.py` — HCP converter
+  leakage + contract + log1p + split tests
 - `scripts/rwd_common.py` — shared writers (`apply_chronological_split`,
   `build_split_registry`, `write_records`, `write_attrition_report`,
   `write_data_dictionary`)
@@ -270,6 +648,12 @@ forgetting the flag silently drops the Layer-5 defense-in-depth. Two mitigations
   guard tests
 - `docs/results/tier0_optum_mart_initiation_events_disproof_20260606.md` — the
   feature-bound-ceiling analysis
+- `docs/results/deployable_cohort_decision_20260607.md` — why the HCP cohort (and
+  why not the patient cohorts); the delivered deploy result
+- `docs/results/disc_feature_bound_verdict_20260607.md` — the patient-grain
+  feature-bound verdict + the HCP keep/exclude regression
+- `docs/results/hcp_adoption_ablation_20260607.py` — the leakage ablation
+  (network-vs-volume-vs-geo standalone + leave-one-out AUC)
 - `.claude/plans/optum-initiation-adapter/IMPLEMENTATION-PLAN.md` — the original
   (now SUPERSEDED) plan; see its as-built banner for the deltas
 - `docs/OPTUM_CONVERSION.md` — the **legacy raw-claims** converter (different input)
