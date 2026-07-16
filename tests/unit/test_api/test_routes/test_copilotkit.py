@@ -1974,3 +1974,140 @@ class TestResolveChatBrand:
         with patch("src.api.routes.copilotkit.TESTING_MODE", False):
             assert _resolve_chat_brand(self._viewer("Kisqali"), "") == ""
             assert _resolve_chat_brand(self._viewer("Kisqali"), None) == ""
+
+
+# =============================================================================
+# TESTS - #1240 Copilot learning-signal collection
+# =============================================================================
+
+
+class TestCopilotLearningSignals:
+    """#1240: every completed copilot turn must produce an honestly graded
+    learning_signals row matching the feedback learner's contract
+    (LearningSignalsFeedbackStore: signal_details carries type/query/response/
+    reward/metadata + domain_signal='dspy_signal'; is_synthetic=false).
+
+    Only the 'agent' (synthesis) component is graded — the copilot path runs
+    no summarizer/investigator, so fabricating those signals would be
+    dishonest attribution. The reward derivation mirrors the cognitive
+    workflow's agent_reward observables with tool results as the evidence
+    analog. Faithful end-to-end flow (real chat turn -> real row) is verified
+    live post-deploy per the issue's evidence protocol.
+    """
+
+    def test_grade_zero_when_no_response(self) -> None:
+        from src.api.routes.copilotkit import _grade_copilot_turn
+
+        assert _grade_copilot_turn(response="", tool_count=3) == 0.0
+
+    def test_grade_direct_answer_baseline(self) -> None:
+        """A substantive direct answer (no tools): base 0.5 + 0.1 length,
+        UNrescaled — raw 0.5 = acceptable synthesis = rating 3.0 on both
+        surfaces, so identical quality must map to identical reward
+        (codex-1240 M2 iter-2: a /0.8 rescale inflated exactly the
+        bottom-anchored region the learner's gates consume)."""
+        from src.api.routes.copilotkit import _grade_copilot_turn
+
+        reward = _grade_copilot_turn(response="x" * 250, tool_count=0)
+        assert reward == pytest.approx(0.6)
+
+    def test_grade_tool_grounded_answer_caps_at_surface_max(self) -> None:
+        """Tool results are the evidence analog: 0.2 * min(1, n/4). A
+        best-possible copilot turn (synthesis + full grounding + substantive
+        length) caps at the surface's honest ceiling 0.8 — the copilot path
+        has no evidence-board/visualization analog, and every hard learner
+        gate is bottom-anchored, so the unreachable top band is honest, not
+        a defect (codex-1240 M2 iter-2)."""
+        from src.api.routes.copilotkit import _grade_copilot_turn
+
+        reward = _grade_copilot_turn(response="x" * 250, tool_count=4)
+        assert reward == pytest.approx(0.8)
+        # Grounding bonus saturates at 4 tools; ceiling holds
+        assert _grade_copilot_turn(response="x" * 250, tool_count=12) == pytest.approx(0.8)
+
+    def test_grade_synthesis_error_drops_base(self) -> None:
+        """A failed synthesis serves a raw tool dump — not a synthesis. The
+        0.5 base is forfeited; only the observable components remain (0.3),
+        landing in the low band (rating 2.2 < 3) so degraded turns count as
+        negative signal on the raw scale."""
+        from src.api.routes.copilotkit import _grade_copilot_turn
+
+        reward = _grade_copilot_turn(response="x" * 250, tool_count=4, synthesis_error=True)
+        assert reward == pytest.approx(0.3)
+
+    @pytest.mark.asyncio
+    async def test_collect_signal_matches_learner_contract(self, monkeypatch) -> None:
+        """The persisted row must be exactly what LearningSignalsFeedbackStore
+        consumes: details.type/query/response/reward/metadata.routed_agents/
+        conversation_id + domain_signal, via record_learning_signal."""
+        import src.api.routes.copilotkit as mod
+
+        captured = {}
+
+        async def _fake_record(signal, cycle_id=None, session_id=None):
+            captured["signal"] = signal
+            captured["session_id"] = session_id
+            return "sig-id"
+
+        monkeypatch.setattr("src.memory.procedural_memory.record_learning_signal", _fake_record)
+
+        await mod._collect_copilot_learning_signal(
+            query="What drives Kisqali TRx?",
+            response="Kisqali TRx is driven by...",
+            tool_names=["kpi_calculate_tool", "causal_analysis_tool"],
+            conversation_id="thread-abc",
+            synthesis_error=False,
+        )
+
+        sig = captured["signal"]
+        details = sig.signal_details
+        assert details["domain_signal"] == "dspy_signal"
+        assert details["type"] == "agent"
+        assert details["query"] == "What drives Kisqali TRx?"
+        assert details["response"].startswith("Kisqali TRx")
+        assert isinstance(details["reward"], float)
+        meta = details["metadata"]
+        assert meta["routed_agents"] == ["copilotkit"]
+        assert meta["tools_invoked"] == ["kpi_calculate_tool", "causal_analysis_tool"]
+        assert meta["conversation_id"] == "thread-abc"
+        assert meta["source_path"] == "copilotkit"
+        assert sig.signal_type == "rating"
+        assert sig.is_training_example is True
+        assert sig.signal_value == details["reward"]
+
+    @pytest.mark.asyncio
+    async def test_collect_signal_never_raises(self, monkeypatch) -> None:
+        """Signal collection is best-effort: a writer failure must never
+        unwind into the chat response path."""
+
+        import src.api.routes.copilotkit as mod
+
+        async def _boom(signal, cycle_id=None, session_id=None):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr("src.memory.procedural_memory.record_learning_signal", _boom)
+
+        # Must not raise.
+        await mod._collect_copilot_learning_signal(
+            query="q",
+            response="r" * 300,
+            tool_names=[],
+            conversation_id="t",
+        )
+
+    def test_graph_nodes_wire_signal_collection(self) -> None:
+        """Wiring guard: ALL THREE terminal paths call the collector —
+        synthesize success, synthesize error-fallback (the degraded-turn
+        site that prevents selection bias; codex-1240 LOW: a >= 2 guard let
+        it be silently removed), and chat_node's direct answer. Source-level
+        check because the nodes are closures inside create_e2i_chat_agent;
+        the live flow is verified post-deploy."""
+        import inspect
+
+        import src.api.routes.copilotkit as mod
+
+        source = inspect.getsource(mod.create_e2i_chat_agent)
+        assert source.count("_collect_copilot_learning_signal") == 3, (
+            "synthesize_node (success AND error-fallback) and chat_node's "
+            "direct-answer path must each collect a learning signal"
+        )

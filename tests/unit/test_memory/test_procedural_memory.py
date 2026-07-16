@@ -687,6 +687,33 @@ class TestRecordLearningSignal:
         assert insert_data["signal_type"] == "thumbs_up"
 
     @pytest.mark.asyncio
+    async def test_record_signal_insert_runs_off_event_loop(self, mock_supabase):
+        """The sync supabase .execute() must run OFF the event-loop thread
+        (asyncio.to_thread, the #953 RC2 idiom). record_learning_signal is
+        awaited on request/graph hot paths (cognitive Reflector, copilot
+        turn collection #1240) — a blocking in-loop HTTP round-trip stalls
+        every concurrent request on the shared loop (codex-1240 M1)."""
+        import threading
+
+        signal = LearningSignalInput(signal_type="thumbs_up")
+        loop_thread = threading.current_thread()
+        executed_in: dict = {}
+
+        def _capture_thread():
+            executed_in["thread"] = threading.current_thread()
+            return MagicMock(data=[])
+
+        mock_supabase.table.return_value.execute.side_effect = _capture_thread
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            await record_learning_signal(signal)
+
+        assert executed_in["thread"] is not loop_thread, (
+            "learning_signals insert executed ON the event-loop thread — "
+            "the blocking supabase call must be offloaded via asyncio.to_thread"
+        )
+
+    @pytest.mark.asyncio
     async def test_record_signal_with_context(self, mock_supabase, sample_learning_signal):
         """record_learning_signal should include all E2I context."""
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
