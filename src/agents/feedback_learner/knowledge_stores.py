@@ -125,6 +125,33 @@ class SupabaseKnowledgeStore:
         row = await self._get_row(key)
         return row.get("value") if row else None
 
+    async def delete(self, key: str) -> bool:
+        """Remove the recorded value for ``key``; True only when confirmed absent.
+
+        #1243: rollback of a FIRST-EVER endpoint apply must restore the true
+        prior state — no recorded row at all (an upsert of ``None`` is rejected
+        as meaningless by design). Read-back confirms absence before reporting
+        success; idempotent (deleting an absent key is True — the desired state
+        holds). FAIL-CLOSED: a DB error returns False and never raises.
+        """
+        try:
+            await (
+                self._client.table(_TABLE)
+                .delete()
+                .eq("knowledge_type", self._knowledge_type)
+                .eq("key", key)
+                .execute()
+            )
+            return (await self._get_row(key)) is None
+        except Exception as e:  # noqa: BLE001 - fail closed, never crash the caller
+            logger.warning(
+                "knowledge_store[%s]: delete failed for %s: %s",
+                self._knowledge_type,
+                key,
+                e,
+            )
+            return False
+
     async def _get_row(self, key: str) -> Optional[Dict[str, Any]]:
         result = await (
             self._client.table(_TABLE)

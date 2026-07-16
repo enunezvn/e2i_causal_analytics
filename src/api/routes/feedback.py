@@ -488,7 +488,7 @@ async def persist_learning_cycle_output(output: Any, batch_id: str) -> "Learning
         ),
         priority_improvements=list(output.priority_improvements or []),
         proposed_updates=_convert_updates(proposed),
-        applied_updates=_convert_updates(applied_records),
+        applied_updates=_convert_updates(applied_records, applied=True),
         learning_summary=output.learning_summary or "",
         patterns_detected=len(output.detected_patterns or []),
         recommendations_generated=len(output.learning_recommendations or []),
@@ -558,6 +558,25 @@ async def _all_updates() -> List[KnowledgeUpdate]:
     if repo is None:
         return list(_updates_store.values())
     return await repo.list_updates()
+
+
+async def _get_knowledge_stores() -> Dict[str, Any]:
+    """Build the real Tier-5 knowledge stores for endpoint-driven apply/rollback.
+
+    #1243: same backend the learning cycle's auto-apply path uses
+    (``SupabaseKnowledgeStore``, #837 — fail-closed, read-back confirmed).
+    Returns ``{}`` when the async client can't be built; callers must treat
+    that as "stores unavailable" (503), never as license to status-flip.
+    """
+    try:
+        from src.agents.feedback_learner.knowledge_stores import build_knowledge_stores
+        from src.memory.services.factories import get_async_supabase_client
+
+        client = await get_async_supabase_client()
+        return build_knowledge_stores(client)
+    except Exception as e:  # noqa: BLE001 - unavailable backend => honest 503 upstream
+        logger.warning(f"knowledge stores unavailable: {e}")
+        return {}
 
 
 # =============================================================================
@@ -880,14 +899,63 @@ async def apply_update(
                 detail=f"Update {update_id} is in status {update.status}, cannot apply",
             )
 
-    # Apply the update (in production, this would actually modify the agent)
+    # #1243: REAL apply — write the recorded learning to the same knowledge
+    # store the learning cycle's auto-apply path uses (SupabaseKnowledgeStore,
+    # #837: fail-closed, read-back confirmed). target_component IS the store's
+    # knowledge_type (graph-state writers set it from knowledge_type; prod
+    # U_R1 carries "prompt"). FAIL-HONEST: any failure below leaves the record
+    # un-flipped — APPLIED means the store write was read-back confirmed.
+    from src.agents.feedback_learner.knowledge_stores import KNOWLEDGE_TYPES
+
+    knowledge_type = update.target_component
+    if knowledge_type not in KNOWLEDGE_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Update {update_id} has target_component {knowledge_type!r}, which maps "
+                f"to no real knowledge store (expected one of {sorted(KNOWLEDGE_TYPES)}); "
+                "refusing to record a status flip that applies nothing"
+            ),
+        )
+
+    stores = await _get_knowledge_stores()
+    store = stores.get(knowledge_type)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Knowledge stores unavailable — update NOT applied",
+        )
+
     try:
         logger.info(f"Applying update {update_id} to {update.target_agent}")
+        # Capture the pre-apply store value so rollback can restore the true
+        # prior state (None => no prior row => rollback deletes the row).
+        # On a force re-apply of an already-APPLIED update the store holds
+        # this update's own proposed_value — re-capturing would stomp the
+        # true prior and rollback would restore the wrong state, so keep the
+        # original capture. (From ROLLED_BACK the store holds the restored
+        # prior, so re-capturing there is correct.)
+        already_applied = update.status == UpdateStatus.APPLIED
+        prior = None if already_applied else await store.get(update.target_agent)
+        applied = await store.update(
+            key=update.target_agent,
+            value=update.proposed_value,
+            justification=update.rationale,
+        )
+        if not applied:
+            raise HTTPException(
+                status_code=502,
+                detail=("Knowledge-store write failed or read-back mismatch — update NOT applied"),
+            )
+        if not already_applied:
+            update.current_value = None if prior is None else str(prior)
         update.status = UpdateStatus.APPLIED
         update.applied_at = datetime.now(timezone.utc)
         await _persist_update(update)
         return update
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to apply update {update_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to apply update: {e}")
@@ -929,13 +997,55 @@ async def rollback_update(
             detail=f"Update {update_id} is not applied, cannot rollback",
         )
 
-    # Rollback the update
+    # #1243: REAL rollback — restore the captured pre-apply value in the
+    # knowledge store (or remove the row when this was a first-ever apply:
+    # current_value None). FAIL-HONEST: a failed store write keeps the record
+    # APPLIED — ROLLED_BACK means the store verifiably holds the prior state.
+    # NB: single-current-value store — rolling back an update that was later
+    # overwritten by ANOTHER apply to the same (type, key) restores THIS
+    # update's prior, clobbering the newer value; operators see the store's
+    # justification trail ("rollback of <id>").
+    from src.agents.feedback_learner.knowledge_stores import KNOWLEDGE_TYPES
+
+    knowledge_type = update.target_component
+    if knowledge_type not in KNOWLEDGE_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Update {update_id} has target_component {knowledge_type!r}, which maps "
+                f"to no real knowledge store (expected one of {sorted(KNOWLEDGE_TYPES)})"
+            ),
+        )
+
+    stores = await _get_knowledge_stores()
+    store = stores.get(knowledge_type)
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Knowledge stores unavailable — update NOT rolled back",
+        )
+
     try:
         logger.info(f"Rolling back update {update_id}")
+        if update.current_value is not None:
+            restored = await store.update(
+                key=update.target_agent,
+                value=update.current_value,
+                justification=f"rollback of {update_id}",
+            )
+        else:
+            restored = await store.delete(update.target_agent)
+        if not restored:
+            raise HTTPException(
+                status_code=502,
+                detail=("Knowledge-store rollback write failed — update stays APPLIED"),
+            )
         update.status = UpdateStatus.ROLLED_BACK
         await _persist_update(update)
         return update
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to rollback update {update_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to rollback: {e}")
@@ -1457,7 +1567,7 @@ async def _execute_learning_cycle(
             ),
             priority_improvements=result.get("priority_improvements", []),
             proposed_updates=_convert_updates(_proposed_updates),
-            applied_updates=_convert_updates(_applied_records),
+            applied_updates=_convert_updates(_applied_records, applied=True),
             learning_summary=result.get("learning_summary", ""),
             patterns_detected=len(result.get("detected_patterns", [])),
             recommendations_generated=len(result.get("learning_recommendations", [])),
@@ -1541,8 +1651,16 @@ _KNOWLEDGE_TYPE_TO_UPDATE_TYPE: Dict[str, UpdateType] = {
 }
 
 
-def _convert_updates(updates: List[Dict[str, Any]]) -> List[KnowledgeUpdate]:
-    """Convert agent output (graph-state or API-style dicts) to API format."""
+def _convert_updates(updates: List[Dict[str, Any]], applied: bool = False) -> List[KnowledgeUpdate]:
+    """Convert agent output (graph-state or API-style dicts) to API format.
+
+    #1243 (PR #1241 final-review minor a): graph-state dicts carry no
+    ``status`` key, so applied_updates entries defaulted to "proposed" — a
+    self-contradicting response under auto_apply. Callers converting records
+    the cycle actually applied pass ``applied=True`` to stamp the default
+    status/applied_at honestly (an explicit ``status`` in the dict still wins).
+    """
+    default_status = "applied" if applied else "proposed"
     result = []
     for u in updates:
         try:
@@ -1554,17 +1672,25 @@ def _convert_updates(updates: List[Dict[str, Any]]) -> List[KnowledgeUpdate]:
                 )
             current_value = u.get("old_value", u.get("current_value"))
             proposed_value = u.get("new_value", u.get("proposed_value", ""))
+            status = UpdateStatus(u.get("status", default_status))
+            applied_at = u.get("applied_at")
+            if applied_at is None and status == UpdateStatus.APPLIED:
+                # The cycle applies within the run; effective_date is the
+                # closest recorded timestamp (KnowledgeUpdaterNode stamps it
+                # at proposal creation, same cycle as the apply).
+                applied_at = u.get("effective_date") or datetime.now(timezone.utc)
             result.append(
                 KnowledgeUpdate(
                     update_id=u.get("update_id", f"upd_{uuid4().hex[:8]}"),
                     update_type=update_type,
-                    status=UpdateStatus(u.get("status", "proposed")),
+                    status=status,
                     target_agent=str(u.get("key") or u.get("target_agent", "")),
                     target_component=str(u.get("knowledge_type") or u.get("target_component", "")),
                     current_value=None if current_value is None else str(current_value),
                     proposed_value="" if proposed_value is None else str(proposed_value),
                     rationale=str(u.get("justification") or u.get("rationale", "")),
                     expected_improvement=u.get("expected_improvement", ""),
+                    applied_at=applied_at,
                 )
             )
         except Exception as e:
