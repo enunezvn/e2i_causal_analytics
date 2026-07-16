@@ -274,18 +274,15 @@ class RefutationSuite:
         - random_common_cause
         - data_subset
         - unobserved_common_cause (maps from sensitivity_e_value)
+
+        #1249: ``skipped_tests`` ({contract_key: reason}, always present)
+        records WHY a test was SKIPPED. Skipped entries stay out of
+        ``individual_tests``/``total_tests`` (#1219 — no fake-FAILED rows).
         """
         # Build Dict with test names as keys (contract requirement)
         individual_tests: Dict[str, Dict[str, Any]] = {}
+        skipped_tests: Dict[str, str] = {}
         for t in self.tests:
-            # SKIPPED (not-applicable) tests are OMITTED: this legacy dict is
-            # pass/fail-shaped (``passed: bool``), so a skipped test — e.g. the
-            # E-value on a randomized design — would surface as a FAILED row in
-            # the FE while ``total_tests`` already excludes it. Absent key →
-            # consumers three-state to None (audit chain) / not-narrated
-            # (interpretation), the honest rendering for "did not gate".
-            if t.status == RefutationStatus.SKIPPED:
-                continue
             # Map test name to contract key
             # Note: sensitivity_e_value maps to unobserved_common_cause per contract
             key = t.test_name.value
@@ -295,6 +292,20 @@ class RefutationSuite:
                 # Bootstrap is additional, not in original contract
                 # Keep as-is for backward compatibility
                 key = "bootstrap"
+
+            # SKIPPED (not-applicable) tests are OMITTED from individual_tests:
+            # this legacy dict is pass/fail-shaped (``passed: bool``), so a
+            # skipped test — e.g. the E-value on a randomized design — would
+            # surface as a FAILED row in the FE while ``total_tests`` already
+            # excludes it. Absent key → consumers three-state to None (audit
+            # chain) / not-narrated (interpretation), the honest rendering for
+            # "did not gate". #1249: the skip *reason* survives in
+            # ``skipped_tests`` (same contract-key space) so downstream
+            # consumers can distinguish "skipped because X" from "never
+            # attempted".
+            if t.status == RefutationStatus.SKIPPED:
+                skipped_tests[key] = t.details.get("message", "")
+                continue
 
             individual_tests[key] = {
                 "test_name": t.test_name.value,
@@ -315,6 +326,11 @@ class RefutationSuite:
             "gate_decision": self.gate_decision.value,
             # H2: distinct signal so a REVIEW-band result is not consumed as robust.
             "needs_review": self.needs_review,
+            # #1249: opt-in observability — {contract_key: reason} for tests
+            # that were SKIPPED (not applicable / data unavailable). Always
+            # present ({} when nothing skipped) so consumers read it without
+            # KeyError. Never feeds individual_tests/total_tests.
+            "skipped_tests": skipped_tests,
         }
 
 

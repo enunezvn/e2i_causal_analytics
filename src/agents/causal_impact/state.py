@@ -142,6 +142,10 @@ class RefutationResults(TypedDict, total=False):
     individual_tests: Dict[str, RefutationTest]
     confidence_adjustment: float  # Multiplier for final confidence (0-1)
     gate_decision: NotRequired[Literal["proceed", "review", "block"]]  # Validation gate
+    # #1249: {contract_key: reason} for SKIPPED (not-applicable) tests. These
+    # stay OUT of individual_tests/total_tests (#1219 — no fake-FAILED rows);
+    # this field is the only place the skip reason survives for consumers.
+    skipped_tests: NotRequired[Dict[str, str]]
 
 
 class SensitivityAnalysis(TypedDict, total=False):
