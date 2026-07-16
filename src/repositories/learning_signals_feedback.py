@@ -106,6 +106,11 @@ class LearningSignalsFeedbackStore(BaseRepository):
                     "metadata": {
                         "source": "learning_signals",
                         "signal_component": component,
+                        # Surface marker (#1251): "copilotkit" on copilot rows
+                        # (#1240), None on cognitive Reflector rows. The
+                        # aggregation layer groups rating pools by this —
+                        # dropping it here would blind rating_surface().
+                        "source_path": meta.get("source_path"),
                         "conversation_id": meta.get("conversation_id"),
                         "routed_agents": routed,
                         "reward": float(reward),

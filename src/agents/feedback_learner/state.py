@@ -100,6 +100,14 @@ class FeedbackSummary(TypedDict):
     by_agent: Dict[str, int]
     average_rating: Optional[float]
     rating_count: int
+    # #1251: per-surface aggregates (keys from rating_utils.rating_surface).
+    # ``average_rating`` pools surfaces with different reward ceilings
+    # (copilot 4.2 vs cognitive/explicit 5.0), so its value depends on source
+    # mix; these are the source-aware aggregate any top-anchored consumer
+    # must read instead. Always produced by the collector ({} when nothing
+    # was rated).
+    average_rating_by_source: NotRequired[Dict[str, float]]
+    rating_count_by_source: NotRequired[Dict[str, int]]
 
 
 # =============================================================================

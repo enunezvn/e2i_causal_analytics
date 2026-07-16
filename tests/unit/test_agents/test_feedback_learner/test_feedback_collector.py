@@ -315,3 +315,108 @@ class TestFeedbackCollectorNode:
         assert item["user_feedback"]["predicted"] == 1000
         assert item["user_feedback"]["actual"] == 950
         assert item["user_feedback"]["error"] == -50
+
+
+class TestSourceAwareSummary:
+    """#1251: the summary must expose per-surface rating aggregates so no
+    consumer is forced onto the mix-sensitive pooled mean. The pooled
+    average_rating is retained (mlflow continuity) but the by-source dicts
+    are the source-aware aggregate future top-anchored consumers must read."""
+
+    @pytest.mark.asyncio
+    async def test_summary_breaks_ratings_down_by_surface(self, base_state):
+        raw_feedback = [
+            {
+                "id": "F1",
+                "agent": "chat_user_agent",
+                "query": "q1",
+                "response": "r1",
+                "rating": "thumbs_up",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+            {
+                "id": "F2",
+                "agent": "gap_analyzer",
+                "query": "q2",
+                "response": "r2",
+                "rating": 4.6,
+                "timestamp": "2024-01-01T01:00:00Z",
+                "metadata": {
+                    "source": "learning_signals",
+                    "signal_component": "agent",
+                    "source_path": None,
+                    "reward": 0.9,
+                },
+            },
+            {
+                "id": "F3",
+                "agent": "copilotkit",
+                "query": "q3",
+                "response": "r3",
+                "rating": 3.4,
+                "timestamp": "2024-01-01T02:00:00Z",
+                "metadata": {
+                    "source": "learning_signals",
+                    "signal_component": "agent",
+                    "source_path": "copilotkit",
+                    "reward": 0.6,
+                },
+            },
+        ]
+        mock_store = AsyncMock()
+        mock_store.get_feedback = AsyncMock(return_value=raw_feedback)
+        node = FeedbackCollectorNode(feedback_store=mock_store, outcome_store=None)
+
+        result = await node.execute(base_state)
+
+        summary = result["feedback_summary"]
+        # pooled mean unchanged (backward compat for mlflow/prompt)
+        assert summary["average_rating"] == pytest.approx((5.0 + 4.6 + 3.4) / 3)
+        assert summary["average_rating_by_source"] == {
+            "explicit": pytest.approx(5.0),
+            "cognitive": pytest.approx(4.6),
+            "copilotkit": pytest.approx(3.4),
+        }
+        assert summary["rating_count_by_source"] == {
+            "explicit": 1,
+            "cognitive": 1,
+            "copilotkit": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_by_source_fields_always_present_empty_when_no_ratings(self, base_state):
+        """Always-present contract ({} when nothing rated) — consumers must
+        be able to distinguish 'no ratings' from 'field not produced'."""
+        raw_feedback = [
+            {
+                "id": "F1",
+                "agent": "agent1",
+                "query": "q1",
+                "response": "r1",
+                "correction": "wrong number",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+        ]
+        mock_store = AsyncMock()
+        mock_store.get_feedback = AsyncMock(return_value=raw_feedback)
+        node = FeedbackCollectorNode(feedback_store=mock_store, outcome_store=None)
+
+        result = await node.execute(base_state)
+
+        summary = result["feedback_summary"]
+        assert summary["average_rating"] is None
+        assert summary["average_rating_by_source"] == {}
+        assert summary["rating_count_by_source"] == {}
+
+    @pytest.mark.asyncio
+    async def test_by_source_fields_present_on_empty_run(self, base_state):
+        mock_store = AsyncMock()
+        mock_store.get_feedback = AsyncMock(return_value=[])
+        node = FeedbackCollectorNode(feedback_store=mock_store, outcome_store=None)
+
+        result = await node.execute(base_state)
+
+        summary = result["feedback_summary"]
+        assert summary["total_count"] == 0
+        assert summary["average_rating_by_source"] == {}
+        assert summary["rating_count_by_source"] == {}

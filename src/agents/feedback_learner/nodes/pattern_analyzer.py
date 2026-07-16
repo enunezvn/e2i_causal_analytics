@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, cast
 
-from ..rating_utils import rating_to_numeric
+from ..rating_utils import rating_surface, rating_to_numeric
 from ..state import DetectedPattern, FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
@@ -210,19 +210,34 @@ class PatternAnalyzerNode:
         # infers the None-filtered element type as ``float`` rather than keeping
         # the original ``float | None`` declared type.
         scored = [(fb, num) for fb, num in scored_raw if num is not None]
-        if scored:
-            avg_rating = sum(num for _, num in scored) / len(scored)
-            if avg_rating < 3.0:  # Assuming 1-5 scale
-                affected_agents = list({fb["source_agent"] for fb, num in scored if num < 3})
+        # #1251: group by reward surface BEFORE averaging. Surfaces have
+        # different reward ceilings (copilot 0.8 vs cognitive 1.0, #1240), so
+        # a pooled mean's distance-to-gate depends on source mix — a low
+        # copilot pool hides behind a high cognitive pool (and vice versa).
+        # The bottom-anchored < 3.0 gate itself is scale-agreeing across
+        # surfaces (reward 0.5 = rating 3.0 on all), so each pool is gated
+        # against the same threshold; single-surface pools behave exactly as
+        # the old pooled gate did.
+        pools: Dict[str, List[Any]] = {}
+        # NB: loop var deliberately NOT named ``num`` — the per-agent detector
+        # below walrus-binds ``num`` to ``float | None`` in this same function
+        # scope, and a prior ``float`` binding here would flag that assignment.
+        for fb, rated in scored:
+            pools.setdefault(rating_surface(fb.get("metadata")), []).append((fb, rated))
+        for surface in sorted(pools):
+            pool = pools[surface]
+            avg_rating = sum(num for _, num in pool) / len(pool)
+            if avg_rating < 3.0:  # 1-5 scale, bottom-anchored
+                affected_agents = list({fb["source_agent"] for fb, num in pool if num < 3})
                 patterns.append(
                     DetectedPattern(
                         pattern_id=f"P{pattern_id}",
                         pattern_type="accuracy_issue",
-                        description="Low average user ratings detected",
-                        frequency=len(scored),
+                        description=f"Low average user ratings detected (surface: {surface})",
+                        frequency=len(pool),
                         severity="high" if avg_rating < 2.0 else "medium",
                         affected_agents=affected_agents,
-                        example_feedback_ids=[fb["feedback_id"] for fb, _ in scored[:3]],
+                        example_feedback_ids=[fb["feedback_id"] for fb, _ in pool[:3]],
                         root_cause_hypothesis="Agent responses may not meet user expectations",
                     )
                 )
@@ -499,6 +514,7 @@ class PatternAnalyzerNode:
 - By type: {json.dumps(summary.get("by_type", {}))}
 - By agent: {json.dumps(summary.get("by_agent", {}))}
 - Avg rating: {summary.get("average_rating", "N/A")}
+- Avg rating by source surface (ceilings differ — copilot tops out at 4.2): {json.dumps(summary.get("average_rating_by_source", {}))}
 
 ## Sample Feedback
 

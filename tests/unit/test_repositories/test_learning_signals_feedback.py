@@ -208,3 +208,36 @@ class TestLearningSignalsFeedbackStore:
     async def test_no_client_returns_empty(self):
         store = get_learning_signals_feedback_store(supabase_client=None)
         assert await store.get_feedback() == []
+
+
+@pytest.mark.unit
+class TestSourcePathPropagation:
+    """#1251: the surface marker (metadata.source_path, written by the
+    copilot collector #1240) must survive the store's metadata mapping —
+    without it the aggregation layer cannot group by reward surface."""
+
+    @pytest.mark.asyncio
+    async def test_copilot_source_path_survives_mapping(self):
+        row = _row("agent", 0.64, routed=["copilotkit"], signal_id="cp1")
+        row["signal_details"]["metadata"]["source_path"] = "copilotkit"
+        client = _RecordingClient([row])
+        store = LearningSignalsFeedbackStore(client)
+
+        items = await store.get_feedback()
+
+        assert len(items) == 1
+        assert items[0]["metadata"]["source_path"] == "copilotkit"
+        assert items[0]["metadata"]["source"] == "learning_signals"
+
+    @pytest.mark.asyncio
+    async def test_cognitive_rows_expose_source_path_none(self):
+        """Cognitive Reflector rows never set source_path; the mapped key is
+        still PRESENT (None) so consumers read one shape for every row."""
+        client = _RecordingClient([_row("agent", 0.9, routed=["gap_analyzer"])])
+        store = LearningSignalsFeedbackStore(client)
+
+        items = await store.get_feedback()
+
+        assert len(items) == 1
+        assert "source_path" in items[0]["metadata"]
+        assert items[0]["metadata"]["source_path"] is None

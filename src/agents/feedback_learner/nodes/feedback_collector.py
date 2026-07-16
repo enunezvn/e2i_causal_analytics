@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from ..rating_utils import rating_to_numeric
+from ..rating_utils import rating_surface, rating_to_numeric
 from ..state import FeedbackItem, FeedbackLearnerState, FeedbackSummary
 
 logger = logging.getLogger(__name__)
@@ -210,11 +210,14 @@ class FeedbackCollectorNode:
                 by_agent={},
                 average_rating=None,
                 rating_count=0,
+                average_rating_by_source={},
+                rating_count_by_source={},
             )
 
         by_type: Dict[str, int] = {}
         by_agent: Dict[str, int] = {}
         ratings: List[float] = []
+        ratings_by_source: Dict[str, List[float]] = {}
 
         for item in feedback:
             # By type
@@ -233,11 +236,22 @@ class FeedbackCollectorNode:
                 num = rating_to_numeric(item["user_feedback"])
                 if num is not None:
                     ratings.append(num)
+                    # #1251: per-surface pools — surfaces have different
+                    # reward ceilings, so the pooled mean's value depends on
+                    # source mix; the by-source aggregates are the honest view.
+                    ratings_by_source.setdefault(rating_surface(item.get("metadata")), []).append(
+                        num
+                    )
 
         return FeedbackSummary(
             total_count=len(feedback),
             by_type=by_type,
             by_agent=by_agent,
+            # Pooled mean retained for continuity (mlflow metric); it mixes
+            # surfaces with different ceilings — source-aware consumers must
+            # read the by-source fields below (#1251).
             average_rating=sum(ratings) / len(ratings) if ratings else None,
             rating_count=len(ratings),
+            average_rating_by_source={s: sum(v) / len(v) for s, v in ratings_by_source.items()},
+            rating_count_by_source={s: len(v) for s, v in ratings_by_source.items()},
         )
