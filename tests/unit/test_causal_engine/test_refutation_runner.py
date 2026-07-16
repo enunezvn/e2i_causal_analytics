@@ -320,6 +320,132 @@ class TestRefutationSuite:
 
 
 # ============================================================================
+# LEGACY FORMAT skipped_tests OBSERVABILITY FIELD (#1249)
+# ============================================================================
+
+
+class TestLegacyFormatSkippedTestsField:
+    """#1249: ``to_legacy_format()`` exposes skip *reasons* via an opt-in
+    ``skipped_tests: {contract_key: reason}`` field.
+
+    Since #1219 SKIPPED tests are omitted from ``individual_tests`` /
+    ``total_tests`` (correct: the pass/fail-shaped dict would render them as
+    fake FAILED rows). But that omission destroyed the skip reason for every
+    downstream consumer (audit chain, executor) — "skipped because X" became
+    indistinguishable from "never attempted". The new field carries the
+    reason without re-entering the pass/fail surface.
+    """
+
+    def _passed(self, *names):
+        return [
+            RefutationResult(
+                test_name=name,
+                status=RefutationStatus.PASSED,
+                original_effect=0.08,
+                refuted_effect=0.01,
+            )
+            for name in names
+        ]
+
+    def _skipped(self, name, message=None):
+        details = {"message": message} if message is not None else {}
+        return RefutationResult(
+            test_name=name,
+            status=RefutationStatus.SKIPPED,
+            original_effect=0.08,
+            refuted_effect=0.08,
+            details=details,
+        )
+
+    def _suite(self, tests):
+        return RefutationSuite(
+            passed=True,
+            confidence_score=1.0,
+            tests=tests,
+            gate_decision=GateDecision.PROCEED,
+        )
+
+    def test_skipped_tests_carries_reason_for_randomized_evalue(self):
+        """The #1219 randomized-design skip surfaces its reason under the
+        contract key (sensitivity_e_value → unobserved_common_cause)."""
+        reason = (
+            "not applicable: randomized design — treatment assignment is exogenous by construction"
+        )
+        tests = self._passed(
+            RefutationTestType.PLACEBO_TREATMENT,
+            RefutationTestType.RANDOM_COMMON_CAUSE,
+            RefutationTestType.DATA_SUBSET,
+            RefutationTestType.BOOTSTRAP,
+        ) + [self._skipped(RefutationTestType.SENSITIVITY_E_VALUE, reason)]
+
+        legacy = self._suite(tests).to_legacy_format()
+
+        assert legacy["skipped_tests"] == {"unobserved_common_cause": reason}
+
+    def test_skipped_tests_empty_dict_when_nothing_skipped(self):
+        """Always-present key: consumers read {} instead of KeyError."""
+        tests = self._passed(
+            RefutationTestType.PLACEBO_TREATMENT,
+            RefutationTestType.RANDOM_COMMON_CAUSE,
+        )
+
+        legacy = self._suite(tests).to_legacy_format()
+
+        assert legacy["skipped_tests"] == {}
+
+    def test_skipped_tests_uses_contract_keys_for_all_skip_sites(self):
+        """All three real skip sites map through the same contract key space
+        as individual_tests (data_subset, bootstrap, unobserved_common_cause)."""
+        tests = self._passed(RefutationTestType.PLACEBO_TREATMENT) + [
+            self._skipped(
+                RefutationTestType.DATA_SUBSET,
+                "DoWhy refutation_result did not expose 'subset_effects'",
+            ),
+            self._skipped(
+                RefutationTestType.BOOTSTRAP,
+                "DoWhy refutation_result did not expose 'bootstrap_estimates'",
+            ),
+            self._skipped(
+                RefutationTestType.SENSITIVITY_E_VALUE,
+                "not applicable: randomized design",
+            ),
+        ]
+
+        legacy = self._suite(tests).to_legacy_format()
+
+        assert set(legacy["skipped_tests"]) == {
+            "data_subset",
+            "bootstrap",
+            "unobserved_common_cause",
+        }
+
+    def test_skipped_tests_reason_defaults_to_empty_string(self):
+        """A SKIPPED result without a details message still records the skip
+        (empty reason) rather than being dropped."""
+        tests = [self._skipped(RefutationTestType.DATA_SUBSET)]
+
+        legacy = self._suite(tests).to_legacy_format()
+
+        assert legacy["skipped_tests"] == {"data_subset": ""}
+
+    def test_skipped_entries_stay_out_of_individual_tests_and_totals(self):
+        """#1219 invariant preserved: the new field must NOT reintroduce
+        fake-FAILED rendering — skipped entries stay out of individual_tests
+        and total_tests."""
+        tests = self._passed(
+            RefutationTestType.PLACEBO_TREATMENT,
+            RefutationTestType.RANDOM_COMMON_CAUSE,
+        ) + [self._skipped(RefutationTestType.SENSITIVITY_E_VALUE, "not applicable")]
+
+        legacy = self._suite(tests).to_legacy_format()
+
+        assert "unobserved_common_cause" not in legacy["individual_tests"]
+        assert legacy["total_tests"] == 2
+        assert legacy["tests_passed"] == 2
+        assert legacy["skipped_tests"] == {"unobserved_common_cause": "not applicable"}
+
+
+# ============================================================================
 # RefutationRunner INITIALIZATION TESTS
 # ============================================================================
 
