@@ -3135,7 +3135,7 @@ def create_e2i_chat_agent():
             # substrate for the Tier-5 feedback learner (no tools invoked).
             if full_content:
                 await _collect_copilot_learning_signal(
-                    query=last_human_message or "",
+                    query=last_human_message or "",  # type: ignore[arg-type]
                     response=full_content,
                     tool_names=[],
                     conversation_id=session_id,
@@ -3346,7 +3346,7 @@ def create_e2i_chat_agent():
             await _collect_copilot_learning_signal(
                 query=original_query,
                 response=full_content,
-                tool_names=[tr["tool"] for tr in tool_results],
+                tool_names=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                 conversation_id=session_id,
             )
 
@@ -3409,7 +3409,7 @@ def create_e2i_chat_agent():
             await _collect_copilot_learning_signal(
                 query=original_query,
                 response=result_text,
-                tool_names=[tr["tool"] for tr in tool_results],
+                tool_names=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                 conversation_id=session_id,
                 synthesis_error=True,
             )
