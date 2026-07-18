@@ -1,79 +1,98 @@
-# Database Migrations Runbook (PROD = MANUAL)
+# Database Migrations Runbook (PROD = AUTO on deploy, manual path available)
 
-**Status**: Operator runbook | **Last verified against code**: 2026-06-03
+**Status**: Operator runbook | **Last verified against code**: 2026-07-18
 
 This is a reader-facing companion. The **code and config are the source of
 truth** — every command, flag, and line reference below was transcribed from
-the files cited. If they have drifted since 2026-06-03, trust the files:
+the files cited. If they have drifted since 2026-07-18, trust the files:
 
-- `.github/workflows/deploy.yml` (the conditional migration step)
-- `scripts/run_migrations.sh` (the `SUPABASE_DB_URL` + `psql` runner)
-- `database/migrations/*.sql` (the migration files)
+- `.github/workflows/deploy.yml` (the unconditional migration step)
+- `scripts/run_migrations.sh` (the auto-detecting, ledger-tracking runner)
+- `database/**/*.sql` (the migration files — ALL schema dirs are in scope)
 - `tests/integration/test_migrations_no_inner_txn.py` (the no-inner-txn lint)
+
+> **History note**: until mid-2026 this runbook correctly said "PROD = MANUAL —
+> nothing in CI applies a migration", because the deploy's migration step was
+> gated on `SUPABASE_DB_URL`, which the droplet doesn't set. That gate is gone:
+> the runner grew a docker-exec mode and the deploy now calls it
+> unconditionally. If you find prose elsewhere claiming prod migrations are
+> manual-only, it predates this change.
 
 ---
 
 ## TL;DR
 
-**Production database migrations are MANUAL.** Nothing in CI or the deploy
-pipeline applies a migration to the live droplet database. When you add a file
-under `database/migrations/`, you must apply it by hand by exec-ing into the
-self-hosted Supabase Postgres container on the droplet:
+**Migrations apply AUTOMATICALLY on every production deploy.** The deploy
+workflow runs `scripts/run_migrations.sh` unconditionally. The runner
+auto-detects its connection:
 
-```bash
-docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
-  < database/migrations/<file>.sql
-```
+1. `SUPABASE_DB_URL` set → `psql` against that URL (CI / remote / workstation)
+2. else → `docker exec` into the `supabase-db` container (the droplet's
+   self-hosted Supabase stack exposes only REST creds, no DB URL)
 
-Then verify it landed with an explicit cast/select disproof (see
-[Verify it applied](#5-verify-it-applied)).
+It scans **all** `database/` schema dirs (`migrations`, `memory`, `core`, `ml`,
+`causal`, `chat`, `rag`, `audit`), applies pending files in order, and records
+each in `public.schema_migrations`. Files are idempotent and the ledger was
+baselined (PRs #676 + #682), so a deploy re-scour is a clean no-op — only
+genuinely-new files apply.
+
+**So the normal flow is: merge the migration to `main` → the next deploy
+applies it.** The manual `docker exec ... psql` path below remains valid for
+urgent/out-of-band applies — but note it bypasses the ledger (§5).
 
 ---
 
-## 1. Why migrations do NOT auto-apply
+## 1. How migrations apply on deploy
 
-The deploy workflow has a migration step, but it is **gated on
-`SUPABASE_DB_URL` being set in the deploy environment** and the droplet env
-does not set that variable.
-
-`deploy.yml` (the SSH deploy script, around lines 244-248):
+`deploy.yml` (SSH deploy script, after the `git reset --hard origin/main`):
 
 ```bash
-# Run migrations only when the DB URL is present in the deploy env;
-# run_migrations.sh hard-exits otherwise, which `set -e` would abort on.
-if [ -n "${SUPABASE_DB_URL:-}" ]; then
-  bash scripts/run_migrations.sh
-else
-  echo "==> Skipping migrations: SUPABASE_DB_URL unset"
-fi
+# Apply DB migrations. run_migrations.sh auto-detects the connection:
+# SUPABASE_DB_URL when set (CI/remote), else `docker exec` into the
+# supabase-db container. ...
+bash scripts/run_migrations.sh
 ```
 
-The droplet's `.env` carries only Supabase **REST** credentials (anon/service
-keys + URL); it has **no `SUPABASE_DB_URL`** Postgres connection string. So on
-every production deploy this branch takes the `else` path and prints
-`==> Skipping migrations: SUPABASE_DB_URL unset`. **No migration is ever
-applied by the deploy.**
+There is **no conditional gate** — the step runs every deploy. If a migration
+fails, `set -e` fails the deploy before the app-services flip (the droplet
+keeps serving the pre-deploy version).
 
-No other CI workflow applies migrations against a live database either. The
-only migration-related CI is the **lint** in
-`tests/integration/test_migrations_no_inner_txn.py`, which is filesystem-only
-(no DB) — it checks file *shape*, not application.
+What the runner does (`scripts/run_migrations.sh`):
 
-| Path | Applies to live prod DB? | Why |
+- **Connection auto-detect**: `SUPABASE_DB_URL` mode needs a host `psql`;
+  docker mode needs `docker exec supabase-db` to work. Neither → hard error.
+- **Scope**: all 8 `database/` dirs, each namespaced in the ledger by a key
+  prefix (e.g. `ml/011_...` vs plain `011_...`) so identically-numbered files
+  never collide.
+- **Safety skips**: `*_validation_queries.sql`, `rollback_*.sql`, and
+  `*_rollback.sql` are never auto-applied (rollback utils DROP live objects).
+- **Transaction wrapping**: each file normally applies under
+  `psql --single-transaction` (body + ledger insert commit together). Files
+  containing non-transactional DDL (`ALTER TYPE ... ADD VALUE`,
+  `... CONCURRENTLY`) or a self-managed `COMMIT;` are detected and applied
+  **unwrapped**, with the ledger row inserted separately only after a clean
+  exit — a file that fails mid-way stays untracked and idempotently retries
+  next deploy.
+- **Ledger**: `public.schema_migrations (filename, applied_at)` — written in
+  BOTH url and docker modes.
+- `--dry-run` lists pending without applying; `--baseline` records
+  everything-present as applied without running it (one-time adoption on an
+  already-migrated DB — already done for prod).
+
+| Path | Applies to live prod DB? | Notes |
 | --- | --- | --- |
-| `deploy.yml` migration step | No | Gated on `SUPABASE_DB_URL`; droplet has none → "Skipping migrations" |
-| `scripts/run_migrations.sh` | Only where `SUPABASE_DB_URL` is exported | Hard-exits otherwise (see below) |
+| `deploy.yml` migration step | **Yes — every deploy** | Unconditional; docker-exec mode on the droplet; ledger-tracked |
+| `scripts/run_migrations.sh` run by hand | Yes | Same behavior; safe to run any time (pending-only) |
 | CI `test_migrations_no_inner_txn.py` | No | Filesystem-only lint, no DB connection |
-| **`docker exec -i supabase-db psql ...`** | **Yes — manual** | The real droplet apply path |
+| `docker exec -i supabase-db psql ...` by hand | Yes — manual | Urgent/out-of-band path; **bypasses the ledger** (§5) |
 
 ---
 
-## 2. The authoritative manual apply command
+## 2. The manual apply command (out-of-band path)
 
-The droplet runs a self-hosted Supabase **Docker** stack. The Postgres
-container is named `supabase-db`. You have direct `docker` access on the
-droplet, so apply a migration by piping the SQL straight into `psql` inside
-that container:
+For an urgent apply that can't wait for a deploy (or to apply something the
+runner skips), the droplet runs a self-hosted Supabase **Docker** stack with
+the Postgres container named `supabase-db`:
 
 ```bash
 docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
@@ -88,44 +107,34 @@ Flag notes:
 | `-U postgres -d postgres` | Connect as superuser to the `postgres` database |
 | `-v ON_ERROR_STOP=1` | Abort on the first SQL error instead of plowing on (do NOT omit) |
 
-Migrations **029, 055, 056, 057** (issue #607, agent-taxonomy reconciliation)
-were applied to the droplet exactly this way by hand.
+Prefer running the tracked runner instead when possible — same droplet, ledger
+maintained:
+
+```bash
+./scripts/run_migrations.sh --dry-run   # list pending
+./scripts/run_migrations.sh             # apply pending, ledger-tracked
+```
+
+If you DO apply a file raw via `docker exec`, the next deploy's re-scour will
+see it as "pending" (no ledger row) and re-run it — harmless **only because**
+migration files are required to be idempotent. Non-idempotent SQL must go
+through the runner.
 
 ---
 
-## 3. Why NOT `scripts/run_migrations.sh` on the droplet
+## 3. Running the runner off-droplet
 
-`run_migrations.sh` is the ledger-tracking runner, but it **cannot run on the
-droplet** because it hard-requires a `SUPABASE_DB_URL` connection string and a
-`psql` binary on the host — neither of which the droplet provides to that
-script's environment.
-
-`run_migrations.sh` (lines 46-56):
-
-```bash
-if [ -z "${SUPABASE_DB_URL:-}" ]; then
-  echo -e "${RED}ERROR: SUPABASE_DB_URL environment variable is required${NC}"
-  echo "Example: export SUPABASE_DB_URL='postgresql://user:pass@host:5432/dbname'"
-  exit 1
-fi
-# ...
-if ! command -v psql &> /dev/null; then
-  echo -e "${RED}ERROR: psql not found. Install postgresql-client.${NC}"
-  exit 1
-fi
-```
-
-Use `run_migrations.sh` only in an environment where you have exported a
-working `SUPABASE_DB_URL` (e.g. a workstation with network access to a
-Postgres endpoint and `postgresql-client` installed). It applies each pending
-file under `psql --single-transaction` and records it in
-`public.schema_migrations`. It also supports a dry run:
+In any environment with a `SUPABASE_DB_URL` and `postgresql-client`, the runner
+uses url mode:
 
 ```bash
 export SUPABASE_DB_URL='postgresql://user:pass@host:5432/dbname'
-./scripts/run_migrations.sh --dry-run   # list pending without applying
-./scripts/run_migrations.sh             # apply pending migrations
+./scripts/run_migrations.sh --dry-run
+./scripts/run_migrations.sh
 ```
+
+`SUPABASE_DB_CONTAINER` overrides the container name for docker mode (default
+`supabase-db`).
 
 ---
 
@@ -133,12 +142,14 @@ export SUPABASE_DB_URL='postgresql://user:pass@host:5432/dbname'
 
 Migration files **must not contain a script-level transaction-control
 statement** — no `BEGIN;`, `COMMIT;`, `ROLLBACK;`, `END;`, `ABORT;`, or
-`START TRANSACTION;`. The runner (`scripts/run_migrations.sh`) already wraps
-each file in `psql --single-transaction`, which owns the outer transaction
-(the migration body **plus** the `INSERT INTO public.schema_migrations`
-bookkeeping row). An inner `COMMIT;` would prematurely commit before the
-bookkeeping insert — leaving a migration applied but unrecorded (silent ledger
-drift); an inner `ROLLBACK;` is the inverse hazard.
+`START TRANSACTION;`. The runner wraps each file in
+`psql --single-transaction`, which owns the outer transaction (the migration
+body **plus** the `INSERT INTO public.schema_migrations` bookkeeping row). An
+inner `COMMIT;` would prematurely commit before the bookkeeping insert —
+leaving a migration applied but unrecorded (silent ledger drift); an inner
+`ROLLBACK;` is the inverse hazard. (The runner detects such files and applies
+them unwrapped with separate tracking — see §1 — but the lint keeps the
+default shape clean.)
 
 This is enforced by the CI lint
 `tests/integration/test_migrations_no_inner_txn.py`, which fails any migration
@@ -166,21 +177,26 @@ The canonical clean-shape reference file is
 > Note on idempotency: enum migrations like `055_*` use
 > `ALTER TYPE ... ADD VALUE IF NOT EXISTS ...`, which is idempotent and safe
 > to re-run, and (in older Postgres) cannot run inside a transaction block —
-> another reason migrations stay transaction-control-free.
+> the runner applies such files unwrapped automatically.
 
 ---
 
 ## 5. Verify it applied
 
-The `docker exec` path **bypasses `public.schema_migrations` version
-tracking** — that ledger is only written by `run_migrations.sh`. So a
-docker-exec apply leaves **no row** in `schema_migrations`; do not rely on that
-table to know what landed on the droplet.
+**Runner path**: check the ledger —
 
-Instead, verify success with an explicit **cast/select disproof** against the
-object the migration created. For example, after adding `experiment_monitor`
-to an enum (mig 055), confirm the value now casts (a value that does not exist
-raises `22P02 invalid_text_representation`):
+```bash
+docker exec -i supabase-db psql -U postgres -d postgres -c \
+  "SELECT filename, applied_at FROM public.schema_migrations ORDER BY applied_at DESC LIMIT 10;"
+```
+
+**Raw `docker exec` path**: bypasses the ledger entirely — no row is written,
+so do not rely on `schema_migrations` to know what a manual apply landed.
+
+Either way, the decisive check is an explicit **cast/select disproof** against
+the object the migration created. For example, after adding
+`experiment_monitor` to an enum (mig 055), confirm the value now casts (a value
+that does not exist raises `22P02 invalid_text_representation`):
 
 ```bash
 docker exec -i supabase-db psql -U postgres -d postgres -c \
@@ -219,28 +235,24 @@ docker exec -i supabase-db psql -U postgres -d postgres -c "<your query>"
 
 ---
 
-## 7. Operator checklist (apply a new migration to prod)
+## 7. Operator checklist (ship a new migration to prod)
 
-1. Confirm the file is in `database/migrations/` and merged to `main`.
+1. Put the file in the right `database/` dir with the next number; keep it
+   **idempotent** (`IF NOT EXISTS` / `IF EXISTS` guards).
 2. Confirm it has **no script-level `BEGIN`/`COMMIT`/`ROLLBACK`/`END`/`ABORT`**
    (CI lint `test_migrations_no_inner_txn.py` should already be green).
-3. SSH to the droplet; `cd` to the project checkout
-   (`/home/enunez/Projects/e2i_causal_analytics`).
-4. Apply:
-   `docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < database/migrations/<file>.sql`
-5. Verify with a cast/select disproof against the migration's new object
-   (Section 5). A clean exit + the disproof passing = applied.
-6. Remember: nothing recorded it in `schema_migrations`. Track applied
-   migrations out of band (PR/commit + this runbook's note).
+3. Merge to `main`. If the same PR touches deploy-triggering paths (`src/`,
+   `config/`, `frontend/`, deps), the deploy fires and **applies the migration
+   automatically**. A docs-only or migration-only merge does NOT trigger a
+   deploy — for those, either wait for the next deploy or run the runner (or
+   the manual `docker exec` apply) on the droplet yourself.
+4. Verify with the ledger and/or a cast/select disproof against the migration's
+   new object (§5).
 
 ---
 
 ## Cross-reference
 
-- Deployment / admin operations: `DEPLOYMENT_ADMIN.md` (and the existing
-  top-level `DEPLOYMENT.md`) — note its rollback section: the deploy's
-  migration step is conditional and **skipped on the droplet** (migrations are
-  applied manually, per this runbook).
-- Backlog item **C3** in
-  `docs/DOCUMENTATION_UPDATE_INDEX_20260603.md` (this runbook fulfills it).
+- `DEPLOYMENT.md` — "Production Deploy (CI/CD)" section (the migration step's
+  place in the gated rollout ordering).
 - The v3 success-criteria + QC gate doc: `docs/model_success_criteria.md`.
