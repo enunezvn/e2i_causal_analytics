@@ -81,9 +81,9 @@ import { cn } from '@/lib/utils';
 // =============================================================================
 
 const DEFAULT_TOP_K = 10;
-// Keep the cold-compute (sequential SHAP) comfortably under the 30s client
-// timeout; the result is cached/warmed so repeat loads are instant regardless.
-const COHORT_SAMPLE_SIZE = 25;
+// Cohort sample sizing is server-side: a uniform random draw grown until the
+// top-feature ranking is stable beyond sampling noise (bounded by the server's
+// latency/memory cap). The page passes no explicit sample_size.
 
 /** Friendly cohort labels (no version numbers). */
 const COHORT_LABELS: Record<string, string> = {
@@ -439,7 +439,7 @@ function FeatureImportance() {
     isError: isGlobalError,
     error: globalError,
     refetch: refetchGlobal,
-  } = useGlobalFeatureImportance(effectiveModelType, selectedBrand, COHORT_SAMPLE_SIZE, {
+  } = useGlobalFeatureImportance(effectiveModelType, selectedBrand, undefined, {
     enabled: viewMode === 'cohort' && !!effectiveModelType,
   });
 
@@ -869,11 +869,19 @@ function FeatureImportance() {
                         </span>
                         <span>•</span>
                         <span
-                          title={`Averaged over a ${global.sample_size}-${
+                          title={`Averaged over a ${
+                            global.sampling_method === 'random' ? 'random ' : ''
+                          }${global.sample_size}-${
                             isHcpCohort ? 'HCP' : 'patient'
-                          } sample of the cohort — not the cohort size.`}
+                          } sample of the cohort — not the cohort size.${
+                            global.stability_achieved
+                              ? ' Sample grown until the top-feature ranking was stable beyond sampling noise.'
+                              : ''
+                          }`}
                         >
-                          n = {global.sample_size} sampled {isHcpCohort ? 'HCPs' : 'patients'}
+                          n = {global.sample_size} {global.sampling_method === 'random' && 'randomly '}
+                          sampled {isHcpCohort ? 'HCPs' : 'patients'}
+                          {global.stability_achieved ? ' · ranking stable' : ''}
                         </span>
                         <span>•</span>
                         <span>{global.cached ? 'cached' : 'freshly computed'}</span>
@@ -1036,7 +1044,9 @@ function FeatureImportance() {
                   </CardTitle>
                   <CardDescription>
                     {viewMode === 'cohort'
-                      ? `Mean |SHAP| over a ${global?.sample_size ?? COHORT_SAMPLE_SIZE}-${
+                      ? `Mean |SHAP| over a ${
+                          global?.sampling_method === 'random' ? 'random ' : ''
+                        }${global ? `${global.sample_size}-` : ''}${
                           isHcpCohort ? 'HCP' : 'patient'
                         } sample, grouped by covariate. Bar length = importance; color = net direction (green raises, red lowers the prediction).`
                       : `Signed SHAP contributions for this ${grainLabel.toLowerCase()}, grouped by covariate. Positive values push the prediction higher.`}

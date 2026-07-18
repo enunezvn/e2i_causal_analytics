@@ -987,6 +987,11 @@ class TestComputeGlobalImportance:
         with (
             patch.object(
                 explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                explain_mod,
                 "_sample_entity_ids",
                 new=AsyncMock(return_value=["e1", "e2", "e3"]),
             ),
@@ -1037,6 +1042,9 @@ class TestComputeGlobalImportance:
 
         with (
             patch.object(
+                explain_mod, "_sample_entity_ids_random", new=AsyncMock(return_value=None)
+            ),
+            patch.object(
                 explain_mod, "_sample_entity_ids", new=AsyncMock(return_value=["e1", "e2"])
             ),
             patch.object(
@@ -1067,6 +1075,9 @@ class TestComputeGlobalImportance:
         from src.api.routes import explain as explain_mod
 
         with (
+            patch.object(
+                explain_mod, "_sample_entity_ids_random", new=AsyncMock(return_value=None)
+            ),
             patch.object(
                 explain_mod, "_sample_entity_ids", new=AsyncMock(return_value=["e1", "e2"])
             ),
@@ -1293,3 +1304,244 @@ class TestGlobalImportanceCachePersists:
             f"data_split={record['data_split']!r} is not a valid data_split_type "
             f"enum member -> Postgres rejects the insert -> cache never persists"
         )
+
+
+# =============================================================================
+# RANDOM + STABILITY-SIZED COHORT SAMPLING (mig 109)
+# =============================================================================
+
+
+class TestRankingStable:
+    """Pure-logic tests for the adaptive-stop stability rule."""
+
+    def test_clear_separation_is_stable(self):
+        from src.api.routes.explain import _ranking_stable
+
+        abs_vals = {"big": [0.5] * 5, "small": [0.1] * 5}
+        assert _ranking_stable(abs_vals, n=5) is True
+
+    def test_overlapping_noise_is_unstable(self):
+        from src.api.routes.explain import _ranking_stable
+
+        # Two features whose means tie (0.5) with high variance — another draw
+        # could easily reorder them.
+        abs_vals = {"a": [0.9, 0.1, 0.9, 0.1], "b": [0.1, 0.9, 0.1, 0.9]}
+        assert _ranking_stable(abs_vals, n=4) is False
+
+    def test_jointly_negligible_tail_does_not_block_stability(self):
+        from src.api.routes.explain import _ranking_stable
+
+        # Rank order among features that jointly explain ~nothing (< 2% of the
+        # top mean) is meaningless — noisy ties there must not force max-n runs.
+        abs_vals = {
+            "dominant": [1.0] * 6,
+            "noise1": [0.018, 0.012, 0.02, 0.01, 0.015, 0.013],
+            "noise2": [0.012, 0.018, 0.01, 0.02, 0.013, 0.015],
+        }
+        assert _ranking_stable(abs_vals, n=6) is True
+
+    def test_needs_at_least_two_entities(self):
+        from src.api.routes.explain import _ranking_stable
+
+        assert _ranking_stable({"a": [0.5]}, n=1) is False
+
+    def test_all_zero_importance_is_unstable(self):
+        from src.api.routes.explain import _ranking_stable
+
+        assert _ranking_stable({"a": [0.0, 0.0], "b": [0.0, 0.0]}, n=2) is False
+
+
+class TestAdaptiveSampling:
+    """The compute loop draws randomly and sizes the sample for stability."""
+
+    async def test_random_sampler_preferred_and_labeled(self):
+        from src.api.routes import explain as explain_mod
+
+        resp = _ns_resp(-0.7, [("big", 1.0, 0.8), ("small", 1.0, 0.05)])
+        prefix_mock = AsyncMock()
+        with (
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=["e1", "e2", "e3", "e4"]),
+            ),
+            patch.object(explain_mod, "_sample_entity_ids", new=prefix_mock),
+            patch.object(explain_mod, "explain_prediction", new=AsyncMock(return_value=resp)),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=2,
+                background_tasks=None,
+            )
+        assert agg["sampling_method"] == "random"
+        prefix_mock.assert_not_awaited()
+
+    async def test_prefix_fallback_labeled_when_rpc_unavailable(self):
+        from src.api.routes import explain as explain_mod
+
+        resp = _ns_resp(-0.7, [("big", 1.0, 0.8), ("small", 1.0, 0.05)])
+        with (
+            patch.object(
+                explain_mod, "_sample_entity_ids_random", new=AsyncMock(return_value=None)
+            ),
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids",
+                new=AsyncMock(return_value=["e1", "e2"]),
+            ),
+            patch.object(explain_mod, "explain_prediction", new=AsyncMock(return_value=resp)),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=2,
+                background_tasks=None,
+            )
+        assert agg["sampling_method"] == "prefix_fallback"
+
+    async def test_stops_early_once_ranking_stable(self):
+        from src.api.routes import explain as explain_mod
+
+        # Identical clear-cut explanations: zero variance, wide gap — the
+        # ranking is provably stable at the minimum n, so the loop must stop
+        # there instead of burning SHAP calls up to the cap.
+        resp = _ns_resp(-0.7, [("big", 1.0, 0.8), ("small", 1.0, 0.05)])
+        explain_mock = AsyncMock(return_value=resp)
+        with (
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=[f"e{i}" for i in range(20)]),
+            ),
+            patch.object(explain_mod, "explain_prediction", new=explain_mock),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=3,
+                background_tasks=None,
+                max_sample_size=10,
+            )
+        assert agg["sample_size"] == 3
+        assert agg["stopping_reason"] == "stable"
+        assert agg["stability_achieved"] is True
+        assert explain_mock.await_count == 3
+
+    async def test_runs_to_cap_when_ranking_unstable(self):
+        from src.api.routes import explain as explain_mod
+
+        # Alternating rank flips: means tie with high variance — never stable,
+        # so the loop must run to max_sample_size and say so.
+        resp_a = _ns_resp(-0.7, [("a", 1.0, 0.9), ("b", 1.0, 0.1)])
+        resp_b = _ns_resp(-0.7, [("a", 1.0, 0.1), ("b", 1.0, 0.9)])
+        explain_mock = AsyncMock(side_effect=[resp_a, resp_b] * 3)
+        with (
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=[f"e{i}" for i in range(12)]),
+            ),
+            patch.object(explain_mod, "explain_prediction", new=explain_mock),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=2,
+                background_tasks=None,
+                max_sample_size=6,
+            )
+        assert agg["sample_size"] == 6
+        assert agg["stopping_reason"] == "max_sample_size_reached"
+        assert agg["stability_achieved"] is False
+        assert explain_mock.await_count == 6
+
+
+class TestSamplingMetaRoundTrip:
+    """Sampling provenance survives the durable-cache write/read cycle."""
+
+    @pytest.mark.asyncio
+    async def test_store_writes_reserved_key_and_parser_recovers_it(self):
+        from src.api.routes.explain import (
+            ModelType,
+            _row_to_global_agg,
+            _store_global_importance_row,
+        )
+
+        sink: dict = {}
+
+        async def _fake_client():
+            return _CapturingInsertQuery(sink)
+
+        agg = {
+            "features": [
+                {
+                    "feature_name": "disease_severity",
+                    "mean_abs_shap": 0.77,
+                    "mean_shap": 0.77,
+                    "mean_feature_value": 4.6,
+                    "contribution_rank": 1,
+                }
+            ],
+            "points": {"disease_severity": [(0.7, 5.0)]},
+            "base_value": -0.91,
+            "sample_size": 5,
+            "computation_method": "LinearExplainer",
+            "sampling_method": "random",
+            "stability_achieved": True,
+            "stopping_reason": "stable",
+        }
+        with patch("src.memory.services.factories.get_async_supabase_client", new=_fake_client):
+            await _store_global_importance_row("reg-1", ModelType.INITIATION, agg)
+
+        record = sink.get("record")
+        assert record is not None
+        assert record["global_importance"]["__sampling__"]["sampling_method"] == "random"
+
+        parsed = _row_to_global_agg(record)
+        # The reserved key must NOT surface as a feature...
+        assert [f["feature_name"] for f in parsed["features"]] == ["disease_severity"]
+        # ...and the provenance must round-trip.
+        assert parsed["sampling_method"] == "random"
+        assert parsed["stability_achieved"] is True
+        assert parsed["stopping_reason"] == "stable"
+
+    def test_legacy_rows_parse_with_null_sampling_meta(self):
+        from src.api.routes.explain import _row_to_global_agg
+
+        parsed = _row_to_global_agg({"global_importance": {"age": 0.3}, "sample_size": 100})
+        assert parsed["sampling_method"] is None
+        assert parsed["stability_achieved"] is None
+        assert parsed["stopping_reason"] is None
+
+
+class TestGlobalEndpointSamplingParams:
+    """HTTP guard for the new max_sample_size query param."""
+
+    def test_422_when_max_below_min(self):
+        resp = client.get(
+            "/api/explain/global",
+            params={
+                "model_type": "initiation",
+                "brand": "Remibrutinib",
+                "sample_size": 30,
+                "max_sample_size": 10,
+            },
+        )
+        assert resp.status_code == 422

@@ -281,7 +281,7 @@ export const queryKeys = {
     history: (patientId: string) =>
       [...queryKeys.explain.all(), 'history', patientId] as const,
     health: () => [...queryKeys.explain.all(), 'health'] as const,
-    global: (modelType: string, brand: string, sampleSize: number) =>
+    global: (modelType: string, brand: string, sampleSize: number | 'auto') =>
       [...queryKeys.explain.all(), 'global', modelType, brand, sampleSize] as const,
     sampleEntities: (modelType: string, limit: number) =>
       [...queryKeys.explain.all(), 'sample-entities', modelType, limit] as const,

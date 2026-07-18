@@ -151,14 +151,16 @@ export function useExplainHealth(
 export function useGlobalFeatureImportance(
   modelType: ModelType | string,
   brand: string,
-  sampleSize = 25,
+  sampleSize?: number,
   options?: Omit<
     UseQueryOptions<GlobalFeatureImportanceResponse, ApiError>,
     'queryKey' | 'queryFn'
   >
 ) {
   return useQuery<GlobalFeatureImportanceResponse, ApiError>({
-    queryKey: queryKeys.explain.global(String(modelType), brand, sampleSize),
+    // 'auto' = no explicit size; the server sizes the sample adaptively
+    // (random draw, grown until the ranking is stable or the cap is hit).
+    queryKey: queryKeys.explain.global(String(modelType), brand, sampleSize ?? 'auto'),
     queryFn: () =>
       getGlobalFeatureImportance({
         model_type: modelType,

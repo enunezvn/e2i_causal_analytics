@@ -55,7 +55,7 @@ export interface SHAPWaterfallProps {
   valueFormatter?: (value: number) => string;
 }
 
-interface WaterfallDataPoint {
+export interface WaterfallDataPoint {
   name: string;
   start: number;
   end: number;
@@ -71,6 +71,70 @@ interface WaterfallDataPoint {
 
 // NOTE: SAMPLE_FEATURES / SAMPLE_BASE (fabricated SHAP waterfall
 // inputs) were DELETED. Omitted props render the empty state.
+
+// =============================================================================
+// DATA
+// =============================================================================
+
+/**
+ * Build the waterfall rows. Every row's `[start, end]` is normalized so
+ * start <= end — the Bar consumes it as a range (floating bar), and Recharts
+ * range geometry requires an ordered interval. The goldstd models emit SHAP in
+ * log-odds space where base and cumulative values are NEGATIVE; unnormalized
+ * intervals produced negative SVG rect widths, which the browser rejects
+ * outright — the bug that left this chart blank. The signed magnitude lives in
+ * `value` for tooltips/colors.
+ */
+export function buildWaterfallData(
+  baseValue: number,
+  features: FeatureContribution[],
+  maxFeatures: number
+): WaterfallDataPoint[] {
+  const sorted = [...features]
+    .sort((a, b) => Math.abs(b.shap_value) - Math.abs(a.shap_value))
+    .slice(0, maxFeatures);
+
+  const data: WaterfallDataPoint[] = [];
+  let cumulative = baseValue;
+
+  // Base value bar — anchored to 0, ordered for negative bases.
+  data.push({
+    name: 'Base Value',
+    start: Math.min(0, baseValue),
+    end: Math.max(0, baseValue),
+    value: baseValue,
+    isBase: true,
+    isOutput: false,
+  });
+
+  // Feature contribution bars — each floats from the running cumulative.
+  sorted.forEach((f) => {
+    const start = cumulative;
+    const end = cumulative + f.shap_value;
+    data.push({
+      name: f.feature_name.replace(/_/g, ' '),
+      start: Math.min(start, end),
+      end: Math.max(start, end),
+      value: f.shap_value,
+      isBase: false,
+      isOutput: false,
+      original: f,
+    });
+    cumulative = end;
+  });
+
+  // Output value bar — anchored to 0, ordered for negative outputs.
+  data.push({
+    name: 'Output',
+    start: Math.min(0, cumulative),
+    end: Math.max(0, cumulative),
+    value: cumulative,
+    isBase: false,
+    isOutput: true,
+  });
+
+  return data;
+}
 
 // =============================================================================
 // COMPONENT
@@ -110,53 +174,10 @@ export const SHAPWaterfall = React.forwardRef<HTMLDivElement, SHAPWaterfallProps
     const baseValue = propBase ?? 0;
     const features = useMemo(() => propFeatures ?? [], [propFeatures]);
 
-    // Build waterfall data
-    const chartData = useMemo<WaterfallDataPoint[]>(() => {
-      const sorted = [...features]
-        .sort((a, b) => Math.abs(b.shap_value) - Math.abs(a.shap_value))
-        .slice(0, maxFeatures);
-
-      const data: WaterfallDataPoint[] = [];
-      let cumulative = baseValue;
-
-      // Base value bar
-      data.push({
-        name: 'Base Value',
-        start: 0,
-        end: baseValue,
-        value: baseValue,
-        isBase: true,
-        isOutput: false,
-      });
-
-      // Feature contribution bars
-      sorted.forEach((f) => {
-        const start = cumulative;
-        const end = cumulative + f.shap_value;
-        data.push({
-          name: f.feature_name.replace(/_/g, ' '),
-          start: Math.min(start, end),
-          end: Math.max(start, end),
-          value: f.shap_value,
-          isBase: false,
-          isOutput: false,
-          original: f,
-        });
-        cumulative = end;
-      });
-
-      // Output value bar
-      data.push({
-        name: 'Output',
-        start: 0,
-        end: cumulative,
-        value: cumulative,
-        isBase: false,
-        isOutput: true,
-      });
-
-      return data;
-    }, [baseValue, features, maxFeatures]);
+    const chartData = useMemo<WaterfallDataPoint[]>(
+      () => buildWaterfallData(baseValue, features, maxFeatures),
+      [baseValue, features, maxFeatures]
+    );
 
     // Calculate domain
     const domain = useMemo(() => {
@@ -221,49 +242,6 @@ export const SHAPWaterfall = React.forwardRef<HTMLDivElement, SHAPWaterfallProps
       );
     };
 
-    // Custom bar shape for waterfall
-    const WaterfallBar = (props: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-      payload: WaterfallDataPoint;
-    }) => {
-      const { x, y, width, height: h, payload } = props;
-      const color = getBarColor(payload);
-
-      // Calculate actual bar dimensions for floating bars
-      const barHeight = Math.abs(h);
-      const barY = payload.isBase || payload.isOutput ? y : y;
-
-      return (
-        <g>
-          {/* Main bar */}
-          <rect
-            x={x}
-            y={barY}
-            width={width}
-            height={barHeight}
-            fill={color}
-            rx={4}
-            ry={4}
-          />
-          {/* Connector line for floating bars */}
-          {!payload.isBase && !payload.isOutput && (
-            <line
-              x1={x - 5}
-              y1={barY + (payload.value >= 0 ? barHeight : 0)}
-              x2={x}
-              y2={barY + (payload.value >= 0 ? barHeight : 0)}
-              stroke="var(--color-border)"
-              strokeWidth={1}
-              strokeDasharray="2,2"
-            />
-          )}
-        </g>
-      );
-    };
-
     // Loading skeleton
     if (isLoading) {
       return (
@@ -317,9 +295,14 @@ export const SHAPWaterfall = React.forwardRef<HTMLDivElement, SHAPWaterfallProps
             />
             <Tooltip content={<CustomTooltip />} />
             <ReferenceLine x={0} stroke="var(--color-border)" strokeWidth={1} />
+            {/* Range dataKey -> native floating bars from start to end. The
+                previous custom shape passed raw negative widths to <rect>
+                (invalid SVG) whenever values were negative — i.e. always, in
+                log-odds space — leaving the chart blank. Recharts' default
+                rectangle normalizes the geometry for us. */}
             <Bar
-              dataKey="end"
-              shape={(props: unknown) => <WaterfallBar {...(props as Parameters<typeof WaterfallBar>[0])} />}
+              dataKey={(d: WaterfallDataPoint) => [d.start, d.end]}
+              radius={[4, 4, 4, 4]}
               cursor={onBarClick ? 'pointer' : 'default'}
               onClick={(data) => {
                 const chartData = data as unknown as { payload: WaterfallDataPoint };

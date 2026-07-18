@@ -329,10 +329,30 @@ class GlobalFeatureImportanceResponse(BaseModel):
     sample_size: int = Field(
         ..., description="Entities successfully explained (n_succeeded, honest)"
     )
-    requested_sample_size: int = Field(..., description="Target sample size requested")
+    requested_sample_size: int = Field(
+        ..., description="Minimum sample size requested (adaptive sizing may exceed it)"
+    )
     computation_method: str = Field(..., description="SHAP explainer used (e.g. LinearExplainer)")
     computed_at: datetime
     cached: bool = Field(..., description="True when read from a stored precomputed row")
+    sampling_method: Optional[str] = Field(
+        None,
+        description=(
+            "'random' (uniform draw via RPC) or 'prefix_fallback' (deterministic, "
+            "pre-migration DB); None on legacy cached rows"
+        ),
+    )
+    stability_achieved: Optional[bool] = Field(
+        None,
+        description=(
+            "True when the top-feature mean-|SHAP| ranking separated beyond "
+            "sampling noise at the final n; None on legacy cached rows"
+        ),
+    )
+    stopping_reason: Optional[str] = Field(
+        None,
+        description="stable | max_sample_size_reached | candidates_exhausted",
+    )
     features: List[GlobalImportanceFeature] = Field(
         ..., description="Features ranked desc by mean_abs_shap"
     )
@@ -2006,8 +2026,10 @@ def _coerce_float(value: Any) -> Optional[float]:
 async def _sample_entity_ids(model_type: ModelType, limit: int) -> List[str]:
     """Fetch up to ``limit`` distinct real entity IDs from the cohort source.
 
-    Ordered deterministically by the id column (a stable prefix sample, not a
-    random draw — keeps the aggregation reproducible and cacheable). NO provenance
+    Ordered deterministically by the id column (a stable prefix, not a random
+    draw) — this feeds the /sample-entities PICKER, where a stable list is a
+    feature (the dropdown must not churn between loads). The cohort-importance
+    aggregation uses ``_sample_entity_ids_random`` instead. NO provenance
     (``is_synthetic=False``) filter: the gold-standard cohorts ARE synthetic-gold,
     so that predicate would exclude every row. Fails LOUD (503) when the source
     is unreachable — this feeds a real importance artifact, not a fabricated one.
@@ -2030,6 +2052,80 @@ async def _sample_entity_ids(model_type: ModelType, limit: int) -> List[str]:
             seen.add(eid)
             ids.append(eid)
     return ids
+
+
+async def _sample_entity_ids_random(model_type: ModelType, limit: int) -> Optional[List[str]]:
+    """Uniform random draw of entity IDs via the ``sample_entity_ids`` RPC (mig 109).
+
+    Sequential synthetic ids correlate with generation order (frontier-append
+    rows land at the tail of the id range), so a sorted prefix is NOT a
+    representative sample — the cohort aggregate must draw uniformly. Returns
+    ``None`` when the RPC is unavailable (pre-migration DB) so the caller can
+    fall back to the deterministic prefix WITH a logged warning — a degraded
+    sampling strategy still yields honest per-entity values, unlike a fabricated
+    feature vector, so a loud fallback beats a hard 503 here.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+
+    _, table, _ = _entity_source_for_model(model_type)
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Entity source unavailable")
+    try:
+        result = await client.rpc(
+            "sample_entity_ids",
+            {"p_source": table, "p_limit": limit},
+        ).execute()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Random entity sampling RPC unavailable ({e}); using prefix fallback")
+        return None
+    seen: set[str] = set()
+    ids: List[str] = []
+    for row in result.data or []:
+        eid = row.get("entity_id") if isinstance(row, dict) else row
+        if eid and eid not in seen:
+            seen.add(eid)
+            ids.append(eid)
+    return ids or None
+
+
+def _ranking_stable(
+    abs_shap_by_feature: Dict[str, List[float]],
+    n: int,
+    top_k: int = 5,
+    z: float = 1.96,
+    negligible_frac: float = 0.02,
+) -> bool:
+    """True when the top-``top_k`` mean-|SHAP| ranking is separated beyond noise.
+
+    Per-feature lists hold |SHAP| for the entities where the feature surfaced;
+    entities where it did not surface contributed ~0, so lists are zero-padded
+    to ``n`` (mirrors the cohort-mean denominator). The ranking is "stable"
+    when every adjacent pair in the top-k is separated by more than
+    ``z * SE(gap)`` — i.e. another draw is unlikely to reorder it. Pairs where
+    BOTH means are negligible (< ``negligible_frac`` of the top mean) are
+    treated as stable: distinguishing rank among jointly-noise features carries
+    no insight and would force every sample to the cap.
+    """
+    if n < 2 or not abs_shap_by_feature:
+        return False
+    means: Dict[str, float] = {f: sum(v) / n for f, v in abs_shap_by_feature.items()}
+    ordered = sorted(means, key=lambda f: means[f], reverse=True)[:top_k]
+    top_mean = means[ordered[0]]
+    if top_mean <= 0.0:
+        return False
+    ses: Dict[str, float] = {}
+    for f in ordered:
+        vals = abs_shap_by_feature[f] + [0.0] * (n - len(abs_shap_by_feature[f]))
+        var = sum((x - means[f]) ** 2 for x in vals) / (n - 1)
+        ses[f] = (var / n) ** 0.5
+    for hi, lo in zip(ordered, ordered[1:], strict=False):
+        if means[hi] < negligible_frac * top_mean and means[lo] < negligible_frac * top_mean:
+            continue
+        gap = means[hi] - means[lo]
+        if gap <= z * (ses[hi] ** 2 + ses[lo] ** 2) ** 0.5:
+            return False
+    return True
 
 
 async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
@@ -2105,6 +2201,13 @@ async def _store_global_importance_row(
             "contribution_rank": feat["contribution_rank"],
             "points": [{"s": s, "v": v} for (s, v) in points.get(name, [])[:max_stored_points]],
         }
+    # Sampling provenance rides in the same JSONB under a reserved dunder key
+    # (no real feature can be named "__sampling__"); the parser skips "__" keys.
+    gi["__sampling__"] = {
+        "sampling_method": agg.get("sampling_method"),
+        "stability_achieved": agg.get("stability_achieved"),
+        "stopping_reason": agg.get("stopping_reason"),
+    }
     record: Dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "model_registry_id": model_registry_id,
@@ -2141,8 +2244,14 @@ def _row_to_global_agg(row: Dict[str, Any]) -> Dict[str, Any]:
     gi = row.get("global_importance") or {}
     features: List[Dict[str, Any]] = []
     points: Dict[str, List[tuple]] = {}
+    sampling_meta: Dict[str, Any] = {}
     if isinstance(gi, dict):
         for name, detail in gi.items():
+            if name.startswith("__"):
+                # Reserved metadata keys (e.g. "__sampling__"), not features.
+                if name == "__sampling__" and isinstance(detail, dict):
+                    sampling_meta = detail
+                continue
             if isinstance(detail, dict):
                 features.append(
                     {
@@ -2185,6 +2294,10 @@ def _row_to_global_agg(row: Dict[str, Any]) -> Dict[str, Any]:
         "sample_size": int(row.get("sample_size") or 0),
         "computation_method": row.get("computation_method") or "LinearExplainer",
         "computed_at": row.get("computed_at"),
+        # None for legacy rows written before mig-109 sampling provenance.
+        "sampling_method": sampling_meta.get("sampling_method"),
+        "stability_achieved": sampling_meta.get("stability_achieved"),
+        "stopping_reason": sampling_meta.get("stopping_reason"),
     }
 
 
@@ -2193,8 +2306,15 @@ async def _compute_global_importance(
     brand: str,
     sample_size: int,
     background_tasks: BackgroundTasks,
+    max_sample_size: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Compute cohort-level mean |SHAP| by explaining a sample of real entities.
+    """Compute cohort-level mean |SHAP| by explaining a random sample of entities.
+
+    Sampling: a uniform random draw (``sample_entity_ids`` RPC, mig 109; loud
+    prefix fallback pre-migration). Sizing: ``sample_size`` is the MINIMUM;
+    after reaching it the loop keeps sampling until the top-feature ranking is
+    stable beyond sampling noise (``_ranking_stable``) or ``max_sample_size``
+    is hit — sized for stability, not a fixed constant.
 
     SHAP is the heavy (~1.3 GiB) part of each call, so the sample is processed
     SEQUENTIALLY under ONE held heavy-compute slot — concurrent fan-out would OOM
@@ -2206,9 +2326,15 @@ async def _compute_global_importance(
 
     from src.api.dependencies.compute import heavy_compute_slot
 
+    max_n = max(max_sample_size or sample_size, sample_size)
     grain, _, _ = _entity_source_for_model(model_type)
     # Over-sample to absorb Feast misses so we can still reach the target count.
-    candidates = await _sample_entity_ids(model_type, max(sample_size * 2, sample_size + 8))
+    pool_size = max(max_n * 2, max_n + 8)
+    sampling_method = "random"
+    candidates = await _sample_entity_ids_random(model_type, pool_size)
+    if candidates is None:
+        sampling_method = "prefix_fallback"
+        candidates = await _sample_entity_ids(model_type, pool_size)
     if not candidates:
         raise HTTPException(
             status_code=503,
@@ -2220,12 +2346,16 @@ async def _compute_global_importance(
     val_sum: Dict[str, float] = defaultdict(float)
     val_n: Dict[str, int] = defaultdict(int)
     points: Dict[str, List[tuple]] = defaultdict(list)
+    abs_values: Dict[str, List[float]] = defaultdict(list)
     base_values: List[float] = []
     n_succeeded = 0
+    stability_achieved = False
+    stopping_reason = "candidates_exhausted"
 
     async with heavy_compute_slot():
         for entity_id in candidates:
-            if n_succeeded >= sample_size:
+            if n_succeeded >= max_n:
+                stopping_reason = "max_sample_size_reached"
                 break
             req = ExplainRequest(
                 patient_id=entity_id,
@@ -2258,11 +2388,18 @@ async def _compute_global_importance(
             for c in resp.top_features:
                 abs_sum[c.feature_name] += abs(c.shap_value)
                 signed_sum[c.feature_name] += c.shap_value
+                abs_values[c.feature_name].append(abs(c.shap_value))
                 fv = _coerce_float(c.feature_value)
                 if fv is not None:
                     val_sum[c.feature_name] += fv
                     val_n[c.feature_name] += 1
                 points[c.feature_name].append((c.shap_value, fv))
+            # Adaptive stop: past the minimum, quit as soon as the top-feature
+            # ranking is separated beyond sampling noise — sized for stability.
+            if n_succeeded >= sample_size and _ranking_stable(abs_values, n_succeeded):
+                stability_achieved = True
+                stopping_reason = "stable"
+                break
 
     if n_succeeded == 0:
         raise HTTPException(
@@ -2272,6 +2409,12 @@ async def _compute_global_importance(
                 f"{model_type.value}/{brand} (feature store / serving unavailable)"
             ),
         )
+
+    # A run that ended at the cap (or ran out of candidates) may still have
+    # reached a stable ranking — report that honestly rather than only when the
+    # early-stop fired.
+    if not stability_achieved and n_succeeded >= 2:
+        stability_achieved = _ranking_stable(abs_values, n_succeeded)
 
     # No silent under-sampling: if Feast misses left us short of the target, the
     # honest n_succeeded still flows to the response — but surface it in logs so a
@@ -2315,6 +2458,9 @@ async def _compute_global_importance(
         "sample_size": n_succeeded,
         "computation_method": "LinearExplainer",
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "sampling_method": sampling_method,
+        "stability_achieved": stability_achieved,
+        "stopping_reason": stopping_reason,
     }
 
 
@@ -2356,23 +2502,42 @@ async def sample_explain_entities(
     summary="Cohort-level (global) SHAP feature importance",
     operation_id="global_feature_importance",
     description=(
-        "Mean |SHAP| feature importance aggregated over a sample of real cohort "
-        "entities for one per-brand gold-standard model. Reads a durable "
-        "precomputed row when available (instant); otherwise computes it once "
-        "(sequential under the heavy-compute slot) and stores it. ``refresh=true`` "
-        "forces recompute. Only gold-standard cohorts are supported (the legacy "
-        "demo model types have no deployed model)."
+        "Mean |SHAP| feature importance aggregated over a uniform RANDOM sample "
+        "of real cohort entities for one per-brand gold-standard model. "
+        "``sample_size`` is the minimum; sampling continues adaptively until the "
+        "top-feature ranking is stable beyond sampling noise or "
+        "``max_sample_size`` is reached. Reads a durable precomputed row when "
+        "available (instant); otherwise computes it once (sequential under the "
+        "heavy-compute slot) and stores it. ``refresh=true`` forces recompute. "
+        "Only gold-standard cohorts are supported (the legacy demo model types "
+        "have no deployed model)."
     ),
 )
 async def global_feature_importance(
     background_tasks: BackgroundTasks,
     model_type: ModelType,
     brand: str = Query(default=_DEFAULT_GOLDSTD_BRAND),
-    sample_size: int = Query(default=25, ge=5, le=60),
+    sample_size: int = Query(
+        default=25,
+        ge=5,
+        le=60,
+        description="Minimum entities to explain; adaptive sizing may sample more",
+    ),
+    max_sample_size: int = Query(
+        default=60,
+        ge=5,
+        le=60,
+        description="Hard cap for adaptive sizing (latency/memory budget)",
+    ),
     max_points: int = Query(default=30, ge=1, le=60),
     refresh: bool = Query(default=False),
     user: Dict[str, Any] = Depends(require_auth),
 ) -> GlobalFeatureImportanceResponse:
+    if max_sample_size < sample_size:
+        raise HTTPException(
+            status_code=422,
+            detail="max_sample_size must be >= sample_size",
+        )
     if model_type not in GOLDSTD_COHORT_MODEL_TYPES:
         raise HTTPException(
             status_code=400,
@@ -2398,7 +2563,9 @@ async def global_feature_importance(
                 agg = parsed
                 cached = True
     if agg is None:
-        agg = await _compute_global_importance(model_type, brand, sample_size, background_tasks)
+        agg = await _compute_global_importance(
+            model_type, brand, sample_size, background_tasks, max_sample_size=max_sample_size
+        )
         # The compute path already 503s when n_succeeded == 0; this guards the
         # rarer "explained N entities but every top_features list was empty" case
         # so we never store/serve a featureless aggregate.
@@ -2456,6 +2623,9 @@ async def global_feature_importance(
         computation_method=agg["computation_method"],
         computed_at=computed_at_dt,
         cached=cached,
+        sampling_method=agg.get("sampling_method"),
+        stability_achieved=agg.get("stability_achieved"),
+        stopping_reason=agg.get("stopping_reason"),
         features=features,
         points=out_points,
     )
