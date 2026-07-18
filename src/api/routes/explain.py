@@ -18,6 +18,7 @@ Version: 4.2.0
 import asyncio
 import inspect
 import logging
+import math
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -2213,7 +2214,7 @@ def _ranking_stable(
 
     def _se(vals: List[float], mean: float) -> float:
         var = sum((x - mean) ** 2 for x in vals) / (n - 1)
-        return (var / n) ** 0.5
+        return math.sqrt(var / n)
 
     ses: Dict[str, float] = {}
     for f in ordered:
@@ -2229,7 +2230,7 @@ def _ranking_stable(
             diffs = [a - b for a, b in zip(vals_hi, vals_lo, strict=True)]
             se_gap = _se(diffs, gap)
         else:
-            se_gap = (ses[hi] ** 2 + ses[lo] ** 2) ** 0.5
+            se_gap = math.sqrt(ses[hi] ** 2 + ses[lo] ** 2)
         if gap + z * se_gap < floor:
             continue
         if gap <= z * se_gap:
