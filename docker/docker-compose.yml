@@ -59,6 +59,18 @@ x-common-env: &common-env
   # failed ("All embedding services unavailable") and episodic_memories stayed
   # empty — starving the whole consolidation/crystallization lifecycle.
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  # LLM model selection (model refresh 2026-07-18). src/utils/llm_factory reads
+  # LLM_PROVIDER (factory lane provider) and LLM_MODEL (OpenAI workhorse pin);
+  # src/optimization/dspy_lm reads DSPY_LM_MODEL (verbatim litellm model string,
+  # takes precedence) so the GEPA-tuned DSPy path can stay pinned independently
+  # of a provider flip. Same never-forwarded gap as OPIK_ENABLED/OPENAI_API_KEY
+  # above: the host .env values silently never reached the containers, so the
+  # in-code defaults governed. ANTHROPIC_MODEL is deliberately NOT forwarded —
+  # its in-code defaults resolve to current models, while the host .env pins an
+  # opus-tier id meant for interactive use, not the platform lanes.
+  LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+  LLM_MODEL: ${LLM_MODEL:-}
+  DSPY_LM_MODEL: ${DSPY_LM_MODEL:-}
   ENVIRONMENT: production
   LOG_LEVEL: INFO
   # Layer-4 adaptive-validity audit-trail persistence (Plan
