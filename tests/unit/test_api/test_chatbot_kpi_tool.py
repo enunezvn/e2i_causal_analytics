@@ -397,3 +397,68 @@ async def test_kpi_calculate_tool_passes_ige_tier_into_context(monkeypatch):
     ctx = captured["context"]
     assert ctx["ige_tier"] == "low"
     assert "biologic" not in ctx and "segment" not in ctx
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_attaches_share_semantic_note():
+    """WS3-BI-008 responses must carry the honest share basis: the denominator
+    is the tracked portfolio's prescriptions (Fabhalta/Kisqali/Remibrutinib),
+    NOT an external market — the 2026-07-18 session review caught the chatbot
+    attributing the share complement to Xolair/Dupixent, which are not in the
+    data model at all."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-008")
+    assert kpi is not None
+    result = KPIResult(kpi_id="WS3-BI-008", value=0.3338, status=KPIStatus.GOOD, metadata={})
+    resp = _kpi_result_to_response(kpi, result, brand="Remibrutinib")
+    assert "tracked portfolio" in resp["semantic_note"]
+    assert "Xolair" in resp["semantic_note"]
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_no_semantic_note_for_other_kpis():
+    """The note is WS3-BI-008-specific; other KPIs must not carry it."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-005")
+    assert kpi is not None
+    result = KPIResult(kpi_id="WS3-BI-005", value=10.0, status=KPIStatus.UNKNOWN, metadata={})
+    resp = _kpi_result_to_response(kpi, result)
+    assert "semantic_note" not in resp
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_segment_window_reach_conversion_context(monkeypatch):
+    """A per-segment windowed conversion ask must thread segment AND window into
+    the calculator context (the session_1784387374342 gap: the tool accepted the
+    params but the calculator dropped them; the routing itself is covered by
+    tests/unit/test_kpi/test_conversion_rate_routing.py)."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["kpi_id"] = kpi_id
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=0.6779, status=KPIStatus.GOOD)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke(
+        {
+            "kpi_name": "conversion rate",
+            "brand": "Remibrutinib",
+            "segment": "high_severity",
+            "window": "2025-07-14 to 2026-07-13",
+        }
+    )
+    assert resp["success"] is True
+    assert captured["kpi_id"] == "WS3-BI-009"
+    ctx = captured["context"]
+    assert ctx["brand"] == "Remibrutinib"
+    assert ctx["segment"] == "high_severity"
+    assert "window" in ctx and ctx["window"]["start"] and ctx["window"]["end"]

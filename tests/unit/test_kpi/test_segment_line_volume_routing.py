@@ -113,9 +113,10 @@ def test_nrx_threads_therapy_line_zero():
     assert client.calls[0]["params"] == ["Remibrutinib", 0]
 
 
-def test_trx_share_threads_segment_never_windowed():
-    """TRx Share has no windowed variant: even with a window key stuffed into
-    context, the resolved id must stay the BASE `_segment` id."""
+def test_trx_share_threads_segment_windowed():
+    """Migration 111 registered windowed share variants: segment + window now
+    routes to `_segment_windowed` with [brand, segment, start, end] (before
+    111 the window was pinned off and silently dropped)."""
     client = _StubClient({"share": 0.42})
     calc = BusinessImpactCalculator(db_client=client)
     context = {
@@ -125,11 +126,11 @@ def test_trx_share_threads_segment_never_windowed():
     }
     value = calc._calc_trx_share(context)
     assert value == 0.42
-    assert client.calls[0]["query_id"] == "business_impact_trx_share_segment"
-    assert client.calls[0]["params"] == ["Remibrutinib", "high_severity"]
+    assert client.calls[0]["query_id"] == "business_impact_trx_share_segment_windowed"
+    assert client.calls[0]["params"] == ["Remibrutinib", "high_severity", "S", "E"]
 
 
-def test_trx_share_threads_therapy_line_never_windowed():
+def test_trx_share_threads_therapy_line_windowed():
     client = _StubClient({"share": 0.31})
     calc = BusinessImpactCalculator(db_client=client)
     context = {
@@ -139,8 +140,38 @@ def test_trx_share_threads_therapy_line_never_windowed():
     }
     value = calc._calc_trx_share(context)
     assert value == 0.31
-    assert client.calls[0]["query_id"] == "business_impact_trx_share_line"
-    assert client.calls[0]["params"] == ["Remibrutinib", 3]
+    assert client.calls[0]["query_id"] == "business_impact_trx_share_line_windowed"
+    assert client.calls[0]["params"] == ["Remibrutinib", 3, "S", "E"]
+
+
+def test_trx_share_segment_without_window_stays_base_axis():
+    """No window in context -> the frontier-anchored `_segment` id (105) as before."""
+    client = _StubClient({"share": 0.42})
+    calc = BusinessImpactCalculator(db_client=client)
+    value = calc._calc_trx_share({"brand": "Remibrutinib", "segment": "high_severity"})
+    assert value == 0.42
+    assert client.calls[0]["query_id"] == "business_impact_trx_share_segment"
+    assert client.calls[0]["params"] == ["Remibrutinib", "high_severity"]
+
+
+def test_trx_share_windowed_plain():
+    client = _StubClient({"share": 0.3338})
+    calc = BusinessImpactCalculator(db_client=client)
+    context = {"brand": "Remibrutinib", "window": {"start": "S", "end": "E"}}
+    value = calc._calc_trx_share(context)
+    assert value == 0.3338
+    assert client.calls[0]["query_id"] == "business_impact_trx_share_windowed"
+    assert client.calls[0]["params"] == ["Remibrutinib", "S", "E"]
+
+
+def test_trx_share_window_plus_region_fails_loud():
+    """No windowed-region share variant is registered; dropping either filter
+    silently would misrepresent the figure, so the combination must raise."""
+    calc = BusinessImpactCalculator(db_client=_StubClient({"share": 0.5}))
+    with pytest.raises(RuntimeError, match="segment.*or line-of-therapy"):
+        calc._calc_trx_share(
+            {"brand": "Remibrutinib", "region": "northeast", "window": {"start": "S", "end": "E"}}
+        )
 
 
 def test_trx_share_still_requires_brand():

@@ -696,7 +696,7 @@ ws3_business:
   trx_share:
     id: "WS3-BI-008"
     name: "TRx Share"
-    definition: "Brand prescription share of total category"
+    definition: "Brand share of total tracked-portfolio prescriptions (competitor brands are not in the data model)"
     formula: "brand_trx / category_trx"
     calculation_type: derived
     tables:
@@ -710,7 +710,9 @@ ws3_business:
       critical: 0.10
     frequency: weekly
     workstream: WS3
-    windowable: not_applicable
+    windowable: clean
+    window:
+      column: event_date
 
   conversion_rate:
     id: "WS3-BI-009"
@@ -731,7 +733,9 @@ ws3_business:
       critical: 0.02
     frequency: weekly
     workstream: WS3
-    windowable: not_applicable
+    windowable: clean
+    window:
+      column: trigger_timestamp
 
   roi:
     id: "WS3-BI-010"

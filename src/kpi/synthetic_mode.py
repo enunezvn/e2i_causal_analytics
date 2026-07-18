@@ -156,6 +156,20 @@ def region_query_id(base_query_id: str) -> str:
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
 
 
+def brand_scoped_query_id(base_query_id: str) -> str:
+    """Brand-scoped query id for a base KPI query whose BASE takes no params
+    (migration 111 — conversion_rate).
+
+    Most business_impact base statements already accept a NULLable ``$1``
+    brand, so they need no ``_brand`` variant. ``business_impact_conversion_
+    rate``'s certified base is param-less (brand-agnostic by original design),
+    so the brand-scoped read is an ADDITIVE ``{base}_brand`` sibling instead of
+    an in-place edit. Same suffixing rules as :func:`region_query_id`.
+    """
+    qid = f"{base_query_id}_brand"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
 def windowed_query_id(base_query_id: str, *, region: bool) -> str:
     """Windowed variant id for a base KPI query (Phase 1, additive).
 
