@@ -1,6 +1,6 @@
 # 03 --- ML Pipeline Schema
 
-> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-02
+> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-07-18
 
 | Navigation | |
 |---|---|
@@ -69,8 +69,19 @@ Experiment metadata with scope definitions and success criteria. Links to MLflow
 | `minimum_auc` | DECIMAL(4,3) | Success threshold (0.5--1.0) |
 | `brand` | brand_type | Remibrutinib, Fabhalta, or Kisqali |
 | `data_split` | data_split_type | Train/val/test tracking |
+| `status` | VARCHAR | Lifecycle: `draft` / `running` / `completed` / `stopped` / `archived` — only actively-enrolling A/B experiments may be `running` (migration 102) |
+| `created_by` | VARCHAR | Creating agent/user (e.g. `scope_definer`, `gold_standard_eval`) |
+| `intervention_channel` | VARCHAR(50) | Digital-twin intervention taxonomy value (`INTERVENTION_CATALOG`); NULL = channel not recorded (migration 100; partial index on non-NULL) |
+| `target_enrollment` | INTEGER | Planned A/B enrollment units; NULL = no enrollment plan (migration 101) |
+| `planned_duration_days` | INTEGER | Planned experiment window in days; NULL = no plan (migration 101) |
+| `updated_at` | TIMESTAMPTZ | Last update timestamp |
 
 **Key constraints**: `valid_auc CHECK (minimum_auc BETWEEN 0.5 AND 1.0)`
+
+> **Status lifecycle (migration 102)**: `ml_experiments` doubles as an A/B
+> registry and a lineage registry. Rows created by pipeline agents as lineage
+> records were closed out to `completed`; only genuinely enrolling A/B
+> experiments carry `running`.
 
 ### 1.2 `ml_model_registry`
 
@@ -161,7 +172,9 @@ SHAP values for global, local (patient/HCP-level), and segment-level explainabil
 | `local_shap_values` | JSONB | Per-entity SHAP values |
 | `natural_language_explanation` | TEXT | LLM-generated explanation |
 | `key_drivers` | TEXT[] | Top 5 driving features |
-| `computation_method` | VARCHAR(50) | TreeExplainer or KernelExplainer |
+| `computation_method` | VARCHAR(50) | e.g. `TreeExplainer`, `KernelExplainer`; the `/api/explain/global` path writes `LinearExplainer` |
+
+> **Sampling & stability provenance (PRs #1268/#1270/#1277, July 2026).** For `analysis_type = 'global'`, `/api/explain/global` stores a reserved `__sampling__` key inside `global_importance` with four fields: `sampling_method` (`random` \| `prefix_fallback`), `stability_achieved` (bool), `stability_criterion` (`covariate_group` \| `encoded_feature`), and `stopping_reason` (`stable` \| `max_sample_size_reached` \| `candidates_exhausted`). Entities are randomly sampled starting from a minimum (default 25) and n grows until the **top-5 ranking is stable** — every adjacent top-5 pair separated by more than `1.96·SE(gap)`, with a paired SE over per-entity differences and two exemptions (jointly-negligible pairs below 2% of the top mean, and confirmed practical ties where `gap + 1.96·SE(gap) < 2%-floor`) — or the cap is hit (60 by default; 200 for persistence/discontinuation models). When raw covariate names are available from the model registry, one-hot and `__isna` encoded columns are grouped to their parent covariate (longest-prefix match, zero-backfilled so every group list stays n-long) and the gate certifies the **displayed covariate-group ranking** (`stability_criterion = 'covariate_group'`, frontend badge "covariate ranking stable"); otherwise it falls back to the encoded-feature ranking. Rows written before July 2026 have no `__sampling__` key (fields read as NULL/legacy).
 
 ### 1.7 `ml_deployments`
 
@@ -647,7 +660,7 @@ Automated retraining events triggered by monitoring alerts with before/after per
 | `ml_drift_status_latest` | Latest drift status per model and drift type |
 | `ml_drift_trend_7d` | 7-day drift trend summary |
 | `ml_active_alerts_summary` | Active alerts aggregated by model |
-| `ml_model_health_dashboard` | Combined drift, alerts, and performance for production models |
+| `ml_model_health_dashboard` | Combined drift, alerts, and performance for production/staging models; migration 103 appended `latest_accuracy`, `latest_auc_roc`, `latest_f1` (latest per-name values from `ml_performance_metrics`) |
 
 ---
 

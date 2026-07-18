@@ -1,6 +1,6 @@
-# 07 — Supporting Schemas (Memory, RAG, Chat, Audit)
+# 07 — Supporting Schemas (Memory, RAG, Chat, Admin/LLM Observability, Audit)
 
-> **E2I Causal Analytics** | Last Updated: 2026-06-05
+> **E2I Causal Analytics** | Last Updated: 2026-07-18
 
 | Navigation | |
 |---|---|
@@ -37,6 +37,11 @@ graph TD
         CP[chatbot_user_profiles<br/>Profile data]
         CV[chatbot_conversations<br/>Conversation tracking]
         CA[chatbot_analytics<br/>Usage analytics]
+    end
+
+    subgraph "Admin & LLM Observability"
+        UA[user_activity_log<br/>Per-minute API activity]
+        LU[llm_usage_events<br/>Per-call token usage<br/>cost priced at read time]
     end
 
     subgraph "Audit System"
@@ -236,6 +241,12 @@ Feedback data used for DSPy optimization and self-improvement.
 | `signal_value` | FLOAT | Numeric signal (-1 to 1 or 1–5 rating) |
 | `correction_text` | TEXT | User's correction (if any) |
 | `agent_name` | e2i_agent_name | Agent being evaluated |
+| `signal_details` | JSONB (default `{}`) | Structured payload. `signal_details->>'domain_signal' = 'dspy_signal'` marks the rows the feedback-learner consumes. There is **no** `metadata` column on this table — structured data goes here. |
+
+> **Two signal collectors — only one feeds the learner (PRs #1240/#1241, July 2026).** Chat feedback lands in two different tables and they are NOT interchangeable:
+>
+> 1. **`chatbot_training_signals`** (chat schema, migration 034) — written by the chatbot graph's finalize node on `/copilotkit/chat` turns. The feedback-learner **never reads this table** (no reference anywhere in `src/agents/feedback_learner/` or `src/repositories/`).
+> 2. **`learning_signals` rows stamped `dspy_signal`** — the learner's **only** input, read via `LearningSignalsFeedbackStore` filtered on `signal_details->>'domain_signal' = 'dspy_signal'`. Writers: the Phase-4 Reflector on `POST /api/cognitive/rag`, agent-node collectors (interpretation, heterogeneous-optimizer profile generator, gap-analyzer formatter), and — since PR #1240 — a copilot-side collector on the chat path. Copilot turns therefore now reach the learner through this table, while `chatbot_training_signals` remains learner-invisible.
 
 ### memory_statistics
 
@@ -441,7 +452,7 @@ Unique constraint: `(user_id, key)`
 |-------|--------|---------|
 | `chatbot_message_feedback` | 031 | Structured feedback per message |
 | `chatbot_analytics` | 033 | Usage analytics aggregations |
-| `chatbot_training_signals` | 034 | Training data for model improvement |
+| `chatbot_training_signals` | 034 | Training data written by the chatbot finalize node — **not** read by the feedback-learner (see the two-collector note under `learning_signals` above) |
 | `chatbot_optimization_requests` | 035 | Optimization request tracking |
 | `user_roles` | 036 | Role-based access definitions |
 
@@ -452,6 +463,79 @@ All chat tables enforce RLS:
 - Uses `current_setting('app.current_user_id')` for user context
 - `authenticated` role gets SELECT/INSERT
 - `service_role` gets full access
+
+---
+
+## Admin & LLM Observability Schema
+
+**Source**: `database/migrations/101_admin_user_activity.sql`, `database/migrations/104_llm_usage_events.sql` (July 2026 — `/admin` page backing tables)
+
+### user_activity_log
+
+Per-minute pre-aggregated API activity, powering the `/admin` user-management
+activity views. One row per (user, endpoint group, method, minute bucket);
+flushes are additive merges.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | BIGSERIAL (PK) | |
+| `user_id` | UUID | Acting user |
+| `user_email` | TEXT | Denormalized for display |
+| `endpoint_group` | TEXT | Coarse endpoint family (not raw paths) |
+| `http_method` | TEXT | DEFAULT `'GET'` |
+| `bucket_minute` | TIMESTAMPTZ | Minute bucket |
+| `request_count` | INTEGER | Requests in the bucket (summed on conflict) |
+| `created_at` | TIMESTAMPTZ | |
+
+Unique on `(user_id, endpoint_group, http_method, bucket_minute)`; indexed by
+`(user_id, bucket_minute DESC)` and `(bucket_minute DESC)`. Retention via
+`purge_old_user_activity` (default 180 days).
+
+### llm_usage_events
+
+One row per completed LLM call, written by the LLM factory's
+`UsageRecorderCallback` (see `docs/LLM_CONFIGURATION.md` §4). **No cost
+column by design** — cost is computed at read time from
+`src/services/llm_pricing.py`, so rate changes never require backfills.
+Surfaced in the `/admin` page's Observability tab.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | BIGINT IDENTITY (PK) | |
+| `created_at` | TIMESTAMPTZ | Call completion time |
+| `provider` | TEXT | `openai` / `anthropic` / … |
+| `model` | TEXT | Model ID as invoked |
+| `input_tokens` | INTEGER | DEFAULT 0 |
+| `output_tokens` | INTEGER | DEFAULT 0 |
+| `surface` | TEXT | Calling surface, DEFAULT `'other'` |
+| `component` | TEXT | Finer-grained caller |
+| `user_id` | UUID | NULL for platform-initiated calls |
+| `session_id` | VARCHAR | Chat session, when applicable |
+| `request_id` | TEXT | Correlation ID |
+
+Indexed by `created_at`, `(user_id, created_at)`, and `session_id`.
+
+### Admin Functions
+
+All `SECURITY DEFINER`, EXECUTE granted to `service_role` only (migration 101):
+
+| Function | Purpose |
+|----------|---------|
+| `record_user_activity(p_rows JSONB)` | Additive upsert-merge flush of activity buckets |
+| `admin_get_login_activity(p_user_id, p_days)` | Daily login events from `auth.audit_log_entries` |
+| `admin_get_platform_activity(p_days)` | Daily logins + active users |
+| `admin_get_user_recent_events(p_user_id, p_limit)` | Recent auth events for one user (capped at 200) |
+| `purge_old_user_activity(p_days)` | Retention delete (default 180 days) |
+
+Migration 101 also backfilled `chatbot_user_profiles` from `auth.users` and
+syncs `role`/`is_admin` from `raw_app_meta_data->>'role'`
+(viewer/analyst/operator/admin).
+
+### Row-Level Security
+
+Both tables enable RLS with an **admin-read** policy: `authenticated` may
+SELECT only when their `chatbot_user_profiles` row is admin; the
+service-role writers bypass RLS.
 
 ---
 
@@ -554,4 +638,5 @@ Each entry's `entry_hash` incorporates the `previous_hash`, creating a tamper-ev
 | Memory | SELECT/INSERT on all tables | Full access |
 | RAG | SELECT/INSERT, EXECUTE functions | Full access |
 | Chat | RLS-filtered SELECT/INSERT | Full access |
+| Admin & LLM Observability | SELECT for admins only (RLS) | Full access; sole EXECUTE on admin functions |
 | Audit | SELECT only (e2i_readonly) | SELECT/INSERT (e2i_service) |

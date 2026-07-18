@@ -1,6 +1,6 @@
 # Core Data Dictionary
 
-**E2I Causal Analytics Platform** | Schema Version 3.0.0 | Last updated: 2026-02-07
+**E2I Causal Analytics Platform** | Schema Version 3.1.0 | Last updated: 2026-07-18
 
 This document provides a comprehensive reference for the 19 core database tables in the E2I Causal Analytics schema. It covers every column, constraint, index, foreign key, and function defined in `database/core/e2i_ml_complete_v3_schema.sql`.
 
@@ -866,10 +866,21 @@ Master table for patient treatment journeys with 45+ columns including demograph
 | `treatment_initiated` | `INTEGER` | YES | CHECK `IN (0, 1)` | Outcome variable: 1 if treatment was initiated, 0 otherwise |
 | `days_to_treatment` | `INTEGER` | YES | | Days from diagnosis to treatment initiation (NULL if not initiated) |
 | `age_at_diagnosis` | `INTEGER` | YES | CHECK `0 <= val <= 120` | Patient age at diagnosis in years |
+| `biologic_experienced` | `SMALLINT` | YES | | Prior anti-IgE biologic exposure (0/1) — **Remibrutinib/CSU rows only**, NULL for other brands by design (migration 107) |
+| `ige_level` | `NUMERIC` | YES | | Baseline total serum IgE (IU/mL) — **Remibrutinib/CSU rows only**, NULL for other brands by design (migration 107) |
 | `data_split` | `data_split_type` | NOT NULL | DEFAULT `'unassigned'` | ML data split assignment |
 | `split_config_id` | `UUID` | YES | **FK** `ml_split_registry(split_config_id)` | Split configuration reference |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Record creation timestamp |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Last update timestamp (auto-updated by trigger) |
+
+> **Brand-gated clinical columns (migration 107)**: brand-specific clinical
+> eligibility columns are **NULL on off-brand rows by design** — non-CSU rows
+> have no `urticaria_severity_uas7`/`prior_antihistamine_therapy`/
+> `biologic_experienced`/`ige_level`; non-Kisqali rows have no `hr_status`/
+> `her2_status`/`disease_stage`/`ecog_performance_status`; non-Fabhalta rows
+> have no `ldh_ratio`/`complement_inhibitor_status`/`proteinuria_g_day`/
+> `egfr`. KPI axes and causal covariates built on these columns are
+> brand-gated fail-closed — a 100%-NULL axis is refused, not fabricated.
 
 **Check Constraints:**
 
@@ -1725,6 +1736,26 @@ ORDER BY routes_from_intent, priority_order;
 
 ## Functions
 
+### sample_entity_ids
+
+Uniform random entity sampling for cohort draws (migration 109). Powers the
+`/api/explain/global` feature-importance cohort sampling.
+
+```sql
+FUNCTION sample_entity_ids(
+    p_source TEXT,      -- whitelisted: 'hcp_profiles' | 'patient_journeys'
+    p_limit  INTEGER    -- 1..500
+) RETURNS TABLE(entity_id TEXT)
+```
+
+**Logic:**
+- `'hcp_profiles'` → `hcp_id::text ORDER BY random()`
+- `'patient_journeys'` → `DISTINCT patient_id::text ORDER BY random()`
+- Any other source, or `p_limit` outside 1..500, **raises** (whitelist
+  fail-closed). `VOLATILE` — every call is a fresh draw.
+
+---
+
 ### assign_patient_split
 
 Assigns a patient to a data split based on their journey start date and the temporal boundaries of a split configuration.
@@ -1884,3 +1915,6 @@ The following migration files extend or modify the core schema:
 | 020 | `database/migrations/020_add_patient_causal_columns.sql` | Adds causal variable columns to `patient_journeys` |
 | 005 | `database/migrations/005_add_prediction_outcome_columns.sql` | Adds ground truth outcome columns to `ml_predictions` |
 | 006 | `database/migrations/006_feedback_loop_infrastructure.sql` | Adds feedback loop infrastructure |
+| 106 | `database/migrations/106_trigger_action_prognostic_baselines.sql` | Data-only reseed: `triggers.action_taken` made arm-conditioned + baseline-prognostic (#1188) |
+| 107 | `database/migrations/107_patient_biologic_ige_axis.sql` | Adds `patient_journeys.biologic_experienced` + `ige_level` (CSU-only) and NULLs off-brand clinical eligibility columns |
+| 109 | `database/migrations/109_sample_entity_ids_rpc.sql` | Adds `sample_entity_ids()` whitelisted random-sampling RPC |

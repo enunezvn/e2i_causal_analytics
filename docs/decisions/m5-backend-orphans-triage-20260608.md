@@ -1,7 +1,7 @@
 # M5 — Backend orphan endpoints: triage & decision (2026-06-08)
 
 **Status:** DECISION DOC + one bounded REWIRE. **No backend endpoint is deleted by this shard.**
-**Source of truth:** `docs/reports/frontend-backend-api-connectivity-audit-20260608.md` §5 (M5, lines 99–104) and §8 recommendation 5 (line 160).
+**Source of truth:** the 2026-06-08 frontend↔backend connectivity audit. The original report (`docs/reports/frontend-backend-api-connectivity-audit-20260608.md`) is no longer in the repo; the surviving related document is [`docs/api_connectivity_review.md`](../api_connectivity_review.md) (its §5 "Pages on mock data" and §8 "Recommended next actions" cover the same ground, but the original's section/line anchors do not map 1:1).
 **Author note:** every zero-consumer and intent claim below was independently re-verified (greps over `frontend/src` excluding `/generated/`, `git log` on each router, and a live Starlette route-matcher run) before being recorded here — see "Verification evidence".
 
 ---
