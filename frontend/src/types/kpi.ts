@@ -331,6 +331,35 @@ export interface KPIHistoryResponse {
   points: KPIHistoryPoint[];
 }
 
+/** Patient axis a segmented history can be split by. */
+export type KPIHistoryAxis = 'segment' | 'therapy_line';
+
+/** One axis bucket's monthly series (e.g. the high-severity tier). */
+export interface KPIHistorySegmentSeries {
+  /** Bucket key (e.g. 'high_severity', or '2' for LOT). */
+  key: string;
+  /** Display label (e.g. 'High severity', '2 prior lines'). */
+  label: string;
+  count: number;
+  points: KPIHistoryPoint[];
+}
+
+/**
+ * Per-axis-bucket monthly history for one KPI, computed live (migration 110).
+ * Bucket series partition the headline series month by month; only the
+ * Rx-volume family (TRx/NRx/NBRx) supports axes.
+ */
+export interface KPISegmentedHistoryResponse {
+  kpi_id: string;
+  /** '' = global / all brands. */
+  brand: string;
+  axis: KPIHistoryAxis;
+  /** Latest prescription event date backing the series (frontier). */
+  data_through?: string | null;
+  count: number;
+  series: KPIHistorySegmentSeries[];
+}
+
 /** History coverage for one KPI: which scopes have a real series. */
 export interface KPIHistoryCoverageEntry {
   kpi_id: string;

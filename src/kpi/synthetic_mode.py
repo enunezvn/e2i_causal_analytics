@@ -234,3 +234,16 @@ def windowed_axis_query_id(base_query_id: str, *, axis: str) -> str:
     """
     qid = f"{base_query_id}_{axis}_windowed"
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
+def monthly_axis_query_id(base_query_id: str, *, axis: str) -> str:
+    """Monthly-series-grouped variant id for an axis-scoped base query.
+
+    Canonical suffix order: ``{base}_monthly_by_{axis}[_include_synthetic]``
+    (migration 110): one call returns the full monthly series for ALL buckets
+    of the axis — rows of (month_start, bucket, value). ``axis`` is
+    ``"segment"`` / ``"line"``. Same additive/suffixing rules as
+    :func:`_axis_query_id`.
+    """
+    qid = f"{base_query_id}_monthly_by_{axis}"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid

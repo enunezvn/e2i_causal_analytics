@@ -37,9 +37,11 @@ from src.api.schemas.kpi import (
     KPIHistoryCoverageResponse,
     KPIHistoryPoint,
     KPIHistoryResponse,
+    KPIHistorySegmentSeries,
     KPIListResponse,
     KPIMetadataResponse,
     KPIResultResponse,
+    KPISegmentedHistoryResponse,
     KPIThresholdResponse,
     WorkstreamInfo,
     WorkstreamListResponse,
@@ -634,6 +636,93 @@ async def get_kpi_history(
         region=region or "",
         count=len(points),
         points=points,
+    )
+
+
+@router.get(
+    "/{kpi_id}/history/segmented",
+    response_model=KPISegmentedHistoryResponse,
+    summary="Get KPI history split by patient axis (severity tier / line of therapy)",
+    description=(
+        "Monthly KPI series per axis bucket, computed live from the vetted "
+        "kpi_query registry (migration 110) — NOT from the materialized "
+        "kpi_history table, which has no patient-segment dimension. Month "
+        "bucketing and partial-edge-month trimming mirror the history "
+        "backfill, so the bucket series partition the headline series. Only "
+        "the Rx-volume family (WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 "
+        "NBRx) supports axes."
+    ),
+    operation_id="get_kpi_history_segmented",
+)
+async def get_kpi_history_segmented(
+    kpi_id: str,
+    axis: str = Query(
+        ...,
+        description="'segment' (severity tier: low/medium/high) or 'therapy_line' (LOT 0-3)",
+    ),
+    brand: str | None = Query(default=None, description="Brand filter ('' / omitted = global)"),
+    value: str | None = Query(
+        default=None,
+        description=(
+            "Restrict to one bucket: a severity tier (low_severity/medium_severity/"
+            "high_severity) or a line-of-therapy count ('0'-'3'). Omitted = all buckets."
+        ),
+    ),
+    start_date: str | None = Query(default=None, description="Earliest metric_date (YYYY-MM-DD)"),
+    end_date: str | None = Query(default=None, description="Latest metric_date (YYYY-MM-DD)"),
+) -> KPISegmentedHistoryResponse:
+    """Return per-bucket monthly history for an axis-capable KPI.
+
+    422 (not empty-series) for unsupported KPIs/axes/values: the chat chart
+    renderer relays the error honestly instead of drawing an empty chart for
+    a request the substrate can never serve.
+    """
+    from src.kpi.segmented_history import (
+        AXIS_SUFFIXES,
+        SEGMENTED_KPI_QUERY_FAMILIES,
+        canonical_buckets,
+        fetch_segmented_rows,
+        shape_segmented_series,
+    )
+
+    if axis not in AXIS_SUFFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown axis '{axis}'. Supported: {sorted(AXIS_SUFFIXES)}",
+        )
+    if kpi_id not in SEGMENTED_KPI_QUERY_FAMILIES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"KPI '{kpi_id}' has no {axis}-level series. Axis-capable KPIs: "
+                f"{sorted(SEGMENTED_KPI_QUERY_FAMILIES)}"
+            ),
+        )
+    if value is not None and value not in canonical_buckets(axis):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown {axis} value '{value}'. Expected one of {canonical_buckets(axis)}",
+        )
+
+    rows = await fetch_segmented_rows(kpi_id, axis=axis, brand=brand)
+    series, data_through = shape_segmented_series(
+        rows, axis=axis, value=value, start_date=start_date, end_date=end_date
+    )
+    return KPISegmentedHistoryResponse(
+        kpi_id=kpi_id,
+        brand=brand or "",
+        axis=axis,
+        data_through=data_through,
+        count=len(series),
+        series=[
+            KPIHistorySegmentSeries(
+                key=s["key"],
+                label=s["label"],
+                count=s["count"],
+                points=[KPIHistoryPoint(**p) for p in s["points"]],
+            )
+            for s in series
+        ],
     )
 
 

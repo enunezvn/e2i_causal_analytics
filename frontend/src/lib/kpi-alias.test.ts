@@ -15,7 +15,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveKpiId, resolveBrand } from './kpi-alias';
+import {
+  resolveBrand,
+  resolveCompareAxis,
+  resolveKpiId,
+  resolveSegment,
+  resolveTherapyLine,
+} from './kpi-alias';
 
 describe('resolveKpiId', () => {
   it('maps friendly commercial-KPI ids to registry codes', () => {
@@ -65,5 +71,60 @@ describe('resolveBrand', () => {
     expect(resolveBrand(undefined)).toBeUndefined();
     expect(resolveBrand('')).toBeUndefined();
     expect(resolveBrand('  ')).toBeUndefined();
+  });
+});
+
+describe('resolveSegment', () => {
+  it('maps friendly severity names to segment_assignment values', () => {
+    expect(resolveSegment('low')).toBe('low_severity');
+    expect(resolveSegment('medium')).toBe('medium_severity');
+    expect(resolveSegment('high')).toBe('high_severity');
+    expect(resolveSegment('High Severity')).toBe('high_severity');
+    expect(resolveSegment('moderate')).toBe('medium_severity');
+    expect(resolveSegment('severe')).toBe('high_severity');
+  });
+
+  it('passes canonical and unknown values through (API 422s honestly)', () => {
+    expect(resolveSegment('medium_severity')).toBe('medium_severity');
+    expect(resolveSegment('extreme')).toBe('extreme');
+  });
+
+  it('returns undefined for missing/blank input', () => {
+    expect(resolveSegment(undefined)).toBeUndefined();
+    expect(resolveSegment('  ')).toBeUndefined();
+  });
+});
+
+describe('resolveTherapyLine', () => {
+  it('extracts the line number from friendly phrasings', () => {
+    expect(resolveTherapyLine('2')).toBe('2');
+    expect(resolveTherapyLine(2)).toBe('2');
+    expect(resolveTherapyLine('LOT 3')).toBe('3');
+    expect(resolveTherapyLine('line 1')).toBe('1');
+  });
+
+  it('returns undefined for missing/blank input', () => {
+    expect(resolveTherapyLine(undefined)).toBeUndefined();
+    expect(resolveTherapyLine('')).toBeUndefined();
+  });
+});
+
+describe('resolveCompareAxis', () => {
+  it('maps severity-ish names to the segment axis', () => {
+    expect(resolveCompareAxis('severity')).toBe('segment');
+    expect(resolveCompareAxis('segment')).toBe('segment');
+    expect(resolveCompareAxis('Severity Tier')).toBe('segment');
+  });
+
+  it('maps LOT-ish names to the therapy_line axis', () => {
+    expect(resolveCompareAxis('lot')).toBe('therapy_line');
+    expect(resolveCompareAxis('LOT')).toBe('therapy_line');
+    expect(resolveCompareAxis('line of therapy')).toBe('therapy_line');
+    expect(resolveCompareAxis('therapy_line')).toBe('therapy_line');
+  });
+
+  it('returns undefined for unknown/missing axes', () => {
+    expect(resolveCompareAxis(undefined)).toBeUndefined();
+    expect(resolveCompareAxis('region')).toBeUndefined();
   });
 });

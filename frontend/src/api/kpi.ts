@@ -31,9 +31,11 @@ import type {
   CacheInvalidationResponse,
   KPICalculationRequest,
   KPIHealthResponse,
+  KPIHistoryAxis,
   KPIHistoryCoverageResponse,
   KPIHistoryResponse,
   KPIListParams,
+  KPISegmentedHistoryResponse,
   KPIListResponse,
   KPIMetadata,
   KPIResult,
@@ -169,6 +171,28 @@ export async function getKPIHistory(
     brand,
     region,
   });
+}
+
+/**
+ * Get the monthly KPI history split by a patient axis (severity tier / LOT).
+ *
+ * Computed live from the vetted kpi_query registry (migration 110) — NOT the
+ * materialized kpi_history table, which has no patient-segment dimension.
+ * Only TRx/NRx/NBRx (WS3-BI-005/006/007) support axes; other KPIs 422.
+ *
+ * @param value - Optional single bucket (e.g. 'high_severity' or '2') to
+ *   restrict the response to one series.
+ */
+export async function getKPIHistorySegmented(
+  kpiId: string,
+  axis: KPIHistoryAxis,
+  brand?: string,
+  value?: string
+): Promise<KPISegmentedHistoryResponse> {
+  return get<KPISegmentedHistoryResponse>(
+    `${KPI_BASE}/${encodeURIComponent(kpiId)}/history/segmented`,
+    { axis, brand, value }
+  );
 }
 
 /**

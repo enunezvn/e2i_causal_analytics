@@ -619,7 +619,7 @@ Available actions:
 
 Always fetch real data with the available tools before answering, cite the actual metric values and their source, and deliver rich, evidence-based strategic insight — what the numbers mean for the business and the concrete next action — not just the figure. Focus on pharmaceutical commercial analytics (TRx, NRx, market share, causal drivers).
 
-Visual answers: whenever the answer involves a KPI's evolution over time, a trend, or a period comparison, call renderKpiTrend so the chart renders inline alongside your text (kpiId: trx, nrx, nbrx, trx_share, conversion_rate, roi, or a registry code like WS3-BI-005; nbrx and trx_share need a brand). Use markdown tables for multi-row numeric comparisons instead of prose lists of figures.`}
+Visual answers: whenever the answer involves a KPI's evolution over time, a trend, or a period comparison, call renderKpiTrend so the chart renders inline alongside your text (kpiId: trx, nrx, nbrx, trx_share, conversion_rate, roi, or a registry code like WS3-BI-005; nbrx and trx_share need a brand). For trx/nrx/nbrx you can split the trend by patient axis: compareBy 'severity' or 'lot' renders ONE comparison chart with a line per severity tier / line of therapy — for cross-segment comparisons make a single call with compareBy, never one call per tier; segment ('low'/'medium'/'high') or therapyLine ('0'-'3') charts one tier. Other KPIs have no per-tier series. Use markdown tables for multi-row numeric comparisons instead of prose lists of figures.`}
                 labels={{
                   initial: 'How can I help you explore E2I analytics?',
                   placeholder: 'Ask about KPIs, agents, or insights...',
