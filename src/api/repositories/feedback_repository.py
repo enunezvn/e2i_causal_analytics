@@ -83,7 +83,7 @@ class FeedbackRepository:
             # #1244: legacy payloads carry no detected_at — backfill from the
             # row's created_at (DB default now() at insert) so the API always
             # reports when the pattern was detected. Payload-carried values
-            # (post-#1244 writers) win.
+            # (stamped by _convert_patterns since #1256) win.
             if not payload.get("detected_at") and r.get("created_at"):
                 payload["detected_at"] = r["created_at"]
             patterns.append(DetectedPattern.model_validate(payload))

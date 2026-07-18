@@ -1324,6 +1324,40 @@ def test_convert_patterns():
     assert result[0].pattern_id == "pat_test"
 
 
+def test_convert_patterns_stamps_detected_at():
+    """#1256: agent output carries no timestamp — _convert_patterns must stamp
+    detection time so the persisted payload owns it. Without the stamp every
+    payload fell through to the persistence row's created_at, which upserts
+    never refresh: a recycled pattern_id served the FIRST cycle's timestamp."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.api.routes.feedback import _convert_patterns
+
+    pattern = {
+        "pattern_id": "P1-abc12345",
+        "pattern_type": "accuracy_issue",
+        "description": "Test",
+        "frequency": 2,
+        "severity": "medium",
+        "affected_agents": ["copilotkit"],
+        "example_feedback_ids": [],
+        "root_cause_hypothesis": "Test",
+    }
+
+    before = datetime.now(timezone.utc)
+    result = _convert_patterns([dict(pattern)])
+    after = datetime.now(timezone.utc)
+
+    assert len(result) == 1
+    assert result[0].detected_at is not None
+    assert before - timedelta(seconds=1) <= result[0].detected_at <= after
+
+    # an explicit detected_at (e.g. replayed output) is preserved, not restamped
+    stamped = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    kept = _convert_patterns([{**pattern, "detected_at": stamped}])
+    assert kept[0].detected_at == stamped
+
+
 def test_convert_recommendations():
     """Test converting recommendations from agent output."""
     from src.api.routes.feedback import _convert_recommendations

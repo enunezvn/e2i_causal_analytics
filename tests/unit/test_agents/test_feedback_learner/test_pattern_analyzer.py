@@ -2,6 +2,7 @@
 Tests for Pattern Analyzer node.
 """
 
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -323,7 +324,10 @@ class TestLLMEnumValidation:
 ]}
 ```"""
         patterns = self._analyzer()._parse_patterns(content)
-        assert [p["pattern_id"] for p in patterns] == ["P2"]
+        # #1256: parsed ids carry a per-run tag (LLM-emitted "P2" would
+        # otherwise collide across cycles on the persistence upsert key).
+        assert len(patterns) == 1
+        assert patterns[0]["pattern_id"].startswith("P2-")
         assert patterns[0]["pattern_type"] == "accuracy_issue"
 
     def test_invalid_severity_drops_pattern(self):
@@ -597,3 +601,39 @@ class TestSourceAwareRatingAggregation:
             if p["pattern_type"] == "accuracy_issue" and "Low average" in p["description"]
         ]
         assert low_rating == []
+
+
+class TestCrossCyclePatternIdUniqueness:
+    """#1256: pattern ids seed the persistence upsert key
+    (feedback_patterns.pattern_id). Positional per-cycle ids (P1, P2, …)
+    collide across cycles — the upsert replaces the payload but keeps the
+    FIRST insert's created_at (insert-only DB default), so a fresh pattern
+    is served with a weeks-old detection timestamp."""
+
+    @pytest.mark.asyncio
+    async def test_two_cycles_emit_disjoint_pattern_ids(self, base_state):
+        feedback_items = [_rating_item(i, 2.0, agent="gap_analyzer") for i in range(4)]
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 4,
+                "by_type": {"rating": 4},
+                "by_agent": {"gap_analyzer": 4},
+                "average_rating": 2.0,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False, prefer_optimized=False)
+
+        first = await node.execute(dict(state))
+        second = await node.execute(dict(state))
+
+        first_ids = {p["pattern_id"] for p in first["detected_patterns"]}
+        second_ids = {p["pattern_id"] for p in second["detected_patterns"]}
+        # this input fires both the low-ratings and the per-agent detectors
+        assert len(first_ids) >= 2 and len(second_ids) >= 2
+        assert first_ids.isdisjoint(second_ids)
+        # ids keep the human-readable positional prefix
+        for pid in first_ids | second_ids:
+            assert re.match(r"^P\d+-[0-9a-f]{8}$", pid)

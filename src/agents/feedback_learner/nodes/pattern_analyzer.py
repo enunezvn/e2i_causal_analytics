@@ -11,6 +11,7 @@ import logging
 import re
 import time
 from typing import Any, Dict, List, Optional, cast
+from uuid import uuid4
 
 from ..rating_utils import rating_surface, rating_to_numeric
 from ..state import DetectedPattern, FeedbackLearnerState
@@ -192,6 +193,11 @@ class PatternAnalyzerNode:
         summary: Dict[str, Any] = cast(Dict[str, Any], state.get("feedback_summary") or {})
 
         patterns: List[DetectedPattern] = []
+        # #1256: ids must be unique ACROSS cycles, not just within one — the
+        # API persists patterns with pattern_id as the upsert key, so a bare
+        # positional "P1" collides with every previous cycle's first pattern
+        # and inherits that row's created_at (insert-only DB default).
+        run_tag = uuid4().hex[:8]
         pattern_id = 1
 
         # Analyze by feedback type
@@ -231,7 +237,7 @@ class PatternAnalyzerNode:
                 affected_agents = list({fb["source_agent"] for fb, num in pool if num < 3})
                 patterns.append(
                     DetectedPattern(
-                        pattern_id=f"P{pattern_id}",
+                        pattern_id=f"P{pattern_id}-{run_tag}",
                         pattern_type="accuracy_issue",
                         description=f"Low average user ratings detected (surface: {surface})",
                         frequency=len(pool),
@@ -249,7 +255,7 @@ class PatternAnalyzerNode:
             affected_agents = list({fb["source_agent"] for fb in corrections})
             patterns.append(
                 DetectedPattern(
-                    pattern_id=f"P{pattern_id}",
+                    pattern_id=f"P{pattern_id}-{run_tag}",
                     pattern_type="accuracy_issue",
                     description="Multiple user corrections submitted",
                     frequency=len(corrections),
@@ -276,7 +282,7 @@ class PatternAnalyzerNode:
                 affected_agents = list({e[0]["source_agent"] for e in errors})
                 patterns.append(
                     DetectedPattern(
-                        pattern_id=f"P{pattern_id}",
+                        pattern_id=f"P{pattern_id}-{run_tag}",
                         pattern_type="accuracy_issue",
                         description=f"Prediction errors detected (avg error: {avg_error:.2f})",
                         frequency=len(errors),
@@ -312,7 +318,7 @@ class PatternAnalyzerNode:
             if agent_negative > 3 and agent_negative / max(count, 1) > 0.3:
                 patterns.append(
                     DetectedPattern(
-                        pattern_id=f"P{pattern_id}",
+                        pattern_id=f"P{pattern_id}-{run_tag}",
                         pattern_type="relevance_issue",
                         description=f"Agent '{agent}' has high negative feedback rate",
                         frequency=agent_negative,
@@ -407,6 +413,7 @@ class PatternAnalyzerNode:
 
         raw_patterns = getattr(prediction, "patterns", []) or []
         patterns: List[DetectedPattern] = []
+        run_tag = uuid4().hex[:8]  # #1256: see _analyze_deterministic
         for i, p in enumerate(raw_patterns, start=1):
             if not isinstance(p, dict):
                 continue
@@ -424,7 +431,7 @@ class PatternAnalyzerNode:
             ptype, severity = sanitized
             patterns.append(
                 DetectedPattern(
-                    pattern_id=f"P{i}",
+                    pattern_id=f"P{i}-{run_tag}",
                     pattern_type=ptype,
                     description=str(p.get("description", "")),
                     frequency=int(p.get("frequency", 0) or 0),
@@ -549,6 +556,7 @@ Output JSON:
             try:
                 data = json.loads(json_match.group(1))
                 patterns = []
+                run_tag = uuid4().hex[:8]  # #1256: see _analyze_deterministic
                 for p in data.get("patterns", []):
                     # LLM enum validation: drop out-of-contract patterns
                     # (see _sanitize_llm_pattern_enums); drops are counted
@@ -563,7 +571,7 @@ Output JSON:
                     ptype, severity = sanitized
                     patterns.append(
                         DetectedPattern(
-                            pattern_id=p.get("pattern_id", "P?"),
+                            pattern_id=f"{p.get('pattern_id', 'P?')}-{run_tag}",
                             pattern_type=ptype,
                             description=p.get("description", ""),
                             frequency=p.get("frequency", 1),

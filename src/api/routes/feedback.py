@@ -1616,6 +1616,12 @@ def _convert_patterns(patterns: List[Dict[str, Any]]) -> List[DetectedPattern]:
                     example_feedback_ids=p.get("example_feedback_ids", []),
                     root_cause_hypothesis=p.get("root_cause_hypothesis", ""),
                     confidence=p.get("confidence", 0.7),
+                    # #1256: agent output carries no timestamp — stamp detection
+                    # time here so the persisted payload owns it. Without this,
+                    # every pattern took the persistence row's created_at, which
+                    # upserts never refresh — a recycled pattern_id served the
+                    # FIRST cycle's timestamp as if it were the current one.
+                    detected_at=p.get("detected_at") or datetime.now(timezone.utc),
                 )
             )
         except Exception as e:
