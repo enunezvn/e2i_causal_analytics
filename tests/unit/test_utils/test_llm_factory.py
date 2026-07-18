@@ -107,14 +107,14 @@ class TestModelMappings:
                 f"anthropic.{tier} is a deprecated 404 model id"
             )
         assert MODEL_MAPPINGS["anthropic"]["fast"] == "claude-haiku-4-5-20251001"
-        assert MODEL_MAPPINGS["anthropic"]["standard"] == "claude-sonnet-4-6"
-        assert MODEL_MAPPINGS["anthropic"]["reasoning"] == "claude-sonnet-4-6"
+        assert MODEL_MAPPINGS["anthropic"]["standard"] == "claude-sonnet-5"
+        assert MODEL_MAPPINGS["anthropic"]["reasoning"] == "claude-sonnet-5"
 
     def test_openai_model_names(self):
-        """Test openai model names are correct."""
-        assert MODEL_MAPPINGS["openai"]["fast"] == "gpt-4o-mini"
-        assert MODEL_MAPPINGS["openai"]["standard"] == "gpt-4o"
-        assert MODEL_MAPPINGS["openai"]["reasoning"] == "gpt-4o"
+        """Test openai model names are correct (model refresh 2026-07-18)."""
+        assert MODEL_MAPPINGS["openai"]["fast"] == "gpt-5.6-luna"
+        assert MODEL_MAPPINGS["openai"]["standard"] == "gpt-5.6-terra"
+        assert MODEL_MAPPINGS["openai"]["reasoning"] == "gpt-5.6-terra"
 
 
 # =============================================================================
@@ -170,9 +170,45 @@ class TestGetChatLLM:
         with patch.dict(os.environ, {"LLM_PROVIDER": "openai", "OPENAI_API_KEY": "test-key"}):
             get_chat_llm(model_tier="fast")
 
-        # Should pass gpt-4o-mini for fast tier
+        # Should pass gpt-5.6-luna for fast tier
         call_args = mock_create_openai.call_args
-        assert call_args[0][0] == "gpt-4o-mini"
+        assert call_args[0][0] == "gpt-5.6-luna"
+
+    @patch("src.utils.llm_factory._create_openai_llm")
+    def test_llm_model_env_overrides_standard_tier(self, mock_create_openai):
+        """LLM_MODEL pins the OpenAI standard/reasoning model without a code change."""
+        mock_create_openai.return_value = MagicMock()
+
+        env = {"LLM_PROVIDER": "openai", "OPENAI_API_KEY": "test-key", "LLM_MODEL": "gpt-5.6-sol"}
+        with patch.dict(os.environ, env):
+            get_chat_llm(model_tier="standard")
+            assert mock_create_openai.call_args[0][0] == "gpt-5.6-sol"
+            get_chat_llm(model_tier="reasoning")
+            assert mock_create_openai.call_args[0][0] == "gpt-5.6-sol"
+
+    @patch("src.utils.llm_factory._create_openai_llm")
+    def test_llm_model_env_does_not_touch_fast_tier(self, mock_create_openai):
+        """The fast tier stays on the mapped small model regardless of LLM_MODEL."""
+        mock_create_openai.return_value = MagicMock()
+
+        env = {"LLM_PROVIDER": "openai", "OPENAI_API_KEY": "test-key", "LLM_MODEL": "gpt-5.6-sol"}
+        with patch.dict(os.environ, env):
+            get_chat_llm(model_tier="fast")
+            assert mock_create_openai.call_args[0][0] == "gpt-5.6-luna"
+
+    @patch("src.utils.llm_factory._create_anthropic_llm")
+    def test_llm_model_env_does_not_touch_anthropic(self, mock_create_anthropic):
+        """LLM_MODEL is an OpenAI-side knob only."""
+        mock_create_anthropic.return_value = MagicMock()
+
+        env = {
+            "LLM_PROVIDER": "anthropic",
+            "ANTHROPIC_API_KEY": "test-key",
+            "LLM_MODEL": "gpt-5.6-sol",
+        }
+        with patch.dict(os.environ, env):
+            get_chat_llm(model_tier="standard")
+            assert mock_create_anthropic.call_args[0][0] == "claude-sonnet-5"
 
     @patch("src.utils.llm_factory._create_openai_llm")
     def test_passes_max_tokens(self, mock_create_openai):
@@ -280,6 +316,31 @@ class TestCreateAnthropicLLM:
                 assert len(call_kwargs["callbacks"]) == 1
                 assert isinstance(call_kwargs["callbacks"][0], llm_factory.UsageRecorderCallback)
 
+    def test_temperature_dropped_for_claude_5_family(self):
+        """Claude Sonnet 5 / Opus 4.8 return HTTP 400 for any non-default
+        `temperature` ('`temperature` is deprecated for this model', verified
+        2026-07-18), so the creator must omit it for those models while legacy
+        callers keep passing one."""
+        mock_chat_anthropic_class = MagicMock()
+        mock_module = MagicMock(ChatAnthropic=mock_chat_anthropic_class)
+
+        with patch.dict("sys.modules", {"langchain_anthropic": mock_module}):
+            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}):
+                from importlib import reload
+
+                import src.utils.llm_factory as llm_factory
+
+                reload(llm_factory)
+
+                for model in ("claude-sonnet-5", "claude-opus-4-8"):
+                    llm_factory._create_anthropic_llm(model, 1024, 0.3, None)
+                    call_kwargs = mock_chat_anthropic_class.call_args.kwargs
+                    assert "temperature" not in call_kwargs, model
+
+                # Haiku 4.5 still accepts temperature — keep passing it there.
+                llm_factory._create_anthropic_llm("claude-haiku-4-5-20251001", 256, 0.0, None)
+                assert mock_chat_anthropic_class.call_args.kwargs["temperature"] == 0.0
+
     def test_timeout_not_passed_when_none(self):
         """Test timeout is not passed to ChatAnthropic when None."""
         mock_chat_anthropic_class = MagicMock()
@@ -369,6 +430,38 @@ class TestCreateOpenAILLM:
                 assert len(call_kwargs["callbacks"]) == 1
                 assert isinstance(call_kwargs["callbacks"][0], llm_factory.UsageRecorderCallback)
 
+    def test_temperature_dropped_and_effort_passed_for_gpt5(self):
+        """gpt-5.x: `temperature` is dropped (tolerated inconsistently upstream —
+        intermittent 401s observed on gpt-5.6-luna), and `reasoning_effort` is
+        forwarded when provided so the fast tier can disable reasoning burn."""
+        mock_chat_openai_class = MagicMock()
+        mock_module = MagicMock(ChatOpenAI=mock_chat_openai_class)
+
+        with patch.dict("sys.modules", {"langchain_openai": mock_module}):
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "test-api-key"}):
+                from importlib import reload
+
+                import src.utils.llm_factory as llm_factory
+
+                reload(llm_factory)
+
+                llm_factory._create_openai_llm("gpt-5.6-luna", 256, 0.0, None, "none")
+                call_kwargs = mock_chat_openai_class.call_args.kwargs
+                assert "temperature" not in call_kwargs
+                assert call_kwargs["reasoning_effort"] == "none"
+
+                # No effort requested -> parameter absent entirely.
+                llm_factory._create_openai_llm("gpt-5.6-terra", 2048, 0.3, None)
+                call_kwargs = mock_chat_openai_class.call_args.kwargs
+                assert "temperature" not in call_kwargs
+                assert "reasoning_effort" not in call_kwargs
+
+                # Legacy models keep the old behavior on both counts.
+                llm_factory._create_openai_llm("gpt-4o", 1024, 0.3, None, "none")
+                call_kwargs = mock_chat_openai_class.call_args.kwargs
+                assert call_kwargs["temperature"] == 0.3
+                assert "reasoning_effort" not in call_kwargs
+
     def test_request_timeout_not_passed_when_none(self):
         """Test request_timeout is not passed to ChatOpenAI when None."""
         mock_chat_openai_class = MagicMock()
@@ -417,6 +510,7 @@ class TestGetFastLLM:
             temperature=0.0,  # Deterministic for classification
             timeout=5,
             provider=None,
+            reasoning_effort="none",  # gpt-5.x: no reasoning burn on small budgets
         )
 
     @patch("src.utils.llm_factory.get_chat_llm")
@@ -458,7 +552,7 @@ class TestGetStandardLLM:
         assert result == mock_llm
         mock_get_chat_llm.assert_called_once_with(
             model_tier="standard",
-            max_tokens=1024,
+            max_tokens=2048,
             temperature=0.3,
             timeout=None,
             provider=None,
@@ -495,7 +589,7 @@ class TestGetReasoningLLM:
         assert result == mock_llm
         mock_get_chat_llm.assert_called_once_with(
             model_tier="reasoning",
-            max_tokens=4096,
+            max_tokens=8192,
             temperature=0.3,
             timeout=120,
             provider=None,

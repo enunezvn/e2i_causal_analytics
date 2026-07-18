@@ -19,21 +19,22 @@ Usage:
 
 Environment Variables:
     LLM_PROVIDER: "openai" (default) or "anthropic"
+    LLM_MODEL: Optional override for the OpenAI standard/reasoning model
     ANTHROPIC_API_KEY: Required if using Anthropic
     OPENAI_API_KEY: Required if using OpenAI
 
 Model Mappings:
     Fast (classification/routing):
         - Anthropic: claude-haiku-4-5-20251001
-        - OpenAI: gpt-4o-mini
+        - OpenAI: gpt-5.6-luna (reasoning_effort="none")
 
     Standard (general chat):
-        - Anthropic: claude-sonnet-4-6
-        - OpenAI: gpt-4o
+        - Anthropic: claude-sonnet-5
+        - OpenAI: gpt-5.6-terra
 
     Reasoning (complex analysis):
-        - Anthropic: claude-sonnet-4-6
-        - OpenAI: gpt-4o
+        - Anthropic: claude-sonnet-5
+        - OpenAI: gpt-5.6-terra
 """
 
 import logging
@@ -51,20 +52,36 @@ LLMProvider = Literal["anthropic", "openai"]
 # NOTE: the previous Anthropic ids (claude-haiku-4-20250414 / claude-sonnet-4-
 # 20250514) were deprecated and return HTTP 404 not_found_error — every chatbot
 # LLM call threw, so the CopilotKit chat node fell back to canned keyword
-# responses. These are the current ids, verified callable on the deployment's
-# ANTHROPIC_API_KEY (Sonnet 4.6 for chat/reasoning, Haiku 4.5 for the fast tier).
+# responses. Every id below was verified callable on the deployment's actual
+# API keys (2026-07-18) before being mapped here.
 MODEL_MAPPINGS = {
     "anthropic": {
         "fast": "claude-haiku-4-5-20251001",
-        "standard": "claude-sonnet-4-6",
-        "reasoning": "claude-sonnet-4-6",
+        "standard": "claude-sonnet-5",
+        "reasoning": "claude-sonnet-5",
     },
     "openai": {
-        "fast": "gpt-4o-mini",
-        "standard": "gpt-4o",
-        "reasoning": "gpt-4o",
+        "fast": "gpt-5.6-luna",
+        "standard": "gpt-5.6-terra",
+        "reasoning": "gpt-5.6-terra",
     },
 }
+
+# Models that reject a non-default `temperature`. Claude Sonnet 5 / Opus 4.8
+# return HTTP 400 ("`temperature` is deprecated for this model"); gpt-5.x
+# tolerates it inconsistently (intermittent 401s observed on gpt-5.6-luna with
+# temperature=0.3). The creators silently drop `temperature` for these so
+# existing callers that pass one keep working across the model upgrade.
+_TEMPERATURE_UNSUPPORTED_PREFIXES = (
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-fable-5",
+    "gpt-5",
+)
+
+
+def _supports_temperature(model: str) -> bool:
+    return not model.startswith(_TEMPERATURE_UNSUPPORTED_PREFIXES)
 
 
 def get_llm_provider() -> LLMProvider:
@@ -83,20 +100,25 @@ def get_llm_provider() -> LLMProvider:
 
 def get_chat_llm(
     model_tier: Literal["fast", "standard", "reasoning"] = "standard",
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     temperature: float = 0.3,
     timeout: Optional[int] = None,
     provider: Optional[LLMProvider] = None,
+    reasoning_effort: Optional[str] = None,
 ):
     """
     Get a LangChain chat LLM instance.
 
     Args:
         model_tier: "fast" for classification, "standard" for general, "reasoning" for complex
-        max_tokens: Maximum tokens in response
-        temperature: Sampling temperature (0.0 to 1.0)
+        max_tokens: Maximum tokens in response (reasoning/thinking tokens count
+            against this budget on gpt-5.x and Claude 5-family models)
+        temperature: Sampling temperature (0.0 to 1.0); dropped for models that
+            reject it (Claude Sonnet 5 / Opus 4.8, gpt-5.x)
         timeout: Request timeout in seconds
         provider: Override the default provider from environment
+        reasoning_effort: OpenAI gpt-5.x reasoning effort ("none"/"low"/"medium"/
+            "high"); ignored for Anthropic and non-reasoning OpenAI models
 
     Returns:
         ChatAnthropic or ChatOpenAI instance
@@ -109,10 +131,14 @@ def get_chat_llm(
         provider = get_llm_provider()
 
     model_name = MODEL_MAPPINGS[provider][model_tier]
+    if provider == "openai" and model_tier in ("standard", "reasoning"):
+        # LLM_MODEL lets the deployment pin the OpenAI workhorse model without
+        # a code change (mirrors how ANTHROPIC_MODEL is consumed elsewhere).
+        model_name = os.environ.get("LLM_MODEL") or model_name
     logger.debug(f"Creating {provider} LLM: {model_name} (tier={model_tier})")
 
     if provider == "openai":
-        return _create_openai_llm(model_name, max_tokens, temperature, timeout)
+        return _create_openai_llm(model_name, max_tokens, temperature, timeout, reasoning_effort)
     else:
         return _create_anthropic_llm(model_name, max_tokens, temperature, timeout)
 
@@ -139,11 +165,12 @@ def _create_anthropic_llm(
     kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         # Usage capture (spec 2026-07-12): construction-time callbacks fire on
         # invoke AND astream, covering every factory consumer.
         "callbacks": [UsageRecorderCallback(provider="anthropic", default_model=model)],
     }
+    if _supports_temperature(model):
+        kwargs["temperature"] = temperature
     if timeout is not None:
         kwargs["timeout"] = timeout
 
@@ -155,6 +182,7 @@ def _create_openai_llm(
     max_tokens: int,
     temperature: float,
     timeout: Optional[int],
+    reasoning_effort: Optional[str] = None,
 ):
     """Create a ChatOpenAI instance."""
     try:
@@ -172,12 +200,15 @@ def _create_openai_llm(
     kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         # stream_usage: OpenAI omits usage on streamed responses unless asked
         # (Anthropic streams usage by default).
         "stream_usage": True,
         "callbacks": [UsageRecorderCallback(provider="openai", default_model=model)],
     }
+    if _supports_temperature(model):
+        kwargs["temperature"] = temperature
+    if reasoning_effort is not None and model.startswith("gpt-5"):
+        kwargs["reasoning_effort"] = reasoning_effort
     if timeout is not None:
         kwargs["request_timeout"] = timeout
 
@@ -195,7 +226,7 @@ def get_fast_llm(
     """
     Get a fast LLM for classification and routing tasks.
 
-    Uses claude-haiku or gpt-4o-mini depending on provider.
+    Uses claude-haiku or gpt-5.6-luna depending on provider.
 
     Args:
         max_tokens: Maximum tokens in response (default: 256)
@@ -211,11 +242,14 @@ def get_fast_llm(
         temperature=0.0,  # Deterministic for classification
         timeout=timeout,
         provider=provider,
+        # Without this, gpt-5.x default reasoning can consume the entire small
+        # max_tokens budget and return empty content (observed in preflight).
+        reasoning_effort="none",
     )
 
 
 def get_standard_llm(
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     temperature: float = 0.3,
     timeout: Optional[int] = None,
     provider: Optional[LLMProvider] = None,
@@ -223,10 +257,10 @@ def get_standard_llm(
     """
     Get a standard LLM for general chat and synthesis tasks.
 
-    Uses claude-sonnet or gpt-4o depending on provider.
+    Uses claude-sonnet or gpt-5.6-terra depending on provider.
 
     Args:
-        max_tokens: Maximum tokens in response (default: 1024)
+        max_tokens: Maximum tokens in response (default: 2048)
         temperature: Sampling temperature (default: 0.3)
         timeout: Request timeout in seconds
         provider: Override provider from environment
@@ -244,7 +278,7 @@ def get_standard_llm(
 
 
 def get_reasoning_llm(
-    max_tokens: int = 4096,
+    max_tokens: int = 8192,
     temperature: float = 0.3,
     timeout: int = 120,
     provider: Optional[LLMProvider] = None,
@@ -252,10 +286,10 @@ def get_reasoning_llm(
     """
     Get a reasoning LLM for complex analysis tasks.
 
-    Uses claude-sonnet or gpt-4o depending on provider.
+    Uses claude-sonnet or gpt-5.6-terra depending on provider.
 
     Args:
-        max_tokens: Maximum tokens in response (default: 4096)
+        max_tokens: Maximum tokens in response (default: 8192)
         temperature: Sampling temperature (default: 0.3)
         timeout: Request timeout in seconds (default: 120)
         provider: Override provider from environment
