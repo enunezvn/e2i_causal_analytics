@@ -233,7 +233,12 @@ class PatternAnalyzerNode:
         for surface in sorted(pools):
             pool = pools[surface]
             avg_rating = sum(num for _, num in pool) / len(pool)
-            if avg_rating < 3.0:  # 1-5 scale, bottom-anchored
+            # #1258: min-pool guard — splitting by surface (#1251) made tiny
+            # pools possible (one bad copilot turn in a low-traffic window =
+            # an n=1 pool), and a single observation must not emit a persisted
+            # pattern. Every sibling detector here has a count floor; 3 keeps
+            # the smallest gated cohort the tests pin (n=3 pools still fire).
+            if len(pool) >= 3 and avg_rating < 3.0:  # 1-5 scale, bottom-anchored
                 affected_agents = list({fb["source_agent"] for fb, num in pool if num < 3})
                 patterns.append(
                     DetectedPattern(
