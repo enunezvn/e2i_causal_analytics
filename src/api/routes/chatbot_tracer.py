@@ -27,7 +27,7 @@ Usage:
             node.log_init(is_new_conversation=True)
         async with trace.trace_node("generate") as node:
             response = await llm.ainvoke(messages)
-            node.log_generate(input_tokens=150, output_tokens=300, model="claude-sonnet-4-20250514")
+            node.log_generate(input_tokens=150, output_tokens=300, model="claude-sonnet-4-6")
         trace.log_workflow_complete(status="success", total_tokens=450)
 
 Author: E2I Causal Analytics Team

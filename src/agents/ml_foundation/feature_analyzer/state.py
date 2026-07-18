@@ -195,7 +195,7 @@ class FeatureAnalyzerState(BaseAgentSchema):
     cautions: Optional[List[str]] = None  # Warnings about model behavior
 
     # LLM metadata
-    interpretation_model: Optional[str] = None  # "claude-sonnet-4-20250514"
+    interpretation_model: Optional[str] = None  # "claude-sonnet-4-6"
     interpretation_time_seconds: Optional[float] = None
     interpretation_tokens: Optional[int] = None
 

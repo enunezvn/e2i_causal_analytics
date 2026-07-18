@@ -186,7 +186,7 @@ class TestEmitSpans:
                     "agent_name": "feature_analyzer",
                     "operation": "interpret",
                     "status": "ok",
-                    "model_used": "claude-sonnet-4-20250514",
+                    "model_used": "claude-sonnet-4-6",
                     "input_tokens": 1000,
                     "output_tokens": 500,
                     "tokens_used": 1500,

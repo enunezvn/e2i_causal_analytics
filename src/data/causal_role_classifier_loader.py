@@ -84,7 +84,7 @@ def _lm_is_configured() -> bool:
 
 # Default model. Matches the convention in
 # ``src/api/routes/chatbot_dspy.py:63`` and ``src/rag/causal_rag.py:186``.
-_DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
+_DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-6"
 
 # Provider → env-var mapping. The DSPy / LiteLLM model string carries the
 # provider prefix (``anthropic/``, ``openai/``, ``azure/``); we use that
@@ -187,7 +187,7 @@ def ensure_dspy_lm_configured(
         provider = _model_provider(model)
         if provider is not None and provider not in _PROVIDER_TO_ENV_VARS:
             # Codex pass-3 MEDIUM (issue #193): typoed provider prefixes
-            # (e.g. ``antropic/claude-sonnet-4-20250514`` missing the
+            # (e.g. ``antropic/claude-sonnet-4-6`` missing the
             # ``h``) used to fall back to a permissive any-recognised-
             # key check, which would let an env with only the wrong
             # provider's key green-light an unusable LM. The previous

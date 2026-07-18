@@ -89,7 +89,7 @@ class ResponseSynthesizer:
     def __init__(
         self,
         llm_client: Any,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         temperature: float = 0.4,
         max_tokens: int = 2000,
     ):

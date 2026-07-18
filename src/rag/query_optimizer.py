@@ -55,7 +55,7 @@ class QueryOptimizer:
     def __init__(
         self,
         vocabulary_path: Optional[str] = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         max_tokens: int = 256,
         temperature: float = 0.3,
         cache_enabled: bool = True,

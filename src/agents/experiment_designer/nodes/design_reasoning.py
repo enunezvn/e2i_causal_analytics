@@ -104,8 +104,8 @@ class DesignReasoningNode:
             self.model_name = "gpt-4o"
             self.fallback_model_name = "gpt-4o-mini"
         else:
-            self.model_name = "claude-sonnet-4-20250514"
-            self.fallback_model_name = "claude-haiku-4-20250414"
+            self.model_name = "claude-sonnet-4-6"
+            self.fallback_model_name = "claude-haiku-4-5-20251001"
         # Use reasoning tier for primary, fast tier for fallback. Both fall back
         # to an opt-in MARKED mock only when no key is configured AND
         # E2I_ALLOW_MOCK_LLM is set (keyless Tier 1-5 harness, #606); otherwise a

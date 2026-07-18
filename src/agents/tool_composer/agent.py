@@ -252,8 +252,8 @@ class ToolComposerAgent:
     agent_type = "orchestration"
     agent_name = "tool_composer"  # Contract REQUIRED: BaseAgentState.agent_name
     tools = ["decomposer", "planner", "executor", "synthesizer"]
-    primary_model = "claude-sonnet-4-20250514"  # Contract: AgentConfig.primary_model
-    fallback_models = ["claude-haiku-4-20250414"]  # Contract: AgentConfig.fallback_models
+    primary_model = "claude-sonnet-4-6"  # Contract: AgentConfig.primary_model
+    fallback_models = ["claude-haiku-4-5-20251001"]  # Contract: AgentConfig.fallback_models
     memory_types: List[Literal["semantic", "episodic", "procedural"]] = [
         "semantic",
         "episodic",

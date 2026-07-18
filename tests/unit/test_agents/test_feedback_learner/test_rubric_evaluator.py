@@ -342,7 +342,7 @@ class TestRubricEvaluatorInit:
         """Should initialize with default values."""
         assert len(evaluator_no_client.criteria) == 5
         assert evaluator_no_client.thresholds["acceptable"] == 4.0
-        assert evaluator_no_client.model == "claude-sonnet-4-20250514"
+        assert evaluator_no_client.model == "claude-sonnet-4-6"
 
     def test_custom_initialization(self):
         """Should accept custom parameters."""

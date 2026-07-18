@@ -64,7 +64,7 @@ class TestNarrateImportance:
         assert "recommendations" in result
         assert "cautions" in result
         assert "interpretation" in result
-        assert result["interpretation_model"] == "claude-sonnet-4-20250514"
+        assert result["interpretation_model"] == "claude-sonnet-4-6"
         assert result["interpretation_tokens"] == 800  # 500 + 300
 
     async def test_error_when_missing_shap_results(self):

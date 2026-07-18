@@ -230,7 +230,7 @@ async def _analyze_qc_failures_with_llm(context: Dict[str, Any]) -> Dict[str, An
         prompt = _build_qc_analysis_prompt(context)
 
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             messages=[
                 {

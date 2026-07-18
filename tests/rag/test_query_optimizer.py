@@ -52,7 +52,7 @@ class TestQueryOptimizerInit:
     def test_init_default_params(self):
         """Test initialization with default parameters."""
         optimizer = QueryOptimizer()
-        assert optimizer.model == "claude-sonnet-4-20250514"
+        assert optimizer.model == "claude-sonnet-4-6"
         assert optimizer.max_tokens == 256
         assert optimizer.temperature == 0.3
         assert optimizer.cache_enabled is True

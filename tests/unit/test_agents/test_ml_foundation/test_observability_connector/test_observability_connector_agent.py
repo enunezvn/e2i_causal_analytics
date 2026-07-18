@@ -291,7 +291,7 @@ class TestObservabilityConnectorAgent:
         result = await agent.track_llm_call(
             agent_name="feature_analyzer",
             operation="interpret",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             input_tokens=1000,
             output_tokens=500,
             context=context,
@@ -303,7 +303,7 @@ class TestObservabilityConnectorAgent:
         assert result["trace_id"] == "trace_123"
         assert result["agent_name"] == "feature_analyzer"
         assert result["operation"] == "interpret"
-        assert result["model_used"] == "claude-sonnet-4-20250514"
+        assert result["model_used"] == "claude-sonnet-4-6"
         assert result["input_tokens"] == 1000
         assert result["output_tokens"] == 500
         assert result["tokens_used"] == 1500
@@ -319,7 +319,7 @@ class TestObservabilityConnectorAgent:
         result = await agent.track_llm_call(
             agent_name="feature_analyzer",
             operation="interpret",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             input_tokens=1000,
             output_tokens=500,
             context=context,

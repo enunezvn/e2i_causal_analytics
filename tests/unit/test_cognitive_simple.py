@@ -45,7 +45,7 @@ class AnthropicLLM:
         import anthropic
 
         self.client = anthropic.Anthropic()
-        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
     async def complete(self, prompt: str, max_tokens: int = 1024) -> str:
         response = self.client.messages.create(

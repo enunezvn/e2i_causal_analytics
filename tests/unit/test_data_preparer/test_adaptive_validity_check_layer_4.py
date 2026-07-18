@@ -1000,7 +1000,7 @@ def test_ensure_dspy_lm_configured_typoed_provider_fails_closed(reset_dspy_lm, m
     ANTHROPIC_API_KEY/OPENAI_API_KEY mismatch for KNOWN providers, but
     a typoed-but-non-empty provider prefix still fell through the
     unknown-provider permissive any-key fallback. An env with only
-    OPENAI_API_KEY + model='antropic/claude-sonnet-4-20250514' (missing
+    OPENAI_API_KEY + model='antropic/claude-sonnet-4-6' (missing
     'h') would green-light configuration of an Anthropic LM, then
     classify_feature would silently fail every call. Fail closed for
     slash-shaped unknown prefixes.
@@ -1012,7 +1012,7 @@ def test_ensure_dspy_lm_configured_typoed_provider_fails_closed(reset_dspy_lm, m
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only-not-real")
     # Typoed provider — looks like a provider/path but the prefix is
     # not in _PROVIDER_TO_ENV_VARS.
-    assert ensure_dspy_lm_configured(model="antropic/claude-sonnet-4-20250514") is False
+    assert ensure_dspy_lm_configured(model="antropic/claude-sonnet-4-6") is False
     assert getattr(dspy.settings, "lm", None) is None
 
 

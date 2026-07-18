@@ -178,7 +178,7 @@ Format your response as JSON with this structure:
 }}"""
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -223,7 +223,7 @@ Format your response as JSON with this structure:
             "recommendations": recommendations,
             "cautions": cautions,
             "interpretation": interpretation,
-            "interpretation_model": "claude-sonnet-4-20250514",
+            "interpretation_model": "claude-sonnet-4-6",
             "interpretation_time_seconds": computation_time,
             "interpretation_tokens": interpretation_tokens,
         }

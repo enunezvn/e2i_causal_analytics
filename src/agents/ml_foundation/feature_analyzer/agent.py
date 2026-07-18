@@ -85,7 +85,7 @@ class FeatureAnalyzerAgent:
     agent_type = "hybrid"  # Computation + LLM
     sla_seconds = 120
     tools = ["shap", "pandas", "numpy", "scipy"]
-    primary_model = "claude-sonnet-4-20250514"  # For NL interpretation node
+    primary_model = "claude-sonnet-4-6"  # For NL interpretation node
 
     def __init__(self):
         """Initialize feature_analyzer agent."""

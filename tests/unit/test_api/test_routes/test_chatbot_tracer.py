@@ -245,7 +245,7 @@ class TestNodeSpanContext:
         ctx.log_generate(
             input_tokens=150,
             output_tokens=300,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             provider="anthropic",
             tool_calls_count=2,
             temperature=0.3,
@@ -253,7 +253,7 @@ class TestNodeSpanContext:
         assert ctx.metadata["input_tokens"] == 150
         assert ctx.metadata["output_tokens"] == 300
         assert ctx.metadata["total_tokens"] == 450
-        assert ctx.metadata["model"] == "claude-sonnet-4-20250514"
+        assert ctx.metadata["model"] == "claude-sonnet-4-6"
         assert ctx.metadata["provider"] == "anthropic"
         assert ctx.metadata["tool_calls_count"] == 2
         assert ctx.metadata["temperature"] == 0.3
@@ -921,7 +921,7 @@ class TestIntegrationScenarios:
                 node.log_generate(
                     input_tokens=500,
                     output_tokens=200,
-                    model="claude-sonnet-4-20250514",
+                    model="claude-sonnet-4-6",
                 )
 
             # Finalize node

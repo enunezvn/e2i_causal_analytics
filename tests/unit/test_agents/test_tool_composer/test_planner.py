@@ -28,7 +28,7 @@ class TestToolPlannerInit:
     def test_default_initialization(self, mock_llm_client, mock_tool_registry):
         """Test default initialization"""
         planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=mock_tool_registry)
-        assert planner.model == "claude-sonnet-4-20250514"
+        assert planner.model == "claude-sonnet-4-6"
         assert planner.temperature == 0.2
         assert planner.max_tools_per_plan == 8
 
@@ -37,11 +37,11 @@ class TestToolPlannerInit:
         planner = ToolPlanner(
             llm_client=mock_llm_client,
             tool_registry=mock_tool_registry,
-            model="claude-3-5-haiku-latest",
+            model="claude-haiku-4-5-20251001",
             temperature=0.4,
             max_tools_per_plan=5,
         )
-        assert planner.model == "claude-3-5-haiku-latest"
+        assert planner.model == "claude-haiku-4-5-20251001"
         assert planner.temperature == 0.4
         assert planner.max_tools_per_plan == 5
 
