@@ -94,8 +94,8 @@ class CausalImpactAgent(SkillsMixin):
     agent_type = "hybrid"  # Computation + Deep Reasoning
     agent_name = "causal_impact"  # Contract REQUIRED: BaseAgentState.agent_name
     tools = ["dowhy", "econml", "networkx"]  # Contract: AgentConfig.tools
-    primary_model = "claude-sonnet-4-20250514"  # Contract: AgentConfig.primary_model
-    fallback_models = ["claude-haiku-4-20250414"]  # Contract: AgentConfig.fallback_models
+    primary_model = "claude-sonnet-4-6"  # Contract: AgentConfig.primary_model
+    fallback_models = ["claude-haiku-4-5-20251001"]  # Contract: AgentConfig.fallback_models
     memory_types: List[Literal["semantic", "episodic"]] = [
         "semantic",
         "episodic",

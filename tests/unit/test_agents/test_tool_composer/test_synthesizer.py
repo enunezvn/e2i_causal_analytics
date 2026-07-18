@@ -32,7 +32,7 @@ class TestResponseSynthesizerInit:
     def test_default_initialization(self, mock_llm_client):
         """Test default initialization"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
-        assert synthesizer.model == "claude-sonnet-4-20250514"
+        assert synthesizer.model == "claude-sonnet-4-6"
         assert synthesizer.temperature == 0.4
         assert synthesizer.max_tokens == 2000
 
@@ -40,11 +40,11 @@ class TestResponseSynthesizerInit:
         """Test custom initialization"""
         synthesizer = ResponseSynthesizer(
             llm_client=mock_llm_client,
-            model="claude-3-5-haiku-latest",
+            model="claude-haiku-4-5-20251001",
             temperature=0.7,
             max_tokens=3000,
         )
-        assert synthesizer.model == "claude-3-5-haiku-latest"
+        assert synthesizer.model == "claude-haiku-4-5-20251001"
         assert synthesizer.temperature == 0.7
         assert synthesizer.max_tokens == 3000
 

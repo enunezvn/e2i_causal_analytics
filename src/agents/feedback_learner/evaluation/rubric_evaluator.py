@@ -124,7 +124,7 @@ class RubricEvaluator:
         criteria: Optional[List[RubricCriterion]] = None,
         thresholds: Optional[Dict[str, float]] = None,
         override_conditions: Optional[List[Dict[str, Any]]] = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         max_tokens: int = 1500,
         temperature: float = 0.3,
         use_config: bool = True,

@@ -48,7 +48,7 @@ class RubricNode:
         self,
         evaluator: Optional[RubricEvaluator] = None,
         db_client: Optional[Any] = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
     ):
         """
         Initialize rubric node.

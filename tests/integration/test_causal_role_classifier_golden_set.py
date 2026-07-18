@@ -133,7 +133,7 @@ def test_classifier_passes_tier_1_sanity_on_golden_set() -> None:
 
     # Configure DSPy LM with caching DISABLED (Option C iter-0 MED
     # finding: cached replay defeats live-LM signal).
-    model_string = "anthropic/claude-sonnet-4-20250514"
+    model_string = "anthropic/claude-sonnet-4-6"
     dspy.configure(lm=dspy.LM(model_string, cache=False))
     configured = ensure_dspy_lm_configured(require_api_key=True)
     assert configured, (
@@ -146,7 +146,7 @@ def test_classifier_passes_tier_1_sanity_on_golden_set() -> None:
     assert classifier is not None, (
         "load_compiled_classifier returned None — recompile via "
         "`python scripts/compile_causal_role_classifier.py "
-        "--lm-model anthropic/claude-sonnet-4-20250514 --force`."
+        "--lm-model anthropic/claude-sonnet-4-6 --force`."
     )
 
     family_a: list[tuple[str, str, str, str]] = []  # (scenario, feature, expected, observed)

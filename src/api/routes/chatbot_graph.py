@@ -1236,7 +1236,7 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
                 temperature=0.3,
             )
             provider = get_llm_provider()
-            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
             logger.info(f"Using {provider} LLM for chatbot")
 
             # Bind tools to the model

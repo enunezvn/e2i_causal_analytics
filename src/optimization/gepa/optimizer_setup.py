@@ -65,7 +65,7 @@ def create_gepa_optimizer(
     metric: E2IGEPAMetric,
     trainset: list[Example],
     valset: Optional[list[Example]] = None,
-    reflection_model: str = "anthropic/claude-sonnet-4-20250514",
+    reflection_model: str = "anthropic/claude-sonnet-4-6",
     auto: str = "medium",
     enable_tool_optimization: bool = False,
     log_dir: Optional[str] = None,

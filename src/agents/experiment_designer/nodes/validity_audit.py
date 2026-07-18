@@ -142,7 +142,7 @@ def _get_validity_llm() -> tuple[Any, str, bool]:
         from langchain_anthropic import ChatAnthropic
 
         # Use Claude Sonnet 4 for validity assessment
-        model_name = os.environ.get("VALIDITY_AUDIT_MODEL", "claude-sonnet-4-20250514")
+        model_name = os.environ.get("VALIDITY_AUDIT_MODEL", "claude-sonnet-4-6")
         llm = ChatAnthropic(  # type: ignore[call-arg]
             model=model_name,
             max_tokens=4096,

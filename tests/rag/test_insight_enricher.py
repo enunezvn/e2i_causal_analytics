@@ -91,7 +91,7 @@ class TestInsightEnricherInit:
     def test_init_default_params(self):
         """Test initialization with default parameters."""
         enricher = InsightEnricher()
-        assert enricher.model == "claude-sonnet-4-20250514"
+        assert enricher.model == "claude-sonnet-4-6"
         assert enricher.max_tokens == 1024
         assert enricher.temperature == 0.3
         assert enricher.cache_enabled is True

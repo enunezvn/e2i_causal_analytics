@@ -87,7 +87,7 @@ class QueryDecomposer:
     def __init__(
         self,
         llm_client: Any,  # Anthropic client or compatible
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         temperature: float = 0.3,
         max_sub_questions: int = 6,
         min_sub_questions: int = 2,

@@ -415,7 +415,7 @@ class TestTrainingSignalCollection:
             "quality_metrics": {"accuracy": 0.9},
             "reward": 0.85,
             "total_latency_ms": 150,
-            "model_used": "claude-sonnet-4-20250514",
+            "model_used": "claude-sonnet-4-6",
             "llm_calls": 3,
             "is_training_example": True,
         }

@@ -148,7 +148,7 @@ class ToolPlanner:
         self,
         llm_client: Any,
         tool_registry: Optional[ToolRegistry] = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         temperature: float = 0.2,
         max_tools_per_plan: int = 8,
         memory_hooks: Optional[ToolComposerMemoryHooks] = None,

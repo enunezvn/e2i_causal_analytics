@@ -126,7 +126,7 @@ class ToolComposer:
 
         self.decomposer = QueryDecomposer(
             llm_client=self.llm_client,
-            model=decompose_config.get("model", "claude-sonnet-4-20250514"),
+            model=decompose_config.get("model", "claude-sonnet-4-6"),
             temperature=decompose_config.get("temperature", 0.3),
             max_sub_questions=decompose_config.get("max_sub_questions", 6),
             min_sub_questions=decompose_config.get("min_sub_questions", 2),
@@ -135,7 +135,7 @@ class ToolComposer:
         self.planner = ToolPlanner(
             llm_client=self.llm_client,
             tool_registry=self.registry,
-            model=plan_config.get("model", "claude-sonnet-4-20250514"),
+            model=plan_config.get("model", "claude-sonnet-4-6"),
             temperature=plan_config.get("temperature", 0.2),
             max_tools_per_plan=plan_config.get("max_tools_per_plan", 8),
             memory_hooks=self.memory_hooks,
@@ -151,7 +151,7 @@ class ToolComposer:
 
         self.synthesizer = ResponseSynthesizer(
             llm_client=self.llm_client,
-            model=synthesize_config.get("model", "claude-sonnet-4-20250514"),
+            model=synthesize_config.get("model", "claude-sonnet-4-6"),
             temperature=synthesize_config.get("temperature", 0.4),
             max_tokens=synthesize_config.get("max_tokens", 2000),
         )

@@ -97,7 +97,7 @@ class LLMConfig:
     """Configuration for LLM service."""
 
     provider: str = "anthropic"
-    model: str = "claude-3-5-sonnet-20241022"
+    model: str = "claude-sonnet-4-6"
     max_tokens: int = 4096
     temperature: float = 0.3
 
@@ -247,7 +247,7 @@ def _parse_llm_config(raw: Dict[str, Any], env: str) -> LLMConfig:
     llm_config = raw.get("llm", {}).get(env, {})
     return LLMConfig(
         provider=llm_config.get("provider", "anthropic"),
-        model=llm_config.get("model", "claude-3-5-sonnet-20241022"),
+        model=llm_config.get("model", "claude-sonnet-4-6"),
         max_tokens=llm_config.get("max_tokens", 4096),
         temperature=llm_config.get("temperature", 0.3),
     )

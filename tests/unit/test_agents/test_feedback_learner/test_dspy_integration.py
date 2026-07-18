@@ -63,7 +63,7 @@ class TestFeedbackLearnerTrainingSignal:
             recommendation_actionability=0.9,
             update_effectiveness=0.75,
             total_latency_ms=15000.0,
-            model_used="anthropic/claude-sonnet-4-20250514",
+            model_used="anthropic/claude-sonnet-4-6",
             llm_calls=10,
         )
 
@@ -169,7 +169,7 @@ class TestFeedbackLearnerTrainingSignal:
             pattern_accuracy=0.75,
             rubric_weighted_score=4.0,
             rubric_decision="apply",
-            model_used="anthropic/claude-sonnet-4-20250514",
+            model_used="anthropic/claude-sonnet-4-6",
             llm_calls=5,
             total_tokens=2500,
         )
@@ -196,7 +196,7 @@ class TestFeedbackLearnerTrainingSignal:
         assert result["output"]["patterns_detected"] == 3
         assert result["quality_metrics"]["pattern_accuracy"] == 0.75
         assert result["rubric_evaluation"]["weighted_score"] == 4.0
-        assert result["llm_usage"]["model"] == "anthropic/claude-sonnet-4-20250514"
+        assert result["llm_usage"]["model"] == "anthropic/claude-sonnet-4-6"
 
 
 class TestFeedbackLearnerCognitiveContext:

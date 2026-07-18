@@ -1280,8 +1280,8 @@ retry_strategies:
 fallback_chains:
   description: "LLM fallback configurations"
   default_chain:
-    - claude-sonnet-4-20250514
-    - claude-3-5-haiku-20241022
+    - claude-sonnet-4-6
+    - claude-haiku-4-5-20251001
     - template_response
 
 
@@ -1569,10 +1569,10 @@ gepa_metric_components:
 reflection_models:
   description: "Recommended LLMs for GEPA reflection"
   values:
-    - anthropic/claude-sonnet-4-20250514     # Recommended for most cases
+    - anthropic/claude-sonnet-4-6     # Recommended for most cases
     - anthropic/claude-opus-4-5-20251101     # For complex deep reasoning
     - openai/gpt-4o                          # Cost-effective alternative
-  default: anthropic/claude-sonnet-4-20250514
+  default: anthropic/claude-sonnet-4-6
   notes: |
     Reflection LM is used by GEPA to reflect on execution traces
     and propose improved instructions. Strong reasoning capability

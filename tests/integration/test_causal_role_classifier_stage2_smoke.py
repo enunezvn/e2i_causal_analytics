@@ -4,7 +4,7 @@ Plan: ``.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md`` §3.5 Stage 2
 + §4.2.
 
 This test invokes ``classify_feature()`` against the live LM
-(``anthropic/claude-sonnet-4-20250514`` by default per the loader's
+(``anthropic/claude-sonnet-4-6`` by default per the loader's
 ``_DEFAULT_LM_MODEL``) for the 12 paired (T, Y)-explicit fixtures pinned by
 the §3.5 Stage 1 unit-test gate, then asserts that the LM agrees with the
 labeled role on ≥10 of 12 invocations.
@@ -160,7 +160,7 @@ def test_stage2_classifier_reproduces_paired_fixture_roles() -> None:
     # mirror its credential gating: explicit ANTHROPIC_API_KEY check above
     # already covers (b). Provider-prefix correctness is verified by the
     # `dspy.configure` call succeeding (LiteLLM raises on bad provider).
-    model_string = "anthropic/claude-sonnet-4-20250514"
+    model_string = "anthropic/claude-sonnet-4-6"
     dspy.configure(lm=dspy.LM(model_string, cache=False))
     # Sanity-confirm configuration took effect; ``ensure_dspy_lm_configured``
     # is idempotent so calling it now without re-configuring lets us reuse
@@ -183,7 +183,7 @@ def test_stage2_classifier_reproduces_paired_fixture_roles() -> None:
         "`artifacts/dspy/causal_role_classifier.json` is missing or "
         "malformed. Recompile via "
         "`python scripts/compile_causal_role_classifier.py "
-        "--lm-model anthropic/claude-sonnet-4-20250514 --force`."
+        "--lm-model anthropic/claude-sonnet-4-6 --force`."
     )
 
     results: list[tuple[str, str, str, str, str, bool]] = []

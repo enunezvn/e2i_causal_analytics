@@ -33,7 +33,7 @@ def test_llm_crystal_narrative_audit_is_frozen_dataclass():
         narrator_model="claude-haiku-4-5-20251001",
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        instance.narrator_model = "claude-sonnet-4-20250514"  # type: ignore[misc]
+        instance.narrator_model = "claude-sonnet-4-6"  # type: ignore[misc]
 
 
 def test_llm_crystal_narrative_audit_mirrors_evaluator_telemetry_fields():

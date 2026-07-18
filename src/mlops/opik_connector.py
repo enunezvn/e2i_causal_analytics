@@ -24,7 +24,7 @@ Usage:
 
     # Trace an LLM call
     async with opik.trace_llm_call(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         trace_id=trace_id
     ) as llm_span:
         response = await client.messages.create(...)
@@ -637,7 +637,7 @@ class OpikConnector:
         Creates an LLM-type span with token tracking and cost calculation.
 
         Args:
-            model: LLM model name (e.g., "claude-sonnet-4-20250514")
+            model: LLM model name (e.g., "claude-sonnet-4-6")
             trace_id: Trace ID to attach this span to
             parent_span_id: Parent span ID for nesting
             provider: LLM provider (anthropic, openai, etc.)
@@ -650,7 +650,7 @@ class OpikConnector:
 
         Example:
             async with opik.trace_llm_call(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 trace_id=trace_id
             ) as llm_span:
                 response = await client.messages.create(...)

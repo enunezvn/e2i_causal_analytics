@@ -368,7 +368,7 @@ Be specific and quantitative. Avoid generic statements."""
             if opik and opik.is_enabled:
                 # Trace the LLM call with dynamic provider info
                 model_name = (
-                    "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-20250414"
+                    "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-5-20251001"
                 )
                 async with opik.trace_llm_call(
                     model=model_name,

@@ -25,7 +25,7 @@ class TestQueryDecomposerInit:
     def test_default_initialization(self, mock_llm_client):
         """Test default initialization"""
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
-        assert decomposer.model == "claude-sonnet-4-20250514"
+        assert decomposer.model == "claude-sonnet-4-6"
         assert decomposer.temperature == 0.3
         assert decomposer.max_sub_questions == 6
         assert decomposer.min_sub_questions == 2
@@ -34,12 +34,12 @@ class TestQueryDecomposerInit:
         """Test custom initialization"""
         decomposer = QueryDecomposer(
             llm_client=mock_llm_client,
-            model="claude-3-5-haiku-latest",
+            model="claude-haiku-4-5-20251001",
             temperature=0.5,
             max_sub_questions=8,
             min_sub_questions=3,
         )
-        assert decomposer.model == "claude-3-5-haiku-latest"
+        assert decomposer.model == "claude-haiku-4-5-20251001"
         assert decomposer.temperature == 0.5
         assert decomposer.max_sub_questions == 8
         assert decomposer.min_sub_questions == 3

@@ -593,7 +593,7 @@ async def _analyze_leakage_with_llm(context: Dict[str, Any]) -> Dict[str, Any]:
         prompt = _build_leakage_analysis_prompt(context)
 
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             temperature=0.0,
             messages=[{"role": "user", "content": prompt}],
