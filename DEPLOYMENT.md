@@ -1,6 +1,7 @@
 # E2I Causal Analytics - Deployment Guide
 
-How to run the full stack locally using Docker Compose with the dev overlay.
+How to run the full stack locally using Docker Compose with the dev overlay,
+plus how the real production deploy works (see [Production Deploy (CI/CD)](#production-deploy-cicd)).
 
 ---
 
@@ -41,7 +42,7 @@ First build pulls PyTorch + ML dependencies — expect 10-15 minutes. Subsequent
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key for LLM-powered agents |
+| `OPENAI_API_KEY` | OpenAI API key — the **default** LLM provider (`gpt-5.6-terra`/`gpt-5.6-luna` tiers) |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Supabase anonymous key |
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
@@ -49,6 +50,16 @@ First build pulls PyTorch + ML dependencies — expect 10-15 minutes. Subsequent
 | `FALKORDB_PASSWORD` | FalkorDB authentication password |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
 | `SUPABASE_DB_URL` | Supabase PostgreSQL connection string |
+
+### Optional LLM configuration
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Anthropic key — only needed with `LLM_PROVIDER=anthropic` |
+| `LLM_PROVIDER` | `openai` (default) or `anthropic` |
+| `LLM_MODEL` | Pin the OpenAI standard/reasoning model without a code change |
+
+See `docs/LLM_CONFIGURATION.md` for tiers, model mappings, and overrides.
 
 ### Auto-configured (set by compose, no action needed)
 
@@ -88,6 +99,50 @@ These are defined in `docker-compose.yml` via the `x-common-env` anchor:
 
 ---
 
+## Production Deploy (CI/CD)
+
+The production deploy is `.github/workflows/deploy.yml` — the workflow file is
+the source of truth; this is the operator-level summary (verified 2026-07-18).
+
+**Trigger**: push to `main`, path-filtered to deploy inputs (`src/`, `config/`,
+compose files, `frontend/`, `requirements*`/`pyproject.toml`/`requirements.lock`,
+`patches/`, BentoML serving inputs). A docs-only merge does NOT deploy.
+
+**Pipeline** (`test` → `build-and-push` + `build-and-push-frontend` → `deploy`):
+
+1. **Images build in CI, not on the droplet.** The app and frontend images are
+   built and pushed to GHCR, tagged with the commit SHA. The droplet pulls them
+   (`--no-build`); a local build happens only as a fallback when the GHCR pull
+   fails. This keeps the OOM-prone React production build off the box.
+2. **Hard sync**: the droplet checkout is `git reset --hard origin/main`. The
+   deploy **aborts** if any *tracked* file has uncommitted changes (a live
+   hot-patch it would clobber); untracked files never block it. The droplet is
+   a deploy target, not a dev box — don't leave tracked edits on it.
+3. **Migrations apply automatically**: `scripts/run_migrations.sh` runs
+   **unconditionally** on every deploy. It auto-detects the connection
+   (`SUPABASE_DB_URL` if set, else docker-exec into the `supabase-db`
+   container), covers every `database/` schema dir, and tracks applied files in
+   `public.schema_migrations`. See `docs/runbooks/migrations.md`.
+4. **Ordered rollout with gates**:
+   - `feast` + `feast-materializer` recreate first; the deploy waits (up to
+     10 min) for a **fresh materialize heartbeat** before the app is allowed
+     to flip — the API must never serve against a stale/empty online store.
+   - The app tier (`api`, `frontend`, `worker_*`, `scheduler`) then flips to
+     the GHCR-pulled images, followed by a 30-attempt `/health` check loop.
+   - When a serving input changed, the `bentoml` container is recreated and
+     gated on `POST /model_info` reporting a non-empty `available_models` —
+     proving the cohort bundles actually loaded, not just that the server is up.
+5. **Automatic rollback**: every gate failure rolls the affected services back
+   to the pre-deploy SHA (app tier re-pulled from GHCR at the old SHA — no
+   local rebuild) and fails the deploy loudly.
+6. **Post-deploy prune**: unreferenced images + build cache are pruned
+   (historically grew to 100% disk without this).
+
+**Not part of the CI deploy**: FalkorDB seeding (manual, see below) and
+synthetic data reseeds.
+
+---
+
 ## Development Workflow
 
 ### Hot Reload
@@ -107,30 +162,15 @@ After changing Python code that runs in workers:
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart worker_light worker_medium scheduler
 ```
 
-### FalkorDB Auto-Seeding
+### FalkorDB Seeding
 
-The deploy script (`scripts/deploy.sh`) automatically runs `scripts/seed_falkordb_all.sh` after pulling new code. This seeds 8 node types and 15 edge types from Supabase core tables into the FalkorDB knowledge graph, ensuring the graph stays in sync with the relational data.
-
-To run manually:
+`scripts/seed_falkordb_all.sh` seeds the FalkorDB knowledge graph from Supabase
+core tables. **The CI/CD deploy does NOT run it** — `deploy.yml` never invokes
+`scripts/deploy.sh` (that script is a separate, manual deploy path which does
+chain into the seeder). Reseed the graph manually when needed:
 
 ```bash
 ./scripts/seed_falkordb_all.sh
-```
-
-### Deploy Rollback
-
-The CI/CD deploy workflow (`.github/workflows/deploy.yml`) includes automatic rollback:
-
-1. Saves the pre-deploy git SHA
-2. Pulls new code and runs migrations
-3. Runs a 30-attempt health check loop (with backoff)
-4. If health checks fail, automatically rolls back to the saved SHA
-
-For manual rollback, revert to a known-good commit and restart workers:
-
-```bash
-git checkout <good-sha>
-docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart worker_light worker_medium scheduler
 ```
 
 ### docker/.env Symlink
@@ -194,7 +234,11 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml dow
 
 ## Optional Stacks
 
-### Opik (LLM observability)
+### Opik (LLM observability) — intentionally stopped in production
+
+The Opik overlay exists but is **not run in production** (intentionally stopped
+2026-05-29); production LLM observability is the `llm_usage_events` path (see
+`docs/LLM_CONFIGURATION.md` §4). To run Opik locally anyway:
 
 ```bash
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.opik.yml up -d
@@ -275,4 +319,4 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 
 ---
 
-*Last Updated: 2026-02-08*
+*Last Updated: 2026-07-18*

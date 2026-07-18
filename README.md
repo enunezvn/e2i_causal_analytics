@@ -14,22 +14,23 @@ Multi-Agent Causal Analytics for Pharmaceutical Drug Adoption Analysis
 
 ## Overview
 
-E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed for pharmaceutical companies to understand and optimize drug adoption through causal inference and natural language querying.
+E2I Causal Analytics is a sophisticated 22-agent, 6-tier agentic system designed for pharmaceutical companies to understand and optimize drug adoption through causal inference and natural language querying.
 
 ### Key Features
 
-- **21 AI Agents** across 6 tiers (ML Foundation, Coordination, Causal Analytics, Monitoring, Predictions, Self-Improvement)
+- **22 AI Agents** across 6 tiers (ML Foundation, Coordination, Causal Analytics, Monitoring, Predictions, Self-Improvement)
 - **Tri-Memory Architecture** (Working, Episodic, Procedural, Semantic)
 - **Causal Validation** with 5 DoWhy refutation tests
-- **MLOps Integration** (MLflow, Opik, Feast, Great Expectations, Optuna, SHAP, BentoML)
+- **MLOps Integration** (MLflow, Feast, Great Expectations, Optuna, SHAP, BentoML)
+- **Tiered LLM Factory** — provider-switchable (OpenAI default, Anthropic alternative) fast/standard/reasoning tiers with per-call usage metering — see [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md)
 - **Real-Time Model Interpretability** (v4.1) - SHAP explanations in 50-500ms via REST API
 - **Digital Twin Engine** (v4.2) - A/B test pre-screening with ML-based simulations
 - **Tool Composer** (v4.2) - Multi-faceted query decomposition & dynamic tool orchestration
 - **Natural Language Interface** with typo-tolerant query processing
-- **120+ Database Tables** across core, ML, memory, chat, audit, and RAG schemas
+- **140+ Database Tables** across core, ML, memory, chat, audit, and RAG schemas
 - **Hybrid RAG System** with vector + full-text + graph search
-- **Full-Stack Dashboard** — React 18 + TypeScript + Vite with 27 pages
-- **Production Observability** — Prometheus, Grafana, Loki, Alertmanager
+- **Full-Stack Dashboard** — React 18 + TypeScript + Vite with 31 pages
+- **Production Observability** — Prometheus, Grafana, Loki, Alertmanager + LLM usage/cost tracking in the `/admin` Observability tab
 
 ### Analyzed Brands
 
@@ -41,8 +42,8 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 
 ### 6-Tier Agent System
 
-**TIER 0: ML FOUNDATION** (8 agents)
-- scope_definer, cohort_constructor, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
+**TIER 0: ML FOUNDATION** (9 agents)
+- scope_definer, cohort_constructor, cohort_profiler, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
 
 **TIER 1: COORDINATION** (2 agents)
 - orchestrator (multi-agent routing & synthesis with 4-stage classifier)
@@ -66,13 +67,13 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 
 ```
 e2i_causal_analytics/
-├── config/                    # YAML configurations (20 files)
+├── config/                    # YAML configurations (27 files)
 │   ├── agent_config.yaml      # Agent definitions
-│   ├── domain_vocabulary_v3.1.0.yaml
+│   ├── domain_vocabulary.yaml # Consolidated NLP vocabulary (v5.x)
 │   ├── kpi_definitions.yaml   # 44 KPIs
 │   └── ...
 │
-├── database/                  # SQL schemas (120+ tables)
+├── database/                  # SQL schemas (140+ tables)
 │   ├── core/                  # Core data tables (patients, HCPs, treatments, triggers)
 │   ├── ml/                    # ML pipeline tables (experiments, models, digital twins, A/B testing, GEPA, etc.)
 │   ├── memory/                # Memory tables + FalkorDB schema
@@ -90,7 +91,7 @@ e2i_causal_analytics/
 │
 ├── src/                       # Main source code
 │   ├── nlp/                   # Query processing, entity extraction
-│   ├── agents/                # 21 agent implementations (6 tiers)
+│   ├── agents/                # 22 agent implementations (6 tiers)
 │   │   ├── orchestrator/      # Tier 1 coordination (4-stage classifier + router)
 │   │   ├── tool_composer/     # Multi-faceted query decomposition & orchestration
 │   │   ├── experiment_designer/ # Experiment design with Digital Twin pre-screening
@@ -108,9 +109,9 @@ e2i_causal_analytics/
 │   ├── api/                   # FastAPI endpoints & middleware
 │   └── utils/                 # Shared utilities (circuit breaker, etc.)
 │
-├── tests/                     # 500+ test files (unit, integration, tier0-5)
+├── tests/                     # 1,400+ test files (unit, integration, tier0-5)
 ├── scripts/                   # Utility scripts (deploy, health check, backups, migrations)
-├── frontend/                  # React 18 + TypeScript + Vite dashboard (27 pages)
+├── frontend/                  # React 18 + TypeScript + Vite dashboard (31 pages)
 ├── docs/                      # Comprehensive documentation
 │   ├── ARCHITECTURE.md        # C4-model architecture documentation
 │   ├── ONBOARDING.md          # Developer onboarding guide
@@ -122,6 +123,16 @@ e2i_causal_analytics/
 │       └── templates/         # CSV templates with example rows
 └── docker/                    # Container configurations
 ```
+
+## Recent Highlights (June–July 2026)
+
+- **LLM model refresh + tier factory** — provider-switchable fast/standard/reasoning tiers (OpenAI `gpt-5.6-luna`/`gpt-5.6-terra` default, Anthropic `claude-haiku-4-5`/`claude-sonnet-5` alternative), `LLM_MODEL` deployment override, DSPy default `openai/gpt-5.6-terra`. See [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md).
+- **Admin LLM observability** — every factory LLM call meters tokens into `llm_usage_events`, priced at read time in the `/admin` Observability tab.
+- **Feedback-learning loop live end-to-end** — golden-set replay → learning signals → pattern detection → gated prompt-update proposals.
+- **Feature-importance stability gating** — adaptive SHAP sample sizing with a statistical stability criterion certifying the displayed covariate ranking.
+- **KPI engine depth** — conversion-rate brand/segment/line-of-therapy/window routing, TRx share windows, clinical segment breakdowns, trend charting.
+- **Causal analysis hardening** — RCT-aware estimator selection (ANCOVA), fail-closed refutation gating, E-value gate scoped to observational designs.
+- **GHCR-based zero-on-box-build deploy** — images built in CI and pulled by the droplet, with feast-freshness and BentoML-readiness gates (see `DEPLOYMENT.md`).
 
 ## What's New in v4.2.1
 
@@ -156,15 +167,9 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
 - **Routing Patterns**: `SINGLE_AGENT`, `PARALLEL_DELEGATION`, `TOOL_COMPOSER`, `CLARIFICATION_NEEDED`
 
 ### Configuration Updates
-- **Domain Vocabulary v4.2.0**: Enhanced with Tool Composer ENUMs and routing patterns
+- **Domain Vocabulary**: Enhanced with Tool Composer ENUMs and routing patterns
 - **Enhanced Orchestrator**: 4-stage classifier for intelligent query routing
 - **Enhanced Experiment Designer**: Digital twin pre-screening tools integrated
-
-### Documentation
-- `docs/digital_twin_component_update_list.md` - Digital twin implementation guide
-- `docs/digital_twin_implementation.html` - Interactive digital twin guide
-- `docs/tool_composer_component_update_list.md` - Tool composer implementation guide
-- `docs/tool_composer_architecture.html` - Tool composer architecture
 
 ## Quick Start
 
@@ -172,9 +177,9 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
 
 - Docker Engine 24+ and Docker Compose v2
 - Supabase account (or self-hosted Supabase)
-- Anthropic API key
+- OpenAI API key (the default LLM provider; Anthropic is the optional alternative — see [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md))
 
-All services (API, frontend, workers, Redis, FalkorDB, MLflow, Opik, observability) run in Docker containers via Docker Compose.
+All services (API, frontend, workers, Redis, FalkorDB, MLflow, observability) run in Docker containers via Docker Compose.
 
 ### Installation
 
@@ -191,10 +196,7 @@ All services (API, frontend, workers, Redis, FalkorDB, MLflow, Opik, observabili
    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
    ```
 
-   To include Opik (agent observability):
-   ```bash
-   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.opik.yml up -d
-   ```
+   Optional overlays (Opik observability — currently not run in production — and debug tools) are described in `DEPLOYMENT.md`.
 
 3. **Verify services are running**
    ```bash
@@ -204,19 +206,12 @@ All services (API, frontend, workers, Redis, FalkorDB, MLflow, Opik, observabili
 
 4. **Initialize database**
    ```bash
-   # Apply schemas in order:
-   # 1. database/core/e2i_ml_complete_v3_schema.sql
-   # 2. database/ml/mlops_tables.sql
-   # 3. database/ml/010_causal_validation_tables.sql
-   # 4. database/ml/011_realtime_shap_audit.sql
-   # 5. database/ml/012_digital_twin_tables.sql (v4.2)
-   # 6. database/ml/013_tool_composer_tables.sql (v4.2)
-   # 7. database/migrations/004_create_feature_store_schema.sql (v4.2)
-   # 8. database/memory/ (RAG functions)
-   # 9. database/audit/
-
-   # For feature store migration, use:
-   python scripts/run_migration.py database/migrations/004_create_feature_store_schema.sql
+   # Applies every pending file under database/ (migrations, memory, core, ml,
+   # causal, chat, rag, audit) in order, tracked in public.schema_migrations.
+   # Connection auto-detects: SUPABASE_DB_URL if set, else docker-exec into
+   # the supabase-db container. See docs/runbooks/migrations.md.
+   ./scripts/run_migrations.sh --dry-run   # list pending
+   ./scripts/run_migrations.sh             # apply
    ```
 
 5. **Generate synthetic data**
@@ -229,27 +224,29 @@ See `docker/README.md` for Docker Compose configuration and `DEPLOYMENT.md` for 
 
 ## CI/CD Workflows
 
-All workflows live in `.github/workflows/` and run on GitHub Actions:
+All workflows live in `.github/workflows/` and run on GitHub Actions. The main ones:
 
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
-| Backend Tests | `backend-tests.yml` | Push/PR to main, develop | pytest with coverage gate (`--cov-fail-under=70`) |
-| Frontend Tests | `frontend-tests.yml` | Push/PR to main, develop | Vitest + coverage thresholds |
-| Deploy | `deploy.yml` | Push to main | Auto-deploy with health checks and rollback |
-| Security | `security.yml` | Push/PR + daily cron | Bandit, safety, secrets scan |
-| API Docs | `api-docs.yml` | Push/PR to main, develop | OpenAPI spec validation (Spectral) |
-| Verify Types | `verify-types.yml` | Push/PR to main | MyPy type checking (non-blocking) |
-| RAGAS Evaluation | `ragas-evaluation.yml` | Push/PR to main | RAG pipeline quality evaluation |
-| Synthetic Benchmarks | `synthetic-benchmarks.yml` | Push/PR to main | Causal engine benchmark suite |
+| Backend Tests | `backend-tests.yml` | Push/PR | pytest with coverage gate + MyPy error-count ceiling |
+| Frontend Tests | `frontend-tests.yml` | Push/PR | Vitest + coverage thresholds |
+| Tier 1-5 Agent Harness | `tier1-5-test.yml` | PR (path-filtered) | Agent-tier integration harness (required check) |
+| Deploy | `deploy.yml` | Push to main (path-filtered) | CI image build+push to GHCR, then gated droplet deploy with auto-rollback |
+| Security | `security.yml` | Push/PR + daily cron | Bandit, pip-audit, Semgrep, secrets scan |
+| Verify OpenAPI Types | `verify-types.yml` | Push/PR (path-filtered) | Regenerates the OpenAPI spec, Spectral lint, frontend type-drift check |
+| RAGAS Evaluation | `ragas-evaluation.yml` | **Manual only** | RAG quality eval (gpt-4o judge; CI-key throughput-bound, see #504) |
+| Synthetic Benchmarks | `synthetic-benchmarks.yml` | Push/PR | Causal engine benchmark suite |
+
+Plus specialized guard workflows (feature contract, lifecycle state, RPC DDL, methodology sign-off, lockfile resolution, slow tests, retrieval benchmarks).
 
 ## Operational Scripts
 
 Key scripts in `scripts/`:
 
 **Core Operations**
-- `deploy.sh` — Git pull, restart workers, seed FalkorDB, health check
+- `deploy.sh` — Manual deploy path (git pull, restart workers, seed FalkorDB, health check); the normal production deploy is CI's `deploy.yml`, which does NOT invoke this script
 - `health_check.sh` — Check all 24 services (HTTP, Redis, FalkorDB, Supabase, observability)
-- `run_migrations.sh` — Apply SQL migrations to Supabase
+- `run_migrations.sh` — Ledger-tracked migration runner over all `database/` dirs; auto-detects `SUPABASE_DB_URL` vs docker-exec into `supabase-db`; run unconditionally by every deploy
 - `backup_data_stores.sh` — Backup Redis, FalkorDB, MLflow artifacts
 - `backup_cron.sh` — Scheduled backup wrapper
 
@@ -258,7 +255,7 @@ Key scripts in `scripts/`:
 - `run_frontend_tests_batched.sh` — Frontend test suite in batches
 
 **Infrastructure**
-- `opik-manager.sh` — Start/stop/status for Opik overlay
+- `opik-manager.sh` — Start/stop/status for the Opik overlay (intentionally stopped in production)
 - `setup_branch_protection.sh` — Configure GitHub branch protection via `gh api`
 - `ssh-tunnels/tunnels.sh` — SSH tunnel launcher for remote management ports
 - `seed_falkordb_all.sh` — Seed knowledge graph from Supabase tables
@@ -367,52 +364,22 @@ features = fs.get_entity_features(
 
 See `docs/data/05-FEATURE-STORE-REFERENCE.md` for feature definitions and `docs/ARCHITECTURE.md` for integration details.
 
-### Opik LLM/Agent Observability
+### LLM Configuration & Observability
 
-**Production-Grade Observability**
-Full observability for LLM calls and agent workflows with the Opik integration:
-- **Trace Visualization**: Hierarchical span view with timing, inputs, outputs
-- **Multi-Backend**: Opik dashboard (primary) + Supabase (persistence)
-- **Circuit Breaker**: Graceful degradation when Opik is unavailable
-- **Batch Processing**: Efficient span buffering (100 spans or 5 seconds)
-- **Self-Monitoring**: Health spans, latency tracking, alert thresholds
-- **Metrics Caching**: Redis (primary) + in-memory fallback with TTL
+**Tiered LLM Factory** (`src/utils/llm_factory.py`)
+- Three tiers — `fast` (classification/routing), `standard` (chat/synthesis), `reasoning` (complex analysis)
+- Provider-switchable via `LLM_PROVIDER`: **OpenAI is the default** (`gpt-5.6-luna` / `gpt-5.6-terra`), Anthropic the alternative (`claude-haiku-4-5` / `claude-sonnet-5`)
+- Deployment-level model pinning via `LLM_MODEL` (no code change)
+- DSPy paths resolve separately through `src/optimization/dspy_lm.py` (default `openai/gpt-5.6-terra`)
 
-**Architecture**
-```
-Agent Workflow → OpikConnector → Opik Dashboard
-                     ↓
-              BatchProcessor → ObservabilitySpanRepository → Supabase
-                     ↓
-              MetricsCache (Redis/Memory) ← SelfMonitor
-```
+**LLM Usage Observability**
+- Every factory-built model meters tokens into the `llm_usage_events` table, attributed to the authenticated user
+- Costs computed at read time (`src/services/llm_pricing.py`) so pricing corrections apply retroactively; unknown models render "unpriced", never a silent default
+- Surfaced in the `/admin` page's **Observability** tab (`/api/admin/observability/llm-usage`)
 
-**Quick Start**
-```python
-from src.mlops.opik_connector import OpikConnector
-from opik import track
+See [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md) for the full reference.
 
-# Initialize connector (auto-configures from ~/.opik.config)
-connector = OpikConnector()
-
-# Use @track decorator for automatic tracing
-@track(project_name='e2i-analytics')
-def analyze_kpi(kpi_name: str, value: float) -> dict:
-    # Your analysis logic
-    return {'kpi': kpi_name, 'status': 'healthy' if value > 50 else 'warning'}
-
-# Or use context manager for custom spans
-async with connector.trace_agent("gap_analyzer", metadata={"brand": "Kisqali"}):
-    result = await run_gap_analysis()
-```
-
-**Production Features**
-- Circuit breaker: Opens after 5 failures, recovers after 30 seconds
-- Batch flush: Every 100 spans or 5 seconds (configurable)
-- Config file: `config/observability.yaml` with environment overrides
-- Contract compliance: 100% (69/69 checks) validated
-
-See `config/observability.yaml` for configuration and `docs/ARCHITECTURE.md` for integration details.
+**Note on Opik**: the codebase retains an Opik tracing integration (`src/mlops/opik_connector.py`, `docker/docker-compose.opik.yml`), but the Opik stack is **intentionally stopped in production** (2026-05-29). Agent/LLM observability in production is the `llm_usage_events` path above plus Prometheus/Grafana/Loki.
 
 ### Tri-Memory System
 
@@ -445,18 +412,18 @@ Gate decisions: **proceed** | **review** | **block**
 3-layer natural language processing:
 1. **fastText normalization** - Handle typos via subword embeddings
 2. **rapidfuzz matching** - Fuzzy match against domain vocabulary
-3. **Claude disambiguation** - Resolve complex/ambiguous queries
+3. **LLM disambiguation** - Resolve complex/ambiguous queries
 
 ## Database
 
-120+ tables across 8 categories:
+140+ tables across 8 categories:
 - **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
 - **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, cohort constructor, etc.
 - **Memory** (7): episodic_memories, procedural_memories, semantic_cache, cognitive_cycles, etc.
 - **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
 - **Chat** (10+): chat_threads, chat_messages, user_preferences (RLS), chatbot analytics, feedback, training signals
 - **Audit** (3): audit_chain_entries (SHA-256 hash chain), verification_log, security_audit_log (partitioned)
-- **FalkorDB Graph**: 8 node types, 15 edge types
+- **FalkorDB Graph**: 10 entity types, 11 relationship types (`E2IEntityType` / `E2IRelationshipType` in `src/memory/graphiti_config.py`)
 - **Feast Feature Store**: 10 feature views, 48 features
 
 See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dictionary and schema documentation.
@@ -475,17 +442,18 @@ See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dicti
   - [KPI Reference](docs/data/06-KPI-REFERENCE.md) — All KPIs with formulas & thresholds
   - [Supporting Schemas](docs/data/07-SUPPORTING-SCHEMAS.md) — Memory, RAG, Chat, Audit
   - [CSV Templates](docs/data/templates/) — Ready-to-use templates with example rows
-- **API Reference**: `docs/api/openapi.json` — OpenAPI 3.0 spec (auto-generated via `scripts/generate_api_docs.sh`)
-- **Observability Config**: `config/observability.yaml` — Production settings
+- **LLM Configuration**: [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md) — Provider default, model tiers, overrides, usage metering & pricing
+- **API Reference**: OpenAPI 3.0 spec, auto-generated on demand (`make api-docs`) and per-PR in CI (`verify-types.yml`) — not tracked in git
+- **Migrations Runbook**: [`docs/runbooks/migrations.md`](docs/runbooks/migrations.md) — How migrations apply (auto on deploy + manual path)
 - **Developer Reference**: `CLAUDE.md` — Quick reference for AI-assisted development
 
 ## Tech Stack
 
 | Category | Technologies |
 |----------|-------------|
-| AI/ML | LangGraph, LangChain, Claude (Anthropic) |
+| AI/ML | LangGraph, LangChain, DSPy, OpenAI GPT-5.x (default), Claude (Anthropic, alternative) |
 | Causal | DoWhy, EconML, NetworkX |
-| MLOps | MLflow, Opik, Optuna, SHAP, BentoML, Great Expectations |
+| MLOps | MLflow, Optuna, SHAP, BentoML, Great Expectations |
 | Feature Store | Feast + Lightweight (Supabase + Redis + MLflow) |
 | Database | PostgreSQL/Supabase, pgvector, Redis, FalkorDB |
 | NLP | fastText, rapidfuzz, sentence-transformers |
@@ -505,5 +473,5 @@ For questions or issues, please contact the E2I development team.
 ---
 
 **Version**: 4.2.1
-**Last Updated**: February 2026
-**Recent**: All-Docker deployment, observability stack, production hardening
+**Last Updated**: July 2026
+**Recent**: LLM model refresh + tier factory, admin LLM observability, GHCR-based gated deploys, KPI/causal-engine deepening (see Recent Highlights above)
