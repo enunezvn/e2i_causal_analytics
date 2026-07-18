@@ -2035,6 +2035,58 @@ class TestCopilotLearningSignals:
         reward = _grade_copilot_turn(response="x" * 250, tool_count=4, synthesis_error=True)
         assert reward == pytest.approx(0.3)
 
+    def test_grader_max_matches_declared_surface_ceiling(self) -> None:
+        """#1259: the copilot ceiling used to exist as three disconnected
+        literals — the grader's component sum (0.5+0.2+0.1), the ceiling
+        map's 1+4*0.8, and hardcoded '4.2' prompt prose. This pins
+        grader ⇔ COPILOT_MAX_REWARD ⇔ SURFACE_RATING_CEILINGS; the analyzer
+        prompt interpolates from the map (pinned in test_pattern_analyzer),
+        so a grader rebalance now fails here instead of stranding the
+        others at a stale value."""
+        from src.agents.feedback_learner.rating_utils import (
+            COPILOT_MAX_REWARD,
+            COPILOT_SURFACE,
+            SURFACE_RATING_CEILINGS,
+        )
+        from src.api.routes.copilotkit import _grade_copilot_turn
+
+        best_turn = _grade_copilot_turn(response="x" * 250, tool_count=4)
+        assert best_turn == pytest.approx(COPILOT_MAX_REWARD)
+        assert SURFACE_RATING_CEILINGS[COPILOT_SURFACE] == pytest.approx(
+            1.0 + 4.0 * COPILOT_MAX_REWARD
+        )
+
+    @pytest.mark.asyncio
+    async def test_collect_signal_synthesis_error_forfeits_base(self, monkeypatch) -> None:
+        """#1261: the degraded-turn call site passes synthesis_error=True —
+        pin the kwarg THROUGH the collector into the persisted signal.
+        Dropping it forward would record failed-synthesis turns at
+        0.8-class rewards with every other unit test green (the grader's
+        forfeit is tested only in isolation)."""
+        import src.api.routes.copilotkit as mod
+
+        captured = {}
+
+        async def _fake_record(signal, cycle_id=None, session_id=None):
+            captured["signal"] = signal
+            return "sig-id"
+
+        monkeypatch.setattr("src.memory.procedural_memory.record_learning_signal", _fake_record)
+
+        await mod._collect_copilot_learning_signal(
+            query="q",
+            response="tool dump " * 30,
+            tool_names=["t1", "t2", "t3", "t4"],
+            conversation_id="c",
+            synthesis_error=True,
+            evidence_tool_count=4,
+        )
+
+        details = captured["signal"].signal_details
+        assert details["reward"] == pytest.approx(0.3)  # 0.5 base forfeited
+        assert details["metadata"]["synthesis_error"] is True
+        assert captured["signal"].signal_value == pytest.approx(0.3)
+
     def test_evidence_tool_count_excludes_failed_envelopes(self) -> None:
         """#1257: E2I tools fail closed with a {"success": false} JSON
         envelope that still becomes a ToolMessage — an invocation, not

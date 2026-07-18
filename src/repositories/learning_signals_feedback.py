@@ -16,6 +16,7 @@ must never learn from showcase substrate.
 
 from typing import Any, Dict, List, Optional
 
+from src.agents.feedback_learner.rating_utils import LEARNING_SIGNALS_SOURCE
 from src.repositories.base import BaseRepository
 
 
@@ -104,7 +105,9 @@ class LearningSignalsFeedbackStore(BaseRepository):
                     "query": str(details.get("query") or ""),
                     "response": str(details.get("response") or ""),
                     "metadata": {
-                        "source": "learning_signals",
+                        # #1260: shared marker constant — rating_surface()
+                        # keys its surface split off this exact string.
+                        "source": LEARNING_SIGNALS_SOURCE,
                         "signal_component": component,
                         # Surface marker (#1251): "copilotkit" on copilot rows
                         # (#1240), None on cognitive Reflector rows. The
