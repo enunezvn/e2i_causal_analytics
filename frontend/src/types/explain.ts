@@ -305,7 +305,7 @@ export interface GlobalFeatureImportanceResponse {
   base_value: number | null;
   /** Entities successfully explained (honest n_succeeded). */
   sample_size: number;
-  /** Target sample size requested. */
+  /** Minimum sample size requested (adaptive sizing may exceed it). */
   requested_sample_size: number;
   /** SHAP explainer used. */
   computation_method: string;
@@ -313,6 +313,12 @@ export interface GlobalFeatureImportanceResponse {
   computed_at: string;
   /** True when read from a stored precomputed row. */
   cached: boolean;
+  /** 'random' (uniform draw) or 'prefix_fallback'; null/absent on legacy cached rows. */
+  sampling_method?: string | null;
+  /** True when the top-feature ranking separated beyond sampling noise. */
+  stability_achieved?: boolean | null;
+  /** stable | max_sample_size_reached | candidates_exhausted. */
+  stopping_reason?: string | null;
   /** Features ranked desc by mean_abs_shap. */
   features: GlobalImportanceFeature[];
   /** Per-entity SHAP points for the top features (real beeswarm distribution). */
@@ -323,7 +329,10 @@ export interface GlobalFeatureImportanceResponse {
 export interface GlobalFeatureImportanceParams {
   model_type: ModelType | string;
   brand?: GoldStandardBrand | string;
+  /** Minimum entities to explain; omit to use the server default. */
   sample_size?: number;
+  /** Hard cap for adaptive stability sizing; omit to use the server default. */
+  max_sample_size?: number;
   max_points?: number;
   refresh?: boolean;
 }

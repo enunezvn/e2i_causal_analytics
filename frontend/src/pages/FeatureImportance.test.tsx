@@ -261,6 +261,20 @@ describe('FeatureImportance — cohort (global) mode', () => {
     expect(screen.getByText('initiation_remibrutinib_goldstd_lr_v1')).toBeInTheDocument();
   });
 
+  it('labels the sample as randomly drawn and rank-stable when the server reports it', () => {
+    (useGlobalFeatureImportance as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { ...mockGlobal, sampling_method: 'random', stability_achieved: true },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    expect(screen.getByText(/n = 30 randomly sampled patients/i)).toBeInTheDocument();
+    expect(screen.getByText(/ranking stable/i)).toBeInTheDocument();
+  });
+
   it('hides Waterfall and History tabs in cohort mode', () => {
     render(<FeatureImportance />, { wrapper: createWrapper() });
     expect(screen.queryByRole('tab', { name: /Waterfall/i })).not.toBeInTheDocument();

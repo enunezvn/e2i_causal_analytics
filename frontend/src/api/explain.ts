@@ -167,6 +167,7 @@ export async function getGlobalFeatureImportance(
     model_type: params.model_type,
     brand: params.brand,
     sample_size: params.sample_size,
+    max_sample_size: params.max_sample_size,
     max_points: params.max_points,
     refresh: params.refresh,
   });
