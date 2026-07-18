@@ -1447,9 +1447,12 @@ class KpiCalculateInput(BaseModel):
     window: Optional[str] = Field(
         default=None,
         description=(
-            "Time window, e.g. 'last 3 months', 'Q1 2025', or "
-            "'2025-01-01 to 2025-03-31'. Omit for the engine's default window "
-            "(the most recent 30 days of available data)."
+            "Time window, e.g. 'last 3 months', 'last year', 'Q1 2025', or "
+            "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx, TRx "
+            "share, and conversion rate (alone or combined with segment/"
+            "therapy_line). ALWAYS pass this when the user names a period. "
+            "Omit for the engine's default window (the most recent 30 days "
+            "of available data)."
         ),
     )
 
@@ -1474,6 +1477,24 @@ KPI_REPORTING_WINDOWS = {
     "WS3-BI-007": "most recent 30 days of prescription data",  # NBRx
     "WS3-BI-008": "most recent 30 days of prescription data",  # TRx share
     "WS3-BI-009": "most recent 30 days of trigger data",  # Conversion rate
+}
+
+# Definition clarifications the synthesizer MUST carry into the answer.
+# WS3-BI-008 (2026-07-18 session review): the share denominator is every
+# prescription in treatment_events, and ONLY the tracked portfolio brands
+# (Fabhalta / Kisqali / Remibrutinib) exist there — the chatbot presented the
+# figure as "share of the CSU market" and attributed the complement to Xolair/
+# Dupixent, which are not in the data model at all (a fabricated narrative on
+# top of a real number). Attaching the honest basis to every response kills
+# that at the source instead of relying on prompt memory.
+KPI_SEMANTIC_NOTES = {
+    "WS3-BI-008": (
+        "TRx Share is the brand's share of the tracked portfolio's "
+        "prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) "
+        "— NOT market share against external competitors. Competitor brands "
+        "(e.g. Xolair, Dupixent) are not in the data model; never attribute "
+        "the share complement to them."
+    ),
 }
 
 
@@ -1533,6 +1554,9 @@ def _kpi_result_to_response(
         window = KPI_REPORTING_WINDOWS.get(kpi.id)
         if window:
             response["reporting_window"] = window
+    semantic_note = KPI_SEMANTIC_NOTES.get(kpi.id)
+    if semantic_note:
+        response["semantic_note"] = semantic_note
     return response
 
 
@@ -1630,9 +1654,13 @@ async def kpi_calculate_tool(
     name to its definition and CALCULATES it from the real substrate (e.g. NBRx =
     count of each patient's first-brand prescription over ``treatment_events``).
 
-    TIME WINDOW: pass ``window`` (e.g. "last 3 months", "Q1 2025",
-    "2025-01-01 to 2025-03-31") to compute the volume KPIs (TRx/NRx/NBRx) over
-    that period. The engine reports back ``window_status`` ("applied" when the
+    TIME WINDOW: pass ``window`` (e.g. "last 3 months", "last year", "Q1 2025",
+    "2025-01-01 to 2025-03-31") to compute the volume KPIs (TRx/NRx/NBRx), TRx
+    share, or conversion rate over that period — ALWAYS pass it when the user
+    names one. A window composes with the ``segment`` / ``therapy_line`` axes
+    (e.g. per-tier conversion rate over the last year); it does NOT compose
+    with region/biologic/ige_tier for share or conversion (the tool errors
+    honestly). The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
     and ``window_applied``. BASELINE COMPARISONS: to compare a recent period

@@ -237,17 +237,27 @@ def test_nbrx_biologic_offbrand_fails_closed():
     assert client.calls == []
 
 
-def test_trx_share_threads_biologic_never_windowed():
-    """TRx Share has no windowed variant: even with a window key in context, the
-    resolved id stays the BASE `_biologic` id."""
-    client = _StubClient({"share": 0.42})
-    calc = BusinessImpactCalculator(db_client=client)
+def test_trx_share_biologic_plus_window_fails_loud():
+    """Migration 111 made TRx Share windowable=clean, so `_stamp_window` marks
+    any requested window "applied". No windowed-biologic share variant exists;
+    the pre-111 behavior (silently drop the window, serve the frontier-30d
+    figure) would now be stamped as an applied window — a plausible-wrong
+    result. The combination must raise instead."""
+    calc = BusinessImpactCalculator(db_client=_StubClient({"share": 0.42}))
     context = {
         "brand": "Remibrutinib",
         "biologic": "experienced",
         "window": {"start": "S", "end": "E"},
     }
-    value = calc._calc_trx_share(context)
+    with pytest.raises(RuntimeError, match="segment.*or line-of-therapy"):
+        calc._calc_trx_share(context)
+
+
+def test_trx_share_biologic_without_window_unchanged():
+    """The frontier-anchored `_biologic` read (migration 108) is untouched."""
+    client = _StubClient({"share": 0.42})
+    calc = BusinessImpactCalculator(db_client=client)
+    value = calc._calc_trx_share({"brand": "Remibrutinib", "biologic": "experienced"})
     assert value == 0.42
     assert client.calls[0]["query_id"] == "business_impact_trx_share_biologic"
     assert client.calls[0]["params"] == ["Remibrutinib", "experienced"]

@@ -23,6 +23,7 @@ from src.kpi.models import (
 )
 from src.kpi.synthetic_mode import (
     biologic_query_id,
+    brand_scoped_query_id,
     ige_tier_query_id,
     line_query_id,
     region_query_id,
@@ -423,11 +424,17 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_trx_share(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-008: TRx Share.
 
-        Brand prescription share of total category. Region/segment/
-        therapy_line routing goes through `_resolve_windowed_call` with
-        `window=None` pinned -- TRx Share has no windowed variant (migrations
-        084/105 never registered one), so `context["window"]` is never read
-        here even if a caller sets it.
+        A brand's share of the TRACKED PORTFOLIO's prescriptions — the
+        denominator is every prescription in ``treatment_events``, and only the
+        portfolio brands (Fabhalta / Kisqali / Remibrutinib) exist there. This
+        is NOT market share against external competitors; competitor brands
+        (e.g. Xolair, Dupixent) are not in the data model at all.
+
+        Region/segment/therapy_line routing goes through
+        `_resolve_windowed_call`. Windowed variants exist for the plain and
+        segment/line-scoped reads (migration 111); region/biologic/ige_tier
+        have no windowed sibling, so a window combined with those axes fails
+        loud rather than silently dropping either filter.
         """
         brand = context.get("brand")
         if not brand:
@@ -435,11 +442,24 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # undefined, not zero. Fail loud rather than fabricate a plausible 0% share.
             raise RuntimeError("KPI WS3-BI-008 unavailable: no brand specified for TRx share")
 
+        window = context.get("window")
+        if window is not None and (
+            context.get("region")
+            or context.get("biologic") is not None
+            or context.get("ige_tier") is not None
+        ):
+            raise RuntimeError(
+                "KPI WS3-BI-008: a time window on TRx share can be combined only "
+                "with the severity-tier (segment) or line-of-therapy axis; "
+                "windowed region/biologic/IgE-tier share variants are not "
+                "registered (migration 111 covers plain/segment/line only)."
+            )
+
         query_id, params = self._resolve_windowed_call(
             "business_impact_trx_share",
             brand=brand,
             region=context.get("region"),
-            window=None,
+            window=window,
             segment=context.get("segment"),
             therapy_line=context.get("therapy_line"),
             biologic=context.get("biologic"),
@@ -454,17 +474,81 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_conversion_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-009: Conversion Rate.
 
-        Percentage of triggers resulting in prescription. When a region is
-        supplied, routes to the region-scoped variant (migration 077) — no brand
-        filter (this metric is brand-agnostic).
+        Percentage of triggers resulting in a prescription within 30 days.
+        Brand/segment/therapy_line/window routing (migration 111) — before it,
+        this method honored ONLY ``region`` and silently dropped every other
+        filter, so a "Remibrutinib high-severity" ask got the overall portfolio
+        figure echoed back under the brand's name (session_1784387374342).
+
+        BRAND SEMANTICS: a brand-scoped read counts triggers with that
+        ``triggers.brand_id`` converting to a SAME-brand prescription; with no
+        brand it reduces to the certified base semantics (all triggers, any
+        prescription — verified equal to the base statement in the migration
+        111 dry-run). The 30-day trigger→Rx conversion horizon is the KPI's
+        definition and never changes; a window bounds WHICH triggers count.
+
+        Axis precedence mirrors `_resolve_windowed_call` (segment >
+        therapy_line > region). Unsupported combinations fail loud instead of
+        silently dropping a filter: biologic/IgE-tier (triggers carry no such
+        dimension) and region+window / region+brand (no such registry
+        variants; the legacy `_region` read is region-only).
         """
+        brand = context.get("brand")
         region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_conversion_rate"), [region]
+        segment = context.get("segment")
+        therapy_line = context.get("therapy_line")
+        window = context.get("window")
+
+        if context.get("biologic") is not None or context.get("ige_tier") is not None:
+            raise RuntimeError(
+                "KPI WS3-BI-009 does not support the biologic-status / IgE-tier "
+                "axes: conversion is computed over triggers, which carry no "
+                "biologic/IgE dimension. Supported: brand, severity tier "
+                "(segment), line of therapy, time window, or region alone."
             )
+
+        base = "business_impact_conversion_rate"
+        if segment is not None:
+            if window is None:
+                query_id, params = segment_query_id(base), [brand, segment]
+            else:
+                query_id, params = (
+                    windowed_axis_query_id(base, axis="segment"),
+                    [brand, segment, window["start"], window["end"]],
+                )
+        elif therapy_line is not None:
+            if window is None:
+                query_id, params = line_query_id(base), [brand, therapy_line]
+            else:
+                query_id, params = (
+                    windowed_axis_query_id(base, axis="line"),
+                    [brand, therapy_line, window["start"], window["end"]],
+                )
+        elif window is not None:
+            if region:
+                raise RuntimeError(
+                    "KPI WS3-BI-009: a time window on conversion rate cannot be "
+                    "combined with a region filter (no windowed-region variant "
+                    "is registered; migration 111 covers brand/segment/line)."
+                )
+            query_id, params = (
+                windowed_query_id(base, region=False),
+                [brand, window["start"], window["end"]],
+            )
+        elif region:
+            if brand:
+                raise RuntimeError(
+                    "KPI WS3-BI-009: brand and region cannot be combined for "
+                    "conversion rate (the region variant predates the brand-"
+                    "scoped reads and takes region only)."
+                )
+            query_id, params = self._region_variant(base), [region]
+        elif brand:
+            query_id, params = brand_scoped_query_id(base), [brand]
         else:
-            result = self._execute_query("business_impact_conversion_rate", [])
+            query_id, params = base, []
+
+        result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
         if result and result[0].get("conversion_rate") is not None:
             return float(result[0]["conversion_rate"])
