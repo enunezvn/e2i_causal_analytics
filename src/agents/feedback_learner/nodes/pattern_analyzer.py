@@ -13,7 +13,12 @@ import time
 from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
-from ..rating_utils import rating_surface, rating_to_numeric
+from ..rating_utils import (
+    COPILOT_SURFACE,
+    SURFACE_RATING_CEILINGS,
+    rating_surface,
+    rating_to_numeric,
+)
 from ..state import DetectedPattern, FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
@@ -526,7 +531,7 @@ class PatternAnalyzerNode:
 - By type: {json.dumps(summary.get("by_type", {}))}
 - By agent: {json.dumps(summary.get("by_agent", {}))}
 - Avg rating: {summary.get("average_rating", "N/A")}
-- Avg rating by source surface (ceilings differ — copilot tops out at 4.2): {json.dumps(summary.get("average_rating_by_source", {}))}
+- Avg rating by source surface (ceilings differ — copilot tops out at {SURFACE_RATING_CEILINGS[COPILOT_SURFACE]:.1f}): {json.dumps(summary.get("average_rating_by_source", {}))}
 
 ## Sample Feedback
 

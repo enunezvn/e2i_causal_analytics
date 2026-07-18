@@ -241,3 +241,37 @@ class TestSourcePathPropagation:
         assert len(items) == 1
         assert "source_path" in items[0]["metadata"]
         assert items[0]["metadata"]["source_path"] is None
+
+    @pytest.mark.asyncio
+    async def test_writer_signal_spans_store_into_copilot_surface(self, monkeypatch):
+        """#1260 spanning test: the REAL copilot writer's signal → the
+        store's row mapping → rating_surface() must land in the copilot
+        pool. Each side's marker strings are asserted per-module elsewhere,
+        so a one-sided rename keeps every other test green while silently
+        reclassifying copilot rows into the cognitive pool (the #1251
+        masked-pool bug, reinstated). Only this test spans the pipe."""
+        import src.api.routes.copilotkit as mod
+        from src.agents.feedback_learner.rating_utils import COPILOT_SURFACE, rating_surface
+
+        captured = {}
+
+        async def _fake_record(signal, cycle_id=None, session_id=None):
+            captured["signal"] = signal
+            return "sig-id"
+
+        monkeypatch.setattr("src.memory.procedural_memory.record_learning_signal", _fake_record)
+        await mod._collect_copilot_learning_signal(
+            query="q", response="r" * 250, tool_names=["kpi"], conversation_id="c"
+        )
+
+        # a learning_signals row exactly as record_learning_signal persists it
+        row = {
+            "signal_id": "s-span",
+            "created_at": "2026-07-17T00:00:00+00:00",
+            "signal_details": captured["signal"].signal_details,
+        }
+        store = LearningSignalsFeedbackStore(_RecordingClient([row]))
+        items = await store.get_feedback()
+
+        assert len(items) == 1
+        assert rating_surface(items[0]["metadata"]) == COPILOT_SURFACE
