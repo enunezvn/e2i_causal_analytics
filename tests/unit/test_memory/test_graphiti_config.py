@@ -49,7 +49,7 @@ memory_backends:
       graph_name: test_semantic_graph
       graphity:
         enabled: true
-        model: claude-3-5-sonnet-latest
+        model: claude-sonnet-4-6
         entity_types:
           - Patient
           - HCP
@@ -231,7 +231,7 @@ class TestGraphitiConfig:
         """Test default configuration values."""
         config = GraphitiConfig()
         assert config.enabled is True
-        assert config.model == "claude-3-5-sonnet-latest"
+        assert config.model == "claude-sonnet-4-6"
         assert config.graph_name == "e2i_causal"
         assert config.falkordb_host == "localhost"
         assert config.falkordb_port == 6379
@@ -470,14 +470,14 @@ class TestModelConfiguration:
     """Tests for model configuration."""
 
     def test_default_model_is_sonnet(self):
-        """Test default model is Claude 3.5 Sonnet."""
+        """Test default model is Claude Sonnet 4.6."""
         config = GraphitiConfig()
-        assert config.model == "claude-3-5-sonnet-latest"
+        assert config.model == "claude-sonnet-4-6"
 
     def test_model_from_yaml(self, temp_config_file):
         """Test model can be loaded from YAML."""
         config = load_graphiti_config(temp_config_file)
-        assert config.model == "claude-3-5-sonnet-latest"
+        assert config.model == "claude-sonnet-4-6"
 
 
 # ============================================================================
