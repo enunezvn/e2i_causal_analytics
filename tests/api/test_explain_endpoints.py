@@ -977,6 +977,18 @@ def _ns_resp(base_value, feats):
 class TestComputeGlobalImportance:
     """Pure-logic tests for the cohort aggregation (no HTTP, no DB, no SHAP)."""
 
+    @pytest.fixture(autouse=True)
+    def _encoded_fallback(self):
+        """No BentoML in unit tests: stub the covariate-schema lookup so the
+        stability gate deterministically exercises the encoded-feature fallback."""
+        from src.api.routes import explain as explain_mod
+
+        with (
+            patch.object(explain_mod, "get_shap_service", new=AsyncMock(return_value=MagicMock())),
+            patch.object(explain_mod, "_keep_columns_for_family", new=AsyncMock(return_value=None)),
+        ):
+            yield
+
     async def test_aggregates_mean_abs_signed_and_value_and_skips_failures(self):
         from src.api.routes import explain as explain_mod
 
@@ -1378,9 +1390,44 @@ class TestRankingStable:
 
         assert _ranking_stable({"a": [0.0, 0.0], "b": [0.0, 0.0]}, n=2) is False
 
+    def test_paired_se_recognizes_correlated_pair_as_stable(self):
+        from src.api.routes.explain import _ranking_stable
+
+        # hi and lo swing together entity-to-entity (shared cohort noise) with a
+        # CONSTANT per-entity gap of 0.2 — paired SE(gap) is exactly 0, so the
+        # ranking is provably stable. The independent formula sqrt(SE²+SE²)
+        # would see two high-variance features (each SE≈0.134, z·SE_gap≈0.37 >
+        # gap) and wrongly block. Asserting True pins the paired computation.
+        hi = [0.9, 0.3, 0.9, 0.3, 0.9, 0.3]
+        lo = [v - 0.2 for v in hi]
+        assert _ranking_stable({"hi": hi, "lo": lo}, n=6) is True
+
+    def test_misaligned_lists_fall_back_to_independent_se(self):
+        from src.api.routes.explain import _ranking_stable
+
+        # Same correlated construction, but lo surfaced for only 5 of the 6
+        # entities: per-entity alignment is lost, so the pair must fall back to
+        # the conservative independent formula — which blocks (z·SE_gap≈0.38 >
+        # gap≈0.22). Asserting False pins the fallback.
+        hi = [0.9, 0.3, 0.9, 0.3, 0.9, 0.3]
+        lo = [v - 0.2 for v in hi][:5]
+        assert _ranking_stable({"hi": hi, "lo": lo}, n=6) is False
+
 
 class TestAdaptiveSampling:
     """The compute loop draws randomly and sizes the sample for stability."""
+
+    @pytest.fixture(autouse=True)
+    def _encoded_fallback(self):
+        """No BentoML in unit tests: stub the covariate-schema lookup so the
+        stability gate deterministically exercises the encoded-feature fallback."""
+        from src.api.routes import explain as explain_mod
+
+        with (
+            patch.object(explain_mod, "get_shap_service", new=AsyncMock(return_value=MagicMock())),
+            patch.object(explain_mod, "_keep_columns_for_family", new=AsyncMock(return_value=None)),
+        ):
+            yield
 
     async def test_random_sampler_preferred_and_labeled(self):
         from src.api.routes import explain as explain_mod
@@ -1466,6 +1513,8 @@ class TestAdaptiveSampling:
         assert agg["sample_size"] == 3
         assert agg["stopping_reason"] == "stable"
         assert agg["stability_achieved"] is True
+        # keep_columns unavailable (stubbed None) -> encoded-feature fallback.
+        assert agg["stability_criterion"] == "encoded_feature"
         assert explain_mock.await_count == 3
 
     async def test_runs_to_cap_when_ranking_unstable(self):
@@ -1501,6 +1550,238 @@ class TestAdaptiveSampling:
         assert explain_mock.await_count == 6
 
 
+class TestParentCovariate:
+    """Server-side grouping MUST mirror parentCovariate in
+    frontend/src/lib/shap-covariates.ts — the gate certifies the ranking the
+    page renders, so the two groupings have to agree."""
+
+    def test_bare_numeric_column_matches_itself(self):
+        from src.api.routes.explain import _parent_covariate
+
+        assert _parent_covariate("age_at_diagnosis", ["age_at_diagnosis"]) == "age_at_diagnosis"
+
+    def test_isna_twin_folds_to_parent(self):
+        from src.api.routes.explain import _parent_covariate
+
+        assert (
+            _parent_covariate("disease_severity__isna", ["disease_severity"]) == "disease_severity"
+        )
+
+    def test_one_hot_category_folds_to_parent(self):
+        from src.api.routes.explain import _parent_covariate
+
+        assert (
+            _parent_covariate("geographic_region_west", ["geographic_region"])
+            == "geographic_region"
+        )
+
+    def test_longest_matching_covariate_wins(self):
+        from src.api.routes.explain import _parent_covariate
+
+        # Both "region" and "region_code" prefix-match "region_code_us"; the
+        # more specific covariate must take the column (same rule as the FE).
+        assert _parent_covariate("region_code_us", ["region", "region_code"]) == "region_code"
+        assert _parent_covariate("region_north", ["region", "region_code"]) == "region"
+
+    def test_unmatched_column_passes_through_flat(self):
+        from src.api.routes.explain import _parent_covariate
+
+        assert _parent_covariate("mystery_col", ["age_at_diagnosis"]) == "mystery_col"
+
+
+class TestKeepColumnsForFamily:
+    """Best-effort covariate-schema lookup: any failure degrades to None."""
+
+    async def test_returns_keep_columns_from_model_info(self):
+        from src.api.routes import explain as explain_mod
+
+        service = MagicMock()
+        service._ensure_initialized = AsyncMock()
+        service.bentoml_client.get_model_info = AsyncMock(
+            return_value={"keep_columns": ["geographic_region", "age_at_diagnosis"]}
+        )
+        keep = await explain_mod._keep_columns_for_family(service, explain_mod.ModelType.INITIATION)
+        assert keep == ["geographic_region", "age_at_diagnosis"]
+
+    async def test_none_when_service_init_fails(self):
+        from src.api.routes import explain as explain_mod
+
+        service = MagicMock()
+        service._ensure_initialized = AsyncMock(side_effect=RuntimeError("bentoml down"))
+        assert (
+            await explain_mod._keep_columns_for_family(service, explain_mod.ModelType.INITIATION)
+            is None
+        )
+
+    async def test_none_when_client_missing_or_info_lacks_columns(self):
+        from src.api.routes import explain as explain_mod
+
+        no_client = MagicMock()
+        no_client._ensure_initialized = AsyncMock()
+        no_client.bentoml_client = None
+        assert (
+            await explain_mod._keep_columns_for_family(no_client, explain_mod.ModelType.INITIATION)
+            is None
+        )
+
+        empty = MagicMock()
+        empty._ensure_initialized = AsyncMock()
+        empty.bentoml_client.get_model_info = AsyncMock(return_value={"keep_columns": []})
+        assert (
+            await explain_mod._keep_columns_for_family(empty, explain_mod.ModelType.INITIATION)
+            is None
+        )
+
+
+class TestGroupLevelStability:
+    """The gate certifies the COVARIATE-GROUP ranking the page displays."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_service(self):
+        from src.api.routes import explain as explain_mod
+
+        with patch.object(explain_mod, "get_shap_service", new=AsyncMock(return_value=MagicMock())):
+            yield
+
+    async def test_one_hot_sibling_flips_do_not_burn_samples(self):
+        """Encoded one-hot siblings of ONE displayed row flip rank entity-to-
+        entity (the persistence/Remibrutinib n=152 pathology), but their GROUP
+        sum is constant — the group criterion stops at the minimum n where the
+        encoded criterion would run to the cap."""
+        from src.api.routes import explain as explain_mod
+
+        resp_west = _ns_resp(
+            -0.7,
+            [
+                ("geographic_region_west", 1.0, 0.5),
+                ("geographic_region_midwest", 0.0, -0.1),
+                ("age_at_diagnosis", 55.0, 0.2),
+            ],
+        )
+        resp_midwest = _ns_resp(
+            -0.7,
+            [
+                ("geographic_region_west", 0.0, -0.1),
+                ("geographic_region_midwest", 1.0, 0.5),
+                ("age_at_diagnosis", 60.0, 0.2),
+            ],
+        )
+        explain_mock = AsyncMock(side_effect=[resp_west, resp_midwest] * 5)
+        with (
+            patch.object(
+                explain_mod,
+                "_keep_columns_for_family",
+                new=AsyncMock(return_value=["geographic_region", "age_at_diagnosis"]),
+            ),
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=[f"e{i}" for i in range(20)]),
+            ),
+            patch.object(explain_mod, "explain_prediction", new=explain_mock),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=3,
+                background_tasks=None,
+                max_sample_size=10,
+            )
+        # Group scores are constant per entity (region 0.6, age 0.2) -> stable
+        # at the minimum n. The ENCODED gate would see west/midwest tie with
+        # high variance and run to the cap.
+        assert agg["stability_criterion"] == "covariate_group"
+        assert agg["stopping_reason"] == "stable"
+        assert agg["stability_achieved"] is True
+        assert agg["sample_size"] == 3
+        assert explain_mock.await_count == 3
+
+    async def test_fallback_to_encoded_runs_to_cap_on_sibling_flips(self):
+        """Same flipping data WITHOUT a covariate schema: the encoded fallback
+        honestly runs to the cap and records which criterion it used."""
+        from src.api.routes import explain as explain_mod
+
+        resp_west = _ns_resp(
+            -0.7,
+            [("geographic_region_west", 1.0, 0.5), ("geographic_region_midwest", 0.0, -0.1)],
+        )
+        resp_midwest = _ns_resp(
+            -0.7,
+            [("geographic_region_west", 0.0, -0.1), ("geographic_region_midwest", 1.0, 0.5)],
+        )
+        explain_mock = AsyncMock(side_effect=[resp_west, resp_midwest] * 3)
+        with (
+            patch.object(explain_mod, "_keep_columns_for_family", new=AsyncMock(return_value=None)),
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=[f"e{i}" for i in range(12)]),
+            ),
+            patch.object(explain_mod, "explain_prediction", new=explain_mock),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=2,
+                background_tasks=None,
+                max_sample_size=6,
+            )
+        assert agg["stability_criterion"] == "encoded_feature"
+        assert agg["stopping_reason"] == "max_sample_size_reached"
+        assert agg["stability_achieved"] is False
+        assert agg["sample_size"] == 6
+
+    async def test_group_appearing_late_is_zero_backfilled(self):
+        """A covariate absent from the first entity's top_k contributed ~0
+        there — its group list is zero-backfilled so it stays entity-aligned.
+        That honest zero delays stability (variance from the miss) until the
+        paired gap clears it: stop lands at n=5, not the minimum 3."""
+        from src.api.routes import explain as explain_mod
+
+        resp_age_only = _ns_resp(-0.7, [("age_at_diagnosis", 50.0, 0.3)])
+        resp_both = _ns_resp(
+            -0.7,
+            [("age_at_diagnosis", 50.0, 0.3), ("geographic_region_west", 1.0, 0.8)],
+        )
+        explain_mock = AsyncMock(side_effect=[resp_age_only] + [resp_both] * 9)
+        with (
+            patch.object(
+                explain_mod,
+                "_keep_columns_for_family",
+                new=AsyncMock(return_value=["geographic_region", "age_at_diagnosis"]),
+            ),
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids_random",
+                new=AsyncMock(return_value=[f"e{i}" for i in range(20)]),
+            ),
+            patch.object(explain_mod, "explain_prediction", new=explain_mock),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=3,
+                background_tasks=None,
+                max_sample_size=10,
+            )
+        assert agg["stability_criterion"] == "covariate_group"
+        assert agg["stopping_reason"] == "stable"
+        assert agg["sample_size"] == 5
+        assert explain_mock.await_count == 5
+
+
 class TestSamplingMetaRoundTrip:
     """Sampling provenance survives the durable-cache write/read cycle."""
 
@@ -1533,6 +1814,7 @@ class TestSamplingMetaRoundTrip:
             "computation_method": "LinearExplainer",
             "sampling_method": "random",
             "stability_achieved": True,
+            "stability_criterion": "covariate_group",
             "stopping_reason": "stable",
         }
         with patch("src.memory.services.factories.get_async_supabase_client", new=_fake_client):
@@ -1548,6 +1830,7 @@ class TestSamplingMetaRoundTrip:
         # ...and the provenance must round-trip.
         assert parsed["sampling_method"] == "random"
         assert parsed["stability_achieved"] is True
+        assert parsed["stability_criterion"] == "covariate_group"
         assert parsed["stopping_reason"] == "stable"
 
     def test_legacy_rows_parse_with_null_sampling_meta(self):
@@ -1556,6 +1839,7 @@ class TestSamplingMetaRoundTrip:
         parsed = _row_to_global_agg({"global_importance": {"age": 0.3}, "sample_size": 100})
         assert parsed["sampling_method"] is None
         assert parsed["stability_achieved"] is None
+        assert parsed["stability_criterion"] is None
         assert parsed["stopping_reason"] is None
 
 

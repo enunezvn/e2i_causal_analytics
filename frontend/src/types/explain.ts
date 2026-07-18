@@ -315,8 +315,14 @@ export interface GlobalFeatureImportanceResponse {
   cached: boolean;
   /** 'random' (uniform draw) or 'prefix_fallback'; null/absent on legacy cached rows. */
   sampling_method?: string | null;
-  /** True when the top-feature ranking separated beyond sampling noise. */
+  /** True when the ranking (per stability_criterion) separated beyond sampling noise. */
   stability_achieved?: boolean | null;
+  /**
+   * Which ranking the stability verdict certifies: 'covariate_group' (the
+   * displayed covariate ranking) or 'encoded_feature' (fallback when the
+   * covariate schema is unavailable); null/absent on legacy cached rows.
+   */
+  stability_criterion?: string | null;
   /** stable | max_sample_size_reached | candidates_exhausted. */
   stopping_reason?: string | null;
   /** Features ranked desc by mean_abs_shap. */

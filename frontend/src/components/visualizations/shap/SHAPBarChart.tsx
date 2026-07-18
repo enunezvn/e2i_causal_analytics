@@ -101,11 +101,21 @@ export const SHAPBarChart = React.forwardRef<HTMLDivElement, SHAPBarChartProps>(
     // Data comes ONLY from props — never a sample fallback.
     const features = useMemo(() => propFeatures ?? [], [propFeatures]);
 
-    // Transform and sort data
+    // Transform and sort data. Respect the producer's contribution_rank when
+    // every feature carries one: grouped covariate rows rank by SUMMED child
+    // importance, which can differ from |net signed effect| after one-hot
+    // cancellation — re-sorting those by |shap_value| would render a different
+    // order than the ranking list beside the chart. Fall back to |shap_value|
+    // when ranks are missing/zero (legacy rows).
     const chartData = useMemo<ChartDataPoint[]>(() => {
-      return features
-        .slice(0, maxFeatures)
-        .sort((a, b) => Math.abs(b.shap_value) - Math.abs(a.shap_value))
+      const sliced = features.slice(0, maxFeatures);
+      const ranked = sliced.length > 0 && sliced.every((f) => (f.contribution_rank ?? 0) > 0);
+      return sliced
+        .sort(
+          ranked
+            ? (a, b) => a.contribution_rank - b.contribution_rank
+            : (a, b) => Math.abs(b.shap_value) - Math.abs(a.shap_value)
+        )
         .map((f) => ({
           name: f.feature_name.replace(/_/g, ' '),
           value: f.shap_value,
