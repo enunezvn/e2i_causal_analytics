@@ -18,25 +18,28 @@ def get_default_dspy_model() -> str:
 
     DSPy talks to providers through litellm, so the model string must carry a
     ``<provider>/<model>`` prefix. This mirrors ``src.utils.llm_factory``'s
-    PROVIDER selection (openai -> ``openai/gpt-4o``, the model the rest of the app
-    uses in prod where ``LLM_PROVIDER=openai``). The Anthropic model is taken from
-    ``ANTHROPIC_MODEL`` independently of llm_factory's hardcoded mapping, so the
-    default is a current model rather than the retired ``claude-sonnet-4-20250514``
-    that 404'd the Executive AI Brief.
+    PROVIDER selection and its ``LLM_MODEL`` override (model refresh
+    2026-07-18: ``openai/gpt-5.6-terra`` is the standard tier, verified
+    callable through dspy/litellm on the deployment's key). The Anthropic
+    model is taken from ``ANTHROPIC_MODEL`` independently of llm_factory's
+    hardcoded mapping, so the default is a current model rather than the
+    retired ``claude-sonnet-4-20250514`` that 404'd the Executive AI Brief.
 
     Resolution order:
       1. ``DSPY_LM_MODEL`` env override — used verbatim (already prefixed).
       2. ``LLM_PROVIDER=anthropic`` -> ``anthropic/{ANTHROPIC_MODEL}``.
-      3. Otherwise (default ``openai``) -> ``openai/gpt-4o`` (the standard tier).
+      3. Otherwise (default ``openai``) -> ``openai/{LLM_MODEL}``, falling
+         back to ``openai/gpt-5.6-terra`` (the standard tier).
     """
     explicit = os.getenv("DSPY_LM_MODEL")
     if explicit:
         return explicit
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
     if provider == "anthropic":
-        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
         return model if "/" in model else f"anthropic/{model}"
-    return "openai/gpt-4o"
+    model = os.getenv("LLM_MODEL") or "gpt-5.6-terra"
+    return model if "/" in model else f"openai/{model}"
 
 
 def dspy_provider_api_key_present() -> bool:
