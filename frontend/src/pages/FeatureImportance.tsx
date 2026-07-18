@@ -875,13 +875,19 @@ function FeatureImportance() {
                             isHcpCohort ? 'HCP' : 'patient'
                           } sample of the cohort — not the cohort size.${
                             global.stability_achieved
-                              ? ' Sample grown until the top-feature ranking was stable beyond sampling noise.'
+                              ? global.stability_criterion === 'covariate_group'
+                                ? ' Sample grown until the covariate ranking shown here was stable beyond sampling noise.'
+                                : ' Sample grown until the top-feature ranking was stable beyond sampling noise.'
                               : ''
                           }`}
                         >
                           n = {global.sample_size} {global.sampling_method === 'random' && 'randomly '}
                           sampled {isHcpCohort ? 'HCPs' : 'patients'}
-                          {global.stability_achieved ? ' · ranking stable' : ''}
+                          {global.stability_achieved
+                            ? global.stability_criterion === 'covariate_group'
+                              ? ' · covariate ranking stable'
+                              : ' · ranking stable'
+                            : ''}
                         </span>
                         <span>•</span>
                         <span>{global.cached ? 'cached' : 'freshly computed'}</span>

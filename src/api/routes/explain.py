@@ -364,8 +364,18 @@ class GlobalFeatureImportanceResponse(BaseModel):
     stability_achieved: Optional[bool] = Field(
         None,
         description=(
-            "True when the top-feature mean-|SHAP| ranking separated beyond "
-            "sampling noise at the final n; None on legacy cached rows"
+            "True when the mean-|SHAP| ranking under ``stability_criterion`` "
+            "separated beyond sampling noise at the final n; None on legacy "
+            "cached rows"
+        ),
+    )
+    stability_criterion: Optional[str] = Field(
+        None,
+        description=(
+            "Which ranking the stability verdict certifies: 'covariate_group' "
+            "(the displayed covariate ranking — encoded children folded to their "
+            "parent covariate, importance summed) or 'encoded_feature' (fallback "
+            "when the covariate schema is unavailable); None on legacy cached rows"
         ),
     )
     stopping_reason: Optional[str] = Field(
@@ -1903,6 +1913,35 @@ async def get_explanation_history(
         ) from e
 
 
+async def _keep_columns_for_family(
+    service: "RealTimeSHAPService", model_type: ModelType
+) -> Optional[List[str]]:
+    """Best-effort ``keep_columns`` (raw covariate names) for ONE goldstd family.
+
+    ``keep_columns`` is brand-invariant within a family (see
+    ``_keep_columns_for_goldstd_families``), so the default brand's serving name
+    resolves it. Returns ``None`` on any failure (BentoML down, legacy model
+    with no keep_columns) — callers must degrade gracefully.
+    """
+    try:
+        await service._ensure_initialized()
+    except Exception as e:  # noqa: BLE001 — best-effort metadata, never load-bearing
+        logger.debug("keep_columns lookup: service init unavailable: %s", e)
+        return None
+    client = service.bentoml_client
+    if client is None:
+        return None
+    try:
+        serving_name = goldstd_serving_name(model_type, _DEFAULT_GOLDSTD_BRAND)
+        info = await client.get_model_info(serving_name)
+        keep = info.get("keep_columns") if isinstance(info, dict) else None
+        if isinstance(keep, list) and keep:
+            return [str(c) for c in keep]
+    except Exception as e:  # noqa: BLE001 — per-family best-effort
+        logger.debug("keep_columns enrichment failed for %s: %s", model_type.value, e)
+    return None
+
+
 async def _keep_columns_for_goldstd_families(
     service: "RealTimeSHAPService",
 ) -> Dict[str, Optional[List[str]]]:
@@ -2108,6 +2147,27 @@ async def _sample_entity_ids_random(model_type: ModelType, limit: int) -> Option
     return ids or None
 
 
+def _parent_covariate(encoded_name: str, keep_columns: List[str]) -> str:
+    """Parent raw covariate for an ENCODED column name.
+
+    MUST mirror ``parentCovariate`` in frontend/src/lib/shap-covariates.ts —
+    the stability gate certifies the covariate ranking the page renders, so the
+    two groupings have to agree. A column ``c`` belongs to covariate ``k`` when
+    ``c == k`` (bare numeric), ``c == k + '__isna'`` (missingness twin) or
+    ``c.startswith(k + '_')`` (one-hot category); the LONGEST match wins so the
+    most specific covariate takes the column. Falls back to the encoded name
+    itself (flat passthrough) when nothing matches.
+    """
+    best: Optional[str] = None
+    for k in keep_columns:
+        matches = (
+            encoded_name == k or encoded_name == f"{k}__isna" or encoded_name.startswith(f"{k}_")
+        )
+        if matches and (best is None or len(k) > len(best)):
+            best = k
+    return best if best is not None else encoded_name
+
+
 def _ranking_stable(
     abs_shap_by_feature: Dict[str, List[float]],
     n: int,
@@ -2117,9 +2177,8 @@ def _ranking_stable(
 ) -> bool:
     """True when the top-``top_k`` mean-|SHAP| ranking is separated beyond noise.
 
-    Per-feature lists hold |SHAP| for the entities where the feature surfaced;
-    entities where it did not surface contributed ~0, so lists are zero-padded
-    to ``n`` (mirrors the cohort-mean denominator). The ranking is "stable"
+    Criterion-agnostic: the keys may be encoded features OR covariate groups —
+    each list holds one per-entity importance score. The ranking is "stable"
     when every adjacent pair in the top-k is separated by more than
     ``z * SE(gap)`` — i.e. another draw is unlikely to reorder it. Two kinds
     of pair are exempt, because their order carries no insight and a true tie
@@ -2133,6 +2192,16 @@ def _ranking_stable(
       individually non-negligible. A noisy observed tie (large SE) is NOT
       exempt: there the true gap may be material and more entities genuinely
       help.
+
+    SE(gap): both means in a pair come from the SAME entities, so when both
+    lists are full-length (one value per entity, index-aligned) the correct
+    SE is the PAIRED one — SE of the per-entity differences. The independent
+    formula sqrt(SE_hi² + SE_lo²) understates SE for negatively-correlated
+    pairs (measured r=-0.37 for one-hot siblings) and overstates it for
+    positively-correlated ones. A list shorter than ``n`` (feature surfaced
+    for only some entities) has lost per-entity alignment, so that pair falls
+    back to the independent formula over end-zero-padded lists (mirrors the
+    cohort-mean denominator).
     """
     if n < 2 or not abs_shap_by_feature:
         return False
@@ -2141,17 +2210,26 @@ def _ranking_stable(
     top_mean = means[ordered[0]]
     if top_mean <= 0.0:
         return False
+
+    def _se(vals: List[float], mean: float) -> float:
+        var = sum((x - mean) ** 2 for x in vals) / (n - 1)
+        return (var / n) ** 0.5
+
     ses: Dict[str, float] = {}
     for f in ordered:
         vals = abs_shap_by_feature[f] + [0.0] * (n - len(abs_shap_by_feature[f]))
-        var = sum((x - means[f]) ** 2 for x in vals) / (n - 1)
-        ses[f] = (var / n) ** 0.5
+        ses[f] = _se(vals, means[f])
     floor = negligible_frac * top_mean
     for hi, lo in zip(ordered, ordered[1:], strict=False):
         if means[hi] < floor and means[lo] < floor:
             continue
         gap = means[hi] - means[lo]
-        se_gap = (ses[hi] ** 2 + ses[lo] ** 2) ** 0.5
+        vals_hi, vals_lo = abs_shap_by_feature[hi], abs_shap_by_feature[lo]
+        if len(vals_hi) == n and len(vals_lo) == n:
+            diffs = [a - b for a, b in zip(vals_hi, vals_lo, strict=True)]
+            se_gap = _se(diffs, gap)
+        else:
+            se_gap = (ses[hi] ** 2 + ses[lo] ** 2) ** 0.5
         if gap + z * se_gap < floor:
             continue
         if gap <= z * se_gap:
@@ -2237,6 +2315,7 @@ async def _store_global_importance_row(
     gi["__sampling__"] = {
         "sampling_method": agg.get("sampling_method"),
         "stability_achieved": agg.get("stability_achieved"),
+        "stability_criterion": agg.get("stability_criterion"),
         "stopping_reason": agg.get("stopping_reason"),
     }
     record: Dict[str, Any] = {
@@ -2325,9 +2404,11 @@ def _row_to_global_agg(row: Dict[str, Any]) -> Dict[str, Any]:
         "sample_size": int(row.get("sample_size") or 0),
         "computation_method": row.get("computation_method") or "LinearExplainer",
         "computed_at": row.get("computed_at"),
-        # None for legacy rows written before mig-109 sampling provenance.
+        # None for legacy rows written before mig-109 sampling provenance
+        # (stability_criterion also None on rows predating the group criterion).
         "sampling_method": sampling_meta.get("sampling_method"),
         "stability_achieved": sampling_meta.get("stability_achieved"),
+        "stability_criterion": sampling_meta.get("stability_criterion"),
         "stopping_reason": sampling_meta.get("stopping_reason"),
     }
 
@@ -2346,6 +2427,15 @@ async def _compute_global_importance(
     after reaching it the loop keeps sampling until the top-feature ranking is
     stable beyond sampling noise (``_ranking_stable``) or ``max_sample_size``
     is hit — sized for stability, not a fixed constant.
+
+    Stability criterion: the gate runs over the COVARIATE-GROUP ranking (per-
+    entity group score = sum of |SHAP| across the covariate's encoded children)
+    because that is the ranking the Feature-Importance page displays — the
+    encoded one-hot ordering inside a single displayed row (e.g.
+    ``geographic_region_midwest`` vs ``_west``) must not burn samples. Falls
+    back to the encoded-feature ranking when the covariate schema
+    (``keep_columns``) is unavailable; the criterion actually used is recorded
+    in the sampling provenance.
 
     SHAP is the heavy (~1.3 GiB) part of each call, so the sample is processed
     SEQUENTIALLY under ONE held heavy-compute slot — concurrent fan-out would OOM
@@ -2372,12 +2462,24 @@ async def _compute_global_importance(
             detail=f"No sample entities available for {model_type.value}",
         )
 
+    # Covariate schema for the group-level stability criterion (best-effort:
+    # None -> encoded-feature fallback, recorded in provenance).
+    keep_cols: Optional[List[str]] = None
+    try:
+        keep_cols = await _keep_columns_for_family(await get_shap_service(), model_type)
+    except Exception as e:  # noqa: BLE001 — criterion fallback, never load-bearing
+        logger.debug("stability keep_columns unavailable for %s: %s", model_type.value, e)
+    stability_criterion = "covariate_group" if keep_cols else "encoded_feature"
+
     abs_sum: Dict[str, float] = defaultdict(float)
     signed_sum: Dict[str, float] = defaultdict(float)
     val_sum: Dict[str, float] = defaultdict(float)
     val_n: Dict[str, int] = defaultdict(int)
     points: Dict[str, List[tuple]] = defaultdict(list)
     abs_values: Dict[str, List[float]] = defaultdict(list)
+    # Per-entity covariate-group scores, index-aligned by entity (entry i of
+    # every list = entity i) so the gate can use the exact paired SE.
+    group_values: Dict[str, List[float]] = {}
     base_values: List[float] = []
     n_succeeded = 0
     stability_achieved = False
@@ -2425,9 +2527,22 @@ async def _compute_global_importance(
                     val_sum[c.feature_name] += fv
                     val_n[c.feature_name] += 1
                 points[c.feature_name].append((c.shap_value, fv))
-            # Adaptive stop: past the minimum, quit as soon as the top-feature
+            if keep_cols:
+                entity_groups: Dict[str, float] = defaultdict(float)
+                for c in resp.top_features:
+                    entity_groups[_parent_covariate(c.feature_name, keep_cols)] += abs(c.shap_value)
+                # Keep every group list exactly n_succeeded long and entity-
+                # aligned: a group absent from this entity contributed ~0, and a
+                # first-seen group gets zero backfill for the earlier entities.
+                for g in entity_groups.keys() - group_values.keys():
+                    group_values[g] = [0.0] * (n_succeeded - 1)
+                for g, vals in group_values.items():
+                    vals.append(entity_groups.get(g, 0.0))
+            # Adaptive stop: past the minimum, quit as soon as the displayed
             # ranking is separated beyond sampling noise — sized for stability.
-            if n_succeeded >= sample_size and _ranking_stable(abs_values, n_succeeded):
+            if n_succeeded >= sample_size and _ranking_stable(
+                group_values if keep_cols else abs_values, n_succeeded
+            ):
                 stability_achieved = True
                 stopping_reason = "stable"
                 break
@@ -2443,9 +2558,10 @@ async def _compute_global_importance(
 
     # A run that ended at the cap (or ran out of candidates) may still have
     # reached a stable ranking — report that honestly rather than only when the
-    # early-stop fired.
+    # early-stop fired. Same criterion as the in-loop check.
     if not stability_achieved and n_succeeded >= 2:
-        stability_achieved = _ranking_stable(abs_values, n_succeeded)
+        final_values = group_values if keep_cols else abs_values
+        stability_achieved = _ranking_stable(final_values, n_succeeded)
 
     # No silent under-sampling: if Feast misses left us short of the target, the
     # honest n_succeeded still flows to the response — but surface it in logs so a
@@ -2491,6 +2607,7 @@ async def _compute_global_importance(
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "sampling_method": sampling_method,
         "stability_achieved": stability_achieved,
+        "stability_criterion": stability_criterion,
         "stopping_reason": stopping_reason,
     }
 
@@ -2536,8 +2653,9 @@ async def sample_explain_entities(
         "Mean |SHAP| feature importance aggregated over a uniform RANDOM sample "
         "of real cohort entities for one per-brand gold-standard model. "
         "``sample_size`` is the minimum; sampling continues adaptively until the "
-        "top-feature ranking is stable beyond sampling noise or "
-        "``max_sample_size`` is reached. Reads a durable precomputed row when "
+        "displayed covariate ranking is stable beyond sampling noise (see "
+        "``stability_criterion``) or ``max_sample_size`` is reached. Reads a "
+        "durable precomputed row when "
         "available (instant); otherwise computes it once (sequential under the "
         "heavy-compute slot) and stores it. ``refresh=true`` forces recompute. "
         "Only gold-standard cohorts are supported (the legacy demo model types "
@@ -2662,6 +2780,7 @@ async def global_feature_importance(
         cached=cached,
         sampling_method=agg.get("sampling_method"),
         stability_achieved=agg.get("stability_achieved"),
+        stability_criterion=agg.get("stability_criterion"),
         stopping_reason=agg.get("stopping_reason"),
         features=features,
         points=out_points,
