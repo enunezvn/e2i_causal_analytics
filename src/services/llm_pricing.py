@@ -12,15 +12,27 @@ different axis).
 from typing import Optional
 
 # Bump whenever rates change; surfaced in the API payload for provenance.
-PRICING_VERSION = "2026-07-12"
+PRICING_VERSION = "2026-07-18"
 
 # USD per 1M tokens: normalized model key -> (input_rate, output_rate).
 # Keys are prefixes: resolve_pricing_key strips provider prefixes and picks
 # the LONGEST matching key, so dated variants (claude-haiku-4-5-20251001)
 # resolve and gpt-4o-mini never falls into gpt-4o.
+# Superseded models stay listed: pricing is applied at read time, so removing
+# an entry would render every historical llm_usage_events row 'unpriced'.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "claude-sonnet-4-6": (3.00, 15.00),
+    # Current defaults (model refresh 2026-07-18). claude-sonnet-5 is list
+    # price — the $2/$10 intro rate through 2026-08-31 is deliberately not
+    # encoded, so costs read as the conservative ceiling.
+    "claude-sonnet-5": (3.00, 15.00),
+    "claude-opus-4-8": (5.00, 25.00),
+    "gpt-5.6-sol": (5.00, 30.00),
+    "gpt-5.6-terra": (2.50, 15.00),
+    "gpt-5.6-luna": (1.00, 6.00),
+    # Still current
     "claude-haiku-4-5": (1.00, 5.00),
+    # Superseded (historical rows)
+    "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-5": (5.00, 25.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
