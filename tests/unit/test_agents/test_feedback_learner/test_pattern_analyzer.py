@@ -570,6 +570,36 @@ class TestSourceAwareRatingAggregation:
         assert low_rating[0]["pattern_id"] != low_rating[1]["pattern_id"]
 
     @pytest.mark.asyncio
+    async def test_pool_below_min_n_stays_silent(self, base_state):
+        """#1258: an n=1 pool (one bad copilot turn in a low-traffic window)
+        must not emit a persisted pattern from a single observation — every
+        sibling detector has a count floor, and the surface split (#1251)
+        made tiny pools possible. The floor is 3; n=3 pools still firing is
+        pinned by test_two_low_surfaces_emit_one_pattern_each above."""
+        feedback_items = [_rating_item(0, 2.2, agent="copilotkit", metadata=dict(_COPILOT_META))]
+        state = {
+            **base_state,
+            "feedback_items": feedback_items,
+            "feedback_summary": {
+                "total_count": 1,
+                "by_type": {"rating": 1},
+                "by_agent": {"copilotkit": 1},
+                "average_rating": 2.2,
+            },
+            "status": "analyzing",
+        }
+        node = PatternAnalyzerNode(use_llm=False, prefer_optimized=False)
+
+        result = await node.execute(state)
+
+        low_rating = [
+            p
+            for p in result["detected_patterns"]
+            if p["pattern_type"] == "accuracy_issue" and "Low average" in p["description"]
+        ]
+        assert low_rating == []
+
+    @pytest.mark.asyncio
     async def test_healthy_pools_on_both_surfaces_stay_silent(self, base_state):
         """Grouping must not FABRICATE patterns: two healthy pools (each avg
         >= 3.0) emit nothing, exactly as the pooled gate did."""

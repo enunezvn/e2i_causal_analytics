@@ -2035,6 +2035,52 @@ class TestCopilotLearningSignals:
         reward = _grade_copilot_turn(response="x" * 250, tool_count=4, synthesis_error=True)
         assert reward == pytest.approx(0.3)
 
+    def test_evidence_tool_count_excludes_failed_envelopes(self) -> None:
+        """#1257: E2I tools fail closed with a {"success": false} JSON
+        envelope that still becomes a ToolMessage — an invocation, not
+        evidence. Payloads without the envelope ARE the evidence and count."""
+        from src.api.routes.copilotkit import _evidence_tool_count
+
+        results = [
+            {"tool": "kpi", "result": '{"success": true, "data": {"trx": 1}}'},
+            {"tool": "causal", "result": '{"success": false, "error": "no data"}'},
+            {"tool": "legacy", "result": "plain text evidence"},
+            {"tool": "dictish", "result": {"success": False, "error": "x"}},
+        ]
+        assert _evidence_tool_count(results) == 2
+        assert _evidence_tool_count([]) == 0
+
+    @pytest.mark.asyncio
+    async def test_all_errored_tools_earn_no_grounding_bonus(self, monkeypatch) -> None:
+        """#1257 failure scenario: 4 tools invoked, ALL failed, model
+        apologizes at length — previously graded 0.8 (the surface MAXIMUM)
+        and persisted as a top-reward training example. Evidence-based
+        grading holds it to the ungrounded baseline 0.6; the full invocation
+        list stays observable in metadata."""
+        import src.api.routes.copilotkit as mod
+
+        captured = {}
+
+        async def _fake_record(signal, cycle_id=None, session_id=None):
+            captured["signal"] = signal
+            return "sig-id"
+
+        monkeypatch.setattr("src.memory.procedural_memory.record_learning_signal", _fake_record)
+
+        await mod._collect_copilot_learning_signal(
+            query="q",
+            response="sorry " * 50,
+            tool_names=["t1", "t2", "t3", "t4"],
+            conversation_id="c",
+            evidence_tool_count=0,
+        )
+
+        details = captured["signal"].signal_details
+        assert details["reward"] == pytest.approx(0.6)
+        meta = details["metadata"]
+        assert meta["tools_invoked"] == ["t1", "t2", "t3", "t4"]
+        assert meta["evidence_tool_count"] == 0
+
     @pytest.mark.asyncio
     async def test_collect_signal_matches_learner_contract(self, monkeypatch) -> None:
         """The persisted row must be exactly what LearningSignalsFeedbackStore

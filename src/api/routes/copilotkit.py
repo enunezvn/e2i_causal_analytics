@@ -1458,6 +1458,31 @@ def _record_analytics_sync(
         return None
 
 
+def _evidence_tool_count(tool_results: List[Dict[str, Any]]) -> int:
+    """Count tool results that actually carry evidence (#1257).
+
+    E2I tools fail closed with a ``{"success": false, ...}`` JSON envelope
+    that still becomes a ToolMessage — counting those toward the grounding
+    bonus graded an all-errored turn 0.8 (the copilot surface maximum), and
+    those rows persist as top-reward training examples. Only results not
+    positively marked failed count; payloads without the envelope (or
+    unparseable ones) ARE the evidence, not an error marker, so they count.
+    """
+    count = 0
+    for tr in tool_results:
+        result = tr.get("result")
+        parsed: Any = result
+        if isinstance(result, str):
+            try:
+                parsed = json.loads(result)
+            except (ValueError, TypeError):
+                parsed = None
+        if isinstance(parsed, dict) and parsed.get("success") is False:
+            continue
+        count += 1
+    return count
+
+
 def _grade_copilot_turn(response: str, tool_count: int, synthesis_error: bool = False) -> float:
     """Grade one completed copilot turn on observable outcome quality (#1240).
 
@@ -1502,6 +1527,7 @@ async def _collect_copilot_learning_signal(
     tool_names: List[str],
     conversation_id: Optional[str],
     synthesis_error: bool = False,
+    evidence_tool_count: Optional[int] = None,
 ) -> None:
     """Persist one honestly graded learning signal for a copilot turn (#1240).
 
@@ -1523,12 +1549,17 @@ async def _collect_copilot_learning_signal(
         from src.memory import procedural_memory
         from src.memory.procedural_memory import LearningSignalInput
 
+        # #1257: grade on EVIDENCE-BEARING tool results only — errored tools
+        # (fail-closed envelopes) invoked but produced no grounding. The full
+        # invocation list stays in metadata.tools_invoked for observability.
+        evidence_count = len(tool_names) if evidence_tool_count is None else evidence_tool_count
         reward = _grade_copilot_turn(
-            response, tool_count=len(tool_names), synthesis_error=synthesis_error
+            response, tool_count=evidence_count, synthesis_error=synthesis_error
         )
         metadata: Dict[str, Any] = {
             "routed_agents": ["copilotkit"],
             "tools_invoked": list(tool_names),
+            "evidence_tool_count": evidence_count,
             "conversation_id": conversation_id,
             "source_path": "copilotkit",
         }
@@ -3350,6 +3381,7 @@ def create_e2i_chat_agent():
                 response=full_content,
                 tool_names=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                 conversation_id=session_id,
+                evidence_tool_count=_evidence_tool_count(tool_results),
             )
 
             # CoAgent State Sync: Emit completion state
@@ -3414,6 +3446,7 @@ def create_e2i_chat_agent():
                 tool_names=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                 conversation_id=session_id,
                 synthesis_error=True,
+                evidence_tool_count=_evidence_tool_count(tool_results),
             )
             return {"messages": [AIMessage(content=result_text)]}
 
