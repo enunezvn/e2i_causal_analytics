@@ -49,8 +49,21 @@ def test_get_default_dspy_model_openai_default(monkeypatch):
     from src.optimization import dspy_lm
 
     monkeypatch.delenv("DSPY_LM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)  # conftest loads .env; isolate
     monkeypatch.setenv("LLM_PROVIDER", "openai")
-    assert dspy_lm.get_default_dspy_model() == "openai/gpt-4o"
+    assert dspy_lm.get_default_dspy_model() == "openai/gpt-5.6-terra"
+
+
+def test_get_default_dspy_model_openai_honors_llm_model(monkeypatch):
+    """LLM_MODEL pins the OpenAI model deployment-wide (model refresh 2026-07-18),
+    mirroring llm_factory's override, so DSPy and LangChain paths stay on the
+    same workhorse model."""
+    from src.optimization import dspy_lm
+
+    monkeypatch.delenv("DSPY_LM_MODEL", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "gpt-5.6-sol")
+    assert dspy_lm.get_default_dspy_model() == "openai/gpt-5.6-sol"
 
 
 def test_get_default_dspy_model_anthropic_uses_env_model(monkeypatch):
@@ -67,6 +80,7 @@ def test_get_default_dspy_model_never_returns_retired_model(monkeypatch):
     from src.optimization import dspy_lm
 
     monkeypatch.delenv("DSPY_LM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
     for provider in ("openai", "anthropic", ""):
         monkeypatch.setenv("LLM_PROVIDER", provider)
         monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
