@@ -2102,10 +2102,18 @@ def _ranking_stable(
     entities where it did not surface contributed ~0, so lists are zero-padded
     to ``n`` (mirrors the cohort-mean denominator). The ranking is "stable"
     when every adjacent pair in the top-k is separated by more than
-    ``z * SE(gap)`` — i.e. another draw is unlikely to reorder it. Pairs where
-    BOTH means are negligible (< ``negligible_frac`` of the top mean) are
-    treated as stable: distinguishing rank among jointly-noise features carries
-    no insight and would force every sample to the cap.
+    ``z * SE(gap)`` — i.e. another draw is unlikely to reorder it. Two kinds
+    of pair are exempt, because their order carries no insight and a true tie
+    can never be statistically separated (it would force every sample to the
+    cap):
+
+    - jointly negligible: BOTH means < ``negligible_frac`` of the top mean;
+    - confirmed practical tie: the upper confidence bound of the gap
+      (``gap + z * SE(gap)``) is below that same threshold — the importances
+      are KNOWN to differ by less than matters, even though each feature is
+      individually non-negligible. A noisy observed tie (large SE) is NOT
+      exempt: there the true gap may be material and more entities genuinely
+      help.
     """
     if n < 2 or not abs_shap_by_feature:
         return False
@@ -2119,11 +2127,15 @@ def _ranking_stable(
         vals = abs_shap_by_feature[f] + [0.0] * (n - len(abs_shap_by_feature[f]))
         var = sum((x - means[f]) ** 2 for x in vals) / (n - 1)
         ses[f] = (var / n) ** 0.5
+    floor = negligible_frac * top_mean
     for hi, lo in zip(ordered, ordered[1:], strict=False):
-        if means[hi] < negligible_frac * top_mean and means[lo] < negligible_frac * top_mean:
+        if means[hi] < floor and means[lo] < floor:
             continue
         gap = means[hi] - means[lo]
-        if gap <= z * (ses[hi] ** 2 + ses[lo] ** 2) ** 0.5:
+        se_gap = (ses[hi] ** 2 + ses[lo] ** 2) ** 0.5
+        if gap + z * se_gap < floor:
+            continue
+        if gap <= z * se_gap:
             return False
     return True
 
