@@ -75,9 +75,10 @@ def parse_window(spec: Any, *, now: Optional[datetime] = None) -> Optional[Windo
         raise WindowParseError(f"unsupported window type: {type(spec).__name__}")
     s = spec.strip().lower()
 
-    m = re.fullmatch(r"(?:last|past|trailing|previous)\s+(\d+)\s+(day|week|month|year)s?", s)
+    # The count is optional: bare "last year" / "past month" means one unit.
+    m = re.fullmatch(r"(?:last|past|trailing|previous)\s+(?:(\d+)\s+)?(day|week|month|year)s?", s)
     if m:
-        n, unit = int(m.group(1)), m.group(2)
+        n, unit = int(m.group(1) or 1), m.group(2)
         delta = {
             "day": relativedelta(days=n),
             "week": relativedelta(weeks=n),

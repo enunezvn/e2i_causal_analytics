@@ -92,3 +92,24 @@ def test_rolling_previous_years():
     assert w.kind == "rolling"
     assert w.end == NOW
     assert w.start == datetime(2024, 6, 20, tzinfo=timezone.utc)
+
+
+def test_rolling_bare_year():
+    """Bare 'last year' (no count) means one year — the phrase users actually
+    type in chat (session_1784387374342 asked 'over the last year')."""
+    w = parse_window("last year", now=NOW)
+    assert w.kind == "rolling"
+    assert w.end == NOW
+    assert w.start == datetime(2025, 6, 20, tzinfo=timezone.utc)
+
+
+def test_rolling_bare_month_week_day():
+    assert parse_window("past month", now=NOW).start == datetime(2026, 5, 20, tzinfo=timezone.utc)
+    assert parse_window("previous week", now=NOW).start == datetime(
+        2026, 6, 13, tzinfo=timezone.utc
+    )
+    assert parse_window("last day", now=NOW).start == datetime(2026, 6, 19, tzinfo=timezone.utc)
+
+
+def test_rolling_bare_unit_label_is_normalized():
+    assert parse_window("last year", now=NOW).label == "last 1 years"
