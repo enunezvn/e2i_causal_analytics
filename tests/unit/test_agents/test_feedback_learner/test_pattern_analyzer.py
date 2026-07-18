@@ -458,6 +458,23 @@ class TestRatingSurface:
         for meta in (None, _COPILOT_META, _COGNITIVE_META):
             assert rating_surface(meta) in SURFACE_RATING_CEILINGS
 
+    def test_analysis_prompt_interpolates_copilot_ceiling_from_map(self):
+        """#1259: the LLM prompt's ceiling prose is interpolated from
+        SURFACE_RATING_CEILINGS, not hardcoded — a ceiling change cannot
+        strand the prompt telling the model a stale number."""
+        from src.agents.feedback_learner.nodes.pattern_analyzer import PatternAnalyzerNode
+        from src.agents.feedback_learner.rating_utils import (
+            COPILOT_SURFACE,
+            SURFACE_RATING_CEILINGS,
+        )
+
+        node = PatternAnalyzerNode.__new__(PatternAnalyzerNode)  # no LLM needed
+        prompt = node._build_analysis_prompt(
+            {"feedback_items": [], "feedback_summary": {"total_count": 0}}
+        )
+        expected = f"copilot tops out at {SURFACE_RATING_CEILINGS[COPILOT_SURFACE]:.1f}"
+        assert expected in prompt
+
 
 class TestSourceAwareRatingAggregation:
     """#1251: the low-ratings gate groups by reward surface so a low pool on

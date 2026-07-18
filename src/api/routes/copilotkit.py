@@ -1546,6 +1546,11 @@ async def _collect_copilot_learning_signal(
     must never unwind into the chat response path.
     """
     try:
+        # #1260: the surface marker is the shared constant the classifier
+        # (rating_surface) keys on — a one-sided rename would silently
+        # reclassify copilot rows into the cognitive pool. Lazy import per
+        # this function's idiom (the learner package init is heavy).
+        from src.agents.feedback_learner.rating_utils import COPILOT_SURFACE
         from src.memory import procedural_memory
         from src.memory.procedural_memory import LearningSignalInput
 
@@ -1557,11 +1562,14 @@ async def _collect_copilot_learning_signal(
             response, tool_count=evidence_count, synthesis_error=synthesis_error
         )
         metadata: Dict[str, Any] = {
+            # agent attribution (NOT the surface marker — same string today,
+            # different meaning: this names the responder, source_path below
+            # routes the reward-surface split)
             "routed_agents": ["copilotkit"],
             "tools_invoked": list(tool_names),
             "evidence_tool_count": evidence_count,
             "conversation_id": conversation_id,
-            "source_path": "copilotkit",
+            "source_path": COPILOT_SURFACE,
         }
         if synthesis_error:
             metadata["synthesis_error"] = True

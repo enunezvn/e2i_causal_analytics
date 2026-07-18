@@ -388,4 +388,39 @@ describe('FeedbackLearning — #1244 Recent Activity pattern attribution', () =>
       .map((el) => el.textContent);
     expect(rowLabels).toEqual(['Knowledge Update', 'Pattern Detected']);
   });
+
+  it('update rows attribute via target_agent when agent_name is absent (#1263)', () => {
+    // The learner's real KnowledgeUpdate rows carry target_agent only
+    // (agent_name is a UI/sample-era field). The fallback chain
+    // agent_name ?? target_agent ?? 'N/A' was rendered by the sort test
+    // above but never discriminated — regressing it to agent_name ?? 'N/A'
+    // re-shows the #1244 "N/A" symptom with the suite green.
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { patterns: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        updates: [
+          {
+            update_id: 'U2',
+            update_type: 'prompt_refinement',
+            status: 'proposed',
+            target_agent: 'gap_analyzer',
+            description: 'Refine gap analyzer prompt',
+            created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Knowledge Update')).toBeInTheDocument();
+    expect(screen.getByText(/gap_analyzer\s*•/)).toBeInTheDocument();
+    expect(screen.queryByText(/N\/A\s*•/)).not.toBeInTheDocument();
+  });
 });

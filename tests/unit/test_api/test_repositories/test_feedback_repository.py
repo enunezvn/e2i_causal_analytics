@@ -13,10 +13,11 @@ from src.api.routes.feedback import (
 
 
 class _FakeQuery:
-    def __init__(self, store, pk, rows=None):
+    def __init__(self, store, pk, rows=None, projection=None):
         self._store = store
         self._pk = pk
         self._rows = rows if rows is not None else list(store.values())
+        self._projection = projection
 
     def upsert(self, row, on_conflict=None):
         self._store[row[self._pk]] = row
@@ -26,11 +27,26 @@ class _FakeQuery:
         self._store[row[self._pk]] = row
         return _FakeQuery(self._store, self._pk, [row])
 
-    def select(self, *_a, **_k):
-        return _FakeQuery(self._store, self._pk, list(self._store.values()))
+    def select(self, *cols, **_k):
+        # #1262: honor the projection like PostgREST does — a fake that
+        # returns every column regardless passes tests for code whose real
+        # query never fetched the column it reads (proved by mutation:
+        # reverting list_patterns to select("payload") kept both #1244
+        # backfill tests green while killing the backfill in production).
+        # Filters still apply to full rows (PostgREST filters the table,
+        # not the projection) — columns are stripped at execute().
+        projection = None
+        if cols and "*" not in cols:
+            projection = {c.strip() for c in ",".join(cols).split(",")}
+        return _FakeQuery(self._store, self._pk, list(self._store.values()), projection)
 
     def eq(self, col, val):
-        return _FakeQuery(self._store, self._pk, [r for r in self._rows if r.get(col) == val])
+        return _FakeQuery(
+            self._store,
+            self._pk,
+            [r for r in self._rows if r.get(col) == val],
+            self._projection,
+        )
 
     def order(self, *_a, **_k):
         return self
@@ -39,8 +55,12 @@ class _FakeQuery:
         return self
 
     def execute(self):
+        rows = self._rows
+        if self._projection is not None:
+            rows = [{k: v for k, v in r.items() if k in self._projection} for r in rows]
+
         class _R:
-            data = self._rows
+            data = rows
 
         return _R()
 
