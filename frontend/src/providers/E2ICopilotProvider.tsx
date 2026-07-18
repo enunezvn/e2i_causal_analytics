@@ -20,10 +20,16 @@ import {
 } from '@copilotkit/react-core';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAccessToken } from '@/stores/auth-store';
-import { getKPIHistory } from '@/api/kpi';
-import { resolveBrand, resolveKpiId } from '@/lib/kpi-alias';
+import { getKPIHistory, getKPIHistorySegmented } from '@/api/kpi';
+import {
+  resolveBrand,
+  resolveCompareAxis,
+  resolveKpiId,
+  resolveSegment,
+  resolveTherapyLine,
+} from '@/lib/kpi-alias';
 import { KpiTrendChart } from '@/components/chat/KpiTrendChart';
-import type { KPIHistoryResponse } from '@/types/kpi';
+import type { KPIHistoryResponse, KPISegmentedHistoryResponse } from '@/types/kpi';
 
 // -----------------------------------------------------------------------------
 // Internal Types (not exported - used within provider)
@@ -875,7 +881,10 @@ const CopilotHooksInner: React.FC = () => {
       'Render an inline line chart of a KPI\'s monthly historical trend. Use when the user asks to ' +
       'visualize, plot, chart, or graph a KPI over time (e.g. "chart TRx", "show the market share trend"). ' +
       'kpiId accepts trx, nrx, nbrx, trx_share (aka market_share), conversion_rate, roi, or a registry ' +
-      'code like WS3-BI-005. nbrx and trx_share are tracked per brand only — pass brand for them.',
+      'code like WS3-BI-005. nbrx and trx_share are tracked per brand only — pass brand for them. ' +
+      'For trx/nrx/nbrx the trend can be split by patient severity tier or line of therapy: pass ' +
+      'compareBy to draw ONE chart with one line per tier (never call once per tier), or ' +
+      'segment/therapyLine to chart a single tier.',
     parameters: [
       {
         name: 'kpiId',
@@ -894,18 +903,70 @@ const CopilotHooksInner: React.FC = () => {
         required: false,
       },
       {
+        name: 'compareBy',
+        type: 'string',
+        description:
+          "'severity' or 'lot': draw one comparison chart with a line per severity tier " +
+          '(low/medium/high) or per line of therapy (0-3 prior lines). trx/nrx/nbrx only.',
+        required: false,
+      },
+      {
+        name: 'segment',
+        type: 'string',
+        description:
+          "Single severity tier to chart: 'low', 'medium', or 'high'. trx/nrx/nbrx only.",
+        required: false,
+      },
+      {
+        name: 'therapyLine',
+        type: 'string',
+        description:
+          "Single line of therapy to chart: '0'-'3' (prior therapy lines). trx/nrx/nbrx only.",
+        required: false,
+      },
+      {
         name: 'title',
         type: 'string',
         description: 'Optional chart title',
         required: false,
       },
     ],
-    handler: async ({ kpiId, brand }: { kpiId: string; brand?: string; title?: string }) => {
+    handler: async ({
+      kpiId,
+      brand,
+      compareBy,
+      segment,
+      therapyLine,
+    }: {
+      kpiId: string;
+      brand?: string;
+      compareBy?: string;
+      segment?: string;
+      therapyLine?: string;
+      title?: string;
+    }) => {
       // Fetch REAL history. Returns { points: [] } when no series exists; the
       // chart renders an honest empty state rather than fabricating data.
       // resolveKpiId translates the friendly ids this action teaches the model
       // into the registry codes kpi_history speaks (nrx → WS3-BI-006).
-      return await getKPIHistory(resolveKpiId(kpiId), resolveBrand(brand));
+      const resolvedKpi = resolveKpiId(kpiId);
+      const resolvedBrand = resolveBrand(brand);
+      // Axis routing: compareBy (all tiers, one comparison chart) wins over a
+      // single-tier segment/therapyLine filter. Both hit the live segmented
+      // endpoint — the materialized history has no patient-segment dimension.
+      const compareAxis = resolveCompareAxis(compareBy);
+      const segmentValue = resolveSegment(segment);
+      const lineValue = resolveTherapyLine(therapyLine);
+      const axis = compareAxis ?? (segmentValue ? 'segment' : lineValue ? 'therapy_line' : undefined);
+      if (axis) {
+        const value = compareAxis
+          ? undefined
+          : axis === 'segment'
+            ? segmentValue
+            : lineValue;
+        return await getKPIHistorySegmented(resolvedKpi, axis, resolvedBrand, value);
+      }
+      return await getKPIHistory(resolvedKpi, resolvedBrand);
     },
     render: ({ status, args, result }) => {
       // 'inProgress' = the LLM is still streaming the arguments, so kpiId may be
@@ -914,9 +975,17 @@ const CopilotHooksInner: React.FC = () => {
       // result ready.
       if (status === 'inProgress') return <></>;
       // CopilotKit types `result` loosely (any). Only treat a well-formed
-      // KPIHistoryResponse as data; otherwise leave it undefined so the chart
-      // shows an explicit "couldn't load" state instead of masquerading a
-      // handler error as an empty series.
+      // response as data; otherwise leave it undefined so the chart shows an
+      // explicit "couldn't load" state instead of masquerading a handler
+      // error as an empty series. A segmented response carries `series`; the
+      // plain history response carries `points`.
+      const segmented =
+        status === 'complete' &&
+        result != null &&
+        typeof result === 'object' &&
+        'series' in result
+          ? (result as KPISegmentedHistoryResponse)
+          : undefined;
       const history =
         status === 'complete' &&
         result != null &&
@@ -929,6 +998,7 @@ const CopilotHooksInner: React.FC = () => {
           kpiId={args?.kpiId ?? ''}
           title={args?.title}
           data={history}
+          segmented={segmented}
           loading={status === 'executing'}
         />
       );

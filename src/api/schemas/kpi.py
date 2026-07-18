@@ -503,3 +503,55 @@ class KPIHistoryResponse(BaseModel):
             }
         }
     )
+
+
+class KPIHistorySegmentSeries(BaseModel):
+    """One axis bucket's monthly series (e.g. the high-severity tier)."""
+
+    key: str = Field(..., description="Bucket key (e.g. 'high_severity', or '2' for LOT)")
+    label: str = Field(..., description="Display label (e.g. 'High severity', '2 prior lines')")
+    count: int = Field(..., description="Number of points")
+    points: list[KPIHistoryPoint] = Field(default_factory=list)
+
+
+class KPISegmentedHistoryResponse(BaseModel):
+    """Per-axis-bucket monthly history for one KPI, computed live (migration 110).
+
+    Unlike ``KPIHistoryResponse`` this is NOT read from the materialized
+    ``kpi_history`` table (which has no patient-segment dimension) — it is
+    recomputed from treatment_events via the vetted kpi_query registry, with
+    identical calendar-month bucketing and partial-edge-month trimming, so
+    the bucket series partition the headline series month by month.
+    """
+
+    kpi_id: str
+    brand: str = Field("", description="'' = global / all brands")
+    axis: str = Field(..., description="'segment' (severity tier) or 'therapy_line' (LOT)")
+    data_through: str | None = Field(
+        None, description="Latest prescription event date backing the series (frontier)"
+    )
+    count: int = Field(..., description="Number of series (buckets)")
+    series: list[KPIHistorySegmentSeries] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_id": "WS3-BI-005",
+                "brand": "Remibrutinib",
+                "axis": "segment",
+                "data_through": "2026-07-13",
+                "count": 3,
+                "series": [
+                    {
+                        "key": "low_severity",
+                        "label": "Low severity",
+                        "count": 2,
+                        "points": [
+                            {"metric_date": "2026-05-01", "value": 57.0},
+                            {"metric_date": "2026-06-01", "value": 272.0},
+                        ],
+                    }
+                ],
+            }
+        }
+    )

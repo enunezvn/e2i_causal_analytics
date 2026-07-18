@@ -745,3 +745,100 @@ class TestROIHistoryHandler:
         assert kis["2026-05-01"]["value"] == pytest.approx(1.8)
         # Every point carries the KPI id + synthetic provenance.
         assert all(p["kpi_id"] == "WS3-BI-010" and p["is_synthetic"] for p in points)
+
+
+class TestKPIHistorySegmentedEndpoint:
+    """GET /api/kpis/{kpi_id}/history/segmented (migration 110 live compute)."""
+
+    @staticmethod
+    def _rows():
+        # Real kpi_query output shape (dry-run validated 2026-07-18).
+        base = {"data_min": "2026-01-01", "data_max": "2026-06-30"}
+        return [
+            {"month_start": "2026-01-01", "bucket": "low_severity", "value": 3, **base},
+            {"month_start": "2026-01-01", "bucket": "medium_severity", "value": 7, **base},
+            {"month_start": "2026-01-01", "bucket": "high_severity", "value": 5, **base},
+            {"month_start": "2026-02-01", "bucket": "low_severity", "value": 4, **base},
+        ]
+
+    def test_segment_axis_returns_ordered_zero_filled_series(self):
+        with patch(
+            "src.kpi.segmented_history.fetch_segmented_rows",
+            new=AsyncMock(return_value=self._rows()),
+        ) as fetch:
+            resp = client.get(
+                "/api/kpis/WS3-BI-005/history/segmented",
+                params={"axis": "segment", "brand": "Remibrutinib"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kpi_id"] == "WS3-BI-005"
+        assert body["brand"] == "Remibrutinib"
+        assert body["axis"] == "segment"
+        assert body["data_through"] == "2026-06-30"
+        assert [s["key"] for s in body["series"]] == [
+            "low_severity",
+            "medium_severity",
+            "high_severity",
+        ]
+        assert body["series"][0]["label"] == "Low severity"
+        # Feb has no medium/high rows -> genuine zeros, not missing points.
+        medium = body["series"][1]
+        assert medium["points"][1] == {"metric_date": "2026-02-01", "value": 0.0, "status": None}
+        fetch.assert_awaited_once_with("WS3-BI-005", axis="segment", brand="Remibrutinib")
+
+    def test_therapy_line_axis_and_value_filter(self):
+        rows = [
+            {
+                "month_start": "2026-01-01",
+                "bucket": "2",
+                "value": 9,
+                "data_min": "2026-01-01",
+                "data_max": "2026-01-31",
+            }
+        ]
+        with patch(
+            "src.kpi.segmented_history.fetch_segmented_rows",
+            new=AsyncMock(return_value=rows),
+        ):
+            resp = client.get(
+                "/api/kpis/WS3-BI-006/history/segmented",
+                params={"axis": "therapy_line", "value": "2"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [s["key"] for s in body["series"]] == ["2"]
+        assert body["series"][0]["label"] == "2 prior lines"
+        assert body["series"][0]["points"] == [
+            {"metric_date": "2026-01-01", "value": 9.0, "status": None}
+        ]
+
+    def test_unsupported_kpi_is_422_not_empty(self):
+        resp = client.get("/api/kpis/WS3-BI-008/history/segmented", params={"axis": "segment"})
+        assert resp.status_code == 422
+        # The app's StarletteHTTPException handler wraps details in the
+        # structured error envelope; assert on the surfaced message text.
+        assert "WS3-BI-005" in resp.text
+
+    def test_unknown_axis_is_422(self):
+        resp = client.get("/api/kpis/WS3-BI-005/history/segmented", params={"axis": "region"})
+        assert resp.status_code == 422
+
+    def test_unknown_bucket_value_is_422(self):
+        resp = client.get(
+            "/api/kpis/WS3-BI-005/history/segmented",
+            params={"axis": "segment", "value": "extreme"},
+        )
+        assert resp.status_code == 422
+
+    def test_empty_rows_yield_empty_series(self):
+        with patch(
+            "src.kpi.segmented_history.fetch_segmented_rows",
+            new=AsyncMock(return_value=[]),
+        ):
+            resp = client.get("/api/kpis/WS3-BI-007/history/segmented", params={"axis": "segment"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["series"] == []
+        assert body["count"] == 0
+        assert body["data_through"] is None

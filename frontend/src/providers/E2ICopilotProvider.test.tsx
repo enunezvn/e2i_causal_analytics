@@ -27,8 +27,10 @@ vi.mock('react-router-dom', () => ({
 
 // Mock the KPI api so renderKpiTrend handler tests can assert what it fetches
 const mockGetKPIHistory = vi.fn();
+const mockGetKPIHistorySegmented = vi.fn();
 vi.mock('@/api/kpi', () => ({
   getKPIHistory: (...args: unknown[]) => mockGetKPIHistory(...args),
+  getKPIHistorySegmented: (...args: unknown[]) => mockGetKPIHistorySegmented(...args),
 }));
 
 // Override the global CopilotKit mock for this test file
@@ -663,6 +665,7 @@ describe('Action Handlers', () => {
     // despite 35 stored monthly points.
     beforeEach(() => {
       mockGetKPIHistory.mockClear();
+      mockGetKPIHistorySegmented.mockClear();
       mockGetKPIHistory.mockResolvedValue({
         kpi_id: 'WS3-BI-006',
         brand: '',
@@ -703,6 +706,85 @@ describe('Action Handlers', () => {
         actionCall![0].parameters as Array<{ name: string }>
       ).map((p) => p.name);
       expect(paramNames).toContain('brand');
+    });
+
+    it('declares the segment/LOT parameters so the model can pass them', () => {
+      getActionHandler('renderKpiTrend');
+      const actionCall = mockUseCopilotAction.mock.calls.find(
+        (call) => call[0]?.name === 'renderKpiTrend'
+      );
+      const paramNames = (
+        actionCall![0].parameters as Array<{ name: string }>
+      ).map((p) => p.name);
+      expect(paramNames).toEqual(
+        expect.arrayContaining(['compareBy', 'segment', 'therapyLine'])
+      );
+    });
+
+    it('routes compareBy to ONE segmented fetch (all tiers), not per-tier calls', async () => {
+      mockGetKPIHistorySegmented.mockResolvedValue({ series: [] });
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'trx', brand: 'remibrutinib', compareBy: 'severity' });
+      });
+
+      expect(mockGetKPIHistorySegmented).toHaveBeenCalledTimes(1);
+      expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
+        'WS3-BI-005',
+        'segment',
+        'Remibrutinib',
+        undefined
+      );
+      expect(mockGetKPIHistory).not.toHaveBeenCalled();
+    });
+
+    it('routes a single severity tier through the segmented fetch with a value', async () => {
+      mockGetKPIHistorySegmented.mockResolvedValue({ series: [] });
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'trx', segment: 'high' });
+      });
+
+      expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
+        'WS3-BI-005',
+        'segment',
+        undefined,
+        'high_severity'
+      );
+    });
+
+    it('routes a single line of therapy through the segmented fetch', async () => {
+      mockGetKPIHistorySegmented.mockResolvedValue({ series: [] });
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'nrx', therapyLine: 'LOT 2' });
+      });
+
+      expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
+        'WS3-BI-006',
+        'therapy_line',
+        undefined,
+        '2'
+      );
+    });
+
+    it('keeps the plain (unsegmented) path when no axis params are passed', async () => {
+      mockGetKPIHistorySegmented.mockClear();
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'trx', brand: 'kisqali' });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali');
+      expect(mockGetKPIHistorySegmented).not.toHaveBeenCalled();
     });
   });
 });
