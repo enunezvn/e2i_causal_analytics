@@ -10,7 +10,7 @@ import { render, screen } from '@testing-library/react';
 import { SHAPBarChart } from './SHAPBarChart';
 import { SHAPBeeswarm, type BeeswarmDataPoint } from './SHAPBeeswarm';
 import { SHAPForcePlot } from './SHAPForcePlot';
-import { SHAPWaterfall } from './SHAPWaterfall';
+import { SHAPWaterfall, buildWaterfallData } from './SHAPWaterfall';
 import type { FeatureContribution } from '@/types/explain';
 
 // =============================================================================
@@ -356,6 +356,67 @@ describe('SHAPForcePlot', () => {
 // =============================================================================
 // SHAP WATERFALL TESTS
 // =============================================================================
+
+describe('buildWaterfallData', () => {
+  // The goldstd LR models emit SHAP in log-odds space: base values around
+  // -2.8 and negative cumulatives are the NORM, not an edge case.
+  const negBase = -2.83;
+
+  it('regression: every row is an ordered [start, end] interval under a negative log-odds base', () => {
+    // Unordered intervals fed Recharts negative rect widths -> invalid SVG ->
+    // the chart rendered blank for every goldstd model.
+    const rows = buildWaterfallData(negBase, mockFeatures, 10);
+    rows.forEach((r) => {
+      expect(r.start).toBeLessThanOrEqual(r.end);
+    });
+  });
+
+  it('anchors base and output rows to 0 spanning the signed value', () => {
+    const rows = buildWaterfallData(negBase, mockFeatures, 10);
+    const base = rows[0];
+    const output = rows[rows.length - 1];
+    expect(base.isBase).toBe(true);
+    expect([base.start, base.end]).toEqual([negBase, 0]);
+    expect(base.value).toBe(negBase);
+    expect(output.isOutput).toBe(true);
+    expect(output.start).toBeLessThanOrEqual(0);
+    expect(output.value).toBeCloseTo(
+      negBase + mockFeatures.reduce((s, f) => s + f.shap_value, 0)
+    );
+  });
+
+  it('chains feature rows cumulatively from the base value', () => {
+    const rows = buildWaterfallData(negBase, mockFeatures, 10);
+    let cumulative = negBase;
+    for (const row of rows.slice(1, -1)) {
+      const next = cumulative + (row.original?.shap_value ?? 0);
+      // The interval endpoints are {previous cumulative, cumulative + shap},
+      // ordered — the bar floats over exactly this step of the walk.
+      expect([row.start, row.end]).toEqual([
+        Math.min(cumulative, next),
+        Math.max(cumulative, next),
+      ]);
+      expect(Math.abs(row.end - row.start)).toBeCloseTo(
+        Math.abs(row.original?.shap_value ?? NaN)
+      );
+      cumulative = next;
+    }
+  });
+
+  it('sorts by |shap| desc and truncates to maxFeatures', () => {
+    const rows = buildWaterfallData(negBase, mockFeatures, 2);
+    // base + 2 features + output
+    expect(rows).toHaveLength(4);
+    expect(rows[1].original?.feature_name).toBe('days_since_visit'); // |0.35|
+    expect(rows[2].original?.feature_name).toBe('total_prescriptions'); // |-0.28|
+  });
+
+  it('keeps positive-base charts anchored correctly too', () => {
+    const rows = buildWaterfallData(0.45, mockFeatures, 10);
+    expect([rows[0].start, rows[0].end]).toEqual([0, 0.45]);
+    rows.forEach((r) => expect(r.start).toBeLessThanOrEqual(r.end));
+  });
+});
 
 describe('SHAPWaterfall', () => {
   it('renders with base value and features', () => {
