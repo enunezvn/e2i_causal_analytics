@@ -1573,3 +1573,32 @@ class TestGlobalEndpointSamplingParams:
             },
         )
         assert resp.status_code == 422
+
+    def test_422_when_max_above_ceiling(self):
+        resp = client.get(
+            "/api/explain/global",
+            params={
+                "model_type": "persistence",
+                "brand": "Remibrutinib",
+                "max_sample_size": 201,
+            },
+        )
+        assert resp.status_code == 422
+
+
+class TestDefaultMaxSampleSize:
+    """Model-type-dependent default cap: persistence/discontinuation rankings
+    have mid-tail pairs whose real gaps are noisy at n=60 (need n≈150-200 to
+    separate), so those cohorts get the extended budget by default."""
+
+    def test_extended_cap_for_persistence_and_discontinuation(self):
+        from src.api.routes.explain import ModelType, _default_max_sample_size
+
+        assert _default_max_sample_size(ModelType.PERSISTENCE) == 200
+        assert _default_max_sample_size(ModelType.DISCONTINUATION) == 200
+
+    def test_standard_cap_for_other_cohorts(self):
+        from src.api.routes.explain import ModelType, _default_max_sample_size
+
+        assert _default_max_sample_size(ModelType.INITIATION) == 60
+        assert _default_max_sample_size(ModelType.HCP_ADOPTION) == 60

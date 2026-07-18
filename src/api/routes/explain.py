@@ -104,6 +104,25 @@ GOLDSTD_COHORT_MODEL_TYPES: frozenset[ModelType] = frozenset(
 GOLDSTD_BRANDS: tuple[str, ...] = ("Remibrutinib", "Fabhalta", "Kisqali")
 _DEFAULT_GOLDSTD_BRAND = "Remibrutinib"
 
+# Adaptive-sizing cap for /global, per model type. Persistence/discontinuation
+# top-5 rankings carry mid-tail pairs whose real gaps (~0.01-0.06 mean |SHAP|)
+# are still noisy at n=60 and need n≈150-200 to separate (measured from stored
+# sample points, 2026-07-18), so those cohorts default to the full ceiling; the
+# other cohorts stabilize by n≈25-60 and keep the cheaper default. ~200
+# sequential SHAP calls run ≈1 min, well inside the 300 s /api proxy budget.
+_MAX_SAMPLE_SIZE_CEILING = 200
+_DEFAULT_MAX_SAMPLE_SIZE = 60
+_EXTENDED_CAP_MODEL_TYPES: frozenset[ModelType] = frozenset(
+    {ModelType.PERSISTENCE, ModelType.DISCONTINUATION}
+)
+
+
+def _default_max_sample_size(model_type: ModelType) -> int:
+    """Default adaptive-sizing cap for a cohort (see _EXTENDED_CAP_MODEL_TYPES)."""
+    if model_type in _EXTENDED_CAP_MODEL_TYPES:
+        return _MAX_SAMPLE_SIZE_CEILING
+    return _DEFAULT_MAX_SAMPLE_SIZE
+
 
 def goldstd_serving_name(model_type: ModelType, brand: Optional[str]) -> str:
     """Resolve the per-brand serving ``model_name`` for a gold-standard cohort.
@@ -2535,16 +2554,22 @@ async def global_feature_importance(
         le=60,
         description="Minimum entities to explain; adaptive sizing may sample more",
     ),
-    max_sample_size: int = Query(
-        default=60,
+    max_sample_size: Optional[int] = Query(
+        default=None,
         ge=5,
-        le=60,
-        description="Hard cap for adaptive sizing (latency/memory budget)",
+        le=_MAX_SAMPLE_SIZE_CEILING,
+        description=(
+            "Hard cap for adaptive sizing (latency/memory budget). Defaults per "
+            "model type: 200 for persistence/discontinuation (mid-tail ranking "
+            "gaps need larger n to separate), 60 otherwise."
+        ),
     ),
     max_points: int = Query(default=30, ge=1, le=60),
     refresh: bool = Query(default=False),
     user: Dict[str, Any] = Depends(require_auth),
 ) -> GlobalFeatureImportanceResponse:
+    if max_sample_size is None:
+        max_sample_size = _default_max_sample_size(model_type)
     if max_sample_size < sample_size:
         raise HTTPException(
             status_code=422,
