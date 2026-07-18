@@ -1340,6 +1340,34 @@ class TestRankingStable:
         }
         assert _ranking_stable(abs_vals, n=6) is True
 
+    def test_confirmed_practical_tie_does_not_block_stability(self):
+        from src.api.routes.explain import _ranking_stable
+
+        # Live regression (hcp_adoption/Remibrutinib, 2026-07-18): two mid-tail
+        # features just ABOVE the negligible floor whose means are tightly
+        # measured near-equal (tiny SEs). The true gap is confidently below the
+        # floor, so their arbitrary order must not force max-n runs.
+        n = 30
+        abs_vals = {
+            "dominant": [1.5] * n,
+            "tied_a": [0.042] * n,
+            "tied_b": [0.0418] * n,
+        }
+        assert _ranking_stable(abs_vals, n=n) is True
+
+    def test_noisy_tie_above_floor_still_blocks(self):
+        from src.api.routes.explain import _ranking_stable
+
+        # Same near-equal means, but measured with high variance: the true gap
+        # could be material, so more entities genuinely help — must NOT be
+        # exempted as a practical tie.
+        abs_vals = {
+            "dominant": [1.5] * 4,
+            "tied_a": [0.5, 0.1, 0.5, 0.1],
+            "tied_b": [0.1, 0.5, 0.1, 0.5],
+        }
+        assert _ranking_stable(abs_vals, n=4) is False
+
     def test_needs_at_least_two_entities(self):
         from src.api.routes.explain import _ranking_stable
 
