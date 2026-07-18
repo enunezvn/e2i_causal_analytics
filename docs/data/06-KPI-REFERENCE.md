@@ -1,6 +1,6 @@
 # KPI Reference
 
-**Version**: 3.0.0 | **Last Updated**: 2025-11-28 | **Calculable KPIs**: 44 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
+**Version**: 3.1.0 | **Last Updated**: 2026-07-18 | **Calculable KPIs**: 44 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
 
 ---
 
@@ -8,7 +8,7 @@
 
 **Jump to workstream**: [WS1 Data Quality](#ws1-data-coverage--quality-9-kpis) | [WS1 Model Performance](#ws1-model-performance-9-kpis) | [WS2 Triggers](#ws2-trigger-performance-8-kpis) | [WS3 Business](#ws3-business-impact-10-kpis) | [Brand-Specific](#brand-specific-5-kpis) | [Causal Metrics](#causal-metrics-5-kpis)
 
-**Reference sections**: [Threshold Interpretation](#threshold-interpretation-guide) | [Helper Views](#helper-views) | [KPI Data Flow](#kpi-data-flow)
+**Reference sections**: [Time Windows & Dimension Axes](#time-windows--dimension-axes-july-2026-engine) | [Threshold Interpretation](#threshold-interpretation-guide) | [Helper Views](#helper-views) | [KPI Data Flow](#kpi-data-flow)
 
 > **Reporting windows (migration 089)**: KPIs described as covering a "30-day" / "trailing" window are anchored at the **data frontier** — the window ends at `MAX(<domain timestamp>)` of the query's own domain (e.g. latest prescription for TRx/NRx/NBRx), **not** wall-clock `NOW()`. The synthetic gold-standard substrate is calendar-fixed by design (journeys 2022-01-01..2024-12-31), so `NOW()`-anchored windows silently decayed to empty sets as time passed the seed date. Each answer carries a `data_through` as-of date. Exception: MAU/WAU stay `NOW()`-anchored — `user_sessions` is real accruing app usage.
 
@@ -68,6 +68,127 @@ All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row
 | 46 | CM-005 | Mediation Effect | Causal | `indirect / total` | -- | -- | -- | On demand |
 
 "--" indicates volume or effect-size metrics without fixed thresholds.
+
+---
+
+## Time Windows & Dimension Axes (July 2026 engine)
+
+The chatbot KPI engine (PRs #1271/#1273, migrations 105/108/110/111) lets a
+small set of KPIs be sliced by **dimension axes** and bounded by
+**user-requested time windows**. This section documents the request grammar,
+the variant registry that serves it, and the honesty guarantees. Code is the
+source of truth: `src/services/time_window.py`, `src/kpi/calculator.py`,
+`src/kpi/calculators/business_impact.py`, `src/kpi/synthetic_mode.py`,
+`src/api/routes/chatbot_tools.py`.
+
+### Which KPIs participate
+
+Windowability comes from `windowable:` in `config/kpi_definitions.yaml`.
+Exactly five KPIs are `windowable: clean`: **WS3-BI-005 (TRx), WS3-BI-006
+(NRx), WS3-BI-007 (NBRx), WS3-BI-008 (TRx Share), WS3-BI-009 (Conversion
+Rate)**. Nearly all others are `not_applicable` (point-in-time or
+model-scored metrics).
+
+### Window grammar (`parse_window`, `src/services/time_window.py`)
+
+Accepted forms (case-insensitive; all half-open `[start, end)` UTC):
+
+| Form | Examples | Anchoring |
+|---|---|---|
+| Rolling — `last/past/trailing/previous [N] unit` | `last 6 months`, `past 2 weeks`, **`last year`** (count optional since PR #1273 — bare unit = 1) | relative to now |
+| Quarter | `Q1 2025` | absolute |
+| Month range | `Jan-Mar 2025`, `Jan to Mar 2025` | absolute |
+| Single month | `March 2025` | absolute |
+| Bare year | `2025` | absolute |
+| ISO range | `2025-01-01 to 2025-06-30` | absolute |
+
+**Not supported**: `ytd`, `qtd`, `this year`, `this month` — a bare unit
+requires the `last/past/trailing/previous` prefix. An unparseable window
+raises `WindowParseError` and comes back as a user-input error with a hint —
+**never a silent default**. No window at all means the KPI's standard
+frontier-anchored window (see the migration-089 callout above).
+
+Every response stamps `window_status`:
+
+| `window_status` | Meaning |
+|---|---|
+| `default` | No window requested; the engine's frontier-anchored default was used (a `reporting_window` prose note is attached) |
+| `applied` | The requested window was honored; `window_requested` + `window_applied` carry the bounds |
+| `not_applicable` | KPI has no time dimension; the request is recorded but the value is unchanged |
+
+### Dimension axes
+
+| Axis | Request field | Backed by | Values |
+|---|---|---|---|
+| Severity tier | `segment` | `patient_journeys.segment_assignment` | `low` / `medium` / `high` severity |
+| Line of therapy | `therapy_line` | `patient_journeys.prior_therapy_lines` | 0–3 |
+| Biologic status | `biologic` | `patient_journeys.biologic_experienced` | `experienced` / `naive` — **Remibrutinib (CSU) only** |
+| IgE tertile | `ige_tier` | `patient_journeys.ige_level`, cut at the empirical p33/p66 (105.21 / 208.50 IU/mL) | `low` / `medium` / `high` — **Remibrutinib (CSU) only** |
+| Region | `region` | territory mapping | predates the axis work; **loses to any patient axis** |
+
+Joins are on `patient_id` (not `patient_journey_id`). Patient axes take
+precedence over `region`, and axes do **not** combine with each other (the
+registry RPC caps at 4 parameters). The biologic / IgE axes are
+**brand-gated fail-closed**: requesting them for a brand whose rows are NULL
+by design (anything but Remibrutinib) errors before any query rather than
+fabricating a split.
+
+### The variant registry (`kpi_query_registry`)
+
+Axis and window support is served by pre-registered SQL variants keyed by
+`query_id` suffix — the certified base queries are byte-for-byte unchanged:
+
+| Suffix | Meaning | Params |
+|---|---|---|
+| *(base)* | brand-scoped headline | `[brand]` |
+| `_segment` / `_line` / `_biologic` / `_ige_tier` | one patient axis | `[brand, axis_value]` |
+| `_windowed` | user window | `[brand, start, end]` |
+| `_{axis}_windowed` | axis + window | `[brand, axis_value, start, end]` |
+| `_monthly_by_{segment,line}` | monthly time-series, all buckets in one call (feeds trend charts) | `[brand]` |
+| `_region`, `_brand` | pre-axis-era variants | per query |
+| `_include_synthetic` | twin of any of the above without the `is_synthetic = false` wrapper (showcase mode) | same |
+
+Registry migrations: **105** (severity/line variants for TRx/NRx/NBRx/TRx
+Share), **108** (biologic/IgE variants, Remibrutinib-only), **110** (monthly
+series by segment/line), **111** (Conversion Rate brand/axis/window + TRx
+Share windowed).
+
+### Fail-loud on unregistered combinations (PR #1271)
+
+A dimension combination with no registered variant **errors loudly** instead
+of silently dropping dimensions (the pre-#1271 bug: conversion rate routed
+region-only and silently discarded brand/segment/line, producing one flat
+number for every question). Examples of refused combinations: conversion ×
+biologic/IgE (conversion is computed over triggers, which carry no
+biologic/IgE dimension); conversion × window × region; TRx Share × window ×
+region/biologic/IgE. The error text names the missing variant and the
+supported alternatives.
+
+### `semantic_note` (fabrication guard)
+
+WS3-BI-008 responses always carry this note, verbatim from
+`src/api/routes/chatbot_tools.py` (`KPI_SEMANTIC_NOTES`):
+
+> TRx Share is the brand's share of the tracked portfolio's prescriptions
+> (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share
+> against external competitors. Competitor brands (e.g. Xolair, Dupixent)
+> are not in the data model; never attribute the share complement to them.
+
+It exists because the chatbot once presented TRx Share as "share of the CSU
+market" and attributed the complement to competitors that aren't in the data.
+
+### Surfaces
+
+- **Chatbot tool `kpi_calculate_tool`** (`src/api/routes/chatbot_tools.py`)
+  — the full engine: accepts `window` plus all axes and returns the
+  provenance fields (`window_status`, `window_requested`/`window_applied`,
+  `data_through`, `reporting_window`, `semantic_note`, and a
+  `window_coverage` warning for volume KPIs over long windows).
+- **REST `GET /api/kpis/{kpi_id}`** (`src/api/routes/kpi.py`) — accepts the
+  axis params (`brand`, `region`, `segment`, `therapy_line`, `biologic`,
+  `ige_tier`) but **no `window` param**, and its response omits the
+  window/semantic provenance fields. To exercise or verify the windowed
+  path, go through the chatbot tool, not REST.
 
 ---
 
@@ -952,8 +1073,8 @@ Requires the `brand` context parameter. Returns 0 when no brand is specified.
 |-------|-------|
 | **ID** | `WS3-BI-008` |
 | **Name** | TRx Share |
-| **Definition** | Brand prescription share of total therapeutic category |
-| **Formula** | `brand_trx / category_trx` |
+| **Definition** | Brand share of the tracked portfolio's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — **not** market share against external competitors |
+| **Formula** | `brand_trx / portfolio_trx` |
 | **Calculation Type** | Derived |
 | **Direction** | Higher is better |
 | **Unit** | Ratio (0.0 - 1.0) |
@@ -966,6 +1087,15 @@ Requires the `brand` context parameter. Returns 0 when no brand is specified.
 | **Critical** | < 0.10 |
 
 Requires the `brand` context parameter.
+
+**Axes & windows** (see [Time Windows & Dimension Axes](#time-windows--dimension-axes-july-2026-engine)):
+severity tier and line-of-therapy variants (migration 105), biologic/IgE
+variants for Remibrutinib (migration 108), and windowed variants — plain,
+`_segment_windowed`, `_line_windowed` only (migration 111). A window combined
+with region/biologic/IgE fails loud (no such variant is registered). Every
+response carries the portfolio-scope `semantic_note` — the share complement
+must never be attributed to competitor brands, which are not in the data
+model.
 
 **Calculator**: `BusinessImpactCalculator._calc_trx_share`
 
@@ -984,13 +1114,22 @@ Requires the `brand` context parameter.
 | **Unit** | Ratio (0.0 - 1.0) |
 | **Frequency** | Weekly |
 | **Source Tables** | `triggers`, `treatment_events` |
-| **Source Columns** | `triggers.trigger_id`, `treatment_events.event_type` |
+| **Source Columns** | `triggers.trigger_id`, `triggers.brand_id`, `treatment_events.event_type` |
 | **Helper View** | None |
 | **Target** | >= 0.08 (8%) |
 | **Warning** | < 0.08 and >= 0.05 |
 | **Critical** | < 0.02 |
 
-Looks for prescription events that occur between trigger fire date and 30 days after for the same patient.
+Looks for prescription events that occur between trigger fire date and 30 days after for the same patient. Brand scoping (migration 111): a trigger belongs to a brand via `triggers.brand_id`, and it **converts only on a same-brand prescription** within the fixed 30-day horizon. A requested time window bounds **which triggers count** (`trigger_timestamp` in the window) — the 30-day trigger→Rx horizon is never window-truncated.
+
+**Axes & windows** (see [Time Windows & Dimension Axes](#time-windows--dimension-axes-july-2026-engine)):
+routed variants for brand, severity tier, line of therapy, and their
+windowed forms (migration 111). Unsupported combinations **fail loud**:
+biologic/IgE axes (triggers carry no biologic/IgE dimension), window ×
+region, and brand × region are all refused with an explanatory error.
+Before PR #1271 this KPI silently routed region-only and dropped
+brand/segment/line dimensions, returning one flat number for every
+question — the fail-loud routing is the fix.
 
 **Calculator**: `BusinessImpactCalculator._calc_conversion_rate`
 
