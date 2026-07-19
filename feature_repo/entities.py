@@ -24,7 +24,7 @@ hcp = Entity(
     join_keys=["hcp_id"],
     value_type=ValueType.STRING,
     description="Healthcare Provider (physician, prescriber). "
-                "Core entity for HCP targeting and conversion analysis.",
+    "Core entity for HCP targeting and conversion analysis.",
     tags={
         "domain": "commercial",
         "owner": "analytics-team",
@@ -37,7 +37,7 @@ patient = Entity(
     join_keys=["patient_id"],
     value_type=ValueType.STRING,
     description="Anonymized patient for journey analysis. "
-                "Used for adherence, churn, and therapy optimization.",
+    "Used for adherence, churn, and therapy optimization.",
     tags={
         "domain": "commercial",
         "owner": "analytics-team",
@@ -50,8 +50,7 @@ territory = Entity(
     name="territory",
     join_keys=["territory_id"],
     value_type=ValueType.STRING,
-    description="Geographic sales territory. "
-                "Used for resource allocation and market analysis.",
+    description="Geographic sales territory. Used for resource allocation and market analysis.",
     tags={
         "domain": "commercial",
         "owner": "sales-ops",
@@ -64,7 +63,7 @@ brand = Entity(
     join_keys=["brand_id"],
     value_type=ValueType.STRING,
     description="Pharmaceutical brand/product. "
-                "Current brands: Remibrutinib (CSU), Fabhalta (PNH), Kisqali (HR+/HER2-).",
+    "Current brands: Remibrutinib (CSU), Fabhalta (PNH), Kisqali (HR+/HER2-).",
     tags={
         "domain": "commercial",
         "owner": "brand-team",
@@ -76,8 +75,7 @@ trigger = Entity(
     name="trigger",
     join_keys=["trigger_id"],
     value_type=ValueType.STRING,
-    description="Marketing trigger/event. "
-                "Used for campaign effectiveness and response analysis.",
+    description="Marketing trigger/event. Used for campaign effectiveness and response analysis.",
     tags={
         "domain": "commercial",
         "owner": "marketing",
@@ -97,7 +95,7 @@ hcp_brand = Entity(
     join_keys=["hcp_brand_id"],  # Composite key: "{hcp_id}_{brand_id}"
     value_type=ValueType.STRING,
     description="HCP-Brand composite entity for brand-specific HCP features. "
-                "Key format: '{hcp_id}_{brand_id}'",
+    "Key format: '{hcp_id}_{brand_id}'",
     tags={
         "domain": "commercial",
         "owner": "analytics-team",
@@ -111,7 +109,7 @@ patient_brand = Entity(
     join_keys=["patient_brand_id"],  # Composite key: "{patient_id}_{brand_id}"
     value_type=ValueType.STRING,
     description="Patient-Brand composite entity for therapy-specific journey features. "
-                "Key format: '{patient_id}_{brand_id}'",
+    "Key format: '{patient_id}_{brand_id}'",
     tags={
         "domain": "commercial",
         "owner": "analytics-team",
@@ -126,7 +124,7 @@ hcp_territory = Entity(
     join_keys=["hcp_territory_id"],  # Composite key: "{hcp_id}_{territory_id}"
     value_type=ValueType.STRING,
     description="HCP-Territory composite for territory-specific targeting. "
-                "Key format: '{hcp_id}_{territory_id}'",
+    "Key format: '{hcp_id}_{territory_id}'",
     tags={
         "domain": "commercial",
         "owner": "sales-ops",

@@ -31,13 +31,13 @@ hcp_conversion_fv = FeatureView(
         Field(name="trx_count", dtype=Int64, description="Total TRx in period"),
         Field(name="nrx_count", dtype=Int64, description="New prescriptions"),
         Field(name="total_rx_count", dtype=Int64, description="Total prescriptions"),
-
         # Market metrics
         Field(name="market_share", dtype=Float32, description="HCP's market share for brand"),
         Field(name="conversion_rate", dtype=Float32, description="Historical conversion rate"),
-
         # Engagement metrics
-        Field(name="engagement_score", dtype=Float32, description="Overall engagement score (0-100)"),
+        Field(
+            name="engagement_score", dtype=Float32, description="Overall engagement score (0-100)"
+        ),
         Field(name="call_frequency", dtype=Float32, description="Rep call frequency (calls/month)"),
     ],
     source=business_metrics_source,
@@ -65,9 +65,10 @@ hcp_profile_fv = FeatureView(
         Field(name="specialty", dtype=String, description="Medical specialty"),
         Field(name="practice_type", dtype=String, description="Solo/Group/Hospital"),
         Field(name="years_of_practice", dtype=Int64, description="Years in practice"),
-
         # Segmentation
-        Field(name="patient_volume_tier", dtype=String, description="High/Medium/Low patient volume"),
+        Field(
+            name="patient_volume_tier", dtype=String, description="High/Medium/Low patient volume"
+        ),
         Field(name="digital_engagement_tier", dtype=String, description="Digital engagement level"),
         Field(name="prescribing_tier", dtype=String, description="Prescribing volume tier"),
     ],

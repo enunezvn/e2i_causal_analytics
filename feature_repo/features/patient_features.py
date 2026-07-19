@@ -26,13 +26,13 @@ patient_journey_fv = FeatureView(
     schema=[
         # Therapy duration
         Field(name="days_on_therapy", dtype=Int64, description="Days since therapy start"),
-        Field(name="therapy_start_date", dtype=UnixTimestamp, description="Therapy initiation date"),
-
+        Field(
+            name="therapy_start_date", dtype=UnixTimestamp, description="Therapy initiation date"
+        ),
         # Adherence metrics
         Field(name="adherence_rate", dtype=Float32, description="Adherence rate (0-1)"),
         Field(name="refill_count", dtype=Int64, description="Number of refills"),
         Field(name="gap_days", dtype=Int64, description="Cumulative gap days"),
-
         # Churn indicators
         Field(name="is_churned", dtype=Bool, description="Has patient churned"),
         Field(name="churn_risk_score", dtype=Float32, description="ML-derived churn risk (0-1)"),
@@ -63,7 +63,6 @@ patient_adherence_fv = FeatureView(
         Field(name="adherence_rate", dtype=Float32, description="Current adherence rate"),
         Field(name="refill_count", dtype=Int64, description="Total refills to date"),
         Field(name="gap_days", dtype=Int64, description="Total gap days"),
-
         # Risk scoring
         Field(name="churn_risk_score", dtype=Float32, description="Current churn risk score"),
     ],

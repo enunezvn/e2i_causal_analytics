@@ -25,13 +25,13 @@ trigger_effectiveness_fv = FeatureView(
     ttl=timedelta(days=7),
     schema=[
         # Trigger metadata
-        Field(name="trigger_type", dtype=String, description="Type of trigger (email, call, event)"),
+        Field(
+            name="trigger_type", dtype=String, description="Type of trigger (email, call, event)"
+        ),
         Field(name="channel", dtype=String, description="Delivery channel"),
-
         # Response metrics
         Field(name="is_responded", dtype=Bool, description="Did HCP respond to trigger"),
         Field(name="response_time_hours", dtype=Float32, description="Time to response in hours"),
-
         # Outcome metrics
         Field(name="conversion_flag", dtype=Bool, description="Did trigger lead to conversion"),
         Field(name="roi_estimate", dtype=Float32, description="Estimated ROI of trigger"),
