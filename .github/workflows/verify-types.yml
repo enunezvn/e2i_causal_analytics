@@ -10,11 +10,13 @@ on:
       - "src/**/*.py"
       - "frontend/src/types/generated/**"
       - ".spectral.yml"
+      - ".github/workflows/verify-types.yml"
   push:
     branches: [main]
     paths:
       - "src/**/*.py"
       - ".spectral.yml"
+      - ".github/workflows/verify-types.yml"
 
 jobs:
   verify-types:
@@ -62,26 +64,24 @@ jobs:
         run: |
           python -m scripts.export_openapi --output openapi.json
 
+      # There is deliberately NO drift diff here: its baseline
+      # (frontend/src/types/generated/api.ts) was untracked in 5aa69163 and
+      # gitignored — hand-written types in frontend/src/types/*.ts are the
+      # compiler's source of truth, and generated types are a local diff aid
+      # (see frontend/README.md "Generated types"). The former "Check for
+      # type drift" step diffed against that nonexistent file, warning
+      # "may be out of sync" on every run. What CI can certify instead,
+      # as hard gates: the current backend schema must generate, and the
+      # generated TypeScript must compile.
       - name: Generate types from exported spec
         working-directory: frontend
         run: |
-          npx openapi-typescript ../openapi.json -o src/types/generated/api.ts.new
+          npx openapi-typescript ../openapi.json -o src/types/generated/api.ts
 
-      - name: Check for type drift
+      - name: Compile-check generated types
         working-directory: frontend
         run: |
-          if [ -f src/types/generated/api.ts.new ]; then
-            # Compare generated types (ignore timestamps/comments)
-            if diff -q <(grep -v "^/\*" src/types/generated/api.ts | grep -v "^\*" | grep -v "^ \*") \
-                       <(grep -v "^/\*" src/types/generated/api.ts.new | grep -v "^\*" | grep -v "^ \*") > /dev/null 2>&1; then
-              echo "Types are in sync with OpenAPI spec"
-            else
-              echo "Types may be out of sync with OpenAPI spec"
-              echo "Run 'npm run generate:types' in frontend/ to update"
-              # Don't fail - just warn (types can have minor formatting differences)
-            fi
-            rm src/types/generated/api.ts.new
-          fi
+          npx tsc --noEmit --strict --skipLibCheck src/types/generated/api.ts
 
       - name: Install Spectral
         run: npm install -g @stoplight/spectral-cli
