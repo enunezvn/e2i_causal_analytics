@@ -126,6 +126,8 @@ e2i_causal_analytics/
 
 ## Recent Highlights (June–July 2026)
 
+> Ongoing change tracking lives in [`CHANGELOG.md`](CHANGELOG.md) (from July 2026) and the decision log in [`docs/decisions/`](docs/decisions/README.md).
+
 - **LLM model refresh + tier factory** — provider-switchable fast/standard/reasoning tiers (OpenAI `gpt-5.6-luna`/`gpt-5.6-terra` default, Anthropic `claude-haiku-4-5`/`claude-sonnet-5` alternative), `LLM_MODEL` deployment override, DSPy default `openai/gpt-5.6-terra`. See [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md).
 - **Admin LLM observability** — every factory LLM call meters tokens into `llm_usage_events`, priced at read time in the `/admin` Observability tab.
 - **Feedback-learning loop live end-to-end** — golden-set replay → learning signals → pattern detection → gated prompt-update proposals.
