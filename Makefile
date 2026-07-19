@@ -158,6 +158,8 @@ api-docs:
 
 # Regenerate the committed frontend contract baseline the same way CI's
 # verify-types drift gate does (static spec export — no running server).
+# Your Python deps must match requirements.txt pins — FastAPI/Pydantic
+# versions change duplicate-schema-name output, and CI is the arbiter.
 generate-types:
 	python -m scripts.export_openapi --output openapi.json
 	cd frontend && npx openapi-typescript ../openapi.json -o src/types/generated/api.ts

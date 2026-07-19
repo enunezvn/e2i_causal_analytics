@@ -58,8 +58,12 @@ npm run generate:types:prod   # from the live deployment
 
 1. **Never edit `api.ts` manually** - CI regenerates it and fails on any difference
 2. **Regenerate after backend changes** - `make generate-types`, commit in the same PR
-3. **Import generated types from `./api`** - The `index.ts` no longer re-exports them (see issue #281); only `ApiResponse<T>` lives on the index
-4. **Backward compatibility** - Hand-crafted types in the parent directory remain the convention for application code
+3. **Your Python env must match `requirements.txt`** - FastAPI/Pydantic versions
+   change how duplicate schema names (e.g. `GraphNode`, `AnalysisStatus`) are
+   disambiguated, producing a byte-different `api.ts`. CI regenerates with the
+   pinned versions and is the arbiter; a drifted venv will fail the drift gate
+4. **Import generated types from `./api`** - The `index.ts` no longer re-exports them (see issue #281); only `ApiResponse<T>` lives on the index
+5. **Backward compatibility** - Hand-crafted types in the parent directory remain the convention for application code
 
 ## Integration with Existing Types
 
