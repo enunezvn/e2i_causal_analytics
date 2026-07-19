@@ -183,6 +183,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.947 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
+| replay_anchor | PASS | per-sample replay ids match the intended e2e replay set, both sides |
 | ragas[fully_scored] | PASS | every covered row carries a real score, both sides |
 | ragas[faithfulness] | **FAIL** | 0.122 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.465 vs baseline 0.401 (margin 0.05) |
@@ -207,6 +208,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.921 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
+| replay_anchor | PASS | per-sample replay ids match the intended e2e replay set, both sides |
 | ragas[fully_scored] | PASS | every covered row carries a real score, both sides |
 | ragas[faithfulness] | **FAIL** | 0.339 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.529 vs baseline 0.401 (margin 0.05) |
@@ -226,7 +228,7 @@ the data points at haiku + a grounding-behavior fix (its extra evidence
 calls retrieve more but its answers ground less), not at sonnet-5
 (unfixable 2.24× latency at equal cost).
 
-**Gate amendments after the run (codex review, add-only).** Eight gates in
+**Gate amendments after the run (codex review, add-only).** Nine gates in
 the tables above were added by the codex adversarial review AFTER the
 measurement runs completed: `ragas[completeness]` (iter-1),
 `ragas[faithfulness_coverage]` and `ragas[faithfulness_common_subset]`
@@ -290,7 +292,20 @@ the single source of truth for labels, as records are for rates; unknown
 query ids fail loud), and any divergence between the stored summary block
 and the rebound recompute is a hard analysis failure (exit 2), not a
 warning. Rebinding the real bundle reproduced every recorded rate
-byte-identically — the recorded labels were genuine. Post-run amendments are legitimate here ONLY because they are
+byte-identically — the recorded labels were genuine. The final amendment,
+`replay_anchor` (iter-9), extends the same measurement-identity anchoring
+to the e2e/RAGAS side: counts alone let a duplicated easy replay hide a
+dropped hard one (the red run passed consistency, completeness, and
+fully_scored with exactly that tamper), so analyze now takes the intended
+replay id list (`--e2e-ids`) and the gate requires both sides' RAGAS
+per-sample query-id multisets to equal it exactly, fail-closed. e2e
+summaries emit `query_ids` going forward and the gate checks them strictly
+whenever present; blocks recorded before the field existed carry only `n`
+and are tolerated as legacy on that half — the per-sample rows are the
+score-bearing identity, and a latency number's provenance is unverifiable
+without raw replay records either way. All three real blocks carry the
+identical intended 10-replay multiset, so it reports PASS and changes
+nothing. Post-run amendments are legitimate here ONLY because they are
 fail-closed additions evaluated on already-collected data: they can add
 failures but cannot flip a pre-registered FAIL to PASS, and on this run's
 data they strengthened the NO-FLIP (common-subset FAILs both candidates).

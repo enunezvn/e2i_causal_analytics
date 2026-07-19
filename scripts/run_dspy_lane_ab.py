@@ -96,6 +96,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
             print(f"ERROR: stored summary diverges from records: {div}")
         return 2
     expected = expected_signature_sets(golden)
+    replay_ids = [q for q in args.e2e_ids.split(",") if q]
     extra = json.loads(Path(args.extra).read_text()) if args.extra else {}
 
     baseline = _bundle_for(args.baseline_model, summary, extra)
@@ -105,7 +106,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     verdicts = {}
     for model in candidates:
         candidate = _bundle_for(model, summary, extra)
-        verdict = evaluate_gates(baseline, candidate, expected)
+        verdict = evaluate_gates(baseline, candidate, expected, replay_ids)
         verdicts[model] = verdict
         print(f"### {model} - {'ALL GATES PASS' if verdict['all_passed'] else 'FAIL'}\n")
         print("| gate | result | detail |")
@@ -152,6 +153,12 @@ def main() -> int:
         "--golden-set",
         required=True,
         help="golden-set fixture; anchors the signature query sets (codex iter-7)",
+    )
+    analyze.add_argument(
+        "--e2e-ids",
+        required=True,
+        help="comma-separated golden query ids the e2e replays were run against; "
+        "anchors the RAGAS per_sample rows (codex iter-9)",
     )
     analyze.add_argument("--extra", default=None)
     analyze.add_argument("--json-out", default=None)

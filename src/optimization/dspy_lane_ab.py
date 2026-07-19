@@ -202,6 +202,10 @@ def summarize_e2e_runs(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         out[model] = {
             "n": len(recs),
             "n_errors": len(recs) - len(ok),
+            # Sorted multiset so the replay_anchor gate can prove which
+            # replays produced these latencies - a count alone cannot (codex
+            # iter-9).
+            "query_ids": sorted(r["query_id"] for r in recs),
             "latency_p50": _percentile(latencies, 0.50),
             "latency_p95": _percentile(latencies, 0.95),
             "mean_hops": (sum(r["hop_count"] for r in ok) / len(ok)) if ok else None,
@@ -426,6 +430,37 @@ def expected_signature_sets(golden: Dict[str, Any]) -> Dict[str, Dict[str, List[
     return out
 
 
+def _replay_anchor_error(side: Dict[str, Any], expected_sorted: List[str]) -> Optional[str]:
+    """One side's replay-identity check against the intended replay set.
+
+    The RAGAS ``per_sample`` rows are the score-bearing identity: their
+    query-id multiset must equal the intended replay multiset exactly, so a
+    duplicated easy replay hiding a dropped hard one fails even though every
+    count stays intact (codex iter-9). The e2e ``query_ids`` field is checked
+    strictly whenever the block carries it; blocks recorded before the field
+    existed carry only ``n``, and a latency number's provenance is
+    unverifiable without raw replay records either way, so its absence is
+    tolerated as legacy rather than fabricating a FAIL on genuine pre-field
+    data.
+    """
+    ragas = side.get("ragas") or {}
+    rows = ragas.get("per_sample")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return "per_sample rows missing or malformed"
+    ids = [r.get("query_id") for r in rows]
+    if not all(isinstance(q, str) for q in ids):
+        return "per_sample rows carry non-string query ids"
+    if sorted(ids) != expected_sorted:
+        return f"per_sample query-id multiset {sorted(ids)} != expected replay set"
+    e2e_ids = (side.get("e2e") or {}).get("query_ids")
+    if e2e_ids is not None:
+        if not isinstance(e2e_ids, list) or not all(isinstance(q, str) for q in e2e_ids):
+            return "e2e query_ids malformed"
+        if sorted(e2e_ids) != expected_sorted:
+            return f"e2e query-id multiset {sorted(e2e_ids)} != expected replay set"
+    return None
+
+
 def _query_sets_match(b: Dict[str, Any], c: Dict[str, Any]) -> bool:
     """True only when both signature blocks carry well-formed query-id lists
     that agree with their own counts and match each other as multisets
@@ -450,13 +485,15 @@ def evaluate_gates(
     baseline: Dict[str, Any],
     candidate: Dict[str, Any],
     expected_signature: Optional[Dict[str, Dict[str, List[str]]]] = None,
+    expected_replay_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Evaluate one candidate against the baseline on the five hard gates.
 
     Missing measurement blocks (e.g. no RAGAS scores) fail closed: a gate
     cannot pass on absent data. ``expected_signature`` is the golden-set
-    anchor from ``expected_signature_sets``; omitting it fails the anchor
-    gates rather than skipping them (codex iter-7).
+    anchor from ``expected_signature_sets`` and ``expected_replay_ids`` the
+    intended e2e replay multiset; omitting either fails its anchor gates
+    rather than skipping them (codex iter-7/iter-9).
     """
     gates: List[Dict[str, Any]] = []
 
@@ -692,6 +729,23 @@ def evaluate_gates(
             f"new error classes: {sorted(new_classes) or 'none'}",
         )
     )
+
+    # Replay identity: counts alone let a duplicated easy replay hide a
+    # dropped hard one on the e2e/RAGAS side, the same measurement-identity
+    # hole the signature path anchors against the fixture (codex iter-9).
+    if expected_replay_ids is None:
+        gates.append(_gate("replay_anchor", False, "missing expected replay ids (fail-closed)"))
+    else:
+        expected_sorted = sorted(expected_replay_ids)
+        b_ra = _replay_anchor_error(baseline, expected_sorted)
+        c_ra = _replay_anchor_error(candidate, expected_sorted)
+        gates.append(
+            _gate(
+                "replay_anchor",
+                b_ra is None and c_ra is None,
+                f"baseline: {b_ra or 'OK'}; candidate: {c_ra or 'OK'}",
+            )
+        )
 
     b_e2e = baseline.get("e2e") or {}
     c_e2e = candidate.get("e2e") or {}
