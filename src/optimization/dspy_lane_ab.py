@@ -30,7 +30,7 @@ import math
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypeGuard
 
 # Pre-registered gate parameters (plan section 5). Changing these after seeing
 # results would be gate-shopping; they are constants on purpose.
@@ -49,6 +49,12 @@ _EPS = 1e-9
 # (same values, same summation order as the judge script - anything beyond
 # repr/JSON round-trip noise means the aggregate does not describe the rows).
 _RAGAS_CONSISTENCY_TOL = 1e-6
+
+# The two real intent surfaces the harness measures. The gate loop iterates
+# this constant rather than whatever keys the baseline happens to carry: an
+# empty or partial baseline signature block must FAIL its gates, not silently
+# drop them from the verdict (codex iter-6).
+GATE_SIGNATURE_TAXONOMIES = ("cognitive_rag", "chatbot")
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +166,13 @@ def summarize_signature_runs(records: List[Dict[str, Any]]) -> Dict[str, Dict[st
             out[model][taxonomy] = {
                 "n_scored": n_scored,
                 "n_excluded": len(recs) - n_scored,
+                # Sorted multisets so the query_set gate can prove both sides
+                # measured the SAME queries - counts alone cannot (codex
+                # iter-6).
+                "scored_query_ids": sorted(r["query_id"] for r in scored),
+                "excluded_query_ids": sorted(
+                    r["query_id"] for r in recs if r["acceptable"] is None
+                ),
                 "accuracy_strict": (sum(1 for v in strict if v) / n_scored) if n_scored else None,
                 "accuracy_lenient": (sum(1 for v in lenient if v) / n_scored) if n_scored else None,
                 "parse_failure_rate": (len(parse_failures) / n_scored) if n_scored else None,
@@ -199,7 +212,7 @@ def summarize_e2e_runs(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _is_finite_number(value: Any) -> bool:
+def _is_finite_number(value: Any) -> TypeGuard[float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
@@ -330,6 +343,26 @@ def _all_error_classes(bundle: Dict[str, Any]) -> set:
     return classes
 
 
+def _query_sets_match(b: Dict[str, Any], c: Dict[str, Any]) -> bool:
+    """True only when both signature blocks carry well-formed query-id lists
+    that agree with their own counts and match each other as multisets
+    (sorted-list comparison catches duplicated-plus-dropped ids that keep the
+    count intact)."""
+    for blk in (b, c):
+        for ids_key, n_key in (
+            ("scored_query_ids", "n_scored"),
+            ("excluded_query_ids", "n_excluded"),
+        ):
+            ids = blk.get(ids_key)
+            if not isinstance(ids, list) or not all(isinstance(q, str) for q in ids):
+                return False
+            if len(ids) != blk.get(n_key):
+                return False
+    return sorted(b["scored_query_ids"]) == sorted(c["scored_query_ids"]) and sorted(
+        b["excluded_query_ids"]
+    ) == sorted(c["excluded_query_ids"])
+
+
 def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate one candidate against the baseline on the five hard gates.
 
@@ -338,10 +371,18 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
     """
     gates: List[Dict[str, Any]] = []
 
-    for taxonomy, b in (baseline.get("signature") or {}).items():
-        c = (candidate.get("signature") or {}).get(taxonomy)
-        if c is None:
-            gates.append(_gate(f"signature[{taxonomy}]", False, "missing candidate data"))
+    baseline_sig = baseline.get("signature") or {}
+    candidate_sig = candidate.get("signature") or {}
+    for taxonomy in GATE_SIGNATURE_TAXONOMIES:
+        b = baseline_sig.get(taxonomy)
+        c = candidate_sig.get(taxonomy)
+        if b is None or c is None:
+            missing = " and ".join(
+                side for side, blk in (("baseline", b), ("candidate", c)) if blk is None
+            )
+            gates.append(
+                _gate(f"signature[{taxonomy}]", False, f"missing {missing} data (fail-closed)")
+            )
             continue
         # Rates are only comparable over the same golden-set denominator: a
         # truncated or partially merged summary (n_scored=1, accuracy 1.0)
@@ -355,6 +396,21 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
                 f"signature_denominator[{taxonomy}]",
                 counts_valid and b_n == c_n,
                 f"baseline (n_scored, n_excluded) {b_n} vs candidate {c_n} (must match exactly)",
+            )
+        )
+        # Equal counts cannot prove equal queries: a merged or hand-edited
+        # summary after a partial run can swap a hard query for an easy one
+        # while preserving (n_scored, n_excluded) (codex iter-6). The scored
+        # and excluded query-id multisets must match exactly, and each side's
+        # lists must agree with its own counts; the analyze CLI recomputes
+        # summaries from raw records so these fields cannot be forged
+        # independently of the records.
+        gates.append(
+            _gate(
+                f"signature_query_set[{taxonomy}]",
+                _query_sets_match(b, c),
+                "scored/excluded query-id multisets must match baseline and "
+                "agree with counts (fail-closed)",
             )
         )
         b_parse, c_parse = b.get("parse_failure_rate"), c.get("parse_failure_rate")
@@ -523,16 +579,22 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
 
     b_e2e = baseline.get("e2e") or {}
     c_e2e = candidate.get("e2e") or {}
-    if b_e2e.get("latency_p50") is None or c_e2e.get("latency_p50") is None:
-        gates.append(_gate("e2e_latency_p50", False, "missing e2e latency (fail-closed)"))
+    b_lat, c_lat = b_e2e.get("latency_p50"), c_e2e.get("latency_p50")
+    # Finite on BOTH sides: an inf baseline makes the limit inf (any candidate
+    # passes) and a non-numeric baseline raised instead of failing (codex
+    # iter-6) - same corruption class the signature/RAGAS gates fail closed on.
+    if not _is_finite_number(b_lat) or not _is_finite_number(c_lat):
+        gates.append(
+            _gate("e2e_latency_p50", False, "missing or non-finite e2e latency (fail-closed)")
+        )
     else:
-        limit = GATE_E2E_LATENCY_FACTOR * b_e2e["latency_p50"]
+        limit = GATE_E2E_LATENCY_FACTOR * b_lat
         gates.append(
             _gate(
                 "e2e_latency_p50",
-                c_e2e["latency_p50"] <= limit + _EPS,
-                f"candidate {c_e2e['latency_p50']:.1f}s vs limit {limit:.1f}s "
-                f"({GATE_E2E_LATENCY_FACTOR}x baseline {b_e2e['latency_p50']:.1f}s)",
+                c_lat <= limit + _EPS,
+                f"candidate {c_lat:.1f}s vs limit {limit:.1f}s "
+                f"({GATE_E2E_LATENCY_FACTOR}x baseline {b_lat:.1f}s)",
             )
         )
 

@@ -193,6 +193,13 @@ def _ragas_block(faith=0.85, rel=0.80, n_ctx=10):
     }
 
 
+# Query-id multisets shared by baseline and candidate fixtures - the
+# signature_query_set gate requires the two sides to have been measured on
+# exactly the same golden queries (codex iter-6).
+_COG_SCORED_IDS = [f"g{i}" for i in range(40)]
+_CHAT_SCORED_IDS = [f"g{i}" for i in range(38)]
+_CHAT_EXCLUDED_IDS = ["g38", "g39"]
+
 BASELINE = {
     "signature": {
         "cognitive_rag": {
@@ -201,6 +208,8 @@ BASELINE = {
             "error_classes": {},
             "n_scored": 40,
             "n_excluded": 0,
+            "scored_query_ids": list(_COG_SCORED_IDS),
+            "excluded_query_ids": [],
         },
         "chatbot": {
             "accuracy_strict": 0.90,
@@ -208,6 +217,8 @@ BASELINE = {
             "error_classes": {},
             "n_scored": 38,
             "n_excluded": 2,
+            "scored_query_ids": list(_CHAT_SCORED_IDS),
+            "excluded_query_ids": list(_CHAT_EXCLUDED_IDS),
         },
     },
     "ragas": _ragas_block(),
@@ -234,6 +245,8 @@ def _candidate(
                 "error_classes": sig_errors or {},
                 "n_scored": 40,
                 "n_excluded": 0,
+                "scored_query_ids": list(_COG_SCORED_IDS),
+                "excluded_query_ids": [],
             },
             "chatbot": {
                 "accuracy_strict": chat_acc,
@@ -241,6 +254,8 @@ def _candidate(
                 "error_classes": sig_errors or {},
                 "n_scored": 38,
                 "n_excluded": 2,
+                "scored_query_ids": list(_CHAT_SCORED_IDS),
+                "excluded_query_ids": list(_CHAT_EXCLUDED_IDS),
             },
         },
         "ragas": _ragas_block(faith=faith, rel=rel, n_ctx=n_ctx),
@@ -606,6 +621,134 @@ def test_production_chatbot_intent_matches_prod_normalizer():
     for raw in ["KPI_QUERY", " kpi ", "kpi query", "causal_analysis", "Greetings"]:
         assert production_chatbot_intent(raw) == _normalize_intent(raw)
     assert production_chatbot_intent("KPI_QUERY") == "kpi_query"
+
+
+def test_gate_signature_query_set_same_count_different_ids_codex_iter6():
+    # Codex iter-6 HIGH: matching (n_scored, n_excluded) cannot prove the two
+    # sides measured the same queries - a merged file after a partial run can
+    # swap a hard query for an easy one while preserving the counts.
+    candidate = _candidate()
+    ids = candidate["signature"]["chatbot"]["scored_query_ids"]
+    ids[0] = "g99"  # same count, different membership
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_denominator[chatbot]" not in failed  # counts still match
+    assert "signature_query_set[chatbot]" in failed
+    assert "signature_query_set[cognitive_rag]" not in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_query_set_duplicate_ids_fail():
+    # A duplicated easy query replacing a dropped hard one keeps the count
+    # but changes the multiset.
+    candidate = _candidate()
+    ids = candidate["signature"]["cognitive_rag"]["scored_query_ids"]
+    ids[1] = ids[0]
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_query_set[cognitive_rag]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_query_set_missing_ids_fails_closed():
+    candidate = _candidate()
+    del candidate["signature"]["cognitive_rag"]["scored_query_ids"]
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_query_set[cognitive_rag]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_query_set_count_id_mismatch_fails_closed():
+    # A block whose counts disagree with its own id lists is malformed.
+    candidate = _candidate()
+    candidate["signature"]["chatbot"]["n_scored"] = 37
+    candidate["signature"]["chatbot"]["n_excluded"] = 3
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_query_set[chatbot]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_missing_baseline_block_fails_closed_codex_iter6():
+    # Codex iter-6 HIGH: iterating baseline keys let an empty baseline
+    # signature block emit ZERO signature gates - all_passed was True with no
+    # signature comparison at all in the red run.
+    import copy
+
+    baseline = copy.deepcopy(BASELINE)
+    baseline["signature"] = {}
+    result = evaluate_gates(baseline, _candidate())
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature[cognitive_rag]" in failed
+    assert "signature[chatbot]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_missing_baseline_taxonomy_fails_closed():
+    import copy
+
+    baseline = copy.deepcopy(BASELINE)
+    del baseline["signature"]["chatbot"]
+    result = evaluate_gates(baseline, _candidate())
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature[chatbot]" in failed
+    assert "signature[cognitive_rag]" not in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_e2e_latency_non_finite_fails_closed_codex_iter6():
+    # Codex iter-6 MED: an inf baseline made the limit inf (any candidate
+    # passed) and a string baseline raised TypeError instead of failing.
+    import copy
+
+    for bad in [float("inf"), float("nan"), "40.0"]:
+        baseline = copy.deepcopy(BASELINE)
+        baseline["e2e"]["latency_p50"] = bad
+        result = evaluate_gates(baseline, _candidate(p50=1e9))
+        lat = [g for g in result["gates"] if g["name"] == "e2e_latency_p50"]
+        assert len(lat) == 1 and lat[0]["passed"] is False
+        assert result["all_passed"] is False
+    candidate = _candidate()
+    candidate["e2e"]["latency_p50"] = float("nan")
+    result = evaluate_gates(BASELINE, candidate)
+    lat = [g for g in result["gates"] if g["name"] == "e2e_latency_p50"]
+    assert len(lat) == 1 and lat[0]["passed"] is False
+
+
+def test_summarize_emits_query_id_multisets():
+    records = [
+        {
+            "model": "m",
+            "taxonomy": "chatbot",
+            "query_id": "a",
+            "predicted": "kpi_query",
+            "acceptable": ["kpi_query"],
+            "latency_s": 0.1,
+            "error": None,
+        },
+        {
+            "model": "m",
+            "taxonomy": "chatbot",
+            "query_id": "b",
+            "predicted": "general",
+            "acceptable": ["kpi_query"],
+            "latency_s": 0.1,
+            "error": None,
+        },
+        {
+            "model": "m",
+            "taxonomy": "chatbot",
+            "query_id": "c",
+            "predicted": "greeting",
+            "acceptable": None,
+            "latency_s": 0.1,
+            "error": None,
+        },
+    ]
+    s = summarize_signature_runs(records)["m"]["chatbot"]
+    assert s["scored_query_ids"] == ["a", "b"]
+    assert s["excluded_query_ids"] == ["c"]
 
 
 def test_run_e2e_replays_expected_model_mismatch_fails_fast(monkeypatch):

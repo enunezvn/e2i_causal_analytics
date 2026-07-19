@@ -43,6 +43,7 @@ from src.optimization.dspy_lane_ab import (  # noqa: E402
     emit_container_script,
     evaluate_gates,
     load_golden_set,
+    summarize_signature_runs,
 )
 
 
@@ -74,7 +75,11 @@ def _bundle_for(model: str, signature_summary: dict, extra: dict) -> dict:
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
     results = json.loads(Path(args.signature_results).read_text())
-    summary = results["summary"]
+    # Recompute the summary from the raw per-call records instead of trusting
+    # the stored aggregate block: a hand-edited or partially merged summary
+    # cannot forge rates or query-id multisets independently of the records
+    # they must be derived from (codex iter-6). Missing records fail loud.
+    summary = summarize_signature_runs(results["records"])
     extra = json.loads(Path(args.extra).read_text()) if args.extra else {}
 
     baseline = _bundle_for(args.baseline_model, summary, extra)

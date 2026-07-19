@@ -173,9 +173,11 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | gate | result | detail |
 |------|--------|--------|
 | signature_denominator[cognitive_rag] | PASS | (n_scored, n_excluded) (40, 0) both sides (must match exactly) |
+| signature_query_set[cognitive_rag] | PASS | scored/excluded query-id multisets match baseline |
 | parse_failure[cognitive_rag] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[cognitive_rag] | PASS | 0.875 vs baseline 0.850 (margin 0.05) |
 | signature_denominator[chatbot] | PASS | (n_scored, n_excluded) (38, 2) both sides (must match exactly) |
+| signature_query_set[chatbot] | PASS | scored/excluded query-id multisets match baseline |
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.947 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
@@ -193,9 +195,11 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | gate | result | detail |
 |------|--------|--------|
 | signature_denominator[cognitive_rag] | PASS | (n_scored, n_excluded) (40, 0) both sides (must match exactly) |
+| signature_query_set[cognitive_rag] | PASS | scored/excluded query-id multisets match baseline |
 | parse_failure[cognitive_rag] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[cognitive_rag] | PASS | 0.800 vs baseline 0.850 (margin 0.05, boundary) |
 | signature_denominator[chatbot] | PASS | (n_scored, n_excluded) (38, 2) both sides (must match exactly) |
+| signature_query_set[chatbot] | PASS | scored/excluded query-id multisets match baseline |
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.921 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
@@ -218,7 +222,7 @@ the data points at haiku + a grounding-behavior fix (its extra evidence
 calls retrieve more but its answers ground less), not at sonnet-5
 (unfixable 2.24× latency at equal cost).
 
-**Gate amendments after the run (codex review, add-only).** Six gates in
+**Gate amendments after the run (codex review, add-only).** Seven gates in
 the tables above were added by the codex adversarial review AFTER the
 measurement runs completed: `ragas[completeness]` (iter-1),
 `ragas[faithfulness_coverage]` and `ragas[faithfulness_common_subset]`
@@ -248,7 +252,22 @@ gate in the red-first test, `all_passed=True`; the gate requires candidate
 fail-closed on missing or non-integer counts, and the rate gates now also
 fail closed on missing/non-finite rates instead of raising; all three real
 summaries share (40, 0) cognitive and (38, 2) chatbot, so it reports PASS
-and changes nothing). Post-run amendments are legitimate here ONLY because they are
+and changes nothing), and `signature_query_set[*]` (iter-6: equal counts
+cannot prove equal queries — a merged file after a partial run can swap a
+hard query for an easy one while preserving the counts. Summaries now carry
+scored/excluded query-id multisets, the analyze CLI recomputes summaries
+from the raw per-call records so aggregates cannot be forged independently
+of the records they must derive from, and the gate requires exact multiset
+equality against the baseline, fail-closed. Recomputing the real bundle
+from records reproduced every recorded rate byte-identically — the recorded
+aggregates were genuine — so it reports PASS and changes nothing. The same
+iteration also closed two fail-open holes found in the red runs: an empty
+or partial baseline signature block used to emit ZERO signature gates and
+return `all_passed=True` with no signature comparison at all — the gate
+loop now iterates the fixed taxonomy pair and fails closed on any missing
+block — and the e2e latency gate accepted an infinite baseline (limit =
+inf, any candidate passes) and crashed on a non-numeric one; it now
+requires finite values on both sides). Post-run amendments are legitimate here ONLY because they are
 fail-closed additions evaluated on already-collected data: they can add
 failures but cannot flip a pre-registered FAIL to PASS, and on this run's
 data they strengthened the NO-FLIP (common-subset FAILs both candidates).
