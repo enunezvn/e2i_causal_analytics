@@ -17,6 +17,10 @@ piped over stdin).
 Scoring is case-sensitive by default because production consumers compare
 intent strings exactly (``cognitive_rag_dspy.py:576``, ``chatbot_dspy.py:2062``);
 a wrong-case answer would misbehave in production even if semantically right.
+The chatbot comparison happens AFTER ``_normalize_intent`` at
+``chatbot_dspy.py:615``, so chatbot predictions are normalized through the
+same function before exact scoring (``production_chatbot_intent``); the
+cognitive consumer reads ``primary_intent`` raw, so cognitive stays raw.
 """
 
 from __future__ import annotations
@@ -96,6 +100,26 @@ def _error_class(error: Optional[str]) -> Optional[str]:
     if not error:
         return None
     return error.split(":", 1)[0].strip()
+
+
+def production_chatbot_intent(raw: Optional[str]) -> Optional[str]:
+    """Map a raw ChatbotIntentClassifier prediction to the value production
+    routes on.
+
+    The prod path (chatbot_dspy.classify_intent_dspy) passes the DSPy output
+    through ``_normalize_intent`` before any consumer sees it, so scoring the
+    raw string would count casing/alias variants production accepts (e.g.
+    ``"KPI_QUERY"``) as wrong (codex iter-5). The cognitive taxonomy is
+    scored raw on purpose: its production consumer reads ``primary_intent``
+    unnormalized. Parse failures stay None.
+    """
+    if raw is None:
+        return None
+    # Deferred: keeps this module import-light; resolvable wherever the
+    # signature runs actually execute (the prod container has src on path).
+    from src.api.routes.chatbot_dspy import _normalize_intent
+
+    return _normalize_intent(str(raw))
 
 
 def _percentile(values: List[float], p: float) -> Optional[float]:
@@ -319,22 +343,55 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
         if c is None:
             gates.append(_gate(f"signature[{taxonomy}]", False, "missing candidate data"))
             continue
+        # Rates are only comparable over the same golden-set denominator: a
+        # truncated or partially merged summary (n_scored=1, accuracy 1.0)
+        # would otherwise beat a full-set baseline on every rate gate (codex
+        # iter-5). Counts must be real ints and match exactly, fail-closed.
+        b_n = (b.get("n_scored"), b.get("n_excluded"))
+        c_n = (c.get("n_scored"), c.get("n_excluded"))
+        counts_valid = all(isinstance(v, int) and not isinstance(v, bool) for v in (*b_n, *c_n))
         gates.append(
             _gate(
-                f"parse_failure[{taxonomy}]",
-                c["parse_failure_rate"] <= b["parse_failure_rate"] + _EPS,
-                f"candidate {c['parse_failure_rate']:.3f} vs baseline "
-                f"{b['parse_failure_rate']:.3f} (must not exceed)",
+                f"signature_denominator[{taxonomy}]",
+                counts_valid and b_n == c_n,
+                f"baseline (n_scored, n_excluded) {b_n} vs candidate {c_n} (must match exactly)",
             )
         )
-        gates.append(
-            _gate(
-                f"accuracy[{taxonomy}]",
-                c["accuracy_strict"] >= b["accuracy_strict"] - GATE_ACCURACY_MARGIN - _EPS,
-                f"candidate {c['accuracy_strict']:.3f} vs baseline {b['accuracy_strict']:.3f} "
-                f"(margin {GATE_ACCURACY_MARGIN:.2f})",
+        b_parse, c_parse = b.get("parse_failure_rate"), c.get("parse_failure_rate")
+        if _is_finite_number(b_parse) and _is_finite_number(c_parse):
+            gates.append(
+                _gate(
+                    f"parse_failure[{taxonomy}]",
+                    c_parse <= b_parse + _EPS,
+                    f"candidate {c_parse:.3f} vs baseline {b_parse:.3f} (must not exceed)",
+                )
             )
-        )
+        else:
+            gates.append(
+                _gate(
+                    f"parse_failure[{taxonomy}]",
+                    False,
+                    "missing or non-finite parse_failure_rate (fail-closed)",
+                )
+            )
+        b_acc, c_acc = b.get("accuracy_strict"), c.get("accuracy_strict")
+        if _is_finite_number(b_acc) and _is_finite_number(c_acc):
+            gates.append(
+                _gate(
+                    f"accuracy[{taxonomy}]",
+                    c_acc >= b_acc - GATE_ACCURACY_MARGIN - _EPS,
+                    f"candidate {c_acc:.3f} vs baseline {b_acc:.3f} "
+                    f"(margin {GATE_ACCURACY_MARGIN:.2f})",
+                )
+            )
+        else:
+            gates.append(
+                _gate(
+                    f"accuracy[{taxonomy}]",
+                    False,
+                    "missing or non-finite accuracy_strict (fail-closed)",
+                )
+            )
 
     b_ragas = baseline.get("ragas")
     c_ragas = candidate.get("ragas")
@@ -534,11 +591,14 @@ def run_signature_ab(
             )
 
             t0 = time.perf_counter()
-            predicted, error = None, None
+            predicted_raw, predicted, error = None, None, None
             try:
                 with dspy.context(lm=lm):
                     pred = chatbot(query=item["query"])
-                predicted = getattr(pred, "intent", None)
+                predicted_raw = getattr(pred, "intent", None)
+                # Score what production routes on, not the raw emission
+                # (codex iter-5); raw is kept in the record for audit.
+                predicted = production_chatbot_intent(predicted_raw)
             except Exception as exc:  # noqa: BLE001
                 error = f"{type(exc).__name__}: {exc}"
             records.append(
@@ -547,6 +607,7 @@ def run_signature_ab(
                     "taxonomy": "chatbot",
                     "query_id": item["id"],
                     "predicted": predicted,
+                    "predicted_raw": predicted_raw,
                     "acceptable": item["expected_chatbot"],
                     "latency_s": time.perf_counter() - t0,
                     "error": error,

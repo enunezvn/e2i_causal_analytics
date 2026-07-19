@@ -20,6 +20,7 @@ from src.optimization.dspy_lane_ab import (
     evaluate_gates,
     is_correct,
     load_golden_set,
+    production_chatbot_intent,
     summarize_e2e_runs,
     summarize_signature_runs,
 )
@@ -194,8 +195,20 @@ def _ragas_block(faith=0.85, rel=0.80, n_ctx=10):
 
 BASELINE = {
     "signature": {
-        "cognitive_rag": {"accuracy_strict": 0.80, "parse_failure_rate": 0.0, "error_classes": {}},
-        "chatbot": {"accuracy_strict": 0.90, "parse_failure_rate": 0.0, "error_classes": {}},
+        "cognitive_rag": {
+            "accuracy_strict": 0.80,
+            "parse_failure_rate": 0.0,
+            "error_classes": {},
+            "n_scored": 40,
+            "n_excluded": 0,
+        },
+        "chatbot": {
+            "accuracy_strict": 0.90,
+            "parse_failure_rate": 0.0,
+            "error_classes": {},
+            "n_scored": 38,
+            "n_excluded": 2,
+        },
     },
     "ragas": _ragas_block(),
     "e2e": {"latency_p50": 40.0, "error_classes": {}, "n": 10},
@@ -219,11 +232,15 @@ def _candidate(
                 "accuracy_strict": cog_acc,
                 "parse_failure_rate": parse_fail,
                 "error_classes": sig_errors or {},
+                "n_scored": 40,
+                "n_excluded": 0,
             },
             "chatbot": {
                 "accuracy_strict": chat_acc,
                 "parse_failure_rate": parse_fail,
                 "error_classes": sig_errors or {},
+                "n_scored": 38,
+                "n_excluded": 2,
             },
         },
         "ragas": _ragas_block(faith=faith, rel=rel, n_ctx=n_ctx),
@@ -536,6 +553,59 @@ def test_gate_ragas_fully_scored_missing_per_sample_fails_closed():
     result = evaluate_gates(BASELINE, candidate)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[fully_scored]" in failed
+
+
+def test_gate_signature_denominator_partial_candidate_codex_iter5():
+    # Codex iter-5 HIGH: the parse/accuracy gates compare rates but never the
+    # denominator, so a truncated candidate summary measured over a single
+    # query (n_scored=1, accuracy 1.0) beat a full-set baseline on every
+    # signature gate before the denominator gate existed.
+    candidate = _candidate(chat_acc=1.0)
+    candidate["signature"]["chatbot"]["n_scored"] = 1
+    candidate["signature"]["chatbot"]["n_excluded"] = 0
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "accuracy[chatbot]" not in failed  # 1.0 clears the margin
+    assert "parse_failure[chatbot]" not in failed
+    assert "signature_denominator[chatbot]" in failed
+    assert "signature_denominator[cognitive_rag]" not in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_denominator_missing_counts_fails_closed():
+    candidate = _candidate()
+    del candidate["signature"]["cognitive_rag"]["n_scored"]
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_denominator[cognitive_rag]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_rates_none_fails_closed():
+    # summarize_signature_runs emits None rates when n_scored=0; the rate
+    # gates must fail closed on them, not raise on a None comparison.
+    candidate = _candidate()
+    candidate["signature"]["chatbot"].update(
+        {"n_scored": 0, "n_excluded": 40, "accuracy_strict": None, "parse_failure_rate": None}
+    )
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "accuracy[chatbot]" in failed
+    assert "parse_failure[chatbot]" in failed
+    assert "signature_denominator[chatbot]" in failed
+    assert result["all_passed"] is False
+
+
+def test_production_chatbot_intent_matches_prod_normalizer():
+    # Codex iter-5 MED: production routes on _normalize_intent(pred.intent),
+    # so the harness must score the value production consumes. Compared
+    # against the real normalizer - casing and aliases map exactly.
+    from src.api.routes.chatbot_dspy import _normalize_intent
+
+    assert production_chatbot_intent(None) is None
+    for raw in ["KPI_QUERY", " kpi ", "kpi query", "causal_analysis", "Greetings"]:
+        assert production_chatbot_intent(raw) == _normalize_intent(raw)
+    assert production_chatbot_intent("KPI_QUERY") == "kpi_query"
 
 
 def test_run_e2e_replays_expected_model_mismatch_fails_fast(monkeypatch):
