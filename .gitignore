@@ -218,6 +218,8 @@ INFRASTRUCTURE.md
 # 2026-07 — it is the CI-enforced contract baseline (verify-types drift gate).
 # Regenerate with `make generate-types` and commit alongside schema changes.
 docs/api/openapi.json
+# Working artifact of `make generate-types` / verify-types (repo root)
+/openapi.json
 
 # Test/script output files
 scripts/*_results.json
