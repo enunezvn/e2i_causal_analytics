@@ -70,7 +70,7 @@ def test_patient_goldstd_cohorts_fetch_enriched_base7():
     the live Feature-Importance page silently shows 3 covariates."""
     from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
 
-    expected = {
+    base7 = {
         "goldstd_cohort_features:disease_severity",
         "goldstd_cohort_features:academic_hcp",
         "goldstd_cohort_features:geographic_region",
@@ -79,10 +79,46 @@ def test_patient_goldstd_cohorts_fetch_enriched_base7():
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
     }
-    for cohort in ("initiation", "persistence", "discontinuation"):
+    # COMM-ARMS Phase 1: the three cohorts are no longer identical. persistence and
+    # discontinuation additionally fetch copay_support, which enters the
+    # discontinuation logit; initiation does not, because copay is absent from the
+    # treatment_initiated equation. Asserted PER COHORT rather than as one shared set
+    # so this still fails on drift in either direction — a shared set would have had
+    # to be loosened to accommodate the split, which would stop catching a cohort
+    # that silently loses a ref.
+    expected_by_cohort = {
+        "initiation": base7,
+        "persistence": base7 | {"goldstd_cohort_features:copay_support"},
+        "discontinuation": base7 | {"goldstd_cohort_features:copay_support"},
+    }
+    for cohort, expected in expected_by_cohort.items():
         assert set(MODEL_FEATURE_REFS[cohort]) == expected, (
-            f"{cohort} must fetch the 7 _BASE7 covariates; got {MODEL_FEATURE_REFS[cohort]!r}"
+            f"{cohort} must fetch exactly {sorted(expected)}; "
+            f"got {sorted(MODEL_FEATURE_REFS[cohort])}"
         )
+
+
+def test_patient_cohort_refs_match_the_cohort_spec_covariates():
+    """The registry and the model spec must agree on the covariate set.
+
+    This is the guard the #576 null-trap actually needed: the serving bundle builds
+    its vector from ``spec.base_covariates``, so a spec declaring N covariates while
+    the refs fetch N-1 produces an incomplete vector at serving time and a 503. The
+    pre-existing test above pins the refs to a literal, which catches a change to the
+    refs but NOT a change to the spec that forgets them. Deriving one from the other
+    closes that gap."""
+    from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
+    from src.mlops.gold_standard_eval.cohort_spec import BRANDS, make_patient_spec
+
+    for cohort in ("initiation", "persistence", "discontinuation"):
+        refs = {r.split(":", 1)[1] for r in MODEL_FEATURE_REFS[cohort]}
+        for brand in BRANDS:
+            covariates = set(make_patient_spec(cohort, brand).base_covariates)
+            assert refs == covariates, (
+                f"{cohort}/{brand}: feature refs {sorted(refs)} != spec covariates "
+                f"{sorted(covariates)}; the serving bundle would get an incomplete "
+                "vector (#576 null-trap)."
+            )
 
 
 def test_explain_route_uses_canonical_registry():

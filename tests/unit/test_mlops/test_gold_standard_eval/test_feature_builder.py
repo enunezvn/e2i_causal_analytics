@@ -45,17 +45,23 @@ def test_feature_builder_is_leakage_safe_and_restricts_to_keep_columns():
     assert len(fb.feature_columns) == X.shape[1]
 
 
-def test_persistence_spec_keeps_seven_covariates():
+def test_persistence_spec_keeps_all_spec_covariates():
     """T9: FeatureBuilder(spec) must honor the per-cohort base_covariates. Persistence/
-    discontinuation now carry 7 covariates — the patient-grain default MUST use
-    spec.base_covariates, not the module KEEP_COLUMNS 3-tuple, or the real models
-    silently train on 3 features and /feature-importance shows 3."""
+    discontinuation carry 8 covariates as of COMM-ARMS Phase 1 (7 + copay_support) — the
+    patient-grain default MUST use spec.base_covariates, not the module KEEP_COLUMNS
+    3-tuple, or the real models silently train on 3 features and /feature-importance
+    shows 3.
+
+    The count is asserted as an explicit number rather than len(spec.base_covariates) on
+    purpose: deriving both sides from the spec would make this tautological and it would
+    pass even if the spec were emptied."""
     from src.mlops.gold_standard_eval.cohort_spec import make_patient_spec
 
     spec = make_patient_spec("persistence", "Remibrutinib")
     fb = FeatureBuilder(spec)
     assert fb.keep_columns == spec.base_covariates
-    assert len(fb.keep_columns) == 7
+    assert len(fb.keep_columns) == 8
+    assert "copay_support" in fb.keep_columns
     raw = pd.DataFrame(
         {
             "patient_id": ["p1", "p2", "p3", "p4"],
@@ -67,6 +73,7 @@ def test_persistence_spec_keeps_seven_covariates():
             "age_at_diagnosis": [45, 70, 55, 33],
             "comorbidity_burden": [0, 3, 1, 2],
             "prior_therapy_lines": [0, 2, 1, 3],
+            "copay_support": [1, 0, 1, 0],
         }
     )
     X, _ = fb.build_from_frame(raw)
@@ -75,6 +82,8 @@ def test_persistence_spec_keeps_seven_covariates():
     assert "age_at_diagnosis" in cols, cols
     assert "comorbidity_burden" in cols, cols
     assert "prior_therapy_lines" in cols, cols
+    # Numeric 0/1, so it survives as a bare column (not one-hot expanded).
+    assert "copay_support" in cols, cols
 
 
 def test_transform_reindexes_eval_to_fitted_columns():

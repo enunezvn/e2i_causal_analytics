@@ -66,7 +66,9 @@ def test_fabhalta_hcp_adoption_specialty_is_pnh():
 
 def test_patient_cohort_features_have_no_specialty():
     fields = build_curated_input_fields("persistence_kisqali_goldstd_lr_v1")
-    # T9: persistence/discontinuation cohorts now carry 7 leakage-safe covariates.
+    # T9: persistence/discontinuation cohorts carry 7 leakage-safe covariates, plus
+    # copay_support as of COMM-ARMS Phase 1. Order is asserted, not just membership:
+    # this list drives the RENDERED field order on the what-if form.
     assert [f["name"] for f in fields] == [
         "disease_severity",
         "academic_hcp",
@@ -75,6 +77,7 @@ def test_patient_cohort_features_have_no_specialty():
         "age_at_diagnosis",
         "comorbidity_burden",
         "prior_therapy_lines",
+        "copay_support",
     ]
     by = _by_name(fields)
     assert "specialty" not in by
@@ -85,6 +88,10 @@ def test_patient_cohort_features_have_no_specialty():
     assert set(by["insurance_type"]["choices"]) == {"commercial", "medicare", "medicaid"}
     assert by["comorbidity_burden"]["type"] == "number"
     assert by["prior_therapy_lines"]["type"] == "number"
+    # copay_support is a 0/1 intervention flag: it must be BOUNDED, or the form offers
+    # a free numeric input on which a user can enter a value the model never saw.
+    assert by["copay_support"]["type"] == "number"
+    assert (by["copay_support"]["min"], by["copay_support"]["max"]) == (0, 1)
 
 
 def test_unknown_model_returns_none():

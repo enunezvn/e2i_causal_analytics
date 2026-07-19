@@ -6,11 +6,34 @@ to encode the 7 leakage-safe covariates, then train_cohort_model (the calibrated
 LogisticRegression the *_goldstd_lr_v1 models use), then the holdout-split AUC, the
 same headline _run_one_cohort records. No hand-rolled encoder, no proxy.
 
-The enriched equation must achieve a realistic ~0.78-0.82 holdout AUC per brand with
-prevalence in the designed [0.05, 0.60] band. These asserted numbers LOCK the
-cohort_outcomes coefficients (the same way the 2026-06-14 feature experiment locked
-KEEP_COLUMNS). Measured live (2026-06-21, n=20000): Remi 0.809 / Fabhalta 0.814 /
-Kisqali 0.805, 19 encoded features (7 covariates), disc prevalence ~0.50.
+The enriched equation must achieve a realistic holdout AUC per brand with prevalence in
+the designed [0.05, 0.60] band. These asserted numbers LOCK the cohort_outcomes
+coefficients (the same way the 2026-06-14 feature experiment locked KEEP_COLUMNS).
+Measured live (2026-06-21, n=20000): Remi 0.809 / Fabhalta 0.814 / Kisqali 0.805,
+19 encoded features (7 covariates), disc prevalence ~0.50.
+
+FLOOR LOWERED 0.78 -> 0.75 on 2026-07-19 (COMM-ARMS Phase 1). This is a re-derivation
+against a deliberately changed DGP, NOT an accommodation of a regression -- the
+distinction matters, so here is the evidence:
+
+  brand         pre-Phase-1   +copay, 7-cov   +copay, 8-cov (shipped)
+  Remibrutinib     0.8169        0.7863            0.7898
+  Fabhalta         0.8232        0.7900            0.7949
+  Kisqali          0.8086        0.7805            0.7850
+
+Phase 1 puts copay_support into the discontinuation logit by design. Copay is real
+outcome signal, so achievable AUC structurally falls ~0.03 -- the old 0.78 floor was
+calibrated against a DGP with NO commercial arms and was measuring a different world.
+At 7 covariates Kisqali cleared it by 0.0005, i.e. green but a guaranteed future red.
+Letting the model SEE copay (the 8th covariate, cohort_spec._BASE8_COMMERCIAL) recovers
+only ~0.005 of the ~0.030: this is a plain LogisticRegression with no interaction
+terms, so given copay as a flat feature it recovers the main effect but not the
+copay x severity-segment interaction that carries most of the signal.
+
+0.75 restores ~0.035 of headroom, which also leaves room for Phases 2-3 (three more
+commercial arms land in this same outcome). NO coefficient and NO shipped data changed
+-- only this tolerance. If a future change pushes any brand below 0.75, that IS a real
+regression: re-measure rather than lowering the floor again.
 
 Hermetic: generates in-memory frames; no DB, no mocks. n=20000 keeps the holdout
 (~1000 rows) large enough that the AUC reflects the DGP's true signal, not
@@ -66,8 +89,8 @@ def test_persistence_auc_in_target_band(faithful):
         assert m["n_features"] >= 15, (
             f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
         )
-        assert 0.78 <= m["auc"] <= 0.83, (
-            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.78, 0.83]"
+        assert 0.75 <= m["auc"] <= 0.83, (
+            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.75, 0.83]"
         )
 
 
