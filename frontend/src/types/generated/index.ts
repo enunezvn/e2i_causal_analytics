@@ -1,15 +1,14 @@
 /**
  * Auto-generated TypeScript types from FastAPI OpenAPI specification.
  *
- * The generated `api.ts` file is intentionally untracked (see root
- * `.gitignore`) and is produced by `npm run generate:types` against a
- * running FastAPI backend.
+ * `api.ts` is a COMMITTED contract baseline (re-tracked 2026-07): CI's
+ * verify-types workflow regenerates it from the backend schema and fails
+ * on any byte difference. Regenerate with `make generate-types` at the
+ * repo root and commit alongside backend schema changes.
  *
- * This `index.ts` no longer re-exports from `./api` because the static
- * re-export broke `tsc -b` (and therefore the CI `build` job) any time
- * `api.ts` was absent — see issue #281. Consumers that need the
- * generated types should import directly from `./api` after running
- * `npm run generate:types`:
+ * This `index.ts` does not re-export from `./api` (the static re-export
+ * was removed in issue #281 when `api.ts` was untracked and could be
+ * absent). Import generated types directly:
  *
  *   import type { paths, components, operations } from '@/types/generated/api';
  *
@@ -17,8 +16,7 @@
  *     components['schemas']['HierarchicalAnalysisRequest'];
  *
  * The hand-crafted types in `frontend/src/types/*.ts` remain the
- * source of truth for the rest of the codebase until contract sync is
- * required.
+ * convention for application code.
  */
 
 // Generic API response envelope. Kept here because it is independent of

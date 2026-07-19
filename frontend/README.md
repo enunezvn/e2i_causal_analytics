@@ -64,7 +64,7 @@ frontend/src/
 ├── providers/      # AuthProvider, E2ICopilotProvider (agent registry + actions)
 ├── hooks/          # use-auth and friends
 ├── config/env.ts   # single accessor for all VITE_* env vars
-└── types/          # hand-written committed types + generated/ (gitignored)
+└── types/          # hand-written types + generated/api.ts (committed contract baseline)
 ```
 
 ---
@@ -92,26 +92,31 @@ frontend/src/
 
 ## API layer & generated types
 
-Hand-written request/response types in `src/types/*.ts` are the **committed**
-source of truth for the compiler. OpenAPI-generated types exist as a local
-verification aid:
+Hand-written request/response types in `src/types/*.ts` are the source of
+truth **for application code**. Alongside them, `src/types/generated/api.ts`
+is a **committed contract baseline** (re-tracked 2026-07): CI's
+`verify-types` workflow regenerates it from the backend schema on every
+schema-affecting PR and **fails if it differs** from the committed file.
 
 ```bash
-npm run generate:types        # from a local backend  → src/types/generated/api.ts
+make generate-types           # repo root — CI-identical static export (use this to fix a drift-gate failure)
+npm run generate:types        # from a local running backend
 npm run generate:types:prod   # from the live deployment
 ```
 
-`src/types/generated/api.ts` is **gitignored and not generated in CI**. Two
-hard rules (from `src/types/generated/README.md`):
+Working rules:
 
-1. **Never commit a `src/` file that imports `@/types/generated/api`** — CI
-   type-checks without the generated file, so the import is an instant TS2307
-   build failure. Use generated types locally to diff against the hand-written
-   ones, then fix the hand-written type.
+1. **A backend PR that changes the API schema must regenerate and commit
+   `api.ts`** (`make generate-types`) — otherwise the verify-types drift gate
+   fails. The diff doubles as a visible record of the contract change; update
+   the affected hand-written types in the same PR.
 2. When a page shows impossible values (e.g. a fabricated "0%" where the
    backend sent `null`), **diff the hand-written type against the generated
    one first** — hand-written/backend drift has caused exactly this class of
    production bug before.
+3. Importing from `@/types/generated/api` no longer breaks CI (the file is
+   always present now), but hand-written types remain the convention for
+   application code.
 
 Responses can be validated at runtime with the zod schemas in
 `src/lib/api-schemas.ts` (opt-in `*Validated` helpers).
@@ -166,7 +171,7 @@ time — never put secrets here**. Precedence: `.env`/`.env.local` (gitignored)
 | `npm run test:e2e` / `test:e2e:ui` | Playwright against a local build/dev server |
 | `npm run test:e2e:noserver` | Playwright live specs against a running deployment |
 | `npm run check:dist` | Asserts no MSW/dev artifacts in `dist/` |
-| `npm run generate:types` / `generate:types:prod` | Regenerate OpenAPI types (local aid, gitignored) |
+| `npm run generate:types` / `generate:types:prod` | Regenerate OpenAPI types (committed baseline; prefer `make generate-types` for CI parity) |
 
 ---
 

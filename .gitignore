@@ -213,9 +213,11 @@ product-development/
 DEPLOYMENT_ADMIN.md
 INFRASTRUCTURE.md
 
-# Auto-generated API schema (regenerable via npm run generate:types)
+# Auto-generated OpenAPI spec (regenerable via make api-docs)
+# NOTE: frontend/src/types/generated/api.ts is deliberately TRACKED since
+# 2026-07 — it is the CI-enforced contract baseline (verify-types drift gate).
+# Regenerate with `make generate-types` and commit alongside schema changes.
 docs/api/openapi.json
-frontend/src/types/generated/api.ts
 
 # Test/script output files
 scripts/*_results.json
