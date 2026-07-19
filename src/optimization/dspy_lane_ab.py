@@ -348,6 +348,66 @@ def _all_error_classes(bundle: Dict[str, Any]) -> set:
     return classes
 
 
+def rebind_acceptable_labels(
+    records: List[Dict[str, Any]], golden: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Replace every record's ``acceptable`` label with the golden fixture's.
+
+    The golden-anchor gate validates which queries were measured, but scoring
+    trusted each record's own label - so a results file keeping the exact
+    golden query ids while widening one hard query's acceptable set to
+    include its wrong prediction passed every gate, and a bundle emitted
+    from a stale golden file scored against outdated labels (codex iter-8).
+    Rebinding makes the fixture the single source of truth for labels, the
+    same trust move analyze already makes for rates (records over stored
+    summary). A record whose (query_id, taxonomy) the fixture does not know
+    fails loud. Input records are not mutated.
+    """
+    labels: Dict[Tuple[str, str], Optional[List[str]]] = {}
+    for item in golden["queries"]:
+        for taxonomy, label_key in _TAXONOMY_LABEL_KEYS.items():
+            labels[(item["id"], taxonomy)] = item[label_key]
+    rebound = []
+    for rec in records:
+        key = (rec["query_id"], rec["taxonomy"])
+        if key not in labels:
+            raise ValueError(
+                f"record references (query_id, taxonomy) {key} that the golden set "
+                "does not define - cannot rebind its acceptable label"
+            )
+        rebound.append({**rec, "acceptable": labels[key]})
+    return rebound
+
+
+def stored_summary_divergences(stored: object, recomputed: Dict[str, Any]) -> List[str]:
+    """Cross-check a results file's stored summary block against the
+    records-recomputed one, comparing only keys the stored block carries (so
+    additive fields newer summarize versions emit never trigger on old
+    files). The verdict never uses the stored block, but a stored aggregate
+    contradicting its own records means tampering, a runner bug, or a
+    label-set change - analyze treats any divergence as a hard failure
+    (codex iter-8). An absent or malformed stored block has nothing to
+    cross-check and reports no divergence.
+    """
+    divergences: List[str] = []
+    if not isinstance(stored, dict):
+        return divergences
+    for model, taxonomies in stored.items():
+        if not isinstance(taxonomies, dict):
+            continue
+        for taxonomy, block in taxonomies.items():
+            if not isinstance(block, dict):
+                continue
+            recomputed_block = recomputed.get(model, {}).get(taxonomy, {})
+            for key, value in block.items():
+                if key in recomputed_block and recomputed_block[key] != value:
+                    divergences.append(
+                        f"{model}/{taxonomy}/{key}: stored {value!r} vs "
+                        f"recomputed {recomputed_block[key]!r}"
+                    )
+    return divergences
+
+
 def expected_signature_sets(golden: Dict[str, Any]) -> Dict[str, Dict[str, List[str]]]:
     """Derive, per taxonomy, which golden queries MUST appear scored and which
     excluded. Every side-to-side gate can be satisfied by two sides sharing

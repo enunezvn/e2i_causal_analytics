@@ -44,6 +44,8 @@ from src.optimization.dspy_lane_ab import (  # noqa: E402
     evaluate_gates,
     expected_signature_sets,
     load_golden_set,
+    rebind_acceptable_labels,
+    stored_summary_divergences,
     summarize_signature_runs,
 )
 
@@ -74,39 +76,26 @@ def _bundle_for(model: str, signature_summary: dict, extra: dict) -> dict:
     }
 
 
-def _warn_stored_summary_divergence(stored: object, recomputed: dict) -> None:
-    # The verdict only ever uses the recompute, but a stored aggregate that
-    # disagrees with its own records means tampering or a runner bug - worth
-    # surfacing even though it cannot change the verdict (codex iter-7).
-    # Only keys present in the stored block are compared, so the additive
-    # fields newer summarize versions emit never trigger it on old files.
-    if not isinstance(stored, dict):
-        return
-    for model, taxonomies in stored.items():
-        if not isinstance(taxonomies, dict):
-            continue
-        for taxonomy, block in taxonomies.items():
-            if not isinstance(block, dict):
-                continue
-            recomputed_block = recomputed.get(model, {}).get(taxonomy, {})
-            for key, value in block.items():
-                if key in recomputed_block and recomputed_block[key] != value:
-                    print(
-                        f"WARNING: stored summary diverges from records at "
-                        f"{model}/{taxonomy}/{key}: stored {value!r} vs "
-                        f"recomputed {recomputed_block[key]!r}"
-                    )
-
-
 def _cmd_analyze(args: argparse.Namespace) -> int:
     results = json.loads(Path(args.signature_results).read_text())
-    # Recompute the summary from the raw per-call records instead of trusting
-    # the stored aggregate block: a hand-edited or partially merged summary
-    # cannot forge rates or query-id multisets independently of the records
-    # they must be derived from (codex iter-6). Missing records fail loud.
-    summary = summarize_signature_runs(results["records"])
-    _warn_stored_summary_divergence(results.get("summary"), summary)
-    expected = expected_signature_sets(load_golden_set(args.golden_set))
+    golden = load_golden_set(args.golden_set)
+    # Recompute the summary from the raw per-call records - with acceptable
+    # labels rebound from the golden fixture first, so neither the stored
+    # aggregate block nor per-record labels can be forged or go stale
+    # independently of the fixture (codex iter-6/iter-8). Missing records or
+    # unknown query ids fail loud.
+    records = rebind_acceptable_labels(results["records"], golden)
+    summary = summarize_signature_runs(records)
+    # The verdict never uses the stored summary, but a stored aggregate that
+    # contradicts its own records (as rebound to the supplied fixture) means
+    # tampering, a runner bug, or a label-set change the analyst must
+    # consciously resolve - hard failure, not a warning (codex iter-8).
+    divergences = stored_summary_divergences(results.get("summary"), summary)
+    if divergences:
+        for div in divergences:
+            print(f"ERROR: stored summary diverges from records: {div}")
+        return 2
+    expected = expected_signature_sets(golden)
     extra = json.loads(Path(args.extra).read_text()) if args.extra else {}
 
     baseline = _bundle_for(args.baseline_model, summary, extra)

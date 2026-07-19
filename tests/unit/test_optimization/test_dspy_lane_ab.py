@@ -791,6 +791,95 @@ def test_expected_signature_sets_from_real_fixture():
     assert len(expected["chatbot"]["excluded_query_ids"]) == 2
 
 
+_MINI_GOLDEN = {
+    "queries": [
+        {"id": "q1", "query": "x", "expected_cognitive": ["A"], "expected_chatbot": ["kpi_query"]},
+        {"id": "q2", "query": "y", "expected_cognitive": ["B"], "expected_chatbot": None},
+    ]
+}
+
+
+def test_rebind_acceptable_labels_restores_golden_truth_codex_iter8():
+    # Codex iter-8 HIGH: the anchor validates query-id membership but scoring
+    # trusted each record's own acceptable label - widening one hard query's
+    # set to include its wrong prediction passed every gate. Rebinding from
+    # the golden fixture makes the tampered/stale label irrelevant.
+    from src.optimization.dspy_lane_ab import rebind_acceptable_labels
+
+    records = [
+        {
+            "model": "m",
+            "taxonomy": "cognitive_rag",
+            "query_id": "q1",
+            "predicted": "WRONG",
+            "acceptable": ["WRONG"],  # tampered: golden says ["A"]
+            "latency_s": 0.1,
+            "error": None,
+        }
+    ]
+    tampered = summarize_signature_runs(records)["m"]["cognitive_rag"]
+    assert tampered["accuracy_strict"] == 1.0  # the exploit
+    rebound = rebind_acceptable_labels(records, _MINI_GOLDEN)
+    honest = summarize_signature_runs(rebound)["m"]["cognitive_rag"]
+    assert honest["accuracy_strict"] == 0.0
+    assert records[0]["acceptable"] == ["WRONG"]  # input not mutated
+
+
+def test_rebind_acceptable_labels_preserves_exclusions():
+    from src.optimization.dspy_lane_ab import rebind_acceptable_labels
+
+    records = [
+        {
+            "model": "m",
+            "taxonomy": "chatbot",
+            "query_id": "q2",
+            "predicted": "kpi_query",
+            "acceptable": ["kpi_query"],  # stale: golden excludes q2 from chatbot
+            "latency_s": 0.1,
+            "error": None,
+        }
+    ]
+    rebound = rebind_acceptable_labels(records, _MINI_GOLDEN)
+    assert rebound[0]["acceptable"] is None
+    s = summarize_signature_runs(rebound)["m"]["chatbot"]
+    assert s["n_scored"] == 0 and s["n_excluded"] == 1
+
+
+def test_rebind_acceptable_labels_unknown_query_raises():
+    from src.optimization.dspy_lane_ab import rebind_acceptable_labels
+
+    records = [
+        {
+            "model": "m",
+            "taxonomy": "cognitive_rag",
+            "query_id": "q99",
+            "predicted": "A",
+            "acceptable": ["A"],
+            "latency_s": 0.1,
+            "error": None,
+        }
+    ]
+    with pytest.raises(ValueError, match="q99"):
+        rebind_acceptable_labels(records, _MINI_GOLDEN)
+
+
+def test_stored_summary_divergences_codex_iter8():
+    from src.optimization.dspy_lane_ab import stored_summary_divergences
+
+    recomputed = {"m": {"chatbot": {"n_scored": 2, "accuracy_strict": 0.5, "new_field": [1]}}}
+    # identical stored keys -> no divergence; additive recomputed-only fields
+    # never trigger on old files
+    assert stored_summary_divergences({"m": {"chatbot": {"n_scored": 2}}}, recomputed) == []
+    # a stored value contradicting the recompute is a divergence
+    diverging = stored_summary_divergences(
+        {"m": {"chatbot": {"n_scored": 2, "accuracy_strict": 1.0}}}, recomputed
+    )
+    assert len(diverging) == 1 and "accuracy_strict" in diverging[0]
+    # absent/malformed stored block: nothing to cross-check, no divergence
+    assert stored_summary_divergences(None, recomputed) == []
+    assert stored_summary_divergences("junk", recomputed) == []
+
+
 def test_summarize_emits_query_id_multisets():
     records = [
         {

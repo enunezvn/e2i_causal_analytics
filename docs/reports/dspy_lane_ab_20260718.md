@@ -277,11 +277,20 @@ candidate sharing the SAME truncated or cherry-picked subset passed them
 all — nothing anchored either side to what the golden set says should have
 been measured. The analyze CLI now derives expected scored/excluded
 query-id sets from the golden fixture and the gate requires both sides to
-match them exactly, fail-closed when the anchor is absent; analyze also
-warns when the stored summary block diverges from the records-recomputed
-one — integrity telemetry, not a gate, since the verdict never uses the
-stored block. The real run's recorded query sets match the fixture exactly
-on all three models, so it reports PASS and changes nothing). Post-run amendments are legitimate here ONLY because they are
+match them exactly, fail-closed when the anchor is absent. The real run's
+recorded query sets match the fixture exactly on all three models, so it
+reports PASS and changes nothing). A ninth hardening (iter-8) is CLI-level
+rather than a new gate: the anchor validates which queries were measured
+but scoring still trusted each record's own acceptable label, so a file
+keeping the golden ids while widening one hard query's acceptable set — or
+a bundle emitted from a stale golden file — scored against labels the
+fixture does not prescribe. Analyze now REBINDS every record's acceptable
+label from the supplied golden fixture before summarizing (the fixture is
+the single source of truth for labels, as records are for rates; unknown
+query ids fail loud), and any divergence between the stored summary block
+and the rebound recompute is a hard analysis failure (exit 2), not a
+warning. Rebinding the real bundle reproduced every recorded rate
+byte-identically — the recorded labels were genuine. Post-run amendments are legitimate here ONLY because they are
 fail-closed additions evaluated on already-collected data: they can add
 failures but cannot flip a pre-registered FAIL to PASS, and on this run's
 data they strengthened the NO-FLIP (common-subset FAILs both candidates).
