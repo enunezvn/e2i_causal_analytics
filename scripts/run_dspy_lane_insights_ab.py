@@ -35,7 +35,14 @@ import os
 import sys
 import time
 
+from dotenv import load_dotenv
+
 sys.path.insert(0, "/app")
+
+# DSPy LM config reads env at import time in parts of the app; a script that
+# touches it must load .env before anything else resolves keys (issue #470).
+# Inside the prod container the env is already injected and this is a no-op.
+load_dotenv()
 
 DEFAULT_MODELS = [
     "openai/gpt-5.6-terra",
