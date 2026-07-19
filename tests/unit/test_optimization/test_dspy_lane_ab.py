@@ -478,6 +478,66 @@ def test_gate_ragas_consistency_missing_per_sample_fails_closed():
     assert "ragas[consistency]" in failed
 
 
+def test_gate_ragas_fully_scored_codex_iter4_scoreless_ctx_rows():
+    # Codex iter-4 HIGH: n_faithfulness counts context-bearing rows while the
+    # faithfulness mean (and the consistency recompute that mirrors it) skips
+    # None scores. A candidate whose judge covered 10 rows but scored only the
+    # 3 shared with the baseline stays internally consistent and clears value,
+    # completeness, coverage AND common-subset - a 3-row measurement wearing
+    # 10-row coverage. Only a scored-row requirement catches it.
+    candidate = _candidate(faith=0.85)
+    for row in candidate["ragas"]["per_sample"][3:]:
+        row["faithfulness"] = None  # covered (n_contexts=1) but never scored
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[consistency]" not in failed  # judge-mirror recompute skips None
+    assert "ragas[faithfulness]" not in failed
+    assert "ragas[completeness]" not in failed
+    assert "ragas[faithfulness_coverage]" not in failed  # counts covered, not scored
+    assert "ragas[faithfulness_common_subset]" not in failed  # q0-q2 still align
+    assert "ragas[fully_scored]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_ragas_fully_scored_baseline_side_checked():
+    # A baseline whose covered rows are partly scoreless understates its own
+    # denominator the same way; both sides must be fully scored.
+    baseline = json.loads(json.dumps(BASELINE))
+    for row in baseline["ragas"]["per_sample"][5:]:
+        row["faithfulness"] = None
+    result = evaluate_gates(baseline, _candidate())
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[fully_scored]" in failed
+
+
+def test_gate_ragas_fully_scored_relevancy_scoreless():
+    # answer_relevancy averages over all rows with the same None-skip, so a
+    # scoreless row hides there identically.
+    candidate = _candidate()
+    candidate["ragas"]["per_sample"][0]["answer_relevancy"] = None
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[answer_relevancy]" not in failed  # mean over the other 9 = 0.80
+    assert "ragas[consistency]" not in failed
+    assert "ragas[fully_scored]" in failed
+
+
+def test_gate_ragas_fully_scored_ignores_uncovered_rows():
+    # Rows the judge never retrieved contexts for (n_contexts=0, score None)
+    # are legitimately scoreless - only covered-but-unscored rows fail.
+    result = evaluate_gates(BASELINE, _candidate(n_ctx=7))
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[fully_scored]" not in failed
+
+
+def test_gate_ragas_fully_scored_missing_per_sample_fails_closed():
+    candidate = _candidate()
+    del candidate["ragas"]["per_sample"]
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[fully_scored]" in failed
+
+
 def test_run_e2e_replays_expected_model_mismatch_fails_fast(monkeypatch):
     from src.optimization.dspy_lane_ab import run_e2e_replays
 

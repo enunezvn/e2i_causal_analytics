@@ -224,6 +224,37 @@ def _ragas_consistency_error(block: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _ragas_scoreless_error(block: Dict[str, Any]) -> Optional[str]:
+    """A row the judge covered but never scored is a silent hole in the
+    aggregates: n_faithfulness counts every context-bearing row while the
+    faithfulness mean (and the consistency recompute that mirrors it) skips
+    None scores, so a block can wear n=10 coverage over an n=3 measurement
+    without any aggregate mismatch (codex iter-4). Requires a finite
+    faithfulness on every context-bearing row and a finite answer_relevancy on
+    every row. Rows with no retrieved contexts are legitimately scoreless for
+    faithfulness and are not flagged. The real 20260718 blocks have zero
+    scoreless rows, so this gate is add-only on the recorded run."""
+    rows = block.get("per_sample")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return "per_sample rows missing or malformed"
+    faith_scoreless = [
+        row.get("query_id")
+        for row in rows
+        if isinstance(row.get("n_contexts"), int)
+        and not isinstance(row.get("n_contexts"), bool)
+        and row["n_contexts"] > 0
+        and not _is_finite_number(row.get("faithfulness"))
+    ]
+    if faith_scoreless:
+        return f"context-bearing rows without a finite faithfulness score: {faith_scoreless}"
+    rel_scoreless = [
+        row.get("query_id") for row in rows if not _is_finite_number(row.get("answer_relevancy"))
+    ]
+    if rel_scoreless:
+        return f"rows without a finite answer_relevancy score: {rel_scoreless}"
+    return None
+
+
 def _common_subset_faithfulness(
     b_rows: Optional[List[Dict[str, Any]]],
     c_rows: Optional[List[Dict[str, Any]]],
@@ -322,6 +353,19 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
                 "ragas[consistency]",
                 b_err is None and c_err is None,
                 f"baseline: {b_err or 'OK'}; candidate: {c_err or 'OK'}",
+            )
+        )
+        # Consistency alone cannot see covered-but-unscored rows: the judge's
+        # None-skip means a candidate scored on only 3 of its 10 context-bearing
+        # rows recomputes cleanly while coverage certifies all 10 (codex
+        # iter-4). Every covered row must actually carry a score, both sides.
+        b_sc = _ragas_scoreless_error(b_ragas)
+        c_sc = _ragas_scoreless_error(c_ragas)
+        gates.append(
+            _gate(
+                "ragas[fully_scored]",
+                b_sc is None and c_sc is None,
+                f"baseline: {b_sc or 'OK'}; candidate: {c_sc or 'OK'}",
             )
         )
         for metric in ("faithfulness", "answer_relevancy"):
