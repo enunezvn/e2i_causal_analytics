@@ -2,9 +2,17 @@
 spec, so a new arm cannot be added without declaring its confounders (which the
 confounder-contract guard then forces into the analysis allowlist)."""
 
+import numpy as np
 import pytest
 
-from src.ml.synthetic.dgp.treatment_arm import ARM_CONFOUNDERS, ARM_REGISTRY, ArmSpec
+from src.ml.synthetic.dgp.treatment_arm import (
+    ARM_CONFOUNDERS,
+    ARM_REGISTRY,
+    ArmSpec,
+    assign_arm_from_spec,
+    assign_treatment_arm,
+    insurance_access_from_type,
+)
 
 
 @pytest.mark.unit
@@ -41,3 +49,73 @@ def test_arm_spec_is_frozen():
     spec = ARM_REGISTRY["copay_support"]
     with pytest.raises(Exception):
         spec.intercept = 0.5  # type: ignore[misc]
+
+
+@pytest.mark.unit
+def test_delegation_is_byte_identical_to_the_legacy_arm():
+    """assign_treatment_arm must delegate to assign_arm_from_spec and produce
+    BIT-IDENTICAL output — same values AND same RNG consumption. A drift here
+    silently changes every shipped causal result on the next reseed."""
+    rng_a = np.random.default_rng(21)
+    rng_b = np.random.default_rng(21)
+    n = 5000
+    covs = {
+        "disease_severity": np.clip(np.random.default_rng(1).normal(5.0, 2.0, n), 0, 10),
+        "academic_hcp": (np.random.default_rng(2).random(n) < 0.30).astype(int),
+    }
+    arm_legacy, prop_legacy = assign_treatment_arm(covs, rng_a)
+    arm_spec, prop_spec = assign_arm_from_spec(ARM_REGISTRY["treatment_arm"], covs, rng_b)
+
+    np.testing.assert_array_equal(arm_legacy, arm_spec)
+    np.testing.assert_array_equal(prop_legacy, prop_spec)
+    # RNG streams must be at the SAME position afterwards (equal consumption).
+    assert rng_a.random() == rng_b.random()
+
+
+@pytest.mark.unit
+def test_copay_propensity_moves_with_each_declared_confounder():
+    """Per-arm contract guard: perturbing ANY declared confounder must move the
+    propensity, so the declared set cannot silently go stale."""
+    n = 4000
+    spec = ARM_REGISTRY["copay_support"]
+    base = {
+        "insurance_access_score": np.full(n, 0.10),
+        "disease_severity": np.full(n, 5.0),
+    }
+    _, p_base = assign_arm_from_spec(spec, base, np.random.default_rng(0))
+    for cov in spec.confounders:
+        bumped = {k: v.copy() for k, v in base.items()}
+        bumped[cov] = bumped[cov] + 1.0
+        _, p_bumped = assign_arm_from_spec(spec, bumped, np.random.default_rng(0))
+        assert not np.allclose(p_base, p_bumped), f"propensity ignores {cov}"
+
+
+@pytest.mark.unit
+def test_copay_propensity_has_overlap():
+    """Clipped to [0.01, 0.99] so both arms are populated and e(X) is estimable."""
+    n = 5000
+    rng = np.random.default_rng(7)
+    covs = {
+        "insurance_access_score": rng.choice([0.45, 0.10, -0.35, -0.55], n),
+        "disease_severity": np.clip(rng.normal(5.0, 2.0, n), 0, 10),
+    }
+    arm, prop = assign_arm_from_spec(ARM_REGISTRY["copay_support"], covs, rng)
+    assert prop.min() >= 0.01 and prop.max() <= 0.99
+    assert 0.20 < arm.mean() < 0.60, arm.mean()
+
+
+@pytest.mark.unit
+def test_insurance_access_score_is_the_documented_gradient():
+    """commercial > medicare > medicaid > uninsured, sourced from the _INIT_INS_ACCESS
+    SSOT so it can never drift from the initiation prognostic offset."""
+    ins = np.array(["commercial", "medicare", "medicaid", "uninsured"])
+    score = insurance_access_from_type(ins)
+    assert score[0] > score[1] > score[2] > score[3]
+    np.testing.assert_allclose(score, [0.45, 0.10, -0.35, -0.55])
+
+
+@pytest.mark.unit
+def test_insurance_access_score_handles_unknown_category():
+    """An unseen insurance category must degrade to the neutral 0.0, never KeyError
+    (the generator must not crash on a future enum addition)."""
+    np.testing.assert_allclose(insurance_access_from_type(np.array(["medicare_advantage"])), [0.0])

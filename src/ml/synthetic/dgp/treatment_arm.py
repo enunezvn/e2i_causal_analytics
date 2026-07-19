@@ -105,6 +105,46 @@ ARM_REGISTRY: Dict[str, ArmSpec] = {
 }
 
 
+def insurance_access_from_type(insurance_type: np.ndarray) -> np.ndarray:
+    """Numeric access gradient (commercial best -> uninsured worst) from the raw
+    categorical. Reads the _INIT_INS_ACCESS SSOT so this persisted covariate can
+    never drift from the initiation prognostic offset that uses the same map.
+
+    WHY a numeric proxy: the EconML/DoWhy executors cannot adjust on a raw
+    categorical, so copay_support's real-world backdoor (insurance coverage) is
+    carried by this score; ``insurance_type`` stays a cohort FILTER only.
+    Unknown categories map to the neutral 0.0 rather than raising.
+    """
+    return np.array(
+        [_INIT_INS_ACCESS.get(str(i), 0.0) for i in np.asarray(insurance_type)],
+        dtype=float,
+    )
+
+
+def assign_arm_from_spec(
+    spec: ArmSpec,
+    covariates: Dict[str, np.ndarray],
+    rng: np.random.Generator,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Confounded binary arm T ~ Bernoulli(e(X)) for ANY ArmSpec.
+
+    e(X) = sigmoid(intercept + sum_k beta_k * (X_k - center_k)), clipped to
+    [0.01, 0.99] to GUARANTEE overlap (no near-separation) so the propensity is
+    estimable with common support. Generalizes assign_treatment_arm; that
+    function now delegates here and is BIT-IDENTICAL (locked by
+    tests/unit/test_synthetic/test_arm_spec.py).
+    """
+    logit = np.full(
+        len(np.asarray(next(iter(covariates.values())))), float(spec.intercept)
+    )
+    for cov, beta in spec.confounders.items():
+        values = np.asarray(covariates[cov], dtype=float)
+        logit = logit + beta * (values - spec.center.get(cov, 0.0))
+    propensity = np.clip(expit(logit), 0.01, 0.99)
+    arm = (rng.random(len(propensity)) < propensity).astype(int)
+    return arm, propensity
+
+
 def assign_treatment_arm(
     covariates: Dict[str, np.ndarray],
     rng: np.random.Generator,
@@ -118,19 +158,22 @@ def assign_treatment_arm(
     clipped to [0.01,0.99] to GUARANTEE overlap (no near-separation) so the
     propensity is estimable with common support. Returns (arm[0/1], propensity).
 
-    The two propensity covariates are read through ``ARM_CONFOUNDERS`` so that
-    constant stays load-bearing (the contract guard test perturbs each and
-    asserts the propensity moves).
+    Phase 1: delegates to the generalized ``assign_arm_from_spec``. The explicit
+    keyword defaults are retained so existing callers/tests that override them
+    keep working; when they are at their defaults this is BIT-IDENTICAL to the
+    registry spec (locked by test_arm_spec.py::test_delegation_is_byte_identical).
     """
-    _severity_key, _academic_key = ARM_CONFOUNDERS
-    severity = np.asarray(covariates[_severity_key], dtype=float)
-    academic = np.asarray(covariates[_academic_key], dtype=float)
-    # center severity at the population mean (5.0) so the intercept sets the
-    # base treatment share rather than being absorbed by the severity scale.
-    logit = intercept + beta_severity * (severity - 5.0) + beta_academic * academic
-    propensity = np.clip(expit(logit), 0.01, 0.99)
-    arm = (rng.random(len(propensity)) < propensity).astype(int)
-    return arm, propensity
+    severity_key, academic_key = ARM_CONFOUNDERS
+    spec = ArmSpec(
+        name="treatment_arm",
+        confounders={severity_key: beta_severity, academic_key: beta_academic},
+        intercept=intercept,
+        cate_by_segment={},
+        target_outcomes=ARM_REGISTRY["treatment_arm"].target_outcomes,
+        center={severity_key: 5.0},
+        propensity_col="propensity_score",
+    )
+    return assign_arm_from_spec(spec, covariates, rng)
 
 
 # Per-brand multiplicative scale on the base CATE map. Distinct per brand so a
