@@ -50,9 +50,9 @@ class ArmSpec:
 
     name: str
     confounders: Dict[str, float]  # covariate -> propensity logit coefficient
-    intercept: float               # sets the base treatment share
+    intercept: float  # sets the base treatment share
     cate_by_segment: Dict[str, float]  # latent CATE per severity segment
-    target_outcomes: Tuple[str, ...]   # curated outcomes this arm wires
+    target_outcomes: Tuple[str, ...]  # curated outcomes this arm wires
     # Covariates centered before entering the logit, so the intercept sets the
     # base share rather than being absorbed by the covariate's scale.
     center: Dict[str, float] = field(default_factory=dict)
@@ -73,8 +73,8 @@ class ArmSpec:
 # +8-12pp). The wider 0.55/0.16/0.05 also orders but drifts ATE to 0.156 (out of
 # band) with worse error -> rejected.
 _COPAY_BETA_INS_ACCESS = -0.90  # LOWER access -> MORE support (real-world skew)
-_COPAY_BETA_SEVERITY = 0.25     # sicker -> more support
-_COPAY_INTERCEPT = -0.40        # base share ~0.34-0.36 (measured)
+_COPAY_BETA_SEVERITY = 0.25  # sicker -> more support
+_COPAY_INTERCEPT = -0.40  # base share ~0.34-0.36 (measured)
 _COPAY_CATE = {
     "high_severity": 0.44,
     "medium_severity": 0.18,
@@ -134,9 +134,19 @@ def assign_arm_from_spec(
     function now delegates here and is BIT-IDENTICAL (locked by
     tests/unit/test_synthetic/test_arm_spec.py).
     """
-    logit = np.full(
-        len(np.asarray(next(iter(covariates.values())))), float(spec.intercept)
-    )
+    # Derive n from a DECLARED confounder, never from an arbitrary caller key:
+    # Phase 2/3 add new callers of this function, and a mismatched dict must fail
+    # loud rather than yield a silently mis-broadcast propensity.
+    missing = [c for c in spec.confounders if c not in covariates]
+    if missing:
+        raise KeyError(
+            f"arm {spec.name!r} declares confounder(s) {missing} that the caller did not "
+            "supply; a propensity omitting a declared backdoor is silently confounded"
+        )
+    lengths = {c: len(np.asarray(covariates[c])) for c in spec.confounders}
+    if len(set(lengths.values())) != 1:
+        raise ValueError(f"arm {spec.name!r} got ragged covariate length(s): {lengths}")
+    logit = np.full(next(iter(lengths.values())), float(spec.intercept))
     for cov, beta in spec.confounders.items():
         values = np.asarray(covariates[cov], dtype=float)
         logit = logit + beta * (values - spec.center.get(cov, 0.0))

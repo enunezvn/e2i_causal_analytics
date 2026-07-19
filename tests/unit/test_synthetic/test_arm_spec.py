@@ -119,3 +119,38 @@ def test_insurance_access_score_handles_unknown_category():
     """An unseen insurance category must degrade to the neutral 0.0, never KeyError
     (the generator must not crash on a future enum addition)."""
     np.testing.assert_allclose(insurance_access_from_type(np.array(["medicare_advantage"])), [0.0])
+
+
+@pytest.mark.unit
+def test_assign_arm_from_spec_rejects_a_missing_declared_confounder():
+    """A caller that forgets a declared confounder must FAIL LOUD, not silently
+    estimate a propensity that omits a backdoor path."""
+    import numpy as np
+    import pytest as _pytest
+
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY, assign_arm_from_spec
+
+    spec = ARM_REGISTRY["copay_support"]
+    with _pytest.raises(KeyError, match="insurance_access_score"):
+        assign_arm_from_spec(
+            spec,
+            {"disease_severity": np.zeros(10)},  # insurance_access_score MISSING
+            np.random.default_rng(0),
+        )
+
+
+@pytest.mark.unit
+def test_assign_arm_from_spec_rejects_ragged_covariates():
+    """Mismatched lengths must raise, not broadcast into a wrong-length arm."""
+    import numpy as np
+    import pytest as _pytest
+
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY, assign_arm_from_spec
+
+    spec = ARM_REGISTRY["copay_support"]
+    with _pytest.raises(ValueError, match="length"):
+        assign_arm_from_spec(
+            spec,
+            {"insurance_access_score": np.zeros(10), "disease_severity": np.zeros(7)},
+            np.random.default_rng(0),
+        )
