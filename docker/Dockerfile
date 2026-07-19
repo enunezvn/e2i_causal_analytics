@@ -101,12 +101,17 @@ COPY tests/ ./tests/
 # #705 H4 twin train/persist trigger run via `docker exec … python scripts/…`).
 COPY scripts/ ./scripts/
 
-# Create directories for shared volumes
+# Create directories for shared volumes. optimized_modules/optimized_prompts
+# must exist in the image so a fresh named volume is initialized with e2i
+# ownership (the chown -R below) — otherwise the engine creates the
+# mountpoint root-owned and non-root worker saves fail silently.
 RUN mkdir -p /app/data/ml_artifacts \
              /app/data/causal_outputs \
              /app/data/agent_outputs \
              /app/data/experiment_designs \
              /app/data/feature_cache \
+             /app/optimized_modules \
+             /app/optimized_prompts \
              /app/tmp
 
 # Create non-root user for security (mirrors production stage UID/GID).
