@@ -170,8 +170,8 @@ BASELINE = {
         "cognitive_rag": {"accuracy_strict": 0.80, "parse_failure_rate": 0.0, "error_classes": {}},
         "chatbot": {"accuracy_strict": 0.90, "parse_failure_rate": 0.0, "error_classes": {}},
     },
-    "ragas": {"faithfulness": 0.85, "answer_relevancy": 0.80},
-    "e2e": {"latency_p50": 40.0, "error_classes": {}},
+    "ragas": {"faithfulness": 0.85, "answer_relevancy": 0.80, "n_samples": 10},
+    "e2e": {"latency_p50": 40.0, "error_classes": {}, "n": 10},
 }
 
 
@@ -198,8 +198,8 @@ def _candidate(
                 "error_classes": sig_errors or {},
             },
         },
-        "ragas": {"faithfulness": faith, "answer_relevancy": rel},
-        "e2e": {"latency_p50": p50, "error_classes": e2e_errors or {}},
+        "ragas": {"faithfulness": faith, "answer_relevancy": rel, "n_samples": 10},
+        "e2e": {"latency_p50": p50, "error_classes": e2e_errors or {}, "n": 10},
     }
 
 
@@ -255,6 +255,61 @@ def test_gate_missing_ragas_fails_closed():
     assert result["all_passed"] is False
 
 
+def test_gate_ragas_per_metric_none_fails_closed():
+    # The judge emits {"faithfulness": None, ...} when zero judged samples had
+    # retrieved contexts - a truthy dict that must fail the gate, not TypeError.
+    candidate = _candidate()
+    candidate["ragas"]["faithfulness"] = None
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness]" in failed
+
+
+def test_gate_ragas_per_metric_none_baseline_fails_closed():
+    baseline = json.loads(json.dumps(BASELINE))
+    baseline["ragas"]["answer_relevancy"] = None
+    result = evaluate_gates(baseline, _candidate())
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[answer_relevancy]" in failed
+
+
+def test_gate_ragas_completeness_requires_all_replays_judged():
+    # Errored/empty-answer replays are excluded from judging by
+    # build_ragas_samples; the gate must surface that as a failure instead of
+    # letting RAGAS score only the candidate's easier successful subset.
+    candidate = _candidate()
+    candidate["ragas"]["n_samples"] = 8
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[completeness]" in failed
+
+
+def test_gate_ragas_completeness_missing_counts_fails_closed():
+    candidate = _candidate()
+    del candidate["ragas"]["n_samples"]
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[completeness]" in failed
+
+
+def test_run_e2e_replays_expected_model_mismatch_fails_fast(monkeypatch):
+    from src.optimization.dspy_lane_ab import run_e2e_replays
+
+    monkeypatch.setenv("DSPY_LM_MODEL", "openai/gpt-5.6-terra")
+    golden = load_golden_set(FIXTURE_PATH)
+    with pytest.raises(RuntimeError, match="expects"):
+        run_e2e_replays(
+            golden,
+            ["ts-12"],
+            "dspy-ab-test",
+            expected_model="anthropic/claude-haiku-4-5-20251001",
+        )
+
+
 # ---------------------------------------------------------------------------
 # golden set loading + bundle emission
 # ---------------------------------------------------------------------------
@@ -286,7 +341,7 @@ def test_emit_container_script_e2e_mode():
     golden = load_golden_set(FIXTURE_PATH)
     script = emit_container_script(
         golden,
-        models=[],
+        models=["anthropic/claude-haiku-4-5-20251001"],
         mode="e2e",
         e2e_query_ids=["ts-12", "ts-9", "dp-1"],
         conversation_prefix="dspy-ab-20260718",
@@ -296,8 +351,19 @@ def test_emit_container_script_e2e_mode():
     assert '"dp-1"' in script
     assert "dspy-ab-20260718" in script
     assert "RESULTS_JSON_BEGIN" in script
-    # e2e mode takes its model from the per-process DSPY_LM_MODEL env
+    # e2e mode takes its model from the per-process DSPY_LM_MODEL env, but the
+    # bundle pins the intended candidate and fails fast on a mismatch
     assert "DSPY_LM_MODEL" in script
+    assert "BUNDLE_EXPECTED_MODEL = 'anthropic/claude-haiku-4-5-20251001'" in script
+
+
+def test_emit_container_script_e2e_requires_exactly_one_model():
+    golden = load_golden_set(FIXTURE_PATH)
+    for models in ([], ["a/x", "a/y"]):
+        with pytest.raises(ValueError, match="exactly one model"):
+            emit_container_script(
+                golden, models=models, mode="e2e", e2e_query_ids=["ts-12"]
+            )
 
 
 def test_emit_container_script_e2e_rejects_unknown_ids():

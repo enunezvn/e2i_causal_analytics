@@ -165,6 +165,14 @@ def summarize_e2e_runs(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def _gate(name: str, passed: bool, detail: str) -> Dict[str, Any]:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
@@ -213,14 +221,50 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
         gates.append(_gate("ragas", False, "missing RAGAS scores (fail-closed)"))
     else:
         for metric in ("faithfulness", "answer_relevancy"):
+            b_val = b_ragas.get(metric)
+            c_val = c_ragas.get(metric)
+            # The judge emits None when zero judged samples carried contexts -
+            # a truthy dict with a missing metric must fail, not TypeError.
+            if not _is_finite_number(b_val) or not _is_finite_number(c_val):
+                gates.append(
+                    _gate(
+                        f"ragas[{metric}]",
+                        False,
+                        f"missing {metric} (baseline={b_val!r}, "
+                        f"candidate={c_val!r}; fail-closed)",
+                    )
+                )
+                continue
             gates.append(
                 _gate(
                     f"ragas[{metric}]",
-                    c_ragas[metric] >= b_ragas[metric] - GATE_RAGAS_MARGIN - _EPS,
-                    f"candidate {c_ragas[metric]:.3f} vs baseline {b_ragas[metric]:.3f} "
+                    c_val >= b_val - GATE_RAGAS_MARGIN - _EPS,
+                    f"candidate {c_val:.3f} vs baseline {b_val:.3f} "
                     f"(margin {GATE_RAGAS_MARGIN:.2f})",
                 )
             )
+        # Errored/empty-answer replays are excluded from judging by
+        # build_ragas_samples; require every requested replay to have produced
+        # a judgeable answer so RAGAS can't quietly score only a candidate's
+        # easier successful subset.
+        b_n = b_ragas.get("n_samples")
+        c_n = c_ragas.get("n_samples")
+        b_req = (baseline.get("e2e") or {}).get("n")
+        c_req = (candidate.get("e2e") or {}).get("n")
+        complete = (
+            all(isinstance(v, int) and not isinstance(v, bool) for v in (b_n, c_n, b_req, c_req))
+            and b_n == b_req
+            and c_n == c_req
+        )
+        gates.append(
+            _gate(
+                "ragas[completeness]",
+                complete,
+                f"judged/requested replays: baseline {b_n}/{b_req}, "
+                f"candidate {c_n}/{c_req} (missing counts or errored/empty "
+                "answers fail-closed)",
+            )
+        )
 
     new_classes = _all_error_classes(candidate) - _all_error_classes(baseline)
     gates.append(
@@ -329,6 +373,7 @@ def run_e2e_replays(
     query_ids: List[str],
     conversation_prefix: str,
     progress=print,
+    expected_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Replay full cognitive RAG turns for the given golden queries.
 
@@ -336,17 +381,25 @@ def run_e2e_replays(
     real memory backends and retrieval) in the current process. The LM under
     test is whatever ``DSPY_LM_MODEL`` resolves to for this process - the
     caller sets the env var per candidate, exactly how the flip itself works.
+    ``expected_model`` (always set by emitted bundles) makes a wrong or unset
+    env fail fast instead of silently measuring the wrong candidate.
 
     Replays write real Reflector-phase learning signals; the recognizable
     ``conversation_prefix`` lets the operator remove those rows afterwards.
     """
-    import asyncio
     import os
+
+    model = os.environ.get("DSPY_LM_MODEL", "(env default)")
+    if expected_model is not None and model != expected_model:
+        raise RuntimeError(
+            f"DSPY_LM_MODEL resolves to {model!r} but this bundle expects "
+            f"{expected_model!r} - refusing to measure the wrong candidate"
+        )
+
+    import asyncio
     import re
 
     from src.rag.causal_rag import CausalRAG
-
-    model = os.environ.get("DSPY_LM_MODEL", "(env default)")
     model_slug = re.sub(r"[^a-zA-Z0-9]+", "-", model.split("/")[-1])
     by_id = {q["id"]: q for q in golden_set["queries"]}
     records: List[Dict[str, Any]] = []
@@ -454,7 +507,10 @@ if __name__ == "__main__":
         results = run_signature_ab(GOLDEN_SET, BUNDLE_MODELS)
     else:
         results = run_e2e_replays(
-            GOLDEN_SET, BUNDLE_E2E_IDS, BUNDLE_CONVERSATION_PREFIX
+            GOLDEN_SET,
+            BUNDLE_E2E_IDS,
+            BUNDLE_CONVERSATION_PREFIX,
+            expected_model=BUNDLE_EXPECTED_MODEL,
         )
     print("RESULTS_JSON_BEGIN")
     print(json.dumps(results))
@@ -482,6 +538,7 @@ def emit_container_script(
     if mode not in ("signature", "e2e"):
         raise ValueError(f"unknown mode: {mode!r}")
     e2e_query_ids = e2e_query_ids or []
+    expected_model: Optional[str] = None
     if mode == "e2e":
         known = {q["id"] for q in golden_set["queries"]}
         unknown = [qid for qid in e2e_query_ids if qid not in known]
@@ -489,6 +546,12 @@ def emit_container_script(
             raise ValueError(f"unknown e2e query ids: {unknown}")
         if not e2e_query_ids:
             raise ValueError("e2e mode requires e2e_query_ids")
+        # One bundle == one candidate: the intended model is pinned into the
+        # bundle so a wrong/unset DSPY_LM_MODEL env fails fast at launch
+        # instead of silently measuring the wrong candidate.
+        if len(models) != 1:
+            raise ValueError("e2e mode requires exactly one model (the candidate under test)")
+        expected_model = models[0]
 
     golden_json = json.dumps(golden_set)
     if '"""' in golden_json:
@@ -501,5 +564,6 @@ def emit_container_script(
         + f"BUNDLE_MODELS = {models!r}\n"
         + f"BUNDLE_E2E_IDS = {e2e_query_ids!r}\n"
         + f"BUNDLE_CONVERSATION_PREFIX = {conversation_prefix!r}\n"
+        + f"BUNDLE_EXPECTED_MODEL = {expected_model!r}\n"
         + _BUNDLE_DRIVER
     )
