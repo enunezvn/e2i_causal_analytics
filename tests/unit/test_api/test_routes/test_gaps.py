@@ -14,7 +14,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.api.routes.gaps import (
-    AnalysisStatus,
+    GapAnalysisStatus,
     GapType,
     ImplementationDifficulty,
     RunGapAnalysisRequest,
@@ -78,7 +78,7 @@ class TestRunGapAnalysisEndpoint:
             user=mock_user,
         )
 
-        assert response.status == AnalysisStatus.PENDING
+        assert response.status == GapAnalysisStatus.PENDING
         assert response.analysis_id.startswith("gap_")
         assert response.brand == "kisqali"
 
@@ -88,7 +88,7 @@ class TestRunGapAnalysisEndpoint:
         with patch("src.api.routes.gaps._execute_gap_analysis") as mock_execute:
             mock_execute.return_value = MagicMock(
                 analysis_id="test-id",
-                status=AnalysisStatus.COMPLETED,
+                status=GapAnalysisStatus.COMPLETED,
                 brand="kisqali",
                 metrics_analyzed=["trx"],
                 segments_analyzed=4,
@@ -101,7 +101,7 @@ class TestRunGapAnalysisEndpoint:
                 user=mock_user,
             )
 
-            assert response.status == AnalysisStatus.COMPLETED
+            assert response.status == GapAnalysisStatus.COMPLETED
             mock_execute.assert_called_once()
 
     @pytest.mark.asyncio
@@ -132,7 +132,7 @@ class TestGetGapAnalysisEndpoint:
 
         test_analysis = GapAnalysisResponse(
             analysis_id="test-id",
-            status=AnalysisStatus.COMPLETED,
+            status=GapAnalysisStatus.COMPLETED,
             brand="kisqali",
             metrics_analyzed=["trx"],
             segments_analyzed=4,
@@ -142,7 +142,7 @@ class TestGetGapAnalysisEndpoint:
         response = await get_gap_analysis("test-id")
 
         assert response.analysis_id == "test-id"
-        assert response.status == AnalysisStatus.COMPLETED
+        assert response.status == GapAnalysisStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_get_analysis_not_found(self):
@@ -211,7 +211,7 @@ class TestListOpportunitiesEndpoint:
 
         test_analysis = GapAnalysisResponse(
             analysis_id="test-id",
-            status=AnalysisStatus.COMPLETED,
+            status=GapAnalysisStatus.COMPLETED,
             brand="kisqali",
             metrics_analyzed=["trx"],
             segments_analyzed=4,
@@ -382,7 +382,7 @@ class TestHelperFunctions:
         response = _generate_mock_response(sample_gap_request, start_time)
 
         assert response.brand == "kisqali"
-        assert response.status == AnalysisStatus.COMPLETED
+        assert response.status == GapAnalysisStatus.COMPLETED
         assert len(response.warnings) > 0
         assert "mock data" in response.warnings[0].lower()
 
@@ -416,7 +416,7 @@ class TestExecuteGapAnalysis:
         ):
             response = await _execute_gap_analysis(sample_gap_request)
 
-            assert response.status == AnalysisStatus.COMPLETED
+            assert response.status == GapAnalysisStatus.COMPLETED
             assert response.brand == "kisqali"
 
     @pytest.mark.asyncio
@@ -427,7 +427,7 @@ class TestExecuteGapAnalysis:
 
         Even if the agent graph (incorrectly) reports status='completed', the route
         must NOT return a green HTTP-200 "no gaps" response when ``errors`` is present.
-        The route forces AnalysisStatus.FAILED whenever ``result['errors']`` is non-empty.
+        The route forces GapAnalysisStatus.FAILED whenever ``result['errors']`` is non-empty.
         """
         mock_graph = AsyncMock()
         mock_graph.ainvoke = AsyncMock(
@@ -455,7 +455,7 @@ class TestExecuteGapAnalysis:
         ):
             response = await _execute_gap_analysis(sample_gap_request)
 
-            assert response.status == AnalysisStatus.FAILED, (
+            assert response.status == GapAnalysisStatus.FAILED, (
                 "route must force FAILED when the agent result carries errors, "
                 f"got {response.status}"
             )
@@ -487,7 +487,7 @@ class TestExecuteGapAnalysis:
         ):
             response = await _execute_gap_analysis(sample_gap_request)
 
-            assert response.status == AnalysisStatus.COMPLETED
+            assert response.status == GapAnalysisStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_execute_falls_back_to_mock_when_explicitly_allowed(
@@ -500,7 +500,7 @@ class TestExecuteGapAnalysis:
         ):
             response = await _execute_gap_analysis(sample_gap_request)
 
-            assert response.status == AnalysisStatus.COMPLETED
+            assert response.status == GapAnalysisStatus.COMPLETED
             assert len(response.warnings) > 0
 
     @pytest.mark.asyncio
@@ -628,7 +628,7 @@ def _make_analysis(
 
     return GapAnalysisResponse(
         analysis_id=analysis_id,
-        status=AnalysisStatus.COMPLETED,
+        status=GapAnalysisStatus.COMPLETED,
         brand=brand,
         metrics_analyzed=["trx"],
         segments_analyzed=4,

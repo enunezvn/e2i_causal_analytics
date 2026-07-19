@@ -435,14 +435,14 @@ def test_executive_brief_feed_outage_degrades_honestly(test_client, monkeypatch)
 
 def _hte_record(status: str = "completed", **overrides):
     from src.api.routes.segments import (
-        AnalysisStatus,
         CATEResult,
         SegmentAnalysisResponse,
+        SegmentAnalysisStatus,
     )
 
     base = {
         "analysis_id": "seg_test123",
-        "status": AnalysisStatus(status),
+        "status": SegmentAnalysisStatus(status),
         "brand": "Remibrutinib",
         "treatment_var": "treatment_arm",
         "outcome_var": "persistent_180d",
