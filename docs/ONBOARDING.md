@@ -43,7 +43,7 @@ The system uses 21 AI agents organized in 6 tiers to perform causal analysis, pr
 - **Digital Twin Engine**: A/B test pre-screening with ML-based simulations
 - **Real-Time Explainability**: SHAP explanations in 50-500ms via REST API
 - **Knowledge Graph**: FalkorDB temporal graph with Cypher queries
-- **Full MLOps**: MLflow tracking, Opik observability, Feast features, BentoML serving
+- **Full MLOps**: MLflow tracking, Feast features, BentoML serving, in-database LLM usage tracking (`llm_usage_events` + `/admin` → Observability)
 
 ---
 
@@ -119,9 +119,12 @@ SUPABASE_DB_URL=postgresql://postgres:PASSWORD@127.0.0.1:5432/postgres
 # Start core services (API, frontend, workers, Redis, FalkorDB, MLflow, observability)
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 
-# Optional: include Opik agent observability (10 additional services)
-docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
-  -f docker/docker-compose.opik.yml up -d
+# Legacy (do NOT start by default): the Opik observability overlay.
+# Opik was intentionally stopped in May 2026 — LLM usage tracking now lives in
+# the llm_usage_events table (see /admin → Observability). The overlay is kept
+# for reference only:
+# docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+#   -f docker/docker-compose.opik.yml up -d
 ```
 
 Or use the Makefile shortcut:
@@ -203,7 +206,7 @@ make data-generate
 |----------|-------------|
 | **AI/ML** | LangGraph, LangChain, Claude (Anthropic), scikit-learn, LightGBM |
 | **Causal Inference** | DoWhy, EconML (CausalForestDML), CausalML (UpliftRandomForest), NetworkX |
-| **MLOps** | MLflow, Opik, Feast, BentoML, Great Expectations, Optuna, SHAP |
+| **MLOps** | MLflow, Feast, BentoML, Great Expectations, Optuna, SHAP (Opik: stopped May 2026) |
 | **Backend** | FastAPI, Pydantic, Celery, Redis |
 | **Frontend** | React 18, TypeScript, Vite, TanStack Query, Tailwind CSS, CopilotKit |
 | **Databases** | PostgreSQL (Supabase), pgvector, Redis, FalkorDB |
@@ -216,7 +219,7 @@ make data-generate
 ```
 e2i_causal_analytics/
 ├── src/                    # Backend source code
-│   ├── agents/             # 21 LangGraph agent implementations
+│   ├── agents/             # 22 LangGraph agent implementations
 │   ├── api/                # FastAPI app, routes, middleware
 │   ├── causal_engine/      # EconML, CausalML, DoWhy integration
 │   ├── digital_twin/       # A/B test simulation engine
@@ -226,11 +229,11 @@ e2i_causal_analytics/
 │   ├── workers/            # Celery task definitions
 │   ├── nlp/                # Query processing, entity extraction
 │   ├── feature_store/      # Feature store client
-│   ├── kpi/                # 46+ KPI definitions
+│   ├── kpi/                # 44 KPI definitions
 │   └── utils/              # Shared utilities
 ├── frontend/               # React/TypeScript/Vite frontend
 │   └── src/
-│       ├── components/     # React components (20+ pages)
+│       ├── components/     # React components (30+ pages)
 │       ├── api/            # API client layer
 │       ├── lib/            # Utility libraries
 │       └── providers/      # Context providers
@@ -241,7 +244,7 @@ e2i_causal_analytics/
 │   ├── synthetic/          # Causal model validation
 │   └── security/           # Security-specific tests
 ├── config/                 # YAML configurations
-│   ├── agent_config.yaml   # 21-agent definitions
+│   ├── agent_config.yaml   # 22-agent definitions
 │   ├── kpi_definitions.yaml
 │   └── observability.yaml
 ├── database/               # SQL schemas (37+ tables)
@@ -252,10 +255,10 @@ e2i_causal_analytics/
 ├── docker/                 # Docker Compose & Dockerfiles
 │   ├── docker-compose.yml       # Base (21+ services)
 │   ├── docker-compose.dev.yml   # Dev overlay (hot-reload)
-│   └── docker-compose.opik.yml  # Opik overlay (10 services)
+│   └── docker-compose.opik.yml  # Opik overlay (legacy — stopped May 2026)
 ├── scripts/                # 36+ operational scripts
 ├── feature_repo/           # Feast feature definitions
-├── .github/workflows/      # 8 CI/CD workflows
+├── .github/workflows/      # 20+ CI/CD workflows
 ├── CLAUDE.md               # AI assistant instructions
 ├── DEPLOYMENT.md           # Deployment guide
 └── pyproject.toml          # Python tool configuration
@@ -333,7 +336,7 @@ Each agent is a **LangGraph state machine** with:
 
 ### Database Schema
 
-- **80+ tables** across PostgreSQL (Supabase) with pgvector extension
+- **140+ tables** across PostgreSQL (Supabase) with pgvector extension
 - **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
 - **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, etc.
 - **Memory** (7): episodic_memories, procedural_memories, semantic_memory_cache, cognitive_cycles, investigation_hops, learning_signals, memory_statistics
@@ -549,7 +552,7 @@ ssh -N -L 8443:localhost:443 enunez@138.197.4.36
 | API Docs | https://localhost:8443/api/docs |
 | MLflow | http://localhost:5000 |
 | Grafana | http://localhost:3200 |
-| Opik | http://localhost:5173 |
+| Opik (stopped May 2026 — only if the legacy overlay is manually started) | http://localhost:5173 |
 | FalkorDB Browser | http://localhost:3030 |
 | Supabase Studio | http://localhost:3001 |
 | Alertmanager | http://localhost:9093 |
@@ -624,7 +627,7 @@ All API responses include:
 
 | What You Want | Where to Look |
 |---------------|---------------|
-| API routes | `src/api/routes/` (80+ endpoints) |
+| API routes | `src/api/routes/` (220+ endpoints) |
 | API middleware | `src/api/middleware/` (security, auth, rate limiting, CORS, timing) |
 | Agent implementations | `src/agents/<agent_name>/` (each has graph.py, nodes, tools) |
 | Agent configuration | `config/agent_config.yaml` |
@@ -635,7 +638,7 @@ All API responses include:
 | Frontend API layer | `frontend/src/api/` + `frontend/src/lib/api-client.ts` |
 | Database schemas | `database/` (organized by domain) |
 | Docker configs | `docker/docker-compose*.yml` |
-| CI/CD workflows | `.github/workflows/` (8 YAML files) |
+| CI/CD workflows | `.github/workflows/` (20+ YAML files) |
 
 ### How Agents Work
 
@@ -699,7 +702,7 @@ def run_analysis(self, params: dict):
    Understand what each of the 24 services does and verify they're running.
 
 2. **Explore the API docs**
-   Open http://localhost:8000/api/docs (Swagger UI) and browse the 80+ endpoints.
+   Open http://localhost:8000/api/docs (Swagger UI) and browse the 220+ endpoints.
 
 3. **Run the test suite**
    ```bash
@@ -709,8 +712,8 @@ def run_analysis(self, params: dict):
 
 4. **Read the architecture docs**
    - `docs/ARCHITECTURE.md` - System architecture with C4 diagrams
-   - `config/agent_config.yaml` - All 21 agent definitions
-   - `config/kpi_definitions.yaml` - 46+ KPI definitions
+   - `config/agent_config.yaml` - All 22 agent definitions
+   - `config/kpi_definitions.yaml` - 44 KPI definitions
 
 5. **Trace a query through the system**
    Follow how a natural language query flows:
@@ -897,8 +900,8 @@ A: `pytest tests/unit/test_causal_engine/ -v` for unit tests, or `pytest tests/s
 **Q: What's the difference between worker_light, worker_medium, and worker_heavy?**
 A: Light workers (x2, concurrency=4) handle quick API tasks. Medium (x1, concurrency=1) handles analytics/reports. Heavy (x0, on-demand) handles causal training and heavy ML. Heavy workers start at 0 replicas and scale up when needed.
 
-**Q: How do I view agent traces?**
-A: If Opik is running, access the dashboard at http://localhost:5173. Traces show hierarchical spans with timing, inputs, and outputs for each agent workflow.
+**Q: How do I view agent traces / LLM usage?**
+A: Per-call LLM usage (model, tokens, cost, latency, agent) is recorded in the `llm_usage_events` table and surfaced in the frontend at `/admin` → Observability. (Opik, the former tracing stack, was intentionally stopped in May 2026; its overlay remains in `docker/docker-compose.opik.yml` for reference only.)
 
 **Q: How do I regenerate TypeScript types from the API?**
 A: `cd frontend && npm run generate:types`. This reads the OpenAPI spec and generates `src/types/generated/api.ts`.

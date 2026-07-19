@@ -1,6 +1,6 @@
 # E2I Causal Analytics - Architecture Documentation
 
-**Version**: 4.2.1 | **Last Updated**: February 2026 | **Status**: Living Document
+**Version**: 4.2.1 | **Last Updated**: July 2026 | **Status**: Living Document
 
 ---
 
@@ -30,18 +30,18 @@ C4Context
     Person(field_rep, "Field Representative", "Views triggers, SHAP explanations, HCP insights")
     Person(admin, "Platform Admin", "Manages models, users, system health")
 
-    System(e2i, "E2I Causal Analytics", "21-agent, 6-tier causal analytics platform for pharmaceutical drug adoption analysis")
+    System(e2i, "E2I Causal Analytics", "22-agent, 6-tier causal analytics platform for pharmaceutical drug adoption analysis")
 
     System_Ext(supabase, "Supabase", "PostgreSQL + Auth + pgvector (self-hosted)")
-    System_Ext(anthropic, "Anthropic API", "Claude LLM for agent reasoning")
-    System_Ext(opik_ext, "Opik Cloud", "LLM observability (optional)")
+    System_Ext(anthropic, "Anthropic API", "Claude LLM — factory chat/synthesis lanes")
+    System_Ext(openai, "OpenAI API", "GPT LLM — DSPy reasoning path + embeddings")
 
     Rel(pharma_analyst, e2i, "Queries via chat, views dashboards", "HTTPS")
     Rel(field_rep, e2i, "Views HCP insights, triggers", "HTTPS")
     Rel(admin, e2i, "Manages system, deploys models", "HTTPS")
     Rel(e2i, supabase, "Stores data, authenticates users", "PostgreSQL/HTTP")
-    Rel(e2i, anthropic, "LLM inference for agents", "HTTPS")
-    Rel(e2i, opik_ext, "Sends traces (optional)", "HTTPS")
+    Rel(e2i, anthropic, "LLM inference (chat/synthesis)", "HTTPS")
+    Rel(e2i, openai, "LLM inference (DSPy) + embeddings", "HTTPS")
 ```
 
 ### 1.2 Stakeholders
@@ -58,8 +58,12 @@ C4Context
 | System | Purpose | Protocol | Auth |
 |--------|---------|----------|------|
 | Supabase (self-hosted) | PostgreSQL + Auth + pgvector + Row-Level Security | HTTP/PostgreSQL | JWT + Anon Key |
-| Anthropic API | Claude LLM for agent reasoning (Sonnet/Haiku) | HTTPS | API Key |
-| Opik Cloud | LLM/agent observability traces (optional) | HTTPS | API Key |
+| Anthropic API | Claude LLM for the factory chat/synthesis lanes (claude-sonnet-5 standard/reasoning, claude-haiku-4-5 fast) | HTTPS | API Key |
+| OpenAI API | GPT LLM for the DSPy reasoning path (gpt-5.6-terra) + embeddings | HTTPS | API Key |
+
+> **LLM provider split (July 2026):** both providers are load-bearing. The LangChain factory lanes run on Anthropic (`LLM_PROVIDER=anthropic`); the GEPA-tuned DSPy reasoning path is pinned to OpenAI `gpt-5.6-terra` (`DSPY_LM_MODEL`); embeddings are OpenAI. See [`docs/LLM_CONFIGURATION.md`](LLM_CONFIGURATION.md) and ADR-009/ADR-010 in [`docs/decisions/`](decisions/README.md).
+>
+> **Opik (removed from this diagram):** the Opik observability stack was intentionally stopped in May 2026 and is no longer an active external system. LLM usage tracking now lives in the `llm_usage_events` table (migration 104), surfaced at `/admin` → Observability. The compose overlay (`docker/docker-compose.opik.yml`) remains in the repo but is not part of the running stack.
 
 ### 1.4 Analyzed Brands
 
@@ -83,8 +87,8 @@ C4Container
 
         Container(nginx_host, "Host Nginx", "Nginx 1.x", "SSL termination, reverse proxy to all containers")
 
-        Container(frontend, "Frontend", "React 18 / TypeScript / Vite", "SPA with CopilotKit chat, 20+ pages, TanStack Query")
-        Container(api, "API Server", "FastAPI / Python 3.12", "150+ REST endpoints, 6 middleware layers, WebSocket support")
+        Container(frontend, "Frontend", "React 18 / TypeScript / Vite", "SPA with CopilotKit chat, 30+ pages, TanStack Query")
+        Container(api, "API Server", "FastAPI / Python 3.12", "220+ REST endpoints, 6 middleware layers, WebSocket support")
 
         Container(worker_light, "Worker Light (x2)", "Celery / Python 3.12", "Cache, notifications, API tasks")
         Container(worker_medium, "Worker Medium", "Celery / Python 3.12", "Analytics, reports, drift monitoring")
@@ -96,8 +100,6 @@ C4Container
         Container(mlflow, "MLflow", "MLflow v3.11.1", "Experiment tracking, model registry")
         Container(bentoml, "BentoML", "Custom Python 3.12", "Model serving (churn, conversion, causal)")
         Container(feast, "Feast", "Feast Feature Server", "Online/offline feature serving")
-
-        Container(opik, "Opik Stack", "10 services", "LLM observability: traces, spans, feedback")
 
         Container(prometheus, "Prometheus", "v3.2.1", "Metrics scraping (15s interval)")
         Container(grafana, "Grafana", "v11.5.2", "Dashboards and alerting")
@@ -162,7 +164,9 @@ C4Container
 | `node-exporter` | prom/node-exporter:v1.9.0 | - |
 | `postgres-exporter` | prometheuscommunity/postgres-exporter:v0.16.0 | - |
 
-#### Opik Stack (10 services in `docker-compose.opik.yml`)
+#### Opik Stack (10 services in `docker-compose.opik.yml`) — **STOPPED May 2026**
+
+> Opik was intentionally stopped in May 2026 and these containers are **not running**. The overlay file is retained for reference; LLM usage tracking moved to the `llm_usage_events` table + `/admin` → Observability. See the amendment note under ADR-008.
 
 | Container | Image | Port |
 |-----------|-------|------|
@@ -200,11 +204,10 @@ Internet
      ├──→ Supabase (external)  — PostgreSQL + Auth
      ├──→ MLflow (:5000)       — model registry
      ├──→ BentoML (:3000)      — model serving
-     ├──→ Feast (:6566)        — feature serving
-     └──→ Opik (:8080)         — LLM observability
+     └──→ Feast (:6566)        — feature serving
 ```
 
-All management ports (MLflow, BentoML, Feast, Opik, Grafana, Prometheus, Loki) are bound to `127.0.0.1` and accessed via SSH tunnels from developer machines.
+All management ports (MLflow, BentoML, Feast, Grafana, Prometheus, Loki) are bound to `127.0.0.1` and accessed via SSH tunnels from developer machines.
 
 ---
 
@@ -294,17 +297,17 @@ All agents share common patterns:
 - **State**: TypedDicts with `query`, `query_id`, `session_id`, `brand`, `status`, `errors`, `warnings`
 - **Graph**: LangGraph state machines with per-node error handling
 - **Audit**: Tamper-evident chain (genesis block -> per-node entries -> verification)
-- **Observability**: Lazy-init Opik tracing + MLflow logging (graceful degradation)
+- **Observability**: Lazy-init MLflow logging (graceful degradation); the legacy Opik tracing connector is disabled (Opik stopped May 2026) — per-call LLM usage is recorded in `llm_usage_events`
 - **Memory**: Tri-memory hooks (working/episodic/procedural/semantic)
 - **Dependencies**: Lazy imports to avoid circular deps; all external services optional
 
 ### 3.4 API Layer
 
-**80+ endpoints** across 21 route files:
+**220+ endpoints** across 33 route files (July 2026). The table below lists the major route groups; the full set lives in `src/api/routes/`:
 
 | Route Group | Prefix | Key Endpoints | Auth Level |
 |------------|--------|---------------|------------|
-| agents | `/api/agents/` | Status of all 21 agents | - |
+| agents | `/api/agents/` | Status of all 22 agents | - |
 | analytics | `/api/analytics/` | Dashboard, agent metrics, trends | AUTH/ANALYST |
 | audit | `/api/audit/` | Workflow audit chain, verification | AUTH |
 | causal | `/api/causal/` | Hierarchical CATE, pipeline, validation | ANALYST |
@@ -317,7 +320,7 @@ All agents share common patterns:
 | gaps | `/api/gaps/` | Gap analysis, ROI opportunities | ANALYST |
 | graph | `/api/graph/` | FalkorDB knowledge graph queries | - |
 | health-score | `/api/health-score/` | Composite health metrics | - |
-| kpi | `/api/kpis/` | 46+ KPI definitions and values | Public |
+| kpi | `/api/kpis/` | 44 KPI definitions and values | AUTH |
 | memory | `/api/memory/` | Tri-memory read/write | AUTH |
 | metrics | `/metrics` | Prometheus metrics export | Public |
 | monitoring | `/api/monitoring/` | Drift detection, alerts | AUTH |
@@ -415,7 +418,7 @@ graph LR
     end
 ```
 
-### 4.2 Database Schema (80+ tables)
+### 4.2 Database Schema (140+ tables)
 
 > **Comprehensive documentation**: See [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary covering all tables, columns, constraints, enums, views, and functions.
 
@@ -992,6 +995,8 @@ ADMIN (level 4)    → Full system access
 
 ## 7. Observability Architecture
 
+> **Status note (July 2026):** Opik — shown as the traces pillar below — was intentionally stopped in May 2026. LLM/agent call tracking now lives in the `llm_usage_events` table (migration 104, written by the LLM factory + DSPy hooks) and is surfaced at `/admin` → Observability. Prometheus, Grafana, Loki, and Alertmanager remain active.
+
 ### 7.1 Three Pillars
 
 ```
@@ -1004,7 +1009,7 @@ ADMIN (level 4)    → Full system access
               │            │            │
         ┌─────▼─────┐ ┌───▼────┐ ┌────▼─────┐
         │ Prometheus │ │  Loki  │ │   Opik   │
-        │ (metrics)  │ │ (logs) │ │ (traces) │
+        │ (metrics)  │ │ (logs) │ │(stopped) │
         │  port 9091 │ │  3101  │ │   8084   │
         └─────┬──────┘ └───┬────┘ └────┬─────┘
               │            │            │
@@ -1048,11 +1053,13 @@ Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 
 ## 8. Architecture Decision Records
 
+> **ADR-001–008 are the original embedded set (through v4.2).** Decision records from July 2026 onward (ADR-009+) are maintained as standalone files in [`docs/decisions/`](decisions/README.md), which also indexes this embedded set.
+
 ### ADR-001: 6-Tier Agent Architecture
 
 **Status**: Accepted (v3.0)
 
-**Context**: The system needs to orchestrate 21 AI agents with different responsibilities, latency requirements, and resource needs. Agents range from sub-second health checks to multi-minute causal inference jobs.
+**Context**: The system needs to orchestrate 21 (now 22) AI agents with different responsibilities, latency requirements, and resource needs. Agents range from sub-second health checks to multi-minute causal inference jobs.
 
 **Decision**: Organize agents into 6 tiers with clear separation of concerns:
 - Tier 0 (ML Foundation) handles the data/model lifecycle sequentially
@@ -1207,7 +1214,9 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 - Loki for log aggregation (30-day retention via Promtail)
 - Grafana for dashboards (provisioned datasources)
 - Alertmanager for alert routing (webhook to API)
-- Opik for LLM-specific tracing (separate stack)
+- Opik for LLM-specific tracing (separate stack) — *see amendment below*
+
+**Amended (July 2026)**: Opik was intentionally stopped in May 2026. LLM-specific usage tracking (model, tokens, cost, latency per call) moved to the in-database `llm_usage_events` table (migration 104) surfaced at `/admin` → Observability. The metrics/logs/alerting pillars are unchanged.
 
 **Consequences**:
 - (+) Full observability at zero recurring cost
@@ -1283,7 +1292,7 @@ Developer Machine                       Droplet
 |-------------|----------|--------|
 | Agent definitions | `config/agent_config.yaml` | YAML |
 | Domain vocabulary | `config/domain_vocabulary.yaml` | YAML |
-| KPI definitions | `config/kpi_definitions.yaml` | YAML (46+ KPIs) |
+| KPI definitions | `config/kpi_definitions.yaml` | YAML (44 KPIs) |
 | Ontology | `config/ontology/*.yaml` | YAML (14 files) |
 | Docker services | `docker/docker-compose*.yml` | YAML (4 files) |
 | Environment | `.env` (gitignored) | Key=Value |
