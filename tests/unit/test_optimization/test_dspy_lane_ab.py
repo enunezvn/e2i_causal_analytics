@@ -180,11 +180,12 @@ def _ragas_per_sample(faith, rel=0.80, n=10, n_ctx=10):
     ]
 
 
-def _ragas_block(faith=0.85, rel=0.80, n_ctx=10):
+def _ragas_block(faith=0.85, rel=0.80, n_ctx=10, model="base-model"):
     # Aggregates mirror what the judge would compute from these rows, so the
     # block is internally consistent (tests that need inconsistency corrupt it
     # explicitly).
     return {
+        "model": model,
         "faithfulness": faith,
         "answer_relevancy": rel,
         "n_samples": 10,
@@ -221,6 +222,7 @@ EXPECTED_SIG_SETS = {
 }
 
 BASELINE = {
+    "model": "base-model",
     "signature": {
         "cognitive_rag": {
             "accuracy_strict": 0.80,
@@ -243,6 +245,7 @@ BASELINE = {
     },
     "ragas": _ragas_block(),
     "e2e": {
+        "model": "base-model",
         "latency_p50": 40.0,
         "error_classes": {},
         "n": 10,
@@ -263,6 +266,7 @@ def _candidate(
     n_ctx=10,
 ):
     return {
+        "model": "cand-model",
         "signature": {
             "cognitive_rag": {
                 "accuracy_strict": cog_acc,
@@ -283,8 +287,9 @@ def _candidate(
                 "excluded_query_ids": list(_CHAT_EXCLUDED_IDS),
             },
         },
-        "ragas": _ragas_block(faith=faith, rel=rel, n_ctx=n_ctx),
+        "ragas": _ragas_block(faith=faith, rel=rel, n_ctx=n_ctx, model="cand-model"),
         "e2e": {
+            "model": "cand-model",
             "latency_p50": p50,
             "error_classes": e2e_errors or {},
             "n": 10,
@@ -885,6 +890,82 @@ def test_gate_replay_anchor_legacy_e2e_block_without_ids():
     result = evaluate_gates(baseline, candidate, EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "replay_anchor" not in failed
+
+
+def test_gate_replay_provenance_wrong_model_block_codex_iter10():
+    # Codex iter-10 HIGH: analyze trusted the outer extra[model] key, so a
+    # hand-edited file could place another model's ragas/e2e block under a
+    # candidate - replay ids still match and every gate evaluated the wrong
+    # model's measurements. A present-but-mismatched identity always fails,
+    # and the legacy override never excuses a contradiction.
+    for field in ("ragas", "e2e"):
+        candidate = _candidate()
+        candidate[field]["model"] = "base-model"  # mis-bound block
+        for allow in (False, True):
+            result = evaluate_gates(
+                BASELINE,
+                candidate,
+                EXPECTED_SIG_SETS,
+                EXPECTED_REPLAY_IDS,
+                allow_legacy_replay_provenance=allow,
+            )
+            failed = {g["name"] for g in result["gates"] if not g["passed"]}
+            assert "replay_provenance" in failed, (field, allow)
+            assert result["all_passed"] is False
+
+
+def test_gate_replay_provenance_legacy_absence_needs_override():
+    # Codex iter-10 MED: blocks recorded before the identity fields existed
+    # were consumed silently by the hard latency gate. Absence now fails
+    # unless the operator explicitly accepts it, and the acceptance is
+    # surfaced in the gate detail.
+    candidate = _candidate()
+    del candidate["ragas"]["model"]
+    del candidate["e2e"]["model"]
+    del candidate["e2e"]["query_ids"]
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "replay_provenance" in failed
+    assert result["all_passed"] is False
+    result = evaluate_gates(
+        BASELINE,
+        candidate,
+        EXPECTED_SIG_SETS,
+        EXPECTED_REPLAY_IDS,
+        allow_legacy_replay_provenance=True,
+    )
+    gate = [g for g in result["gates"] if g["name"] == "replay_provenance"][0]
+    assert gate["passed"] is True
+    assert "override" in gate["detail"]
+
+
+def test_gate_replay_provenance_missing_bundle_model_fails_closed():
+    candidate = _candidate()
+    del candidate["model"]
+    result = evaluate_gates(
+        BASELINE,
+        candidate,
+        EXPECTED_SIG_SETS,
+        EXPECTED_REPLAY_IDS,
+        allow_legacy_replay_provenance=True,
+    )
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "replay_provenance" in failed
+
+
+def test_summarize_e2e_emits_model():
+    records = [
+        {
+            "model": "m",
+            "query_id": "a",
+            "latency_s": 1.0,
+            "hop_count": 1,
+            "evidence_count": 1,
+            "answer_chars": 10,
+            "error": None,
+        }
+    ]
+    assert summarize_e2e_runs(records)["m"]["model"] == "m"
 
 
 def test_summarize_e2e_emits_query_ids():

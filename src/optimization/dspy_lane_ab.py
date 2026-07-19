@@ -200,6 +200,10 @@ def summarize_e2e_runs(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         latencies = [r["latency_s"] for r in recs if r.get("latency_s") is not None]
         errors = Counter(cls for cls in (_error_class(r.get("error")) for r in recs) if cls)
         out[model] = {
+            # The block's own identity, so the replay_provenance gate can
+            # prove these latencies belong to the model being verdicted
+            # (codex iter-10).
+            "model": model,
             "n": len(recs),
             "n_errors": len(recs) - len(ok),
             # Sorted multiset so the replay_anchor gate can prove which
@@ -461,6 +465,50 @@ def _replay_anchor_error(side: Dict[str, Any], expected_sorted: List[str]) -> Op
     return None
 
 
+def _replay_provenance_error(
+    side: Dict[str, Any], allow_legacy: bool
+) -> Tuple[Optional[str], Optional[str]]:
+    """(error, legacy_note) for one side's replay-block ownership.
+
+    The nested ragas/e2e blocks carry their own model identity (the RAGAS
+    judge always emitted it; e2e summaries emit it as of codex iter-10), and
+    a present-but-mismatched identity is affirmative evidence the block
+    belongs to a different model - it always fails, override or not. Blocks
+    recorded before the fields existed have no identity to check; that
+    absence also fails, but an operator can explicitly accept it, and the
+    acceptance is surfaced in the gate detail rather than being silent
+    (codex iter-10: the hard latency gate must not consume unverifiable
+    provenance quietly).
+    """
+    expected = side.get("model")
+    if not isinstance(expected, str) or not expected:
+        return "bundle missing model identity (fail-closed)", None
+    legacy: List[str] = []
+    ragas_model = (side.get("ragas") or {}).get("model")
+    if ragas_model is None:
+        legacy.append("ragas.model")
+    elif ragas_model != expected:
+        return f"ragas block belongs to {ragas_model!r}, not {expected!r}", None
+    e2e = side.get("e2e") or {}
+    e2e_model = e2e.get("model")
+    if e2e_model is None:
+        legacy.append("e2e.model")
+    elif e2e_model != expected:
+        return f"e2e block belongs to {e2e_model!r}, not {expected!r}", None
+    if e2e.get("query_ids") is None:
+        legacy.append("e2e.query_ids")
+    if legacy:
+        fields = ", ".join(legacy)
+        if not allow_legacy:
+            return (
+                f"unverified legacy provenance ({fields} absent; "
+                "--allow-legacy-replay-provenance accepts it explicitly)",
+                None,
+            )
+        return None, f"legacy provenance accepted by override ({fields} absent)"
+    return None, None
+
+
 def _query_sets_match(b: Dict[str, Any], c: Dict[str, Any]) -> bool:
     """True only when both signature blocks carry well-formed query-id lists
     that agree with their own counts and match each other as multisets
@@ -486,6 +534,7 @@ def evaluate_gates(
     candidate: Dict[str, Any],
     expected_signature: Optional[Dict[str, Dict[str, List[str]]]] = None,
     expected_replay_ids: Optional[List[str]] = None,
+    allow_legacy_replay_provenance: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate one candidate against the baseline on the five hard gates.
 
@@ -746,6 +795,19 @@ def evaluate_gates(
                 f"baseline: {b_ra or 'OK'}; candidate: {c_ra or 'OK'}",
             )
         )
+
+    # Replay measurements must belong to the model they verdict (codex
+    # iter-10): a mis-bound block always fails; identity-less legacy blocks
+    # fail unless explicitly accepted, and the acceptance is surfaced.
+    b_pe, b_note = _replay_provenance_error(baseline, allow_legacy_replay_provenance)
+    c_pe, c_note = _replay_provenance_error(candidate, allow_legacy_replay_provenance)
+    gates.append(
+        _gate(
+            "replay_provenance",
+            b_pe is None and c_pe is None,
+            f"baseline: {b_pe or b_note or 'OK'}; candidate: {c_pe or c_note or 'OK'}",
+        )
+    )
 
     b_e2e = baseline.get("e2e") or {}
     c_e2e = candidate.get("e2e") or {}

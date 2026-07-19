@@ -70,6 +70,9 @@ def _cmd_emit(args: argparse.Namespace) -> int:
 def _bundle_for(model: str, signature_summary: dict, extra: dict) -> dict:
     block = extra.get(model, {})
     return {
+        # The bundle's claimed identity - the replay_provenance gate holds
+        # the nested blocks' own model fields against it (codex iter-10).
+        "model": model,
         "signature": signature_summary.get(model, {}),
         "ragas": block.get("ragas"),
         "e2e": block.get("e2e"),
@@ -106,7 +109,13 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     verdicts = {}
     for model in candidates:
         candidate = _bundle_for(model, summary, extra)
-        verdict = evaluate_gates(baseline, candidate, expected, replay_ids)
+        verdict = evaluate_gates(
+            baseline,
+            candidate,
+            expected,
+            replay_ids,
+            allow_legacy_replay_provenance=args.allow_legacy_replay_provenance,
+        )
         verdicts[model] = verdict
         print(f"### {model} - {'ALL GATES PASS' if verdict['all_passed'] else 'FAIL'}\n")
         print("| gate | result | detail |")
@@ -159,6 +168,12 @@ def main() -> int:
         required=True,
         help="comma-separated golden query ids the e2e replays were run against; "
         "anchors the RAGAS per_sample rows (codex iter-9)",
+    )
+    analyze.add_argument(
+        "--allow-legacy-replay-provenance",
+        action="store_true",
+        help="accept ragas/e2e blocks recorded before the model/query_ids identity "
+        "fields existed; mismatched identities still fail (codex iter-10)",
     )
     analyze.add_argument("--extra", default=None)
     analyze.add_argument("--json-out", default=None)

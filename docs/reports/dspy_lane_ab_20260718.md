@@ -184,6 +184,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | accuracy[chatbot] | PASS | 0.947 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
 | replay_anchor | PASS | per-sample replay ids match the intended e2e replay set, both sides |
+| replay_provenance | PASS | legacy blocks accepted by explicit --allow-legacy-replay-provenance (fields predate this run; mismatches would still fail) |
 | ragas[fully_scored] | PASS | every covered row carries a real score, both sides |
 | ragas[faithfulness] | **FAIL** | 0.122 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.465 vs baseline 0.401 (margin 0.05) |
@@ -209,6 +210,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | accuracy[chatbot] | PASS | 0.921 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
 | replay_anchor | PASS | per-sample replay ids match the intended e2e replay set, both sides |
+| replay_provenance | PASS | legacy blocks accepted by explicit --allow-legacy-replay-provenance (fields predate this run; mismatches would still fail) |
 | ragas[fully_scored] | PASS | every covered row carries a real score, both sides |
 | ragas[faithfulness] | **FAIL** | 0.339 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.529 vs baseline 0.401 (margin 0.05) |
@@ -228,7 +230,7 @@ the data points at haiku + a grounding-behavior fix (its extra evidence
 calls retrieve more but its answers ground less), not at sonnet-5
 (unfixable 2.24× latency at equal cost).
 
-**Gate amendments after the run (codex review, add-only).** Nine gates in
+**Gate amendments after the run (codex review, add-only).** Ten gates in
 the tables above were added by the codex adversarial review AFTER the
 measurement runs completed: `ragas[completeness]` (iter-1),
 `ragas[faithfulness_coverage]` and `ragas[faithfulness_common_subset]`
@@ -305,7 +307,21 @@ and are tolerated as legacy on that half — the per-sample rows are the
 score-bearing identity, and a latency number's provenance is unverifiable
 without raw replay records either way. All three real blocks carry the
 identical intended 10-replay multiset, so it reports PASS and changes
-nothing. Post-run amendments are legitimate here ONLY because they are
+nothing. The tenth amendment, `replay_provenance` (iter-10), binds replay
+measurements to the model they verdict: nested ragas/e2e blocks carry
+their own model identity going forward (the RAGAS judge always emitted it
+— the field was dropped during this run's manual extra.json assembly; e2e
+summaries emit it as of this amendment), and a present-but-mismatched
+identity always fails, override or not. Blocks recorded before the fields
+existed have no identity to check; that absence also fails unless the
+operator explicitly passes `--allow-legacy-replay-provenance`, and the
+acceptance is printed in the gate detail rather than being silent. This
+run's blocks predate the fields, so the recorded verdict uses the override
+— stated here openly: the replay measurements' model binding for THIS run
+rests on the run logs and §2/§3 of this report, not on in-band
+identity fields, and any mismatch the fields could have caught would
+still not flip the verdict (every gate delta since iter-1 has been
+add-only PASS). Post-run amendments are legitimate here ONLY because they are
 fail-closed additions evaluated on already-collected data: they can add
 failures but cannot flip a pre-registered FAIL to PASS, and on this run's
 data they strengthened the NO-FLIP (common-subset FAILs both candidates).
