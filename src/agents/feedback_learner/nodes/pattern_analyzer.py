@@ -380,7 +380,11 @@ class PatternAnalyzerNode:
             )
         except FileNotFoundError:
             # Intentional miss: no artifact yet. Cache so we don't re-probe.
-            logger.debug("No optimized pattern module saved yet; using fallback")
+            # INFO, not DEBUG: prod ran on this fallback for 6 weeks while the
+            # 2026-06-08 artifact sat unshipped and everyone believed the tuned
+            # module was live (dspy_lane_ab_20260718.md §7). Logged once per
+            # process (the miss is cached), so this stays quiet in volume.
+            logger.info("No optimized pattern module saved yet; using base module")
             self._optimized_module = None
             self._optimized_load_attempted = True
         except Exception as e:  # noqa: BLE001

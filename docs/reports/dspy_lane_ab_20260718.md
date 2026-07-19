@@ -394,3 +394,34 @@ denominators.
   filter `is_synthetic=False`); hard deletion was withheld (destructive-op
   guardrail) and left to the user:
   `delete from learning_signals where is_synthetic and signal_details::text like '%dspy-ab-20260718%'`.
+
+### 2026-07-19 addendum — both user-decision items RESOLVED
+
+- **learning_signals rows deleted.** The user authorized the hard delete; the
+  SQL above removed exactly 96 rows (count-verified 96 → 0 remaining rows
+  matching the marker; 2,056 unrelated rows intact).
+- **GEPA artifact prod gap closed — with a materially different fix than the
+  options listed above, because new evidence changed the classification.**
+  An in-container state diff proved the artifact is **zero-delta**: its
+  `module_state` is identical to a freshly instantiated stock
+  `ChainOfThought(PatternDetectionSignature)` in instructions, fields, demos,
+  traces, and train — the ONLY difference is the retired
+  `anthropic/claude-sonnet-4-20250514` lm pin. The 2026-06-08 light-budget
+  GEPA run saved an unmodified program, so the silent fallback prod has been
+  serving is behaviorally identical to the "tuned" module: the gap had zero
+  production impact. (Also: prod's `_analyze_with_dspy` rebinds via
+  `module.set_lm(...)`, which overwrites per-predictor pins — the 404 risk
+  applied to the smoke's `dspy.context` path, not the prod path.)
+  Consequently "commit the artifact" would have shipped a false claim of
+  optimization; the artifact was instead retired on the host (moved to
+  `optimized_modules/feedback_learner_pattern/retired/`, invisible to the
+  loader's non-recursive glob). The structural fix ships the missing
+  persistence handshake the architecture already expects — the daily
+  `dspy-prompt-optimization-daily` beat task (worker_medium) writes
+  `optimized_modules/` + `optimized_prompts/`, and the api reads both
+  (pattern_analyzer load; startup `install_all_prompt_bundles()`):
+  named volumes `e2i_optimized_modules`/`e2i_optimized_prompts`
+  (worker_medium rw producer, api ro consumer), image-created dirs for
+  non-root volume ownership, the intentional-miss fallback log raised
+  DEBUG → INFO, and a compose-wiring guard test
+  (`tests/integration/test_optimized_artifacts_compose_wiring.py`).

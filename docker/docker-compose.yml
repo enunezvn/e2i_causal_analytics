@@ -179,6 +179,17 @@ volumes:
   experiment_designs:
     driver: local
     name: e2i_experiment_designs
+  # DSPy self-improvement artifact roots (dspy_lane_ab_20260718.md §7 prod
+  # gap): both are CWD-relative under /app in code and were previously
+  # container-ephemeral. worker_medium produces (daily beat), api consumes
+  # (pattern_analyzer + startup install_all_prompt_bundles). Guard:
+  # tests/integration/test_optimized_artifacts_compose_wiring.py.
+  optimized_modules:
+    driver: local
+    name: e2i_optimized_modules
+  optimized_prompts:
+    driver: local
+    name: e2i_optimized_prompts
 
   # Observability volumes
   prometheus_data:
@@ -634,6 +645,14 @@ services:
       - audit_artifacts:/app/data/audit_artifacts
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro  # Read from Feast
+      # DSPy optimization artifacts (dspy_lane_ab_20260718.md §7): api is a
+      # pure consumer — pattern_analyzer loads optimized_modules, startup
+      # install_all_prompt_bundles reads optimized_prompts. Producer is
+      # worker_medium (daily beat). :ro is intentional; an api-side writer
+      # (dormant chatbot GEPA path) must consciously flip this + the guard
+      # test (tests/integration/test_optimized_artifacts_compose_wiring.py).
+      - optimized_modules:/app/optimized_modules:ro
+      - optimized_prompts:/app/optimized_prompts:ro
     environment:
       <<: *common-env
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3002}
@@ -761,6 +780,13 @@ services:
       - audit_artifacts:/app/data/audit_artifacts
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
+      # Producer side of the DSPy optimization artifacts: the daily
+      # dspy-prompt-optimization-daily beat task (analytics queue) writes GEPA
+      # module saves + .trigger_state.json (optimized_modules) and recipient
+      # bundles (optimized_prompts). Read-write required — every writer
+      # catches-and-warns, so a :ro mount would break saves SILENTLY.
+      - optimized_modules:/app/optimized_modules
+      - optimized_prompts:/app/optimized_prompts
     tmpfs:
       - /app/tmp:size=2G,uid=1000,gid=1000,mode=0700
     environment:
