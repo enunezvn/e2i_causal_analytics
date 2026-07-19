@@ -80,11 +80,20 @@ def test_client_init_missing_credentials():
         FeatureStoreClient()
 
 
-@patch.dict("os.environ", {"SUPABASE_URL": "http://test", "SUPABASE_KEY": "test-key"})
+@patch.dict(
+    "os.environ",
+    {"SUPABASE_URL": "http://test", "SUPABASE_KEY": "test-key"},
+    clear=True,
+)
 @patch("src.feature_store.client.create_client")
 @patch("src.feature_store.client.redis.from_url")
 def test_client_init_from_env(mock_redis, mock_supabase):
-    """Test initialization from environment variables."""
+    """Test initialization from environment variables.
+
+    clear=True isolates the test from the host environment: the client
+    prefers SUPABASE_SERVICE_ROLE_KEY over SUPABASE_KEY, so a real
+    service-role key loaded from .env would otherwise win.
+    """
     mock_supabase_client = MagicMock()
     mock_supabase.return_value = mock_supabase_client
 
@@ -95,6 +104,33 @@ def test_client_init_from_env(mock_redis, mock_supabase):
     FeatureStoreClient()
 
     mock_supabase.assert_called_once_with("http://test", "test-key")
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "SUPABASE_URL": "http://test",
+        "SUPABASE_KEY": "anon-key",
+        "SUPABASE_SERVICE_ROLE_KEY": "service-role-key",
+    },
+    clear=True,
+)
+@patch("src.feature_store.client.create_client")
+@patch("src.feature_store.client.redis.from_url")
+def test_client_init_prefers_service_role_key(mock_redis, mock_supabase):
+    """The service-role key must win over the anon key.
+
+    The feature store writes to tables that migration 058 revoked from
+    anon/authenticated; SUPABASE_KEY is the dev/test fallback only.
+    """
+    mock_supabase.return_value = MagicMock()
+    mock_redis_client = MagicMock()
+    mock_redis_client.ping.return_value = True
+    mock_redis.return_value = mock_redis_client
+
+    FeatureStoreClient()
+
+    mock_supabase.assert_called_once_with("http://test", "service-role-key")
 
 
 # =============================================================================
