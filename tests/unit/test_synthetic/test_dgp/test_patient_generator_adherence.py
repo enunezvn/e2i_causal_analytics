@@ -19,14 +19,15 @@ def test_generator_emits_adherence_columns_and_true_ate_by_arm():
     assert df["adherent_180d"].notna().all()
     assert set(np.unique(df["adherent_180d"])) <= {0, 1}
 
-    # Phase 1 wired copay: these are now POPULATED, not placeholders (Task 4).
-    for col in ("copay_support", "insurance_access_score"):
+    # Phase 1/2 wired copay + psp: these are now POPULATED, not placeholders.
+    for col in ("copay_support", "insurance_access_score", "psp_enrolled"):
         assert col in df.columns
-        assert df[col].notna().all(), f"{col} should be populated once copay is wired"
+        assert df[col].notna().all(), f"{col} should be populated once its arm is wired"
     assert set(np.unique(df["copay_support"])) <= {0, 1}
+    assert set(np.unique(df["psp_enrolled"])) <= {0, 1}
 
-    # Phase 2+ columns remain NULL placeholders (so the loader carries them)
-    for col in ("psp_enrolled", "rep_detailing_high", "sample_dropped"):
+    # Phase 3 columns remain NULL placeholders (so the loader carries them)
+    for col in ("rep_detailing_high", "sample_dropped"):
         assert col in df.columns
         assert df[col].isna().all()
 

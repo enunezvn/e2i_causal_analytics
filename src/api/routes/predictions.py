@@ -861,6 +861,15 @@ _NUMERIC_GUIDANCE: Dict[str, Dict[str, Any]] = {
         "step": 1,
         "hint": "Binary: 0 = no copay support, 1 = enrolled in copay support",
     },
+    # COMM-ARMS Phase 2: like copay_support, a commercial intervention flag the
+    # business can ACT on (enroll a patient in the support program), so the what-if
+    # form toggles it 0->1 to read the persistence/adherence uplift.
+    "psp_enrolled": {
+        "min": 0,
+        "max": 1,
+        "step": 1,
+        "hint": "Binary: 0 = not enrolled, 1 = enrolled in patient support program",
+    },
     "age_at_diagnosis": {
         "min": 18,
         "max": 85,

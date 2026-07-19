@@ -81,6 +81,29 @@ _COPAY_CATE = {
     "low_severity": 0.06,
 }
 
+# Phase 2 (COMM-ARMS): psp_enrolled (patient support program). Constants are MEASURED,
+# not guessed (harness: scratchpad psp_disproof/psp_*_sweep, 2026-07-19). psp skews to
+# sicker + more-engaged + academic-HCP patients (the three design confounders, all
+# already allowlisted numeric covariates). The design band is +5-10pp (a shade weaker
+# than copay's +8-12pp). This _PSP_CATE is the ADHERENCE-latent map (adherent_180d); the
+# persistence effect lives on the discontinuation logit (_PSP_DISC_LOGIT in
+# cohort_outcomes.py). The WIDE high-medium gap is retained because the n=8000
+# CausalForestDML medium-segment resolution floor (Phase 1) is an estimator property.
+# Map tuning: the first guess {0.34,0.14,0.05} left Fabhalta/seed21 adherent h-m at a
+# razor-thin +0.0152; lowering medium to 0.13 and lifting high to 0.38 raised it to
+# +0.0327 (m-l stays +0.057) while keeping Remibrutinib(base) ATE 0.098 in-band. Kisqali
+# (1.40 scale) lands 0.122 -- above +10pp by brand-scaling design, exactly as copay's
+# Kisqali did (0.140); the gate asserts |est-true|<0.15, not an ATE band.
+_PSP_BETA_SEVERITY = 0.20  # sicker -> more likely enrolled in a support program
+_PSP_BETA_ENGAGEMENT = 0.16  # more engaged -> more likely to enroll (centered at 5)
+_PSP_BETA_ACADEMIC = 0.45  # academic HCPs enroll patients in PSPs more often
+_PSP_INTERCEPT = -1.20  # base share ~0.376 (MEASURED, brand-invariant; prop AUC ~0.64)
+_PSP_CATE = {
+    "high_severity": 0.38,
+    "medium_severity": 0.13,
+    "low_severity": 0.05,
+}
+
 ARM_REGISTRY: Dict[str, ArmSpec] = {
     "treatment_arm": ArmSpec(
         name="treatment_arm",
@@ -101,6 +124,18 @@ ARM_REGISTRY: Dict[str, ArmSpec] = {
         cate_by_segment=_COPAY_CATE,
         target_outcomes=("adherent_180d", "low_gap_180d", "persistent_180d"),
         center={"disease_severity": 5.0},
+    ),
+    "psp_enrolled": ArmSpec(
+        name="psp_enrolled",
+        confounders={
+            "disease_severity": _PSP_BETA_SEVERITY,
+            "engagement_score": _PSP_BETA_ENGAGEMENT,
+            "academic_hcp": _PSP_BETA_ACADEMIC,
+        },
+        intercept=_PSP_INTERCEPT,
+        cate_by_segment=_PSP_CATE,
+        target_outcomes=("adherent_180d", "persistent_180d"),
+        center={"disease_severity": 5.0, "engagement_score": 5.0},
     ),
 }
 

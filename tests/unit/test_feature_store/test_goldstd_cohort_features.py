@@ -49,11 +49,11 @@ class TestGoldstdCohortFeatureView:
         arm-independent (ATE/CATE preserved) and are the ones the live
         Feature-Importance page must surface alongside the base 3.
 
-        COMM-ARMS Phase 1 adds copay_support (consumed by persistence and
-        discontinuation). This does NOT weaken the no-leakage intent of this test:
-        copay_support is assigned PRE-index, is not a post-index outcome proxy, and
-        is not in FeatureBuilder.LEAKAGE_DENYLIST. It is a treatment/intervention
-        flag the model may legitimately observe."""
+        COMM-ARMS Phase 1/2 add copay_support + psp_enrolled (both consumed by
+        persistence and discontinuation). This does NOT weaken the no-leakage intent
+        of this test: both are assigned PRE-index, are not post-index outcome proxies,
+        and are not in FeatureBuilder.LEAKAGE_DENYLIST. They are treatment/intervention
+        flags the model may legitimately observe."""
         from features.goldstd_cohort_features import goldstd_cohort_features_fv
 
         served = {f.name for f in goldstd_cohort_features_fv.schema}
@@ -66,6 +66,7 @@ class TestGoldstdCohortFeatureView:
             "comorbidity_burden",
             "prior_therapy_lines",
             "copay_support",
+            "psp_enrolled",
         }
 
     def test_geographic_region_served_as_string(self) -> None:

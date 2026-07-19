@@ -79,17 +79,21 @@ def test_patient_goldstd_cohorts_fetch_enriched_base7():
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
     }
-    # COMM-ARMS Phase 1: the three cohorts are no longer identical. persistence and
-    # discontinuation additionally fetch copay_support, which enters the
-    # discontinuation logit; initiation does not, because copay is absent from the
-    # treatment_initiated equation. Asserted PER COHORT rather than as one shared set
-    # so this still fails on drift in either direction — a shared set would have had
-    # to be loosened to accommodate the split, which would stop catching a cohort
-    # that silently loses a ref.
+    # COMM-ARMS Phase 1/2: the three cohorts are no longer identical. persistence and
+    # discontinuation additionally fetch the commercial arms copay_support (Phase 1) +
+    # psp_enrolled (Phase 2), which both enter the discontinuation logit; initiation
+    # does not, because neither is in the treatment_initiated equation. Asserted PER
+    # COHORT rather than as one shared set so this still fails on drift in either
+    # direction — a shared set would have had to be loosened to accommodate the split,
+    # which would stop catching a cohort that silently loses a ref.
+    commercial = {
+        "goldstd_cohort_features:copay_support",
+        "goldstd_cohort_features:psp_enrolled",
+    }
     expected_by_cohort = {
         "initiation": base7,
-        "persistence": base7 | {"goldstd_cohort_features:copay_support"},
-        "discontinuation": base7 | {"goldstd_cohort_features:copay_support"},
+        "persistence": base7 | commercial,
+        "discontinuation": base7 | commercial,
     }
     for cohort, expected in expected_by_cohort.items():
         assert set(MODEL_FEATURE_REFS[cohort]) == expected, (

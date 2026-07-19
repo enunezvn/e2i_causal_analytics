@@ -47,10 +47,10 @@ def test_feature_builder_is_leakage_safe_and_restricts_to_keep_columns():
 
 def test_persistence_spec_keeps_all_spec_covariates():
     """T9: FeatureBuilder(spec) must honor the per-cohort base_covariates. Persistence/
-    discontinuation carry 8 covariates as of COMM-ARMS Phase 1 (7 + copay_support) — the
-    patient-grain default MUST use spec.base_covariates, not the module KEEP_COLUMNS
-    3-tuple, or the real models silently train on 3 features and /feature-importance
-    shows 3.
+    discontinuation carry 9 covariates as of COMM-ARMS Phase 2 (7 + copay_support +
+    psp_enrolled) — the patient-grain default MUST use spec.base_covariates, not the
+    module KEEP_COLUMNS 3-tuple, or the real models silently train on 3 features and
+    /feature-importance shows 3.
 
     The count is asserted as an explicit number rather than len(spec.base_covariates) on
     purpose: deriving both sides from the spec would make this tautological and it would
@@ -60,8 +60,9 @@ def test_persistence_spec_keeps_all_spec_covariates():
     spec = make_patient_spec("persistence", "Remibrutinib")
     fb = FeatureBuilder(spec)
     assert fb.keep_columns == spec.base_covariates
-    assert len(fb.keep_columns) == 8
+    assert len(fb.keep_columns) == 9
     assert "copay_support" in fb.keep_columns
+    assert "psp_enrolled" in fb.keep_columns
     raw = pd.DataFrame(
         {
             "patient_id": ["p1", "p2", "p3", "p4"],

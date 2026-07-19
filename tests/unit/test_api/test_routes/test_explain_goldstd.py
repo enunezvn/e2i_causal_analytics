@@ -58,10 +58,10 @@ class TestModelTypeTaxonomyReconcile:
         goldstd_cohort_features view (T9/T11 enrichment): the base 3 plus the 4
         arm-independent prognostic drivers the enriched models consume.
 
-        COMM-ARMS Phase 1: the three cohorts are no longer identical. persistence and
-        discontinuation fetch an 8th ref, copay_support, which enters the
-        discontinuation logit; initiation does not, because copay is absent from the
-        treatment_initiated equation."""
+        COMM-ARMS Phase 1/2: the three cohorts are no longer identical. persistence and
+        discontinuation fetch two extra refs, copay_support (Phase 1) + psp_enrolled
+        (Phase 2), which both enter the discontinuation logit; initiation does not,
+        because neither is in the treatment_initiated equation."""
         from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
 
         base7 = [
@@ -73,10 +73,14 @@ class TestModelTypeTaxonomyReconcile:
             "goldstd_cohort_features:comorbidity_burden",
             "goldstd_cohort_features:prior_therapy_lines",
         ]
+        commercial = [
+            "goldstd_cohort_features:copay_support",
+            "goldstd_cohort_features:psp_enrolled",
+        ]
         expected_by_cohort = {
             "initiation": base7,
-            "persistence": base7 + ["goldstd_cohort_features:copay_support"],
-            "discontinuation": base7 + ["goldstd_cohort_features:copay_support"],
+            "persistence": base7 + commercial,
+            "discontinuation": base7 + commercial,
         }
         for cohort, expected in expected_by_cohort.items():
             assert MODEL_FEATURE_REFS[cohort] == expected, cohort

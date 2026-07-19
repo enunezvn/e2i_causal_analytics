@@ -43,6 +43,11 @@ from .cohort_outcomes import generate_discontinuation_outcomes
 # _BIOLOGIC_SPAWN_KEY). Every pre-existing column stays byte-identical; only the
 # adherence OUTCOMES change, because copay genuinely enters their latent.
 _COPAY_SPAWN_KEY = 0xC0FA
+# Phase 2: an INDEPENDENT substream for the psp arm (distinct from _COPAY_SPAWN_KEY),
+# so wiring psp shifts NO pre-existing column — only the adherence/persistence OUTCOMES
+# move, because psp genuinely enters both latents. Distinct key => copay and psp draw
+# from non-overlapping streams (no shared entropy that would correlate the arms).
+_PSP_SPAWN_KEY = 0x9527
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -189,6 +194,29 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             seg: round(val * _copay_scale, 4) for seg, val in copay_spec.cate_by_segment.items()
         }
 
+        # Phase 2 (COMM-ARMS): the psp_enrolled commercial arm. Confounded on
+        # disease_severity + engagement_score + academic_hcp (all already-allowlisted
+        # covariates, all drawn ABOVE this point), from its OWN independent substream so
+        # its position here shifts no pre-existing column. Consumed by both outcome
+        # calls below (persistence logit + adherence latent), exactly like copay.
+        _psp_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(_PSP_SPAWN_KEY,))
+        )
+        psp_spec = ARM_REGISTRY["psp_enrolled"]
+        psp_enrolled, psp_propensity = assign_arm_from_spec(
+            psp_spec,
+            {
+                "disease_severity": confounders["disease_severity"],
+                "engagement_score": np.asarray(engagement_scores, dtype=float),
+                "academic_hcp": confounders["academic_hcp"],
+            },
+            _psp_rng,
+        )
+        _psp_scale = _BRAND_CATE_SCALE.get(brand_enum, 1.0)
+        psp_cate = {
+            seg: round(val * _psp_scale, 4) for seg, val in psp_spec.cate_by_segment.items()
+        }
+
         # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
         # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
         # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
@@ -205,6 +233,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             segment=np.asarray(segment),
             brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
             copay_support=copay_support,
+            psp_enrolled=psp_enrolled,
         )
 
         # Phase 0 (commercial-arms enrichment): binarized adherence outcomes of the
@@ -220,6 +249,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             rng=self._rng,
             copay_support=copay_support,
             copay_cate=copay_cate,
+            psp_enrolled=psp_enrolled,
+            psp_cate=psp_cate,
         )
 
         # days_to_treatment only for initiators (preserve prior shape)
@@ -376,13 +407,13 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "gap_days": _adh["gap_days"],
                 # Phases 2-3 commercial arms — NULL placeholders so the loader
                 # carries them; populated by their phase's generator wiring.
-                # Phase 1 (COMM-ARMS): copay_support is POPULATED.
+                # Phase 1/2 (COMM-ARMS): copay_support + psp_enrolled are POPULATED.
                 "copay_support": copay_support,
-                "psp_enrolled": np.nan,
+                "psp_enrolled": psp_enrolled,
                 "rep_detailing_high": np.nan,
                 "sample_dropped": np.nan,
                 "copay_support_propensity": np.round(copay_propensity, 4),
-                "psp_enrolled_propensity": np.nan,
+                "psp_enrolled_propensity": np.round(psp_propensity, 4),
                 "rep_detailing_high_propensity": np.nan,
                 "sample_dropped_propensity": np.nan,
                 "insurance_access_score": np.round(insurance_access, 4),
@@ -449,6 +480,18 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                     np.mean([_coh["copay_persistent_rd_by_segment"][str(s)] for s in segment])
                 ),
                 "cate_by_segment": _coh["copay_persistent_rd_by_segment"],
+            },
+        }
+        df.attrs["true_ate_by_arm"]["psp_enrolled"] = {
+            "adherent_180d": {
+                "ate": float(np.mean(list(_adh["psp_adherent_rd_by_segment"].values()))),
+                "cate_by_segment": _adh["psp_adherent_rd_by_segment"],
+            },
+            "persistent_180d": {
+                "ate": float(
+                    np.mean([_coh["psp_persistent_rd_by_segment"][str(s)] for s in segment])
+                ),
+                "cate_by_segment": _coh["psp_persistent_rd_by_segment"],
             },
         }
 

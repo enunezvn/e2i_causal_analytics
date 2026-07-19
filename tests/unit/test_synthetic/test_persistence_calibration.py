@@ -1,5 +1,12 @@
 """FAITHFUL calibration gate for the enriched persistence DGP (T9).
 
+UPDATED 2026-07-19 (COMM-ARMS Phase 2, backlog #43 folded in): the AUC assertion is now
+a PER-BRAND PINNED BASELINE + tolerance (see _PERSISTENCE_AUC_BASELINE below), NOT the
+single absolute band [0.75, 0.83] described in the historical notes further down. Those
+notes are retained because they explain WHY the reshape happened (a single-seed point
+estimate on a ~0.03-dispersion quantity that each commercial arm erodes further). The
+[0.75, 0.83] numbers below are historical context, not the live assertion.
+
 This is the measure-don't-assume gate, and it is FAITHFUL: it routes the generated
 data through the EXACT real model pipeline — FeatureBuilder(make_patient_spec(...))
 to encode the 7 leakage-safe covariates, then train_cohort_model (the calibrated
@@ -70,6 +77,36 @@ from src.mlops.gold_standard_eval.cohort_deployer import train_cohort_model
 from src.mlops.gold_standard_eval.cohort_spec import make_patient_spec
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
 
+# --- backlog #43 (folded into COMM-ARMS Phase 2) --------------------------------------
+# Per-brand PINNED baselines replace the old single absolute band [0.75, 0.83]. WHY the
+# reshape: the old gate was a single-seed (seed 42) point estimate on a quantity with
+# ~0.03 seed dispersion — deterministic, so it never flaked, but seed 42 is not
+# representative, so any deliberate DGP change moved it unpredictably and the floor's
+# true safety margin was far thinner than its nominal gap. Phase 1 had already cleared
+# 0.78 by only 0.0005 at Kisqali; each commercial arm erodes the persistence ceiling
+# further by the SAME irreducible mechanism (a commercial arm that goes preferentially
+# to sicker patients cancels the severity gradient — measured against a Bayes oracle,
+# backlog #43). A pinned per-brand baseline detects DRIFT FROM A KNOWN POINT instead of
+# asserting an absolute level Phases 2-3 legitimately move.
+#
+# Values MEASURED on the faithful path (real FeatureBuilder _BASE9 + train_cohort_model,
+# seed 42, n=20000) AFTER Phase 2 wired psp_enrolled into the discontinuation logit and
+# added it as the 9th persistence/discontinuation model covariate. Measured on the LOCAL
+# droplet. CPU-ISA FP divergence local(AVX2)/CI can shift AUC ~0.01 (cf.
+# test_synthetic_baseline_invariant's ±0.01 bands); _TOL absorbs that plus modest DGP
+# jitter. If the FIRST CI run lands just outside _TOL, RE-PIN from the CI value (mirror
+# BASELINE_CI's placeholder→measured pattern) — do NOT widen blindly. A brand below the
+# OUTER floor IS a real regression: re-measure, do not lower the floor again (Phase 1's
+# own docstring instruction). Do NOT bundle a re-pin with an estimator change — that hits
+# all 12 gold-standard models and fail-closes /shap (backlog #43 blast-radius note).
+_PERSISTENCE_AUC_BASELINE = {
+    Brand.REMIBRUTINIB: 0.7751,
+    Brand.FABHALTA: 0.7827,
+    Brand.KISQALI: 0.7701,
+}
+_PERSISTENCE_AUC_TOL = 0.025  # per-brand drift tolerance (absorbs local/CI FP + jitter)
+_PERSISTENCE_AUC_OUTER = (0.72, 0.83)  # wide sanity band for gross breakage
+
 
 def _faithful(brand: Brand, n: int = 20000, seed: int = 42) -> dict:
     """Train the REAL gold-standard model (FeatureBuilder 7-cov + calibrated LR) on
@@ -99,15 +136,29 @@ def faithful() -> dict:
     return {b: _faithful(b) for b in Brand}
 
 
-def test_persistence_auc_in_target_band(faithful):
+def test_persistence_auc_matches_pinned_baseline(faithful):
+    """backlog #43: per-brand pinned baseline + tolerance (was a single absolute band).
+
+    Two-layer check: a wide OUTER sanity band catches gross breakage, and a per-brand
+    drift check against the pinned post-Phase-2 baseline catches a DGP change moving the
+    AUC away from its known point. A deliberate DGP change re-pins the baseline; an
+    unexplained drift outside tolerance is a regression to re-measure."""
+    lo, hi = _PERSISTENCE_AUC_OUTER
     for b, m in faithful.items():
         assert 0.05 <= m["disc_prev"] <= 0.60, f"{b.value}: prevalence {m['disc_prev']} out of band"
-        # 7 covariates → ~19 encoded features (was 9 for the 3-covariate model).
+        # 9 leakage-safe covariates (_BASE9: _BASE7 + copay_support + psp_enrolled) →
+        # ~23 encoded features (was ~19 at 7 covariates, ~21 at 8).
         assert m["n_features"] >= 15, (
-            f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
+            f"{b.value}: only {m['n_features']} encoded features (expected the 9-covariate set)"
         )
-        assert 0.75 <= m["auc"] <= 0.83, (
-            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.75, 0.83]"
+        assert lo <= m["auc"] <= hi, (
+            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of outer sanity band [{lo}, {hi}]"
+        )
+        base = _PERSISTENCE_AUC_BASELINE[b]
+        assert abs(m["auc"] - base) <= _PERSISTENCE_AUC_TOL, (
+            f"{b.value}: faithful AUC {m['auc']:.4f} drifted {m['auc'] - base:+.4f} from the "
+            f"pinned baseline {base:.4f} (tol ±{_PERSISTENCE_AUC_TOL}); a deliberate DGP change "
+            "re-pins the baseline, an unexplained drift is a regression to re-measure."
         )
 
 

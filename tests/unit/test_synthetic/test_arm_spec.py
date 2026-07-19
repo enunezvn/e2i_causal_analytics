@@ -16,8 +16,8 @@ from src.ml.synthetic.dgp.treatment_arm import (
 
 
 @pytest.mark.unit
-def test_registry_contains_the_existing_arm_and_copay():
-    assert set(ARM_REGISTRY) == {"treatment_arm", "copay_support"}
+def test_registry_contains_the_existing_arm_and_commercial_arms():
+    assert set(ARM_REGISTRY) == {"treatment_arm", "copay_support", "psp_enrolled"}
 
 
 @pytest.mark.unit
@@ -42,6 +42,51 @@ def test_copay_spec_declares_its_backdoor_and_targets():
     # LOWER access -> MORE copay support (the real-world skew).
     assert spec.confounders["insurance_access_score"] < 0
     assert spec.target_outcomes == ("adherent_180d", "low_gap_180d", "persistent_180d")
+
+
+@pytest.mark.unit
+def test_psp_spec_declares_its_backdoor_and_targets():
+    spec = ARM_REGISTRY["psp_enrolled"]
+    assert spec.name == "psp_enrolled"
+    assert set(spec.confounders) == {"disease_severity", "engagement_score", "academic_hcp"}
+    # psp skews to sicker + more-engaged + academic-HCP patients (all positive pulls).
+    assert all(v > 0 for v in spec.confounders.values())
+    # psp targets adherent + persistent (NOT low_gap — that is copay's, not psp's).
+    assert spec.target_outcomes == ("adherent_180d", "persistent_180d")
+
+
+@pytest.mark.unit
+def test_psp_propensity_moves_with_each_declared_confounder():
+    """Per-arm contract guard: perturbing ANY declared psp confounder must move the
+    propensity, so the declared set cannot silently go stale."""
+    n = 4000
+    spec = ARM_REGISTRY["psp_enrolled"]
+    base = {
+        "disease_severity": np.full(n, 5.0),
+        "engagement_score": np.full(n, 5.0),
+        "academic_hcp": np.zeros(n),
+    }
+    _, p_base = assign_arm_from_spec(spec, base, np.random.default_rng(0))
+    for cov in spec.confounders:
+        bumped = {k: v.copy() for k, v in base.items()}
+        bumped[cov] = bumped[cov] + 1.0
+        _, p_bumped = assign_arm_from_spec(spec, bumped, np.random.default_rng(0))
+        assert not np.allclose(p_base, p_bumped), f"propensity ignores {cov}"
+
+
+@pytest.mark.unit
+def test_psp_propensity_has_overlap():
+    """Clipped to [0.01, 0.99] so both arms are populated and e(X) is estimable."""
+    n = 5000
+    rng = np.random.default_rng(7)
+    covs = {
+        "disease_severity": np.clip(rng.normal(5.0, 2.0, n), 0, 10),
+        "engagement_score": np.clip(rng.normal(5.0, 2.0, n), 0, 10),
+        "academic_hcp": (rng.random(n) < 0.30).astype(int),
+    }
+    arm, prop = assign_arm_from_spec(ARM_REGISTRY["psp_enrolled"], covs, rng)
+    assert prop.min() >= 0.01 and prop.max() <= 0.99
+    assert 0.20 < arm.mean() < 0.60, arm.mean()
 
 
 @pytest.mark.unit

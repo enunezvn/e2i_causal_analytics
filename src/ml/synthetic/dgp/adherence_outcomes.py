@@ -111,6 +111,7 @@ class AdherenceOutcomes(TypedDict):
     low_gap_rd_by_segment: Dict[str, float]
     copay_adherent_rd_by_segment: Dict[str, float]
     copay_low_gap_rd_by_segment: Dict[str, float]
+    psp_adherent_rd_by_segment: Dict[str, float]
 
 
 def generate_adherence_outcomes(
@@ -123,6 +124,8 @@ def generate_adherence_outcomes(
     rng: np.random.Generator,
     copay_support: np.ndarray | None = None,
     copay_cate: Dict[str, float] | None = None,
+    psp_enrolled: np.ndarray | None = None,
+    psp_cate: Dict[str, float] | None = None,
 ) -> AdherenceOutcomes:
     """Return adherent_180d / low_gap_180d (recoverable binaries) + adherence_rate
     / gap_days (raw proxies) + the per-segment RD ground-truth map for BOTH binaries.
@@ -152,7 +155,22 @@ def generate_adherence_outcomes(
         copay = np.zeros(len(segs), dtype=int)
         tau_copay = np.zeros(len(segs), dtype=float)
         copay_contribution = np.zeros(len(segs), dtype=float)
-    baseline = baseline + copay_contribution
+
+    # Phase 2: psp_enrolled is a THIRD arm on the SAME latent, folded in exactly like
+    # copay. Each arm's ground-truth RD (below) is computed against an effective
+    # baseline that HOLDS THE OTHER TWO ARMS at their realized contributions, so no
+    # arm's truth is a blend — additive-independent by construction (design non-goal:
+    # no interactions). Like copay, psp_cate is NOT boosted by _ADH_LATENT_CATE_BOOST
+    # (that boost is calibrated for the treatment_arm effect only).
+    if psp_enrolled is not None and psp_cate is not None:
+        psp = np.asarray(psp_enrolled, dtype=int)
+        tau_psp = np.array([float(psp_cate[str(s)]) for s in segs], dtype=float)
+        psp_contribution = psp.astype(float) * tau_psp
+    else:
+        psp = np.zeros(len(segs), dtype=int)
+        tau_psp = np.zeros(len(segs), dtype=float)
+        psp_contribution = np.zeros(len(segs), dtype=float)
+    baseline = baseline + copay_contribution + psp_contribution
 
     # Boost the latent CATE map BEFORE use (cf. initiation's boosted_map) so the boost
     # flows CONSISTENTLY into both the score (binary_outcome_rd) and the RD ground truth
@@ -224,6 +242,19 @@ def generate_adherence_outcomes(
         noise_std=_ADH_NOISE_STD,
     )
 
+    # psp's OWN recoverable RD on adherent_180d (its only adherence target outcome):
+    # fold BOTH treatment_arm and copay back into psp's effective baseline (the mirror
+    # of the copay computation above), thresholded on the SAME shared score.
+    psp_eff_baseline = baseline - psp_contribution + arm.astype(float) * tau_latent
+    _, tau_psp_adh = binarize_score(
+        score,
+        psp_eff_baseline,
+        tau_psp,
+        segs,
+        target_prevalence=_TARGET_PREVALENCE,
+        noise_std=_ADH_NOISE_STD,
+    )
+
     return {
         "adherent_180d": adherent_180d,
         "low_gap_180d": low_gap_180d,
@@ -233,4 +264,5 @@ def generate_adherence_outcomes(
         "low_gap_rd_by_segment": rd_map_from_tau(segs, tau_lowgap),
         "copay_adherent_rd_by_segment": rd_map_from_tau(segs, tau_copay_adh),
         "copay_low_gap_rd_by_segment": rd_map_from_tau(segs, tau_copay_low),
+        "psp_adherent_rd_by_segment": rd_map_from_tau(segs, tau_psp_adh),
     }

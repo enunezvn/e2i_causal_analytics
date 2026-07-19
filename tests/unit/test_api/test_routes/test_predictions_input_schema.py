@@ -78,6 +78,7 @@ def test_patient_cohort_features_have_no_specialty():
         "comorbidity_burden",
         "prior_therapy_lines",
         "copay_support",
+        "psp_enrolled",
     ]
     by = _by_name(fields)
     assert "specialty" not in by
@@ -88,10 +89,13 @@ def test_patient_cohort_features_have_no_specialty():
     assert set(by["insurance_type"]["choices"]) == {"commercial", "medicare", "medicaid"}
     assert by["comorbidity_burden"]["type"] == "number"
     assert by["prior_therapy_lines"]["type"] == "number"
-    # copay_support is a 0/1 intervention flag: it must be BOUNDED, or the form offers
-    # a free numeric input on which a user can enter a value the model never saw.
+    # copay_support / psp_enrolled are 0/1 intervention flags: they must be BOUNDED, or
+    # the form offers a free numeric input on which a user can enter a value the model
+    # never saw.
     assert by["copay_support"]["type"] == "number"
     assert (by["copay_support"]["min"], by["copay_support"]["max"]) == (0, 1)
+    assert by["psp_enrolled"]["type"] == "number"
+    assert (by["psp_enrolled"]["min"], by["psp_enrolled"]["max"]) == (0, 1)
 
 
 def test_unknown_model_returns_none():

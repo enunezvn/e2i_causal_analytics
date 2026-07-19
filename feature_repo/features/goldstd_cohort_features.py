@@ -63,7 +63,8 @@ goldstd_cohort_source = PostgreSQLSource(
             age_at_diagnosis::BIGINT AS age_at_diagnosis,
             comorbidity_burden::BIGINT AS comorbidity_burden,
             prior_therapy_lines::BIGINT AS prior_therapy_lines,
-            copay_support::BIGINT AS copay_support
+            copay_support::BIGINT AS copay_support,
+            psp_enrolled::BIGINT AS psp_enrolled
         FROM patient_journeys
         WHERE event_date >= NOW() - INTERVAL '2000 days'
     """,
@@ -142,6 +143,20 @@ goldstd_cohort_features_fv = FeatureView(
             name="copay_support",
             dtype=Int64,
             description="Copay-support commercial arm, 0/1 (persistence + "
+            "discontinuation only; NULL until the next synthetic reseed).",
+        ),
+        # --- COMM-ARMS Phase 2: the psp_enrolled commercial arm ---
+        # Same rationale as copay_support above: psp_enrolled enters the
+        # discontinuation logit (Phase 2), so it is real outcome signal the
+        # persistence/discontinuation models can legitimately observe (assigned
+        # pre-index, not a leakage column). initiation does NOT consume it (psp is
+        # not in the treatment_initiated equation). NULL until the next reseed;
+        # declared here so the ref the persistence/disc views expose is not a
+        # #576 null-trap.
+        Field(
+            name="psp_enrolled",
+            dtype=Int64,
+            description="Patient-support-program commercial arm, 0/1 (persistence + "
             "discontinuation only; NULL until the next synthetic reseed).",
         ),
     ],

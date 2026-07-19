@@ -187,6 +187,77 @@ def test_copay_support_recoverable(brand, outcome):
     assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
 
 
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_psp_enrolled_adherence_recoverable(brand):
+    """Phase 2: psp_enrolled -> adherent_180d must be recoverable off its OWN
+    backdoor (disease_severity + engagement_score + academic_hcp).
+
+    psp targets adherent_180d (NOT low_gap_180d), so unlike copay this is a single
+    outcome. Same n=8000 resolution floor as copay. MEASURED (2026-07-19): with the
+    adherent CATE map {0.38,0.13,0.05} the seed-21 h-m margin is worst for the
+    flattest brand Fabhalta at +0.0327 (m-l +0.057); the first-guess {0.34,0.14,0.05}
+    left it at a razor-thin +0.0152, so the high-medium gap was widened. Kisqali's
+    planted ATE (0.122) sits above the +5-10pp band by the 1.40 brand scale — as
+    copay's Kisqali did (0.140) — so the gate asserts |est-true|<0.15, not a band.
+    """
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    cfg = GeneratorConfig(seed=21, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    truth = df.attrs["true_ate_by_arm"]["psp_enrolled"]["adherent_180d"]
+
+    out = recover_ate_and_cate(
+        df,
+        treatment_col="psp_enrolled",
+        outcome_col="adherent_180d",
+        confounders=list(ARM_REGISTRY["psp_enrolled"].confounders),
+        segment_col="segment_assignment",
+        true_ate=truth["ate"],
+        cate_map=truth["cate_by_segment"],
+    )
+
+    assert out["propensity_auc"] > 0.5, out
+    assert out["n_treated"] >= 30 and out["n_control"] >= 100, out
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+    cate = out["cate_by_segment_estimate"]
+    assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
+
+
+@pytest.mark.parametrize("seed", [21, 7, 99, 123])
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_psp_enrolled_persistence_recoverable(brand, seed):
+    """Phase 2: psp_enrolled -> persistent_180d off its OWN backdoor.
+
+    MULTI-SEED like the copay persistence gate below (same reason: logit->Bernoulli
+    RD, thin separations). MEASURED (2026-07-19): the persistent CATE lives on the
+    (brand-invariant) discontinuation logit _PSP_DISC_LOGIT. The first guess
+    {-0.90,-0.45,-0.05} left seed-99 h-m at only +0.012 (gated!); widening the high
+    arm to -1.10 lifts every seed-99 h-m to >=+0.042 while keeping the planted ATE
+    ~0.079 in the +5-10pp band. This gate is what locks that widening in place.
+    """
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    cfg = GeneratorConfig(seed=seed, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    truth = df.attrs["true_ate_by_arm"]["psp_enrolled"]["persistent_180d"]
+
+    out = recover_ate_and_cate(
+        df,
+        treatment_col="psp_enrolled",
+        outcome_col="persistent_180d",
+        confounders=list(ARM_REGISTRY["psp_enrolled"].confounders),
+        segment_col="segment_assignment",
+        true_ate=truth["ate"],
+        cate_map=truth["cate_by_segment"],
+    )
+
+    assert out["propensity_auc"] > 0.5, out
+    assert out["n_treated"] >= 30 and out["n_control"] >= 100, out
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+    cate = out["cate_by_segment_estimate"]
+    assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
+
+
 @pytest.mark.parametrize("seed", [21, 7, 99, 123])
 @pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
 def test_copay_support_persistence_recoverable(brand, seed):
