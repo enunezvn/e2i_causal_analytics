@@ -14,6 +14,7 @@ Author: E2I Causal Analytics Team
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -292,23 +293,29 @@ class SegmentCATECalculator:
         estimator_type = self.config.estimator_type.lower()
         X_arr = X.values
 
-        if estimator_type == "causal_forest":
-            return self._run_causal_forest(X_arr, treatment, outcome)
-        elif estimator_type == "linear_dml":
-            return self._run_linear_dml(X_arr, treatment, outcome)
-        elif estimator_type == "drlearner":
-            return self._run_drlearner(X_arr, treatment, outcome)
-        elif estimator_type == "s_learner":
-            return self._run_s_learner(X_arr, treatment, outcome)
-        elif estimator_type == "t_learner":
-            return self._run_t_learner(X_arr, treatment, outcome)
-        elif estimator_type == "x_learner":
-            return self._run_x_learner(X_arr, treatment, outcome)
-        elif estimator_type == "ols":
-            return self._run_ols(X_arr, treatment, outcome)
-        else:
-            # Default to causal forest
-            return self._run_causal_forest(X_arr, treatment, outcome)
+        # The concrete ``_run_*`` estimators are fully SYNCHRONOUS and CPU-heavy
+        # (EconML/sklearn ``.fit()`` + a bootstrap CI for the meta-learners).
+        # Offload every one to a worker thread so it never runs on the caller's
+        # asyncio event loop. Callers invoke ``analyze()`` as a FastAPI
+        # BackgroundTask inside the uvicorn worker loop; a fit executed inline
+        # starves the worker's heartbeat and the gunicorn master SIGABRTs the
+        # worker at ``--timeout`` (the /segment-analysis worker-timeout). It also
+        # makes the callers' ``asyncio.wait_for(analyze(), timeout=...)`` guards
+        # effective — a loop-blocking coroutine never lets the timeout fire.
+        # This mirrors the sibling graph nodes (cate_estimator / uplift_analyzer),
+        # which already wrap their fits in ``asyncio.to_thread``.
+        dispatch = {
+            "causal_forest": self._run_causal_forest,
+            "linear_dml": self._run_linear_dml,
+            "drlearner": self._run_drlearner,
+            "s_learner": self._run_s_learner,
+            "t_learner": self._run_t_learner,
+            "x_learner": self._run_x_learner,
+            "ols": self._run_ols,
+        }
+        # Default to causal forest for any unrecognised estimator type.
+        runner = dispatch.get(estimator_type, self._run_causal_forest)
+        return await asyncio.to_thread(runner, X_arr, treatment, outcome)
 
     def _run_causal_forest(
         self,

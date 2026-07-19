@@ -23,6 +23,7 @@ Author: E2I Causal Analytics Team
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -404,7 +405,13 @@ class HierarchicalAnalyzer:
         )
 
         model = UpliftRandomForest(config)
-        result = model.estimate(X, treatment, outcome)
+        # The CausalML uplift fit is synchronous and CPU-heavy; run it on a
+        # worker thread so it never blocks the caller's asyncio event loop.
+        # ``analyze()`` runs inside the uvicorn worker loop (segment-analysis
+        # BackgroundTask / causal /hierarchical route); an inline fit starves the
+        # worker heartbeat and the gunicorn master SIGABRTs the worker at
+        # ``--timeout``. See _run_econml_estimator for the same rationale.
+        result = await asyncio.to_thread(model.estimate, X, treatment, outcome)
 
         if not result.success:
             raise RuntimeError(f"Uplift estimation failed: {result.error_message}")
