@@ -82,7 +82,9 @@ artifact); answer-relevancy over all samples.
   decisions). Robustness re-aggregation on the common context-bearing subset
   (syn-1, ts-12, ts-346; n=3 for all models): terra 0.690, haiku 0.523,
   sonnet-5 0.000. Same verdict — haiku still misses the floor, sonnet
-  collapses. The confound does not change the gate outcome.
+  collapses. The confound does not change the gate outcome. This manual
+  check is now codified as the `ragas[faithfulness_common_subset]` gate
+  (computed from per-sample judge rows; see §6 gate-amendment note).
 - Pattern worth noting: sonnet-5 scored 0.0 faithfulness on 6 of its 7
   context-bearing samples (its answers assert claims the judge cannot ground
   in the retrieved contexts), while writing the second-longest answers. Terra
@@ -172,6 +174,8 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | ragas[faithfulness] | **FAIL** | 0.122 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.465 vs baseline 0.401 (margin 0.05) |
 | ragas[completeness] | PASS | judged/requested replays 10/10 both sides |
+| ragas[faithfulness_coverage] | PASS | context-bearing replays: candidate 7 ≥ baseline 3 ≥ min 3 |
+| ragas[faithfulness_common_subset] | **FAIL** | 0.000 vs baseline 0.690 on 3 common context-bearing replays (margin 0.05) |
 | no_new_error_class | PASS | none |
 | e2e_latency_p50 | **FAIL** | 88.8s vs limit 59.4s (1.5× baseline 39.6s) |
 
@@ -186,16 +190,42 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | ragas[faithfulness] | **FAIL** | 0.339 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.529 vs baseline 0.401 (margin 0.05) |
 | ragas[completeness] | PASS | judged/requested replays 10/10 both sides |
+| ragas[faithfulness_coverage] | PASS | context-bearing replays: candidate 8 ≥ baseline 3 ≥ min 3 |
+| ragas[faithfulness_common_subset] | **FAIL** | 0.523 vs baseline 0.690 on 3 common context-bearing replays (margin 0.05) |
 | no_new_error_class | PASS | none |
 | e2e_latency_p50 | PASS | 53.2s vs limit 59.4s (1.5× baseline 39.6s) |
 
-Haiku came closest — it fails only faithfulness, and the §3 robustness
-re-aggregation confirms that failure isn't a denominator artifact (0.523 vs
-0.640 floor on the common subset). The plan's Phase 4 flip is therefore NOT
-executed; the pre-registered rollback/no-flip branch applies. If a flip is
-ever revisited, the data points at haiku + a grounding-behavior fix (its
-extra evidence calls retrieve more but its answers ground less), not at
-sonnet-5 (unfixable 2.24× latency at equal cost).
+Haiku came closest — it fails only the faithfulness pair, and the
+common-subset gate (codified from the §3 robustness re-aggregation, see the
+gate-amendment note below) confirms that failure isn't a denominator
+artifact (0.523 vs 0.640 floor on the 3 replays both models retrieved
+contexts for). The plan's Phase 4 flip is therefore NOT executed; the
+pre-registered rollback/no-flip branch applies. If a flip is ever revisited,
+the data points at haiku + a grounding-behavior fix (its extra evidence
+calls retrieve more but its answers ground less), not at sonnet-5
+(unfixable 2.24× latency at equal cost).
+
+**Gate amendments after the run (codex review, add-only).** Three gates in
+the tables above were added by the codex adversarial review AFTER the
+measurement runs completed: `ragas[completeness]` (iter-1),
+`ragas[faithfulness_coverage]` and `ragas[faithfulness_common_subset]`
+(iter-2, closing the deeper hole that equal `n_samples` does not make
+faithfulness means comparable when they average different context-bearing
+subsets). Post-run amendments are legitimate here ONLY because they are
+fail-closed additions evaluated on already-collected data: they can add
+failures but cannot flip a pre-registered FAIL to PASS, and on this run's
+data they strengthened the NO-FLIP (common-subset FAILs both candidates).
+Two codex-suggested alternatives were rejected with reasoning: requiring
+`n_faithfulness == n` (context capture is legitimately query/model-dependent
+— baseline itself was 3/10, so that gate could never pass: always-fail, not
+fail-closed) and zero-filling no-context replays into the faithfulness mean
+(re-defining the pre-registered endpoint after seeing results — on this
+run's numbers it would have flipped haiku's faithfulness FAIL to PASS,
+which is exactly the gate-shopping pre-registration exists to prevent).
+`GATE_RAGAS_MIN_FAITHFULNESS_N = 3` is acknowledged as a post-hoc constant
+equal to this run's baseline coverage; it binds future reruns, not this
+verdict. Future reruns should raise e2e `n` to fatten the faithfulness
+denominators.
 
 ## 7. Side effects, incidents & cleanup
 

@@ -26,13 +26,18 @@ import math
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Pre-registered gate parameters (plan section 5). Changing these after seeing
 # results would be gate-shopping; they are constants on purpose.
 GATE_ACCURACY_MARGIN = 0.05
 GATE_RAGAS_MARGIN = 0.05
 GATE_E2E_LATENCY_FACTOR = 1.5
+# Floor on faithfulness denominators: a mean over 1-2 context-bearing replays
+# is noise, not signal. Added post-run (codex iter-2) as an add-only guard; 3
+# equals the completed 20260718 run's baseline coverage, so it binds future
+# reruns without re-adjudicating that verdict.
+GATE_RAGAS_MIN_FAITHFULNESS_N = 3
 
 _EPS = 1e-9
 
@@ -44,7 +49,7 @@ _EPS = 1e-9
 
 def load_golden_set(path: str | Path) -> Dict[str, Any]:
     """Load and minimally validate the golden-set fixture."""
-    golden = json.loads(Path(path).read_text())
+    golden: Dict[str, Any] = json.loads(Path(path).read_text())
     if not golden.get("queries"):
         raise ValueError(f"golden set at {path} has no queries")
     for item in golden["queries"]:
@@ -126,8 +131,8 @@ def summarize_signature_runs(records: List[Dict[str, Any]]) -> Dict[str, Dict[st
             out[model][taxonomy] = {
                 "n_scored": n_scored,
                 "n_excluded": len(recs) - n_scored,
-                "accuracy_strict": (sum(strict) / n_scored) if n_scored else None,
-                "accuracy_lenient": (sum(lenient) / n_scored) if n_scored else None,
+                "accuracy_strict": (sum(1 for v in strict if v) / n_scored) if n_scored else None,
+                "accuracy_lenient": (sum(1 for v in lenient if v) / n_scored) if n_scored else None,
                 "parse_failure_rate": (len(parse_failures) / n_scored) if n_scored else None,
                 "latency_p50": _percentile(latencies, 0.50),
                 "latency_p95": _percentile(latencies, 0.95),
@@ -166,10 +171,45 @@ def summarize_e2e_runs(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _common_subset_faithfulness(
+    b_rows: Optional[List[Dict[str, Any]]],
+    c_rows: Optional[List[Dict[str, Any]]],
+) -> Tuple[Optional[float], Optional[float], int]:
+    """Mean faithfulness for each side over the replays BOTH sides retrieved
+    contexts for - the only apples-to-apples faithfulness comparison when
+    context capture differs by model. Returns (baseline_mean, candidate_mean,
+    n_common); (None, None, 0) when there is no usable overlap."""
+
+    def _by_id(rows: Optional[List[Dict[str, Any]]]) -> Dict[Any, float]:
+        out: Dict[Any, float] = {}
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            qid = row.get("query_id")
+            n_ctx = row.get("n_contexts")
+            if (
+                qid is None
+                or not isinstance(n_ctx, int)
+                or isinstance(n_ctx, bool)
+                or n_ctx <= 0
+                or not _is_finite_number(row.get("faithfulness"))
+            ):
+                continue
+            out[qid] = float(row["faithfulness"])
+        return out
+
+    b_by_id = _by_id(b_rows)
+    c_by_id = _by_id(c_rows)
+    common = sorted(set(b_by_id) & set(c_by_id))
+    if not common:
+        return None, None, 0
     return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
+        sum(b_by_id[q] for q in common) / len(common),
+        sum(c_by_id[q] for q in common) / len(common),
+        len(common),
     )
 
 
@@ -230,8 +270,7 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
                     _gate(
                         f"ragas[{metric}]",
                         False,
-                        f"missing {metric} (baseline={b_val!r}, "
-                        f"candidate={c_val!r}; fail-closed)",
+                        f"missing {metric} (baseline={b_val!r}, candidate={c_val!r}; fail-closed)",
                     )
                 )
                 continue
@@ -265,6 +304,48 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
                 "answers fail-closed)",
             )
         )
+        # Faithfulness averages only context-bearing replays, and how often
+        # retrieval finds contexts is itself model-influenced - so equal
+        # n_samples does NOT make the faithfulness means comparable (codex
+        # iter-2). Two add-only guards close that hole; requiring
+        # n_faithfulness == n instead was rejected because context capture is
+        # legitimately query/model-dependent (the completed run's baseline was
+        # 3/10) - that would be always-fail, not fail-closed.
+        b_nf = b_ragas.get("n_faithfulness")
+        c_nf = c_ragas.get("n_faithfulness")
+        nf_ints = all(isinstance(v, int) and not isinstance(v, bool) for v in (b_nf, c_nf))
+        gates.append(
+            _gate(
+                "ragas[faithfulness_coverage]",
+                nf_ints and c_nf >= b_nf and b_nf >= GATE_RAGAS_MIN_FAITHFULNESS_N,
+                f"context-bearing replays: baseline {b_nf!r}, candidate "
+                f"{c_nf!r} (need candidate >= baseline >= "
+                f"{GATE_RAGAS_MIN_FAITHFULNESS_N}; missing counts fail-closed)",
+            )
+        )
+        b_common, c_common, n_common = _common_subset_faithfulness(
+            b_ragas.get("per_sample"), c_ragas.get("per_sample")
+        )
+        if b_common is None or c_common is None or n_common < GATE_RAGAS_MIN_FAITHFULNESS_N:
+            gates.append(
+                _gate(
+                    "ragas[faithfulness_common_subset]",
+                    False,
+                    f"only {n_common} common context-bearing replays (need >= "
+                    f"{GATE_RAGAS_MIN_FAITHFULNESS_N}; missing per-sample rows "
+                    "fail-closed)",
+                )
+            )
+        else:
+            gates.append(
+                _gate(
+                    "ragas[faithfulness_common_subset]",
+                    c_common >= b_common - GATE_RAGAS_MARGIN - _EPS,
+                    f"candidate {c_common:.3f} vs baseline {b_common:.3f} on "
+                    f"{n_common} common context-bearing replays "
+                    f"(margin {GATE_RAGAS_MARGIN:.2f})",
+                )
+            )
 
     new_classes = _all_error_classes(candidate) - _all_error_classes(baseline)
     gates.append(
@@ -400,6 +481,7 @@ def run_e2e_replays(
     import re
 
     from src.rag.causal_rag import CausalRAG
+
     model_slug = re.sub(r"[^a-zA-Z0-9]+", "-", model.split("/")[-1])
     by_id = {q["id"]: q for q in golden_set["queries"]}
     records: List[Dict[str, Any]] = []

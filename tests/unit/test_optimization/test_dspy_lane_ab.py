@@ -165,12 +165,36 @@ def test_summarize_e2e_runs():
 # ---------------------------------------------------------------------------
 
 
+def _ragas_per_sample(faith, n=10, n_ctx=10):
+    # First n_ctx replays carry retrieved contexts (and thus a faithfulness
+    # score); the rest mirror the judge's no-context rows (score None).
+    return [
+        {
+            "query_id": f"q{i}",
+            "n_contexts": 1 if i < n_ctx else 0,
+            "faithfulness": faith if i < n_ctx else None,
+            "answer_relevancy": 0.80,
+        }
+        for i in range(n)
+    ]
+
+
+def _ragas_block(faith=0.85, rel=0.80, n_ctx=10):
+    return {
+        "faithfulness": faith,
+        "answer_relevancy": rel,
+        "n_samples": 10,
+        "n_faithfulness": n_ctx,
+        "per_sample": _ragas_per_sample(faith, n_ctx=n_ctx),
+    }
+
+
 BASELINE = {
     "signature": {
         "cognitive_rag": {"accuracy_strict": 0.80, "parse_failure_rate": 0.0, "error_classes": {}},
         "chatbot": {"accuracy_strict": 0.90, "parse_failure_rate": 0.0, "error_classes": {}},
     },
-    "ragas": {"faithfulness": 0.85, "answer_relevancy": 0.80, "n_samples": 10},
+    "ragas": _ragas_block(),
     "e2e": {"latency_p50": 40.0, "error_classes": {}, "n": 10},
 }
 
@@ -184,6 +208,7 @@ def _candidate(
     p50=40.0,
     sig_errors=None,
     e2e_errors=None,
+    n_ctx=10,
 ):
     return {
         "signature": {
@@ -198,7 +223,7 @@ def _candidate(
                 "error_classes": sig_errors or {},
             },
         },
-        "ragas": {"faithfulness": faith, "answer_relevancy": rel, "n_samples": 10},
+        "ragas": _ragas_block(faith=faith, rel=rel, n_ctx=n_ctx),
         "e2e": {"latency_p50": p50, "error_classes": e2e_errors or {}, "n": 10},
     }
 
@@ -296,6 +321,89 @@ def test_gate_ragas_completeness_missing_counts_fails_closed():
     assert "ragas[completeness]" in failed
 
 
+def test_gate_ragas_faithfulness_coverage_candidate_below_baseline():
+    # Faithfulness averages only context-bearing replays; a candidate judged on
+    # fewer of them than the baseline is being scored on a different (easier)
+    # denominator even when n_samples matches (codex iter-2).
+    candidate = _candidate(n_ctx=8)
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness_coverage]" in failed
+
+
+def test_gate_ragas_faithfulness_coverage_min_n_floor():
+    # A faithfulness mean over 1-2 replays is noise, not signal - both sides
+    # need at least GATE_RAGAS_MIN_FAITHFULNESS_N context-bearing replays.
+    baseline = json.loads(json.dumps(BASELINE))
+    baseline["ragas"] = _ragas_block(n_ctx=2)
+    result = evaluate_gates(baseline, _candidate(n_ctx=2))
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness_coverage]" in failed
+
+
+def test_gate_ragas_faithfulness_coverage_missing_count_fails_closed():
+    candidate = _candidate()
+    del candidate["ragas"]["n_faithfulness"]
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness_coverage]" in failed
+
+
+def test_gate_ragas_codex_iter2_scenario_tiny_context_subset():
+    # Codex iter-2 HIGH: all 10 replays answered (completeness PASSES) but the
+    # candidate retrieved contexts on only 1, so its faithfulness mean is a
+    # single easy sample that clears the margin. Must still fail.
+    candidate = _candidate(faith=0.90, n_ctx=1)
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[completeness]" not in failed  # the hole iter-2 identified
+    assert "ragas[faithfulness]" not in failed  # margin cleared on the tiny mean
+    assert "ragas[faithfulness_coverage]" in failed
+    assert "ragas[faithfulness_common_subset]" in failed
+
+
+def test_gate_ragas_common_subset_disjoint_contexts_fails_closed():
+    # Equal coverage counts can still mean DIFFERENT judged subsets; with no
+    # overlap there is no apples-to-apples comparison at all.
+    baseline = json.loads(json.dumps(BASELINE))
+    baseline["ragas"] = _ragas_block(n_ctx=5)
+    candidate = _candidate(n_ctx=5)
+    for row in candidate["ragas"]["per_sample"]:
+        row["n_contexts"] = 0 if row["n_contexts"] else 1
+        row["faithfulness"] = None if row["n_contexts"] == 0 else 0.85
+    result = evaluate_gates(baseline, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness_common_subset]" in failed
+
+
+def test_gate_ragas_common_subset_recomputes_from_per_sample():
+    # The common-subset gate must trust per-sample rows over the aggregate: a
+    # candidate whose aggregate clears the margin but whose per-sample scores
+    # on the shared replays do not must fail.
+    candidate = _candidate(faith=0.85)
+    for row in candidate["ragas"]["per_sample"]:
+        row["faithfulness"] = 0.60
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness]" not in failed  # aggregate said 0.85
+    assert "ragas[faithfulness_common_subset]" in failed
+
+
+def test_gate_ragas_common_subset_missing_per_sample_fails_closed():
+    candidate = _candidate()
+    del candidate["ragas"]["per_sample"]
+    result = evaluate_gates(BASELINE, candidate)
+    assert result["all_passed"] is False
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness_common_subset]" in failed
+
+
 def test_run_e2e_replays_expected_model_mismatch_fails_fast(monkeypatch):
     from src.optimization.dspy_lane_ab import run_e2e_replays
 
@@ -361,9 +469,7 @@ def test_emit_container_script_e2e_requires_exactly_one_model():
     golden = load_golden_set(FIXTURE_PATH)
     for models in ([], ["a/x", "a/y"]):
         with pytest.raises(ValueError, match="exactly one model"):
-            emit_container_script(
-                golden, models=models, mode="e2e", e2e_query_ids=["ts-12"]
-            )
+            emit_container_script(golden, models=models, mode="e2e", e2e_query_ids=["ts-12"])
 
 
 def test_emit_container_script_e2e_rejects_unknown_ids():
