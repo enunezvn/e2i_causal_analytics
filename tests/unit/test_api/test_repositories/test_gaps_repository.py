@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from src.api.routes.gaps import AnalysisStatus, GapAnalysisResponse
+from src.api.routes.gaps import GapAnalysisResponse, GapAnalysisStatus
 
 
 def _ilike_to_regex(pattern: str) -> re.Pattern[str]:
@@ -102,7 +102,7 @@ async def test_upsert_then_get_roundtrips_across_boundary():
     repo = GapsRepository(client=_FakeClient())
     resp = GapAnalysisResponse(
         analysis_id="gap_deadbeef0001",
-        status=AnalysisStatus.COMPLETED,
+        status=GapAnalysisStatus.COMPLETED,
         brand="kisqali",
         metrics_analyzed=["trx"],
         segments_analyzed=3,
@@ -111,7 +111,7 @@ async def test_upsert_then_get_roundtrips_across_boundary():
     got = await repo.get("gap_deadbeef0001")
     assert got is not None
     assert got.analysis_id == "gap_deadbeef0001"
-    assert got.status == AnalysisStatus.COMPLETED
+    assert got.status == GapAnalysisStatus.COMPLETED
     assert got.brand == "kisqali"
 
 
@@ -132,7 +132,7 @@ async def test_list_completed_filters_by_brand():
     await repo.upsert(
         GapAnalysisResponse(
             analysis_id="gap_a",
-            status=AnalysisStatus.COMPLETED,
+            status=GapAnalysisStatus.COMPLETED,
             brand="kisqali",
             metrics_analyzed=["trx"],
             segments_analyzed=1,
@@ -141,7 +141,7 @@ async def test_list_completed_filters_by_brand():
     await repo.upsert(
         GapAnalysisResponse(
             analysis_id="gap_b",
-            status=AnalysisStatus.PENDING,
+            status=GapAnalysisStatus.PENDING,
             brand="kisqali",
             metrics_analyzed=["trx"],
             segments_analyzed=1,
@@ -150,7 +150,7 @@ async def test_list_completed_filters_by_brand():
     await repo.upsert(
         GapAnalysisResponse(
             analysis_id="gap_c",
-            status=AnalysisStatus.COMPLETED,
+            status=GapAnalysisStatus.COMPLETED,
             brand="cosentyx",
             metrics_analyzed=["trx"],
             segments_analyzed=1,
@@ -185,7 +185,7 @@ async def test_list_completed_brand_filter_is_case_insensitive():
     await repo.upsert(
         GapAnalysisResponse(
             analysis_id="gap_grounded_kisqali",
-            status=AnalysisStatus.COMPLETED,
+            status=GapAnalysisStatus.COMPLETED,
             brand="Kisqali",
             metrics_analyzed=["trx"],
             segments_analyzed=5,
@@ -221,7 +221,7 @@ async def test_list_completed_does_not_double_count_legacy_lowercase_rows():
     # Real grounded analysis (capitalized) carrying opportunities.
     grounded = GapAnalysisResponse(
         analysis_id="gap_grounded_kisqali",
-        status=AnalysisStatus.COMPLETED,
+        status=GapAnalysisStatus.COMPLETED,
         brand="Kisqali",
         metrics_analyzed=["trx"],
         segments_analyzed=5,
@@ -233,7 +233,7 @@ async def test_list_completed_does_not_double_count_legacy_lowercase_rows():
         await repo.upsert(
             GapAnalysisResponse(
                 analysis_id=legacy_id,
-                status=AnalysisStatus.COMPLETED,
+                status=GapAnalysisStatus.COMPLETED,
                 brand="kisqali",
                 metrics_analyzed=["trx"],
                 segments_analyzed=0,
@@ -275,7 +275,7 @@ async def test_list_completed_brand_filter_does_not_treat_wildcards_as_patterns(
         await repo.upsert(
             GapAnalysisResponse(
                 analysis_id=aid,
-                status=AnalysisStatus.COMPLETED,
+                status=GapAnalysisStatus.COMPLETED,
                 brand=brand,
                 metrics_analyzed=["trx"],
                 segments_analyzed=1,

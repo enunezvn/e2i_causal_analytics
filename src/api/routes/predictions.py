@@ -277,7 +277,7 @@ class BatchPredictionResponse(BaseModel):
     timestamp: str = Field(..., description="Batch processing timestamp")
 
 
-class ModelHealthResponse(BaseModel):
+class PredictionModelHealthResponse(BaseModel):
     """Response schema for model health check."""
 
     model_name: str = Field(..., description="Name of the model")
@@ -293,7 +293,9 @@ class ModelsStatusResponse(BaseModel):
     total_models: int = Field(..., description="Total number of registered models")
     healthy_count: int = Field(..., description="Number of healthy models")
     unhealthy_count: int = Field(..., description="Number of unhealthy models")
-    models: List[ModelHealthResponse] = Field(..., description="Individual model statuses")
+    models: List[PredictionModelHealthResponse] = Field(
+        ..., description="Individual model statuses"
+    )
     timestamp: str = Field(..., description="Status check timestamp")
 
 
@@ -775,7 +777,7 @@ async def predict_batch(
 
 @router.get(
     "/{model_name}/health",
-    response_model=ModelHealthResponse,
+    response_model=PredictionModelHealthResponse,
     summary="Check model health",
     operation_id="get_prediction_model_health",
     description="Check the health status of a specific BentoML model service",
@@ -783,7 +785,7 @@ async def predict_batch(
 async def model_health(
     model_name: str,
     client: BentoMLClient = Depends(get_bentoml_client),
-) -> ModelHealthResponse:
+) -> PredictionModelHealthResponse:
     """Check health of a specific model service.
 
     Args:
@@ -795,7 +797,7 @@ async def model_health(
     """
     result = await client.health_check(model_name)
 
-    return ModelHealthResponse(
+    return PredictionModelHealthResponse(
         model_name=model_name,
         status=result.get("status", "unknown"),
         endpoint=result.get("endpoint", ""),
@@ -1030,7 +1032,7 @@ async def models_status(
             unhealthy_count += 1
 
         model_statuses.append(
-            ModelHealthResponse(
+            PredictionModelHealthResponse(
                 model_name=model_name,
                 status=status_str,
                 endpoint=result.get("endpoint", ""),

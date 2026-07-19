@@ -76,7 +76,7 @@ class SegmentationMethod(str, Enum):
     TREE = "tree"
 
 
-class AnalysisStatus(str, Enum):
+class SegmentAnalysisStatus(str, Enum):
     """Status of segment analysis."""
 
     PENDING = "pending"
@@ -87,7 +87,7 @@ class AnalysisStatus(str, Enum):
     FAILED = "failed"
 
 
-class QuestionType(str, Enum):
+class SegmentQuestionType(str, Enum):
     """Type of analysis question for library routing."""
 
     EFFECT_HETEROGENEITY = "effect_heterogeneity"  # EconML primary
@@ -207,7 +207,7 @@ class RunSegmentAnalysisRequest(BaseModel):
     top_segments_count: int = Field(
         default=10, description="Number of top segments to return", ge=1, le=50
     )
-    question_type: Optional[QuestionType] = Field(
+    question_type: Optional[SegmentQuestionType] = Field(
         default=None, description="Analysis question type for library routing"
     )
 
@@ -310,8 +310,8 @@ class SegmentAnalysisResponse(BaseModel):
     """Response from segment analysis."""
 
     analysis_id: str = Field(..., description="Unique analysis identifier")
-    status: AnalysisStatus = Field(..., description="Analysis status")
-    question_type: Optional[QuestionType] = Field(
+    status: SegmentAnalysisStatus = Field(..., description="Analysis status")
+    question_type: Optional[SegmentQuestionType] = Field(
         default=None, description="Question type used for routing"
     )
 
@@ -803,7 +803,7 @@ class _DurableAnalysesStore:
             analysis_id,
         )
         sanitized = response.model_copy(deep=True)
-        sanitized.status = AnalysisStatus.FAILED
+        sanitized.status = SegmentAnalysisStatus.FAILED
         sanitized.cate_by_segment = {}
         sanitized.high_responders = []
         sanitized.low_responders = []
@@ -1065,7 +1065,7 @@ async def run_segment_analysis(
     # Create initial response
     response = SegmentAnalysisResponse(
         analysis_id=analysis_id,
-        status=AnalysisStatus.PENDING if async_mode else AnalysisStatus.ESTIMATING,
+        status=SegmentAnalysisStatus.PENDING if async_mode else SegmentAnalysisStatus.ESTIMATING,
         question_type=request.question_type,
         # #27: carry the requested CI level (alpha=significance_level) from the
         # start so an async poller sees the level its CATE CIs will use.
@@ -1098,7 +1098,7 @@ async def run_segment_analysis(
         raise
     except Exception as e:
         logger.error(f"Segment analysis failed: {e}", exc_info=True)
-        response.status = AnalysisStatus.FAILED
+        response.status = SegmentAnalysisStatus.FAILED
         # Store a generic warning on the persisted FAILED record rather than the
         # raw exception text (the record is later returned to clients via GET).
         response.warnings.append("Segment analysis failed due to an internal error.")
@@ -1139,7 +1139,7 @@ async def list_policies(
     total_lift = 0.0
 
     for analysis in await _analyses_store.values():
-        if analysis.status != AnalysisStatus.COMPLETED:
+        if analysis.status != SegmentAnalysisStatus.COMPLETED:
             continue
 
         for rec in analysis.policy_recommendations:
@@ -1607,7 +1607,7 @@ async def _run_segment_analysis_task(
         # Update status (read-modify-write so the change persists to the store).
         pending = await _analyses_store.get(analysis_id)
         if pending is not None:
-            pending.status = AnalysisStatus.ESTIMATING
+            pending.status = SegmentAnalysisStatus.ESTIMATING
             await _analyses_store.set(analysis_id, pending)
 
         # Execute analysis
@@ -1628,7 +1628,7 @@ async def _run_segment_analysis_task(
         logger.error(f"Segment analysis {analysis_id} failed: {e.detail}")
         existing = await _analyses_store.get(analysis_id)
         if existing is not None:
-            existing.status = AnalysisStatus.FAILED
+            existing.status = SegmentAnalysisStatus.FAILED
             detail = e.detail if isinstance(e.detail, str) else "Segment analysis failed."
             existing.warnings.append(f"Segment analysis failed: {detail}")
             await _analyses_store.set(analysis_id, existing)
@@ -1636,7 +1636,7 @@ async def _run_segment_analysis_task(
         logger.error(f"Segment analysis {analysis_id} failed: {e}")
         existing = await _analyses_store.get(analysis_id)
         if existing is not None:
-            existing.status = AnalysisStatus.FAILED
+            existing.status = SegmentAnalysisStatus.FAILED
             # Store a generic warning rather than raw exception text (the record
             # is later returned to clients via GET).
             existing.warnings.append("Segment analysis failed due to an internal error.")
@@ -1751,9 +1751,9 @@ async def _execute_segment_analysis(
 
         return SegmentAnalysisResponse(
             analysis_id="",  # Will be set by caller
-            status=AnalysisStatus.COMPLETED
+            status=SegmentAnalysisStatus.COMPLETED
             if result.get("status") == "completed"
-            else AnalysisStatus.FAILED,
+            else SegmentAnalysisStatus.FAILED,
             question_type=request.question_type,
             brand=request.brand,
             treatment_var=treatment_var,
@@ -2015,7 +2015,7 @@ def _generate_mock_response(
 
     return SegmentAnalysisResponse(
         analysis_id="",
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         question_type=request.question_type,
         brand=request.brand,
         treatment_var=request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT,

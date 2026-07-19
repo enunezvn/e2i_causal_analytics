@@ -7159,6 +7159,34 @@ export interface components {
             selected_estimator?: string | null;
         };
         /**
+         * CausalGraphNode
+         * @description Node in the causal graph.
+         */
+        CausalGraphNode: {
+            /**
+             * Id
+             * @description Node identifier
+             */
+            id: string;
+            /**
+             * Label
+             * @description Display label
+             */
+            label: string;
+            /**
+             * Type
+             * @description Node type (brand/kpi/region/agent)
+             */
+            type: string;
+            /**
+             * Properties
+             * @description Node properties
+             */
+            properties?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * CausalHealthResponse
          * @description Response for causal engine health check.
          * @example {
@@ -7294,7 +7322,7 @@ export interface components {
              * Nodes
              * @description Graph nodes
              */
-            nodes: components["schemas"]["src__api__routes__rag__GraphNode"][];
+            nodes: components["schemas"]["CausalGraphNode"][];
             /**
              * Edges
              * @description Graph edges
@@ -10327,7 +10355,7 @@ export interface components {
              */
             analysis_id: string;
             /** @description Analysis status */
-            status: components["schemas"]["src__api__routes__gaps__AnalysisStatus"];
+            status: components["schemas"]["GapAnalysisStatus"];
             /**
              * Brand
              * @description Brand analyzed
@@ -10427,6 +10455,12 @@ export interface components {
              */
             warnings?: string[];
         };
+        /**
+         * GapAnalysisStatus
+         * @description Status of a gap analysis.
+         * @enum {string}
+         */
+        GapAnalysisStatus: "pending" | "detecting" | "calculating" | "prioritizing" | "completed" | "failed";
         /**
          * GapHealthResponse
          * @description Health check response for gap analysis service.
@@ -12985,7 +13019,7 @@ export interface components {
              * Models
              * @description Individual model statuses
              */
-            models: components["schemas"]["src__api__routes__predictions__ModelHealthResponse"][];
+            models: components["schemas"]["PredictionModelHealthResponse"][];
             /**
              * Timestamp
              * @description Status check timestamp
@@ -14308,6 +14342,37 @@ export interface components {
             total_insights: number;
         };
         /**
+         * PredictionModelHealthResponse
+         * @description Response schema for model health check.
+         */
+        PredictionModelHealthResponse: {
+            /**
+             * Model Name
+             * @description Name of the model
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description Health status
+             */
+            status: string;
+            /**
+             * Endpoint
+             * @description Model endpoint URL
+             */
+            endpoint: string;
+            /**
+             * Last Check
+             * @description Last health check timestamp
+             */
+            last_check: string;
+            /**
+             * Error
+             * @description Error message if unhealthy
+             */
+            error?: string | null;
+        };
+        /**
          * PredictionRequest
          * @description Request schema for model prediction.
          */
@@ -14689,12 +14754,6 @@ export interface components {
          * @enum {string}
          */
         QuestionType: "causal_effect" | "effect_heterogeneity" | "targeting" | "system_dependencies" | "comprehensive";
-        /**
-         * QuestionType
-         * @description Type of analysis question for library routing.
-         * @enum {string}
-         */
-        "QuestionType-Input": "effect_heterogeneity" | "targeting" | "segment_optimization" | "comprehensive";
         /**
          * ROIEstimate
          * @description ROI estimate for closing a performance gap.
@@ -15808,7 +15867,7 @@ export interface components {
              */
             top_segments_count: number;
             /** @description Analysis question type for library routing */
-            question_type?: components["schemas"]["QuestionType-Input"] | null;
+            question_type?: components["schemas"]["SegmentQuestionType"] | null;
         };
         /**
          * SRMCheckResult
@@ -16297,9 +16356,9 @@ export interface components {
              */
             analysis_id: string;
             /** @description Analysis status */
-            status: components["schemas"]["src__api__routes__segments__AnalysisStatus"];
+            status: components["schemas"]["SegmentAnalysisStatus"];
             /** @description Question type used for routing */
-            question_type?: components["schemas"]["src__api__routes__segments__QuestionType"] | null;
+            question_type?: components["schemas"]["SegmentQuestionType"] | null;
             /**
              * Brand
              * @description Brand row-filter the run used (None = all brands)
@@ -16490,6 +16549,12 @@ export interface components {
             confidence: number;
         };
         /**
+         * SegmentAnalysisStatus
+         * @description Status of segment analysis.
+         * @enum {string}
+         */
+        SegmentAnalysisStatus: "pending" | "estimating" | "analyzing" | "optimizing" | "completed" | "failed";
+        /**
          * SegmentCATEResult
          * @description CATE result for a single segment.
          */
@@ -16658,6 +16723,12 @@ export interface components {
              */
             recommendation: string;
         };
+        /**
+         * SegmentQuestionType
+         * @description Type of analysis question for library routing.
+         * @enum {string}
+         */
+        SegmentQuestionType: "effect_heterogeneity" | "targeting" | "segment_optimization" | "comprehensive";
         /**
          * SegmentationMethod
          * @description Segmentation methods for hierarchical analysis.
@@ -18279,6 +18350,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /**
          * ValidationErrorResponse
@@ -18453,83 +18528,6 @@ export interface components {
              */
             total: number;
         };
-        /**
-         * AnalysisStatus
-         * @description Status of a gap analysis.
-         * @enum {string}
-         */
-        src__api__routes__gaps__AnalysisStatus: "pending" | "detecting" | "calculating" | "prioritizing" | "completed" | "failed";
-        /**
-         * ModelHealthResponse
-         * @description Response schema for model health check.
-         */
-        src__api__routes__predictions__ModelHealthResponse: {
-            /**
-             * Model Name
-             * @description Name of the model
-             */
-            model_name: string;
-            /**
-             * Status
-             * @description Health status
-             */
-            status: string;
-            /**
-             * Endpoint
-             * @description Model endpoint URL
-             */
-            endpoint: string;
-            /**
-             * Last Check
-             * @description Last health check timestamp
-             */
-            last_check: string;
-            /**
-             * Error
-             * @description Error message if unhealthy
-             */
-            error?: string | null;
-        };
-        /**
-         * GraphNode
-         * @description Node in the causal graph.
-         */
-        src__api__routes__rag__GraphNode: {
-            /**
-             * Id
-             * @description Node identifier
-             */
-            id: string;
-            /**
-             * Label
-             * @description Display label
-             */
-            label: string;
-            /**
-             * Type
-             * @description Node type (brand/kpi/region/agent)
-             */
-            type: string;
-            /**
-             * Properties
-             * @description Node properties
-             */
-            properties?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * AnalysisStatus
-         * @description Status of segment analysis.
-         * @enum {string}
-         */
-        src__api__routes__segments__AnalysisStatus: "pending" | "estimating" | "analyzing" | "optimizing" | "completed" | "failed";
-        /**
-         * QuestionType
-         * @description Type of analysis question for library routing.
-         * @enum {string}
-         */
-        src__api__routes__segments__QuestionType: "effect_heterogeneity" | "targeting" | "segment_optimization" | "comprehensive";
     };
     responses: never;
     parameters: never;
@@ -25190,7 +25188,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["src__api__routes__predictions__ModelHealthResponse"];
+                    "application/json": components["schemas"]["PredictionModelHealthResponse"];
                 };
             };
             /** @description Authentication required */

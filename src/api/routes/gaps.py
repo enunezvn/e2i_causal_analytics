@@ -73,7 +73,7 @@ class ImplementationDifficulty(str, Enum):
     HIGH = "high"
 
 
-class AnalysisStatus(str, Enum):
+class GapAnalysisStatus(str, Enum):
     """Status of a gap analysis."""
 
     PENDING = "pending"
@@ -268,7 +268,7 @@ class GapAnalysisResponse(BaseModel):
     """Response from gap analysis."""
 
     analysis_id: str = Field(..., description="Unique analysis identifier")
-    status: AnalysisStatus = Field(..., description="Analysis status")
+    status: GapAnalysisStatus = Field(..., description="Analysis status")
     brand: str = Field(..., description="Brand analyzed")
     metrics_analyzed: List[str] = Field(..., description="KPIs analyzed")
     segments_analyzed: int = Field(..., description="Number of segments")
@@ -541,7 +541,7 @@ async def run_gap_analysis(
     # Create initial response
     response = GapAnalysisResponse(
         analysis_id=analysis_id,
-        status=AnalysisStatus.PENDING if async_mode else AnalysisStatus.DETECTING,
+        status=GapAnalysisStatus.PENDING if async_mode else GapAnalysisStatus.DETECTING,
         brand=request.brand,
         metrics_analyzed=request.metrics,
         segments_analyzed=0,
@@ -574,7 +574,7 @@ async def run_gap_analysis(
         raise
     except Exception as e:
         logger.error(f"Gap analysis failed: {e}")
-        response.status = AnalysisStatus.FAILED
+        response.status = GapAnalysisStatus.FAILED
         response.warnings.append(str(e))
         await _persist_analysis(response)
         raise HTTPException(status_code=500, detail=f"Gap analysis failed: {e}")
@@ -617,7 +617,8 @@ async def list_opportunities(
     completed = [
         a
         for a in analyses
-        if a.status == AnalysisStatus.COMPLETED and (not brand or a.brand.lower() == brand.lower())
+        if a.status == GapAnalysisStatus.COMPLETED
+        and (not brand or a.brand.lower() == brand.lower())
     ]
 
     # ACCUMULATION/STALENESS FIX: surface only the LATEST run per brand, not the
@@ -791,7 +792,7 @@ async def _run_gap_analysis_task(
         # Update status (read-modify-persist; in-memory mutates in place)
         existing = await _load_analysis(analysis_id)
         if existing is not None:
-            existing.status = AnalysisStatus.DETECTING
+            existing.status = GapAnalysisStatus.DETECTING
             await _persist_analysis(existing)
 
         # Execute analysis
@@ -807,7 +808,7 @@ async def _run_gap_analysis_task(
         logger.error(f"Gap analysis {analysis_id} failed: {e}")
         existing = await _load_analysis(analysis_id)
         if existing is not None:
-            existing.status = AnalysisStatus.FAILED
+            existing.status = GapAnalysisStatus.FAILED
             existing.warnings.append(str(e))
             await _persist_analysis(existing)
 
@@ -870,9 +871,9 @@ async def _execute_gap_analysis(
             # carries errors, even if a stale/buggy node still reports
             # status="completed". Never launder an upstream error into a green
             # HTTP-200 "no significant gaps" response.
-            status=AnalysisStatus.COMPLETED
+            status=GapAnalysisStatus.COMPLETED
             if result.get("status") == "completed" and not result.get("errors")
-            else AnalysisStatus.FAILED,
+            else GapAnalysisStatus.FAILED,
             brand=request.brand,
             metrics_analyzed=request.metrics,
             segments_analyzed=result.get("segments_analyzed", 0),
@@ -1021,7 +1022,7 @@ def _generate_mock_response(
 
     return GapAnalysisResponse(
         analysis_id="",
-        status=AnalysisStatus.COMPLETED,
+        status=GapAnalysisStatus.COMPLETED,
         brand=request.brand,
         metrics_analyzed=request.metrics,
         segments_analyzed=len(request.segments) * 4,  # Mock 4 values per segment
