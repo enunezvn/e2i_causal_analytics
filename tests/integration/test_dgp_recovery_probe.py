@@ -149,3 +149,50 @@ def test_adherent_recoverable_under_causal_route_default_adjustment_set():
         cate_map=truth["cate_by_segment"],
     )
     assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+
+
+@pytest.mark.parametrize("outcome", ["adherent_180d", "low_gap_180d"])
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_copay_support_recoverable(brand, outcome):
+    """Phase 1: copay_support -> {adherent_180d, low_gap_180d} must be recoverable
+    off its OWN backdoor (insurance_access_score + disease_severity).
+
+    n_records=8000, NOT the 3000 used by the treatment_arm gates. MEASURED
+    (2026-07-19): at n=3000 CausalForestDML cannot resolve the MEDIUM segment for
+    copay at ANY planted effect size — sweeping the CATE map from 0.28/0.20/0.12
+    to 0.40/0.22/0.04 moved high (0.119->0.158) and low (0.054->0.034) while
+    medium stayed pinned at ~0.02. n=8000 resolves it. Same resolution-floor
+    phenomenon as the Phase 3 biologic differential (validated at n>=8000).
+    """
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    cfg = GeneratorConfig(seed=21, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    truth = df.attrs["true_ate_by_arm"]["copay_support"][outcome]
+
+    out = recover_ate_and_cate(
+        df,
+        treatment_col="copay_support",
+        outcome_col=outcome,
+        confounders=list(ARM_REGISTRY["copay_support"].confounders),
+        segment_col="segment_assignment",
+        true_ate=truth["ate"],
+        cate_map=truth["cate_by_segment"],
+    )
+
+    assert out["propensity_auc"] > 0.5, out
+    assert out["n_treated"] >= 30 and out["n_control"] >= 100, out
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+    cate = out["cate_by_segment_estimate"]
+    assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
+
+
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_copay_planted_ate_is_in_the_designed_band(brand):
+    """The planted copay effect must stay in the design's +8-12pp commercial band
+    (brand-scaled, so the spread across brands is expected). A drift out of band
+    means the CATE constants were retuned without revisiting the design intent."""
+    cfg = GeneratorConfig(seed=21, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    ate = df.attrs["true_ate_by_arm"]["copay_support"]["low_gap_180d"]["ate"]
+    assert 0.05 < ate < 0.18, f"{brand.value} copay planted ATE {ate:.4f} out of band"
