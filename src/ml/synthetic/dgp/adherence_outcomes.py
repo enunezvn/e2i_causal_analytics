@@ -70,6 +70,31 @@ _LOW_GAP_PREVALENCE = 0.30
 # inflates Kisqali (>0.37 ATE) WITHOUT improving seed=21. The +0.03 heuristic isn't cleanly
 # reachable — seed=21 caps ~+0.025 for this flattest brand at any realistic boost — but EVERY
 # seed is positive (min +0.0255), which is the actual proof the recovery is not a coin-flip.
+#
+# ---------------------------------------------------------------------------------------
+# RE-MEASURED 2026-07-19 (COMM-ARMS Phase 1). The ABSOLUTE margins in the table above are
+# NOT what the gate sees. Measured on the FAITHFUL path — real PatientGenerator + real
+# recover_ate_and_cate with ARM_CONFOUNDERS at the gate's own n=3000, i.e. exactly the calls
+# tests/integration/test_dgp_recovery_probe.py makes — the worst cell (seed 21, Fabhalta,
+# low_gap, est(high)-est(medium)) is:
+#     +0.1253  on pre-Phase-1 code (main @ 0a3c17dd)
+#     +0.1537  WITH the copay arm in the latent (i.e. what THIS file now ships)
+# versus the +0.0255 claimed above — roughly 5-6x healthier, not a razor's edge.
+#
+# The table's numbers came from the Phase 0 tuning harness, which is not the gate path. Treat
+# them as RELATIVE tuning signal (which boost beats which — that comparison is still what
+# justifies 1.40) and NOT as the gate's absolute headroom. Believing +0.0255 was real would
+# invite either a pointless "fix" for fragility that does not exist, or a threshold set far
+# too tight.
+#
+# Both numbers are recorded deliberately: copay RAISED this particular cell (+0.1253 ->
+# +0.1537), but that is not a general rule — across 12 measured cells copay's effect on the
+# treatment_arm margin ranged -0.1229 to +0.0604. It perturbs; it does not uniformly erode.
+# The ordering does remain noise-sensitive (a different noise realization alone flips seed 99
+# on the default probe tuple), so re-run the FULL probe module after ANY change that redraws
+# the adherence latent — and re-measure this cell after each new arm, since every arm added to
+# this latent spends from the same finite margin budget.
+# ---------------------------------------------------------------------------------------
 _ADH_LATENT_CATE_BOOST = 1.40
 
 
