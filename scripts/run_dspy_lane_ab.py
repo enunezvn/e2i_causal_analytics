@@ -42,6 +42,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.optimization.dspy_lane_ab import (  # noqa: E402
     emit_container_script,
     evaluate_gates,
+    expected_signature_sets,
     load_golden_set,
     summarize_signature_runs,
 )
@@ -73,6 +74,30 @@ def _bundle_for(model: str, signature_summary: dict, extra: dict) -> dict:
     }
 
 
+def _warn_stored_summary_divergence(stored: object, recomputed: dict) -> None:
+    # The verdict only ever uses the recompute, but a stored aggregate that
+    # disagrees with its own records means tampering or a runner bug - worth
+    # surfacing even though it cannot change the verdict (codex iter-7).
+    # Only keys present in the stored block are compared, so the additive
+    # fields newer summarize versions emit never trigger it on old files.
+    if not isinstance(stored, dict):
+        return
+    for model, taxonomies in stored.items():
+        if not isinstance(taxonomies, dict):
+            continue
+        for taxonomy, block in taxonomies.items():
+            if not isinstance(block, dict):
+                continue
+            recomputed_block = recomputed.get(model, {}).get(taxonomy, {})
+            for key, value in block.items():
+                if key in recomputed_block and recomputed_block[key] != value:
+                    print(
+                        f"WARNING: stored summary diverges from records at "
+                        f"{model}/{taxonomy}/{key}: stored {value!r} vs "
+                        f"recomputed {recomputed_block[key]!r}"
+                    )
+
+
 def _cmd_analyze(args: argparse.Namespace) -> int:
     results = json.loads(Path(args.signature_results).read_text())
     # Recompute the summary from the raw per-call records instead of trusting
@@ -80,6 +105,8 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     # cannot forge rates or query-id multisets independently of the records
     # they must be derived from (codex iter-6). Missing records fail loud.
     summary = summarize_signature_runs(results["records"])
+    _warn_stored_summary_divergence(results.get("summary"), summary)
+    expected = expected_signature_sets(load_golden_set(args.golden_set))
     extra = json.loads(Path(args.extra).read_text()) if args.extra else {}
 
     baseline = _bundle_for(args.baseline_model, summary, extra)
@@ -89,7 +116,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     verdicts = {}
     for model in candidates:
         candidate = _bundle_for(model, summary, extra)
-        verdict = evaluate_gates(baseline, candidate)
+        verdict = evaluate_gates(baseline, candidate, expected)
         verdicts[model] = verdict
         print(f"### {model} - {'ALL GATES PASS' if verdict['all_passed'] else 'FAIL'}\n")
         print("| gate | result | detail |")
@@ -132,6 +159,11 @@ def main() -> int:
     analyze = sub.add_parser("analyze", help="evaluate decision gates")
     analyze.add_argument("--baseline-model", required=True)
     analyze.add_argument("--signature-results", required=True)
+    analyze.add_argument(
+        "--golden-set",
+        required=True,
+        help="golden-set fixture; anchors the signature query sets (codex iter-7)",
+    )
     analyze.add_argument("--extra", default=None)
     analyze.add_argument("--json-out", default=None)
     analyze.set_defaults(func=_cmd_analyze)

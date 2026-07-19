@@ -200,6 +200,20 @@ _COG_SCORED_IDS = [f"g{i}" for i in range(40)]
 _CHAT_SCORED_IDS = [f"g{i}" for i in range(38)]
 _CHAT_EXCLUDED_IDS = ["g38", "g39"]
 
+# What the golden set says SHOULD have been measured - the anchor the
+# signature_golden_anchor gate holds both sides against (codex iter-7: two
+# sides sharing the same truncated subset pass every side-to-side gate).
+EXPECTED_SIG_SETS = {
+    "cognitive_rag": {
+        "scored_query_ids": sorted(_COG_SCORED_IDS),
+        "excluded_query_ids": [],
+    },
+    "chatbot": {
+        "scored_query_ids": sorted(_CHAT_SCORED_IDS),
+        "excluded_query_ids": sorted(_CHAT_EXCLUDED_IDS),
+    },
+}
+
 BASELINE = {
     "signature": {
         "cognitive_rag": {
@@ -264,30 +278,36 @@ def _candidate(
 
 
 def test_gates_all_pass_at_parity():
-    result = evaluate_gates(BASELINE, _candidate())
+    result = evaluate_gates(BASELINE, _candidate(), EXPECTED_SIG_SETS)
     assert result["all_passed"] is True
     assert all(g["passed"] for g in result["gates"])
 
 
 def test_gate_accuracy_margin():
     # 5pp below baseline is allowed, more is not
-    ok = evaluate_gates(BASELINE, _candidate(cog_acc=0.80 - GATE_ACCURACY_MARGIN))
+    ok = evaluate_gates(
+        BASELINE, _candidate(cog_acc=0.80 - GATE_ACCURACY_MARGIN), EXPECTED_SIG_SETS
+    )
     assert ok["all_passed"] is True
-    bad = evaluate_gates(BASELINE, _candidate(cog_acc=0.80 - GATE_ACCURACY_MARGIN - 0.01))
+    bad = evaluate_gates(
+        BASELINE, _candidate(cog_acc=0.80 - GATE_ACCURACY_MARGIN - 0.01), EXPECTED_SIG_SETS
+    )
     assert bad["all_passed"] is False
     failed = [g for g in bad["gates"] if not g["passed"]]
     assert any("accuracy" in g["name"] for g in failed)
 
 
 def test_gate_parse_failure_must_not_exceed_baseline():
-    bad = evaluate_gates(BASELINE, _candidate(parse_fail=0.05))
+    bad = evaluate_gates(BASELINE, _candidate(parse_fail=0.05), EXPECTED_SIG_SETS)
     assert bad["all_passed"] is False
 
 
 def test_gate_ragas_margin():
-    ok = evaluate_gates(BASELINE, _candidate(faith=0.85 - GATE_RAGAS_MARGIN))
+    ok = evaluate_gates(BASELINE, _candidate(faith=0.85 - GATE_RAGAS_MARGIN), EXPECTED_SIG_SETS)
     assert ok["all_passed"] is True
-    bad = evaluate_gates(BASELINE, _candidate(rel=0.80 - GATE_RAGAS_MARGIN - 0.01))
+    bad = evaluate_gates(
+        BASELINE, _candidate(rel=0.80 - GATE_RAGAS_MARGIN - 0.01), EXPECTED_SIG_SETS
+    )
     assert bad["all_passed"] is False
 
 
@@ -295,23 +315,27 @@ def test_gate_no_new_error_class():
     # error classes already seen in baseline do not fail the candidate
     baseline = json.loads(json.dumps(BASELINE))
     baseline["e2e"]["error_classes"] = {"TimeoutError": 1}
-    ok = evaluate_gates(baseline, _candidate(e2e_errors={"TimeoutError": 2}))
+    ok = evaluate_gates(baseline, _candidate(e2e_errors={"TimeoutError": 2}), EXPECTED_SIG_SETS)
     assert ok["all_passed"] is True
-    bad = evaluate_gates(baseline, _candidate(sig_errors={"AuthenticationError": 1}))
+    bad = evaluate_gates(
+        baseline, _candidate(sig_errors={"AuthenticationError": 1}), EXPECTED_SIG_SETS
+    )
     assert bad["all_passed"] is False
 
 
 def test_gate_e2e_latency_factor():
-    ok = evaluate_gates(BASELINE, _candidate(p50=40.0 * GATE_E2E_LATENCY_FACTOR))
+    ok = evaluate_gates(BASELINE, _candidate(p50=40.0 * GATE_E2E_LATENCY_FACTOR), EXPECTED_SIG_SETS)
     assert ok["all_passed"] is True
-    bad = evaluate_gates(BASELINE, _candidate(p50=40.0 * GATE_E2E_LATENCY_FACTOR + 0.1))
+    bad = evaluate_gates(
+        BASELINE, _candidate(p50=40.0 * GATE_E2E_LATENCY_FACTOR + 0.1), EXPECTED_SIG_SETS
+    )
     assert bad["all_passed"] is False
 
 
 def test_gate_missing_ragas_fails_closed():
     candidate = _candidate()
     candidate["ragas"] = None
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
 
 
@@ -320,7 +344,7 @@ def test_gate_ragas_per_metric_none_fails_closed():
     # retrieved contexts - a truthy dict that must fail the gate, not TypeError.
     candidate = _candidate()
     candidate["ragas"]["faithfulness"] = None
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness]" in failed
@@ -329,7 +353,7 @@ def test_gate_ragas_per_metric_none_fails_closed():
 def test_gate_ragas_per_metric_none_baseline_fails_closed():
     baseline = json.loads(json.dumps(BASELINE))
     baseline["ragas"]["answer_relevancy"] = None
-    result = evaluate_gates(baseline, _candidate())
+    result = evaluate_gates(baseline, _candidate(), EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[answer_relevancy]" in failed
@@ -341,7 +365,7 @@ def test_gate_ragas_completeness_requires_all_replays_judged():
     # letting RAGAS score only the candidate's easier successful subset.
     candidate = _candidate()
     candidate["ragas"]["n_samples"] = 8
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[completeness]" in failed
@@ -350,7 +374,7 @@ def test_gate_ragas_completeness_requires_all_replays_judged():
 def test_gate_ragas_completeness_missing_counts_fails_closed():
     candidate = _candidate()
     del candidate["ragas"]["n_samples"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[completeness]" in failed
@@ -361,7 +385,7 @@ def test_gate_ragas_faithfulness_coverage_candidate_below_baseline():
     # fewer of them than the baseline is being scored on a different (easier)
     # denominator even when n_samples matches (codex iter-2).
     candidate = _candidate(n_ctx=8)
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_coverage]" in failed
@@ -372,7 +396,7 @@ def test_gate_ragas_faithfulness_coverage_min_n_floor():
     # need at least GATE_RAGAS_MIN_FAITHFULNESS_N context-bearing replays.
     baseline = json.loads(json.dumps(BASELINE))
     baseline["ragas"] = _ragas_block(n_ctx=2)
-    result = evaluate_gates(baseline, _candidate(n_ctx=2))
+    result = evaluate_gates(baseline, _candidate(n_ctx=2), EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_coverage]" in failed
@@ -381,7 +405,7 @@ def test_gate_ragas_faithfulness_coverage_min_n_floor():
 def test_gate_ragas_faithfulness_coverage_missing_count_fails_closed():
     candidate = _candidate()
     del candidate["ragas"]["n_faithfulness"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_coverage]" in failed
@@ -392,7 +416,7 @@ def test_gate_ragas_codex_iter2_scenario_tiny_context_subset():
     # candidate retrieved contexts on only 1, so its faithfulness mean is a
     # single easy sample that clears the margin. Must still fail.
     candidate = _candidate(faith=0.90, n_ctx=1)
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[completeness]" not in failed  # the hole iter-2 identified
@@ -410,7 +434,7 @@ def test_gate_ragas_common_subset_disjoint_contexts_fails_closed():
     for row in candidate["ragas"]["per_sample"]:
         row["n_contexts"] = 0 if row["n_contexts"] else 1
         row["faithfulness"] = None if row["n_contexts"] == 0 else 0.85
-    result = evaluate_gates(baseline, candidate)
+    result = evaluate_gates(baseline, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_common_subset]" in failed
@@ -423,7 +447,7 @@ def test_gate_ragas_common_subset_recomputes_from_per_sample():
     candidate = _candidate(faith=0.85)
     for row in candidate["ragas"]["per_sample"]:
         row["faithfulness"] = 0.60
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness]" not in failed  # aggregate said 0.85
@@ -433,7 +457,7 @@ def test_gate_ragas_common_subset_recomputes_from_per_sample():
 def test_gate_ragas_common_subset_missing_per_sample_fails_closed():
     candidate = _candidate()
     del candidate["ragas"]["per_sample"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_common_subset]" in failed
@@ -447,7 +471,7 @@ def test_gate_ragas_consistency_codex_iter3_fabricated_aggregate():
     # common-subset. Only aggregate-vs-rows reconciliation catches it.
     candidate = _candidate(faith=0.80)
     candidate["ragas"]["per_sample"] = _ragas_per_sample(0.90, n=3, n_ctx=3)
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness]" not in failed  # fabricated aggregate clears margin
     assert "ragas[completeness]" not in failed  # fabricated n_samples matches e2e.n
@@ -461,7 +485,7 @@ def test_gate_ragas_consistency_n_faithfulness_mismatch():
     # Reported context-bearing count must equal what the rows actually show.
     candidate = _candidate(n_ctx=8)
     candidate["ragas"]["n_faithfulness"] = 10
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_coverage]" not in failed  # fabricated count passes it
     assert "ragas[consistency]" in failed
@@ -475,7 +499,7 @@ def test_gate_ragas_consistency_aggregate_value_mismatch():
     for row in candidate["ragas"]["per_sample"]:
         if row["n_contexts"]:
             row["faithfulness"] = 0.84
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness]" not in failed
     assert "ragas[faithfulness_common_subset]" not in failed
@@ -487,7 +511,7 @@ def test_gate_ragas_consistency_baseline_side_checked():
     # must validate the baseline block too, not just the candidate.
     baseline = json.loads(json.dumps(BASELINE))
     baseline["ragas"]["faithfulness"] = 0.30
-    result = evaluate_gates(baseline, _candidate())
+    result = evaluate_gates(baseline, _candidate(), EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[consistency]" in failed
 
@@ -496,7 +520,7 @@ def test_gate_ragas_consistency_relevancy_mismatch():
     candidate = _candidate()
     for row in candidate["ragas"]["per_sample"]:
         row["answer_relevancy"] = 0.70
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[answer_relevancy]" not in failed  # aggregate still says 0.80
     assert "ragas[consistency]" in failed
@@ -505,7 +529,7 @@ def test_gate_ragas_consistency_relevancy_mismatch():
 def test_gate_ragas_consistency_missing_per_sample_fails_closed():
     candidate = _candidate()
     del candidate["ragas"]["per_sample"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[consistency]" in failed
 
@@ -520,7 +544,7 @@ def test_gate_ragas_fully_scored_codex_iter4_scoreless_ctx_rows():
     candidate = _candidate(faith=0.85)
     for row in candidate["ragas"]["per_sample"][3:]:
         row["faithfulness"] = None  # covered (n_contexts=1) but never scored
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[consistency]" not in failed  # judge-mirror recompute skips None
     assert "ragas[faithfulness]" not in failed
@@ -537,7 +561,7 @@ def test_gate_ragas_fully_scored_baseline_side_checked():
     baseline = json.loads(json.dumps(BASELINE))
     for row in baseline["ragas"]["per_sample"][5:]:
         row["faithfulness"] = None
-    result = evaluate_gates(baseline, _candidate())
+    result = evaluate_gates(baseline, _candidate(), EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[fully_scored]" in failed
 
@@ -547,7 +571,7 @@ def test_gate_ragas_fully_scored_relevancy_scoreless():
     # scoreless row hides there identically.
     candidate = _candidate()
     candidate["ragas"]["per_sample"][0]["answer_relevancy"] = None
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[answer_relevancy]" not in failed  # mean over the other 9 = 0.80
     assert "ragas[consistency]" not in failed
@@ -557,7 +581,7 @@ def test_gate_ragas_fully_scored_relevancy_scoreless():
 def test_gate_ragas_fully_scored_ignores_uncovered_rows():
     # Rows the judge never retrieved contexts for (n_contexts=0, score None)
     # are legitimately scoreless - only covered-but-unscored rows fail.
-    result = evaluate_gates(BASELINE, _candidate(n_ctx=7))
+    result = evaluate_gates(BASELINE, _candidate(n_ctx=7), EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[fully_scored]" not in failed
 
@@ -565,7 +589,7 @@ def test_gate_ragas_fully_scored_ignores_uncovered_rows():
 def test_gate_ragas_fully_scored_missing_per_sample_fails_closed():
     candidate = _candidate()
     del candidate["ragas"]["per_sample"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[fully_scored]" in failed
 
@@ -578,7 +602,7 @@ def test_gate_signature_denominator_partial_candidate_codex_iter5():
     candidate = _candidate(chat_acc=1.0)
     candidate["signature"]["chatbot"]["n_scored"] = 1
     candidate["signature"]["chatbot"]["n_excluded"] = 0
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "accuracy[chatbot]" not in failed  # 1.0 clears the margin
     assert "parse_failure[chatbot]" not in failed
@@ -590,7 +614,7 @@ def test_gate_signature_denominator_partial_candidate_codex_iter5():
 def test_gate_signature_denominator_missing_counts_fails_closed():
     candidate = _candidate()
     del candidate["signature"]["cognitive_rag"]["n_scored"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature_denominator[cognitive_rag]" in failed
     assert result["all_passed"] is False
@@ -603,7 +627,7 @@ def test_gate_signature_rates_none_fails_closed():
     candidate["signature"]["chatbot"].update(
         {"n_scored": 0, "n_excluded": 40, "accuracy_strict": None, "parse_failure_rate": None}
     )
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "accuracy[chatbot]" in failed
     assert "parse_failure[chatbot]" in failed
@@ -630,7 +654,7 @@ def test_gate_signature_query_set_same_count_different_ids_codex_iter6():
     candidate = _candidate()
     ids = candidate["signature"]["chatbot"]["scored_query_ids"]
     ids[0] = "g99"  # same count, different membership
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature_denominator[chatbot]" not in failed  # counts still match
     assert "signature_query_set[chatbot]" in failed
@@ -644,7 +668,7 @@ def test_gate_signature_query_set_duplicate_ids_fail():
     candidate = _candidate()
     ids = candidate["signature"]["cognitive_rag"]["scored_query_ids"]
     ids[1] = ids[0]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature_query_set[cognitive_rag]" in failed
     assert result["all_passed"] is False
@@ -653,7 +677,7 @@ def test_gate_signature_query_set_duplicate_ids_fail():
 def test_gate_signature_query_set_missing_ids_fails_closed():
     candidate = _candidate()
     del candidate["signature"]["cognitive_rag"]["scored_query_ids"]
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature_query_set[cognitive_rag]" in failed
     assert result["all_passed"] is False
@@ -664,7 +688,7 @@ def test_gate_signature_query_set_count_id_mismatch_fails_closed():
     candidate = _candidate()
     candidate["signature"]["chatbot"]["n_scored"] = 37
     candidate["signature"]["chatbot"]["n_excluded"] = 3
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature_query_set[chatbot]" in failed
     assert result["all_passed"] is False
@@ -678,7 +702,7 @@ def test_gate_signature_missing_baseline_block_fails_closed_codex_iter6():
 
     baseline = copy.deepcopy(BASELINE)
     baseline["signature"] = {}
-    result = evaluate_gates(baseline, _candidate())
+    result = evaluate_gates(baseline, _candidate(), EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature[cognitive_rag]" in failed
     assert "signature[chatbot]" in failed
@@ -690,7 +714,7 @@ def test_gate_signature_missing_baseline_taxonomy_fails_closed():
 
     baseline = copy.deepcopy(BASELINE)
     del baseline["signature"]["chatbot"]
-    result = evaluate_gates(baseline, _candidate())
+    result = evaluate_gates(baseline, _candidate(), EXPECTED_SIG_SETS)
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "signature[chatbot]" in failed
     assert "signature[cognitive_rag]" not in failed
@@ -705,15 +729,66 @@ def test_gate_e2e_latency_non_finite_fails_closed_codex_iter6():
     for bad in [float("inf"), float("nan"), "40.0"]:
         baseline = copy.deepcopy(BASELINE)
         baseline["e2e"]["latency_p50"] = bad
-        result = evaluate_gates(baseline, _candidate(p50=1e9))
+        result = evaluate_gates(baseline, _candidate(p50=1e9), EXPECTED_SIG_SETS)
         lat = [g for g in result["gates"] if g["name"] == "e2e_latency_p50"]
         assert len(lat) == 1 and lat[0]["passed"] is False
         assert result["all_passed"] is False
     candidate = _candidate()
     candidate["e2e"]["latency_p50"] = float("nan")
-    result = evaluate_gates(BASELINE, candidate)
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS)
     lat = [g for g in result["gates"] if g["name"] == "e2e_latency_p50"]
     assert len(lat) == 1 and lat[0]["passed"] is False
+
+
+def test_gate_signature_golden_anchor_shared_truncated_subset_codex_iter7():
+    # Codex iter-7 MED: every earlier signature gate is side-to-side, so a
+    # results file where baseline AND candidate carry the same truncated
+    # easy subset passes them all - nothing anchors either side to what the
+    # golden set says SHOULD have been measured.
+    import copy
+
+    baseline = copy.deepcopy(BASELINE)
+    candidate = _candidate()
+    for side in (baseline, candidate):
+        chat = side["signature"]["chatbot"]
+        chat["scored_query_ids"] = sorted(_CHAT_SCORED_IDS[:20])
+        chat["n_scored"] = 20
+    result = evaluate_gates(baseline, candidate, EXPECTED_SIG_SETS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_query_set[chatbot]" not in failed  # sides match each other
+    assert "signature_denominator[chatbot]" not in failed  # counts match too
+    assert "signature_golden_anchor[chatbot]" in failed
+    assert "signature_golden_anchor[cognitive_rag]" not in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_signature_golden_anchor_missing_expected_fails_closed():
+    # A caller that forgets the golden anchor gets failed gates, not a pass.
+    result = evaluate_gates(BASELINE, _candidate())
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "signature_golden_anchor[cognitive_rag]" in failed
+    assert "signature_golden_anchor[chatbot]" in failed
+    assert result["all_passed"] is False
+
+
+def test_expected_signature_sets_from_real_fixture():
+    # The anchor must derive from the shipped golden set: every query id is
+    # either scored or excluded per taxonomy, matching the recorded run's
+    # (40, 0) cognitive and (38, 2) chatbot shape.
+    from src.optimization.dspy_lane_ab import expected_signature_sets
+
+    golden = load_golden_set(FIXTURE_PATH)
+    expected = expected_signature_sets(golden)
+    all_ids = sorted(item["id"] for item in golden["queries"])
+    assert set(expected) == {"cognitive_rag", "chatbot"}
+    for taxonomy in expected:
+        scored = expected[taxonomy]["scored_query_ids"]
+        excluded = expected[taxonomy]["excluded_query_ids"]
+        assert sorted(scored + excluded) == all_ids
+    assert len(expected["cognitive_rag"]["scored_query_ids"]) == 40
+    assert expected["cognitive_rag"]["excluded_query_ids"] == []
+    assert len(expected["chatbot"]["scored_query_ids"]) == 38
+    assert len(expected["chatbot"]["excluded_query_ids"]) == 2
 
 
 def test_summarize_emits_query_id_multisets():

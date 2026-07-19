@@ -174,10 +174,12 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 |------|--------|--------|
 | signature_denominator[cognitive_rag] | PASS | (n_scored, n_excluded) (40, 0) both sides (must match exactly) |
 | signature_query_set[cognitive_rag] | PASS | scored/excluded query-id multisets match baseline |
+| signature_golden_anchor[cognitive_rag] | PASS | both sides match the golden set's expected query sets |
 | parse_failure[cognitive_rag] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[cognitive_rag] | PASS | 0.875 vs baseline 0.850 (margin 0.05) |
 | signature_denominator[chatbot] | PASS | (n_scored, n_excluded) (38, 2) both sides (must match exactly) |
 | signature_query_set[chatbot] | PASS | scored/excluded query-id multisets match baseline |
+| signature_golden_anchor[chatbot] | PASS | both sides match the golden set's expected query sets |
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.947 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
@@ -196,10 +198,12 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 |------|--------|--------|
 | signature_denominator[cognitive_rag] | PASS | (n_scored, n_excluded) (40, 0) both sides (must match exactly) |
 | signature_query_set[cognitive_rag] | PASS | scored/excluded query-id multisets match baseline |
+| signature_golden_anchor[cognitive_rag] | PASS | both sides match the golden set's expected query sets |
 | parse_failure[cognitive_rag] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[cognitive_rag] | PASS | 0.800 vs baseline 0.850 (margin 0.05, boundary) |
 | signature_denominator[chatbot] | PASS | (n_scored, n_excluded) (38, 2) both sides (must match exactly) |
 | signature_query_set[chatbot] | PASS | scored/excluded query-id multisets match baseline |
+| signature_golden_anchor[chatbot] | PASS | both sides match the golden set's expected query sets |
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.921 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
@@ -222,7 +226,7 @@ the data points at haiku + a grounding-behavior fix (its extra evidence
 calls retrieve more but its answers ground less), not at sonnet-5
 (unfixable 2.24× latency at equal cost).
 
-**Gate amendments after the run (codex review, add-only).** Seven gates in
+**Gate amendments after the run (codex review, add-only).** Eight gates in
 the tables above were added by the codex adversarial review AFTER the
 measurement runs completed: `ragas[completeness]` (iter-1),
 `ragas[faithfulness_coverage]` and `ragas[faithfulness_common_subset]`
@@ -267,7 +271,17 @@ return `all_passed=True` with no signature comparison at all — the gate
 loop now iterates the fixed taxonomy pair and fails closed on any missing
 block — and the e2e latency gate accepted an infinite baseline (limit =
 inf, any candidate passes) and crashed on a non-numeric one; it now
-requires finite values on both sides). Post-run amendments are legitimate here ONLY because they are
+requires finite values on both sides), and `signature_golden_anchor[*]`
+(iter-7: every earlier signature gate is side-to-side, so baseline and
+candidate sharing the SAME truncated or cherry-picked subset passed them
+all — nothing anchored either side to what the golden set says should have
+been measured. The analyze CLI now derives expected scored/excluded
+query-id sets from the golden fixture and the gate requires both sides to
+match them exactly, fail-closed when the anchor is absent; analyze also
+warns when the stored summary block diverges from the records-recomputed
+one — integrity telemetry, not a gate, since the verdict never uses the
+stored block. The real run's recorded query sets match the fixture exactly
+on all three models, so it reports PASS and changes nothing). Post-run amendments are legitimate here ONLY because they are
 fail-closed additions evaluated on already-collected data: they can add
 failures but cannot flip a pre-registered FAIL to PASS, and on this run's
 data they strengthened the NO-FLIP (common-subset FAILs both candidates).

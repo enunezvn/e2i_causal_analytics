@@ -56,6 +56,11 @@ _RAGAS_CONSISTENCY_TOL = 1e-6
 # drop them from the verdict (codex iter-6).
 GATE_SIGNATURE_TAXONOMIES = ("cognitive_rag", "chatbot")
 
+# Golden-set label key per taxonomy: a null label means the query is excluded
+# from that taxonomy, and that status is a static fixture property, never
+# model-dependent.
+_TAXONOMY_LABEL_KEYS = {"cognitive_rag": "expected_cognitive", "chatbot": "expected_chatbot"}
+
 
 # ---------------------------------------------------------------------------
 # Golden set
@@ -343,6 +348,24 @@ def _all_error_classes(bundle: Dict[str, Any]) -> set:
     return classes
 
 
+def expected_signature_sets(golden: Dict[str, Any]) -> Dict[str, Dict[str, List[str]]]:
+    """Derive, per taxonomy, which golden queries MUST appear scored and which
+    excluded. Every side-to-side gate can be satisfied by two sides sharing
+    the same truncated subset (codex iter-7); this is the external anchor the
+    signature_golden_anchor gate holds both sides against."""
+    out: Dict[str, Dict[str, List[str]]] = {}
+    for taxonomy, label_key in _TAXONOMY_LABEL_KEYS.items():
+        out[taxonomy] = {
+            "scored_query_ids": sorted(
+                item["id"] for item in golden["queries"] if item[label_key] is not None
+            ),
+            "excluded_query_ids": sorted(
+                item["id"] for item in golden["queries"] if item[label_key] is None
+            ),
+        }
+    return out
+
+
 def _query_sets_match(b: Dict[str, Any], c: Dict[str, Any]) -> bool:
     """True only when both signature blocks carry well-formed query-id lists
     that agree with their own counts and match each other as multisets
@@ -363,11 +386,17 @@ def _query_sets_match(b: Dict[str, Any], c: Dict[str, Any]) -> bool:
     ) == sorted(c["excluded_query_ids"])
 
 
-def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_gates(
+    baseline: Dict[str, Any],
+    candidate: Dict[str, Any],
+    expected_signature: Optional[Dict[str, Dict[str, List[str]]]] = None,
+) -> Dict[str, Any]:
     """Evaluate one candidate against the baseline on the five hard gates.
 
     Missing measurement blocks (e.g. no RAGAS scores) fail closed: a gate
-    cannot pass on absent data.
+    cannot pass on absent data. ``expected_signature`` is the golden-set
+    anchor from ``expected_signature_sets``; omitting it fails the anchor
+    gates rather than skipping them (codex iter-7).
     """
     gates: List[Dict[str, Any]] = []
 
@@ -413,6 +442,33 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
                 "agree with counts (fail-closed)",
             )
         )
+        # Side-to-side equality cannot catch BOTH sides sharing the same
+        # truncated or cherry-picked subset (codex iter-7) - each side must
+        # also match what the golden set says should have been measured,
+        # where scored/excluded is a static fixture property.
+        exp = (expected_signature or {}).get(taxonomy)
+        if exp is None:
+            gates.append(
+                _gate(
+                    f"signature_golden_anchor[{taxonomy}]",
+                    False,
+                    "missing expected golden query sets (fail-closed)",
+                )
+            )
+        else:
+            anchored = all(
+                isinstance(blk.get(key), list) and sorted(blk[key]) == exp[key]
+                for blk in (b, c)
+                for key in ("scored_query_ids", "excluded_query_ids")
+            )
+            gates.append(
+                _gate(
+                    f"signature_golden_anchor[{taxonomy}]",
+                    anchored,
+                    "scored/excluded query-id multisets must equal the golden "
+                    "set's expected sets, both sides (fail-closed)",
+                )
+            )
         b_parse, c_parse = b.get("parse_failure_rate"), c.get("parse_failure_rate")
         if _is_finite_number(b_parse) and _is_finite_number(c_parse):
             gates.append(
