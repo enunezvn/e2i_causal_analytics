@@ -199,7 +199,7 @@ class SearchResponse(BaseModel):
     )
 
 
-class GraphNode(BaseModel):
+class CausalGraphNode(BaseModel):
     """Node in the causal graph."""
 
     id: str = Field(..., description="Node identifier")
@@ -222,7 +222,7 @@ class CausalSubgraphResponse(BaseModel):
     """Causal subgraph for visualization."""
 
     entity: str = Field(..., description="Center entity of the subgraph")
-    nodes: List[GraphNode] = Field(..., description="Graph nodes")
+    nodes: List[CausalGraphNode] = Field(..., description="Graph nodes")
     edges: List[GraphEdge] = Field(..., description="Graph edges")
     depth: int = Field(..., description="Traversal depth")
     node_count: int = Field(..., description="Total node count")
@@ -643,7 +643,7 @@ async def get_causal_subgraph(
         )
 
         nodes = [
-            GraphNode(
+            CausalGraphNode(
                 id=n.get("id", ""),
                 label=n.get("label", n.get("id", "")),
                 type=n.get("type", "unknown"),

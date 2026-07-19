@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from src.api.routes.gaps import AnalysisStatus, GapAnalysisResponse
+from src.api.routes.gaps import GapAnalysisResponse, GapAnalysisStatus
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class GapsRepository:
         query = (
             self._client.table(_TABLE)
             .select("payload")
-            .eq("status", AnalysisStatus.COMPLETED.value)
+            .eq("status", GapAnalysisStatus.COMPLETED.value)
         )
         if brand:
             # Case-insensitive brand match. The canonical brand casing across the

@@ -32,12 +32,12 @@ _UNREACHABLE = (httpx.TransportError, ConnectionError, OSError)
 @pytest.mark.asyncio
 async def test_gap_analysis_roundtrips_across_repo_instances():
     from src.api.repositories.gaps_repository import GapsRepository
-    from src.api.routes.gaps import AnalysisStatus, GapAnalysisResponse
+    from src.api.routes.gaps import GapAnalysisResponse, GapAnalysisStatus
 
     analysis_id = f"gap_it_{uuid.uuid4().hex[:8]}"
     resp = GapAnalysisResponse(
         analysis_id=analysis_id,
-        status=AnalysisStatus.COMPLETED,
+        status=GapAnalysisStatus.COMPLETED,
         brand="kisqali",
         metrics_analyzed=["trx"],
         segments_analyzed=4,
@@ -48,7 +48,7 @@ async def test_gap_analysis_roundtrips_across_repo_instances():
     except _UNREACHABLE as exc:
         pytest.skip(f"SUPABASE_URL configured but Supabase unreachable: {exc}")
     assert got is not None and got.brand == "kisqali"
-    assert got.status == AnalysisStatus.COMPLETED
+    assert got.status == GapAnalysisStatus.COMPLETED
 
 
 @pytest.mark.asyncio

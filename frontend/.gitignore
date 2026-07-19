@@ -19,9 +19,9 @@ test-results
 .playwright
 blob-report
 
-# Auto-generated API types (regenerated via `npm run generate:types`;
-# also ignored at repo root). The hand-written index.ts/README stay tracked.
-src/types/generated/api.ts
+# NOTE: src/types/generated/api.ts is deliberately TRACKED since 2026-07 —
+# CI-enforced contract baseline (verify-types drift gate). Regenerate with
+# `make generate-types` at the repo root and commit with schema changes.
 
 # Editor directories and files
 .vscode/*

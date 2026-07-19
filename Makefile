@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq test-cov tier1-5-test lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs curate-candidates check-compile-backlog
+.PHONY: help install dev-install test test-fast test-seq test-cov tier1-5-test lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs generate-types curate-candidates check-compile-backlog
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -16,6 +16,7 @@ help:
 	@echo "  make lint          Run linting checks"
 	@echo "  make format        Format code with black"
 	@echo "  make api-docs      Generate OpenAPI spec + Redoc HTML"
+	@echo "  make generate-types Regenerate committed frontend/src/types/generated/api.ts"
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Docker:"
@@ -154,3 +155,11 @@ data-generate:
 
 api-docs:
 	./scripts/generate_api_docs.sh
+
+# Regenerate the committed frontend contract baseline the same way CI's
+# verify-types drift gate does (static spec export — no running server).
+# Your Python deps must match requirements.txt pins — FastAPI/Pydantic
+# versions change duplicate-schema-name output, and CI is the arbiter.
+generate-types:
+	python -m scripts.export_openapi --output openapi.json
+	cd frontend && npx openapi-typescript ../openapi.json -o src/types/generated/api.ts

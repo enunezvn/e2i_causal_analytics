@@ -13,10 +13,10 @@ from fastapi import BackgroundTasks, HTTPException
 
 # Import route functions and models
 from src.api.routes.segments import (
-    AnalysisStatus,
     ResponderType,
     # Models
     RunSegmentAnalysisRequest,
+    SegmentAnalysisStatus,
     _analyses_store,
     _convert_cate_results,
     _convert_policies,
@@ -222,7 +222,7 @@ async def test_execute_segment_analysis_computes_confidence(curated_request, moc
     ):
         response = await _execute_segment_analysis(curated_request)
 
-    assert response.status == AnalysisStatus.COMPLETED
+    assert response.status == SegmentAnalysisStatus.COMPLETED
     assert response.confidence == pytest.approx(expected)
     assert response.confidence > 0.0  # the bug was a hard 0.0
 
@@ -239,7 +239,7 @@ async def test_run_segment_analysis_async_mode(sample_request, mock_user):
         user=mock_user,
     )
 
-    assert result.status == AnalysisStatus.PENDING
+    assert result.status == SegmentAnalysisStatus.PENDING
     assert result.analysis_id.startswith("seg_")
     assert await _analyses_store.contains(result.analysis_id)
 
@@ -252,7 +252,7 @@ async def test_run_segment_analysis_sync_mode(sample_request, mock_user):
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_result = MagicMock(
             analysis_id="",
-            status=AnalysisStatus.COMPLETED,
+            status=SegmentAnalysisStatus.COMPLETED,
             overall_ate=10.5,
         )
         mock_execute.return_value = mock_result
@@ -264,7 +264,7 @@ async def test_run_segment_analysis_sync_mode(sample_request, mock_user):
             user=mock_user,
         )
 
-        assert result.status == AnalysisStatus.COMPLETED
+        assert result.status == SegmentAnalysisStatus.COMPLETED
         mock_execute.assert_called_once()
 
 
@@ -300,7 +300,7 @@ async def test_run_segment_analysis_stores_result(sample_request, mock_user):
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_result = MagicMock(
             analysis_id="",
-            status=AnalysisStatus.COMPLETED,
+            status=SegmentAnalysisStatus.COMPLETED,
         )
         mock_execute.return_value = mock_result
 
@@ -314,7 +314,7 @@ async def test_run_segment_analysis_stores_result(sample_request, mock_user):
         assert await _analyses_store.contains(result.analysis_id)
         stored = await _analyses_store.get(result.analysis_id)
         assert stored is not None
-        assert stored.status == AnalysisStatus.COMPLETED
+        assert stored.status == SegmentAnalysisStatus.COMPLETED
 
 
 # =============================================================================
@@ -329,14 +329,14 @@ async def test_get_segment_analysis_success():
     analysis_id = "seg_test123"
     mock_analysis = MagicMock(
         analysis_id=analysis_id,
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
     )
     await _analyses_store.set(analysis_id, mock_analysis)
 
     result = await get_segment_analysis(analysis_id)
 
     assert result.analysis_id == analysis_id
-    assert result.status == AnalysisStatus.COMPLETED
+    assert result.status == SegmentAnalysisStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -412,7 +412,7 @@ async def test_list_policies_with_data():
     )
 
     mock_analysis = MagicMock(
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         policy_recommendations=[mock_policy],
     )
     await _analyses_store.set("seg_1", mock_analysis)
@@ -446,7 +446,7 @@ async def test_list_policies_filters_by_min_lift():
     )
 
     mock_analysis = MagicMock(
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         policy_recommendations=[mock_policy_high, mock_policy_low],
     )
     await _analyses_store.set("seg_1", mock_analysis)
@@ -479,7 +479,7 @@ async def test_list_policies_filters_by_min_confidence():
     )
 
     mock_analysis = MagicMock(
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         policy_recommendations=[mock_policy_high, mock_policy_low],
     )
     await _analyses_store.set("seg_1", mock_analysis)
@@ -508,7 +508,7 @@ async def test_list_policies_respects_limit():
     ]
 
     mock_analysis = MagicMock(
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         policy_recommendations=policies,
     )
     await _analyses_store.set("seg_1", mock_analysis)
@@ -548,7 +548,7 @@ async def test_list_policies_sorts_by_outcome():
     ]
 
     mock_analysis = MagicMock(
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         policy_recommendations=policies,
     )
     await _analyses_store.set("seg_1", mock_analysis)
@@ -574,7 +574,7 @@ async def test_list_policies_skips_pending_analyses():
     )
 
     mock_pending = MagicMock(
-        status=AnalysisStatus.PENDING,
+        status=SegmentAnalysisStatus.PENDING,
         policy_recommendations=[mock_policy],
     )
     await _analyses_store.set("seg_1", mock_pending)
@@ -649,7 +649,7 @@ async def test_get_segment_health_counts_recent_analyses():
 
     recent_analysis = SegmentAnalysisResponse(
         analysis_id="seg_1",
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         timestamp=datetime.now(timezone.utc),
     )
     await _analyses_store.set("seg_1", recent_analysis)
@@ -667,7 +667,7 @@ async def test_get_segment_health_last_analysis():
 
     analysis = SegmentAnalysisResponse(
         analysis_id="seg_1",
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         timestamp=datetime.now(timezone.utc),
     )
     await _analyses_store.set("seg_1", analysis)
@@ -695,14 +695,14 @@ async def test_run_segment_analysis_task_success(sample_request, mock_agent_resu
         analysis_id,
         SegmentAnalysisResponse(
             analysis_id=analysis_id,
-            status=AnalysisStatus.PENDING,
+            status=SegmentAnalysisStatus.PENDING,
         ),
     )
 
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_result = MagicMock(
             analysis_id="",
-            status=AnalysisStatus.COMPLETED,
+            status=SegmentAnalysisStatus.COMPLETED,
         )
         mock_execute.return_value = mock_result
 
@@ -710,7 +710,7 @@ async def test_run_segment_analysis_task_success(sample_request, mock_agent_resu
 
         stored = await _analyses_store.get(analysis_id)
         assert stored is not None
-        assert stored.status == AnalysisStatus.COMPLETED
+        assert stored.status == SegmentAnalysisStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -724,7 +724,7 @@ async def test_run_segment_analysis_task_handles_error(sample_request):
         analysis_id,
         SegmentAnalysisResponse(
             analysis_id=analysis_id,
-            status=AnalysisStatus.PENDING,
+            status=SegmentAnalysisStatus.PENDING,
         ),
     )
 
@@ -735,7 +735,7 @@ async def test_run_segment_analysis_task_handles_error(sample_request):
 
         stored = await _analyses_store.get(analysis_id)
         assert stored is not None
-        assert stored.status == AnalysisStatus.FAILED
+        assert stored.status == SegmentAnalysisStatus.FAILED
         assert len(stored.warnings) > 0
 
 
@@ -759,7 +759,7 @@ async def test_execute_segment_analysis_with_agent(curated_request, mock_agent_r
     ):
         result = await _execute_segment_analysis(curated_request)
 
-        assert result.status == AnalysisStatus.COMPLETED
+        assert result.status == SegmentAnalysisStatus.COMPLETED
         assert result.overall_ate == 10.5
         assert result.heterogeneity_score == 0.65
         mock_graph.ainvoke.assert_called_once()
@@ -780,7 +780,7 @@ async def test_execute_segment_analysis_falls_back_to_mock_when_explicitly_allow
     ):
         result = await _execute_segment_analysis(curated_request)
 
-        assert result.status == AnalysisStatus.COMPLETED
+        assert result.status == SegmentAnalysisStatus.COMPLETED
         assert "mock data" in result.warnings[0].lower()
 
 
@@ -999,7 +999,7 @@ def test_generate_mock_response_structure(sample_request):
     start_time = time.time()
     result = _generate_mock_response(sample_request, start_time)
 
-    assert result.status == AnalysisStatus.COMPLETED
+    assert result.status == SegmentAnalysisStatus.COMPLETED
     assert result.overall_ate is not None
     assert result.heterogeneity_score is not None
     assert len(result.cate_by_segment) > 0
@@ -1081,7 +1081,7 @@ class TestBoundedAnalysesStore:
         for i in range(5):
             store[f"seg_{i}"] = SegmentAnalysisResponse(
                 analysis_id=f"seg_{i}",
-                status=AnalysisStatus.COMPLETED,
+                status=SegmentAnalysisStatus.COMPLETED,
                 timestamp=datetime.now(timezone.utc),
             )
 
@@ -1105,18 +1105,18 @@ class TestBoundedAnalysesStore:
         for i in range(2):
             store[f"seg_{i}"] = SegmentAnalysisResponse(
                 analysis_id=f"seg_{i}",
-                status=AnalysisStatus.PENDING,
+                status=SegmentAnalysisStatus.PENDING,
                 timestamp=datetime.now(timezone.utc),
             )
         # Update an existing key (e.g. PENDING -> COMPLETED on completion).
         store["seg_0"] = SegmentAnalysisResponse(
             analysis_id="seg_0",
-            status=AnalysisStatus.COMPLETED,
+            status=SegmentAnalysisStatus.COMPLETED,
             timestamp=datetime.now(timezone.utc),
         )
 
         assert len(store) == 2
-        assert store["seg_0"].status == AnalysisStatus.COMPLETED
+        assert store["seg_0"].status == SegmentAnalysisStatus.COMPLETED
         assert "seg_1" in store
 
     def test_module_store_is_bounded_instance(self):
@@ -1301,7 +1301,7 @@ class _FakePipeline:
         return results
 
 
-def _make_resp(analysis_id, status=AnalysisStatus.COMPLETED):  # noqa: ANN001
+def _make_resp(analysis_id, status=SegmentAnalysisStatus.COMPLETED):  # noqa: ANN001
     from src.api.routes.segments import SegmentAnalysisResponse
 
     return SegmentAnalysisResponse(
@@ -1338,7 +1338,7 @@ class TestDurableAnalysesStore:
         got = await worker_b.get("seg_shared")
         assert got is not None
         assert got.analysis_id == "seg_shared"
-        assert got.status == AnalysisStatus.COMPLETED
+        assert got.status == SegmentAnalysisStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_values_enumerates_from_redis(self):
@@ -1443,7 +1443,7 @@ def _make_poison_resp(analysis_id):  # noqa: ANN001
 
     return SegmentAnalysisResponse(
         analysis_id=analysis_id,
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         timestamp=datetime.now(timezone.utc),
         cate_by_segment={
             "region": [
@@ -1489,7 +1489,7 @@ class TestNonFinitePoison:
         # payload — the degenerate CATE/policy entries are dropped, not coerced.
         got = await store.get("seg_poison")
         assert got is not None, "poison write must remain readable, not 500 on read"
-        assert got.status == AnalysisStatus.FAILED
+        assert got.status == SegmentAnalysisStatus.FAILED
         assert got.cate_by_segment == {}  # degenerate CATE dropped, not faked
         assert got.policy_recommendations == []
         assert got.overall_ate is None
@@ -1921,22 +1921,22 @@ class TestFIFONotLRU:
         store = _DurableAnalysesStore(redis_factory=_factory, max_entries=2)
 
         # Create seg_0 first (oldest), then seg_1.
-        await store.set("seg_0", _make_resp("seg_0", status=AnalysisStatus.PENDING))
+        await store.set("seg_0", _make_resp("seg_0", status=SegmentAnalysisStatus.PENDING))
         shared.advance(10)
-        await store.set("seg_1", _make_resp("seg_1", status=AnalysisStatus.PENDING))
+        await store.set("seg_1", _make_resp("seg_1", status=SegmentAnalysisStatus.PENDING))
 
         creation_score_0 = shared.zset[_REDIS_INDEX_KEY]["seg_0"]
 
         # seg_0 gets a status update much later — its index score must NOT bump.
         shared.advance(100)
-        await store.set("seg_0", _make_resp("seg_0", status=AnalysisStatus.COMPLETED))
+        await store.set("seg_0", _make_resp("seg_0", status=SegmentAnalysisStatus.COMPLETED))
         assert shared.zset[_REDIS_INDEX_KEY]["seg_0"] == creation_score_0
 
         # Now a third record arrives, forcing one eviction. True FIFO evicts the
         # genuinely-oldest (seg_0), NOT seg_1 — even though seg_0 was written
         # most recently (a status update).
         shared.advance(10)
-        await store.set("seg_2", _make_resp("seg_2", status=AnalysisStatus.PENDING))
+        await store.set("seg_2", _make_resp("seg_2", status=SegmentAnalysisStatus.PENDING))
 
         assert await store.contains("seg_0") is False  # oldest by creation
         assert await store.contains("seg_1") is True
@@ -1971,7 +1971,7 @@ def _make_poison_resp_in_field(analysis_id, field):  # noqa: ANN001
 
     resp = SegmentAnalysisResponse(
         analysis_id=analysis_id,
-        status=AnalysisStatus.COMPLETED,
+        status=SegmentAnalysisStatus.COMPLETED,
         timestamp=datetime.now(timezone.utc),
     )
     if field == "confidence":
@@ -2028,7 +2028,7 @@ class TestSanitizeScrubsAllFloatFields:
         # Must read back (no ValidationError 500) AND must be enumerable.
         got = await store.get(f"seg_{field}")
         assert got is not None, f"poison in {field} must remain readable, not 500"
-        assert got.status == AnalysisStatus.FAILED
+        assert got.status == SegmentAnalysisStatus.FAILED
 
         listed = [v.analysis_id for v in await store.values()]
         assert f"seg_{field}" in listed, (
@@ -2066,7 +2066,7 @@ class TestSanitizeScrubsAllFloatFields:
         # And the JSON dump re-validates (the actual persistence round-trip).
         dumped = sanitized.model_dump_json()
         revalidated = SegmentAnalysisResponse.model_validate_json(dumped)
-        assert revalidated.status == AnalysisStatus.FAILED
+        assert revalidated.status == SegmentAnalysisStatus.FAILED
 
 
 # =============================================================================
@@ -2149,7 +2149,7 @@ class TestTTLPruneDoesNotDropLiveUpdatedRecord:
         # time = 1250 - 100 = 1150, and 1000 <= 1150 -> Pass-1 would drop it.
         clock.advance(250)
         await store.set(
-            "seg_updated_old", _make_resp("seg_updated_old", status=AnalysisStatus.COMPLETED)
+            "seg_updated_old", _make_resp("seg_updated_old", status=SegmentAnalysisStatus.COMPLETED)
         )
 
         # The key must still be alive (TTL was reset on the update).

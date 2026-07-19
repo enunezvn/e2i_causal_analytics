@@ -1,6 +1,9 @@
 # Normalize line endings to LF on commit
 * text=auto eol=lf
 
+# Generated contract baseline — collapse in diffs, regenerate via make generate-types
+frontend/src/types/generated/api.ts linguist-generated=true
+
 # Binary files
 *.png binary
 *.jpg binary

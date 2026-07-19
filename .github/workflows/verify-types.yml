@@ -15,6 +15,7 @@ on:
     branches: [main]
     paths:
       - "src/**/*.py"
+      - "frontend/src/types/generated/**"
       - ".spectral.yml"
       - ".github/workflows/verify-types.yml"
 
@@ -64,19 +65,26 @@ jobs:
         run: |
           python -m scripts.export_openapi --output openapi.json
 
-      # There is deliberately NO drift diff here: its baseline
-      # (frontend/src/types/generated/api.ts) was untracked in 5aa69163 and
-      # gitignored — hand-written types in frontend/src/types/*.ts are the
-      # compiler's source of truth, and generated types are a local diff aid
-      # (see frontend/README.md "Generated types"). The former "Check for
-      # type drift" step diffed against that nonexistent file, warning
-      # "may be out of sync" on every run. What CI can certify instead,
-      # as hard gates: the current backend schema must generate, and the
-      # generated TypeScript must compile.
+      # frontend/src/types/generated/api.ts is the TRACKED contract baseline
+      # (re-tracked 2026-07, reversing 5aa69163 which had untracked it — the
+      # old "Check for type drift" step then diffed against a nonexistent
+      # file and warned on every run). Three hard gates: the current backend
+      # schema must generate, the fresh generation must match the committed
+      # baseline byte-for-byte, and the generated TypeScript must compile.
       - name: Generate types from exported spec
         working-directory: frontend
         run: |
           npx openapi-typescript ../openapi.json -o src/types/generated/api.ts
+
+      - name: Check generated types match committed baseline
+        working-directory: frontend
+        run: |
+          if ! git diff --exit-code -- src/types/generated/api.ts; then
+            echo ""
+            echo "::error::Backend OpenAPI schema drifted from the committed frontend contract baseline."
+            echo "Run 'make generate-types' at the repo root and commit the updated frontend/src/types/generated/api.ts."
+            exit 1
+          fi
 
       - name: Compile-check generated types
         working-directory: frontend

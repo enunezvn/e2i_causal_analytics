@@ -26,10 +26,10 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.routes.segments import (
-    AnalysisStatus,
     ResponderType,
     RunSegmentAnalysisRequest,
     SegmentAnalysisResponse,
+    SegmentAnalysisStatus,
     _execute_segment_analysis,
     _load_segment_hte_frame,
 )
@@ -170,7 +170,7 @@ async def test_execute_maps_strategic_and_hierarchical_fields(stub_request, rich
         result = await _execute_segment_analysis(stub_request)
 
     assert isinstance(result, SegmentAnalysisResponse)
-    assert result.status == AnalysisStatus.COMPLETED
+    assert result.status == SegmentAnalysisStatus.COMPLETED
 
     # strategic_interpretation (profile_generator) — was dropped at the route.
     assert result.strategic_interpretation == (

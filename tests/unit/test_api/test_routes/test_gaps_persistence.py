@@ -2,8 +2,8 @@ import pytest
 
 import src.api.routes.gaps as gaps_mod
 from src.api.routes.gaps import (
-    AnalysisStatus,
     GapAnalysisResponse,
+    GapAnalysisStatus,
     get_gap_analysis,
 )
 
@@ -22,7 +22,7 @@ class _Repo:
         return [
             r
             for r in self._rows.values()
-            if r.status == AnalysisStatus.COMPLETED and (brand is None or r.brand == brand)
+            if r.status == GapAnalysisStatus.COMPLETED and (brand is None or r.brand == brand)
         ]
 
     async def list_all(self):
@@ -36,7 +36,7 @@ async def test_get_reads_from_repo_not_dict(monkeypatch):
     await repo.upsert(
         GapAnalysisResponse(
             analysis_id="gap_xworker",
-            status=AnalysisStatus.COMPLETED,
+            status=GapAnalysisStatus.COMPLETED,
             brand="kisqali",
             metrics_analyzed=["trx"],
             segments_analyzed=2,

@@ -114,7 +114,7 @@ class TestGapsFailClosed:
     async def test_gaps_falls_back_to_mock_when_allowed(self):
         """When env explicitly allows mock, response carries warnings[] payload."""
         from src.api.routes.gaps import (
-            AnalysisStatus,
+            GapAnalysisStatus,
             GapType,
             RunGapAnalysisRequest,
             _execute_gap_analysis,
@@ -134,7 +134,7 @@ class TestGapsFailClosed:
             ):
                 response = await _execute_gap_analysis(request)
 
-        assert response.status == AnalysisStatus.COMPLETED
+        assert response.status == GapAnalysisStatus.COMPLETED
         assert len(response.warnings) > 0
         assert "mock data" in response.warnings[0].lower()
 
@@ -167,14 +167,14 @@ class TestSegmentsFailClosed:
     @pytest.mark.asyncio
     async def test_segments_raises_503_when_fail_closed(self):
         from src.api.routes.segments import (
-            QuestionType,
             RunSegmentAnalysisRequest,
+            SegmentQuestionType,
             _execute_segment_analysis,
         )
 
         request = RunSegmentAnalysisRequest(
             query="Q",
-            question_type=QuestionType.EFFECT_HETEROGENEITY,
+            question_type=SegmentQuestionType.EFFECT_HETEROGENEITY,
         )
         with patch.dict("os.environ", _fail_closed_env(), clear=False):
             with self._patch_loader():
@@ -190,14 +190,14 @@ class TestSegmentsFailClosed:
     @pytest.mark.asyncio
     async def test_segments_mock_fallback_preserves_warnings(self):
         from src.api.routes.segments import (
-            QuestionType,
             RunSegmentAnalysisRequest,
+            SegmentQuestionType,
             _execute_segment_analysis,
         )
 
         request = RunSegmentAnalysisRequest(
             query="Q",
-            question_type=QuestionType.EFFECT_HETEROGENEITY,
+            question_type=SegmentQuestionType.EFFECT_HETEROGENEITY,
         )
         with patch.dict("os.environ", _mock_allowed_env(), clear=False):
             with self._patch_loader():
