@@ -8,6 +8,7 @@ trigger/cohort generators (Shards 05/06).
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Dict, Literal, Tuple, overload
 
 import numpy as np
@@ -35,6 +36,73 @@ SEGMENT_LOW = "low_severity"
 # visible to the analyst by the naive-vs-adjusted "confounding bias removed"
 # surfacing (Option D).
 ARM_CONFOUNDERS: Tuple[str, str] = ("disease_severity", "academic_hcp")
+
+
+@dataclass(frozen=True)
+class ArmSpec:
+    """Declarative description of ONE binary treatment arm.
+
+    Adding an arm means adding a spec — the confounder-contract guard then forces
+    every declared confounder into the analysis covariate allowlist, so a new arm
+    cannot ship with an un-adjustable backdoor (the anti-mocking harm: the
+    estimator would silently report the confounded naive diff-in-means).
+    """
+
+    name: str
+    confounders: Dict[str, float]  # covariate -> propensity logit coefficient
+    intercept: float               # sets the base treatment share
+    cate_by_segment: Dict[str, float]  # latent CATE per severity segment
+    target_outcomes: Tuple[str, ...]   # curated outcomes this arm wires
+    # Covariates centered before entering the logit, so the intercept sets the
+    # base share rather than being absorbed by the covariate's scale.
+    center: Dict[str, float] = field(default_factory=dict)
+    propensity_col: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.propensity_col:
+            object.__setattr__(self, "propensity_col", f"{self.name}_propensity")
+
+
+# Phase 1 (COMM-ARMS): copay_support. Constants are MEASURED, not guessed — see
+# docs/superpowers/plans/2026-07-19-dgp-commercial-arms-phase1-copay-support.md.
+# The CATE map needs a WIDE high-medium gap: at n=3000 the forest cannot resolve
+# the medium segment at ANY effect size (measured across maps 0.28/0.20/0.12 ..
+# 0.40/0.22/0.04), and even at n=8000 the narrower 0.32/0.20/0.08 map leaves
+# Remibrutinib/seed21 INVERTED (high 0.1165 < med 0.1264). 0.44/0.18/0.06 orders
+# for all 3 brands, |ATE err| 0.003-0.035, planted ATE 0.083-0.141 (design band
+# +8-12pp). The wider 0.55/0.16/0.05 also orders but drifts ATE to 0.156 (out of
+# band) with worse error -> rejected.
+_COPAY_BETA_INS_ACCESS = -0.90  # LOWER access -> MORE support (real-world skew)
+_COPAY_BETA_SEVERITY = 0.25     # sicker -> more support
+_COPAY_INTERCEPT = -0.40        # base share ~0.34-0.36 (measured)
+_COPAY_CATE = {
+    "high_severity": 0.44,
+    "medium_severity": 0.18,
+    "low_severity": 0.06,
+}
+
+ARM_REGISTRY: Dict[str, ArmSpec] = {
+    "treatment_arm": ArmSpec(
+        name="treatment_arm",
+        confounders={"disease_severity": 0.30, "academic_hcp": 0.80},
+        intercept=-2.0,
+        cate_by_segment={},  # sourced from brand_scaled_cate (brand-dependent)
+        target_outcomes=("treatment_initiated", "adherent_180d", "low_gap_180d"),
+        center={"disease_severity": 5.0},
+        propensity_col="propensity_score",  # legacy column name, NOT <name>_propensity
+    ),
+    "copay_support": ArmSpec(
+        name="copay_support",
+        confounders={
+            "insurance_access_score": _COPAY_BETA_INS_ACCESS,
+            "disease_severity": _COPAY_BETA_SEVERITY,
+        },
+        intercept=_COPAY_INTERCEPT,
+        cate_by_segment=_COPAY_CATE,
+        target_outcomes=("adherent_180d", "low_gap_180d", "persistent_180d"),
+        center={"disease_severity": 5.0},
+    ),
+}
 
 
 def assign_treatment_arm(
