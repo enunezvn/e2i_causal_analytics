@@ -1,0 +1,372 @@
+{
+  "version": 1,
+  "created": "2026-07-18",
+  "purpose": "Labeled golden set for the DSPy-lane provider A/B (openai/gpt-5.6-terra baseline vs anthropic candidates). Scored on the two real intent surfaces riding DSPY_LM_MODEL: cognitive RAG IntentClassificationSignature and chatbot ChatbotIntentClassificationSignature. Labels are acceptable-sets (prediction correct iff in set); null excludes the query from that taxonomy's accuracy.",
+  "labeling_notes": "Hand-labeled 2026-07-18 against the signature docstrings/descs. production_predicted is the historical chatbot-lane prediction (gpt-4o era) recorded in chatbot_training_signals - used as context, NOT as ground truth. Sources: chatbot_training_signals(id=N,n=freq) = real production query; disproof_2026-07-18 = queries from the pre-plan disproof probe; synthetic_coverage = added because real traffic contains no PREDICTION and little GAP_ANALYSIS/EXPERIMENT_DESIGN.",
+  "taxonomies": {
+    "cognitive_rag": ["CAUSAL_ANALYSIS", "GAP_ANALYSIS", "PREDICTION", "EXPERIMENT_DESIGN", "EXPLANATION", "GENERAL"],
+    "chatbot": ["kpi_query", "causal_analysis", "agent_status", "recommendation", "search", "multi_faceted", "greeting", "help", "general"]
+  },
+  "queries": [
+    {
+      "id": "ts-12",
+      "query": "What is TRx for Kisqali?",
+      "source": "chatbot_training_signals(id=12,n=137)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": "Highest-volume production query. Cognitive taxonomy has no KPI intent; a metric lookup is GENERAL or EXPLANATION."
+    },
+    {
+      "id": "ts-43",
+      "query": "What is TRx?",
+      "source": "chatbot_training_signals(id=43,n=49)",
+      "expected_cognitive": ["EXPLANATION"],
+      "expected_chatbot": ["kpi_query", "help", "general"],
+      "production_predicted": "help",
+      "notes": "Definitional. Chatbot docstring puts TRx-metric questions under kpi_query, but production history (n=49) classified as help and a pure definition also fits general - genuinely ambiguous in that taxonomy."
+    },
+    {
+      "id": "ts-14",
+      "query": "What can you do?",
+      "source": "chatbot_training_signals(id=14,n=25)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["help"],
+      "production_predicted": "help",
+      "notes": ""
+    },
+    {
+      "id": "ts-57",
+      "query": "Build a cohort of high-value HCPs",
+      "source": "chatbot_training_signals(id=57,n=6)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["search", "recommendation"],
+      "production_predicted": "search",
+      "notes": "Cohort construction is an action request - not causal/gap/prediction/experiment/explanation."
+    },
+    {
+      "id": "ts-44",
+      "query": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter",
+      "source": "chatbot_training_signals(id=44,n=3)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["search", "recommendation"],
+      "production_predicted": "search",
+      "notes": ""
+    },
+    {
+      "id": "ts-53",
+      "query": "What are the eligibility criteria for Kisqali patients?",
+      "source": "chatbot_training_signals(id=53,n=2)",
+      "expected_cognitive": ["EXPLANATION", "GENERAL"],
+      "expected_chatbot": ["search", "general"],
+      "production_predicted": "search",
+      "notes": ""
+    },
+    {
+      "id": "ts-113",
+      "query": "What is the current system health score?",
+      "source": "chatbot_training_signals(id=113,n=2)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["agent_status", "kpi_query"],
+      "production_predicted": "agent_status",
+      "notes": ""
+    },
+    {
+      "id": "ts-345",
+      "query": "What are the TRx trends for Kisqali in Q4?",
+      "source": "chatbot_training_signals(id=345,n=2)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": "Historical trend lookup, not a forecast - PREDICTION would be wrong."
+    },
+    {
+      "id": "ts-8",
+      "query": "What is the total TRx for all brands?",
+      "source": "chatbot_training_signals(id=8,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": ""
+    },
+    {
+      "id": "ts-9",
+      "query": "Why did Kisqali TRx drop in Q1?",
+      "source": "chatbot_training_signals(id=9,n=1)",
+      "expected_cognitive": ["CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["causal_analysis"],
+      "production_predicted": "causal_analysis",
+      "notes": ""
+    },
+    {
+      "id": "ts-28",
+      "query": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18",
+      "source": "chatbot_training_signals(id=28,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["search", "multi_faceted", "recommendation"],
+      "production_predicted": "multi_faceted",
+      "notes": "Cohort-building with criteria spans the chatbot taxonomy's search/recommendation/multi_faceted boundary; production said multi_faceted."
+    },
+    {
+      "id": "ts-32",
+      "query": "What caused the increase in TRx for Kisqali?",
+      "source": "chatbot_training_signals(id=32,n=1)",
+      "expected_cognitive": ["CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["causal_analysis"],
+      "production_predicted": "causal_analysis",
+      "notes": ""
+    },
+    {
+      "id": "ts-33",
+      "query": "Design an A/B test for the new marketing campaign",
+      "source": "chatbot_training_signals(id=33,n=1)",
+      "expected_cognitive": ["EXPERIMENT_DESIGN"],
+      "expected_chatbot": ["recommendation"],
+      "production_predicted": "recommendation",
+      "notes": "Chatbot taxonomy has no experiment category; production routed to recommendation."
+    },
+    {
+      "id": "ts-34",
+      "query": "Hello, how are you?",
+      "source": "chatbot_training_signals(id=34,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["greeting"],
+      "production_predicted": "greeting",
+      "notes": ""
+    },
+    {
+      "id": "ts-36",
+      "query": "Hello, how can you help me?",
+      "source": "chatbot_training_signals(id=36,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["greeting", "help"],
+      "production_predicted": "help",
+      "notes": ""
+    },
+    {
+      "id": "ts-37",
+      "query": "What is the current TRx volume for Fabhalta?",
+      "source": "chatbot_training_signals(id=37,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": ""
+    },
+    {
+      "id": "ts-39",
+      "query": "What KPIs are available for Kisqali?",
+      "source": "chatbot_training_signals(id=39,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query", "help"],
+      "production_predicted": "kpi_query",
+      "notes": ""
+    },
+    {
+      "id": "ts-40",
+      "query": "What is the causal impact of rep visits on TRx for Kisqali?",
+      "source": "chatbot_training_signals(id=40,n=1)",
+      "expected_cognitive": ["CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["causal_analysis"],
+      "production_predicted": "causal_analysis",
+      "notes": ""
+    },
+    {
+      "id": "ts-42",
+      "query": "What agents are available in the system?",
+      "source": "chatbot_training_signals(id=42,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["agent_status", "help"],
+      "production_predicted": "agent_status",
+      "notes": ""
+    },
+    {
+      "id": "ts-47",
+      "query": "Segment HCPs by prescription volume into high, medium, and low tiers",
+      "source": "chatbot_training_signals(id=47,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["recommendation", "search", "multi_faceted"],
+      "production_predicted": "recommendation",
+      "notes": "Segmentation request has no clean home in the chatbot taxonomy; production said recommendation."
+    },
+    {
+      "id": "ts-48",
+      "query": "Define a patient cohort with inclusion criteria: diagnosed with PNH in 2024, age over 18",
+      "source": "chatbot_training_signals(id=48,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["search", "recommendation"],
+      "production_predicted": "search",
+      "notes": ""
+    },
+    {
+      "id": "ts-50",
+      "query": "Create a cohort of HCPs who are oncologists in the Northeast",
+      "source": "chatbot_training_signals(id=50,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["search", "recommendation"],
+      "production_predicted": "search",
+      "notes": ""
+    },
+    {
+      "id": "ts-51",
+      "query": "Segment patients by treatment response",
+      "source": "chatbot_training_signals(id=51,n=1)",
+      "expected_cognitive": ["GENERAL", "CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["recommendation", "search", "multi_faceted"],
+      "production_predicted": "recommendation",
+      "notes": "Treatment-response segmentation borders HTE analysis, so CAUSAL_ANALYSIS is defensible on the cognitive side; chatbot side is the same segmentation ambiguity as ts-47."
+    },
+    {
+      "id": "ts-52",
+      "query": "Define the target patient population for the Q1 campaign",
+      "source": "chatbot_training_signals(id=52,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["recommendation", "search"],
+      "production_predicted": "recommendation",
+      "notes": ""
+    },
+    {
+      "id": "ts-64",
+      "query": "What is the causal impact of HCP engagement on TRx volume for Kisqali?",
+      "source": "chatbot_training_signals(id=64,n=1)",
+      "expected_cognitive": ["CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["causal_analysis"],
+      "production_predicted": "causal_analysis",
+      "notes": ""
+    },
+    {
+      "id": "ts-66",
+      "query": "Build a cohort of oncologists who prescribed Kisqali",
+      "source": "chatbot_training_signals(id=66,n=1)",
+      "expected_cognitive": ["GENERAL"],
+      "expected_chatbot": ["search", "recommendation"],
+      "production_predicted": "search",
+      "notes": ""
+    },
+    {
+      "id": "ts-115",
+      "query": "How can I optimize resource allocation for Remibrutinib in the Northeast region?",
+      "source": "chatbot_training_signals(id=115,n=1)",
+      "expected_cognitive": ["GENERAL", "GAP_ANALYSIS"],
+      "expected_chatbot": ["recommendation"],
+      "production_predicted": "recommendation",
+      "notes": ""
+    },
+    {
+      "id": "ts-332",
+      "query": "Give me an NRx breakdown by patient clinical segment for Remibrutinib.",
+      "source": "chatbot_training_signals(id=332,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": ""
+    },
+    {
+      "id": "ts-334",
+      "query": "What are biologic-naive vs biologic-experienced NRx numbers for Remibrutinib?",
+      "source": "chatbot_training_signals(id=334,n=1)",
+      "expected_cognitive": ["GENERAL", "EXPLANATION"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": ""
+    },
+    {
+      "id": "ts-346",
+      "query": "What is the market share for Kisqali compared to competitors?",
+      "source": "chatbot_training_signals(id=346,n=1)",
+      "expected_cognitive": ["GAP_ANALYSIS", "GENERAL"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": "kpi_query",
+      "notes": "Competitive share comparison is the canonical GAP_ANALYSIS shape, but a plain share lookup (GENERAL) is defensible."
+    },
+    {
+      "id": "dp-1",
+      "query": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?",
+      "source": "disproof_2026-07-18",
+      "expected_cognitive": ["CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["causal_analysis"],
+      "production_predicted": null,
+      "notes": ""
+    },
+    {
+      "id": "dp-2",
+      "query": "Compare TRx market share for Kisqali vs its competitors over the last 6 months",
+      "source": "disproof_2026-07-18",
+      "expected_cognitive": ["GAP_ANALYSIS", "GENERAL"],
+      "expected_chatbot": ["kpi_query", "multi_faceted"],
+      "production_predicted": null,
+      "notes": ""
+    },
+    {
+      "id": "dp-3",
+      "query": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption",
+      "source": "disproof_2026-07-18",
+      "expected_cognitive": ["EXPERIMENT_DESIGN"],
+      "expected_chatbot": ["recommendation"],
+      "production_predicted": null,
+      "notes": ""
+    },
+    {
+      "id": "dp-4",
+      "query": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+      "source": "disproof_2026-07-18",
+      "expected_cognitive": ["CAUSAL_ANALYSIS"],
+      "expected_chatbot": ["causal_analysis", "multi_faceted"],
+      "production_predicted": null,
+      "notes": ""
+    },
+    {
+      "id": "dp-5",
+      "query": "Show me the conversion rate trend for Kisqali by payer segment last year",
+      "source": "disproof_2026-07-18",
+      "expected_cognitive": ["GENERAL", "EXPLANATION", "GAP_ANALYSIS"],
+      "expected_chatbot": ["kpi_query"],
+      "production_predicted": null,
+      "notes": "The known-ambiguous query from the D2 disproof: all three models classified it differently on the cognitive side. Historical trend display, so PREDICTION stays out of the set."
+    },
+    {
+      "id": "syn-1",
+      "query": "Forecast Kisqali TRx volume for the next two quarters",
+      "source": "synthetic_coverage",
+      "expected_cognitive": ["PREDICTION"],
+      "expected_chatbot": null,
+      "production_predicted": null,
+      "notes": "Real traffic contains no forecast queries; added for PREDICTION coverage. Chatbot taxonomy has no forecast category, so excluded there."
+    },
+    {
+      "id": "syn-2",
+      "query": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+      "source": "synthetic_coverage",
+      "expected_cognitive": ["PREDICTION"],
+      "expected_chatbot": null,
+      "production_predicted": null,
+      "notes": "PREDICTION coverage; excluded from chatbot scoring for the same reason as syn-1."
+    },
+    {
+      "id": "syn-3",
+      "query": "Where are the biggest untapped opportunities to grow Remibrutinib market share?",
+      "source": "synthetic_coverage",
+      "expected_cognitive": ["GAP_ANALYSIS"],
+      "expected_chatbot": ["recommendation"],
+      "production_predicted": null,
+      "notes": ""
+    },
+    {
+      "id": "syn-4",
+      "query": "Explain what heterogeneous treatment effects mean in our analyses",
+      "source": "synthetic_coverage",
+      "expected_cognitive": ["EXPLANATION"],
+      "expected_chatbot": ["general", "help"],
+      "production_predicted": null,
+      "notes": ""
+    },
+    {
+      "id": "syn-5",
+      "query": "Design an experiment to measure whether speaker programs increase Fabhalta NRx",
+      "source": "synthetic_coverage",
+      "expected_cognitive": ["EXPERIMENT_DESIGN"],
+      "expected_chatbot": ["recommendation"],
+      "production_predicted": null,
+      "notes": ""
+    }
+  ]
+}
