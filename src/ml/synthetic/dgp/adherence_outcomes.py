@@ -183,12 +183,20 @@ def generate_adherence_outcomes(
     # shared score so both arms' truths describe the same realized outcome.
     copay_eff_baseline = baseline - copay_contribution + arm.astype(float) * tau_latent
     _, tau_copay_adh = binarize_score(
-        score, copay_eff_baseline, tau_copay, segs,
-        target_prevalence=_TARGET_PREVALENCE, noise_std=_ADH_NOISE_STD,
+        score,
+        copay_eff_baseline,
+        tau_copay,
+        segs,
+        target_prevalence=_TARGET_PREVALENCE,
+        noise_std=_ADH_NOISE_STD,
     )
     _, tau_copay_low = binarize_score(
-        score, copay_eff_baseline, tau_copay, segs,
-        target_prevalence=_LOW_GAP_PREVALENCE, noise_std=_ADH_NOISE_STD,
+        score,
+        copay_eff_baseline,
+        tau_copay,
+        segs,
+        target_prevalence=_LOW_GAP_PREVALENCE,
+        noise_std=_ADH_NOISE_STD,
     )
 
     return {

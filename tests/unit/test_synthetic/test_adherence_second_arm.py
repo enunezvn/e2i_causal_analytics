@@ -16,8 +16,9 @@ def _inputs(n=4000, seed=21):
         "treatment_arm": (rng.random(n) < 0.4).astype(int),
         "disease_severity": severity,
         "academic_hcp": (rng.random(n) < 0.3).astype(int),
-        "segment": np.where(severity > 7, "high_severity",
-                            np.where(severity > 4, "medium_severity", "low_severity")),
+        "segment": np.where(
+            severity > 7, "high_severity", np.where(severity > 4, "medium_severity", "low_severity")
+        ),
         "cate_map": {"high_severity": 0.70, "medium_severity": 0.30, "low_severity": 0.10},
     }
 

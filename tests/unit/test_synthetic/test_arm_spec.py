@@ -124,14 +124,24 @@ def test_insurance_access_score_handles_unknown_category():
 @pytest.mark.unit
 def test_assign_arm_from_spec_rejects_a_missing_declared_confounder():
     """A caller that forgets a declared confounder must FAIL LOUD, not silently
-    estimate a propensity that omits a backdoor path."""
+    estimate a propensity that omits a backdoor path.
+
+    Matches the INTENTIONAL guard's wording, not just the column name. The bare
+    name matched the incidental `KeyError` the old `covariates[cov]` lookup raised
+    anyway, so this test passed BEFORE the hardening existed and would keep passing
+    if the guard were reverted -- it locked nothing. Matching "declares confounder"
+    ties it to the explicit check, which is the behavior worth protecting: the
+    incidental KeyError only fires because the loop happens to touch every
+    confounder, which is exactly the implementation detail this guard removes
+    reliance on.
+    """
     import numpy as np
     import pytest as _pytest
 
     from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY, assign_arm_from_spec
 
     spec = ARM_REGISTRY["copay_support"]
-    with _pytest.raises(KeyError, match="insurance_access_score"):
+    with _pytest.raises(KeyError, match="declares confounder"):
         assign_arm_from_spec(
             spec,
             {"disease_severity": np.zeros(10)},  # insurance_access_score MISSING
