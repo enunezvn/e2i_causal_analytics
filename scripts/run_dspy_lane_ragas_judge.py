@@ -42,6 +42,7 @@ def main() -> None:
             results.append(
                 {
                     "query_id": sample.metadata.get("query_id"),
+                    "n_contexts": len(sample.retrieved_contexts),
                     "faithfulness": res.faithfulness,
                     "answer_relevancy": res.answer_relevancy,
                 }
@@ -51,15 +52,21 @@ def main() -> None:
 
     per_sample = asyncio.run(_run())
 
-    def _mean(key: str):
-        vals = [r[key] for r in per_sample if r[key] is not None]
+    def _mean(rows: list, key: str):
+        vals = [r[key] for r in rows if r[key] is not None]
         return (sum(vals) / len(vals)) if vals else None
 
+    # Faithfulness measures answer-vs-contexts; on a run that retrieved no
+    # evidence the score is an artifact (NaN->0), so it averages only over
+    # samples with contexts. How often retrieval finds evidence is itself
+    # model-influenced (hop decisions ride the LM) - n_faithfulness exposes it.
+    with_ctx = [r for r in per_sample if r["n_contexts"] > 0]
     out = {
         "model": model,
         "n_samples": len(per_sample),
-        "faithfulness": _mean("faithfulness"),
-        "answer_relevancy": _mean("answer_relevancy"),
+        "n_faithfulness": len(with_ctx),
+        "faithfulness": _mean(with_ctx, "faithfulness"),
+        "answer_relevancy": _mean(per_sample, "answer_relevancy"),
         "per_sample": per_sample,
     }
     print("RESULTS_JSON_BEGIN")
