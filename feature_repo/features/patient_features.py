@@ -5,15 +5,15 @@ Use Case: Churn Prediction
 - Features: adherence patterns, refill behavior, gap analysis
 """
 
-from datetime import timedelta
-from feast import Feature, FeatureView, Field
-from feast.types import Bool, Float32, Float64, Int64, String, UnixTimestamp
-
 import sys
-sys.path.append("..")
-from entities import patient, patient_brand
-from data_sources import patient_journey_source
+from datetime import timedelta
 
+from feast import FeatureView, Field
+from feast.types import Bool, Float32, Int64, UnixTimestamp
+
+sys.path.append("..")
+from data_sources import patient_journey_source
+from entities import patient, patient_brand
 
 # =============================================================================
 # Patient Journey Feature View

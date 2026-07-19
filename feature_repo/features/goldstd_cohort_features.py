@@ -29,6 +29,7 @@ own view keyed on ``patient`` alone (the gold-standard models are brand-scoped a
 the row level via the cohort, not via a composite patient_brand key).
 """
 
+import sys
 from datetime import timedelta
 
 from feast import FeatureView, Field
@@ -36,8 +37,6 @@ from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source i
     PostgreSQLSource,
 )
 from feast.types import Float64, Int64, String
-
-import sys
 
 sys.path.append("..")
 from entities import patient  # noqa: E402

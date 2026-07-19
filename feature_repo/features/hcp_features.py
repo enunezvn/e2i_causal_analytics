@@ -5,18 +5,18 @@ Use Case: HCP Conversion Prediction
 - Features: engagement history, prescribing patterns, profile attributes
 """
 
-from datetime import timedelta
-from feast import Feature, FeatureView, Field
-from feast.types import Float32, Float64, Int64, String
-
 import sys
+from datetime import timedelta
+
+from feast import FeatureView, Field
+from feast.types import Float32, Int64, String
+
 sys.path.append("..")
-from entities import hcp, hcp_brand, territory
 from data_sources import (
     business_metrics_source,
     hcp_profiles_source,
 )
-
+from entities import hcp, hcp_brand
 
 # =============================================================================
 # HCP Conversion Feature View

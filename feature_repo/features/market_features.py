@@ -5,15 +5,15 @@ Use Case: ROI Prediction
 - Features: market share trends, territory performance, investment levels
 """
 
-from datetime import timedelta
-from feast import Feature, FeatureView, Field
-from feast.types import Float32, Float64, Int64, String
-
 import sys
-sys.path.append("..")
-from entities import territory, brand, hcp_territory
-from data_sources import business_metrics_source, territory_metrics_source
+from datetime import timedelta
 
+from feast import FeatureView, Field
+from feast.types import Float32, Int64
+
+sys.path.append("..")
+from data_sources import business_metrics_source, territory_metrics_source
+from entities import brand, territory
 
 # =============================================================================
 # Market Dynamics Feature View
