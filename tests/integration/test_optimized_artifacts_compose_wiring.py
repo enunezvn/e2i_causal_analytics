@@ -20,6 +20,7 @@ structure directly.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -87,14 +88,27 @@ def test_api_mounts_both_roots_read_only():
         )
 
 
-def test_dockerfile_creates_both_roots():
-    """The image must mkdir both roots BEFORE the chown -R e2i:e2i /app so a
-    fresh named volume is initialized with e2i ownership — without this the
-    engine creates the mountpoint root-owned and every non-root worker write
-    fails (caught-and-warned, i.e. silently)."""
+def test_dockerfile_creates_both_roots_in_every_user_stage():
+    """Every stage that drops to USER e2i must mkdir both roots BEFORE its
+    chown -R e2i:e2i /app so a fresh named volume is initialized with e2i
+    ownership — without this the engine creates the mountpoint root-owned and
+    every non-root worker write fails (caught-and-warned, i.e. silently).
+
+    Asserted per-stage, not whole-file: compose builds ``target: production``,
+    so a mkdir present only in the dev stage would pass a whole-file grep while
+    the deployed image still ships root-owned mountpoints (the exact regression
+    this file exists to prevent)."""
     dockerfile = _DOCKERFILE_PATH.read_text()
-    for target in _ROOTS.values():
-        assert target in dockerfile, (
-            f"docker/Dockerfile must mkdir {target} (in BOTH stages) so named-volume "
-            f"initialization copies e2i ownership"
-        )
+    stages = re.split(r"^FROM .+ AS (\w+)$", dockerfile, flags=re.MULTILINE)
+    # re.split yields [preamble, name1, body1, name2, body2, ...]
+    stage_bodies = dict(zip(stages[1::2], stages[2::2], strict=True))
+    user_stages = [
+        name for name, body in stage_bodies.items() if "USER e2i" in body
+    ]
+    assert user_stages, "no stage switches to USER e2i — Dockerfile layout changed?"
+    for name in user_stages:
+        for target in _ROOTS.values():
+            assert target in stage_bodies[name], (
+                f"stage {name!r} must mkdir {target} before its chown so "
+                f"named-volume initialization copies e2i ownership"
+            )
