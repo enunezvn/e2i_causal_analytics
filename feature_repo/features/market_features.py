@@ -28,10 +28,8 @@ market_dynamics_fv = FeatureView(
         Field(name="trx_count", dtype=Int64, description="Territory TRx volume"),
         Field(name="nrx_count", dtype=Int64, description="Territory NRx volume"),
         Field(name="total_rx_count", dtype=Int64, description="Total prescriptions"),
-
         # Market position
         Field(name="market_share", dtype=Float32, description="Market share in territory"),
-
         # Performance indicators
         Field(name="conversion_rate", dtype=Float32, description="Territory conversion rate"),
         Field(name="engagement_score", dtype=Float32, description="Average engagement score"),
@@ -69,14 +67,16 @@ territory_performance_fv = FeatureView(
         # Volume metrics
         Field(name="total_trx", dtype=Int64, description="Total TRx in territory"),
         Field(name="total_nrx", dtype=Int64, description="Total NRx in territory"),
-
         # Coverage metrics
         Field(name="active_hcp_count", dtype=Int64, description="Active HCPs in territory"),
         Field(name="covered_lives", dtype=Int64, description="Covered lives in territory"),
-
         # Potential and allocation
         Field(name="market_potential", dtype=Float32, description="Market potential score"),
-        Field(name="resource_allocation_score", dtype=Float32, description="Current resource allocation"),
+        Field(
+            name="resource_allocation_score",
+            dtype=Float32,
+            description="Current resource allocation",
+        ),
     ],
     source=territory_metrics_source,
     online=True,
