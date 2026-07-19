@@ -67,3 +67,68 @@ def test_proxy_consistency_survives_the_second_arm():
     )
     assert np.all((out["adherence_rate"] >= 0.80) == (out["adherent_180d"] == 1))
     assert np.all((out["gap_days"] <= 30) == (out["low_gap_180d"] == 1))
+
+
+# --- Phase 2: psp_enrolled is a THIRD arm on the same adherence latent ---------------
+_PSP_CATE = {"high_severity": 0.38, "medium_severity": 0.13, "low_severity": 0.05}
+_COPAY_CATE = {"high_severity": 0.44, "medium_severity": 0.18, "low_severity": 0.06}
+
+
+@pytest.mark.unit
+def test_psp_absent_leaves_the_copay_path_unchanged():
+    """Passing no psp arm must reproduce the copay-only result EXACTLY, so wiring
+    the psp default branch does not perturb the shipped Phase 1 behaviour."""
+    ins = _inputs()
+    n = len(ins["disease_severity"])
+    copay = (np.random.default_rng(9).random(n) < 0.35).astype(int)
+    a = generate_adherence_outcomes(
+        rng=np.random.default_rng(5), copay_support=copay, copay_cate=_COPAY_CATE, **ins
+    )
+    b = generate_adherence_outcomes(
+        rng=np.random.default_rng(5),
+        copay_support=copay,
+        copay_cate=_COPAY_CATE,
+        psp_enrolled=None,
+        psp_cate=None,
+        **ins,
+    )
+    np.testing.assert_array_equal(a["adherent_180d"], b["adherent_180d"])
+    assert a["copay_adherent_rd_by_segment"] == b["copay_adherent_rd_by_segment"]
+
+
+@pytest.mark.unit
+def test_psp_ground_truth_is_returned_and_ordered():
+    ins = _inputs()
+    n = len(ins["disease_severity"])
+    psp = (np.random.default_rng(11).random(n) < 0.38).astype(int)
+    out = generate_adherence_outcomes(
+        rng=np.random.default_rng(5), psp_enrolled=psp, psp_cate=_PSP_CATE, **ins
+    )
+    rd = out["psp_adherent_rd_by_segment"]
+    assert rd["high_severity"] > rd["medium_severity"] > rd["low_severity"], rd
+    assert 0.02 < float(np.mean(list(rd.values()))) < 0.25, rd
+
+
+@pytest.mark.unit
+def test_three_arms_each_carry_their_own_ordered_ground_truth():
+    """With treatment_arm + copay + psp all in the latent, EACH commercial arm's
+    per-segment RD is its OWN ordered effect (the effective-baseline folds the other
+    two arms in), not a blend — so the recovery gate validates the right number."""
+    ins = _inputs()
+    n = len(ins["disease_severity"])
+    copay = (np.random.default_rng(9).random(n) < 0.35).astype(int)
+    psp = (np.random.default_rng(11).random(n) < 0.38).astype(int)
+    out = generate_adherence_outcomes(
+        rng=np.random.default_rng(5),
+        copay_support=copay,
+        copay_cate=_COPAY_CATE,
+        psp_enrolled=psp,
+        psp_cate=_PSP_CATE,
+        **ins,
+    )
+    for key in ("copay_adherent_rd_by_segment", "psp_adherent_rd_by_segment"):
+        rd = out[key]
+        assert rd["high_severity"] > rd["medium_severity"] > rd["low_severity"], (key, rd)
+        assert all(v > 0 for v in rd.values()), (key, rd)
+    # Proxy consistency still holds with three arms in the latent.
+    assert np.all((out["adherence_rate"] >= 0.80) == (out["adherent_180d"] == 1))

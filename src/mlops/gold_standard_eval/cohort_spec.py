@@ -107,13 +107,19 @@ _BASE7 = _BASE3 + (
 #
 # MUST stay in lockstep with MODEL_FEATURE_REFS in src/feature_store/model_feature_refs.py
 # and the Field list in feature_repo/features/goldstd_cohort_features.py. A spec that
-# declares 8 while the refs fetch 7 hands the serving bundle an incomplete vector
-# (#576 null-trap → 503); test_model_feature_refs.py locks the three together.
+# declares more covariates than the refs fetch hands the serving bundle an incomplete
+# vector (#576 null-trap → 503); test_model_feature_refs.py locks the three together.
 _BASE8_COMMERCIAL = _BASE7 + ("copay_support",)
+# COMM-ARMS Phase 2 (2026-07-19): persistence/discontinuation gain a 9th covariate,
+# psp_enrolled. Same rationale as copay (line above): psp enters the discontinuation
+# logit, is assigned pre-index, is not a leakage column, and letting the model observe
+# it recovers ~+0.004 faithful holdout AUC (measured). initiation stays at _BASE7 (psp
+# is not in the treatment_initiated equation).
+_BASE9_COMMERCIAL = _BASE8_COMMERCIAL + ("psp_enrolled",)
 _PATIENT_COVARIATES: dict[str, tuple[str, ...]] = {
     "initiation": _BASE7,
-    "persistence": _BASE8_COMMERCIAL,
-    "discontinuation": _BASE8_COMMERCIAL,
+    "persistence": _BASE9_COMMERCIAL,
+    "discontinuation": _BASE9_COMMERCIAL,
 }
 
 

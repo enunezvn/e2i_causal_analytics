@@ -63,6 +63,26 @@ _COPAY_DISC_LOGIT = {
     "low_severity": -0.04,
 }
 
+# Phase 2 (COMM-ARMS): psp_enrolled on the DISCONTINUATION logit (negative = improves
+# persistence). MEASURED, not guessed. Unlike the treatment-arm term this is NOT
+# brand-scaled, so the planted persistent ATE is ~brand-invariant (~0.079). psp is a
+# 9th covariate of the persistence/discontinuation models (_BASE9_COMMERCIAL), so the
+# model CAN observe it -- but it is still real outcome signal, so the post-psp AUC falls
+# ~0.017 vs Phase 1 (measured; part is irreducible, part is recovered by the +psp
+# feature). backlog #43 (folded into this phase) re-shapes that gate to per-brand PINNED
+# baselines + tolerance, exactly because each arm erodes the ceiling by the same
+# mechanism. GATE tuning: the persistence gate is MULTI-SEED (21/7/99/123, strict
+# ordering), and logit->Bernoulli RDs are thin -- the first guess {-0.90,-0.45,-0.05}
+# left seed-99 h-m at only +0.012 (gated, a hair's breadth). Widening the HIGH arm to
+# -1.10 lifts every seed-99 h-m to >=+0.042 (approaching copay's +0.054 bar) while
+# keeping the ATE ~0.079 in the +5-10pp band. Do NOT narrow the gap without re-running
+# the multi-seed persistence gate.
+_PSP_DISC_LOGIT = {
+    "high_severity": -1.10,
+    "medium_severity": -0.45,
+    "low_severity": -0.05,
+}
+
 # Confounder pull on the discontinuation logit (sicker/non-academic -> more gaps).
 _DISC_SEVERITY_COEF = 0.55
 _DISC_ACADEMIC_COEF = -0.80
@@ -108,6 +128,7 @@ class DiscontinuationOutcomes(TypedDict):
     persistent_180d: np.ndarray
     retention_benefit: np.ndarray
     copay_persistent_rd_by_segment: Dict[str, float]
+    psp_persistent_rd_by_segment: Dict[str, float]
 
 
 def generate_discontinuation_outcomes(
@@ -124,6 +145,7 @@ def generate_discontinuation_outcomes(
     segment: np.ndarray,
     brand_cate_scale: float,
     copay_support: np.ndarray | None = None,
+    psp_enrolled: np.ndarray | None = None,
 ) -> DiscontinuationOutcomes:
     """Draw discontinued_180d (and its complement persistent_180d) + a
     non-negative retention_benefit covariate.
@@ -166,24 +188,46 @@ def generate_discontinuation_outcomes(
     else:
         copay = np.zeros(n, dtype=int)
         copay_pull = np.zeros(n, dtype=float)
-    p_disc = expit(logit + copay_pull * copay)
+    # Phase 2: psp_enrolled enters the SAME discontinuation logit additively, kept
+    # SEPARATE from `logit` (like copay) so each arm's planted RD is a clean
+    # counterfactual holding the OTHER arm at its realized pull, not a re-derivation
+    # from the blended logit. When None the equation is byte-identical to pre-psp.
+    if psp_enrolled is not None:
+        psp = np.asarray(psp_enrolled, dtype=int)
+        psp_pull = np.array([_PSP_DISC_LOGIT.get(str(s), 0.0) for s in segment], dtype=float)
+    else:
+        psp = np.zeros(n, dtype=int)
+        psp_pull = np.zeros(n, dtype=float)
+    copay_realized = copay_pull * copay
+    psp_realized = psp_pull * psp
+    p_disc = expit(logit + copay_realized + psp_realized)
     discontinued = (rng.random(n) < p_disc).astype(int)
     persistent = 1 - discontinued
     # Non-negative retention benefit: scales with severity (high-severity persisters
     # are the most valuable to retain) and is ALWAYS >= 0.
     retention_benefit = PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * disease_severity * persistent
-    # copay's OWN recoverable RD on PERSISTENCE = -(discontinuation RD), computed
-    # per segment as a counterfactual on the logit the row actually got.
+    # Each commercial arm's OWN recoverable RD on PERSISTENCE = -(discontinuation RD),
+    # computed per segment as a counterfactual on the logit the row actually got, with
+    # the OTHER arm folded into the effective base at its realized pull (additive-
+    # independent: no arm's truth is a blend of the other's).
     copay_rd: Dict[str, float] = {}
+    psp_rd: Dict[str, float] = {}
     for seg_name in np.unique(segment):
         mask = np.asarray(segment) == seg_name
         if not mask.any():
             continue
-        pull = float(_COPAY_DISC_LOGIT.get(str(seg_name), 0.0))
-        copay_rd[str(seg_name)] = float(np.mean(expit(logit[mask]) - expit(logit[mask] + pull)))
+        c_pull = float(_COPAY_DISC_LOGIT.get(str(seg_name), 0.0))
+        p_pull = float(_PSP_DISC_LOGIT.get(str(seg_name), 0.0))
+        base_for_copay = logit[mask] + psp_realized[mask]
+        copay_rd[str(seg_name)] = float(
+            np.mean(expit(base_for_copay) - expit(base_for_copay + c_pull))
+        )
+        base_for_psp = logit[mask] + copay_realized[mask]
+        psp_rd[str(seg_name)] = float(np.mean(expit(base_for_psp) - expit(base_for_psp + p_pull)))
     return {
         "discontinued_180d": discontinued,
         "persistent_180d": persistent,
         "retention_benefit": np.clip(retention_benefit, 0.0, None),
         "copay_persistent_rd_by_segment": copay_rd,
+        "psp_persistent_rd_by_segment": psp_rd,
     }

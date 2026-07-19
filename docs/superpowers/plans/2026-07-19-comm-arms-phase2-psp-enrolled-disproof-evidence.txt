@@ -1,0 +1,63 @@
+COMM-ARMS Phase 2 (psp_enrolled) — cheapest-disproof evidence
+=============================================================
+Date: 2026-07-19  |  Branch: feat/comm-arms-phase2-psp-enrolled  |  Base: main @ 173d8b95
+Design: docs/superpowers/specs/2026-06-29-dgp-commercial-arms-enrichment-design.md §7 Phase 2
+Backlog #43 (persistence-calibration gate reshape) FOLDED IN per user direction.
+
+LOAD-BEARING ASSUMPTION (named before building)
+------------------------------------------------
+psp_enrolled can be planted as a THIRD arm in the shared adherence latent AND the
+discontinuation logit with a recoverable +5-10pp brand-scaled effect, WITHOUT (a)
+eroding any gated treatment_arm/copay margin below the ~+0.05 flake floor, and (b)
+dropping the persistence-calibration AUC below a defensible level. Measured FAITHFULLY
+(real PatientGenerator + real recover_ate_and_cate + real FeatureBuilder/train_cohort_model,
+n=8000/20000, seeds 21/7/99/123) BEFORE any reseed/deploy.
+
+MEASURED CONSTANTS (override the design's "illustrative" +5-10pp starting points)
+--------------------------------------------------------------------------------
+Propensity (brand-invariant, confounds on disease_severity+engagement_score+academic_hcp):
+  _PSP_BETA_SEVERITY=0.20  _PSP_BETA_ENGAGEMENT=0.16  _PSP_BETA_ACADEMIC=0.45  _PSP_INTERCEPT=-1.20
+  -> share 0.376, propensity AUC ~0.64, overlap 0.19..0.84 (estimable, both arms populated)
+Adherence CATE (brand-scaled latent map, adherent_180d):  _PSP_CATE {high 0.38, med 0.13, low 0.05}
+  first guess {0.34,0.14,0.05} left Fabhalta/seed21 adherent h-m at +0.0152 (too thin) ->
+  widened high-medium; final worst seed-21 adherent h-m = +0.0327 (m-l +0.057).
+Persistence logit (NOT brand-scaled -> brand-invariant ATE ~0.079):
+  _PSP_DISC_LOGIT {high -1.10, med -0.45, low -0.05}
+  first guess {-0.90,-0.45,-0.05} left seed-99 persistent h-m at +0.012 (GATED, hair's breadth)
+  -> widened HIGH arm to -1.10; final worst seed-99 persistent h-m = +0.0424.
+
+RECOVERY — GREEN across all 24 cells (3 brands x 2 outcomes x seeds 21/7/99/123, n=8000)
+----------------------------------------------------------------------------------------
+worst |LinearDML ATE - true| = 0.0449 (tol 0.15); ALL CATE ordered high>med>low.
+  planted adherent ATE: Remi ~0.096 / Fab ~0.073 (in band) / Kis ~0.121 (>10pp by 1.40
+    brand-scale, as copay's Kisqali 0.140 was -- gate asserts |est-true|<0.15, not a band)
+  planted persistent ATE: ~0.079 all brands (brand-invariant, in +5-10pp band)
+  worst adherent margin (seed-21 gated): Fabhalta h-m +0.0327
+  worst persistent margin (multi-seed gated): seed-99 h-m +0.0424 (~copay's +0.054 bar)
+
+FORWARD RISK (Phase 1 finite-CATE-budget) — did NOT materialize
+---------------------------------------------------------------
+treatment_arm adherent margins WITH psp in the latent (seed 21, n=8000):
+  Remi h-m +0.2725 / Fab +0.2272 / Kis +0.2189 -- huge, barely dented.
+copay adherent margins held at/above shipped: Fabhalta m-l +0.043 (>= Phase 1's +0.034).
+=> psp does NOT erode the existing gated arms below their floors.
+
+PERSISTENCE-CALIBRATION AUC (post-psp, faithful _BASE9 spec, seed 42, n=20000) -> backlog #43 PIN
+------------------------------------------------------------------------------------------------
+  Remibrutinib 0.7751 | Fabhalta 0.7827 | Kisqali 0.7701   (each ~0.017 below Phase-1's copay
+  level -- the SAME irreducible per-arm erosion the #43 note predicts; all above the old 0.75).
+psp added as the 9th persistence/disc model covariate (_BASE9_COMMERCIAL) recovers +0.004 AUC
+  (measured invisible->+psp), matching copay's ~0.005 Phase-1 recovery -> honest serving surface.
+#43 reshape: gate now asserts per-brand PINNED baseline +/- 0.025 tol + outer band [0.72,0.83]
+  (replaces the single absolute [0.75,0.83]). Local-measured; re-pin from first CI run if needed.
+
+CROSS-VERSION INVARIANCE (recorded, not self-compared)
+------------------------------------------------------
+Digest diff pre-psp(main 173d8b95) vs with-psp, n=2000, Remi:21 + Kis:7:
+  ALL 17 non-outcome cols (incl BOTH copay cols) byte-IDENTICAL; ALL 6 outcome cols DIFFER.
+  => psp touches ONLY the two latents; independent 0x9527 substream; copay undisturbed.
+
+LOCAL GATES GREEN: recovery 15/15 (psp) ; calibration 3/3 (pinned) ; unit wiring/contract/
+  invariance/lockstep all pass ; ruff check+format clean. CI is the mypy/full-suite arbiter.
+Harnesses: scratchpad/psp_disproof.py, psp_share_sweep.py, psp_adh_map_sweep.py,
+  psp_persist_sweep.py, psp_erosion.py, psp_auc_feature.py, psp_digest_capture.py.

@@ -39,13 +39,14 @@ def _fit_bundle(spec, seed: int) -> dict[str, Any]:
             "age_at_diagnosis": rng.integers(18, 85, n),
             "comorbidity_burden": rng.integers(0, 6, n),
             "prior_therapy_lines": rng.integers(0, 4, n),
-            # COMM-ARMS Phase 1: the 8th covariate for persistence/discontinuation.
-            # Must be present in the FITTING frame, not just the request: the service
-            # derives numeric-vs-categorical from the fitted FeatureBuilder's learned
-            # `_numeric_medians`, so a covariate absent at fit time is treated as
-            # categorical and rejects the integer 0/1 the request supplies. Specs that
-            # do not list it (initiation) simply ignore the extra column.
+            # COMM-ARMS Phase 1/2: the 8th + 9th covariates for persistence/
+            # discontinuation. Must be present in the FITTING frame, not just the
+            # request: the service derives numeric-vs-categorical from the fitted
+            # FeatureBuilder's learned `_numeric_medians`, so a covariate absent at fit
+            # time is treated as categorical and rejects the integer 0/1 the request
+            # supplies. Specs that do not list them (initiation) ignore the extra columns.
             "copay_support": rng.integers(0, 2, n),
+            "psp_enrolled": rng.integers(0, 2, n),
             spec.label_column: rng.integers(0, 2, n),
         }
     )
@@ -111,12 +112,12 @@ class TestRoutingByModelName:
             "comorbidity_burden": 2,
             "prior_therapy_lines": 1,
         }
-        # COMM-ARMS Phase 1: persistence consumes an 8th covariate, copay_support
-        # (initiation does not). The service validates EVERY key against the routed
-        # model's own covariate types, so persistence must be handed its own set --
-        # reusing initiation's 7 verbatim is exactly the incomplete-vector case the
-        # #576 null-trap describes, and this test failing on that is it working.
-        raw_pers = dict(raw_init, copay_support=1)
+        # COMM-ARMS Phase 1/2: persistence consumes a 8th + 9th covariate, copay_support
+        # + psp_enrolled (initiation does not). The service validates EVERY key against
+        # the routed model's own covariate types, so persistence must be handed its own
+        # set -- reusing initiation's 7 verbatim is exactly the incomplete-vector case
+        # the #576 null-trap describes, and this test failing on that is it working.
+        raw_pers = dict(raw_init, copay_support=1, psp_enrolled=1)
 
         out_init = await service.predict(
             serving_module.PredictionInput(

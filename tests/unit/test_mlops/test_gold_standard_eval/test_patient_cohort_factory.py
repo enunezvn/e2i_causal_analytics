@@ -26,10 +26,13 @@ _SEVEN = _THREE + (
 # treatment_initiated equation, so fetching it there would be an unused feature and a
 # gratuitous widening of that cohort's serving contract.
 _EIGHT = _SEVEN + ("copay_support",)
+# COMM-ARMS Phase 2 (2026-07-19): persistence/discontinuation gain a 9th covariate,
+# psp_enrolled, which also enters the discontinuation logit. initiation stays at 7.
+_NINE = _EIGHT + ("psp_enrolled",)
 _EXPECTED_COVARIATES = {
     "initiation": _SEVEN,
-    "persistence": _EIGHT,
-    "discontinuation": _EIGHT,
+    "persistence": _NINE,
+    "discontinuation": _NINE,
 }
 
 
@@ -52,13 +55,14 @@ def test_factory_covers_9_patient_slots():
     assert make_patient_spec("discontinuation", "Remibrutinib").label_column == "discontinued_180d"
 
 
-def test_persistence_cohorts_use_eight_covariates():
-    """COMM-ARMS Phase 1: persistence + discontinuation additionally observe
-    copay_support. Ordering matters as well as membership — the serving bundle builds
-    its vector positionally from base_covariates, so this asserts the exact tuple."""
+def test_persistence_cohorts_use_nine_covariates():
+    """COMM-ARMS Phase 1/2: persistence + discontinuation additionally observe
+    copay_support + psp_enrolled. Ordering matters as well as membership — the serving
+    bundle builds its vector positionally from base_covariates, so this asserts the
+    exact tuple."""
     for brand in ("Remibrutinib", "Fabhalta", "Kisqali"):
         for cohort in ("persistence", "discontinuation"):
-            assert make_patient_spec(cohort, brand).base_covariates == _EIGHT, f"{cohort}/{brand}"
+            assert make_patient_spec(cohort, brand).base_covariates == _NINE, f"{cohort}/{brand}"
 
 
 def test_initiation_stays_at_seven_covariates():
