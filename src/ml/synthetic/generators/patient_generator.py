@@ -24,16 +24,25 @@ from ..config import (
 from ..dgp.treatment_arm import (
     _BIOLOGIC_SPAWN_KEY,
     _BRAND_CATE_SCALE,
+    ARM_REGISTRY,
+    assign_arm_from_spec,
     assign_segment,
     assign_treatment_arm,
     binary_outcome_with_cate,
     biologic_cate_modifier,
     brand_scaled_cate,
     initiation_prognostic_offset,
+    insurance_access_from_type,
     rd_map_from_tau,
 )
 from .base import BaseGenerator, GeneratorConfig
 from .cohort_outcomes import generate_discontinuation_outcomes
+
+# Independent SeedSequence spawn_key for the copay arm, so wiring Phase 1 does
+# NOT shift the generator's main self._rng stream (mirrors Phase 3's
+# _BIOLOGIC_SPAWN_KEY). Every pre-existing column stays byte-identical; only the
+# adherence OUTCOMES change, because copay genuinely enters their latent.
+_COPAY_SPAWN_KEY = 0xC0FA
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -172,9 +181,33 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
         )
 
+        # Phase 1 (COMM-ARMS): the copay_support commercial arm. Assigned AFTER
+        # insurance_type exists (its backdoor covariate) and from an INDEPENDENT
+        # substream so the main RNG stream is untouched.
+        insurance_access = insurance_access_from_type(np.asarray(insurance_type))
+        _copay_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(_COPAY_SPAWN_KEY,))
+        )
+        copay_spec = ARM_REGISTRY["copay_support"]
+        copay_support, copay_propensity = assign_arm_from_spec(
+            copay_spec,
+            {
+                "insurance_access_score": insurance_access,
+                "disease_severity": confounders["disease_severity"],
+            },
+            _copay_rng,
+        )
+        # Brand-scaled copay CATE, reusing the arm-scale SSOT so a Kisqali probe
+        # differs from a Remibrutinib one (same pattern as brand_scaled_cate).
+        _copay_scale = _BRAND_CATE_SCALE.get(brand_enum, 1.0)
+        copay_cate = {
+            seg: round(val * _copay_scale, 4) for seg, val in copay_spec.cate_by_segment.items()
+        }
+
         # Phase 0 (commercial-arms enrichment): binarized adherence outcomes of the
         # EXISTING treatment_arm, on the SAME segment/CATE map (single SSOT). The
         # binary is authoritative + recoverable; adherence_rate/gap_days are proxies.
+        # Phase 1: copay_support now also enters the shared adherence latent.
         _adh = generate_adherence_outcomes(
             treatment_arm=np.asarray(treatment_arm, dtype=int),
             disease_severity=confounders["disease_severity"],
@@ -182,6 +215,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             segment=np.asarray(segment),
             cate_map=latent_cate_map,
             rng=self._rng,
+            copay_support=copay_support,
+            copay_cate=copay_cate,
         )
 
         # days_to_treatment only for initiators (preserve prior shape)
@@ -336,17 +371,18 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "low_gap_180d": _adh["low_gap_180d"],
                 "adherence_rate": _adh["adherence_rate"],
                 "gap_days": _adh["gap_days"],
-                # Phases 1-3 commercial arms — NULL placeholders so the loader
+                # Phases 2-3 commercial arms — NULL placeholders so the loader
                 # carries them; populated by their phase's generator wiring.
-                "copay_support": np.nan,
+                # Phase 1 (COMM-ARMS): copay_support is POPULATED.
+                "copay_support": copay_support,
                 "psp_enrolled": np.nan,
                 "rep_detailing_high": np.nan,
                 "sample_dropped": np.nan,
-                "copay_support_propensity": np.nan,
+                "copay_support_propensity": np.round(copay_propensity, 4),
                 "psp_enrolled_propensity": np.nan,
                 "rep_detailing_high_propensity": np.nan,
                 "sample_dropped_propensity": np.nan,
-                "insurance_access_score": np.nan,
+                "insurance_access_score": np.round(insurance_access, 4),
                 "comorbidity_burden": comorbidity_burden,
                 "prior_therapy_lines": prior_therapy_lines,
             }
@@ -395,6 +431,16 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                     "cate_by_segment": _adh["low_gap_rd_by_segment"],
                 },
             }
+        }
+        df.attrs["true_ate_by_arm"]["copay_support"] = {
+            "adherent_180d": {
+                "ate": float(np.mean(list(_adh["copay_adherent_rd_by_segment"].values()))),
+                "cate_by_segment": _adh["copay_adherent_rd_by_segment"],
+            },
+            "low_gap_180d": {
+                "ate": float(np.mean(list(_adh["copay_low_gap_rd_by_segment"].values()))),
+                "cate_by_segment": _adh["copay_low_gap_rd_by_segment"],
+            },
         }
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
