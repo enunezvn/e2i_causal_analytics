@@ -115,3 +115,33 @@ def test_arm_confounders_constant_is_load_bearing():
             f"assign_treatment_arm propensity does not depend on {cov!r}, but it is "
             "listed in ARM_CONFOUNDERS — the constant has drifted from the DGP."
         )
+
+
+@pytest.mark.unit
+def test_every_registered_arm_confounder_is_in_the_causal_allowlist():
+    """Generalized contract: EVERY arm in ARM_REGISTRY must have its full
+    confounder set available as a causal covariate. Adding a Phase 2/3 arm
+    without allowlisting its backdoor fails HERE rather than shipping a
+    silently-confounded estimate."""
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    covariates = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["covariate"])
+    for arm_name, spec in ARM_REGISTRY.items():
+        missing = set(spec.confounders) - covariates
+        assert not missing, (
+            f"arm {arm_name!r} is confounded on {sorted(missing)}, which is NOT in the "
+            "patient_journeys covariate allowlist; an estimate on this arm would report "
+            "the confounded naive diff-in-means as the treatment effect."
+        )
+
+
+@pytest.mark.unit
+def test_registered_arms_are_offered_as_treatments():
+    """An arm the DGP populates but the allowlist never exposes is invisible work;
+    an arm exposed without being populated is a NULL-column trap."""
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    treatments = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["treatment"])
+    assert set(ARM_REGISTRY) <= treatments, sorted(set(ARM_REGISTRY) - treatments)

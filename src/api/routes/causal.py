@@ -834,7 +834,7 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # only wires those relationships).
 _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     "patient_journeys": {
-        "treatment": ["treatment_arm", "treatment_initiated"],
+        "treatment": ["treatment_arm", "treatment_initiated", "copay_support"],
         "outcome": [
             "persistent_180d",
             "discontinued_180d",
@@ -860,6 +860,12 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             # other brands). ige_level is NOT here — it stays a descriptive KPI axis
             # (Remibrutinib is a BTK inhibitor, not anti-IgE; no IgE causal effect).
             "biologic_experienced",
+            # Phase 1 (COMM-ARMS): the NUMERIC access gradient derived from
+            # insurance_type. This is copay_support's backdoor — it MUST stay
+            # allowlisted or a copay estimate reports the confounded naive
+            # diff-in-means (locked by test_arm_confounder_contract.py). The raw
+            # categorical insurance_type stays a cohort FILTER, never a covariate.
+            "insurance_access_score",
             # adherence_rate and gap_days are NOT listed here: they are
             # post-treatment descendants of treatment_arm (near-deterministic
             # proxies of adherent_180d / low_gap_180d). Adjusting on them
@@ -999,6 +1005,13 @@ _COLUMN_LABELS: Dict[str, str] = {
     "academic_hcp": "Academic HCP",
     "geographic_region": "Geographic region",
     "biologic_experienced": "Biologic-experienced (prior anti-IgE)",
+    "copay_support": "Copay support",
+    # NOT a measured payer metric: a deterministic access gradient derived from
+    # insurance_type (range approx -0.35..+0.45, higher = better access). The label
+    # says "derived" for the same reason disease_severity's label says
+    # "cross-indication" — an analyst must not read a synthetic index as a real
+    # instrument.
+    "insurance_access_score": "Insurance access (derived from insurance type)",
 }
 
 # Datasets that are NOT a single physical table — built by a JOIN-aware loader
@@ -1030,6 +1043,8 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "low_gap_180d",
         "adherence_rate",
         "gap_days",
+        "copay_support",
+        "insurance_access_score",
     },
     "hcp_adoption": {
         "peer_influence_score",
