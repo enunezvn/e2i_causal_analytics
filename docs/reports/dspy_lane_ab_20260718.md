@@ -171,6 +171,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | accuracy[cognitive_rag] | PASS | 0.875 vs baseline 0.850 (margin 0.05) |
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.947 vs baseline 0.947 (margin 0.05) |
+| ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
 | ragas[faithfulness] | **FAIL** | 0.122 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.465 vs baseline 0.401 (margin 0.05) |
 | ragas[completeness] | PASS | judged/requested replays 10/10 both sides |
@@ -187,6 +188,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | accuracy[cognitive_rag] | PASS | 0.800 vs baseline 0.850 (margin 0.05, boundary) |
 | parse_failure[chatbot] | PASS | 0.000 vs baseline 0.000 |
 | accuracy[chatbot] | PASS | 0.921 vs baseline 0.947 (margin 0.05) |
+| ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
 | ragas[faithfulness] | **FAIL** | 0.339 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.529 vs baseline 0.401 (margin 0.05) |
 | ragas[completeness] | PASS | judged/requested replays 10/10 both sides |
@@ -205,13 +207,19 @@ the data points at haiku + a grounding-behavior fix (its extra evidence
 calls retrieve more but its answers ground less), not at sonnet-5
 (unfixable 2.24× latency at equal cost).
 
-**Gate amendments after the run (codex review, add-only).** Three gates in
+**Gate amendments after the run (codex review, add-only).** Four gates in
 the tables above were added by the codex adversarial review AFTER the
 measurement runs completed: `ragas[completeness]` (iter-1),
 `ragas[faithfulness_coverage]` and `ragas[faithfulness_common_subset]`
 (iter-2, closing the deeper hole that equal `n_samples` does not make
 faithfulness means comparable when they average different context-bearing
-subsets). Post-run amendments are legitimate here ONLY because they are
+subsets), and `ragas[consistency]` (iter-3: every other RAGAS gate reads the
+judge's reported aggregate fields, so a stale, hand-edited, or partially
+merged results block could clear all of them while its own `per_sample` rows
+tell a different story — the gate recomputes `n_samples`, `n_faithfulness`,
+`faithfulness`, and `answer_relevancy` from the rows, mirroring the judge's
+exact averaging semantics, and fails closed on any mismatch on either side;
+this run's real blocks reconcile, so it reports PASS and changes nothing). Post-run amendments are legitimate here ONLY because they are
 fail-closed additions evaluated on already-collected data: they can add
 failures but cannot flip a pre-registered FAIL to PASS, and on this run's
 data they strengthened the NO-FLIP (common-subset FAILs both candidates).

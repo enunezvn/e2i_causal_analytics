@@ -41,6 +41,11 @@ GATE_RAGAS_MIN_FAITHFULNESS_N = 3
 
 _EPS = 1e-9
 
+# Float slack when recomputing a judge aggregate from its own per_sample rows
+# (same values, same summation order as the judge script - anything beyond
+# repr/JSON round-trip noise means the aggregate does not describe the rows).
+_RAGAS_CONSISTENCY_TOL = 1e-6
+
 
 # ---------------------------------------------------------------------------
 # Golden set
@@ -174,6 +179,51 @@ def _is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _ragas_consistency_error(block: Dict[str, Any]) -> Optional[str]:
+    """Reconcile a RAGAS block's reported aggregates against its own
+    per_sample rows, mirroring exactly how the judge script computes them
+    (n_samples = all rows; n_faithfulness = rows with contexts; faithfulness =
+    mean over non-None context-bearing scores; answer_relevancy = mean over
+    all non-None scores). Returns the first mismatch found, or None. A stale,
+    hand-edited, or partially merged block whose aggregates no longer describe
+    its rows must fail closed (codex iter-3)."""
+    rows = block.get("per_sample")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return "per_sample rows missing or malformed"
+    ctx_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        n_ctx = row.get("n_contexts")
+        if not isinstance(n_ctx, int) or isinstance(n_ctx, bool) or n_ctx < 0:
+            return f"row {row.get('query_id')!r} has invalid n_contexts {n_ctx!r}"
+        if n_ctx > 0:
+            ctx_rows.append(row)
+    if block.get("n_samples") != len(rows):
+        return f"n_samples={block.get('n_samples')!r} but per_sample has {len(rows)} rows"
+    if block.get("n_faithfulness") != len(ctx_rows):
+        return (
+            f"n_faithfulness={block.get('n_faithfulness')!r} but per_sample "
+            f"has {len(ctx_rows)} context-bearing rows"
+        )
+    for metric, subset in (("faithfulness", ctx_rows), ("answer_relevancy", rows)):
+        vals: List[float] = []
+        for row in subset:
+            value = row.get(metric)
+            if value is None:
+                continue
+            if not _is_finite_number(value):
+                return f"row {row.get('query_id')!r} has non-finite {metric} {value!r}"
+            vals.append(float(value))
+        recomputed = (sum(vals) / len(vals)) if vals else None
+        reported = block.get(metric)
+        if recomputed is None and reported is None:
+            continue
+        if recomputed is None or reported is None or not _is_finite_number(reported):
+            return f"{metric}={reported!r} but per_sample recomputes to {recomputed!r}"
+        if abs(recomputed - float(reported)) > _RAGAS_CONSISTENCY_TOL:
+            return f"{metric}={float(reported):.6f} but per_sample recomputes to {recomputed:.6f}"
+    return None
+
+
 def _common_subset_faithfulness(
     b_rows: Optional[List[Dict[str, Any]]],
     c_rows: Optional[List[Dict[str, Any]]],
@@ -260,6 +310,20 @@ def evaluate_gates(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[
     if not b_ragas or not c_ragas:
         gates.append(_gate("ragas", False, "missing RAGAS scores (fail-closed)"))
     else:
+        # Every other RAGAS gate reads the reported aggregate fields, so a
+        # stale or hand-edited block could clear all of them while its own
+        # per_sample rows tell a different story (codex iter-3). Reconcile
+        # BOTH sides against their raw rows first - a corrupted-low baseline
+        # weakens every floor, so the baseline is not exempt.
+        b_err = _ragas_consistency_error(b_ragas)
+        c_err = _ragas_consistency_error(c_ragas)
+        gates.append(
+            _gate(
+                "ragas[consistency]",
+                b_err is None and c_err is None,
+                f"baseline: {b_err or 'OK'}; candidate: {c_err or 'OK'}",
+            )
+        )
         for metric in ("faithfulness", "answer_relevancy"):
             b_val = b_ragas.get(metric)
             c_val = c_ragas.get(metric)

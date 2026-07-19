@@ -165,7 +165,7 @@ def test_summarize_e2e_runs():
 # ---------------------------------------------------------------------------
 
 
-def _ragas_per_sample(faith, n=10, n_ctx=10):
+def _ragas_per_sample(faith, rel=0.80, n=10, n_ctx=10):
     # First n_ctx replays carry retrieved contexts (and thus a faithfulness
     # score); the rest mirror the judge's no-context rows (score None).
     return [
@@ -173,19 +173,22 @@ def _ragas_per_sample(faith, n=10, n_ctx=10):
             "query_id": f"q{i}",
             "n_contexts": 1 if i < n_ctx else 0,
             "faithfulness": faith if i < n_ctx else None,
-            "answer_relevancy": 0.80,
+            "answer_relevancy": rel,
         }
         for i in range(n)
     ]
 
 
 def _ragas_block(faith=0.85, rel=0.80, n_ctx=10):
+    # Aggregates mirror what the judge would compute from these rows, so the
+    # block is internally consistent (tests that need inconsistency corrupt it
+    # explicitly).
     return {
         "faithfulness": faith,
         "answer_relevancy": rel,
         "n_samples": 10,
         "n_faithfulness": n_ctx,
-        "per_sample": _ragas_per_sample(faith, n_ctx=n_ctx),
+        "per_sample": _ragas_per_sample(faith, rel=rel, n_ctx=n_ctx),
     }
 
 
@@ -402,6 +405,77 @@ def test_gate_ragas_common_subset_missing_per_sample_fails_closed():
     assert result["all_passed"] is False
     failed = {g["name"] for g in result["gates"] if not g["passed"]}
     assert "ragas[faithfulness_common_subset]" in failed
+
+
+def test_gate_ragas_consistency_codex_iter3_fabricated_aggregate():
+    # Codex iter-3 HIGH: every other RAGAS gate reads the reported aggregate
+    # fields; a stale/hand-edited block claiming n_samples=10, n_faithfulness=10,
+    # faithfulness=0.80 while its actual per_sample holds only 3 decent rows on
+    # the baseline's shared replays passes value, completeness, coverage AND
+    # common-subset. Only aggregate-vs-rows reconciliation catches it.
+    candidate = _candidate(faith=0.80)
+    candidate["ragas"]["per_sample"] = _ragas_per_sample(0.90, n=3, n_ctx=3)
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness]" not in failed  # fabricated aggregate clears margin
+    assert "ragas[completeness]" not in failed  # fabricated n_samples matches e2e.n
+    assert "ragas[faithfulness_coverage]" not in failed  # fabricated n_faithfulness
+    assert "ragas[faithfulness_common_subset]" not in failed  # 3 real rows look fine
+    assert "ragas[consistency]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_ragas_consistency_n_faithfulness_mismatch():
+    # Reported context-bearing count must equal what the rows actually show.
+    candidate = _candidate(n_ctx=8)
+    candidate["ragas"]["n_faithfulness"] = 10
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness_coverage]" not in failed  # fabricated count passes it
+    assert "ragas[consistency]" in failed
+
+
+def test_gate_ragas_consistency_aggregate_value_mismatch():
+    # A reported mean that differs from what the rows recompute to - subtly
+    # enough that both the value gate and the common-subset gate still pass -
+    # must fail reconciliation.
+    candidate = _candidate(faith=0.85)
+    for row in candidate["ragas"]["per_sample"]:
+        if row["n_contexts"]:
+            row["faithfulness"] = 0.84
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[faithfulness]" not in failed
+    assert "ragas[faithfulness_common_subset]" not in failed
+    assert "ragas[consistency]" in failed
+
+
+def test_gate_ragas_consistency_baseline_side_checked():
+    # A corrupted-low baseline aggregate weakens every floor; reconciliation
+    # must validate the baseline block too, not just the candidate.
+    baseline = json.loads(json.dumps(BASELINE))
+    baseline["ragas"]["faithfulness"] = 0.30
+    result = evaluate_gates(baseline, _candidate())
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[consistency]" in failed
+
+
+def test_gate_ragas_consistency_relevancy_mismatch():
+    candidate = _candidate()
+    for row in candidate["ragas"]["per_sample"]:
+        row["answer_relevancy"] = 0.70
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[answer_relevancy]" not in failed  # aggregate still says 0.80
+    assert "ragas[consistency]" in failed
+
+
+def test_gate_ragas_consistency_missing_per_sample_fails_closed():
+    candidate = _candidate()
+    del candidate["ragas"]["per_sample"]
+    result = evaluate_gates(BASELINE, candidate)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[consistency]" in failed
 
 
 def test_run_e2e_replays_expected_model_mismatch_fails_fast(monkeypatch):
