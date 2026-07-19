@@ -63,7 +63,11 @@ What the runner does (`scripts/run_migrations.sh`):
   docker mode needs `docker exec supabase-db` to work. Neither → hard error.
 - **Scope**: all 8 `database/` dirs, each namespaced in the ledger by a key
   prefix (e.g. `ml/011_...` vs plain `011_...`) so identically-numbered files
-  never collide.
+  never collide. Numbers are also not unique **within** a directory:
+  `database/migrations/` has shared-number pairs (two `099_*.sql`, two
+  `101_*.sql`). The ledger keys by full filename, so both members of a pair
+  are tracked and applied independently — a shared number is harmless, but
+  prefer the next unused number for new files.
 - **Safety skips**: `*_validation_queries.sql`, `rollback_*.sql`, and
   `*_rollback.sql` are never auto-applied (rollback utils DROP live objects).
 - **Transaction wrapping**: each file normally applies under

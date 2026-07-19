@@ -1,12 +1,12 @@
 # 00 — Data Documentation Index
 
-> **E2I Causal Analytics** | v4.2.1 | 22 Agents | 6 Tiers | 3 Brands | Last Updated: 2026-07-18
+> **E2I Causal Analytics** | v4.2.1 | 22 Agents | 6 Tiers | 3 Brands | Last Updated: 2026-07-19
 
 ---
 
 ## System Overview
 
-E2I Causal Analytics is a 21-agent, 6-tier pharmaceutical drug adoption analysis platform. It processes healthcare data (claims, EHR, CRM, lab) through causal inference pipelines to generate actionable insights for three Novartis brands: **Remibrutinib** (CSU), **Fabhalta** (PNH), and **Kisqali** (HR+ HER2- breast cancer). The system combines ML models, knowledge graphs, feature stores, and agentic workflows to produce causal estimates, trigger recommendations, ROI predictions, and resource optimization strategies.
+E2I Causal Analytics is a 22-agent, 6-tier pharmaceutical drug adoption analysis platform. It processes healthcare data (claims, EHR, CRM, lab) through causal inference pipelines to generate actionable insights for three Novartis brands: **Remibrutinib** (CSU), **Fabhalta** (PNH), and **Kisqali** (HR+ HER2- breast cancer). The system combines ML models, knowledge graphs, feature stores, and agentic workflows to produce causal estimates, trigger recommendations, ROI predictions, and resource optimization strategies.
 
 ---
 

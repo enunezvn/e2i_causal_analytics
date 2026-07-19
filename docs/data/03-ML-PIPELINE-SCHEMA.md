@@ -271,6 +271,8 @@ Tracks domain expert validation of causal DAGs and methodology. Supports time-li
 | `reviewer_role` | VARCHAR(100) | commercial_ops, medical_affairs, data_science |
 | `approval_status` | VARCHAR(30) | pending, approved, rejected, expired |
 | `checklist_json` | JSONB | Completed review checklist |
+| `dag_structure_json` | JSONB | Sanitized causal-DAG snapshot (nodes, edges, treatment/outcome, adjustment sets, provenance) captured at review creation so the `/expert-reviews` UI can render the reviewed DAG — `dag_version_hash` alone is one-way; NULL for pre-097 rows (migration 097) |
+| `agent_assessment_json` | JSONB | Cached advisory agent checklist assessment (`POST /expert-reviews/{id}/assessment`) — separate from the human-completed `checklist_json` (migration 097) |
 | `valid_until` | DATE | Expiration date for approval |
 | `supersedes_review_id` | UUID | Replaces a previous review |
 
@@ -576,7 +578,7 @@ Comprehensive model monitoring with drift detection, performance tracking, alert
 
 ### 7.1 `ml_drift_history`
 
-Time-series drift detection results for data, model, and concept drift. A trigger auto-generates alerts for medium+ severity drift.
+Time-series drift detection results for data, model, and concept drift. A trigger auto-generates alerts for medium+ severity drift. Migration 093 hardened the trigger (`create_drift_alert()`): alert creation **dedups on write** (`NOT EXISTS` on `(model_id, title)` among `status = 'active'` alerts, so re-running monitoring cannot storm duplicates), and PSI alerts report the PSI statistic against its real thresholds ("PSI <stat> (warning >= 0.1, critical >= 0.25)") with the KS-test p-value explicitly labeled as a companion value instead of posing as the PSI significance. Alert titles are load-bearing — `_justified_alert_titles()` in `src/tasks/drift_monitoring_tasks.py` mirrors them. Migration 093 also ran a one-time purge of alerts, drift history, and monitoring runs tied to synthetic (planted) registry models.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -624,6 +626,8 @@ Full-lifecycle alert management from creation through resolution. Supports notif
 | `triggered_retraining` | BOOLEAN | Whether auto-retraining was triggered |
 | `resolution_action` | VARCHAR(100) | retrained, rolled_back, dismissed, fixed_data |
 
+**Retention (migration 093)**: the `drift_history_id → ml_drift_history(id)` FK is `ON DELETE SET NULL`, so purging drift history no longer breaks alert rows.
+
 ### 7.4 `ml_monitoring_runs`
 
 Monitoring job execution records for auditing and debugging.
@@ -653,6 +657,35 @@ Automated retraining events triggered by monitoring alerts with before/after per
 | `new_metric_value` | DECIMAL(12,6) | Metric after retraining |
 | `auto_deployed` | BOOLEAN | Whether auto-promoted to production |
 
+**Retention (migration 093)**: the `alert_id → ml_monitoring_alerts(id)` FK is `ON DELETE SET NULL` — resolving/purging alerts keeps retraining history intact.
+
+### 7.6 `health_check_history` (migration 096)
+
+Durable system-health history — one row per 10-minute bucket per full check, so the `/system-health` trend survives restarts and multiple workers.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Record identifier |
+| `check_id` | TEXT | Health-check invocation id |
+| `checked_at` | TIMESTAMPTZ | When the check ran |
+| `time_bucket` | BIGINT UNIQUE | Epoch // 600 — multi-worker dedup, one row per 10-min bucket |
+| `overall_health_score` | NUMERIC(5,2) | 0–100 composite score |
+| `health_grade` | TEXT | Letter/word grade for the composite |
+| `component_health_score` | NUMERIC(4,3) | Nullable — NULL means *not measured*, never coerced to 0 |
+| `model_health_score` | NUMERIC(4,3) | Nullable, same convention |
+| `pipeline_health_score` | NUMERIC(4,3) | Nullable, same convention |
+| `agent_health_score` | NUMERIC(4,3) | Nullable, same convention |
+| `critical_issues_count` | INTEGER | Critical findings in this check |
+| `warnings_count` | INTEGER | Warnings in this check |
+| `data_provenance` | TEXT | CHECK IN (`measured`, `partial`) — placeholder/unknown rows are rejected |
+| `check_scope` | TEXT | DEFAULT `full` |
+
+Indexed by `checked_at DESC` (`idx_health_check_history_checked_at`).
+
+### 7.7 `health_check_history_daily` (view, migration 096)
+
+Daily aggregation over `health_check_history` (avg/min/max overall score, checks count), filtered to `check_scope = 'full'`; a day's provenance is `measured` only if **every** contributing check was measured (`bool_and`).
+
 ### Notable Views
 
 | View | Purpose |
@@ -660,7 +693,7 @@ Automated retraining events triggered by monitoring alerts with before/after per
 | `ml_drift_status_latest` | Latest drift status per model and drift type |
 | `ml_drift_trend_7d` | 7-day drift trend summary |
 | `ml_active_alerts_summary` | Active alerts aggregated by model |
-| `ml_model_health_dashboard` | Combined drift, alerts, and performance for production/staging models; migration 103 appended `latest_accuracy`, `latest_auc_roc`, `latest_f1` (latest per-name values from `ml_performance_metrics`) |
+| `ml_model_health_dashboard` | Combined drift, alerts, and performance for production/staging models; migration 103 appended `latest_accuracy`, `latest_auc_roc`, `latest_f1` (latest per-name values from `ml_performance_metrics`); migration 096 fixed `max_drift_severity` to use true `drift_severity_enum` ordering (the old `max(severity::text)` was alphabetical) and made `health_status = 'attention'` require drift severity ≥ `medium` OR measured performance degradation, so low-severity scheduled-cron drift no longer flips models to "degraded" |
 
 ---
 
