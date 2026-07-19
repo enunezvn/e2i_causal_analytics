@@ -27,7 +27,7 @@ on expected_response < 0) never rejects this cohort.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, TypedDict
 
 import numpy as np
 from scipy.special import expit
@@ -45,6 +45,22 @@ _DISC_TREATMENT_LOGIT = {
     "high_severity": -1.20,
     "medium_severity": -0.70,
     "low_severity": -0.35,
+}
+
+# Copay effect on the DISCONTINUATION logit (negative = improves persistence).
+# Measured 2026-07-19. The LOW arm is deliberately near zero: at low=-0.14 the
+# recovered medium-low margin collapses to +0.003..+0.006 at seed 21 (flaky), and
+# the planted ATE falls below the design band. At low=-0.04 the worst margin is
+# +0.0543 and ATE is 0.0892. Do NOT widen further: copay is invisible to
+# FeatureBuilder's 7 covariates, so every logit unit here costs achievable AUC, and
+# the faithful post-wiring re-measure (2026-07-19, test_persistence_calibration's own
+# _faithful, n=20000/seed=42) is Remi 0.7863 / Fabhalta 0.7900 / Kisqali 0.7805
+# against a 0.78 HARD floor -- Kisqali clears it by 0.0005, not the ~0.016 estimated
+# pre-wiring. The AUC floor, not the CATE margin, is now the binding constraint.
+_COPAY_DISC_LOGIT = {
+    "high_severity": -1.20,
+    "medium_severity": -0.55,
+    "low_severity": -0.04,
 }
 
 # Confounder pull on the discontinuation logit (sicker/non-academic -> more gaps).
@@ -83,6 +99,17 @@ _DISC_NOISE_SD = 0.25
 PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY = 0.05
 
 
+class DiscontinuationOutcomes(TypedDict):
+    """Return shape of :func:`generate_discontinuation_outcomes`. The two binaries
+    + the retention covariate are per-unit np.ndarrays; ``copay_persistent_rd_by_segment``
+    is the per-segment recoverable RD ground truth for the copay arm."""
+
+    discontinued_180d: np.ndarray
+    persistent_180d: np.ndarray
+    retention_benefit: np.ndarray
+    copay_persistent_rd_by_segment: Dict[str, float]
+
+
 def generate_discontinuation_outcomes(
     *,
     rng: np.random.Generator,
@@ -96,7 +123,8 @@ def generate_discontinuation_outcomes(
     prior_therapy_lines: np.ndarray,
     segment: np.ndarray,
     brand_cate_scale: float,
-) -> Dict[str, np.ndarray]:
+    copay_support: np.ndarray | None = None,
+) -> DiscontinuationOutcomes:
     """Draw discontinued_180d (and its complement persistent_180d) + a
     non-negative retention_benefit covariate.
 
@@ -107,6 +135,8 @@ def generate_discontinuation_outcomes(
         segment: per-unit {high,medium,low}_severity (Shard-03 segmentation).
         brand_cate_scale: brand-distinct multiplier on the treatment logit so a
             Kisqali probe differs from a Remibrutinib probe (INDEX CATE-by-brand).
+        copay_support: optional per-unit 0/1 second commercial arm (Phase 1). When
+            None the equation is byte-identical to the pre-copay DGP.
     """
     n = len(treatment_arm)
     seg_treat = np.array([_DISC_TREATMENT_LOGIT.get(str(s), -0.70) for s in segment], dtype=float)
@@ -126,14 +156,34 @@ def generate_discontinuation_outcomes(
         + _AGE_COEF * (np.asarray(age_at_diagnosis, dtype=float) - _AGE_CENTER)
         + rng.normal(0.0, _DISC_NOISE_SD, n)
     )
-    p_disc = expit(logit)
+    # Phase 1 follow-up: copay_support on the DISCONTINUATION logit (negative =
+    # improves persistence). Kept SEPARATE from `logit` above so copay's planted
+    # RD is a clean counterfactual (expit(base) - expit(base + copay_pull)) rather
+    # than a re-derivation from the blended logit.
+    if copay_support is not None:
+        copay = np.asarray(copay_support, dtype=int)
+        copay_pull = np.array([_COPAY_DISC_LOGIT.get(str(s), 0.0) for s in segment], dtype=float)
+    else:
+        copay = np.zeros(n, dtype=int)
+        copay_pull = np.zeros(n, dtype=float)
+    p_disc = expit(logit + copay_pull * copay)
     discontinued = (rng.random(n) < p_disc).astype(int)
     persistent = 1 - discontinued
     # Non-negative retention benefit: scales with severity (high-severity persisters
     # are the most valuable to retain) and is ALWAYS >= 0.
     retention_benefit = PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * disease_severity * persistent
+    # copay's OWN recoverable RD on PERSISTENCE = -(discontinuation RD), computed
+    # per segment as a counterfactual on the logit the row actually got.
+    copay_rd: Dict[str, float] = {}
+    for seg_name in np.unique(segment):
+        mask = np.asarray(segment) == seg_name
+        if not mask.any():
+            continue
+        pull = float(_COPAY_DISC_LOGIT.get(str(seg_name), 0.0))
+        copay_rd[str(seg_name)] = float(np.mean(expit(logit[mask]) - expit(logit[mask] + pull)))
     return {
         "discontinued_180d": discontinued,
         "persistent_180d": persistent,
         "retention_benefit": np.clip(retention_benefit, 0.0, None),
+        "copay_persistent_rd_by_segment": copay_rd,
     }

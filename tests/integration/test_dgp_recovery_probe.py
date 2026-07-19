@@ -187,6 +187,40 @@ def test_copay_support_recoverable(brand, outcome):
     assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
 
 
+@pytest.mark.parametrize("seed", [21, 7, 99, 123])
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_copay_support_persistence_recoverable(brand, seed):
+    """Task 10: copay_support -> persistent_180d off its OWN backdoor.
+
+    MULTI-SEED on purpose. This outcome is a logit->Bernoulli draw, so the planted
+    RD is an expit difference and the medium-low separation is the fragile one:
+    _COPAY_DISC_LOGIT's low arm was widened from -0.14 to -0.04 precisely because
+    the recovered medium-low margin collapsed to +0.003..+0.006 at seed 21 alone.
+    A single-seed gate could not have caught that, so all 4 seeds are asserted.
+    """
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    cfg = GeneratorConfig(seed=seed, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    truth = df.attrs["true_ate_by_arm"]["copay_support"]["persistent_180d"]
+
+    out = recover_ate_and_cate(
+        df,
+        treatment_col="copay_support",
+        outcome_col="persistent_180d",
+        confounders=list(ARM_REGISTRY["copay_support"].confounders),
+        segment_col="segment_assignment",
+        true_ate=truth["ate"],
+        cate_map=truth["cate_by_segment"],
+    )
+
+    assert out["propensity_auc"] > 0.5, out
+    assert out["n_treated"] >= 30 and out["n_control"] >= 100, out
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+    cate = out["cate_by_segment_estimate"]
+    assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
+
+
 @pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
 def test_copay_planted_ate_is_in_the_designed_band(brand):
     """The planted copay effect must stay in the design's +8-12pp commercial band

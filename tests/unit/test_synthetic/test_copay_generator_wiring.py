@@ -29,8 +29,6 @@ _PRE_COPAY_DIGESTS = {
         "age_at_diagnosis": "5f0f191c6166a2d2",
         "geographic_region": "2e57809069fb0ac7",
         "data_split": "57c10764069cebb3",
-        "discontinued_180d": "9962009b37a04971",
-        "persistent_180d": "79939d5b995bca4f",
     },
     "Kisqali:7": {
         "patient_journey_id": "9d37ed3c10cda091",
@@ -46,8 +44,6 @@ _PRE_COPAY_DIGESTS = {
         "age_at_diagnosis": "34ca4305e39a8ce1",
         "geographic_region": "cfea1e7674329b01",
         "data_split": "c1570c894741bb45",
-        "discontinued_180d": "ad5aba9e3ed2601c",
-        "persistent_180d": "b3c63eae6183e00b",
     },
 }
 
@@ -106,9 +102,11 @@ def test_unrelated_columns_are_byte_identical_to_the_pre_copay_stream(key, seed,
     NOT downstream of the adherence latent must be byte-identical to the
     PRE-COPAY generator.
 
-    NOTE for Task 10: discontinued_180d/persistent_180d are invariant HERE
-    because copay is not yet wired into the discontinuation logit. Task 10 MUST
-    move those two into the expected-to-change set.
+    Task 10 (DONE): discontinued_180d/persistent_180d were MIGRATED out of this
+    invariant set — copay is now in the discontinuation logit, so both legitimately
+    move. Their pre-copay digests live in
+    test_persistence_outcomes_DID_change_so_the_fixture_is_not_vacuous, which
+    asserts they DIFFER. Every column remaining here is still expected byte-identical.
     """
     df = _frame(seed=seed, brand=brand)
     for col, expected in _PRE_COPAY_DIGESTS[key].items():
@@ -133,6 +131,24 @@ def test_adherence_outcomes_DID_change_so_the_fixture_is_not_vacuous():
     }
     changed = [c for c, d in pre.items() if _digest(df[c]) != d]
     assert changed, "adherence columns identical to pre-copay -- copay never entered the latent"
+
+
+@pytest.mark.unit
+def test_persistence_outcomes_DID_change_so_the_fixture_is_not_vacuous():
+    """Task 10 counterpart of the adherence guard above. These two digests are the
+    VERBATIM pre-copay values migrated out of _PRE_COPAY_DIGESTS (not re-recorded),
+    so the evidence survives the migration: if copay really entered the
+    discontinuation logit, both columns MUST differ from pre-copay. If they match,
+    copay never reached the persistence outcome."""
+    df = _frame(seed=21, brand=Brand.REMIBRUTINIB)
+    pre = {
+        "discontinued_180d": "9962009b37a04971",
+        "persistent_180d": "79939d5b995bca4f",
+    }
+    unchanged = [c for c, d in pre.items() if _digest(df[c]) == d]
+    assert not unchanged, (
+        f"{unchanged} identical to pre-copay -- copay never entered the discontinuation logit"
+    )
 
 
 @pytest.mark.unit

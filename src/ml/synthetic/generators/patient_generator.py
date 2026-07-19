@@ -164,26 +164,11 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # record dict below — single SSOT, no second random draw.
         geographic_region = self._random_choice([r.value for r in RegionEnum], n)
 
-        # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
-        # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
-        # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
-        _coh = generate_discontinuation_outcomes(
-            rng=self._rng,
-            treatment_arm=np.asarray(treatment_arm, dtype=int),
-            disease_severity=confounders["disease_severity"],
-            academic_hcp=confounders["academic_hcp"],
-            geographic_region=np.asarray(geographic_region),
-            insurance_type=np.asarray(insurance_type),
-            age_at_diagnosis=np.asarray(age_at_diagnosis),
-            comorbidity_burden=np.asarray(comorbidity_burden),
-            prior_therapy_lines=np.asarray(prior_therapy_lines),
-            segment=np.asarray(segment),
-            brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
-        )
-
         # Phase 1 (COMM-ARMS): the copay_support commercial arm. Assigned AFTER
-        # insurance_type exists (its backdoor covariate) and from an INDEPENDENT
-        # substream so the main RNG stream is untouched.
+        # insurance_type exists (its backdoor covariate) and BEFORE both outcome
+        # calls below, which now consume it — the discontinuation/persistence eqn
+        # (Task 10) and the adherence latent. Drawn from an INDEPENDENT substream,
+        # so its position in this function does NOT shift the main RNG stream.
         insurance_access = insurance_access_from_type(np.asarray(insurance_type))
         _copay_rng = np.random.default_rng(
             np.random.SeedSequence(self.config.seed, spawn_key=(_COPAY_SPAWN_KEY,))
@@ -203,6 +188,24 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         copay_cate = {
             seg: round(val * _copay_scale, 4) for seg, val in copay_spec.cate_by_segment.items()
         }
+
+        # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
+        # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
+        # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
+        _coh = generate_discontinuation_outcomes(
+            rng=self._rng,
+            treatment_arm=np.asarray(treatment_arm, dtype=int),
+            disease_severity=confounders["disease_severity"],
+            academic_hcp=confounders["academic_hcp"],
+            geographic_region=np.asarray(geographic_region),
+            insurance_type=np.asarray(insurance_type),
+            age_at_diagnosis=np.asarray(age_at_diagnosis),
+            comorbidity_burden=np.asarray(comorbidity_burden),
+            prior_therapy_lines=np.asarray(prior_therapy_lines),
+            segment=np.asarray(segment),
+            brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
+            copay_support=copay_support,
+        )
 
         # Phase 0 (commercial-arms enrichment): binarized adherence outcomes of the
         # EXISTING treatment_arm, on the SAME segment/CATE map (single SSOT). The
@@ -440,6 +443,12 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             "low_gap_180d": {
                 "ate": float(np.mean(list(_adh["copay_low_gap_rd_by_segment"].values()))),
                 "cate_by_segment": _adh["copay_low_gap_rd_by_segment"],
+            },
+            "persistent_180d": {
+                "ate": float(
+                    np.mean([_coh["copay_persistent_rd_by_segment"][str(s)] for s in segment])
+                ),
+                "cate_by_segment": _coh["copay_persistent_rd_by_segment"],
             },
         }
 
