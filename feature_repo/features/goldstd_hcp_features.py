@@ -15,6 +15,7 @@ Distinct from the patient ``goldstd_cohort_features`` view: different ENTITY
 are numeric.
 """
 
+import sys
 from datetime import timedelta
 
 from feast import FeatureView, Field
@@ -22,8 +23,6 @@ from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source i
     PostgreSQLSource,
 )
 from feast.types import Float64, Int64, String
-
-import sys
 
 sys.path.append("..")
 from entities import hcp  # noqa: E402

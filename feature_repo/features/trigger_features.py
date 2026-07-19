@@ -5,15 +5,15 @@ Use Case: Trigger Effectiveness
 - Features: response rates, conversion rates, channel performance
 """
 
-from datetime import timedelta
-from feast import Feature, FeatureView, Field
-from feast.types import Bool, Float32, Float64, Int64, String
-
 import sys
-sys.path.append("..")
-from entities import trigger, hcp, hcp_brand
-from data_sources import triggers_source
+from datetime import timedelta
 
+from feast import FeatureView, Field
+from feast.types import Bool, Float32, String
+
+sys.path.append("..")
+from data_sources import triggers_source
+from entities import hcp, hcp_brand, trigger
 
 # =============================================================================
 # Trigger Effectiveness Feature View
