@@ -148,10 +148,12 @@ Axis and window support is served by pre-registered SQL variants keyed by
 | `_region`, `_brand` | pre-axis-era variants | per query |
 | `_include_synthetic` | twin of any of the above without the `is_synthetic = false` wrapper (showcase mode) | same |
 
-Registry migrations: **105** (severity/line variants for TRx/NRx/NBRx/TRx
-Share), **108** (biologic/IgE variants, Remibrutinib-only), **110** (monthly
-series by segment/line), **111** (Conversion Rate brand/axis/window + TRx
-Share windowed).
+Registry migrations: **095** (deterministic re-registration + `_include_synthetic`
+twins for the four view-backed WS1 DQ KPIs — see the DQ-003/004/007/009 notes),
+**099** (WS3-BI-004 HCP Coverage tier-scoped + twin), **105** (severity/line
+variants for TRx/NRx/NBRx/TRx Share), **108** (biologic/IgE variants,
+Remibrutinib-only), **110** (monthly series by segment/line), **111**
+(Conversion Rate brand/axis/window + TRx Share windowed).
 
 ### Fail-loud on unregistered combinations (PR #1271)
 
@@ -267,17 +269,22 @@ WHERE ($1::text IS NULL OR pj.brand = $1 OR ru.brand = $1)
 | **Frequency** | Daily |
 | **Source Tables** | `data_source_tracking` |
 | **Source Columns** | `data_source_tracking.match_rate_vs_claims`, `data_source_tracking.match_rate_vs_ehr`, `data_source_tracking.match_rate_vs_specialty` |
-| **Helper View** | `v_kpi_cross_source_match` |
+| **Helper View** | `v_kpi_cross_source_match` (retained, but the live registry query reads the table directly since migration 095) |
 | **Target** | >= 0.75 |
 | **Warning** | < 0.75 and >= 0.60 |
 | **Critical** | < 0.40 |
 
-**Note**: V3 schema addition. Uses the `data_source_tracking` table introduced in schema V3.
+**Note**: V3 schema addition. Uses the `data_source_tracking` table introduced in schema V3. Migration 095 re-registered the query as a deterministic records-weighted trailing-30-day aggregate anchored at the data frontier (the original `SELECT match_rate FROM v_kpi_cross_source_match LIMIT 1` returned one arbitrary (date, source) row), and added an `_include_synthetic` twin (byte-identical minus the synthetic-excluding wrap).
 
 **Calculator**: `DataQualityCalculator._calc_cross_source_match`
 
 ```sql
-SELECT match_rate FROM v_kpi_cross_source_match LIMIT 1
+-- registry query since migration 095 (base; twin drops the is_synthetic wrap)
+SELECT (SUM(records_matched)::numeric / NULLIF(SUM(records_received), 0))::float AS match_rate
+FROM (SELECT * FROM data_source_tracking WHERE is_synthetic = false) dst
+WHERE tracking_date >= (SELECT MAX(tracking_date)
+                        FROM (SELECT * FROM data_source_tracking WHERE is_synthetic = false) dst2)
+                       - INTERVAL '30 days'
 ```
 
 ---
@@ -296,7 +303,7 @@ SELECT match_rate FROM v_kpi_cross_source_match LIMIT 1
 | **Frequency** | Daily |
 | **Source Tables** | `data_source_tracking` |
 | **Source Columns** | `data_source_tracking.stacking_lift_percentage`, `data_source_tracking.stacking_eligible_records`, `data_source_tracking.stacking_applied_records` |
-| **Helper View** | `v_kpi_stacking_lift` |
+| **Helper View** | `v_kpi_stacking_lift` (retained, but the live registry query reads the table directly since migration 095) |
 | **Target** | >= 0.15 |
 | **Warning** | < 0.15 and >= 0.10 |
 | **Critical** | < 0.05 |
@@ -306,7 +313,13 @@ SELECT match_rate FROM v_kpi_cross_source_match LIMIT 1
 **Calculator**: `DataQualityCalculator._calc_stacking_lift`
 
 ```sql
-SELECT lift_score FROM v_kpi_stacking_lift LIMIT 1
+-- registry query since migration 095 (base; twin drops the is_synthetic wrap):
+-- trailing-30d mean stacking_lift_percentage anchored at the data frontier
+SELECT AVG(stacking_lift_percentage)::float AS lift_score
+FROM (SELECT * FROM data_source_tracking WHERE is_synthetic = false) dst
+WHERE tracking_date >= (SELECT MAX(tracking_date)
+                        FROM (SELECT * FROM data_source_tracking WHERE is_synthetic = false) dst2)
+                       - INTERVAL '30 days'
 ```
 
 ---
@@ -373,7 +386,7 @@ Critical fields checked: `patient_id`, `brand`, `event_date`. Records from the m
 | **Frequency** | Daily |
 | **Source Tables** | `patient_journeys` |
 | **Source Columns** | `patient_journeys.source_timestamp`, `patient_journeys.ingestion_timestamp`, `patient_journeys.data_lag_hours` |
-| **Helper View** | `v_kpi_data_lag` |
+| **Helper View** | `v_kpi_data_lag` (retained, but the live registry query reads the table directly since migration 095) |
 | **Target** | <= 3 days |
 | **Warning** | > 3 days and <= 7 days |
 | **Critical** | > 14 days |
@@ -383,7 +396,16 @@ Critical fields checked: `patient_id`, `brand`, `event_date`. Records from the m
 **Calculator**: `DataQualityCalculator._calc_data_lag`
 
 ```sql
-SELECT median_lag_days FROM v_kpi_data_lag LIMIT 1
+-- registry query since migration 095 (base; twin drops the is_synthetic wrap):
+-- a TRUE median over rows (the old view read returned one arbitrary group's median)
+SELECT (percentile_cont(0.5) WITHIN GROUP (ORDER BY data_lag_hours) / 24.0)::float
+       AS median_lag_days
+FROM (SELECT * FROM patient_journeys WHERE is_synthetic = false) pj
+WHERE data_lag_hours IS NOT NULL
+  AND created_at >= (SELECT MAX(created_at)
+                     FROM (SELECT * FROM patient_journeys WHERE is_synthetic = false) pj2
+                     WHERE pj2.data_lag_hours IS NOT NULL)
+                    - INTERVAL '30 days'
 ```
 
 ---
@@ -441,7 +463,7 @@ SELECT iaa_score FROM v_kpi_label_quality LIMIT 1
 | **Frequency** | Daily |
 | **Source Tables** | `etl_pipeline_metrics` |
 | **Source Columns** | `etl_pipeline_metrics.source_data_timestamp`, `etl_pipeline_metrics.run_completed_at`, `etl_pipeline_metrics.time_to_release_hours` |
-| **Helper View** | `v_kpi_time_to_release` |
+| **Helper View** | `v_kpi_time_to_release` (retained, but the live registry query reads the table directly since migration 095) |
 | **Target** | <= 24 hours |
 | **Warning** | > 24 hours and <= 48 hours |
 | **Critical** | > 72 hours (declared SLA ceiling — see status-banding note) |
@@ -453,8 +475,19 @@ SELECT iaa_score FROM v_kpi_label_quality LIMIT 1
 **Calculator**: `DataQualityCalculator._calc_time_to_release`
 
 ```sql
-SELECT avg_ttr_hours FROM v_kpi_time_to_release LIMIT 1
+-- registry query since migration 095 (base; twin drops the is_synthetic wrap):
+-- trailing-30d mean TTR over status='success' runs, anchored on the latest
+-- successful run (a trailing failure streak narrows the window, never empties it)
+SELECT AVG(time_to_release_hours)::float AS avg_ttr_hours
+FROM (SELECT * FROM etl_pipeline_metrics WHERE is_synthetic = false) epm
+WHERE status = 'success'
+  AND run_start >= (SELECT MAX(run_start)
+                    FROM (SELECT * FROM etl_pipeline_metrics WHERE is_synthetic = false) epm2
+                    WHERE epm2.status = 'success')
+                   - INTERVAL '30 days'
 ```
+
+**Data note (migration 095)**: the synthetic generator originally wrote the unsanctioned `status = 'completed'`; 095 backfilled those rows to `'success'` (scoped to `is_synthetic = true`) and the generator now writes `'success'` directly.
 
 ---
 
@@ -992,13 +1025,15 @@ These KPIs measure the downstream business outcomes of the engagement platform, 
 | **Unit** | Ratio (0.0 - 1.0) |
 | **Frequency** | Weekly |
 | **Source Tables** | `hcp_profiles` |
-| **Source Columns** | `hcp_profiles.coverage_status` |
+| **Source Columns** | `hcp_profiles.coverage_status`, `hcp_profiles.priority_tier` |
 | **Helper View** | None |
 | **Target** | >= 0.75 |
 | **Warning** | < 0.75 and >= 0.60 |
 | **Critical** | < 0.45 |
 
 **Calculator**: `BusinessImpactCalculator._calc_hcp_coverage`
+
+**Registry (migration 099)**: `business_impact_hcp_coverage` (+ `_include_synthetic` twin) scopes **both** numerator and denominator to tier 1–2 priority targets — `count(covered AND tier <= 2) / count(tier <= 2)` — matching the stated definition. The same migration healed synthetic instances so the KPI is honest there: NULL `priority_tier` backfilled via `NTILE(5)` over descending patient volume, and the all-TRUE default `coverage_status` re-planted as a deterministic tier-weighted split (`is_synthetic = true` rows only).
 
 ---
 
@@ -1534,6 +1569,12 @@ Eight Postgres views pre-compute KPI aggregations for performance. These are def
 | `v_kpi_change_fail_rate` | Change-fail rate by change type | `triggers` | WS2-TR-008 |
 | `v_kpi_active_users` | MAU, WAU, and DAU counts | `user_sessions` | WS3-BI-001, WS3-BI-002 |
 | `v_kpi_intent_to_prescribe` | Intent-to-prescribe scores by brand and month | `hcp_intent_surveys` | BR-002 |
+| `v_kpi_history_coverage` | Per-`(kpi_id, brand)` coverage of materialized `kpi_history`: `points`, `first_date`, `last_date` (migration 098) | `kpi_history` | `GET /api/kpis/history/coverage` — Time-Series page badges and brand-scope dropdown |
+
+> **Migration 095**: the live registry queries for DQ-003/004/007/009 no longer
+> read their `v_kpi_*` views — they were re-registered as deterministic
+> trailing-30-day aggregates reading the source tables directly, each with an
+> `_include_synthetic` twin. The views are retained (dashboards/ad-hoc use).
 
 ### View Details
 

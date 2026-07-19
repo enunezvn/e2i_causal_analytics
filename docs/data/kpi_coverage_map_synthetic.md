@@ -63,7 +63,7 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS3-BI-001 | Monthly Active Users | `user_sessions.user_id/session_start` → `v_kpi_active_users` / mau fallback (Task 5) | MAPPED | mau=30 |
 | WS3-BI-002 | Weekly Active Users | `user_sessions` → `v_kpi_active_users` / wau fallback (Task 5) | MAPPED | wau=30 |
 | WS3-BI-003 | Patient Touch Rate | `triggers`+`patient_journeys` → `business_impact_patient_touch_rate` (Shard 05/06) | MAPPED | touch_rate=0.916 |
-| WS3-BI-004 | HCP Coverage | `hcp_profiles.coverage_status` → `business_impact_hcp_coverage` | MAPPED | coverage=52.3 |
+| WS3-BI-004 | HCP Coverage | `hcp_profiles.coverage_status` → `business_impact_hcp_coverage` | MAPPED | coverage=52.3 (pre-099 probe: unscoped numerator; migration 099 re-scoped both sides to `priority_tier <= 2` and healed synthetic tier/coverage data) |
 | WS3-BI-005 | Total Prescriptions (TRx) | `treatment_events.event_type='prescription'` → `business_impact_trx` (Shard 05) | MAPPED | trx=1238 |
 | WS3-BI-006 | New Prescriptions (NRx) | `treatment_events.event_type/sequence_number=1` → `business_impact_nrx` — **`sequence_number` stamped by Task 5b helper** | MAPPED | nrx=301 |
 | WS3-BI-007 | New-to-Brand Rx (NBRx) | `treatment_events.event_type/brand` (first per patient) → `business_impact_nbrx` | MAPPED | nbrx=301 |

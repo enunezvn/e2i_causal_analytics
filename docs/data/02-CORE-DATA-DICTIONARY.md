@@ -785,7 +785,7 @@ Master table for Healthcare Professional (HCP) profiles with 30 columns covering
 | `state` | `VARCHAR(2)` | YES | | Two-letter state abbreviation |
 | `city` | `VARCHAR(100)` | YES | | City name |
 | `zip_code` | `VARCHAR(10)` | YES | | ZIP or ZIP+4 code |
-| `priority_tier` | `INTEGER` | YES | CHECK `BETWEEN 1 AND 5` | HCP priority tier (1 = highest priority) |
+| `priority_tier` | `INTEGER` | YES | CHECK `BETWEEN 1 AND 5` | HCP priority tier (1 = highest priority). Migration 099 backfilled NULLs as `NTILE(5)` over descending `total_patient_volume` |
 | `decile` | `INTEGER` | YES | CHECK `BETWEEN 1 AND 10` | Prescribing volume decile (10 = highest volume) |
 | `total_patient_volume` | `INTEGER` | YES | | Total patients seen across all indications |
 | `target_patient_volume` | `INTEGER` | YES | | Patients in the target indication |
@@ -800,7 +800,7 @@ Master table for Healthcare Professional (HCP) profiles with 30 columns covering
 | `influence_network_size` | `INTEGER` | YES | | Number of HCPs in this HCP's influence network |
 | `peer_influence_score` | `DECIMAL(3,2)` | YES | | Peer influence score (0.00 - 9.99) |
 | `adoption_category` | `VARCHAR(20)` | YES | | Innovation adoption category: `innovator`, `early_adopter`, `early_majority`, `late_majority`, `laggard` |
-| `coverage_status` | `BOOLEAN` | YES | DEFAULT `TRUE` | Whether this HCP is currently covered by a sales rep |
+| `coverage_status` | `BOOLEAN` | YES | DEFAULT `TRUE` | Whether this HCP is currently covered by a sales rep. Migration 099 re-planted synthetic rows (all-TRUE from the default) as a deterministic tier-weighted split (`hashtext`-based: ~95/90/70/50/30% covered for tiers 1–5), `is_synthetic = true` rows only |
 | `territory_id` | `VARCHAR(20)` | YES | | Sales territory identifier |
 | `sales_rep_id` | `VARCHAR(20)` | YES | | Assigned sales representative identifier |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Record creation timestamp |
@@ -1242,6 +1242,12 @@ Stores periodic KPI snapshots by brand and region including actuals, targets, ac
 | `confidence_interval_lower` | `DECIMAL(15,2)` | YES | | Lower bound of the confidence interval |
 | `confidence_interval_upper` | `DECIMAL(15,2)` | YES | | Upper bound of the confidence interval |
 | `sample_size` | `INTEGER` | YES | | Number of observations underlying this metric |
+| `email_campaign_count` | `NUMERIC` | YES | | Per-HCP-rollup treatment channel: email campaign exposure (synthetic-gold DGP intervention; migration 099) |
+| `speaker_program_count` | `NUMERIC` | YES | | Per-HCP-rollup treatment channel: speaker program attendance (migration 099) |
+| `sample_volume` | `NUMERIC` | YES | | Per-HCP-rollup treatment channel: product samples provided (migration 099) |
+| `peer_influence_score` | `NUMERIC` | YES | | Per-HCP-rollup treatment channel: peer influence exposure — distinct from `hcp_profiles.peer_influence_score` (migration 099) |
+| `patient_support_enrollment` | `NUMERIC` | YES | | Per-HCP-rollup treatment channel: patient-support-program enrollment share, 0–1 (migration 099) |
+| `rep_training_score` | `NUMERIC` | YES | | Per-HCP-rollup treatment channel: rep training quality, 0–10 (migration 099) |
 | `data_split` | `data_split_type` | NOT NULL | DEFAULT `'unassigned'` | ML data split assignment |
 | `split_config_id` | `UUID` | YES | **FK** `ml_split_registry(split_config_id)` | Split configuration reference |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Record creation timestamp |
@@ -1711,6 +1717,12 @@ LIMIT 6;
 | View | Purpose |
 |------|---------|
 | `v_agent_routing` | Flattened view of agent-to-intent routing. Joins `agent_registry` with its `routes_from_intents` JSONB array via `CROSS JOIN LATERAL jsonb_array_elements()`. Returns one row per (agent, intent) pair, sorted by `priority_order`. |
+
+### Brand–Territory Activity View (migration 094)
+
+| View | Purpose |
+|------|---------|
+| `v_brand_territory_activity` | Per-`(brand, territory_id)` HCP activity: `active_hcp_count` (distinct HCPs) and `treatment_event_count`, from `treatment_events JOIN hcp_profiles USING (hcp_id)` over territory-bearing rows. Added for `/resource-optimization` synthetic seeding — `territory_metrics` has no brand column. Deliberately has **no** `is_synthetic` filter (100%-synthetic instance; BR-002 lesson). |
 
 **Columns:**
 
