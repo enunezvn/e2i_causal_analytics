@@ -84,6 +84,8 @@ class AdherenceOutcomes(TypedDict):
     gap_days: np.ndarray
     adherent_rd_by_segment: Dict[str, float]
     low_gap_rd_by_segment: Dict[str, float]
+    copay_adherent_rd_by_segment: Dict[str, float]
+    copay_low_gap_rd_by_segment: Dict[str, float]
 
 
 def generate_adherence_outcomes(
@@ -94,6 +96,8 @@ def generate_adherence_outcomes(
     segment: np.ndarray,
     cate_map: Dict[str, float],
     rng: np.random.Generator,
+    copay_support: np.ndarray | None = None,
+    copay_cate: Dict[str, float] | None = None,
 ) -> AdherenceOutcomes:
     """Return adherent_180d / low_gap_180d (recoverable binaries) + adherence_rate
     / gap_days (raw proxies) + the per-segment RD ground-truth map for BOTH binaries.
@@ -109,6 +113,21 @@ def generate_adherence_outcomes(
     academic = np.asarray(academic_hcp, dtype=float)
     segs = np.asarray(segment)
     baseline = _ADH_SEVERITY_COEF * (severity - 5.0) + _ADH_ACADEMIC_COEF * academic
+
+    # Phase 1: the copay arm enters the SAME latent additively. Its contribution
+    # folds into the EFFECTIVE BASELINE for treatment_arm's counterfactual RD (and
+    # vice versa below) so each arm's ground truth is its OWN effect, not a blend.
+    # copay_cate is the brand-scaled latent CATE map; it is NOT boosted by
+    # _ADH_LATENT_CATE_BOOST (that boost is calibrated for treatment_arm only).
+    if copay_support is not None and copay_cate is not None:
+        copay = np.asarray(copay_support, dtype=int)
+        tau_copay = np.array([float(copay_cate[str(s)]) for s in segs], dtype=float)
+        copay_contribution = copay.astype(float) * tau_copay
+    else:
+        copay = np.zeros(len(segs), dtype=int)
+        tau_copay = np.zeros(len(segs), dtype=float)
+        copay_contribution = np.zeros(len(segs), dtype=float)
+    baseline = baseline + copay_contribution
 
     # Boost the latent CATE map BEFORE use (cf. initiation's boosted_map) so the boost
     # flows CONSISTENTLY into both the score (binary_outcome_rd) and the RD ground truth
@@ -159,6 +178,19 @@ def generate_adherence_outcomes(
     gap = np.where(low_gap_180d == 1, np.minimum(gap, 30.0), np.maximum(gap, 31.0))
     gap_days = np.clip(np.round(gap), 0.0, _GAP_WINDOW_DAYS).astype(int)
 
+    # copay's OWN recoverable RD: treatment_arm's contribution folds into ITS
+    # effective baseline (the mirror of the fold above), thresholded on the SAME
+    # shared score so both arms' truths describe the same realized outcome.
+    copay_eff_baseline = baseline - copay_contribution + arm.astype(float) * tau_latent
+    _, tau_copay_adh = binarize_score(
+        score, copay_eff_baseline, tau_copay, segs,
+        target_prevalence=_TARGET_PREVALENCE, noise_std=_ADH_NOISE_STD,
+    )
+    _, tau_copay_low = binarize_score(
+        score, copay_eff_baseline, tau_copay, segs,
+        target_prevalence=_LOW_GAP_PREVALENCE, noise_std=_ADH_NOISE_STD,
+    )
+
     return {
         "adherent_180d": adherent_180d,
         "low_gap_180d": low_gap_180d,
@@ -166,4 +198,6 @@ def generate_adherence_outcomes(
         "gap_days": gap_days,
         "adherent_rd_by_segment": rd_map_from_tau(segs, tau_adherent),
         "low_gap_rd_by_segment": rd_map_from_tau(segs, tau_lowgap),
+        "copay_adherent_rd_by_segment": rd_map_from_tau(segs, tau_copay_adh),
+        "copay_low_gap_rd_by_segment": rd_map_from_tau(segs, tau_copay_low),
     }
