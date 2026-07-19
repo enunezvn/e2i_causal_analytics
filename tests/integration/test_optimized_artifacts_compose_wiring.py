@@ -102,9 +102,7 @@ def test_dockerfile_creates_both_roots_in_every_user_stage():
     stages = re.split(r"^FROM .+ AS (\w+)$", dockerfile, flags=re.MULTILINE)
     # re.split yields [preamble, name1, body1, name2, body2, ...]
     stage_bodies = dict(zip(stages[1::2], stages[2::2], strict=True))
-    user_stages = [
-        name for name, body in stage_bodies.items() if "USER e2i" in body
-    ]
+    user_stages = [name for name, body in stage_bodies.items() if "USER e2i" in body]
     assert user_stages, "no stage switches to USER e2i — Dockerfile layout changed?"
     for name in user_stages:
         for target in _ROOTS.values():
