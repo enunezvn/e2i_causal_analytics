@@ -121,7 +121,40 @@ deployed optimized module (`gepa_v1_feedback_learner_pattern_20260608`) on
 the real recorded inputs that carry patterns, checking structured-output
 validity per LM plus a type-overlap diagnostic (explicitly NOT a gate).
 
-RESULTS PENDING.
+Results (6 real cases per model, 18 runs total, 0 errors):
+
+| model | cases | errors | all structured | mean diag. score | latency (min–max, mean) |
+|-------|-------|--------|----------------|------------------|-------------------------|
+| openai/gpt-5.6-terra | 6 | 0 | no (2 empty-pattern outputs) | 0.700 | 1.9–10.2s, 6.6s |
+| anthropic/claude-sonnet-5 | 6 | 0 | no (2 cases with pattern dicts missing `type`/`pattern_type`) | 0.700 | 7.8–34.5s, 24.5s |
+| anthropic/claude-haiku-4-5-20251001 | 6 | 0 | **yes** (6/6) | 0.700 | 3.6–22.1s, 11.4s |
+
+Reading the results honestly:
+
+- **The diagnostic score is non-discriminative here**: every one of the 18
+  runs scored exactly 0.700, including terra's two empty-pattern outputs.
+  The GEPA metric as invoked on these sub-bar inputs does not separate the
+  models; the informative columns are structure and latency. This reinforces
+  that the smoke is a functional check, NOT a gate — it played no role in
+  the §6 verdict.
+- Structure: haiku was the only model producing well-formed typed pattern
+  dicts on all 6 cases; terra returned empty pattern lists on the 2 smallest
+  inputs; sonnet emitted patterns on all cases but 2 had dicts missing the
+  `type`/`pattern_type` key.
+- Latency ordering (terra < haiku < sonnet, roughly 1× / 1.7× / 3.7×)
+  matches the e2e replay ordering in §3.
+
+Three incidents hit while running the smoke, all recorded as findings in §7:
+
+1. The GEPA artifact is host-only (untracked, never in CI-built images) — the
+   smoke had to stage it into container `/tmp` via stdin pipe (docker cp
+   cannot write into a tmpfs mount).
+2. The artifact's saved `module_state` embeds the RETIRED
+   `anthropic/claude-sonnet-4-20250514` as a per-predictor `lm` pin, which
+   overrides `dspy.context(lm=...)` and 404s — the smoke strips `pred.lm`
+   after load; the shipped artifact is unusable as-is even if it did ship.
+3. The GEPA metric returns a plain dict (not a score object) — score
+   extraction must branch on `isinstance(score, dict)`.
 
 ## 6. Pre-registered gates (plan §5) — verdict
 
