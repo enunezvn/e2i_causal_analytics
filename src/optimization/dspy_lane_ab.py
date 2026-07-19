@@ -466,30 +466,38 @@ def _replay_anchor_error(side: Dict[str, Any], expected_sorted: List[str]) -> Op
 
 
 def _replay_provenance_error(
-    side: Dict[str, Any], allow_legacy: bool
+    side: Dict[str, Any], allow_legacy_e2e: bool, allow_absent_ragas_model: bool
 ) -> Tuple[Optional[str], Optional[str]]:
-    """(error, legacy_note) for one side's replay-block ownership.
+    """(error, acceptance_note) for one side's replay-block ownership.
 
-    The nested ragas/e2e blocks carry their own model identity (the RAGAS
-    judge always emitted it; e2e summaries emit it as of codex iter-10), and
-    a present-but-mismatched identity is affirmative evidence the block
-    belongs to a different model - it always fails, override or not. Blocks
-    recorded before the fields existed have no identity to check; that
-    absence also fails, but an operator can explicitly accept it, and the
-    acceptance is surfaced in the gate detail rather than being silent
-    (codex iter-10: the hard latency gate must not consume unverifiable
-    provenance quietly).
+    A present-but-mismatched identity is affirmative evidence the block
+    belongs to a different model - it always fails, overrides or not. The
+    two absence cases are NOT the same condition and take separate overrides
+    (codex iter-11): e2e blocks recorded before the model/query_ids fields
+    existed genuinely have no identity to check (legacy), but the RAGAS
+    judge has ALWAYS emitted ``model``, so an absent ragas.model means the
+    block was stripped or hand-assembled - accepting it is a deliberate
+    attestation that ownership was verified out-of-band (run logs), never
+    something the e2e legacy flag covers. Every acceptance is surfaced in
+    the gate detail rather than being silent (codex iter-10).
     """
     expected = side.get("model")
     if not isinstance(expected, str) or not expected:
         return "bundle missing model identity (fail-closed)", None
-    legacy: List[str] = []
+    notes: List[str] = []
     ragas_model = (side.get("ragas") or {}).get("model")
     if ragas_model is None:
-        legacy.append("ragas.model")
+        if not allow_absent_ragas_model:
+            return (
+                "ragas.model absent - the judge always emits it; "
+                "--allow-absent-ragas-model attests out-of-band ownership",
+                None,
+            )
+        notes.append("ragas.model absence attested by override")
     elif ragas_model != expected:
         return f"ragas block belongs to {ragas_model!r}, not {expected!r}", None
     e2e = side.get("e2e") or {}
+    legacy: List[str] = []
     e2e_model = e2e.get("model")
     if e2e_model is None:
         legacy.append("e2e.model")
@@ -499,14 +507,14 @@ def _replay_provenance_error(
         legacy.append("e2e.query_ids")
     if legacy:
         fields = ", ".join(legacy)
-        if not allow_legacy:
+        if not allow_legacy_e2e:
             return (
-                f"unverified legacy provenance ({fields} absent; "
+                f"unverified legacy e2e provenance ({fields} absent; "
                 "--allow-legacy-replay-provenance accepts it explicitly)",
                 None,
             )
-        return None, f"legacy provenance accepted by override ({fields} absent)"
-    return None, None
+        notes.append(f"legacy e2e provenance accepted by override ({fields} absent)")
+    return None, "; ".join(notes) if notes else None
 
 
 def _query_sets_match(b: Dict[str, Any], c: Dict[str, Any]) -> bool:
@@ -535,6 +543,7 @@ def evaluate_gates(
     expected_signature: Optional[Dict[str, Dict[str, List[str]]]] = None,
     expected_replay_ids: Optional[List[str]] = None,
     allow_legacy_replay_provenance: bool = False,
+    allow_absent_ragas_model: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate one candidate against the baseline on the five hard gates.
 
@@ -799,8 +808,12 @@ def evaluate_gates(
     # Replay measurements must belong to the model they verdict (codex
     # iter-10): a mis-bound block always fails; identity-less legacy blocks
     # fail unless explicitly accepted, and the acceptance is surfaced.
-    b_pe, b_note = _replay_provenance_error(baseline, allow_legacy_replay_provenance)
-    c_pe, c_note = _replay_provenance_error(candidate, allow_legacy_replay_provenance)
+    b_pe, b_note = _replay_provenance_error(
+        baseline, allow_legacy_replay_provenance, allow_absent_ragas_model
+    )
+    c_pe, c_note = _replay_provenance_error(
+        candidate, allow_legacy_replay_provenance, allow_absent_ragas_model
+    )
     gates.append(
         _gate(
             "replay_provenance",

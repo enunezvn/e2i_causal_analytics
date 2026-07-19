@@ -115,6 +115,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
             expected,
             replay_ids,
             allow_legacy_replay_provenance=args.allow_legacy_replay_provenance,
+            allow_absent_ragas_model=args.allow_absent_ragas_model,
         )
         verdicts[model] = verdict
         print(f"### {model} - {'ALL GATES PASS' if verdict['all_passed'] else 'FAIL'}\n")
@@ -172,8 +173,15 @@ def main() -> int:
     analyze.add_argument(
         "--allow-legacy-replay-provenance",
         action="store_true",
-        help="accept ragas/e2e blocks recorded before the model/query_ids identity "
+        help="accept e2e blocks recorded before the model/query_ids identity "
         "fields existed; mismatched identities still fail (codex iter-10)",
+    )
+    analyze.add_argument(
+        "--allow-absent-ragas-model",
+        action="store_true",
+        help="attest that RAGAS block ownership was verified out-of-band; the judge "
+        "always emits model, so absence means stripped/hand-assembled data and is "
+        "NOT covered by the e2e legacy flag (codex iter-11)",
     )
     analyze.add_argument("--extra", default=None)
     analyze.add_argument("--json-out", default=None)

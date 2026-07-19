@@ -184,7 +184,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | accuracy[chatbot] | PASS | 0.947 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
 | replay_anchor | PASS | per-sample replay ids match the intended e2e replay set, both sides |
-| replay_provenance | PASS | legacy blocks accepted by explicit --allow-legacy-replay-provenance (fields predate this run; mismatches would still fail) |
+| replay_provenance | PASS | e2e legacy accepted by --allow-legacy-replay-provenance; ragas.model absence separately attested by --allow-absent-ragas-model (mismatches would still fail) |
 | ragas[fully_scored] | PASS | every covered row carries a real score, both sides |
 | ragas[faithfulness] | **FAIL** | 0.122 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.465 vs baseline 0.401 (margin 0.05) |
@@ -210,7 +210,7 @@ Three incidents hit while running the smoke, all recorded as findings in §7:
 | accuracy[chatbot] | PASS | 0.921 vs baseline 0.947 (margin 0.05) |
 | ragas[consistency] | PASS | aggregates reconcile with per-sample rows, both sides |
 | replay_anchor | PASS | per-sample replay ids match the intended e2e replay set, both sides |
-| replay_provenance | PASS | legacy blocks accepted by explicit --allow-legacy-replay-provenance (fields predate this run; mismatches would still fail) |
+| replay_provenance | PASS | e2e legacy accepted by --allow-legacy-replay-provenance; ragas.model absence separately attested by --allow-absent-ragas-model (mismatches would still fail) |
 | ragas[fully_scored] | PASS | every covered row carries a real score, both sides |
 | ragas[faithfulness] | **FAIL** | 0.339 vs baseline 0.690 (margin 0.05) |
 | ragas[answer_relevancy] | PASS | 0.529 vs baseline 0.401 (margin 0.05) |
@@ -315,8 +315,15 @@ summaries emit it as of this amendment), and a present-but-mismatched
 identity always fails, override or not. Blocks recorded before the fields
 existed have no identity to check; that absence also fails unless the
 operator explicitly passes `--allow-legacy-replay-provenance`, and the
-acceptance is printed in the gate detail rather than being silent. This
-run's blocks predate the fields, so the recorded verdict uses the override
+acceptance is printed in the gate detail rather than being silent. The
+override is split by provenance source (iter-11): the e2e legacy flag
+never covers an absent `ragas.model` — the judge has always emitted it,
+so its absence means stripped or hand-assembled data and requires the
+separate `--allow-absent-ragas-model` attestation that ownership was
+verified out-of-band. This run's e2e blocks predate the fields and its
+ragas.model was dropped during manual extra.json assembly (attested
+against §3's per-model judge runs), so the recorded verdict uses both
+flags — the acceptances are itemized in the gate detail
 — stated here openly: the replay measurements' model binding for THIS run
 rests on the run logs and §2/§3 of this report, not on in-band
 identity fields, and any mismatch the fields could have caught would

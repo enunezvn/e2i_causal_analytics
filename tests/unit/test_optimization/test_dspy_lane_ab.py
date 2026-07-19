@@ -908,19 +908,19 @@ def test_gate_replay_provenance_wrong_model_block_codex_iter10():
                 EXPECTED_SIG_SETS,
                 EXPECTED_REPLAY_IDS,
                 allow_legacy_replay_provenance=allow,
+                allow_absent_ragas_model=allow,
             )
             failed = {g["name"] for g in result["gates"] if not g["passed"]}
             assert "replay_provenance" in failed, (field, allow)
             assert result["all_passed"] is False
 
 
-def test_gate_replay_provenance_legacy_absence_needs_override():
-    # Codex iter-10 MED: blocks recorded before the identity fields existed
-    # were consumed silently by the hard latency gate. Absence now fails
-    # unless the operator explicitly accepts it, and the acceptance is
+def test_gate_replay_provenance_legacy_e2e_absence_needs_override():
+    # Codex iter-10 MED: e2e blocks recorded before the identity fields
+    # existed were consumed silently by the hard latency gate. Absence now
+    # fails unless the operator explicitly accepts it, and the acceptance is
     # surfaced in the gate detail.
     candidate = _candidate()
-    del candidate["ragas"]["model"]
     del candidate["e2e"]["model"]
     del candidate["e2e"]["query_ids"]
     result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
@@ -937,6 +937,35 @@ def test_gate_replay_provenance_legacy_absence_needs_override():
     gate = [g for g in result["gates"] if g["name"] == "replay_provenance"][0]
     assert gate["passed"] is True
     assert "override" in gate["detail"]
+
+
+def test_gate_replay_provenance_absent_ragas_model_not_covered_by_legacy_codex_iter11():
+    # Codex iter-11 MED: the judge has ALWAYS emitted ragas.model, so its
+    # absence is stripped/hand-assembled data, not pre-field legacy - the
+    # e2e legacy override must NOT cover it.
+    candidate = _candidate()
+    del candidate["ragas"]["model"]
+    result = evaluate_gates(
+        BASELINE,
+        candidate,
+        EXPECTED_SIG_SETS,
+        EXPECTED_REPLAY_IDS,
+        allow_legacy_replay_provenance=True,  # e2e legacy flag alone is not enough
+    )
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "replay_provenance" in failed
+    assert result["all_passed"] is False
+    result = evaluate_gates(
+        BASELINE,
+        candidate,
+        EXPECTED_SIG_SETS,
+        EXPECTED_REPLAY_IDS,
+        allow_legacy_replay_provenance=True,
+        allow_absent_ragas_model=True,
+    )
+    gate = [g for g in result["gates"] if g["name"] == "replay_provenance"][0]
+    assert gate["passed"] is True
+    assert "attested" in gate["detail"]
 
 
 def test_gate_replay_provenance_missing_bundle_model_fails_closed():
