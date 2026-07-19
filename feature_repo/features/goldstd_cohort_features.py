@@ -62,7 +62,8 @@ goldstd_cohort_source = PostgreSQLSource(
             insurance_type::VARCHAR AS insurance_type,
             age_at_diagnosis::BIGINT AS age_at_diagnosis,
             comorbidity_burden::BIGINT AS comorbidity_burden,
-            prior_therapy_lines::BIGINT AS prior_therapy_lines
+            prior_therapy_lines::BIGINT AS prior_therapy_lines,
+            copay_support::BIGINT AS copay_support
         FROM patient_journeys
         WHERE event_date >= NOW() - INTERVAL '2000 days'
     """,
@@ -122,6 +123,26 @@ goldstd_cohort_features_fv = FeatureView(
             name="prior_therapy_lines",
             dtype=Int64,
             description="Number of prior therapy lines (numeric prognostic driver).",
+        ),
+        # --- COMM-ARMS Phase 1: the copay_support commercial arm ---
+        # Consumed by the PERSISTENCE and DISCONTINUATION cohorts only. copay enters
+        # the discontinuation logit, so it is real outcome signal; withholding it made
+        # the persistence model blind to a driver it can legitimately observe (copay is
+        # assigned pre-index and is NOT a leakage column). initiation does NOT consume
+        # it — copay does not enter the treatment_initiated equation (verified: that
+        # column is byte-identical pre/post copay), so serving it there would add a
+        # pure-noise feature.
+        #
+        # NULL until the next synthetic reseed. That is safe rather than a trap: the
+        # bundled FeatureBuilder median-imputes numerics and emits a `__isna` flag, so
+        # an all-NULL column degrades to a constant feature, not a crash. It must still
+        # be declared HERE, because a ref the view does not expose is the actual #576
+        # null-trap.
+        Field(
+            name="copay_support",
+            dtype=Int64,
+            description="Copay-support commercial arm, 0/1 (persistence + "
+            "discontinuation only; NULL until the next synthetic reseed).",
         ),
     ],
     source=goldstd_cohort_source,

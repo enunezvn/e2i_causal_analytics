@@ -43,11 +43,17 @@ class TestGoldstdCohortFeatureView:
         assert entity_names == ["patient"]
 
     def test_schema_is_exactly_keep_columns(self) -> None:
-        """The view serves EXACTLY the 7 RAW _BASE7 covariates the enriched
-        gold-standard patient models consume (T9/T11 DGP enrichment) — no
-        post-index/leakage columns leak into the serving contract. The 4 new
-        prognostic drivers are arm-independent (ATE/CATE preserved) and are the
-        ones the live Feature-Importance page must surface alongside the base 3."""
+        """The view serves EXACTLY the RAW covariates the enriched gold-standard
+        patient models consume (T9/T11 DGP enrichment) — no post-index/leakage
+        columns leak into the serving contract. The 4 prognostic drivers are
+        arm-independent (ATE/CATE preserved) and are the ones the live
+        Feature-Importance page must surface alongside the base 3.
+
+        COMM-ARMS Phase 1 adds copay_support (consumed by persistence and
+        discontinuation). This does NOT weaken the no-leakage intent of this test:
+        copay_support is assigned PRE-index, is not a post-index outcome proxy, and
+        is not in FeatureBuilder.LEAKAGE_DENYLIST. It is a treatment/intervention
+        flag the model may legitimately observe."""
         from features.goldstd_cohort_features import goldstd_cohort_features_fv
 
         served = {f.name for f in goldstd_cohort_features_fv.schema}
@@ -59,6 +65,7 @@ class TestGoldstdCohortFeatureView:
             "age_at_diagnosis",
             "comorbidity_burden",
             "prior_therapy_lines",
+            "copay_support",
         }
 
     def test_geographic_region_served_as_string(self) -> None:

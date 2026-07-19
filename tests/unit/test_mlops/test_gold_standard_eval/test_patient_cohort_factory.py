@@ -20,6 +20,17 @@ _SEVEN = _THREE + (
     "comorbidity_burden",
     "prior_therapy_lines",
 )
+# COMM-ARMS Phase 1 (2026-07-19): persistence/discontinuation carry an 8th covariate,
+# copay_support, because copay enters the discontinuation logit and is therefore real
+# outcome signal the model should see. initiation stays at 7 — copay is absent from the
+# treatment_initiated equation, so fetching it there would be an unused feature and a
+# gratuitous widening of that cohort's serving contract.
+_EIGHT = _SEVEN + ("copay_support",)
+_EXPECTED_COVARIATES = {
+    "initiation": _SEVEN,
+    "persistence": _EIGHT,
+    "discontinuation": _EIGHT,
+}
 
 
 def test_factory_covers_9_patient_slots():
@@ -29,8 +40,10 @@ def test_factory_covers_9_patient_slots():
             s = make_patient_spec(cohort, brand)
             assert s.brand == brand
             assert s.target == f"{cohort}_{brand.lower()}"
-            # T11: all three patient cohorts now use the 7-covariate set.
-            assert s.base_covariates == _SEVEN, f"{cohort}/{brand}"
+            # T11 + COMM-ARMS Phase 1: the three cohorts are no longer identical —
+            # assert each against its OWN expected set rather than a shared one, so a
+            # cohort that silently gains or loses a covariate still fails here.
+            assert s.base_covariates == _EXPECTED_COVARIATES[cohort], f"{cohort}/{brand}"
             seen.add((s.target, s.label_column))
     assert len(seen) == 9
     # labels correct
@@ -39,16 +52,21 @@ def test_factory_covers_9_patient_slots():
     assert make_patient_spec("discontinuation", "Remibrutinib").label_column == "discontinued_180d"
 
 
-def test_persistence_cohorts_use_seven_covariates():
+def test_persistence_cohorts_use_eight_covariates():
+    """COMM-ARMS Phase 1: persistence + discontinuation additionally observe
+    copay_support. Ordering matters as well as membership — the serving bundle builds
+    its vector positionally from base_covariates, so this asserts the exact tuple."""
     for brand in ("Remibrutinib", "Fabhalta", "Kisqali"):
         for cohort in ("persistence", "discontinuation"):
-            assert make_patient_spec(cohort, brand).base_covariates == _SEVEN, f"{cohort}/{brand}"
+            assert make_patient_spec(cohort, brand).base_covariates == _EIGHT, f"{cohort}/{brand}"
 
 
-def test_initiation_uses_seven_covariates():
-    # T11: initiation's outcome eqn was enriched with the 4 prognostic drivers, so it
-    # no longer "stays three" — it carries the full 7-covariate set like persist/disc.
+def test_initiation_stays_at_seven_covariates():
+    """initiation must NOT pick up copay_support: copay does not enter the
+    treatment_initiated equation (verified byte-identical when the arm was wired), so
+    adding it would widen the serving contract for a feature carrying no signal."""
     assert make_patient_spec("initiation", "Remibrutinib").base_covariates == _SEVEN
+    assert "copay_support" not in make_patient_spec("initiation", "Remibrutinib").base_covariates
 
 
 def test_name_helpers():

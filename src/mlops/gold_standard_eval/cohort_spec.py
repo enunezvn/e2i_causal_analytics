@@ -95,10 +95,25 @@ _BASE7 = _BASE3 + (
     "comorbidity_burden",
     "prior_therapy_lines",
 )
+# COMM-ARMS Phase 1 (2026-07-19): persistence/discontinuation gain an 8th covariate,
+# copay_support. copay enters the DISCONTINUATION logit, so it is genuine outcome
+# signal; it is assigned pre-index and is NOT a leakage column, so the model may
+# legitimately observe it. Withholding it made copay irreducible noise and dropped the
+# faithful holdout AUC ~0.03 (Kisqali to within 0.0005 of the gate floor).
+#
+# initiation deliberately stays at _BASE7: copay does NOT enter the treatment_initiated
+# equation (verified — that column is byte-identical pre/post copay), so adding it there
+# would only feed the model a pure-noise feature.
+#
+# MUST stay in lockstep with MODEL_FEATURE_REFS in src/feature_store/model_feature_refs.py
+# and the Field list in feature_repo/features/goldstd_cohort_features.py. A spec that
+# declares 8 while the refs fetch 7 hands the serving bundle an incomplete vector
+# (#576 null-trap → 503); test_model_feature_refs.py locks the three together.
+_BASE8_COMMERCIAL = _BASE7 + ("copay_support",)
 _PATIENT_COVARIATES: dict[str, tuple[str, ...]] = {
     "initiation": _BASE7,
-    "persistence": _BASE7,
-    "discontinuation": _BASE7,
+    "persistence": _BASE8_COMMERCIAL,
+    "discontinuation": _BASE8_COMMERCIAL,
 }
 
 

@@ -69,6 +69,12 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
     ],
+    # COMM-ARMS Phase 1: persistence/discontinuation additionally consume
+    # copay_support (8 refs, not 7). copay enters the DISCONTINUATION logit, so it
+    # is real outcome signal the model can legitimately observe (assigned pre-index,
+    # not a leakage column). These two lists must stay in lockstep with
+    # _PATIENT_COVARIATES in cohort_spec.py — spec says 8, refs must fetch 8, or the
+    # bundle gets an incomplete vector (#576 null-trap → 503).
     "persistence": [
         "goldstd_cohort_features:disease_severity",
         "goldstd_cohort_features:academic_hcp",
@@ -77,6 +83,7 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "goldstd_cohort_features:age_at_diagnosis",
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
+        "goldstd_cohort_features:copay_support",
     ],
     "discontinuation": [
         "goldstd_cohort_features:disease_severity",
@@ -86,6 +93,7 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "goldstd_cohort_features:age_at_diagnosis",
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
+        "goldstd_cohort_features:copay_support",
     ],
     # HCP-grain gold-standard adoption cohort (#39 multi-model): the per-brand
     # ``hcp_adoption_{brand}_goldstd_lr_v1`` models consume the 5 RAW leakage-safe

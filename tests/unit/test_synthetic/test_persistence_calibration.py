@@ -6,11 +6,51 @@ to encode the 7 leakage-safe covariates, then train_cohort_model (the calibrated
 LogisticRegression the *_goldstd_lr_v1 models use), then the holdout-split AUC, the
 same headline _run_one_cohort records. No hand-rolled encoder, no proxy.
 
-The enriched equation must achieve a realistic ~0.78-0.82 holdout AUC per brand with
-prevalence in the designed [0.05, 0.60] band. These asserted numbers LOCK the
-cohort_outcomes coefficients (the same way the 2026-06-14 feature experiment locked
-KEEP_COLUMNS). Measured live (2026-06-21, n=20000): Remi 0.809 / Fabhalta 0.814 /
-Kisqali 0.805, 19 encoded features (7 covariates), disc prevalence ~0.50.
+The enriched equation must achieve a realistic holdout AUC per brand with prevalence in
+the designed [0.05, 0.60] band. These asserted numbers LOCK the cohort_outcomes
+coefficients (the same way the 2026-06-14 feature experiment locked KEEP_COLUMNS).
+Measured live (2026-06-21, n=20000): Remi 0.809 / Fabhalta 0.814 / Kisqali 0.805,
+19 encoded features (7 covariates), disc prevalence ~0.50.
+
+FLOOR LOWERED 0.78 -> 0.75 on 2026-07-19 (COMM-ARMS Phase 1). This is a re-derivation
+against a deliberately changed DGP, NOT an accommodation of a regression -- the
+distinction matters, so here is the evidence (seed=42, the seed this gate asserts):
+
+  brand         pre-Phase-1   +copay, 7-cov   +copay, 8-cov (shipped)
+  Remibrutinib     0.8169        0.7863            0.7898
+  Fabhalta         0.8232        0.7900            0.7949
+  Kisqali          0.8086        0.7805            0.7850
+
+Phase 1 puts copay_support into the discontinuation logit by design. Copay is real
+outcome signal, so achievable AUC structurally falls -- the old 0.78 floor was
+calibrated against a DGP with NO commercial arms and was measuring a different world.
+At 7 covariates Kisqali cleared it by 0.0005, i.e. green but a guaranteed future red.
+Letting the model SEE copay (the 8th covariate, cohort_spec._BASE8_COMMERCIAL) recovers
+~0.005 of that drop.
+
+MOST OF THE DROP IS IRREDUCIBLE -- do not try to win it back with a richer estimator.
+Measured 2026-07-19 against a Bayes oracle (scoring with the true DGP probability) over
+3 brands x 3 seeds x 2 worlds: for Kisqali the 0.0158 drop decomposes into 0.0096 (61%)
+ceiling loss NO estimator can recover, plus a 0.0062 model gap; total headroom over the
+shipped LR is 0.0074. Mechanism: corr(copay_term, rest_of_logit) = -0.35 -- copay goes
+preferentially to sicker patients and its pull is most negative exactly there, so it
+cancels the dominant severity gradient (observable-logit SD 1.454 -> 1.371). The AUC was
+destroyed in the OUTCOME, not hidden from the model. Candidate estimators, paired on
+identical rows/splits: explicit copay x segment +0.0064, degree-2 poly +0.0043,
+HistGradientBoosting -0.0047 (worse) -- all under the 0.011-0.031 seed spread. Oracle
+sanity check: pre-Phase-1 a plain LR (0.8134) EQUALS the Bayes ceiling (0.8135), i.e.
+LR was already Bayes-optimal while the DGP was still linear-additive. Backlog #43.
+
+The seed-42 column above is a point estimate, not the expected drop: across seeds
+42/7/99 the drop spans 0.0158-0.0216 and per-variant seed spread is 0.011-0.031. That
+dispersion is why an absolute band is a blunt instrument here (backlog #43 proposes
+per-brand pinned baselines + tolerance instead).
+
+0.75 restores ~0.035 of headroom at seed 42, which also leaves room for Phases 2-3
+(three more commercial arms land in this same outcome, each eroding the ceiling by the
+same irreducible mechanism). NO coefficient and NO shipped data changed -- only this
+tolerance. If a future change pushes any brand below 0.75, that IS a real regression:
+re-measure rather than lowering the floor again.
 
 Hermetic: generates in-memory frames; no DB, no mocks. n=20000 keeps the holdout
 (~1000 rows) large enough that the AUC reflects the DGP's true signal, not
@@ -66,8 +106,8 @@ def test_persistence_auc_in_target_band(faithful):
         assert m["n_features"] >= 15, (
             f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
         )
-        assert 0.78 <= m["auc"] <= 0.83, (
-            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.78, 0.83]"
+        assert 0.75 <= m["auc"] <= 0.83, (
+            f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.75, 0.83]"
         )
 
 

@@ -852,6 +852,15 @@ _NUMERIC_GUIDANCE: Dict[str, Dict[str, Any]] = {
         "step": 1,
         "hint": "Binary: 0 = community HCP, 1 = academic HCP",
     },
+    # COMM-ARMS Phase 1: a commercial intervention flag, not a patient attribute —
+    # unlike the other covariates this is something the business can ACT on, so the
+    # what-if form is the point where a user toggles it 0->1 to read the uplift.
+    "copay_support": {
+        "min": 0,
+        "max": 1,
+        "step": 1,
+        "hint": "Binary: 0 = no copay support, 1 = enrolled in copay support",
+    },
     "age_at_diagnosis": {
         "min": 18,
         "max": 85,

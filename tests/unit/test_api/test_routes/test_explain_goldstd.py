@@ -54,22 +54,32 @@ class TestModelTypeTaxonomyReconcile:
             assert m.value in MODEL_FEATURE_REFS, f"missing refs for {m.value}"
 
     def test_goldstd_refs_point_at_raw_covariate_view(self) -> None:
-        """Gold-standard cohorts fetch the 7 RAW _BASE7 covariates from the
+        """Gold-standard cohorts fetch their RAW covariates from the
         goldstd_cohort_features view (T9/T11 enrichment): the base 3 plus the 4
-        arm-independent prognostic drivers the enriched models consume."""
+        arm-independent prognostic drivers the enriched models consume.
+
+        COMM-ARMS Phase 1: the three cohorts are no longer identical. persistence and
+        discontinuation fetch an 8th ref, copay_support, which enters the
+        discontinuation logit; initiation does not, because copay is absent from the
+        treatment_initiated equation."""
         from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
 
-        for cohort in ("initiation", "persistence", "discontinuation"):
-            refs = MODEL_FEATURE_REFS[cohort]
-            assert refs == [
-                "goldstd_cohort_features:disease_severity",
-                "goldstd_cohort_features:academic_hcp",
-                "goldstd_cohort_features:geographic_region",
-                "goldstd_cohort_features:insurance_type",
-                "goldstd_cohort_features:age_at_diagnosis",
-                "goldstd_cohort_features:comorbidity_burden",
-                "goldstd_cohort_features:prior_therapy_lines",
-            ]
+        base7 = [
+            "goldstd_cohort_features:disease_severity",
+            "goldstd_cohort_features:academic_hcp",
+            "goldstd_cohort_features:geographic_region",
+            "goldstd_cohort_features:insurance_type",
+            "goldstd_cohort_features:age_at_diagnosis",
+            "goldstd_cohort_features:comorbidity_burden",
+            "goldstd_cohort_features:prior_therapy_lines",
+        ]
+        expected_by_cohort = {
+            "initiation": base7,
+            "persistence": base7 + ["goldstd_cohort_features:copay_support"],
+            "discontinuation": base7 + ["goldstd_cohort_features:copay_support"],
+        }
+        for cohort, expected in expected_by_cohort.items():
+            assert MODEL_FEATURE_REFS[cohort] == expected, cohort
 
     def test_get_feature_refs_for_model_returns_goldstd_raw(self) -> None:
         service = RealTimeSHAPService.__new__(RealTimeSHAPService)
