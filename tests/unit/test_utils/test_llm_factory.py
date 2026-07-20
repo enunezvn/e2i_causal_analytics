@@ -149,6 +149,15 @@ class TestGetChatLLM:
         assert result == mock_llm
         mock_create_anthropic.assert_called_once()
 
+    @patch("src.utils.llm_factory._create_anthropic_llm")
+    def test_forwards_reasoning_effort_to_anthropic(self, mock_create_anthropic):
+        """reasoning_effort must reach the Anthropic creator (it was
+        OpenAI-only before the 2026-07-20 thinking-budget incident fix)."""
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            get_chat_llm(provider="anthropic", reasoning_effort="medium")
+
+        assert mock_create_anthropic.call_args.args[-1] == "medium"
+
     @patch("src.utils.llm_factory._create_openai_llm")
     def test_provider_override(self, mock_create_openai):
         """Test provider parameter overrides environment."""
@@ -340,6 +349,93 @@ class TestCreateAnthropicLLM:
                 # Haiku 4.5 still accepts temperature — keep passing it there.
                 llm_factory._create_anthropic_llm("claude-haiku-4-5-20251001", 256, 0.0, None)
                 assert mock_chat_anthropic_class.call_args.kwargs["temperature"] == 0.0
+
+    def test_reasoning_effort_maps_to_adaptive_thinking_with_output_config(self):
+        """Claude 5-family rejects thinking.type=enabled/budget_tokens; the
+        control surface is thinking.type=adaptive + output_config.effort
+        (verified live on claude-sonnet-5, 2026-07-20). output_config has no
+        ChatAnthropic field, so it must ride model_kwargs."""
+        mock_chat_anthropic_class = MagicMock()
+        mock_module = MagicMock(ChatAnthropic=mock_chat_anthropic_class)
+
+        with patch.dict("sys.modules", {"langchain_anthropic": mock_module}):
+            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}):
+                from importlib import reload
+
+                import src.utils.llm_factory as llm_factory
+
+                reload(llm_factory)
+
+                llm_factory._create_anthropic_llm(
+                    "claude-sonnet-5", 8192, 0.3, None, reasoning_effort="medium"
+                )
+                call_kwargs = mock_chat_anthropic_class.call_args.kwargs
+                assert call_kwargs["thinking"] == {"type": "adaptive"}
+                assert call_kwargs["model_kwargs"] == {"output_config": {"effort": "medium"}}
+
+    def test_reasoning_effort_none_disables_thinking(self):
+        """reasoning_effort="none" mirrors the OpenAI branch's semantics:
+        no thinking at all (thinking tokens count against max_tokens on the
+        5-family, so "none" is the hard truncation-proof setting)."""
+        mock_chat_anthropic_class = MagicMock()
+        mock_module = MagicMock(ChatAnthropic=mock_chat_anthropic_class)
+
+        with patch.dict("sys.modules", {"langchain_anthropic": mock_module}):
+            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}):
+                from importlib import reload
+
+                import src.utils.llm_factory as llm_factory
+
+                reload(llm_factory)
+
+                llm_factory._create_anthropic_llm(
+                    "claude-sonnet-5", 2048, 0.3, None, reasoning_effort="none"
+                )
+                call_kwargs = mock_chat_anthropic_class.call_args.kwargs
+                assert call_kwargs["thinking"] == {"type": "disabled"}
+                assert "model_kwargs" not in call_kwargs
+
+    def test_reasoning_effort_ignored_without_adaptive_thinking_surface(self):
+        """Models outside the 5-family (haiku-4-5, legacy sonnet-4) don't get
+        thinking kwargs — get_fast_llm passes reasoning_effort="none" for the
+        gpt-5.x fast tier and that must stay a no-op on Anthropic haiku."""
+        mock_chat_anthropic_class = MagicMock()
+        mock_module = MagicMock(ChatAnthropic=mock_chat_anthropic_class)
+
+        with patch.dict("sys.modules", {"langchain_anthropic": mock_module}):
+            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}):
+                from importlib import reload
+
+                import src.utils.llm_factory as llm_factory
+
+                reload(llm_factory)
+
+                for model in ("claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"):
+                    llm_factory._create_anthropic_llm(
+                        model, 256, 0.0, None, reasoning_effort="none"
+                    )
+                    call_kwargs = mock_chat_anthropic_class.call_args.kwargs
+                    assert "thinking" not in call_kwargs, model
+                    assert "model_kwargs" not in call_kwargs, model
+
+    def test_no_thinking_kwargs_when_reasoning_effort_omitted(self):
+        """Existing callers that never pass reasoning_effort keep the exact
+        payload they had before the thinking control was added."""
+        mock_chat_anthropic_class = MagicMock()
+        mock_module = MagicMock(ChatAnthropic=mock_chat_anthropic_class)
+
+        with patch.dict("sys.modules", {"langchain_anthropic": mock_module}):
+            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}):
+                from importlib import reload
+
+                import src.utils.llm_factory as llm_factory
+
+                reload(llm_factory)
+
+                llm_factory._create_anthropic_llm("claude-sonnet-5", 2048, 0.3, None)
+                call_kwargs = mock_chat_anthropic_class.call_args.kwargs
+                assert "thinking" not in call_kwargs
+                assert "model_kwargs" not in call_kwargs
 
     def test_timeout_not_passed_when_none(self):
         """Test timeout is not passed to ChatAnthropic when None."""
