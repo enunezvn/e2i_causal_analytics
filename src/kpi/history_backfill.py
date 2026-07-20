@@ -636,11 +636,19 @@ async def _trigger_monthly_ratio(
     cache: Optional[Dict[str, Any]],
     numerator: Callable[[Dict[str, Any]], bool],
     denominator: Callable[[Dict[str, Any]], bool],
+    mature_days: int = 0,
 ) -> List[Dict[str, Any]]:
     """Shared monthly num/den recast over triggers.trigger_timestamp.
 
     Months with an empty denominator are skipped (mirrors NULLIF -> NULL: no
     fabricated 0.0 on an empty cohort).
+
+    ``mature_days`` > 0 excludes triggers whose forward outcome window has not
+    fully elapsed at the data frontier (max trigger date): a trigger fired 5
+    days before the frontier has only 5 days of its 30d conversion window in
+    the data, so counting it would read as a false decline in the final month.
+    Calendar-completeness (``_complete_months``) still uses ALL dates — a month
+    is complete or not regardless of which of its triggers have matured.
     """
     by_month: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
     dates: List[date] = []
@@ -650,9 +658,14 @@ async def _trigger_monthly_ratio(
             continue
         dates.append(d)
         by_month[_month_start(d)].append(r)
+    cutoff: Optional[date] = None
+    if mature_days > 0 and dates:
+        cutoff = max(dates) - timedelta(days=mature_days)
     points: List[Dict[str, Any]] = []
     for m in _complete_months(dates):
         rows = by_month.get(m, [])
+        if cutoff is not None:
+            rows = [r for r in rows if (_to_date(r.get("trigger_timestamp")) or cutoff) <= cutoff]
         den = sum(1 for r in rows if denominator(r))
         if den == 0:
             continue
@@ -670,7 +683,11 @@ async def _backfill_tr001_precision(
 
     Mirrors ``trigger_performance_precision`` v2 EXACTLY (lockstep: a backfill
     computing the old tracked-only ratio would write historical points on a
-    different definition than the live reading).
+    different definition than the live reading), including the 30d maturation
+    guard — the live SQL scores only triggers whose conversion window has fully
+    elapsed (window (frontier-60d, frontier-30d]); without the same guard here
+    the final backfilled month would read a false decline from late-month
+    triggers whose windows extend past the data frontier.
     """
     return await _trigger_monthly_ratio(
         client,
@@ -681,6 +698,7 @@ async def _backfill_tr001_precision(
         and float(r.get("outcome_value") or 0) > 0,
         denominator=lambda r: r.get("acceptance_status") == "accepted"
         and bool(r.get("outcome_tracked")),
+        mature_days=30,
     )
 
 

@@ -306,8 +306,15 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         tx = self.treatment_df
         if tx is None or len(tx) == 0 or "patient_id" not in tx.columns:
             return hit
-        if "event_type" in tx.columns:
-            tx = tx[tx["event_type"].astype(str) == "prescription"]
+        if "event_type" not in tx.columns:
+            # Fail loud, not permissive: without the type column every row would
+            # count as an Rx and outcome_value would silently overstate. Callers
+            # must pass the post-rename schema (treatment_type -> event_type).
+            raise ValueError(
+                "_baseline_rx_in_window requires an 'event_type' column "
+                "(pass the post-rename treatment_events schema)"
+            )
+        tx = tx[tx["event_type"].astype(str) == "prescription"]
         if len(tx) == 0:
             return hit
         brand_col = "brand" if "brand" in tx.columns else None
@@ -327,6 +334,11 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             if dates is None or len(dates) == 0:
                 continue
             lo = np.searchsorted(dates, t, side="left")
+            # event_date is DATE-granular (midnight); trigger_timestamp carries
+            # time-of-day, so a same-calendar-day Rx sorts BEFORE the trigger and
+            # is excluded — conservative (undercounts rx_in_window slightly), the
+            # mirror image of the SQL recall boundary where a same-day trigger
+            # counts as preceding.
             if lo < len(dates) and dates[lo] <= t + np.timedelta64(30, "D"):
                 hit[i] = True
         return hit

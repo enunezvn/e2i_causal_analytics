@@ -17,6 +17,8 @@ acceptance x outcome table were structurally empty — precision was unfalsifiab
   (acceptance ~0.50, override ~0.14 among delivered/viewed) are preserved.
 """
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -162,6 +164,111 @@ def test_false_positive_flag_only_on_tracked_unproductive_triggers():
     fp = triggers[triggers["false_positive_flag"].astype(bool)]
     assert fp["outcome_tracked"].astype(bool).all()
     assert (fp["outcome_value"].fillna(0) <= 0).all()
+
+
+# Phase-4-era pinned digest of TriggerGenerator's NON-acceptance/outcome fields
+# (design-review M2): Phase 4 restructured _generate_trigger_record, which
+# legitimately shifted the per-record RNG stream (the destructive reseed
+# rewrites every trigger row, and no consumer pins trigger bytes — unlike the
+# patient persistence digests, which held). THIS pin locks the post-Phase-4
+# stream so any FUTURE refactor that silently adds/removes/reorders draws
+# (shifting delivery_channel, confidence_score, control_group_flag, ... for
+# every subsequent trigger) fails here instead of shipping unnoticed.
+_STREAM_FIELDS = [
+    "trigger_id",
+    "patient_id",
+    "trigger_type",
+    "trigger_timestamp",
+    "priority",
+    "confidence_score",
+    "delivery_channel",
+    "delivery_status",
+    "control_group_flag",
+    "action_taken",
+    "lead_time_days",
+    "outcome_tracked",
+]
+_STREAM_DIGEST = "5b7b668b03f6e9750a7b01aabda28a43a35f58cb2b699dfe288bae796b7b0d45"
+
+
+@pytest.mark.unit
+def test_non_outcome_trigger_fields_stream_is_pinned():
+    _, df, _ = _generate()
+    missing = [f for f in _STREAM_FIELDS if f not in df.columns]
+    assert not missing, f"stream-pinned fields missing from the frame: {missing}"
+    digest = hashlib.sha256(df[_STREAM_FIELDS].to_csv(index=False).encode()).hexdigest()
+    assert digest == _STREAM_DIGEST, (
+        "TriggerGenerator per-record RNG stream shifted (non-acceptance/outcome "
+        "fields changed for a fixed seed). If the change is INTENTIONAL, re-pin "
+        "the digest AND note that an upsert reseed leaves stale tail rows when "
+        "the generated trigger count shrinks (delete the orphan id range)."
+    )
+
+
+def _patient_df_with_share(share: float, seed: int = 7, n: int = _N_PATIENTS) -> pd.DataFrame:
+    """Fixture with a CONTROLLED arm share — the base ``_patient_df`` fixture's
+    coin flip lands at 0.4983 (seed 21), which is BELOW p[accepted]=0.50 and so
+    exercises the degenerate fallback, not the production mixture (codex pass-1
+    finding: the healthy q1/q0 algebra was untested by fixture accident)."""
+    df = _patient_df(seed, n)
+    rng = np.random.default_rng(seed + 1)
+    df["trigger_accepted"] = (rng.random(n) < share).astype(int)
+    return df
+
+
+@pytest.mark.unit
+def test_mixture_healthy_branch_algebra_and_marginals():
+    """Production share is 0.5786 (treatment_arm.py) — a fixture in that zone
+    must take the smooth-mixture branch: q0[accepted]=0, zero clipping, and the
+    share-weighted mixture reproduces ACCEPTANCE_STATUS_P exactly."""
+    patients = _patient_df_with_share(0.60)
+    gen = TriggerGenerator(
+        GeneratorConfig(seed=7, n_records=1800, brand=Brand.REMIBRUTINIB),
+        patient_df=patients,
+    )
+    q = gen._acceptance_mixture()
+    assert q is not None
+    share = float(patients["trigger_accepted"].mean())
+    statuses = list(gen.ACCEPTANCE_STATUS_VALUES)
+    p = np.asarray(gen.ACCEPTANCE_STATUS_P, dtype=float)
+    acc = statuses.index("accepted")
+    q1, q0 = np.asarray(q[1]), np.asarray(q[0])
+    assert q1[acc] < 1.0, "fixture unexpectedly hit the degenerate branch"
+    assert q0[acc] == 0.0
+    np.testing.assert_allclose(share * q1 + (1 - share) * q0, p, atol=1e-9)
+    # Frame level: marginals hold AND arm-1 within-patient heterogeneity
+    # survives (arm=1 patients still carry non-accepted triggers).
+    df = gen.generate()
+    dv = df[df["delivery_status"].isin(["delivered", "viewed"])]
+    assert 0.45 <= (dv["acceptance_status"] == "accepted").mean() <= 0.55
+    arm1 = set(patients.loc[patients["trigger_accepted"] == 1, "patient_id"])
+    arm1_triggers = df[df["patient_id"].isin(arm1)]
+    assert (arm1_triggers["acceptance_status"] != "accepted").any(), (
+        "healthy branch must NOT force every arm=1 trigger to 'accepted'"
+    )
+
+
+@pytest.mark.unit
+def test_mixture_degenerate_branch_is_explicit_and_loud():
+    """share <= p[accepted]: q1 collapses to one-hot accepted and the realized
+    acceptance marginal degrades toward the share — LOUDLY below the 0.45 floor
+    the marginal-preservation test enforces, never a silent negative q0."""
+    patients = _patient_df_with_share(0.30)
+    gen = TriggerGenerator(
+        GeneratorConfig(seed=7, n_records=1800, brand=Brand.REMIBRUTINIB),
+        patient_df=patients,
+    )
+    q = gen._acceptance_mixture()
+    assert q is not None
+    statuses = list(gen.ACCEPTANCE_STATUS_VALUES)
+    acc = statuses.index("accepted")
+    q1 = np.asarray(q[1])
+    assert q1[acc] == 1.0 and q1.sum() == 1.0, "degenerate branch must be one-hot accepted"
+    df = gen.generate()
+    dv = df[df["delivery_status"].isin(["delivered", "viewed"])]
+    assert (dv["acceptance_status"] == "accepted").mean() < 0.42, (
+        "degraded marginal must be loud (well below the preserved-band floor)"
+    )
 
 
 @pytest.mark.unit
