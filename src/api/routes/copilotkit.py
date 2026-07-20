@@ -2958,11 +2958,15 @@ def create_e2i_chat_agent():
 
         # Get LLM via factory — use Anthropic for reliable tool calling
         try:
+            # 8192 + effort: sonnet-5's adaptive thinking counts against
+            # max_tokens; at 2048 a thinking pass can consume the entire budget
+            # and stream zero text (2026-07-20 frozen-at-75% incident).
             llm = get_chat_llm(
                 model_tier="standard",
-                max_tokens=2048,
+                max_tokens=8192,
                 temperature=0.3,
                 provider="anthropic",
+                reasoning_effort="medium",
             )
             provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for chat")
@@ -3302,11 +3306,15 @@ def create_e2i_chat_agent():
 
         # Get LLM via factory to synthesize tool results — use Anthropic for consistency
         try:
+            # 8192 + effort: sonnet-5's adaptive thinking counts against
+            # max_tokens; at 2048 a thinking pass can consume the entire budget
+            # and stream zero text (2026-07-20 frozen-at-75% incident).
             llm = get_chat_llm(
                 model_tier="standard",
-                max_tokens=2048,
+                max_tokens=8192,
                 temperature=0.3,
                 provider="anthropic",
+                reasoning_effort="medium",
             )
             provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for synthesis")
@@ -3344,6 +3352,17 @@ def create_e2i_chat_agent():
                     logger.debug(f"[CopilotKit] Streamed synthesis chunk: {len(chunk_text)} chars")
 
             logger.debug(f"[CopilotKit] Synthesis streaming complete: {len(full_content)} chars")
+
+            if not full_content.strip():
+                # Fail LOUD: a 0-char synthesis was once persisted as success
+                # and froze the chat at 75% (2026-07-20 incident — thinking
+                # consumed the whole max_tokens budget before any text). Route
+                # to the tool-dump fallback below instead.
+                raise RuntimeError(
+                    "synthesis stream produced no text "
+                    "(model thinking may have consumed the max_tokens budget)"
+                )
+
             response = AIMessage(content=full_content)
 
             # Persist synthesized response
@@ -3409,6 +3428,18 @@ def create_e2i_chat_agent():
             logger.error(f"[CopilotKit] Synthesis failed: {e}")
             result_text = "\n\n".join([f"**{tr['tool']}**: {tr['result']}" for tr in tool_results])
             await copilotkit_emit_message(config, result_text)
+            # Terminal state: the fallback IS a delivered response — without
+            # this the progress UI stays frozen at 75% even though text
+            # arrived (chat_node's except path got the same fix for its 25%
+            # stage).
+            state["current_node"] = "idle"
+            state["progress_percent"] = 100
+            state["agent_status"] = "complete"
+            state["error_message"] = str(e)
+            try:
+                await copilotkit_emit_state(config, state)
+            except Exception as emit_err:
+                logger.debug(f"[CopilotKit] Terminal state emission skipped: {emit_err}")
             # Persist error fallback
             if session_id:
                 try:

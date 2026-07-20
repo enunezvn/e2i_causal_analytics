@@ -84,6 +84,24 @@ def _supports_temperature(model: str) -> bool:
     return not model.startswith(_TEMPERATURE_UNSUPPORTED_PREFIXES)
 
 
+# Claude 5-family models think ADAPTIVELY by default, and thinking tokens count
+# against max_tokens — an eager thinking pass can consume the whole budget and
+# stream zero text (2026-07-20 copilot frozen-at-75% incident: input 32,393 /
+# output exactly 2048, no text blocks). These models reject
+# thinking.type=enabled/budget_tokens; their control surface is
+# thinking.type=adaptive|disabled plus output_config.effort (both verified live
+# on claude-sonnet-5, 2026-07-20).
+_ADAPTIVE_THINKING_PREFIXES = (
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-fable-5",
+)
+
+
+def _supports_adaptive_thinking(model: str) -> bool:
+    return model.startswith(_ADAPTIVE_THINKING_PREFIXES)
+
+
 def get_llm_provider() -> LLMProvider:
     """
     Get the configured LLM provider from environment.
@@ -117,8 +135,11 @@ def get_chat_llm(
             reject it (Claude Sonnet 5 / Opus 4.8, gpt-5.x)
         timeout: Request timeout in seconds
         provider: Override the default provider from environment
-        reasoning_effort: OpenAI gpt-5.x reasoning effort ("none"/"low"/"medium"/
-            "high"); ignored for Anthropic and non-reasoning OpenAI models
+        reasoning_effort: reasoning/thinking effort ("none"/"low"/"medium"/
+            "high"). OpenAI gpt-5.x: passed as reasoning_effort. Claude
+            5-family: "none" disables thinking, other values keep adaptive
+            thinking with output_config.effort bounding its appetite. Ignored
+            for models without a thinking control surface
 
     Returns:
         ChatAnthropic or ChatOpenAI instance
@@ -140,7 +161,7 @@ def get_chat_llm(
     if provider == "openai":
         return _create_openai_llm(model_name, max_tokens, temperature, timeout, reasoning_effort)
     else:
-        return _create_anthropic_llm(model_name, max_tokens, temperature, timeout)
+        return _create_anthropic_llm(model_name, max_tokens, temperature, timeout, reasoning_effort)
 
 
 def _create_anthropic_llm(
@@ -148,6 +169,7 @@ def _create_anthropic_llm(
     max_tokens: int,
     temperature: float,
     timeout: Optional[int],
+    reasoning_effort: Optional[str] = None,
 ):
     """Create a ChatAnthropic instance."""
     try:
@@ -173,6 +195,14 @@ def _create_anthropic_llm(
         kwargs["temperature"] = temperature
     if timeout is not None:
         kwargs["timeout"] = timeout
+    if reasoning_effort is not None and _supports_adaptive_thinking(model):
+        if reasoning_effort == "none":
+            kwargs["thinking"] = {"type": "disabled"}
+        else:
+            kwargs["thinking"] = {"type": "adaptive"}
+            # ChatAnthropic has no output_config field; model_kwargs merges
+            # into the request payload.
+            kwargs["model_kwargs"] = {"output_config": {"effort": reasoning_effort}}
 
     return ChatAnthropic(**kwargs)  # type: ignore[arg-type]
 
