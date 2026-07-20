@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from redis.exceptions import RedisError
 
 from src.api.dependencies.auth import require_analyst
+from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.repositories.provenance import apply_provenance_filter
 
@@ -1096,6 +1097,12 @@ async def run_segment_analysis(
         # F-010-backend (#429, codex iter-1 M1): preserve 503 from
         # agent-import guard.
         raise
+    except HeavyComputeSaturated:
+        # OOM guard (#1293): the worker rejected this heavy fit fast because it is
+        # saturated. Re-raise so the app-level handler maps it to 503 + Retry-After
+        # — must precede the broad handler below or it becomes a 500. Nothing was
+        # started, so we store no FAILED record; the client simply retries.
+        raise
     except Exception as e:
         logger.error(f"Segment analysis failed: {e}", exc_info=True)
         response.status = SegmentAnalysisStatus.FAILED
@@ -1632,6 +1639,19 @@ async def _run_segment_analysis_task(
             detail = e.detail if isinstance(e.detail, str) else "Segment analysis failed."
             existing.warnings.append(f"Segment analysis failed: {detail}")
             await _analyses_store.set(analysis_id, existing)
+    except HeavyComputeSaturated:
+        # OOM guard (#1293): the fit was rejected fast because the worker is
+        # saturated (this async task never gets a 503 back to the client, so record
+        # a SPECIFIC, safe warning on the durable store — reject-fast, not a silent
+        # hang or a generic internal error). Must precede the broad handler below.
+        logger.warning(f"Segment analysis {analysis_id} rejected: heavy compute saturated")
+        existing = await _analyses_store.get(analysis_id)
+        if existing is not None:
+            existing.status = SegmentAnalysisStatus.FAILED
+            existing.warnings.append(
+                "Segment analysis rejected: compute capacity saturated; retry later."
+            )
+            await _analyses_store.set(analysis_id, existing)
     except Exception as e:
         logger.error(f"Segment analysis {analysis_id} failed: {e}")
         existing = await _analyses_store.get(analysis_id)
@@ -1685,141 +1705,155 @@ async def _execute_segment_analysis(
         effect_modifiers=effect_modifiers,
     )
 
-    try:
-        # Try to use the actual Heterogeneous Optimizer agent
-        from src.agents.heterogeneous_optimizer.agent import calculate_confidence
-        from src.agents.heterogeneous_optimizer.graph import (
-            create_heterogeneous_optimizer_graph,
-        )
-        from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
+    # The heterogeneous-optimizer graph fit — EconML CATE + CausalML uplift
+    # estimated WITHIN each segment — is the genuinely heavy in-process compute
+    # here. Hold ONE per-worker heavy-compute slot around it (and its mock
+    # fallback) so concurrent background analyses can no longer each spawn fit
+    # threads and push the api container past its 5G cgroup (OOM guard, #1293).
+    # Pre-#1292 the inline loop-blocking fit accidentally serialised analyses
+    # one-at-a-time per worker; once #1292 offloaded the fit with asyncio.to_thread
+    # that implicit bound was gone. The Tier-0 frame load above is light I/O and
+    # is deliberately OUTSIDE the slot. On a saturated worker heavy_compute_slot()
+    # raises HeavyComputeSaturated on ENTER (nothing is queued); both callers of
+    # this helper translate that into a fast reject — the sync route re-raises it
+    # to the app handler (503 + Retry-After) and the background task records a
+    # FAILED 'capacity saturated' analysis rather than hanging.
+    async with heavy_compute_slot():
+        try:
+            # Try to use the actual Heterogeneous Optimizer agent
+            from src.agents.heterogeneous_optimizer.agent import calculate_confidence
+            from src.agents.heterogeneous_optimizer.graph import (
+                create_heterogeneous_optimizer_graph,
+            )
+            from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
-        # Initialize state (cast partial state - remaining fields populated by graph nodes).
-        # The clinical contract is FIXED server-side (the prepared frame is passed
-        # as tier0_data so cate/hierarchical/uplift all consume ONE banded frame):
-        #   - effect_modifiers (X): numeric clinical covariates (drives feature
-        #     importance), NO region.
-        #   - confounders (W): engagement_score pure control — NOT in X (no overlap).
-        #   - segment_vars: banded / raw categoricals present in the frame.
-        initial_state = cast(
-            HeterogeneousOptimizerState,
-            {
-                "query": request.query,
-                "treatment_var": treatment_var,
-                "outcome_var": outcome_var,
-                "segment_vars": list(segment_vars),
-                "effect_modifiers": list(effect_modifiers),
-                # Explicit confounders take precedence-1 in cate_estimator's
-                # _resolve_confounders and are residualized as the DML W (issue
-                # #237).
-                "confounders": list(_SEGMENT_HTE_CONFOUNDERS),
-                # The prepared, banded gold-standard frame — consumed as tier0
-                # priority-1 by cate_estimator / hierarchical / uplift.
-                "tier0_data": tier0_frame,
-                "data_source": _SEGMENT_HTE_DATASET,
-                "filters": request.filters,
-                "n_estimators": request.n_estimators,
-                "min_samples_leaf": request.min_samples_leaf,
-                "significance_level": request.significance_level,
-                "top_segments_count": request.top_segments_count,
-                # Label-gater (opt-in): brand + indication + flag thread through to
-                # cate_estimator (segment augmentation) and policy_learner (the gate).
-                "brand": request.brand,
-                "indication": request.indication,
-                "label_segmentation": request.label_segmentation,
-                "status": "pending",
-                "errors": [],
-                "warnings": [],
-                "estimation_latency_ms": 0,
-                "analysis_latency_ms": 0,
-                "total_latency_ms": 0,
-            },
-        )
+            # Initialize state (cast partial state - remaining fields populated by graph nodes).
+            # The clinical contract is FIXED server-side (the prepared frame is passed
+            # as tier0_data so cate/hierarchical/uplift all consume ONE banded frame):
+            #   - effect_modifiers (X): numeric clinical covariates (drives feature
+            #     importance), NO region.
+            #   - confounders (W): engagement_score pure control — NOT in X (no overlap).
+            #   - segment_vars: banded / raw categoricals present in the frame.
+            initial_state = cast(
+                HeterogeneousOptimizerState,
+                {
+                    "query": request.query,
+                    "treatment_var": treatment_var,
+                    "outcome_var": outcome_var,
+                    "segment_vars": list(segment_vars),
+                    "effect_modifiers": list(effect_modifiers),
+                    # Explicit confounders take precedence-1 in cate_estimator's
+                    # _resolve_confounders and are residualized as the DML W (issue
+                    # #237).
+                    "confounders": list(_SEGMENT_HTE_CONFOUNDERS),
+                    # The prepared, banded gold-standard frame — consumed as tier0
+                    # priority-1 by cate_estimator / hierarchical / uplift.
+                    "tier0_data": tier0_frame,
+                    "data_source": _SEGMENT_HTE_DATASET,
+                    "filters": request.filters,
+                    "n_estimators": request.n_estimators,
+                    "min_samples_leaf": request.min_samples_leaf,
+                    "significance_level": request.significance_level,
+                    "top_segments_count": request.top_segments_count,
+                    # Label-gater (opt-in): brand + indication + flag thread through to
+                    # cate_estimator (segment augmentation) and policy_learner (the gate).
+                    "brand": request.brand,
+                    "indication": request.indication,
+                    "label_segmentation": request.label_segmentation,
+                    "status": "pending",
+                    "errors": [],
+                    "warnings": [],
+                    "estimation_latency_ms": 0,
+                    "analysis_latency_ms": 0,
+                    "total_latency_ms": 0,
+                },
+            )
 
-        # Create and run graph. The factory resolves a SINGLE shared data
-        # connector (when none is supplied) and passes it to BOTH data-fetching
-        # nodes (cate_estimator + hierarchical_analyzer) so they read the same
-        # live substrate; hierarchical_analyzer previously had no source and
-        # raised RuntimeError mid-graph in production (#30). The resolution lives
-        # in the factory (not here) so this function's import-guard / mock-
-        # fallback contract — and the unit tests that patch the factory — stay
-        # intact.
-        graph = create_heterogeneous_optimizer_graph()
-        result = await graph.ainvoke(initial_state)
+            # Create and run graph. The factory resolves a SINGLE shared data
+            # connector (when none is supplied) and passes it to BOTH data-fetching
+            # nodes (cate_estimator + hierarchical_analyzer) so they read the same
+            # live substrate; hierarchical_analyzer previously had no source and
+            # raised RuntimeError mid-graph in production (#30). The resolution lives
+            # in the factory (not here) so this function's import-guard / mock-
+            # fallback contract — and the unit tests that patch the factory — stay
+            # intact.
+            graph = create_heterogeneous_optimizer_graph()
+            result = await graph.ainvoke(initial_state)
 
-        # Convert agent output to API response
-        total_latency = int((time.time() - start_time) * 1000)
+            # Convert agent output to API response
+            total_latency = int((time.time() - start_time) * 1000)
 
-        return SegmentAnalysisResponse(
-            analysis_id="",  # Will be set by caller
-            status=SegmentAnalysisStatus.COMPLETED
-            if result.get("status") == "completed"
-            else SegmentAnalysisStatus.FAILED,
-            question_type=request.question_type,
-            brand=request.brand,
-            treatment_var=treatment_var,
-            outcome_var=outcome_var,
-            cate_by_segment=_convert_cate_results(result.get("cate_by_segment", {})),
-            overall_ate=result.get("overall_ate"),
-            # #27: echo the level the CATE CIs were computed at (alpha=significance_level).
-            confidence_level=1.0 - request.significance_level,
-            heterogeneity_score=result.get("heterogeneity_score"),
-            # _to_native: coerce numpy scalars in the Dict/Any-typed fields below so
-            # the durable store's model_dump_json() can serialize them (numpy.int64
-            # is not JSON/Pydantic-serializable and otherwise fails the analysis).
-            feature_importance=_to_native(result.get("feature_importance")),
-            uplift_metrics=_convert_uplift_metrics(result),
-            high_responders=_convert_segment_profiles(result.get("high_responders", [])),
-            # mid_responders (responder_type="average") — the converter already
-            # accepts "average"; default [] when the graph omits the key.
-            mid_responders=_convert_segment_profiles(result.get("mid_responders", [])),
-            low_responders=_convert_segment_profiles(result.get("low_responders", [])),
-            policy_recommendations=_convert_policies(result.get("policy_recommendations", [])),
-            expected_total_lift=result.get("expected_total_lift"),
-            expected_lift_pp=result.get("expected_lift_pp"),
-            optimal_allocation_summary=result.get("optimal_allocation_summary"),
-            executive_summary=result.get("executive_summary"),
-            # Clinical-HTE rebuild: map the fields that were previously dropped at
-            # the route (codex LOW-2 — read from the final graph state directly).
-            strategic_interpretation=result.get("strategic_interpretation"),
-            segment_comparison=_to_native(result.get("segment_comparison")),
-            # NOTE: the hierarchical node emits the key 'segment_heterogeneity'
-            # (NOT 'segment_heterogeneity_score', which is the TypedDict field).
-            segment_heterogeneity=result.get("segment_heterogeneity"),
-            n_segments_analyzed=result.get("n_segments_analyzed"),
-            # The hierarchical node emits the key 'segmentation_method' (the state
-            # field is named '..._used', but the node sets 'segmentation_method') —
-            # read the key actually emitted, else this is always None.
-            segmentation_method_used=result.get("segmentation_method"),
-            overall_hierarchical_ate=result.get("overall_hierarchical_ate"),
-            hierarchical_segment_results=_to_native(result.get("hierarchical_segment_results")),
-            uplift_by_segment=_to_native(result.get("uplift_by_segment")),
-            key_insights=result.get("key_insights", []),
-            libraries_used=result.get("libraries_executed"),
-            library_agreement_score=result.get("library_agreement_score"),
-            validation_passed=result.get("validation_passed"),
-            estimation_latency_ms=result.get("estimation_latency_ms", 0),
-            analysis_latency_ms=result.get("analysis_latency_ms", 0),
-            total_latency_ms=total_latency,
-            warnings=result.get("warnings", []),
-            # The route invokes the graph DIRECTLY (graph.ainvoke), bypassing
-            # agent._build_output — and no graph node writes "confidence" into the
-            # state, so result.get("confidence", 0.0) always yielded 0.0 (every
-            # completed run showed Confidence 0% on the page). Compute it here from
-            # the SAME SSOT the agent path uses.
-            confidence=calculate_confidence(result),
-        )
+            return SegmentAnalysisResponse(
+                analysis_id="",  # Will be set by caller
+                status=SegmentAnalysisStatus.COMPLETED
+                if result.get("status") == "completed"
+                else SegmentAnalysisStatus.FAILED,
+                question_type=request.question_type,
+                brand=request.brand,
+                treatment_var=treatment_var,
+                outcome_var=outcome_var,
+                cate_by_segment=_convert_cate_results(result.get("cate_by_segment", {})),
+                overall_ate=result.get("overall_ate"),
+                # #27: echo the level the CATE CIs were computed at (alpha=significance_level).
+                confidence_level=1.0 - request.significance_level,
+                heterogeneity_score=result.get("heterogeneity_score"),
+                # _to_native: coerce numpy scalars in the Dict/Any-typed fields below so
+                # the durable store's model_dump_json() can serialize them (numpy.int64
+                # is not JSON/Pydantic-serializable and otherwise fails the analysis).
+                feature_importance=_to_native(result.get("feature_importance")),
+                uplift_metrics=_convert_uplift_metrics(result),
+                high_responders=_convert_segment_profiles(result.get("high_responders", [])),
+                # mid_responders (responder_type="average") — the converter already
+                # accepts "average"; default [] when the graph omits the key.
+                mid_responders=_convert_segment_profiles(result.get("mid_responders", [])),
+                low_responders=_convert_segment_profiles(result.get("low_responders", [])),
+                policy_recommendations=_convert_policies(result.get("policy_recommendations", [])),
+                expected_total_lift=result.get("expected_total_lift"),
+                expected_lift_pp=result.get("expected_lift_pp"),
+                optimal_allocation_summary=result.get("optimal_allocation_summary"),
+                executive_summary=result.get("executive_summary"),
+                # Clinical-HTE rebuild: map the fields that were previously dropped at
+                # the route (codex LOW-2 — read from the final graph state directly).
+                strategic_interpretation=result.get("strategic_interpretation"),
+                segment_comparison=_to_native(result.get("segment_comparison")),
+                # NOTE: the hierarchical node emits the key 'segment_heterogeneity'
+                # (NOT 'segment_heterogeneity_score', which is the TypedDict field).
+                segment_heterogeneity=result.get("segment_heterogeneity"),
+                n_segments_analyzed=result.get("n_segments_analyzed"),
+                # The hierarchical node emits the key 'segmentation_method' (the state
+                # field is named '..._used', but the node sets 'segmentation_method') —
+                # read the key actually emitted, else this is always None.
+                segmentation_method_used=result.get("segmentation_method"),
+                overall_hierarchical_ate=result.get("overall_hierarchical_ate"),
+                hierarchical_segment_results=_to_native(result.get("hierarchical_segment_results")),
+                uplift_by_segment=_to_native(result.get("uplift_by_segment")),
+                key_insights=result.get("key_insights", []),
+                libraries_used=result.get("libraries_executed"),
+                library_agreement_score=result.get("library_agreement_score"),
+                validation_passed=result.get("validation_passed"),
+                estimation_latency_ms=result.get("estimation_latency_ms", 0),
+                analysis_latency_ms=result.get("analysis_latency_ms", 0),
+                total_latency_ms=total_latency,
+                warnings=result.get("warnings", []),
+                # The route invokes the graph DIRECTLY (graph.ainvoke), bypassing
+                # agent._build_output — and no graph node writes "confidence" into the
+                # state, so result.get("confidence", 0.0) always yielded 0.0 (every
+                # completed run showed Confidence 0% on the page). Compute it here from
+                # the SAME SSOT the agent path uses.
+                confidence=calculate_confidence(result),
+            )
 
-    except ImportError as e:
-        # F-010-backend (#429): fail-closed in production unless mock-fallback
-        # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
-        from src.api.utils.agent_import_guard import guard_or_raise
+        except ImportError as e:
+            # F-010-backend (#429): fail-closed in production unless mock-fallback
+            # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
+            from src.api.utils.agent_import_guard import guard_or_raise
 
-        guard_or_raise(e, agent_name="Heterogeneous Optimizer")
-        return _generate_mock_response(request, start_time)
+            guard_or_raise(e, agent_name="Heterogeneous Optimizer")
+            return _generate_mock_response(request, start_time)
 
-    except Exception as e:
-        logger.error(f"Segment analysis execution failed: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"Segment analysis execution failed: {e}")
+            raise
 
 
 def _to_native(obj: Any) -> Any:
