@@ -183,13 +183,17 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
 # Digit sequences (integers or decimals) — the unit of the fail-closed subset
 # guard. "67.5" is ONE token: an LM re-rounding it to "67" or "68" fails the
 # guard rather than serving a figure the grounding cannot vouch for.
+# Thousands separators are normalized first ("12,345" ≡ "12345"): _fmt_value
+# renders large volumes with commas and the LM may cite either form — both
+# must tokenize identically or a verbatim quote gets falsely rejected.
 _DIGIT_RE = re.compile(r"\d+(?:\.\d+)?")
+_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d)")
 
 _NO_CONTEXT = "No data-constraint context is available for this scope."
 
 
 def _digit_sequences(text: str) -> set[str]:
-    return set(_DIGIT_RE.findall(text))
+    return set(_DIGIT_RE.findall(_THOUSANDS_RE.sub("", text)))
 
 
 def _digit_violation(outputs: list[str], corpus: str) -> str | None:

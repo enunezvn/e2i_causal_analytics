@@ -93,6 +93,23 @@ def test_digits_from_constraint_context_are_allowed():
     assert out["is_fallback"] is False
 
 
+def test_thousands_separator_forms_are_equivalent():
+    """_fmt_value renders volumes with commas ('12,345'); the LM may cite
+    either '12,345' or '12345' — both must pass, and neither may leak the
+    fragment tokens ('12'/'345') as independently-allowed digits."""
+    g = _g()
+    g["kpi_table"] = "Total Prescriptions (TRx) [ws3_business]: 12,345 (warning)"
+    for quote in ("12,345", "12345"):
+        ok = _pred(f"TRx volume stands at {quote} scripts.")
+        with patch.object(home_kpi, "run_signature", return_value=ok):
+            out = home_kpi.generate_insight(g)
+        assert out["is_fallback"] is False, quote
+    fragment = _pred("Volume rose by 345 scripts.")
+    with patch.object(home_kpi, "run_signature", return_value=fragment):
+        out = home_kpi.generate_insight(g)
+    assert out["is_fallback"] is True
+
+
 def test_build_grounding_renders_lower_is_better_hint():
     meta = SimpleNamespace(
         id="WS1-DQ-006",
