@@ -29,7 +29,11 @@ _PRE_PSP_INVARIANT = {
         "engagement_score": "eb514850e0d1892c",
         "treatment_arm": "bddd18e722dc784c",
         "propensity_score": "ff7ca1d21394a4ee",
-        "treatment_initiated": "38c219eefa1b88f5",
+        # treatment_initiated DELIBERATELY dropped from psp's invariant set as of
+        # COMM-ARMS Phase 3: rep_detailing_high + sample_dropped now fold into the
+        # initiation latent, so treatment_initiated is no longer byte-identical to the
+        # pre-psp stream (psp still does not touch it — Phase 3 does). Its invariance is
+        # now owned by test_rep_sample_generator_wiring.py's DID-change guard.
         "segment_assignment": "97f865ca7980d7c2",
         "insurance_type": "5e5a51c7f9782291",
         "comorbidity_burden": "104b132fe693dc95",
@@ -48,7 +52,7 @@ _PRE_PSP_INVARIANT = {
         "engagement_score": "2bf1f8974caa4d99",
         "treatment_arm": "b85024b8e0902234",
         "propensity_score": "83270b5be5848dd3",
-        "treatment_initiated": "9ffccc923d37461d",
+        # treatment_initiated dropped as of COMM-ARMS Phase 3 (see Remibrutinib note above).
         "segment_assignment": "f9e258f8b0cd171a",
         "insurance_type": "b2825bbfbf6b7b0e",
         "comorbidity_burden": "ae031168e27b686f",

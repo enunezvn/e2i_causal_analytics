@@ -834,7 +834,18 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # only wires those relationships).
 _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     "patient_journeys": {
-        "treatment": ["treatment_arm", "treatment_initiated", "copay_support", "psp_enrolled"],
+        "treatment": [
+            "treatment_arm",
+            "treatment_initiated",
+            "copay_support",
+            "psp_enrolled",
+            # COMM-ARMS Phase 3: rep_detailing_high + sample_dropped, two arms that fold
+            # into the treatment_initiated (initiation) latent. Their backdoor
+            # {academic_hcp, engagement_score} is already in the covariate list below, so
+            # the confounder-contract guard is satisfied without a new covariate.
+            "rep_detailing_high",
+            "sample_dropped",
+        ],
         "outcome": [
             "persistent_180d",
             "discontinued_180d",
@@ -1007,6 +1018,9 @@ _COLUMN_LABELS: Dict[str, str] = {
     "biologic_experienced": "Biologic-experienced (prior anti-IgE)",
     "copay_support": "Copay support",
     "psp_enrolled": "Patient support program",
+    # COMM-ARMS Phase 3: two initiation-latent commercial arms.
+    "rep_detailing_high": "High rep detailing",
+    "sample_dropped": "Sample dropped",
     # NOT a measured payer metric: a deterministic access gradient derived from
     # insurance_type (range approx -0.35..+0.45, higher = better access). The label
     # says "derived" for the same reason disease_severity's label says
@@ -1046,6 +1060,8 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "gap_days",
         "copay_support",
         "psp_enrolled",
+        "rep_detailing_high",  # Phase 3: 0/1 initiation-latent arm, float-coerced
+        "sample_dropped",  # Phase 3: 0/1 initiation-latent arm, float-coerced
         "insurance_access_score",
     },
     "hcp_adoption": {

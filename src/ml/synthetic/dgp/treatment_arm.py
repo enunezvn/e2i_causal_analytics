@@ -104,6 +104,43 @@ _PSP_CATE = {
     "low_severity": 0.05,
 }
 
+# COMM-ARMS Phase 3 (2026-07-20): rep_detailing_high + sample_dropped, TWO arms that
+# fold into the INITIATION latent (treatment_initiated) — the SAME latent as
+# treatment_arm, unlike copay/psp which target adherence/persistence. Constants are
+# MEASURED (harness: scratchpad phase3_disproof v1-v4, 2026-07-20), not guessed. Both
+# confound on academic_hcp + engagement_score (already-allowlisted numeric covariates):
+# a rep who details heavily and drops samples skews to academic + high-engagement HCPs.
+#
+# WHY the WIDE rep high-medium gap ({0.36,0.14,0.05}, high/med ratio 2.57 ~ copay's 2.44):
+# rep is a WEAK arm (+3-6pp design) and at that magnitude CausalForestDML sits at the
+# n=8000 medium-segment resolution floor (the copay/psp phenomenon). The first guess
+# {0.30,0.15,0.06} flipped rep's recovered high>med>low ordering at 3/12 seed-brand cells
+# (Remi/123, Fabh/7, Fabh/123); the copay-shaped {0.36,0.14,0.05} cut it to 1/12 (only
+# Fabhalta/seed123, the flattest 0.70-scale brand) WITHOUT inflating the RD-scale ATE —
+# nonlinear RD compression absorbs the wider LATENT gap, so rep's realized ATE stays
+# ~+6.5pp (Remi base). ALL cells recover the ATE (|est-true| <= 0.028 << 0.15) and order
+# strictly at the gate seed (21); the recovery gate asserts ordering@seed21 + ATE multi-
+# seed, mirroring treatment_arm's own seed-21 ordering gate (test_dgp_recovery_probe.py).
+# sample {0.20,0.10,0.04} orders 12/12; its intercept -1.05 keeps share ~0.37 (rep -0.80
+# => ~0.49) — realistic detailing/sampling penetration, well below the 0.61/0.50 an
+# un-lowered intercept gave (share is RD-ATE-neutral: the effect is population-weighted).
+_REP_BETA_ACADEMIC = 0.60  # academic HCPs get more high-touch rep detailing
+_REP_BETA_ENGAGEMENT = 0.18  # more-engaged HCPs get more detailing (centered at 5)
+_REP_INTERCEPT = -0.80  # base share ~0.49 (measured)
+_REP_CATE = {
+    "high_severity": 0.36,
+    "medium_severity": 0.14,
+    "low_severity": 0.05,
+}
+_SAMPLE_BETA_ACADEMIC = 0.40  # academic HCPs more often have samples dropped
+_SAMPLE_BETA_ENGAGEMENT = 0.12  # more-engaged HCPs more often sampled (centered at 5)
+_SAMPLE_INTERCEPT = -1.05  # base share ~0.37 (measured)
+_SAMPLE_CATE = {
+    "high_severity": 0.20,
+    "medium_severity": 0.10,
+    "low_severity": 0.04,
+}
+
 ARM_REGISTRY: Dict[str, ArmSpec] = {
     "treatment_arm": ArmSpec(
         name="treatment_arm",
@@ -136,6 +173,28 @@ ARM_REGISTRY: Dict[str, ArmSpec] = {
         cate_by_segment=_PSP_CATE,
         target_outcomes=("adherent_180d", "persistent_180d"),
         center={"disease_severity": 5.0, "engagement_score": 5.0},
+    ),
+    "rep_detailing_high": ArmSpec(
+        name="rep_detailing_high",
+        confounders={
+            "academic_hcp": _REP_BETA_ACADEMIC,
+            "engagement_score": _REP_BETA_ENGAGEMENT,
+        },
+        intercept=_REP_INTERCEPT,
+        cate_by_segment=_REP_CATE,
+        target_outcomes=("treatment_initiated",),
+        center={"engagement_score": 5.0},
+    ),
+    "sample_dropped": ArmSpec(
+        name="sample_dropped",
+        confounders={
+            "academic_hcp": _SAMPLE_BETA_ACADEMIC,
+            "engagement_score": _SAMPLE_BETA_ENGAGEMENT,
+        },
+        intercept=_SAMPLE_INTERCEPT,
+        cate_by_segment=_SAMPLE_CATE,
+        target_outcomes=("treatment_initiated",),
+        center={"engagement_score": 5.0},
     ),
 }
 
@@ -244,6 +303,18 @@ _BRAND_CATE_SCALE: Dict[Brand, float] = {
 # NOT in brand_scaled_cate — so brand_scaled_cate stays the pure base×brand-scale map
 # (Remi@1.0 == base config). CATE high>med>low ordering is preserved (uniform factor).
 _INIT_LATENT_CATE_BOOST = 1.30
+
+# Initiation-latent baseline coefficients + noise/prevalence, promoted to module SSOT so
+# both binary_outcome_with_cate (below) AND the multi-arm initiation folder
+# (initiation_outcomes.generate_initiation_outcome, COMM-ARMS Phase 3) build the SAME
+# latent. These were TUNED by the Task 03.5 recovery probe — see binary_outcome_with_cate's
+# docstring for the full derivation (0.20/0.30/1.0 flipped medium-vs-low; 0.6 is the noise
+# sweet spot). A drift here silently de-calibrates BOTH the initiation AUC gate and the
+# ATE/CATE recovery gate, so they live in one place.
+_INIT_BASE_SEVERITY_COEF = 0.10
+_INIT_BASE_ACADEMIC_COEF = 0.15
+_INIT_NOISE_STD = 0.6
+_INIT_TARGET_PREVALENCE = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -493,10 +564,10 @@ def binary_outcome_with_cate(
     segment: np.ndarray,
     cate_map: Dict[str, float],
     rng: np.random.Generator,
-    target_prevalence: float = 0.35,
-    baseline_severity_coef: float = 0.10,
-    baseline_academic_coef: float = 0.15,
-    noise_std: float = 0.6,
+    target_prevalence: float = _INIT_TARGET_PREVALENCE,
+    baseline_severity_coef: float = _INIT_BASE_SEVERITY_COEF,
+    baseline_academic_coef: float = _INIT_BASE_ACADEMIC_COEF,
+    noise_std: float = _INIT_NOISE_STD,
     prognostic_offset: np.ndarray | None = None,
     cate_modifier: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:

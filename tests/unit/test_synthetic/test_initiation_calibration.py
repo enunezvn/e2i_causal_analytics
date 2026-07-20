@@ -14,11 +14,14 @@ HURT" experiment measured THAT ceiling). T11 adds 4 prognostic drivers (insuranc
 access, age, comorbidity, prior-therapy) to the latent baseline via
 initiation_prognostic_offset, drawn ⊥ treatment_arm so ATE/CATE recovery is preserved.
 
-The enriched equation must achieve a realistic ~0.78-0.83 holdout AUC per brand with
+The enriched equation must achieve a realistic ~0.78-0.86 holdout AUC per brand with
 prevalence ~0.35 (the prevalence-banded construction pins it). These asserted numbers
 LOCK _INIT_DRIVER_SCALE (the way T9 locked cohort_outcomes). Measured (2026-06-22,
 n=20000, scale=0.75): Remi 0.804 / Fabhalta 0.797 / Kisqali 0.798, init_prev 0.35,
-19 encoded features (7 covariates).
+19 encoded features (7 covariates). COMM-ARMS Phase 3 (2026-07-20) adds rep_detailing_high
++ sample_dropped to the initiation spec (9 covariates, 23 encoded features) — pre-index
+causal drivers of initiation the model may legitimately observe — lifting the AUC to
+Remi 0.846 / Fabhalta 0.829 / Kisqali 0.846 (ceiling re-based to 0.86).
 
 Hermetic: generates in-memory frames; no DB, no mocks. n=20000 keeps the holdout
 (~3000 rows) large enough that the AUC reflects the DGP's true signal, not noise.
@@ -67,27 +70,29 @@ def faithful() -> dict:
     return {b: _faithful(b) for b in Brand}
 
 
-# Per-brand initiation AUC ceiling. Remibrutinib carries a HIGHER ceiling because
-# Phase 3 (CLIN-SEG-P3, PR pending 2026-07-13) plants a recoverable biologic-
-# experience differential CATE on its initiation outcome: boosting the naive
-# majority's effect (mean-preserving 2x spread) SHARPENS the severity->initiation
-# gradient the leakage-safe 7-covariate model reads, lifting the faithful holdout
-# AUC 0.804 -> ~0.839 (measured seed=42, n=20000). This is a DELIBERATE DGP change,
-# not leakage: biologic_experienced is NOT a model feature (it's not in the
-# initiation spec) and is orthogonal to every covariate (corr<0.002 vs severity/arm;
-# control init-rate is identical naive-vs-experienced). Re-baselined here in the
-# same commit per the band's re-base protocol. Kisqali/Fabhalta are byte-identical
-# to pre-P3 (biologic 100% NULL for them) and keep the original 0.83 ceiling.
-_INIT_AUC_CEILING = {"Remibrutinib": 0.85}
+# Per-brand initiation AUC ceiling — UNIFORM 0.86 after COMM-ARMS Phase 3.
+#
+# History: Remibrutinib carried a higher 0.85 ceiling because CLIN-SEG-P3's biologic-
+# experience differential sharpened its severity->initiation gradient (0.804 -> ~0.839).
+# COMM-ARMS Phase 3 (2026-07-20) adds rep_detailing_high + sample_dropped to the initiation
+# SPEC (_BASE9_INITIATION): both arms fold into the treatment_initiated latent AND are
+# pre-index (assigned from academic_hcp + engagement_score, BEFORE the initiation decision),
+# so letting the model observe them is real observable-driver signal — the exact analogue of
+# copay/psp on persistence, NOT leakage. Measured (seed=42, n=20000, 23 encoded features):
+# Remibrutinib 0.846 / Fabhalta 0.829 / Kisqali 0.846 (Kisqali/Fabhalta gain the most —
+# they lack the biologic lift so rep/sample add the most marginal AUC). Re-based to a
+# uniform 0.86 (~0.014-0.031 headroom) which still fails on gross leakage (>0.9).
+_INIT_AUC_CEILING = {"Remibrutinib": 0.86, "Fabhalta": 0.86, "Kisqali": 0.86}
 
 
 def test_initiation_auc_in_target_band(faithful):
     for b, m in faithful.items():
         # prevalence-banded construction pins initiation prevalence at ~0.35
         assert 0.25 <= m["init_prev"] <= 0.45, f"{b.value}: init_prev {m['init_prev']} out of band"
-        # 7 covariates → ~19 encoded features (was 9 for the 3-covariate model).
+        # 9 covariates (_BASE9_INITIATION: _BASE7 + rep_detailing_high + sample_dropped)
+        # → ~23 encoded features (was 19 for the 7-covariate set; 9 for the legacy base-3).
         assert m["n_features"] >= 15, (
-            f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
+            f"{b.value}: only {m['n_features']} encoded features (expected the 9-covariate set)"
         )
         ceiling = _INIT_AUC_CEILING.get(b.value, 0.83)
         assert 0.78 <= m["auc"] <= ceiling, (

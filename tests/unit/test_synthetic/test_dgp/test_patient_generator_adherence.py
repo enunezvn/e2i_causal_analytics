@@ -26,10 +26,12 @@ def test_generator_emits_adherence_columns_and_true_ate_by_arm():
     assert set(np.unique(df["copay_support"])) <= {0, 1}
     assert set(np.unique(df["psp_enrolled"])) <= {0, 1}
 
-    # Phase 3 columns remain NULL placeholders (so the loader carries them)
+    # COMM-ARMS Phase 3: rep_detailing_high + sample_dropped are now POPULATED (they fold
+    # into the initiation latent) — no longer the NULL placeholders they were pre-Phase-3.
     for col in ("rep_detailing_high", "sample_dropped"):
         assert col in df.columns
-        assert df[col].isna().all()
+        assert df[col].notna().all(), f"{col} should be populated once its arm is wired"
+        assert set(np.unique(df[col])) <= {0, 1}
 
     # per-arm ground truth for the adherence outcomes
     tba = df.attrs["true_ate_by_arm"]

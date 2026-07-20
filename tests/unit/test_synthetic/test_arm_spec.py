@@ -17,7 +17,14 @@ from src.ml.synthetic.dgp.treatment_arm import (
 
 @pytest.mark.unit
 def test_registry_contains_the_existing_arm_and_commercial_arms():
-    assert set(ARM_REGISTRY) == {"treatment_arm", "copay_support", "psp_enrolled"}
+    assert set(ARM_REGISTRY) == {
+        "treatment_arm",
+        "copay_support",
+        "psp_enrolled",
+        # COMM-ARMS Phase 3: two arms folding into the treatment_initiated latent.
+        "rep_detailing_high",
+        "sample_dropped",
+    }
 
 
 @pytest.mark.unit
