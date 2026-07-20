@@ -678,7 +678,7 @@ async def _backfill_tr001_precision(
         cache,
         numerator=lambda r: r.get("acceptance_status") == "accepted"
         and bool(r.get("outcome_tracked"))
-        and (r.get("outcome_value") or 0) > 0,
+        and float(r.get("outcome_value") or 0) > 0,
         denominator=lambda r: r.get("acceptance_status") == "accepted"
         and bool(r.get("outcome_tracked")),
     )
