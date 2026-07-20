@@ -18,6 +18,8 @@ to a stub so no real agent / Supabase / EconML runs — these tests exercise the
 route's mapping + guards only, mirroring tests/unit/test_api/test_label_gater_converters.py.
 """
 
+import contextlib
+from typing import Any, Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -25,13 +27,17 @@ import pandas as pd
 import pytest
 from fastapi import HTTPException
 
+from src.api.dependencies import compute as compute_mod
+from src.api.dependencies.compute import HeavyComputeSaturated
 from src.api.routes.segments import (
     ResponderType,
     RunSegmentAnalysisRequest,
     SegmentAnalysisResponse,
     SegmentAnalysisStatus,
+    _DurableAnalysesStore,
     _execute_segment_analysis,
     _load_segment_hte_frame,
+    _run_segment_analysis_task,
 )
 
 # =============================================================================
@@ -154,6 +160,33 @@ def _patch_loader(frame: pd.DataFrame):
         "src.api.routes.segments._load_segment_hte_frame",
         new=AsyncMock(return_value=frame),
     )
+
+
+@contextlib.contextmanager
+def _saturate_heavy_compute() -> Iterator[None]:
+    """Occupy the per-loop heavy-compute limiter so the NEXT ``heavy_compute_slot()``
+    enter rejects fast (``HeavyComputeSaturated``) without any fit running.
+
+    This is the honest way to force saturation used by the OOM guard: the limiter
+    (default ``max_concurrency=1``) is a plain in-flight counter keyed by the
+    running event loop, so acquiring it once here leaves the guarded path's own
+    ``acquire()`` over budget. Must run inside a live loop (the limiter resolves
+    ``asyncio.get_running_loop()``), i.e. inside the ``async def`` test body.
+    """
+    compute_mod._reset_limiter_cache_for_tests()
+    limiter = compute_mod.get_heavy_compute_limiter()
+    limiter.acquire()  # occupy the only slot -> now saturated
+    try:
+        yield
+    finally:
+        limiter.release()
+        compute_mod._reset_limiter_cache_for_tests()
+
+
+async def _failing_redis_factory() -> Any:
+    """A Redis factory that always fails, forcing the analyses store onto its
+    in-process fallback so background-task tests never touch a real Redis."""
+    raise ConnectionError("no redis in unit test")
 
 
 # =============================================================================
@@ -488,3 +521,97 @@ async def test_segment_route_accepts_adherent_180d_outcome():
         )
     assert exc_info.value.status_code == 400
     assert "not permitted" in exc_info.value.detail
+
+
+# =============================================================================
+# OOM guard (#1293): bound the background fit with heavy_compute_slot()
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_execute_rejects_fast_when_heavy_compute_saturated(stub_request, rich_graph_result):
+    """With the per-worker heavy-compute slot saturated, _execute_segment_analysis
+    raises HeavyComputeSaturated on slot ENTER — the graph fit never runs (reject
+    fast, nothing queued). The Tier-0 frame load still happens (it is light I/O
+    OUTSIDE the slot), proving the guard boundary sits around the fit, not the load."""
+    loader = AsyncMock(return_value=_make_stub_frame())
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value=rich_graph_result)
+
+    with (
+        patch("src.api.routes.segments._load_segment_hte_frame", new=loader),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        with _saturate_heavy_compute():
+            with pytest.raises(HeavyComputeSaturated):
+                await _execute_segment_analysis(stub_request)
+
+    # Frame load ran OUTSIDE the slot (not blocked); the heavy fit was bounded out.
+    loader.assert_awaited_once()
+    mock_graph.ainvoke.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_happy_path_unaffected_by_slot_guard(stub_request, rich_graph_result):
+    """The heavy_compute_slot guard must not break the happy path: with a free slot
+    the (mocked) graph still runs, a COMPLETED response comes back, and the slot is
+    released (in_flight returns to 0 — no leak)."""
+    compute_mod._reset_limiter_cache_for_tests()
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value=rich_graph_result)
+
+    with (
+        _patch_loader(_make_stub_frame()),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        result = await _execute_segment_analysis(stub_request)
+
+    assert result.status == SegmentAnalysisStatus.COMPLETED
+    mock_graph.ainvoke.assert_awaited_once()
+    assert compute_mod.get_heavy_compute_limiter().in_flight == 0
+    compute_mod._reset_limiter_cache_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_background_task_records_failed_on_saturation(stub_request):
+    """When the slot is saturated, the background task records a FAILED analysis
+    with a SPECIFIC 'capacity saturated' warning (reject fast) — not a generic
+    internal-error warning and not a record stuck in ESTIMATING."""
+    store = _DurableAnalysesStore(redis_factory=_failing_redis_factory)
+    analysis_id = "seg_saturation_probe"
+    await store.set(
+        analysis_id,
+        SegmentAnalysisResponse(
+            analysis_id=analysis_id,
+            status=SegmentAnalysisStatus.PENDING,
+            question_type=stub_request.question_type,
+        ),
+    )
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value={"status": "completed", "cate_by_segment": {}})
+
+    with (
+        patch("src.api.routes.segments._analyses_store", store),
+        _patch_loader(_make_stub_frame()),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        with _saturate_heavy_compute():
+            await _run_segment_analysis_task(analysis_id=analysis_id, request=stub_request)
+
+    stored = await store.get(analysis_id)
+    assert stored is not None
+    assert stored.status == SegmentAnalysisStatus.FAILED
+    assert any("capacity saturated" in w.lower() for w in stored.warnings)
+    assert not any("internal error" in w.lower() for w in stored.warnings)
+    # The heavy fit was bounded out — the task rejected before invoking the graph.
+    mock_graph.ainvoke.assert_not_called()
