@@ -14,7 +14,14 @@ showing the PRE-reseed covariate set:
 2. Feast online store — the materializer runs ``materialize-incremental`` keyed
    on ``event_timestamp``; reseeded rows carry HISTORICAL ``event_date``s outside
    the incremental window, so they are never re-materialized.  A FULL materialize
-   (owned by the ``e2i_feast`` sidecar) is required.
+   (owned by the ``e2i_feast`` sidecar) is required.  AND (#1296) even a FULL
+   materialize silently NO-OPS on a SAME-DAY re-reseed: Feast's Redis store skips
+   any write whose ``event_timestamp`` is ``<=`` the stored ``_ts:<view>`` dedup
+   marker, and both goldstd views derive ``event_timestamp`` from a day-granular
+   ``event_date`` cast to midnight — so a second reseed on the same calendar day
+   ties the marker and is DROPPED (materialize still exits 0, serving stays
+   stale).  The ``_ts:<view>`` markers must therefore be CLEARED before the FULL
+   materialize (``feature_repo/clear_goldstd_ts_markers.py``, run in the sidecar).
 3. SHAP ``global_importance`` cache — ``ml_shap_analyses`` rows are served
    verbatim until ``refresh=true`` recomputes them.
 
@@ -29,7 +36,15 @@ Usage (in order)::
     # 1) re-materialize the 12 bundles + print the next steps
     python -m scripts.sync_goldstd_serving
 
-    # 2) Feast FULL materialize (e2i_feast sidecar — NOT incremental).
+    # 2) Clear the Feast Redis _ts:<view> dedup markers FIRST (#1296), so a
+    #    same-day re-reseed actually propagates. Feast drops writes whose
+    #    event_timestamp is <= the stored marker and event_date is day-granular,
+    #    so without this the FULL materialize below silently no-ops on a second
+    #    reseed on the same calendar day. Dry-run first, then clear (sidecar):
+    docker exec e2i_feast python /feast-src/clear_goldstd_ts_markers.py --dry-run
+    docker exec e2i_feast python /feast-src/clear_goldstd_ts_markers.py
+
+    # 3) Feast FULL materialize (e2i_feast sidecar — NOT incremental).
     #    NOTE: --views is a REPEATABLE flag, one view per flag — a
     #    space-separated list dies with "Got unexpected extra argument"
     #    AND still exits 0 through a pipe (live-caught 2026-07-04):
@@ -37,12 +52,12 @@ Usage (in order)::
         2020-01-01T00:00:00 "$(date -u +%Y-%m-%dT%H:%M:%S)" \\
         --views goldstd_cohort_features --views goldstd_hcp_cohort_features
 
-    # 3) reload the re-materialized bundles. The container is e2i_bentoml
+    # 4) reload the re-materialized bundles. The container is e2i_bentoml
     #    (plain compose) or e2i_bentoml_dev (dev overlay) — resolve with
     #    `docker ps --format '{{.Names}}' | grep bentoml` first:
     docker restart e2i_bentoml
 
-    # 4) ONLY NOW repopulate the SHAP global-importance cache:
+    # 5) ONLY NOW repopulate the SHAP global-importance cache:
     python -m scripts.sync_goldstd_serving --refresh-only
 
 The app image cannot ``import feast`` (#307), so the e2i_feast sidecar owns the
@@ -275,15 +290,21 @@ def main() -> int:
 
     logger.info(
         "Bundles done. Now run, IN ORDER, then the terminal cache refresh:\n"
-        "  1) Feast FULL materialize (e2i_feast sidecar — NOT incremental;\n"
+        "  1) Clear the Feast _ts:<view> dedup markers FIRST so a same-day\n"
+        "     re-reseed propagates (#1296 — Feast drops writes whose event_ts is\n"
+        "     <= the stored marker, and event_date is day-granular). Dry-run,\n"
+        "     then clear, in the e2i_feast sidecar:\n"
+        "       docker exec e2i_feast python /feast-src/clear_goldstd_ts_markers.py --dry-run\n"
+        "       docker exec e2i_feast python /feast-src/clear_goldstd_ts_markers.py\n"
+        "  2) Feast FULL materialize (e2i_feast sidecar — NOT incremental;\n"
         "     --views is REPEATABLE, one view per flag):\n"
         "       docker exec e2i_feast feast --chdir /feast materialize "
         '2020-01-01T00:00:00 "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%S)" '
         "--views goldstd_cohort_features --views goldstd_hcp_cohort_features\n"
-        "  2) Reload the re-materialized bundles (container is e2i_bentoml, or\n"
+        "  3) Reload the re-materialized bundles (container is e2i_bentoml, or\n"
         "     e2i_bentoml_dev under the dev overlay — check docker ps):\n"
         "       docker restart e2i_bentoml\n"
-        "  3) Repopulate the SHAP cache (ONLY after 1+2):\n"
+        "  4) Repopulate the SHAP cache (ONLY after 1+2+3):\n"
         "       python -m scripts.sync_goldstd_serving --refresh-only"
     )
     return rc
