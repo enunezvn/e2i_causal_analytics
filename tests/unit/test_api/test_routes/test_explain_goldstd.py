@@ -77,8 +77,16 @@ class TestModelTypeTaxonomyReconcile:
             "goldstd_cohort_features:copay_support",
             "goldstd_cohort_features:psp_enrolled",
         ]
+        # COMM-ARMS Phase 3: initiation additionally fetches rep_detailing_high +
+        # sample_dropped, which fold into the treatment_initiated latent (the mirror of
+        # copay/psp, which enter the discontinuation logit). persistence/discontinuation
+        # do NOT get the rep/sample refs; initiation does NOT get the copay/psp refs.
+        initiation_arms = [
+            "goldstd_cohort_features:rep_detailing_high",
+            "goldstd_cohort_features:sample_dropped",
+        ]
         expected_by_cohort = {
-            "initiation": base7,
+            "initiation": base7 + initiation_arms,
             "persistence": base7 + commercial,
             "discontinuation": base7 + commercial,
         }
@@ -88,6 +96,8 @@ class TestModelTypeTaxonomyReconcile:
     def test_get_feature_refs_for_model_returns_goldstd_raw(self) -> None:
         service = RealTimeSHAPService.__new__(RealTimeSHAPService)
         refs = service._get_feature_refs_for_model(ModelType.INITIATION)
+        # COMM-ARMS Phase 3: initiation additionally fetches rep_detailing_high +
+        # sample_dropped (folded into the treatment_initiated latent).
         assert refs == [
             "goldstd_cohort_features:disease_severity",
             "goldstd_cohort_features:academic_hcp",
@@ -96,6 +106,8 @@ class TestModelTypeTaxonomyReconcile:
             "goldstd_cohort_features:age_at_diagnosis",
             "goldstd_cohort_features:comorbidity_burden",
             "goldstd_cohort_features:prior_therapy_lines",
+            "goldstd_cohort_features:rep_detailing_high",
+            "goldstd_cohort_features:sample_dropped",
         ]
 
 
