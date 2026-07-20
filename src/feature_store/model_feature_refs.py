@@ -60,6 +60,13 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
     # features SHAP runs over. Fetching only the base 3 here would hand the
     # 7-covariate bundle an incomplete vector (the #576 null-trap → 503), and
     # the live Feature-Importance page would show 3 covariates instead of 7.
+    # COMM-ARMS Phase 3: initiation additionally consumes rep_detailing_high +
+    # sample_dropped (9 refs, not 7) — the two arms that enter the treatment_initiated
+    # latent (initiation_outcomes). This MIRRORS the persistence/discontinuation split
+    # below: copay/psp are on those two cohorts (discontinuation logit) and NOT here;
+    # rep/sample are here and NOT there. Must stay in lockstep with _PATIENT_COVARIATES
+    # in cohort_spec.py — spec says 9, refs must fetch 9, or the bundle gets an incomplete
+    # vector (#576 null-trap → 503).
     "initiation": [
         "goldstd_cohort_features:disease_severity",
         "goldstd_cohort_features:academic_hcp",
@@ -68,6 +75,8 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "goldstd_cohort_features:age_at_diagnosis",
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
+        "goldstd_cohort_features:rep_detailing_high",
+        "goldstd_cohort_features:sample_dropped",
     ],
     # COMM-ARMS Phase 1/2: persistence/discontinuation additionally consume the
     # commercial arms copay_support (Phase 1) + psp_enrolled (Phase 2) — 9 refs, not 7.

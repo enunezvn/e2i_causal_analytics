@@ -301,3 +301,66 @@ def test_copay_planted_ate_is_in_the_designed_band(brand):
     df = PatientGenerator(cfg).generate()
     ate = df.attrs["true_ate_by_arm"]["copay_support"]["low_gap_180d"]["ate"]
     assert 0.05 < ate < 0.18, f"{brand.value} copay planted ATE {ate:.4f} out of band"
+
+
+@pytest.mark.parametrize("seed", [21, 7, 99, 123])
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+@pytest.mark.parametrize("arm", ["rep_detailing_high", "sample_dropped"])
+def test_initiation_commercial_arm_recoverable(arm, brand, seed):
+    """COMM-ARMS Phase 3: rep_detailing_high + sample_dropped -> treatment_initiated must
+    be recoverable off their OWN backdoor {academic_hcp, engagement_score}. These are the
+    FIRST arms to fold into the SAME latent as treatment_arm (initiation), so the fold-
+    faithful disproof also proved treatment_arm's own seed-21 ordering survives (that gate
+    is test_estimators_recover_true_ate_and_cate_ordering above).
+
+    ATE recovery (|est-true|<0.15) is asserted MULTI-SEED (21/7/99/123), like the copay/psp
+    persistence gates — the effects are logit->Bernoulli-scale RD differences and a single
+    seed cannot prove the recovery is not a coin-flip. n=8000 (NOT 3000): rep/sample are
+    DESIGNED WEAK (+3-6pp / +2-5pp), so like copay they sit at CausalForestDML's n=3000
+    medium-segment resolution floor.
+
+    STRICT high>med>low CATE ordering is asserted at the GATE SEED (21) ONLY, for all 3
+    brands — MIRRORING treatment_arm's own seed-21 ordering gate. MEASURED (2026-07-20,
+    phase3_disproof v4): with the copay-shaped {0.36,0.14,0.05} rep map + {0.20,0.10,0.04}
+    sample map, sample orders 12/12 seed-brand cells and rep 11/12 (only Fabhalta/seed123,
+    the flattest 0.70-scale brand at the resolution floor), while ALL cells order at seed 21.
+    Widening the gate to strict ordering at every off-seed would chase that flattest-brand
+    floor; the ATE recovers at every seed regardless (asserted here)."""
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+
+    cfg = GeneratorConfig(seed=seed, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    truth = df.attrs["true_ate_by_arm"][arm]["treatment_initiated"]
+
+    out = recover_ate_and_cate(
+        df,
+        treatment_col=arm,
+        outcome_col="treatment_initiated",
+        confounders=list(ARM_REGISTRY[arm].confounders),
+        segment_col="segment_assignment",
+        true_ate=truth["ate"],
+        cate_map=truth["cate_by_segment"],
+    )
+
+    assert out["propensity_auc"] > 0.5, out
+    assert out["n_treated"] >= 30 and out["n_control"] >= 100, out
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
+    if seed == 21:
+        cate = out["cate_by_segment_estimate"]
+        assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"], out
+
+
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_initiation_arm_planted_ate_in_designed_band(brand):
+    """The planted rep/sample initiation effects must stay in their design bands
+    (rep +3-6pp, sample +2-5pp base; brand-scaled, so Kisqali's 1.40 scale runs hotter —
+    the gate is a generous [0.02, 0.11] envelope, not the illustrative base band). A drift
+    out means the CATE constants were retuned without revisiting the design intent."""
+    cfg = GeneratorConfig(seed=21, n_records=8000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    rep_ate = df.attrs["true_ate_by_arm"]["rep_detailing_high"]["treatment_initiated"]["ate"]
+    sample_ate = df.attrs["true_ate_by_arm"]["sample_dropped"]["treatment_initiated"]["ate"]
+    assert 0.02 < rep_ate < 0.11, f"{brand.value} rep planted ATE {rep_ate:.4f} out of band"
+    assert 0.01 < sample_ate < 0.09, (
+        f"{brand.value} sample planted ATE {sample_ate:.4f} out of band"
+    )

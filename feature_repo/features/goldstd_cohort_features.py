@@ -64,7 +64,9 @@ goldstd_cohort_source = PostgreSQLSource(
             comorbidity_burden::BIGINT AS comorbidity_burden,
             prior_therapy_lines::BIGINT AS prior_therapy_lines,
             copay_support::BIGINT AS copay_support,
-            psp_enrolled::BIGINT AS psp_enrolled
+            psp_enrolled::BIGINT AS psp_enrolled,
+            rep_detailing_high::BIGINT AS rep_detailing_high,
+            sample_dropped::BIGINT AS sample_dropped
         FROM patient_journeys
         WHERE event_date >= NOW() - INTERVAL '2000 days'
     """,
@@ -158,6 +160,24 @@ goldstd_cohort_features_fv = FeatureView(
             dtype=Int64,
             description="Patient-support-program commercial arm, 0/1 (persistence + "
             "discontinuation only; NULL until the next synthetic reseed).",
+        ),
+        # --- COMM-ARMS Phase 3: rep_detailing_high + sample_dropped commercial arms ---
+        # The MIRROR of copay/psp above: these two enter the INITIATION latent
+        # (treatment_initiated via initiation_outcomes), so the initiation cohort consumes
+        # them and persistence/discontinuation do NOT. Real pre-index outcome signal, not
+        # leakage. NULL until the next synthetic reseed; declared here so the initiation
+        # refs that request them are not a #576 null-trap.
+        Field(
+            name="rep_detailing_high",
+            dtype=Int64,
+            description="High-rep-detailing commercial arm, 0/1 (initiation only; "
+            "NULL until the next synthetic reseed).",
+        ),
+        Field(
+            name="sample_dropped",
+            dtype=Int64,
+            description="Sample-dropped commercial arm, 0/1 (initiation only; "
+            "NULL until the next synthetic reseed).",
         ),
     ],
     source=goldstd_cohort_source,

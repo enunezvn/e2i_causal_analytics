@@ -116,8 +116,17 @@ _BASE8_COMMERCIAL = _BASE7 + ("copay_support",)
 # it recovers ~+0.004 faithful holdout AUC (measured). initiation stays at _BASE7 (psp
 # is not in the treatment_initiated equation).
 _BASE9_COMMERCIAL = _BASE8_COMMERCIAL + ("psp_enrolled",)
+# COMM-ARMS Phase 3 (2026-07-20): INITIATION gains rep_detailing_high + sample_dropped.
+# This is the MIRROR IMAGE of copay/psp above: those two enter the discontinuation logit
+# (persistence/discontinuation cohorts) and NOT the initiation equation, so they were
+# added to _BASE9_COMMERCIAL but withheld from initiation. rep/sample are the opposite —
+# they enter ONLY the treatment_initiated latent (initiation_outcomes), so they belong on
+# initiation and are withheld from persistence/discontinuation (adding them there would
+# feed those models a pure-noise feature). Same lockstep contract as copay/psp: a spec
+# covariate the refs don't fetch => incomplete serving vector (#576 null-trap → 503).
+_BASE9_INITIATION = _BASE7 + ("rep_detailing_high", "sample_dropped")
 _PATIENT_COVARIATES: dict[str, tuple[str, ...]] = {
-    "initiation": _BASE7,
+    "initiation": _BASE9_INITIATION,
     "persistence": _BASE9_COMMERCIAL,
     "discontinuation": _BASE9_COMMERCIAL,
 }

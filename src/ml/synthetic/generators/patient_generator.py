@@ -12,6 +12,7 @@ import pandas as pd
 from scipy.special import expit
 
 from src.ml.synthetic.dgp.adherence_outcomes import generate_adherence_outcomes
+from src.ml.synthetic.dgp.initiation_outcomes import generate_initiation_outcome
 
 from ..clinical_codes import BRAND_ELIGIBILITY_FIELDS, brand_codes
 from ..config import (
@@ -28,7 +29,6 @@ from ..dgp.treatment_arm import (
     assign_arm_from_spec,
     assign_segment,
     assign_treatment_arm,
-    binary_outcome_with_cate,
     biologic_cate_modifier,
     brand_scaled_cate,
     initiation_prognostic_offset,
@@ -48,6 +48,14 @@ _COPAY_SPAWN_KEY = 0xC0FA
 # move, because psp genuinely enters both latents. Distinct key => copay and psp draw
 # from non-overlapping streams (no shared entropy that would correlate the arms).
 _PSP_SPAWN_KEY = 0x9527
+# Phase 3: INDEPENDENT substreams for the rep_detailing_high + sample_dropped arms.
+# Distinct from copay/psp/biologic keys so all commercial arms draw from non-overlapping
+# streams. Unlike copay/psp (assigned AFTER the initiation outcome because they feed the
+# LATER adherence/persistence latents), rep/sample feed the INITIATION latent and so are
+# assigned BEFORE it — but from these substreams, so the main self._rng stream (and every
+# column not causally downstream of who-initiates) stays byte-identical to pre-Phase-3.
+_REP_SPAWN_KEY = 0x8EE9
+_SAMPLE_SPAWN_KEY = 0x5A3D
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -150,19 +158,71 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # per-unit RD-scale (de-confounded, recoverable) segment CATE. T11: the 4
         # prognostic drivers enter via prognostic_offset (⊥ arm) so the goldstd
         # initiation model gains real signal while ATE/CATE recovery is preserved.
+        # Phase 3 (COMM-ARMS): rep_detailing_high + sample_dropped fold into the
+        # INITIATION latent, so they are assigned HERE — BEFORE the treatment_initiated
+        # outcome that consumes them — from independent substreams (no main-stream shift).
+        # Both confound on academic_hcp + engagement_score (drawn above).
+        _rep_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(_REP_SPAWN_KEY,))
+        )
+        rep_spec = ARM_REGISTRY["rep_detailing_high"]
+        rep_detailing_high, rep_propensity = assign_arm_from_spec(
+            rep_spec,
+            {
+                "academic_hcp": confounders["academic_hcp"],
+                "engagement_score": np.asarray(engagement_scores, dtype=float),
+            },
+            _rep_rng,
+        )
+        _sample_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(_SAMPLE_SPAWN_KEY,))
+        )
+        sample_spec = ARM_REGISTRY["sample_dropped"]
+        sample_dropped, sample_propensity = assign_arm_from_spec(
+            sample_spec,
+            {
+                "academic_hcp": confounders["academic_hcp"],
+                "engagement_score": np.asarray(engagement_scores, dtype=float),
+            },
+            _sample_rng,
+        )
+        # Brand-scaled latent CATE maps for the two arms (same _BRAND_CATE_SCALE SSOT the
+        # arm/copay/psp maps use) — NOT the _INIT_LATENT_CATE_BOOST (that is treatment_arm's).
+        _rep_scale = _BRAND_CATE_SCALE.get(brand_enum, 1.0)
+        rep_cate = {
+            seg: round(val * _rep_scale, 4) for seg, val in rep_spec.cate_by_segment.items()
+        }
+        sample_cate = {
+            seg: round(val * _rep_scale, 4) for seg, val in sample_spec.cate_by_segment.items()
+        }
+
         prognostic_offset = initiation_prognostic_offset(
             insurance_type, age_at_diagnosis, comorbidity_burden, prior_therapy_lines
         )
-        treatment_initiated, tau_i = binary_outcome_with_cate(
-            treatment_arm,
-            confounders,
-            segment,
-            latent_cate_map,
-            self._rng,
+        # Phase 3: treatment_arm + rep + sample fold into ONE shared initiation latent.
+        # With rep/sample absent this is byte-identical to the old binary_outcome_with_cate
+        # call (same coefs/boost/single noise draw), so self._rng advances identically.
+        _init = generate_initiation_outcome(
+            treatment_arm=treatment_arm,
+            disease_severity=confounders["disease_severity"],
+            academic_hcp=confounders["academic_hcp"],
+            segment=segment,
+            cate_map=latent_cate_map,
+            rng=self._rng,
             prognostic_offset=prognostic_offset,
+            rep_detailing_high=rep_detailing_high,
+            rep_cate=rep_cate,
+            sample_dropped=sample_dropped,
+            sample_cate=sample_cate,
         )
+        treatment_initiated = _init["treatment_initiated"]
+        tau_i = _init["tau_i"]
         # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
-        cate_map = rd_map_from_tau(segment, tau_i)
+        cate_map = _init["arm_rd_by_segment"]
+        # Per-arm RD ground truth for the recovery gate (may be REVISED for Remibrutinib by
+        # the biologic-differential rebuild below, which re-draws initiation on that brand).
+        rep_rd_by_segment = _init["rep_rd_by_segment"]
+        sample_rd_by_segment = _init["sample_rd_by_segment"]
 
         # Hoist region generation here so it can be passed into the DGP (region now
         # carries real leakage-safe signal via _DISC_REGION_LOGIT) and reused in the
@@ -410,12 +470,13 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 # Phase 1/2 (COMM-ARMS): copay_support + psp_enrolled are POPULATED.
                 "copay_support": copay_support,
                 "psp_enrolled": psp_enrolled,
-                "rep_detailing_high": np.nan,
-                "sample_dropped": np.nan,
+                # Phase 1/2/3 (COMM-ARMS): all four commercial arms are POPULATED.
+                "rep_detailing_high": rep_detailing_high,
+                "sample_dropped": sample_dropped,
                 "copay_support_propensity": np.round(copay_propensity, 4),
                 "psp_enrolled_propensity": np.round(psp_propensity, 4),
-                "rep_detailing_high_propensity": np.nan,
-                "sample_dropped_propensity": np.nan,
+                "rep_detailing_high_propensity": np.round(rep_propensity, 4),
+                "sample_dropped_propensity": np.round(sample_propensity, 4),
                 "insurance_access_score": np.round(insurance_access, 4),
                 "comorbidity_burden": comorbidity_burden,
                 "prior_therapy_lines": prior_therapy_lines,
@@ -429,8 +490,21 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # treatment_effect_estimate / days_to_treatment are rewritten). No-op (returns
         # tau_i unchanged, cate_by_biologic=None) when the frame carries no
         # Remibrutinib rows with a populated biologic_experienced.
-        tau_i, cate_by_biologic = self._apply_biologic_differential(
-            df, np.asarray(segment), confounders, prognostic_offset, latent_cate_map, tau_i
+        tau_i, cate_by_biologic, rep_rd_by_segment, sample_rd_by_segment = (
+            self._apply_biologic_differential(
+                df,
+                np.asarray(segment),
+                confounders,
+                prognostic_offset,
+                latent_cate_map,
+                tau_i,
+                rep_detailing_high=rep_detailing_high,
+                rep_cate=rep_cate,
+                sample_dropped=sample_dropped,
+                sample_cate=sample_cate,
+                rep_rd_by_segment=rep_rd_by_segment,
+                sample_rd_by_segment=sample_rd_by_segment,
+            )
         )
         cate_map = rd_map_from_tau(np.asarray(segment), tau_i)
 
@@ -494,6 +568,25 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "cate_by_segment": _coh["psp_persistent_rd_by_segment"],
             },
         }
+        # Phase 3 (COMM-ARMS): rep_detailing_high + sample_dropped target ONLY
+        # treatment_initiated. Their per-segment RD is the fold-step ground truth
+        # (RE-DERIVED against the biologic-rebuilt score for Remibrutinib frames).
+        # ate = population-mean of the per-segment RD map (segment-marginal). Both maps
+        # are always populated here — generate() unconditionally supplies both arms to the
+        # initiation folder — so narrow the folder's Optional return for the indexing below.
+        assert rep_rd_by_segment is not None and sample_rd_by_segment is not None
+        df.attrs["true_ate_by_arm"]["rep_detailing_high"] = {
+            "treatment_initiated": {
+                "ate": float(np.mean([rep_rd_by_segment[str(s)] for s in segment])),
+                "cate_by_segment": rep_rd_by_segment,
+            },
+        }
+        df.attrs["true_ate_by_arm"]["sample_dropped"] = {
+            "treatment_initiated": {
+                "ate": float(np.mean([sample_rd_by_segment[str(s)] for s in segment])),
+                "cate_by_segment": sample_rd_by_segment,
+            },
+        }
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
         return df
@@ -506,7 +599,19 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         prognostic_offset: np.ndarray,
         latent_cate_map: Dict[str, float],
         tau_i: np.ndarray,
-    ) -> tuple[np.ndarray, Optional[Dict[str, float]]]:
+        *,
+        rep_detailing_high: np.ndarray,
+        rep_cate: Dict[str, float],
+        sample_dropped: np.ndarray,
+        sample_cate: Dict[str, float],
+        rep_rd_by_segment: Optional[Dict[str, float]],
+        sample_rd_by_segment: Optional[Dict[str, float]],
+    ) -> tuple[
+        np.ndarray,
+        Optional[Dict[str, float]],
+        Optional[Dict[str, float]],
+        Optional[Dict[str, float]],
+    ]:
         """Phase 3 (CLIN-SEG-P3): plant the biologic-experience differential CATE on
         the Remibrutinib initiation outcome.
 
@@ -518,14 +623,24 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         deterministic substream, so:
           * the generator's main ``self._rng`` stream is never perturbed, and
           * every non-Remibrutinib row (biologic NULL) is byte-identical to pre-P3.
-        Returns the frame-wide per-unit tau (Remibrutinib rows updated) and the
-        {naive,experienced} RD ground-truth map (or ``None`` when no Remibrutinib
-        rows carry biologic-experience).
+
+        COMM-ARMS Phase 3: the rebuild goes through the SAME multi-arm initiation folder
+        (``generate_initiation_outcome``) as the main call, folding rep_detailing_high +
+        sample_dropped into the Remibrutinib initiation latent — otherwise this rebuild,
+        which overwrites the Remibrutinib outcome, would CLOBBER their planted effect.
+        rep/sample per-segment RD is RE-DERIVED against the rebuilt (biologic-noise) score
+        so the recovery gate compares the estimate against the ground truth of the SAME
+        outcome the estimate is fit on. A Remibrutinib frame is single-brand (mask covers
+        all biologic-populated rows), so the subset RD IS the frame RD.
+
+        Returns (frame-wide per-unit tau with Remibrutinib rows updated, {naive,experienced}
+        biologic RD map, rep RD map, sample RD map). When no Remibrutinib rows carry
+        biologic-experience it is a no-op that passes the inputs straight back.
         """
         biologic = df["biologic_experienced"].to_numpy()
         mask = (df["brand"].to_numpy() == Brand.REMIBRUTINIB.value) & ~pd.isna(biologic)
         if not mask.any():
-            return tau_i, None
+            return tau_i, None, rep_rd_by_segment, sample_rd_by_segment
         idx = np.where(mask)[0]
         bio = biologic[idx].astype(float)  # 0=naive, 1=experienced
         modifier = biologic_cate_modifier(bio)
@@ -535,18 +650,22 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         bio_rng = np.random.default_rng(
             np.random.SeedSequence(self.config.seed, spawn_key=(_BIOLOGIC_SPAWN_KEY,))
         )
-        y_new, tau_new = binary_outcome_with_cate(
-            df["treatment_arm"].to_numpy()[idx].astype(int),
-            {
-                "disease_severity": confounders["disease_severity"][idx],
-                "academic_hcp": confounders["academic_hcp"][idx],
-            },
-            segment[idx],
-            latent_cate_map,
-            bio_rng,
+        _bio = generate_initiation_outcome(
+            treatment_arm=df["treatment_arm"].to_numpy()[idx].astype(int),
+            disease_severity=confounders["disease_severity"][idx],
+            academic_hcp=confounders["academic_hcp"][idx],
+            segment=segment[idx],
+            cate_map=latent_cate_map,
+            rng=bio_rng,
             prognostic_offset=np.asarray(prognostic_offset)[idx],
+            rep_detailing_high=np.asarray(rep_detailing_high)[idx],
+            rep_cate=rep_cate,
+            sample_dropped=np.asarray(sample_dropped)[idx],
+            sample_cate=sample_cate,
             cate_modifier=modifier,
         )
+        y_new = _bio["treatment_initiated"]
+        tau_new = _bio["tau_i"]
 
         # Reconcile days_to_treatment ONLY for rows whose initiation flipped, so
         # unchanged initiators keep their original day and non-initiators stay NaN.
@@ -575,7 +694,26 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             "naive": float(np.mean(tau_new[bio < 0.5])),
             "experienced": float(np.mean(tau_new[bio >= 0.5])),
         }
-        return final_tau, cate_by_biologic
+        # rep/sample RD re-derived against the biologic-rebuilt score (fall back to the
+        # fold-step map only if the arm wasn't supplied to the folder). The biologic map
+        # is derived from the biologic SUBSET (rows with populated biologic_experienced);
+        # for a real Remibrutinib frame that is ALL rows (100% populated), so it covers
+        # every segment. But a partial-biologic frame (e.g. small-n / defaulted-brand test
+        # frames) can leave a segment out of the subset — so MERGE the subset map OVER the
+        # main-call (full-coverage) map: biologic values win where present, main-call values
+        # backfill any uncovered segment, guaranteeing the true_ate_by_arm segment-mean can
+        # never KeyError on a segment the full frame contains.
+        rep_rd_out = (
+            {**(rep_rd_by_segment or {}), **_bio["rep_rd_by_segment"]}
+            if _bio["rep_rd_by_segment"] is not None
+            else rep_rd_by_segment
+        )
+        sample_rd_out = (
+            {**(sample_rd_by_segment or {}), **_bio["sample_rd_by_segment"]}
+            if _bio["sample_rd_by_segment"] is not None
+            else sample_rd_by_segment
+        )
+        return final_tau, cate_by_biologic, rep_rd_out, sample_rd_out
 
     def _generate_confounders(
         self,

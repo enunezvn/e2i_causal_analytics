@@ -305,12 +305,14 @@ def test_hcp_keep_columns_default_is_covariates_not_patient_keep():
 def test_patient_path_uses_spec_base_covariates():
     # Post-T9 landmine fix, the patient path uses spec.base_covariates (not the
     # module KEEP_COLUMNS default). Pre-T11 this coincidentally equaled KEEP_COLUMNS
-    # because initiation was the 3-covariate set; T11 enriched initiation to 7, so
-    # keep_columns now follows the spec's 7-covariate set and DIFFERS from KEEP_COLUMNS.
+    # because initiation was the 3-covariate set; T11 enriched initiation to 7, and
+    # COMM-ARMS Phase 3 folded rep_detailing_high + sample_dropped into the
+    # treatment_initiated latent -> 9. So keep_columns now follows the spec's
+    # 9-covariate set and DIFFERS from KEEP_COLUMNS.
     spec = make_patient_spec("initiation", "Remibrutinib")
     fb = FeatureBuilder(spec)
     assert fb.keep_columns == spec.base_covariates
-    assert len(fb.keep_columns) == 7
+    assert len(fb.keep_columns) == 9
     assert fb.keep_columns != KEEP_COLUMNS
 
 

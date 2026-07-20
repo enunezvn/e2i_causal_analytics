@@ -1,0 +1,89 @@
+COMM-ARMS PHASE 3 — rep_detailing_high + sample_dropped → treatment_initiated
+CHEAPEST-DISPROOF EVIDENCE (measured, not guessed)
+================================================================================
+Date: 2026-07-20
+Harnesses: scratchpad/phase3_disproof.py (v1), _v2 (fold-faithful arm A/B),
+           _v3 (share-reduction), _v4 (copay-shaped wider rep gap — WINNER),
+           phase3_smoke.py (real post-build PatientGenerator frames).
+All reuse the REAL PatientGenerator substrate + the REAL recover_ate_and_cate probe.
+
+LOAD-BEARING ASSUMPTION (named before building)
+--------------------------------------------------------------------------------
+Two new binary arms folded ADDITIVELY into the INITIATION latent —
+  rep_detailing_high (design +3-6pp) and sample_dropped (design +2-5pp), both
+  confounded on {academic_hcp, engagement_score} — are RECOVERABLE (LinearDML
+  |est-true|<0.15 + CATE high>med>low) across 3 brands × seeds {21,7,99,123},
+WITHOUT breaking:
+  (a) the EXISTING treatment_arm → treatment_initiated recovery/ordering gate,
+  (b) the initiation holdout AUC band, and
+  (c) the [0.25,0.45] initiation prevalence band.
+
+Phase 3 is the FIRST enrichment to fold arms into the SAME latent as treatment_arm
+(copay/psp target the separate adherence/persistence latents), so a mistuned fold
+could perturb an ALREADY-GREEN calibration gate — hence the disproof measured
+treatment_arm PRESERVATION, not just rep/sample recovery.
+
+WHAT WAS MEASURED
+--------------------------------------------------------------------------------
+1. rep/sample ATE recovery (n=8000, multi-seed 21/7/99/123 × 3 brands):
+   worst |est-true| rep 0.0284, sample 0.0278 — all << 0.15. propensity AUC
+   ~0.56-0.59, n_treated ~3000-4000 (good common support).
+
+2. CATE ordering (strict high>med>low on the CausalForestDML estimate):
+   - v3 narrow rep map {0.30,0.15,0.06}: rep flipped 3/12 cells (Remi/123, Fabh/7,
+     Fabh/123) — the n=8000 medium-segment RESOLUTION FLOOR for weak arms (copay hit
+     the same at n=3000). sample {0.20,0.10,0.04} ordered 12/12.
+   - v4 copay-shaped rep map {0.36,0.14,0.05} (high/med ratio 2.57 ~ copay's 2.44):
+     cut rep flips to 1/12 (ONLY Fabhalta/seed123, the flattest 0.70-scale brand)
+     WITHOUT inflating the RD-scale ATE — nonlinear RD compression absorbs the wider
+     LATENT gap, so rep's realized ATE stays ~+6.5pp (Remi base). sample still 12/12.
+   - BOTH arms order at the GATE SEED (21) for ALL 3 brands.
+
+3. treatment_arm PRESERVATION (v2 fold-faithful A/B — same noise draw WITHOUT vs
+   WITH the fold; anchored by the REAL recover_ate_and_cate reproducing prod green):
+   - WITHOUT-fold reproduces the prod gate 12/12 ordered.
+   - WITH-fold: seed=21 ordered ALL brands (Remi +0.11, Fabh +0.17, Kisq +0.11).
+   - ONE off-seed flip (Kisq/7, -0.010) is INTRINSIC: WITHOUT-fold Kisq/7 is already
+     thin (+0.067), and share-reduction (0.61->0.49) did NOT fix it (v2 -0.014 ->
+     v3 -0.010). NOT chased — the enforced gate is seed=21 (per test_dgp_recovery_probe).
+
+4. Prevalence pinned 0.350 (band [0.25,0.45]) by the quantile-threshold construction.
+
+5. Initiation AUC — faithful-family proxy DELTA (rep+sample as features, n=20000
+   seed=42): Remi +0.0010, Fabh -0.0004, Kisq +0.0044 (negligible separating power).
+   The AUTHORITATIVE post-build number (real FeatureBuilder + train_cohort_model):
+   Remi 0.846 / Fabh 0.829 / Kisq 0.846 — a LEGITIMATE observable-driver lift (rep/sample
+   are pre-index causal drivers of initiation the model may observe, the analogue of
+   copay/psp on persistence; NOT leakage). Ceiling re-based 0.83/0.85 -> uniform 0.86.
+
+6. REAL post-build frames (phase3_smoke.py, n=8000 seed=21): rep/sample recovery on the
+   ACTUAL generated frame — including the Remibrutinib BIOLOGIC-rebuild path — err
+   0.010/0.023 (Remi), ordered, all 3 brands; treatment_arm err <0.005, ordered.
+
+LOCKED CONSTANTS (v4)
+--------------------------------------------------------------------------------
+rep_detailing_high:  confounders {academic_hcp 0.60, engagement_score 0.18},
+  intercept -0.80 (share ~0.49), cate {high 0.36, med 0.14, low 0.05},
+  center {engagement_score 5.0}, target treatment_initiated.
+sample_dropped:      confounders {academic_hcp 0.40, engagement_score 0.12},
+  intercept -1.05 (share ~0.37), cate {high 0.20, med 0.10, low 0.04},
+  center {engagement_score 5.0}, target treatment_initiated.
+Substream spawn keys: rep 0x8EE9, sample 0x5A3D.
+
+GATE DESIGN (reasoned, precedent-matched)
+--------------------------------------------------------------------------------
+- treatment_arm: KEEP the existing seed=21 strict-ordering gate (green WITH-fold) +
+  seed=42 non-strict ordering via test_initiation_calibration. No new multi-seed arm
+  gate (copay/psp added multi-seed gates for the NEW arm's own recovery, never for
+  treatment_arm preservation).
+- rep/sample (test_initiation_commercial_arm_recoverable): ATE |est-true|<0.15
+  MULTI-SEED (21/7/99/123 × 3 brands) + strict high>med>low ordering at SEED=21 × 3
+  brands (mirrors treatment_arm's own seed-21 ordering gate; honest about the weak-arm
+  off-seed resolution floor at the flattest brand).
+
+INTEGRATION NOTE (Phase-3-specific collision, resolved)
+--------------------------------------------------------------------------------
+_apply_biologic_differential (Remibrutinib-only, post-hoc) REBUILDS treatment_initiated.
+Phase 3 threads rep/sample through the SAME initiation folder in that rebuild (so the
+fold is not clobbered) and RE-DERIVES rep/sample RD against the biologic-noise score.
+Verified GREEN on the real Remibrutinib frame (smoke: rep err 0.010, sample 0.023, ordered).

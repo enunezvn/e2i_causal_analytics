@@ -79,19 +79,23 @@ def test_patient_goldstd_cohorts_fetch_enriched_base7():
         "goldstd_cohort_features:comorbidity_burden",
         "goldstd_cohort_features:prior_therapy_lines",
     }
-    # COMM-ARMS Phase 1/2: the three cohorts are no longer identical. persistence and
-    # discontinuation additionally fetch the commercial arms copay_support (Phase 1) +
-    # psp_enrolled (Phase 2), which both enter the discontinuation logit; initiation
-    # does not, because neither is in the treatment_initiated equation. Asserted PER
-    # COHORT rather than as one shared set so this still fails on drift in either
-    # direction — a shared set would have had to be loosened to accommodate the split,
-    # which would stop catching a cohort that silently loses a ref.
+    # COMM-ARMS Phase 1/2/3: the three cohorts are no longer identical. persistence and
+    # discontinuation additionally fetch copay_support (Phase 1) + psp_enrolled (Phase 2),
+    # which both enter the discontinuation logit; initiation additionally fetches
+    # rep_detailing_high + sample_dropped (Phase 3), which enter the treatment_initiated
+    # latent. The two splits are MIRROR IMAGES — copay/psp are on persistence/disc and NOT
+    # initiation; rep/sample are on initiation and NOT persistence/disc. Asserted PER COHORT
+    # (not one shared set) so this still fails on drift in either direction.
     commercial = {
         "goldstd_cohort_features:copay_support",
         "goldstd_cohort_features:psp_enrolled",
     }
+    initiation_arms = {
+        "goldstd_cohort_features:rep_detailing_high",
+        "goldstd_cohort_features:sample_dropped",
+    }
     expected_by_cohort = {
-        "initiation": base7,
+        "initiation": base7 | initiation_arms,
         "persistence": base7 | commercial,
         "discontinuation": base7 | commercial,
     }

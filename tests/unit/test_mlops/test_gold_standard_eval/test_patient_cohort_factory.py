@@ -29,8 +29,14 @@ _EIGHT = _SEVEN + ("copay_support",)
 # COMM-ARMS Phase 2 (2026-07-19): persistence/discontinuation gain a 9th covariate,
 # psp_enrolled, which also enters the discontinuation logit. initiation stays at 7.
 _NINE = _EIGHT + ("psp_enrolled",)
+# COMM-ARMS Phase 3 (2026-07-20): initiation gains rep_detailing_high + sample_dropped,
+# which fold into the treatment_initiated latent (the mirror image of copay/psp, which
+# enter the discontinuation logit and belong to persistence/discontinuation). So
+# initiation now also carries 9 covariates — but a DIFFERENT ninth pair: the two rep/
+# sample arms, NOT copay/psp. persistence/discontinuation still exclude rep/sample.
+_NINE_INITIATION = _SEVEN + ("rep_detailing_high", "sample_dropped")
 _EXPECTED_COVARIATES = {
-    "initiation": _SEVEN,
+    "initiation": _NINE_INITIATION,
     "persistence": _NINE,
     "discontinuation": _NINE,
 }
@@ -65,12 +71,17 @@ def test_persistence_cohorts_use_nine_covariates():
             assert make_patient_spec(cohort, brand).base_covariates == _NINE, f"{cohort}/{brand}"
 
 
-def test_initiation_stays_at_seven_covariates():
-    """initiation must NOT pick up copay_support: copay does not enter the
-    treatment_initiated equation (verified byte-identical when the arm was wired), so
-    adding it would widen the serving contract for a feature carrying no signal."""
-    assert make_patient_spec("initiation", "Remibrutinib").base_covariates == _SEVEN
-    assert "copay_support" not in make_patient_spec("initiation", "Remibrutinib").base_covariates
+def test_initiation_uses_rep_sample_not_copay_psp():
+    """COMM-ARMS Phase 3: initiation gains rep_detailing_high + sample_dropped, which
+    fold into the treatment_initiated latent (real initiation signal). It must STILL
+    exclude copay_support + psp_enrolled: those enter the discontinuation logit, not
+    treatment_initiated, so fetching them for initiation would widen its serving
+    contract for features carrying no initiation signal (the mirror rationale that keeps
+    rep/sample off persistence/discontinuation)."""
+    init_covs = make_patient_spec("initiation", "Remibrutinib").base_covariates
+    assert init_covs == _NINE_INITIATION
+    assert "rep_detailing_high" in init_covs and "sample_dropped" in init_covs
+    assert "copay_support" not in init_covs and "psp_enrolled" not in init_covs
 
 
 def test_name_helpers():
