@@ -30,13 +30,15 @@ _PRIORITY_LIFT_FACTOR = {"critical": 1.3, "high": 1.3, "medium": 1.0, "low": 0.7
 # #1118 WS2-TR-005 (False Alert Rate): P(field review marks a trigger as a
 # false alert | outcome tracked AND no positive outcome materialized). A false
 # positive can only be MARKED when the outcome was tracked and demonstrably
-# did not pan out (outcome_value NULL or <= 0 — the exact complement of the
-# TR-001 precision numerator `outcome_tracked AND outcome_value > 0`), and
-# field review catches most-but-not-all of those. Realized rate over ALL
-# triggers (the TR-005 denominator):
-#   P(tracked)=0.40 x P(no positive outcome | tracked)~=1-P(accepted)~0.575
-#   x 0.60 ~= 0.14  -> WARNING band (target 0.10 / warning 0.20), coherent
-# with TR-001 precision ~0.38-0.43 CRITICAL from the same table+window.
+# did not pan out (outcome_value <= 0 — the exact complement of the
+# conversion_flag numerator), and field review catches most-but-not-all of
+# those. COMM-ARMS Phase 4 (2026-07-20): "no positive outcome" now means "no
+# REAL prescription landed in the 30d window" (the decoupled substrate), so the
+# realized rate over ALL triggers (the TR-005 denominator) becomes
+#   P(tracked)=0.40 x P(no Rx in-window | tracked)~0.42 x 0.60 ~= 0.10
+# -> the GOOD/WARNING boundary (target 0.10 / warning 0.20). The pre-P4 level
+# was ~0.14 (its complement was the acceptance coin, ~0.575) — the shift is a
+# DEFINITION-DRIVEN discontinuity, disclosed in the Phase 4 PR body.
 _P_FALSE_POSITIVE_MARKED = 0.60
 
 # #1188 (WS2-TR-003 + nba_triggers RCT): arm-conditioned, baseline-PROGNOSTIC
@@ -131,9 +133,14 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
     # P(acceptance_status | delivered or viewed), aligned with
     # ACCEPTANCE_STATUS_VALUES order. The 'overridden' mass (0.14 — just under
     # the TR-006 target 0.15: GOOD, but honestly earned and non-degenerate) is
-    # carved out of pending/rejected/expired; 'accepted' stays at 0.50 so
-    # TR-001 precision (~P(accepted)) and the designed trigger->prescription
-    # conversion lift substrate (accepted-vs-rest arms) are unperturbed.
+    # carved out of pending/rejected/expired; 'accepted' stays at 0.50.
+    # COMM-ARMS Phase 4: on the linked path with a patient-level trigger_accepted
+    # arm, these are the TARGET MARGINALS the arm-conditional mixture
+    # (_acceptance_mixture) reproduces — arm=1 patients draw from q1
+    # (accepted-rich), arm=0 from q0 (accepted mass ZERO), with
+    # share*q1 + (1-share)*q0 == this vector by construction, so TR-004/TR-006
+    # do not move. Standalone / arm-less paths still draw from this vector
+    # directly.
     ACCEPTANCE_STATUS_P = [0.12, 0.50, 0.15, 0.09, 0.14]
 
     @property
@@ -183,14 +190,29 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             # Generate triggers linked to patients (hcp_id is read off the patient
             # row, so hcp_df is not required for the linked path — passing only
             # patient_df keeps the patient's brand/journey flowing into the trigger).
+            # COMM-ARMS Phase 4: when the patient frame carries the trigger_accepted
+            # arm, acceptance_status is drawn from the arm-conditional mixture and
+            # per-patient consistency is enforced (arm=1 <=> >=1 accepted trigger).
+            mixture = self._acceptance_mixture()
             records = []
             triggers_per_patient = max(1, n // len(self.patient_df))
 
             for _, patient in self.patient_df.iterrows():
                 n_triggers = self._rng.integers(1, triggers_per_patient + 2)
+                arm = None
+                if mixture is not None:
+                    raw_arm = patient.get("trigger_accepted")
+                    if raw_arm is not None and not pd.isna(raw_arm):
+                        arm = int(raw_arm)
+                start = len(records)
                 for _ in range(n_triggers):
-                    record = self._generate_trigger_record(patient)
+                    record = self._generate_trigger_record(
+                        patient,
+                        acceptance_p=mixture[arm] if mixture and arm is not None else None,
+                    )
                     records.append(record)
+                if arm == 1:
+                    self._enforce_arm_consistency(records, start)
 
             df = pd.DataFrame(records)
         else:
@@ -208,22 +230,152 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         # probability (accepted > rejected), scaled by priority. The injected rows are
         # exposed via self.injected_prescriptions and MUST be merged into
         # treatment_events by the loader caller (load_synthetic_data.py, Task 4).
-        self.injected_prescriptions = self._inject_conversion_prescriptions(df)
+        inject_mask, self.injected_prescriptions = self._inject_conversion_prescriptions(df)
+
+        # COMM-ARMS Phase 4: outcome_value is DECOUPLED from acceptance — the outcome
+        # is the REAL downstream prescription inside the 30d window (injected OR
+        # baseline treatment_events), for triggers of EVERY acceptance status.
+        df = self._finalize_outcomes(df, inject_mask)
 
         self._log(f"Generated {len(df)} triggers")
         return df
 
-    def _inject_conversion_prescriptions(self, triggers: pd.DataFrame) -> pd.DataFrame:
+    def _acceptance_mixture(self) -> Optional[Dict[int, list]]:
+        """Arm-conditional acceptance distributions q1 (arm=1) / q0 (arm=0) whose
+        share-weighted mixture reproduces ACCEPTANCE_STATUS_P EXACTLY, with
+        q0[accepted] = 0 (an arm=0 patient can never carry an accepted trigger).
+
+        q1[accepted] = p[accepted] / share (capped 0.97 for degenerate tiny shares);
+        the residual q1 mass is split over the non-accepted statuses proportionally
+        to their target masses; q0 solves the mixture equation per status. Returns
+        None when the patient frame has no populated trigger_accepted column (legacy
+        callers keep the base draw)."""
+        if self.patient_df is None or "trigger_accepted" not in self.patient_df.columns:
+            return None
+        arm_col = self.patient_df["trigger_accepted"]
+        if arm_col.isna().all():
+            return None
+        share = float(arm_col.fillna(0).astype(float).mean())
+        statuses = list(self.ACCEPTANCE_STATUS_VALUES)
+        p = np.asarray(self.ACCEPTANCE_STATUS_P, dtype=float)
+        acc_idx = statuses.index("accepted")
+        if share <= p[acc_idx]:
+            # Not enough arm mass to carry the whole accepted marginal — q1 goes
+            # fully accepted and the realized marginal degrades to `share` (loud in
+            # the marginal-preservation test rather than a silent negative q0).
+            q1 = np.zeros(len(p))
+            q1[acc_idx] = 1.0
+        else:
+            q1 = np.zeros(len(p))
+            q1[acc_idx] = min(p[acc_idx] / share, 0.97)
+            rest = 1.0 - q1[acc_idx]
+            non_acc_mass = 1.0 - p[acc_idx]
+            for i in range(len(p)):
+                if i != acc_idx:
+                    q1[i] = rest * p[i] / non_acc_mass
+        q0 = np.zeros(len(p))
+        for i in range(len(p)):
+            if i != acc_idx:
+                q0[i] = max(p[i] - share * q1[i], 0.0) / max(1.0 - share, 1e-9)
+        total = q0.sum()
+        if total > 0:
+            q0 = q0 / total
+        return {1: q1.tolist(), 0: q0.tolist()}
+
+    def _enforce_arm_consistency(self, records: list, start: int) -> None:
+        """arm=1 patients MUST carry >=1 accepted trigger. Deterministic
+        post-processing (no RNG draws — the per-record stream shape is untouched):
+        if none of the patient's delivered/viewed triggers drew 'accepted', promote
+        the first delivered/viewed one; if the patient has NO delivered/viewed
+        trigger at all, force the first trigger delivered+accepted."""
+        block = records[start:]
+        if any(r["acceptance_status"] == "accepted" for r in block):
+            return
+        for r in block:
+            if r["delivery_status"] in ("delivered", "viewed"):
+                r["acceptance_status"] = "accepted"
+                return
+        block[0]["delivery_status"] = "delivered"
+        block[0]["acceptance_status"] = "accepted"
+
+    def _baseline_rx_in_window(self, triggers: pd.DataFrame) -> np.ndarray:
+        """Per-trigger flag: a BASELINE treatment_events prescription (the journey
+        substrate, NOT the injected conversions) for the same patient+brand lands
+        inside [trigger_ts, trigger_ts + 30d]."""
+        hit = np.zeros(len(triggers), dtype=bool)
+        tx = self.treatment_df
+        if tx is None or len(tx) == 0 or "patient_id" not in tx.columns:
+            return hit
+        if "event_type" in tx.columns:
+            tx = tx[tx["event_type"].astype(str) == "prescription"]
+        if len(tx) == 0:
+            return hit
+        brand_col = "brand" if "brand" in tx.columns else None
+        dates_by_key: Dict[Any, np.ndarray] = {}
+        ev_dates = pd.to_datetime(tx["event_date"], errors="coerce")
+        keys = zip(tx["patient_id"], tx[brand_col], strict=False) if brand_col else tx["patient_id"]
+        for key, d in zip(keys, ev_dates, strict=False):
+            if pd.isna(d):
+                continue
+            dates_by_key.setdefault(key, []).append(d.to_datetime64())
+        dates_by_key = {k: np.sort(np.asarray(v)) for k, v in dates_by_key.items()}
+        ts = pd.to_datetime(triggers["trigger_timestamp"]).to_numpy()
+        tbrand = triggers["brand"] if "brand" in triggers.columns else triggers.get("brand_id")
+        for i, (pid, t) in enumerate(zip(triggers["patient_id"], ts, strict=False)):
+            key = (pid, tbrand.iloc[i]) if brand_col and tbrand is not None else pid
+            dates = dates_by_key.get(key)
+            if dates is None or len(dates) == 0:
+                continue
+            lo = np.searchsorted(dates, t, side="left")
+            if lo < len(dates) and dates[lo] <= t + np.timedelta64(30, "D"):
+                hit[i] = True
+        return hit
+
+    def _finalize_outcomes(self, df: pd.DataFrame, inject_mask: np.ndarray) -> pd.DataFrame:
+        """Resolve the TRI-STATE outcome_value from the REAL prescription substrate,
+        acceptance-independent (COMM-ARMS Phase 4 decoupling):
+
+        * NULL  iff NOT outcome_tracked (outcome not observable in CRM);
+        * > 0   when tracked AND a prescription landed in the 30d window (injected
+                conversion OR baseline treatment_events) — magnitude from the
+                per-record beta draw (clamped positive so the DB stored-generated
+                conversion_flag = outcome_value > 0 reads true);
+        * 0.0   when tracked AND no prescription landed (a tracked miss —
+                conversion_flag false, false-alert candidate).
+
+        false_positive_flag keeps its #1118 semantics (tracked AND unproductive AND
+        field review marks _P_FALSE_POSITIVE_MARKED of those) — computed here from
+        the per-record fp draw so it sees the FINAL outcome."""
+        rx_in_window = np.asarray(inject_mask, dtype=bool) | self._baseline_rx_in_window(df)
+        tracked = df["outcome_tracked"].to_numpy(dtype=bool)
+        mag = df.pop("_outcome_magnitude").to_numpy(dtype=float)
+        fp_draw = df.pop("_fp_draw").to_numpy(dtype=float)
+        mag = np.where(mag > 0, mag, 0.001)  # a landed Rx must read converted
+        df["outcome_value"] = [
+            (round(float(m), 3) if hit else 0.0) if t else None
+            for t, hit, m in zip(tracked, rx_in_window, mag, strict=False)
+        ]
+        df["false_positive_flag"] = (
+            tracked & ~rx_in_window & (fp_draw < _P_FALSE_POSITIVE_MARKED)
+        ).tolist()
+        return df
+
+    def _inject_conversion_prescriptions(
+        self, triggers: pd.DataFrame
+    ) -> tuple[np.ndarray, pd.DataFrame]:
         """Build treatment_events 'prescription' rows that realize the designed
         accepted-vs-rejected conversion lift, each landing inside the trigger's
         30-day conversion window. Deterministic via the generator RNG.
 
-        Returns a DataFrame with post-rename treatment_events columns (patient_id,
-        brand, event_date, event_type, duration_days) self-stamped is_synthetic=True.
-        Empty when there are no triggers.
+        Returns ``(inject_mask, frame)``: the per-trigger boolean injection mask
+        (consumed by _finalize_outcomes — Phase 4 derives outcome_value from the
+        REAL prescription substrate, so the mask is the injection channel's half of
+        rx_in_window) and a DataFrame with post-rename treatment_events columns
+        (patient_id, brand, event_date, event_type, duration_days) self-stamped
+        is_synthetic=True. Empty mask/frame when there are no triggers.
         """
         if triggers is None or len(triggers) == 0:
-            return pd.DataFrame()
+            return np.zeros(0, dtype=bool), pd.DataFrame()
 
         ts = pd.to_datetime(triggers["trigger_timestamp"])
         accepted = triggers["acceptance_status"].astype(str).str.lower().eq("accepted")
@@ -240,7 +392,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         inject = draw < p_inject
 
         if not inject.any():
-            return pd.DataFrame()
+            return inject, pd.DataFrame()
 
         sel = triggers[inject].reset_index(drop=True)
         sel_ts = ts[inject].reset_index(drop=True)
@@ -266,7 +418,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             brand_vals = sel["brand_id"].to_numpy()
         else:
             brand_vals = np.array([Brand.REMIBRUTINIB.value] * len(sel))
-        return pd.DataFrame(
+        return inject, pd.DataFrame(
             {
                 "treatment_event_id": self._generate_ids("trxc", len(sel)),
                 "patient_id": sel["patient_id"].to_numpy(),
@@ -284,8 +436,14 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             }
         )
 
-    def _generate_trigger_record(self, patient: pd.Series) -> Dict:
-        """Generate a trigger record linked to patient."""
+    def _generate_trigger_record(
+        self, patient: pd.Series, acceptance_p: Optional[list] = None
+    ) -> Dict:
+        """Generate a trigger record linked to patient.
+
+        ``acceptance_p`` (COMM-ARMS Phase 4) overrides the acceptance-status
+        distribution with the patient's arm-conditional mixture (q1/q0 from
+        _acceptance_mixture); None keeps the legacy base draw."""
         # Select trigger type based on patient state
         engagement_score = patient.get("engagement_score", 5.0)
         treatment_initiated = patient.get("treatment_initiated", 0)
@@ -319,34 +477,26 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             p=[0.10, 0.60, 0.25, 0.05],
         )
 
-        # Acceptance (only if delivered/viewed)
+        # Acceptance (only if delivered/viewed). Phase 4: the linked path draws
+        # from the patient's arm-conditional mixture when supplied.
         if delivery_status in ["delivered", "viewed"]:
             acceptance_status = self._rng.choice(
                 self.ACCEPTANCE_STATUS_VALUES,
-                p=self.ACCEPTANCE_STATUS_P,
+                p=acceptance_p if acceptance_p is not None else self.ACCEPTANCE_STATUS_P,
             )
         else:
             acceptance_status = "pending"
 
-        # Outcome tracking (some triggers have measured outcomes)
+        # Outcome tracking (CRM observability coin). Phase 4 DECOUPLING: the
+        # outcome VALUE is no longer assigned here — it is resolved in
+        # _finalize_outcomes from the REAL prescription substrate (injected
+        # conversions + baseline treatment_events inside the 30d window),
+        # acceptance-independent. The per-record magnitude + false-positive
+        # draws stay HERE (unconditional) so the record-level RNG stream shape
+        # is deterministic/seeded => reseed-idempotent.
         outcome_tracked = self._rng.random() < 0.40
-        outcome_value = None
-        if outcome_tracked and acceptance_status == "accepted":
-            # Positive outcome more likely with high engagement
-            outcome_value = round(self._rng.beta(2 + engagement_score / 5, 3) * 1.0, 3)
-
-        # #1118 WS2-TR-005: false-positive marking. Only an outcome-tracked
-        # trigger whose outcome demonstrably failed to materialize (no value,
-        # or <= 0 — the complement of the TR-001 precision numerator) can be
-        # marked a false alert; field review marks _P_FALSE_POSITIVE_MARKED of
-        # those. Unconditional draw keeps the per-record RNG stream shape
-        # stable (deterministic/seeded => reseed-idempotent).
+        outcome_magnitude = round(self._rng.beta(2 + engagement_score / 5, 3) * 1.0, 3)
         fp_draw = self._rng.random()
-        false_positive_flag = bool(
-            outcome_tracked
-            and (outcome_value is None or outcome_value <= 0)
-            and fp_draw < _P_FALSE_POSITIVE_MARKED
-        )
 
         # Generate causal chain and evidence
         causal_chain = self._generate_causal_chain(trigger_type, engagement_score)
@@ -390,8 +540,9 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             "delivery_status": delivery_status,
             "acceptance_status": acceptance_status,
             "outcome_tracked": outcome_tracked,
-            "outcome_value": outcome_value,
-            "false_positive_flag": false_positive_flag,
+            # temp columns consumed + dropped by _finalize_outcomes (Phase 4)
+            "_outcome_magnitude": outcome_magnitude,
+            "_fp_draw": fp_draw,
             "trigger_reason": self._generate_trigger_reason(trigger_type),
             "causal_chain": causal_chain,
             "supporting_evidence": supporting_evidence,
@@ -603,24 +754,13 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             else:
                 acceptance_statuses.append("pending")
 
-        # Outcome tracking
+        # Outcome tracking. Phase 4 DECOUPLING: values are resolved in
+        # _finalize_outcomes from the real prescription substrate; here only the
+        # observability coin + the per-record magnitude/false-positive draws
+        # (unconditional, seeded => reseed-idempotent).
         outcome_tracked = self._rng.random(n) < 0.40
-        outcome_values = [
-            round(self._rng.beta(3, 3) * 1.0, 3) if tracked and acc == "accepted" else None
-            for tracked, acc in zip(outcome_tracked, acceptance_statuses, strict=False)
-        ]
-
-        # #1118 WS2-TR-005: false-positive marking (mirrors
-        # _generate_trigger_record — tracked AND no positive outcome AND field
-        # review marks it, all off the seeded RNG => reseed-idempotent).
-        unproductive = np.array(
-            [v is None or v <= 0 for v in outcome_values],
-            dtype=bool,
-        )
+        outcome_magnitudes = np.round(self._rng.beta(3, 3, size=n) * 1.0, 3)
         fp_draws = self._rng.random(n)
-        false_positive_flags = (
-            outcome_tracked & unproductive & (fp_draws < _P_FALSE_POSITIVE_MARKED)
-        )
 
         # Brands
         brands_list: list[str]
@@ -663,8 +803,9 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                 "delivery_status": delivery_statuses,
                 "acceptance_status": acceptance_statuses,
                 "outcome_tracked": outcome_tracked,
-                "outcome_value": outcome_values,
-                "false_positive_flag": false_positive_flags.tolist(),
+                # temp columns consumed + dropped by _finalize_outcomes (Phase 4)
+                "_outcome_magnitude": outcome_magnitudes,
+                "_fp_draw": fp_draws,
                 "trigger_reason": [self._generate_trigger_reason(tt) for tt in trigger_types],
                 "causal_chain": [
                     self._generate_causal_chain(tt, eng)

@@ -305,7 +305,7 @@ def test_copay_planted_ate_is_in_the_designed_band(brand):
 
 @pytest.mark.parametrize("seed", [21, 7, 99, 123])
 @pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
-@pytest.mark.parametrize("arm", ["rep_detailing_high", "sample_dropped"])
+@pytest.mark.parametrize("arm", ["rep_detailing_high", "sample_dropped", "trigger_accepted"])
 def test_initiation_commercial_arm_recoverable(arm, brand, seed):
     """COMM-ARMS Phase 3: rep_detailing_high + sample_dropped -> treatment_initiated must
     be recoverable off their OWN backdoor {academic_hcp, engagement_score}. These are the
@@ -363,4 +363,10 @@ def test_initiation_arm_planted_ate_in_designed_band(brand):
     assert 0.02 < rep_ate < 0.11, f"{brand.value} rep planted ATE {rep_ate:.4f} out of band"
     assert 0.01 < sample_ate < 0.09, (
         f"{brand.value} sample planted ATE {sample_ate:.4f} out of band"
+    )
+    # COMM-ARMS Phase 4: trigger_accepted -> treatment_initiated, design band +4-7pp
+    # base; the envelope is brand-scale-generous like rep/sample above.
+    trig_ate = df.attrs["true_ate_by_arm"]["trigger_accepted"]["treatment_initiated"]["ate"]
+    assert 0.025 < trig_ate < 0.12, (
+        f"{brand.value} trigger_accepted planted ATE {trig_ate:.4f} out of band"
     )

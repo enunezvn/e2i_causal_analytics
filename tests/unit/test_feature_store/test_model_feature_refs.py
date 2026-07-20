@@ -93,6 +93,8 @@ def test_patient_goldstd_cohorts_fetch_enriched_base7():
     initiation_arms = {
         "goldstd_cohort_features:rep_detailing_high",
         "goldstd_cohort_features:sample_dropped",
+        # COMM-ARMS Phase 4: NBA trigger acceptance, initiation latent only.
+        "goldstd_cohort_features:trigger_accepted",
     }
     expected_by_cohort = {
         "initiation": base7 | initiation_arms,

@@ -125,8 +125,14 @@ _BASE9_COMMERCIAL = _BASE8_COMMERCIAL + ("psp_enrolled",)
 # feed those models a pure-noise feature). Same lockstep contract as copay/psp: a spec
 # covariate the refs don't fetch => incomplete serving vector (#576 null-trap → 503).
 _BASE9_INITIATION = _BASE7 + ("rep_detailing_high", "sample_dropped")
+# COMM-ARMS Phase 4 (2026-07-20): INITIATION gains trigger_accepted — the NBA
+# trigger-acceptance arm, which enters ONLY the treatment_initiated latent
+# (initiation_outcomes), exactly like rep/sample above. Same lockstep contract:
+# a spec covariate the refs don't fetch => incomplete serving vector (#576
+# null-trap → 503); test_model_feature_refs.py locks spec/refs/Feast together.
+_BASE10_INITIATION = _BASE9_INITIATION + ("trigger_accepted",)
 _PATIENT_COVARIATES: dict[str, tuple[str, ...]] = {
-    "initiation": _BASE9_INITIATION,
+    "initiation": _BASE10_INITIATION,
     "persistence": _BASE9_COMMERCIAL,
     "discontinuation": _BASE9_COMMERCIAL,
 }
