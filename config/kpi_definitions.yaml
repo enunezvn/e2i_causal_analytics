@@ -145,7 +145,20 @@ ws1_data_quality:
 
   geographic_consistency:
     id: "WS1-DQ-006"
-    name: "Geographic Consistency"
+    # Renamed from "Geographic Consistency" (2026-07-20, constraint-aware
+    # insights): the metric is a max regional GAP where LOWER is better; the
+    # old name read as a consistency SCORE and both the LM narrative and human
+    # readers misread 10.2% as "very low consistency". The name flows as data
+    # (grid + grounding read it from this registry; no frontend contract).
+    name: "Geographic Consistency Gap"
+    direction: lower_is_better
+    actionability: structurally_constrained
+    actionability_owner: data_strategy
+    measurement_caveat: >-
+      Max region-to-region gap between source share and reference-universe
+      share — LOWER is better; 10% means the largest regional difference is
+      10 points, not that consistency is 10%. Closing it is a vendor-coverage /
+      data-strategy lever, not a field-execution lever.
     value_format: percent
     definition: "Max absolute gap between source share and universe share across regions"
     formula: "max_region(|share_source - share_universe|)"
@@ -396,6 +409,12 @@ ws2_triggers:
     definition: "Of accepted triggers with tracked outcomes, the share whose patient started therapy within the 30-day conversion window"
     formula: "count(accepted AND tracked AND conversion) / count(accepted AND tracked)"
     definition_version: 2
+    data_plane: claims
+    actionability: mixed
+    actionability_owner: platform
+    levers:
+      - "trigger threshold and targeting-criteria tuning"
+      - "trigger model retraining on accepted-but-failed cohort"
     measurement_caveat: >-
       Definition v2 as of 2026-07-20 (truth-aligned). Historical values before
       that date measured outcome-tracking coverage, not trigger quality, and are
@@ -429,6 +448,12 @@ ws2_triggers:
     definition: "Percentage of new therapy starts that were preceded by a trigger"
     formula: "count(new_starts with trigger on/before first Rx) / count(new_starts)"
     definition_version: 2
+    data_plane: claims
+    actionability: mixed
+    actionability_owner: platform
+    levers:
+      - "trigger coverage expansion (patient-universe breadth)"
+      - "model sensitivity tuning for pre-initiation signals"
     measurement_caveat: >-
       Definition v2 as of 2026-07-20: the historical 0.10 level was a proxy
       artifact of the v1 denominator (any prescription in the window, mostly
@@ -455,6 +480,12 @@ ws2_triggers:
     name: "Action Rate Uplift"
     definition: "Incremental action rate vs control group"
     formula: "(action_rate_treatment - action_rate_control) / action_rate_control"
+    data_plane: crm
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "field enablement and NBA content quality"
+      - "trigger delivery-channel optimization"
     calculation_type: derived
     tables:
       - triggers
@@ -475,6 +506,12 @@ ws2_triggers:
     name: "Acceptance Rate"
     definition: "Percentage of delivered triggers accepted by reps"
     formula: "count(accepted) / count(delivered)"
+    data_plane: crm
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "field engagement and rep training on trigger value"
+      - "trigger relevance review with field feedback"
     calculation_type: direct
     tables:
       - triggers
@@ -496,6 +533,16 @@ ws2_triggers:
     name: "False Alert Rate"
     definition: "Percentage of triggers marked as false positives"
     formula: "count(false_positive) / total_triggers"
+    data_plane: claims
+    actionability: mixed
+    actionability_owner: platform
+    levers:
+      - "trigger precision tuning (threshold, suppression rules)"
+      - "field feedback loop on alert quality"
+    measurement_caveat: >-
+      The numerator is a synthetic field-review flag until real CRM review data
+      connects — the level is substrate-designed, not field-earned. Expires on
+      real CRM connection.
     calculation_type: direct
     tables:
       - triggers
@@ -515,6 +562,12 @@ ws2_triggers:
     name: "Override Rate"
     definition: "Percentage of triggers overridden by users"
     formula: "count(overridden) / count(delivered)"
+    data_plane: crm
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "rep training on trigger rationale"
+      - "trigger explainability improvements"
     calculation_type: derived
     tables:
       - triggers
@@ -536,6 +589,16 @@ ws2_triggers:
     name: "Lead Time"
     definition: "Median days between trigger and outcome"
     formula: "median(outcome_date - trigger_date)"
+    data_plane: claims
+    actionability: mixed
+    actionability_owner: platform
+    levers:
+      - "earlier-signal feature engineering"
+      - "trigger refresh cadence"
+    measurement_caveat: >-
+      On the synthetic substrate lead_time_days is a planted uniform draw — the
+      level is designed, not earned. Expires when real outcome timestamps
+      connect.
     calculation_type: direct
     tables:
       - triggers
@@ -556,6 +619,12 @@ ws2_triggers:
     name: "Change-Fail Rate (CFR)"
     definition: "Percentage of trigger changes that resulted in worse outcomes"
     formula: "count(change_failed) / count(changed_triggers)"
+    data_plane: platform
+    actionability: reader_actionable
+    actionability_owner: platform
+    levers:
+      - "trigger change-management discipline (review before rollout)"
+      - "rollback of degrading trigger revisions"
     calculation_type: derived
     tables:
       - triggers    # V3 NEW fields
@@ -668,6 +737,18 @@ ws3_business:
     definition: "Total prescription volume"
     formula: "count(event_type = 'prescription')"
     calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "HCP targeting and call-plan coverage"
+      - "field-force allocation to underpenetrated territories"
+      - "access and copay pull-through programs"
+    measurement_caveat: >-
+      Claims-derived volume: the most recent windows under-count until claims
+      fully mature (multi-week adjudication lag on real sources) — prefer trend
+      over level for the newest periods. Expires when per-brand completeness
+      curves land (TRIG-DECOMP).
     tables:
       - treatment_events
     columns:
@@ -686,6 +767,17 @@ ws3_business:
     definition: "First-time prescriptions for a patient"
     formula: "count(first_prescription)"
     calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "new-patient-start programs (diagnostic activation, referral pathways)"
+      - "speaker programs and peer-to-peer education"
+    measurement_caveat: >-
+      Claims-derived volume: the most recent windows under-count until claims
+      fully mature (multi-week adjudication lag on real sources) — prefer trend
+      over level for the newest periods. Expires when per-brand completeness
+      curves land (TRIG-DECOMP).
     tables:
       - treatment_events
     columns:
@@ -705,6 +797,17 @@ ws3_business:
     definition: "First prescription of specific brand for a patient"
     formula: "count(first_brand_prescription)"
     calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "competitive positioning and switch messaging"
+      - "formulary access expansion"
+    measurement_caveat: >-
+      Claims-derived volume: the most recent windows under-count until claims
+      fully mature (multi-week adjudication lag on real sources) — prefer trend
+      over level for the newest periods. Expires when per-brand completeness
+      curves land (TRIG-DECOMP).
     tables:
       - treatment_events
     columns:
@@ -724,6 +827,17 @@ ws3_business:
     definition: "Brand share of total tracked-portfolio prescriptions (competitor brands are not in the data model)"
     formula: "brand_trx / category_trx"
     calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "share-of-voice and competitive detailing"
+      - "budget reallocation toward high-opportunity segments"
+    measurement_caveat: >-
+      Claims-derived volume: the most recent windows under-count until claims
+      fully mature (multi-week adjudication lag on real sources) — prefer trend
+      over level for the newest periods. Expires when per-brand completeness
+      curves land (TRIG-DECOMP).
     tables:
       - treatment_events
     columns:
@@ -745,6 +859,17 @@ ws3_business:
     definition: "Percentage of triggers resulting in prescription"
     formula: "prescriptions_after_trigger / triggers_delivered"
     calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "trigger follow-through discipline in the field"
+      - "patient-services pull-through after trigger action"
+    measurement_caveat: >-
+      Claims-derived volume: the most recent windows under-count until claims
+      fully mature (multi-week adjudication lag on real sources) — prefer trend
+      over level for the newest periods. Expires when per-brand completeness
+      curves land (TRIG-DECOMP).
     tables:
       - triggers
       - treatment_events
