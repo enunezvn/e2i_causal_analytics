@@ -664,16 +664,23 @@ async def _trigger_monthly_ratio(
 async def _backfill_tr001_precision(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """WS2-TR-001: (outcome_tracked AND outcome_value > 0) / outcome_tracked.
+    """WS2-TR-001 definition v2 (migration 113): accepted-and-converted /
+    accepted-and-tracked — the declared "trigger accepted AND downstream
+    outcome achieved" truth shape.
 
-    Mirrors ``trigger_performance_precision``.
+    Mirrors ``trigger_performance_precision`` v2 EXACTLY (lockstep: a backfill
+    computing the old tracked-only ratio would write historical points on a
+    different definition than the live reading).
     """
     return await _trigger_monthly_ratio(
         client,
         kpi_meta,
         cache,
-        numerator=lambda r: bool(r.get("outcome_tracked")) and (r.get("outcome_value") or 0) > 0,
-        denominator=lambda r: bool(r.get("outcome_tracked")),
+        numerator=lambda r: r.get("acceptance_status") == "accepted"
+        and bool(r.get("outcome_tracked"))
+        and (r.get("outcome_value") or 0) > 0,
+        denominator=lambda r: r.get("acceptance_status") == "accepted"
+        and bool(r.get("outcome_tracked")),
     )
 
 

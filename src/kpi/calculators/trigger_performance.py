@@ -21,7 +21,12 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id
+from src.kpi.synthetic_mode import (
+    brand_region_query_id,
+    brand_scoped_query_id,
+    region_query_id,
+    resolve_kpi_query_id,
+)
 
 
 class TriggerPerformanceCalculator(KPICalculatorBase):
@@ -115,17 +120,26 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
     @staticmethod
-    def _region_scoped(base_query_id: str, context: dict[str, Any]) -> tuple[str, list[Any]]:
-        """Route to the region-scoped query variant (migration 078) when a region
-        is selected, else the base query.
+    def _scoped(base_query_id: str, context: dict[str, Any]) -> tuple[str, list[Any]]:
+        """Route to the brand/region-scoped query variant (migrations 078 + 113)
+        from the request context, else the base query.
 
-        Trigger queries take no params today; the region variants take region as
-        ``$1`` (triggers carry no region column — the variant joins
-        triggers.patient_id -> patient_journeys.geographic_region). Returns
-        ``(query_id, params)``; region=None yields the base query + ``[]`` (so the
-        certified gates are byte-identical).
+        The certified base queries take no params; scoped variants bind their
+        scope(s) positionally — region as ``$1`` on ``_region`` (078), brand as
+        ``$1`` on ``_brand`` and brand ``$1`` + region ``$2`` on
+        ``_brand_region`` (113). Region joins triggers.patient_id ->
+        patient_journeys.geographic_region (triggers carry no region column);
+        brand filters triggers.brand_id directly. Returns ``(query_id,
+        params)``; no scope yields the base query + ``[]`` (so the certified
+        gates are byte-identical). The synthetic_mode helpers self-suffix
+        ``_include_synthetic`` under the showcase flag.
         """
+        brand = context.get("brand")
         region = context.get("region")
+        if brand and region:
+            return brand_region_query_id(base_query_id), [brand, region]
+        if brand:
+            return brand_scoped_query_id(base_query_id), [brand]
         if region:
             return region_query_id(base_query_id), [region]
         return base_query_id, []
@@ -135,7 +149,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of fired triggers resulting in positive outcome.
         """
-        query_id, params = self._region_scoped("trigger_performance_precision", context)
+        query_id, params = self._scoped("trigger_performance_precision", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("precision") is not None:
             return float(result[0]["precision"])
@@ -146,7 +160,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of positive outcomes preceded by a trigger.
         """
-        query_id, params = self._region_scoped("trigger_performance_recall", context)
+        query_id, params = self._scoped("trigger_performance_recall", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("recall") is not None:
             return float(result[0]["recall"])
@@ -174,7 +188,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         not raised; a negative uplift (treatment worse than control) is likewise
         returned (it reads CRITICAL via the higher-is-better bands).
         """
-        query_id, params = self._region_scoped("trigger_performance_action_rate_uplift", context)
+        query_id, params = self._scoped("trigger_performance_action_rate_uplift", context)
         result = self._execute_query(query_id, params)
         if not result or result[0].get("action_rate_uplift") is None:
             raise RuntimeError(
@@ -189,7 +203,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of delivered triggers accepted by reps.
         """
-        query_id, params = self._region_scoped("trigger_performance_acceptance_rate", context)
+        query_id, params = self._scoped("trigger_performance_acceptance_rate", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("acceptance_rate") is not None:
             return float(result[0]["acceptance_rate"])
@@ -201,7 +215,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of triggers marked as false positives.
         Lower is better.
         """
-        query_id, params = self._region_scoped("trigger_performance_false_alert_rate", context)
+        query_id, params = self._scoped("trigger_performance_false_alert_rate", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("false_alert_rate") is not None:
             return float(result[0]["false_alert_rate"])
@@ -213,7 +227,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of triggers overridden by users.
         Lower is better.
         """
-        query_id, params = self._region_scoped("trigger_performance_override_rate", context)
+        query_id, params = self._scoped("trigger_performance_override_rate", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("override_rate") is not None:
             return float(result[0]["override_rate"])
@@ -225,7 +239,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Median days between trigger and outcome.
         Lower is better.
         """
-        query_id, params = self._region_scoped("trigger_performance_lead_time", context)
+        query_id, params = self._scoped("trigger_performance_lead_time", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("median_lead_time") is not None:
             return float(result[0]["median_lead_time"])
@@ -237,7 +251,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of trigger changes that resulted in worse outcomes.
         Lower is better.
         """
-        query_id, params = self._region_scoped("trigger_performance_cfr", context)
+        query_id, params = self._scoped("trigger_performance_cfr", context)
         result = self._execute_query(query_id, params)
         if result and result[0].get("cfr") is not None:
             return float(result[0]["cfr"])

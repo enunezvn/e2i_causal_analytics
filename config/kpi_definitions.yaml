@@ -387,12 +387,26 @@ ws2_triggers:
   trigger_precision:
     id: "WS2-TR-001"
     name: "Trigger Precision"
-    definition: "Percentage of fired triggers resulting in positive outcome"
-    formula: "true_positives / (true_positives + false_positives)"
+    # definition v2 (2026-07-20, migration 113): the declared truth shape from
+    # domain_vocabulary truth_definitions.next_best_action_truth — "trigger
+    # accepted AND downstream outcome achieved". The v1 form (tracked-and-
+    # positive / tracked) measured the outcome-tracking coin, not trigger
+    # quality; conversion substrate decoupled from acceptance by COMM-ARMS
+    # Phase 4, so this level is a real, movable number (~0.62 post-reseed).
+    definition: "Of accepted triggers with tracked outcomes, the share whose patient started therapy within the 30-day conversion window"
+    formula: "count(accepted AND tracked AND conversion) / count(accepted AND tracked)"
+    definition_version: 2
+    measurement_caveat: >-
+      Definition v2 as of 2026-07-20 (truth-aligned). Historical values before
+      that date measured outcome-tracking coverage, not trigger quality, and are
+      not comparable. On the synthetic substrate the conversion window uses
+      complete data; on real claims sources recent windows under-count until the
+      claims lag matures (TRIG-DECOMP owns the per-source deferral).
     calculation_type: derived
     tables:
       - triggers
     columns:
+      - triggers.acceptance_status
       - triggers.outcome_tracked
       - triggers.outcome_value
     view: null
@@ -407,8 +421,19 @@ ws2_triggers:
   trigger_recall:
     id: "WS2-TR-002"
     name: "Trigger Recall"
-    definition: "Percentage of positive outcomes preceded by a trigger"
-    formula: "true_positives / (true_positives + false_negatives)"
+    # definition v2 (2026-07-20, migration 113): denominator = NEW STARTS
+    # (patients whose first-ever prescription lands in the frontier-anchored
+    # 30d window); numerator = new starts preceded by a trigger. The v1 proxy
+    # (any-Rx-in-30d denominator) structurally read ~0.10 — a measurement
+    # artifact, not model performance; v2 reads ~0.675 on the same substrate.
+    definition: "Percentage of new therapy starts that were preceded by a trigger"
+    formula: "count(new_starts with trigger on/before first Rx) / count(new_starts)"
+    definition_version: 2
+    measurement_caveat: >-
+      Definition v2 as of 2026-07-20: the historical 0.10 level was a proxy
+      artifact of the v1 denominator (any prescription in the window, mostly
+      ongoing therapy), not model performance. The v2 step change is a
+      redefinition, not an improvement. Expires after one reporting cycle.
     calculation_type: derived
     tables:
       - triggers

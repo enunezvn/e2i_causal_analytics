@@ -347,19 +347,33 @@ class TestTriggerRatios:
         assert points[0]["status"] == "good"  # 10 <= target 14, lower-is-better
 
     def test_tr001_precision_and_tr008_cfr(self):
+        """TR-001 asserts the v2 (migration 113) truth shape: accepted-and-
+        converted / accepted-and-tracked. The non-accepted converted row must be
+        EXCLUDED from both sides (under v1 it would have counted in both)."""
         rows = _pad_month(
             [
                 _trigger_row(
                     "2026-01-05T08:00:00+00:00",
                     trigger_id="hit",
+                    acceptance_status="accepted",
                     outcome_tracked=True,
                     outcome_value=2.0,
                 ),
                 _trigger_row(
                     "2026-01-06T08:00:00+00:00",
                     trigger_id="miss",
+                    acceptance_status="accepted",
                     outcome_tracked=True,
                     outcome_value=0.0,
+                ),
+                # decoupled substrate (COMM-ARMS Phase 4): a REJECTED trigger can
+                # convert — v2 precision must ignore it entirely.
+                _trigger_row(
+                    "2026-01-06T09:00:00+00:00",
+                    trigger_id="rejected-converted",
+                    acceptance_status="rejected",
+                    outcome_tracked=True,
+                    outcome_value=1.5,
                 ),
                 _trigger_row(
                     "2026-01-07T08:00:00+00:00",
