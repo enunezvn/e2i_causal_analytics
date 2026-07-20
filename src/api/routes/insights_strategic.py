@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.api.dependencies.auth import require_analyst
 from src.insights import (
     causal_discovery,
+    data_constraint_context,
     digital_twin,
     executive_brief,
     feedback_learning,
@@ -46,6 +47,12 @@ class StrategicInsightResponse(BaseModel):
     is_fallback: bool
     generated_at: str
     provenance: str
+    # Channel 2 of the constraint-aware two-channel triage (home-kpis today):
+    # structural constraints — escalation/investment considerations for
+    # data-strategy/platform owners, rendered by the page as a distinct block
+    # so channel-1 recommendations are not diluted. None on surfaces that do
+    # not produce it.
+    structural_considerations: str | None = None
 
 
 def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightResponse:
@@ -56,6 +63,7 @@ def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightRespo
         is_fallback=payload["is_fallback"],
         generated_at=datetime.now(timezone.utc).isoformat(),
         provenance=provenance,
+        structural_considerations=payload.get("structural_considerations"),
     )
 
 
@@ -262,7 +270,19 @@ async def home_kpi_insight(
         if req.region:
             context["region"] = req.region
         batch = calc.calculate_batch(kpi_ids=[m.id for m in metas], use_cache=True, context=context)
-        return home_kpi.build_grounding(req.brand, req.region, metas, batch.results)
+        g = home_kpi.build_grounding(req.brand, req.region, metas, batch.results)
+        # Constraint-aware two-channel triage (2026-07-20): deterministic
+        # measurement-constraint block for the KPIs that actually computed.
+        # Empty on failure (loud degradation): the chip surfaces it and the
+        # short cache TTL below keeps the constraint-blind generation from
+        # pinning for the full hour.
+        computed_ids = {r.kpi_id for r in batch.results if r.value is not None and not r.error}
+        g["data_constraint_context"] = data_constraint_context.build_constraint_context(
+            req.brand, [m for m in metas if m.id in computed_ids]
+        )
+        if not g["data_constraint_context"]:
+            g["grounding"].append({"label": "Constraint context", "value": "unavailable"})
+        return g
 
     try:
         g = await asyncio.to_thread(_load)
@@ -280,18 +300,30 @@ async def home_kpi_insight(
             provenance="Registry KPIs for this scope (unavailable)",
         )
     # Key on the derived grounding strings so two scopes that differ in any
-    # computed value or status never collide.
+    # computed value or status never collide. The constraint context is part
+    # of the key ("dcc", mirroring exec-brief's "cc"/"cl"): a caveat/profile
+    # edit must produce a new generation, not serve the stale narrative for
+    # the residual TTL.
     key = cache_key(
         "home-kpis",
         f"{req.brand}:{req.region or 'all-us'}",
-        {"t": g["kpi_table"], "s": g["status_summary"], "c": g["coverage"]},
+        {
+            "t": g["kpi_table"],
+            "s": g["status_summary"],
+            "c": g["coverage"],
+            "dcc": g["data_constraint_context"],
+        },
     )
     cached = await cache_get(key)
     if cached is not None:
         payload = cached
     else:
         payload = await asyncio.to_thread(home_kpi.generate_insight, g)
-        await cache_set(key, payload)
+        # Degraded states are transient (LM outage, rejected samples, or a
+        # constraint-context builder hiccup): cache briefly so the page
+        # self-heals instead of pinning the degraded narrative for an hour.
+        degraded = payload.get("is_fallback") or not g["data_constraint_context"]
+        await cache_set(key, payload, ttl_seconds=300 if degraded else 3600)
     return _finalize(payload, provenance="Registry KPIs recomputed for this scope (server-derived)")
 
 

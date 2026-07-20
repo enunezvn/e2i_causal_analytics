@@ -15,6 +15,10 @@ interface StrategicInsightCardProps {
   isFallback?: boolean;
   provenance?: string;
   generatedAt?: string;
+  /** Channel 2 of the constraint-aware triage: structural constraints —
+   * escalation/investment considerations for data-strategy/platform owners,
+   * rendered as a distinct block so recommendations are not diluted. */
+  structuralConsiderations?: string | null;
 }
 
 export function StrategicInsightCard({
@@ -29,6 +33,7 @@ export function StrategicInsightCard({
   isFallback,
   provenance,
   generatedAt,
+  structuralConsiderations,
 }: StrategicInsightCardProps) {
   return (
     <Card className="border-primary/40">
@@ -71,6 +76,16 @@ export function StrategicInsightCard({
                   <li key={i}>{t}</li>
                 ))}
               </ul>
+            )}
+            {structuralConsiderations && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+                <p className="mb-1 font-medium text-amber-700 dark:text-amber-400">
+                  Structural constraints — escalation &amp; investment considerations
+                </p>
+                <p className="whitespace-pre-line text-muted-foreground">
+                  {structuralConsiderations}
+                </p>
+              </div>
             )}
             {grounding.length > 0 && (
               <div className="flex flex-wrap gap-2 pt-1">

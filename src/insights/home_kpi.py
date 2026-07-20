@@ -1,11 +1,20 @@
 """Home-dashboard strategic insight: read of the computed KPI grid scoped to the
 selected brand + territory. Grounding is SERVER-derived (registry KPIs recomputed
 under the same brand/region context the dashboard uses) — caller-posted figures
-are never accepted."""
+are never accepted.
+
+Constraint-aware (2026-07-20): the signature performs two-channel triage over a
+data_constraint_context block (src.insights.data_constraint_context), and every
+generation passes a fail-closed DIGIT-SUBSET guard — each digit sequence in the
+output must literally appear in the grounding or the constraint context (one
+fresh-sample retry, then the factual fallback). This surface previously served
+LM output with zero validation while exec-brief/HTE both grew guards after
+instruction-only proved insufficient."""
 
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from typing import Any
 
@@ -25,19 +34,51 @@ try:
         Read the picture for the STATED brand/territory scope — do not
         generalise beyond it. Rows tagged [sibling brand: X] are computed
         portfolio-wide and belong to ANOTHER brand; NEVER attribute them to the
-        selected brand — at most mention them as portfolio context. If few or
-        no KPIs computed for this scope, say so plainly instead of
-        speculating."""
+        selected brand — at most mention them as portfolio context. Rows tagged
+        [lower is better] are gap/rate metrics where a SMALLER value is good —
+        never read them as scores. If few or no KPIs computed for this scope,
+        say so plainly instead of speculating.
+
+        Perform TWO-CHANNEL triage using data_constraint_context:
+
+        Channel 1 — interpretation + key_takeaways: full-strength,
+        lever-specific recommendations for every KPI the reader can act on —
+        expressly INCLUDING commercial levers (HCP targeting and call-plan
+        coverage, field-force allocation, access/copay and patient-services
+        pull-through, conversion-funnel actions, budget reallocation,
+        diagnostic-activation programs) and any lever the KPI's classification
+        names; the lever list is open, never a closed whitelist. KPIs without a
+        flagged constraint deserve full-strength recommendations; a constraint
+        may only EXPLAIN a KPI whose classification carries a measurement
+        caveat — never blanket-attribute a commercial gap to prevalence or
+        data lag.
+
+        Channel 2 — structural_considerations: constraints (claims lag, vendor
+        coverage, disease prevalence, metric artifacts) are context that
+        explains readings, and fixing them belongs to a DIFFERENT actor (data
+        strategy / platform). Name each binding constraint, the KPIs it gates,
+        and what would improve if it were lifted (e.g. faster claims feeds,
+        tokenized data linking). NEVER recommend that this reader fix a
+        constraint they cannot change, and NEVER treat a caveat-flagged value
+        as a real performance level."""
 
         scope: str = dspy.InputField(desc="Brand + territory the KPI values are scoped to")
         kpi_table: str = dspy.InputField(desc="Computed KPIs: name [workstream]: value (status)")
         status_summary: str = dspy.InputField(desc="Counts of KPI statuses")
         coverage: str = dspy.InputField(desc="How many of the defined KPIs computed for this scope")
+        data_constraint_context: str = dspy.InputField(
+            desc="Measurement constraints + per-KPI actionability classification; "
+            "cite it — attribute constraints, do not recommend fixing them"
+        )
 
         interpretation: str = dspy.OutputField(
             desc="What the KPI picture says for this scope and where to act, grounded in the values"
         )
         key_takeaways: list = dspy.OutputField(desc="3-5 grounded, actionable takeaways")
+        structural_considerations: str = dspy.OutputField(
+            desc="Channel 2: structural constraints — escalation and investment "
+            "considerations for data-strategy/platform owners (empty string if none)"
+        )
 
     DSPY_AVAILABLE = True
 except ImportError:
@@ -92,6 +133,11 @@ def build_grounding(
         tag = ""
         if brand != "All" and m and m.brand and m.brand != brand:
             tag = f" [sibling brand: {m.brand}]"
+        # Gap/rate metrics where smaller is good (registry direction field,
+        # e.g. Geographic Consistency Gap) — hint inline so neither the LM nor
+        # a human reader mistakes the value for a score.
+        if m and getattr(m, "direction", None) == "lower_is_better":
+            tag = f" [lower is better]{tag}"
         lines.append(f"{name} [{ws}]: {value} ({_status(r)}){tag}")
     kpi_table = "\n".join(lines) or "no KPIs computed for this scope"
 
@@ -129,26 +175,71 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
         "insight": insight,
         "key_takeaways": [g["coverage"], f"Statuses: {g['status_summary']}", first_line],
         "grounding": g["grounding"],
+        "structural_considerations": "",
         "is_fallback": True,
     }
 
 
+# Digit sequences (integers or decimals) — the unit of the fail-closed subset
+# guard. "67.5" is ONE token: an LM re-rounding it to "67" or "68" fails the
+# guard rather than serving a figure the grounding cannot vouch for.
+_DIGIT_RE = re.compile(r"\d+(?:\.\d+)?")
+
+_NO_CONTEXT = "No data-constraint context is available for this scope."
+
+
+def _digit_sequences(text: str) -> set[str]:
+    return set(_DIGIT_RE.findall(text))
+
+
+def _digit_violation(outputs: list[str], corpus: str) -> str | None:
+    """First digit sequence in ``outputs`` that the grounding corpus cannot
+    vouch for, or None. Subset check, fail-closed — mirrors the exec-brief
+    lesson (instruction-only grounding proved insufficient) without its full
+    placeholder machinery."""
+    allowed = _digit_sequences(corpus)
+    for text in outputs:
+        for seq in _digit_sequences(text):
+            if seq not in allowed:
+                return seq
+    return None
+
+
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
-    pred = run_signature(
-        HomeKpiInsightSignature,
-        scope=g["scope"],
-        kpi_table=g["kpi_table"],
-        status_summary=g["status_summary"],
-        coverage=g["coverage"],
-    )
-    if pred is None:
-        return _fallback(g)
-    interpretation = str(getattr(pred, "interpretation", "")).strip()
-    if not interpretation:
-        return _fallback(g)
-    return {
-        "insight": interpretation,
-        "key_takeaways": normalize_list(getattr(pred, "key_takeaways", [])),
-        "grounding": g["grounding"],
-        "is_fallback": False,
-    }
+    context = g.get("data_constraint_context") or _NO_CONTEXT
+    corpus = "\n".join([g["scope"], g["kpi_table"], g["status_summary"], g["coverage"], context])
+    # Attempt 2 forces a fresh sample (lm_cache=False) — the long-lived API
+    # process's in-memory DSPy cache would otherwise replay the identical
+    # rejected completion on the retry (exec-brief precedent).
+    for attempt in (1, 2):
+        pred = run_signature(
+            HomeKpiInsightSignature,
+            lm_cache=attempt == 1,
+            scope=g["scope"],
+            kpi_table=g["kpi_table"],
+            status_summary=g["status_summary"],
+            coverage=g["coverage"],
+            data_constraint_context=context,
+        )
+        if pred is None:
+            return _fallback(g)
+        interpretation = str(getattr(pred, "interpretation", "")).strip()
+        takeaways = normalize_list(getattr(pred, "key_takeaways", []))
+        structural = str(getattr(pred, "structural_considerations", "") or "").strip()
+        violation = _digit_violation([interpretation, *takeaways, structural], corpus)
+        if interpretation and violation is None:
+            return {
+                "insight": interpretation,
+                "key_takeaways": takeaways,
+                "grounding": g["grounding"],
+                "structural_considerations": structural,
+                "is_fallback": False,
+            }
+        logger.warning(
+            "home-KPI insight attempt %d rejected (digit %r absent from grounding corpus%s); %s",
+            attempt,
+            violation,
+            "" if interpretation else "; empty interpretation",
+            "retrying with a fresh sample" if attempt == 1 else "serving factual fallback",
+        )
+    return _fallback(g)

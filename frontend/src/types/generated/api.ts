@@ -17454,6 +17454,8 @@ export interface components {
             generated_at: string;
             /** Provenance */
             provenance: string;
+            /** Structural Considerations */
+            structural_considerations?: string | null;
         };
         /**
          * SuggestionsRequest
@@ -18350,6 +18352,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /**
          * ValidationErrorResponse
