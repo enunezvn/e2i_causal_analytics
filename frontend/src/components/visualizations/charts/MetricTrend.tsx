@@ -5,6 +5,12 @@
  * Time series visualization for tracking metrics over time with trend indicators.
  * Supports thresholds, annotations, and change detection.
  *
+ * Claims-lag support (backlog #45): points flagged `provisional` render as a
+ * dashed tail with hollow markers (their claims are still arriving), and the
+ * opt-in `showNowcast` prop overlays the grossed-up nowcast estimate with its
+ * CI band. All of it is ADDITIVE — consumers passing only the legacy props
+ * render exactly as before.
+ *
  * @module components/visualizations/charts/MetricTrend
  */
 
@@ -12,7 +18,9 @@ import * as React from 'react';
 import { useMemo } from 'react';
 import {
   LineChart,
+  ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -35,6 +43,19 @@ export interface MetricDataPoint {
   value: number;
   /** Optional annotation */
   annotation?: string;
+  /**
+   * Claims-lag: true while the period's claims are still maturing — the point
+   * renders as part of the dashed provisional tail with a hollow marker.
+   */
+  provisional?: boolean;
+  /** Estimated share of the period's claims arrived so far (null = unknown). */
+  completionFactor?: number | null;
+  /** Grossed-up nowcast estimate for a provisional period (null = none). */
+  nowcastValue?: number | null;
+  /** Nowcast CI lower bound (null = none). */
+  nowcastCiLower?: number | null;
+  /** Nowcast CI upper bound (null = none). */
+  nowcastCiUpper?: number | null;
 }
 
 export interface MetricThreshold {
@@ -73,6 +94,12 @@ export interface MetricTrendProps {
   timestampFormatter?: (value: string) => string;
   /** Format for value display */
   valueFormatter?: (value: number) => string;
+  /**
+   * Opt-in claims-lag nowcast overlay: a faint line at each provisional
+   * point's `nowcastValue` plus its CI band. Default OFF — the default view
+   * stays the honest mature series. No-op when no point is provisional.
+   */
+  showNowcast?: boolean;
 }
 
 // NOTE: SAMPLE_DATA / SAMPLE_THRESHOLDS (a fabricated improving accuracy
@@ -128,6 +155,38 @@ function analyzeTrend(data: MetricDataPoint[], thresholds?: MetricThreshold[]): 
   };
 }
 
+/**
+ * Tooltip disclosure line for a provisional (claims-still-maturing) point.
+ *
+ * Returns null for mature points. Never fabricates: the completion share and
+ * the nowcast estimate each appear ONLY when the estimator produced them —
+ * a month younger than the observed lag support gets the bare disclosure.
+ */
+export function provisionalTooltipText(
+  point: Pick<MetricDataPoint, 'provisional' | 'completionFactor' | 'nowcastValue'>,
+  valueFormatter: (v: number) => string = (v) => v.toFixed(2),
+  unit = ''
+): string | null {
+  if (!point.provisional) return null;
+  const maturing =
+    point.completionFactor != null
+      ? `Provisional — claims still maturing (~${Math.round(point.completionFactor * 100)}% of this month's claims have arrived).`
+      : 'Provisional — claims still maturing.';
+  const nowcast =
+    point.nowcastValue != null
+      ? ` Nowcast estimate: ${valueFormatter(point.nowcastValue)}${unit}.`
+      : '';
+  return `${maturing}${nowcast}`;
+}
+
+/** Chart row for the provisional split: the mature segment and the dashed
+ *  tail are separate recharts Lines fed by these derived keys. */
+interface ProvisionalChartRow extends MetricDataPoint {
+  matureValue: number | null;
+  provisionalValue: number | null;
+  nowcastBand: [number, number] | null;
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -162,6 +221,7 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
       className,
       timestampFormatter,
       valueFormatter = (v) => v.toFixed(2),
+      showNowcast = false,
     },
     ref
   ) => {
@@ -170,6 +230,27 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
     const data = useMemo(() => propData ?? [], [propData]);
     const thresholds = useMemo(() => propThresholds ?? [], [propThresholds]);
 
+    // Claims-lag: any provisional point switches the chart into the
+    // mature-segment + dashed-tail split. Legacy data never sets the flag,
+    // so legacy consumers keep the exact single-Line render below.
+    const hasProvisional = useMemo(() => data.some((p) => p.provisional === true), [data]);
+    const nowcastActive = showNowcast && hasProvisional;
+
+    const chartData: MetricDataPoint[] | ProvisionalChartRow[] = useMemo(() => {
+      if (!hasProvisional) return data;
+      return data.map((p, i) => ({
+        ...p,
+        matureValue: p.provisional ? null : p.value,
+        // The last mature point anchors the dashed tail so the line connects.
+        provisionalValue:
+          p.provisional || data[i + 1]?.provisional === true ? p.value : null,
+        nowcastBand:
+          p.provisional && p.nowcastCiLower != null && p.nowcastCiUpper != null
+            ? ([p.nowcastCiLower, p.nowcastCiUpper] as [number, number])
+            : null,
+      }));
+    }, [data, hasProvisional]);
+
     // Analyze trend
     const trend = useMemo(() => analyzeTrend(data, thresholds), [data, thresholds]);
 
@@ -177,14 +258,24 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
     const domain = useMemo(() => {
       const values = data.map((d) => d.value);
       const thresholdValues = thresholds.map((t) => t.value);
-      const allValues = [...values, ...thresholdValues];
+      // With the overlay on, the CI band and nowcast line must not clip.
+      const nowcastValues = nowcastActive
+        ? data.flatMap((d) =>
+            d.provisional
+              ? [d.nowcastValue, d.nowcastCiLower, d.nowcastCiUpper].filter(
+                  (v): v is number => v != null
+                )
+              : []
+          )
+        : [];
+      const allValues = [...values, ...thresholdValues, ...nowcastValues];
 
       const min = Math.min(...allValues);
       const max = Math.max(...allValues);
       const padding = (max - min) * 0.1;
 
       return [Math.max(0, min - padding), max + padding];
-    }, [data, thresholds]);
+    }, [data, thresholds, nowcastActive]);
 
     // Find reference areas (between thresholds)
     const referenceAreas = useMemo(() => {
@@ -222,6 +313,8 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
     }) => {
       if (!active || !payload || !payload.length) return null;
       const point = payload[0].payload;
+      // Claims-lag disclosure for provisional points (null for mature ones).
+      const provisionalNote = provisionalTooltipText(point, valueFormatter, unit);
 
       return (
         <div className="bg-[var(--color-popover)] border border-[var(--color-border)] rounded-md shadow-lg p-3">
@@ -231,6 +324,11 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
           <p className="text-lg font-medium text-[var(--color-foreground)]">
             {valueFormatter(point.value)}{unit}
           </p>
+          {provisionalNote && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 max-w-[240px]">
+              {provisionalNote}
+            </p>
+          )}
           {point.annotation && (
             <p className="text-xs text-[var(--color-muted-foreground)] mt-1 italic">
               {point.annotation}
@@ -239,6 +337,10 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
         </div>
       );
     };
+
+    // ComposedChart only when the provisional split needs its Area band —
+    // the legacy path must keep the exact LineChart element tree.
+    const ChartComponent = hasProvisional ? ComposedChart : LineChart;
 
     // Get trend icon
     const TrendIcon = trend.direction === 'up' ? TrendingUp : trend.direction === 'down' ? TrendingDown : Minus;
@@ -366,9 +468,10 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
           </div>
         )}
 
-        {/* Chart */}
+        {/* Chart. ComposedChart only for the provisional split (the CI band
+            is an Area); the legacy path keeps the exact LineChart render. */}
         <ResponsiveContainer width="100%" height={height}>
-          <LineChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+          <ChartComponent data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
             <XAxis
               dataKey="timestamp"
@@ -411,31 +514,119 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
               />
             ))}
 
-            {/* Main line */}
-            <Line
-              type="monotone"
-              dataKey="value"
-              stroke={color}
-              strokeWidth={2}
-              dot={(props) => {
-                const { payload } = props as { payload: MetricDataPoint };
-                if (payload?.annotation) {
-                  return (
-                    <circle
-                      cx={props.cx}
-                      cy={props.cy}
-                      r={5}
-                      fill={color}
-                      stroke="white"
-                      strokeWidth={2}
-                    />
-                  );
-                }
-                return <circle cx={props.cx} cy={props.cy} r={0} />;
-              }}
-              activeDot={{ r: 6, strokeWidth: 2 }}
-            />
-          </LineChart>
+            {/* Nowcast CI band (under the lines) — opt-in, provisional tail only. */}
+            {nowcastActive && (
+              <Area
+                dataKey="nowcastBand"
+                stroke="none"
+                fill={color}
+                fillOpacity={0.12}
+                activeDot={false}
+                connectNulls={false}
+              />
+            )}
+
+            {/* Main line (legacy path: no provisional points). */}
+            {!hasProvisional && (
+              <Line
+                type="monotone"
+                dataKey="value"
+                stroke={color}
+                strokeWidth={2}
+                dot={(props) => {
+                  const { payload } = props as { payload: MetricDataPoint };
+                  if (payload?.annotation) {
+                    return (
+                      <circle
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={5}
+                        fill={color}
+                        stroke="white"
+                        strokeWidth={2}
+                      />
+                    );
+                  }
+                  return <circle cx={props.cx} cy={props.cy} r={0} />;
+                }}
+                activeDot={{ r: 6, strokeWidth: 2 }}
+              />
+            )}
+
+            {/* Mature segment (solid) — the values are the honest series. */}
+            {hasProvisional && (
+              <Line
+                type="monotone"
+                dataKey="matureValue"
+                stroke={color}
+                strokeWidth={2}
+                dot={(props) => {
+                  const { payload } = props as { payload: MetricDataPoint };
+                  if (payload?.annotation) {
+                    return (
+                      <circle
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={5}
+                        fill={color}
+                        stroke="white"
+                        strokeWidth={2}
+                      />
+                    );
+                  }
+                  return <circle cx={props.cx} cy={props.cy} r={0} />;
+                }}
+                activeDot={{ r: 6, strokeWidth: 2 }}
+              />
+            )}
+
+            {/* Provisional tail (dashed, hollow markers): claims for these
+                periods are still arriving — same values, honest styling. */}
+            {hasProvisional && (
+              <Line
+                className="metric-trend-provisional"
+                type="monotone"
+                dataKey="provisionalValue"
+                stroke={color}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                dot={(props) => {
+                  const { payload } = props as { payload: MetricDataPoint };
+                  if (payload?.provisional) {
+                    return (
+                      <circle
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={3.5}
+                        fill="var(--color-background)"
+                        stroke={color}
+                        strokeWidth={1.5}
+                      />
+                    );
+                  }
+                  // The mature anchor point of the tail carries no marker.
+                  return <circle cx={props.cx} cy={props.cy} r={0} />;
+                }}
+                activeDot={{ r: 6, strokeWidth: 2 }}
+              />
+            )}
+
+            {/* Nowcast estimate (faint) — opt-in, provisional tail only. */}
+            {nowcastActive && (
+              <Line
+                className="metric-trend-nowcast"
+                type="monotone"
+                dataKey="nowcastValue"
+                stroke={color}
+                strokeOpacity={0.55}
+                strokeWidth={1.5}
+                strokeDasharray="2 3"
+                dot={false}
+                connectNulls={false}
+                activeDot={{ r: 4, strokeWidth: 1 }}
+              />
+            )}
+          </ChartComponent>
         </ResponsiveContainer>
       </div>
     );
