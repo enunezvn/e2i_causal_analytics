@@ -218,7 +218,7 @@ class TestSyntheticDataConsolidation:
 
         External system bug: Only 3 splits (train, validation, test) - NO holdout
         Main system: All 4 splits (train, validation, test, holdout)
-        Target split ratios: 60/20/15/5
+        Target split ratios: 60/20/10/10 (#44 holdout enlargement)
         """
         # Verify DataSplit enum has all 4 values
         split_values = {s.value for s in DataSplit}

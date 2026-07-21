@@ -49,12 +49,12 @@ GENERATOR_TARGET = "discontinuation_flag"
 
 # n=200 is the smallest reliable boundary above the Step-5 split-validation
 # floor — see test_phase5p2_scale_machinery.py:38-46 for the codex-validated
-# rationale (60/20/15/5 yields train=120/val=40/test=30/holdout=10, all
-# above CONFIG.min_samples_per_split=10).
+# rationale (60/20/10/10 per #44 yields train=120/val=40/test=20/holdout=20,
+# all above CONFIG.min_samples_per_split=10).
 INITIATION_N = 200
 
 # 30% positive rate keeps both classes comfortably represented in every
-# 60/20/15/5 partition at n=200 (~12+ positives per split). Higher than
+# 60/20/10/10 partition at n=200 (~12+ positives per split). Higher than
 # the 10% used in scale-machinery's primary boundary test because real
 # Optum initiation prevalence is closer to 30%.
 INITIATION_POSITIVE_RATE = 0.30
@@ -152,7 +152,7 @@ def test_renamed_frame_target_is_non_degenerate(renamed_initiation_frame: object
 
 
 def test_initiation_split_math_passes_floor_at_n200(renamed_initiation_frame: object) -> None:
-    """At n=200, 60/20/15/5 splits all exceed min_samples_per_split=10.
+    """At n=200, 60/20/10/10 splits (#44 policy) all exceed min_samples_per_split=10.
 
     Mirrors test_step5_split_floor_passes_at_n200_prev10 in
     test_phase5p2_scale_machinery.py but pins the floor for the
@@ -166,7 +166,7 @@ def test_initiation_split_math_passes_floor_at_n200(renamed_initiation_frame: ob
     n = len(df)  # type: ignore[arg-type]
     train_n = int(n * 0.60)
     val_n = int(n * 0.20)
-    test_n = int(n * 0.15)
+    test_n = int(n * 0.10)
     holdout_n = n - train_n - val_n - test_n
     floor = 10
     for label, sz in [

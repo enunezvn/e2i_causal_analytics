@@ -241,11 +241,14 @@ class SplitAwareRepository(BaseRepository[T]):
         1. Same patient always in same split (prevent leakage)
         2. Deterministic based on patient_id
 
-        Split ratios:
+        Split ratios (#44 holdout enlargement 2026-07-21 — lockstep with the
+        seed quota in src/ml/synthetic/generators/base.py::_assign_splits and
+        the split_enforcer single-mode contract; a 15/5 hash band here would
+        mint splits the enforcer now rejects):
         - train: 60%
         - validation: 20%
-        - test: 15%
-        - holdout: 5%
+        - test: 10%
+        - holdout: 10%
 
         Args:
             patient_id: Patient identifier
@@ -260,7 +263,7 @@ class SplitAwareRepository(BaseRepository[T]):
             return "train"
         elif normalized < 0.80:
             return "validation"
-        elif normalized < 0.95:
+        elif normalized < 0.90:
             return "test"
         else:
             return "holdout"

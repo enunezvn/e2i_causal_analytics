@@ -171,7 +171,7 @@ def generate_synthetic_data(
             "data_split": np.random.choice(
                 [s.value for s in DataSplit],
                 n_samples,
-                p=[0.60, 0.20, 0.15, 0.05],  # 60/20/15/5 ratio
+                p=[0.60, 0.20, 0.10, 0.10],  # 60/20/10/10 ratio (#44 holdout enlargement)
             ),
         }
     )
@@ -512,9 +512,9 @@ class TestSyntheticPipelineE2E:
             elif split.split_name == "validation":
                 assert 15 < split.percentage < 25, "Validation should be ~20%"
             elif split.split_name == "test":
-                assert 10 < split.percentage < 20, "Test should be ~15%"
+                assert 5 < split.percentage < 15, "Test should be ~10% (#44 policy)"
             elif split.split_name == "holdout":
-                assert 2 < split.percentage < 8, "Holdout should be ~5%"
+                assert 5 < split.percentage < 15, "Holdout should be ~10% (#44 policy)"
 
     def test_ground_truth_store_integration(self, ground_truth_store):
         """Verify ground truth store correctly records and validates effects."""

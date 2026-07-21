@@ -197,8 +197,8 @@ class ModelTrainerState(BaseAgentSchema):
     total_samples: Optional[int] = None
     train_ratio: Optional[float] = None  # Should be ~0.60
     validation_ratio: Optional[float] = None  # Should be ~0.20
-    test_ratio: Optional[float] = None  # Should be ~0.15
-    holdout_ratio: Optional[float] = None  # Should be ~0.05
+    test_ratio: Optional[float] = None  # Should be ~0.10 (#44: was 0.15)
+    holdout_ratio: Optional[float] = None  # Should be ~0.10 (#44: was 0.05)
     split_validation_message: Optional[str] = None
     split_ratio_checks: Optional[List[str]] = None
     leakage_warnings: Optional[List[str]] = None

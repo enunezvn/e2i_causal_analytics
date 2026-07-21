@@ -167,11 +167,12 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     CRITICAL: This loads the enforced ML splits from data_preparer.
     These splits MUST be respected throughout training to prevent data leakage.
 
-    Expected split ratios:
+    Expected split ratios (#44 holdout enlargement 2026-07-21: test 15%→10%,
+    holdout 5%→10%):
     - Train: 60%
     - Validation: 20%
-    - Test: 15%
-    - Holdout: 5% (LOCKED until post-deployment)
+    - Test: 10%
+    - Holdout: 10% (LOCKED until post-deployment)
 
     Args:
         state: ModelTrainerState with experiment_id or direct split data

@@ -177,6 +177,19 @@ def test_data_split(frame):
     )
 
 
+def test_default_split_proportions_match_44_quota(frame):
+    """Red-first #44 pin (2026-07-21): the default split quota is 60/20/10/10
+    (test 0.15→0.10, holdout 0.05→0.10 — goldstd holdout enlargement), lockstep
+    with BaseGenerator._assign_splits and split_enforcer's expected_ratios. The
+    stratified assignment is exact to integer rounding per class, so shares sit
+    within ~2pp of the design on any non-trivial frame."""
+    shares = frame["data_split"].value_counts(normalize=True)
+    assert shares.get("train", 0.0) == pytest.approx(0.60, abs=0.02)
+    assert shares.get("validation", 0.0) == pytest.approx(0.20, abs=0.02)
+    assert shares.get("test", 0.0) == pytest.approx(0.10, abs=0.02)
+    assert shares.get("holdout", 0.0) == pytest.approx(0.10, abs=0.02)
+
+
 # ---------------------------------------------------------------------------
 # Test 7: leakage — forbidden columns must not appear
 # ---------------------------------------------------------------------------

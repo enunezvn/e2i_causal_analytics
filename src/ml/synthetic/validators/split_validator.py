@@ -82,14 +82,20 @@ class SplitValidator:
     def __init__(
         self,
         config: Optional[SyntheticDataConfig] = None,
-        ratio_tolerance: float = 0.05,
+        ratio_tolerance: float = 0.02,
     ):
         """
         Initialize split validator.
 
         Args:
             config: Synthetic data config with split boundaries
-            ratio_tolerance: Maximum allowed deviation from expected ratios
+            ratio_tolerance: Maximum allowed deviation from expected ratios.
+                Default tightened 0.05→0.02 with backlog #44 (2026-07-21): the
+                row-quota seed assignment is exact to whole-date chunk rounding
+                (<1pp on full-size seeds, measured pooled holdout 4.995% vs the
+                then-designed 5%), and 0.05 would let the PRE-enlargement 15/5
+                design pass borderline against the new 10/10 expectations.
+                Matches split_enforcer.py's ±2% single-mode tolerance.
         """
         self.config = config or SyntheticDataConfig()
         self.ratio_tolerance = ratio_tolerance
@@ -188,10 +194,18 @@ class SplitValidator:
             result.ratio_errors[split] = error
 
             if error > self.ratio_tolerance:
-                result.warnings.append(
+                # #44 (2026-07-21, codex finding 1): ratio violations are an
+                # ENFORCED failure, not a warning. Warnings-only meant a frame
+                # seeded with the pre-enlargement 60/20/15/5 quota still passed
+                # every is_valid gate. This module has no production consumers
+                # (test-only-by-design, see module docstring), so the semantic
+                # flip breaks no caller; the design intent ("Correct split
+                # ratios" is a validated property) is now actually enforced.
+                result.errors.append(
                     f"Split '{split}' ratio {ratio:.2%} differs from expected "
                     f"{expected:.2%} by {error:.2%}"
                 )
+                result.is_valid = False
 
     def _validate_entity_isolation(
         self,

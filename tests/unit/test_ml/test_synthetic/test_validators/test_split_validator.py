@@ -59,8 +59,8 @@ class TestSplitValidator:
                 }
             )
 
-        # Test: 15% (2024-04-01 to 2024-09-30)
-        for i in range(800, 950):
+        # Test: 10% (#44 holdout enlargement: 15% → 10%)
+        for i in range(800, 900):
             patients.append(
                 {
                     "patient_id": f"pt_{i:05d}",
@@ -70,8 +70,8 @@ class TestSplitValidator:
                 }
             )
 
-        # Holdout: 5% (2024-10-01 to 2024-12-31)
-        for i in range(950, 1000):
+        # Holdout: 10% (#44 holdout enlargement: 5% → 10%)
+        for i in range(900, 1000):
             patients.append(
                 {
                     "patient_id": f"pt_{i:05d}",
@@ -130,11 +130,40 @@ class TestSplitValidator:
 
         assert result.split_counts["train"] == 600
         assert result.split_counts["validation"] == 200
-        assert result.split_counts["test"] == 150
-        assert result.split_counts["holdout"] == 50
+        assert result.split_counts["test"] == 100
+        assert result.split_counts["holdout"] == 100
 
         assert abs(result.split_ratios["train"] - 0.60) < 0.01
         assert abs(result.split_ratios["validation"] - 0.20) < 0.01
+        assert abs(result.split_ratios["test"] - 0.10) < 0.01
+        assert abs(result.split_ratios["holdout"] - 0.10) < 0.01
+        # A design-conforming frame carries no ratio warnings.
+        assert result.ratio_errors["test"] < 0.01
+        assert result.ratio_errors["holdout"] < 0.01
+
+    def test_legacy_15_5_frame_fails_ratio_validation(self, validator):
+        """Red-first #44 pin: a frame seeded with the PRE-enlargement 60/20/15/5
+        quota must be REJECTED (``is_valid=False``, ratio errors recorded) — the
+        5pp gap to the new 10/10 design exceeds the tightened tolerance. Ratio
+        violations are an ENFORCED failure, not a warning: warnings-only let an
+        old-quota substrate pass every gate (codex finding 1), and the previous
+        0.05 tolerance made 15%-vs-10% pass borderline on top of that."""
+        rows = []
+        pid = 0
+        for split, n in [("train", 600), ("validation", 200), ("test", 150), ("holdout", 50)]:
+            for _ in range(n):
+                rows.append({"patient_id": f"pt_{pid:05d}", "data_split": split})
+                pid += 1
+        df = pd.DataFrame(rows)
+
+        result = validator.validate(df=df, entity_column="patient_id", split_column="data_split")
+
+        assert result.is_valid is False
+        assert result.ratio_errors["test"] == pytest.approx(0.05, abs=0.001)
+        assert result.ratio_errors["holdout"] == pytest.approx(0.05, abs=0.001)
+        ratio_errors = [e for e in result.errors if "differs from expected" in e]
+        assert any("'test'" in e for e in ratio_errors)
+        assert any("'holdout'" in e for e in ratio_errors)
 
     def test_detect_entity_overlap(self, validator, entity_overlap_df):
         """Test detection of entity overlap across splits."""
@@ -185,8 +214,8 @@ class TestSplitValidator:
                 "patient_id": [f"pt_{i % 1000:05d}" for i in range(100)],
                 "data_split": ["train"] * 60
                 + ["validation"] * 20
-                + ["test"] * 15
-                + ["holdout"] * 5,
+                + ["test"] * 10
+                + ["holdout"] * 10,
             }
         )
 

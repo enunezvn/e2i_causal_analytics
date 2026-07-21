@@ -439,7 +439,7 @@ graph LR
 
 | Table | Purpose |
 |-------|---------|
-| `ml_split_registry` | Temporal split configs (60/20/15/5) |
+| `ml_split_registry` | Temporal split configs (60/20/10/10 since #44 v3.1.0; was 60/20/15/5) |
 | `ml_patient_split_assignments` | Patient-level split assignments |
 | `ml_preprocessing_metadata` | Preprocessing stats (train-only) |
 | `ml_leakage_audit` | Automated leakage detection |

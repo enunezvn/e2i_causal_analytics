@@ -7,7 +7,7 @@ an operator has reviewed a preview and opts in by setting
 node concatenates the synthetic rows into the **training split only** — so they
 flow through the same preprocessing / resampling / training as the real data.
 
-It runs after ``enforce_splits`` (so the real 60/20/15/5 ratio validation is
+It runs after ``enforce_splits`` (so the real 60/20/10/10 ratio validation is
 done on the real data) and before ``fit_preprocessing``.
 
 Safety (pharma anti-mocking discipline — see CLAUDE.md):

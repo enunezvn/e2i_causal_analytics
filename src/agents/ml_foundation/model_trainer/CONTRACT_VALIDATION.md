@@ -273,21 +273,23 @@ if not qc_passed:
 - `test_qc_gate_checker.py:25-38` - QC gate blocks when qc_passed=False
 - `test_model_trainer_agent.py:74-87` - Integration test: QC gate blocks training
 
-### 2. Split Enforcement (60/20/15/5) ✅
+### 2. Split Enforcement (60/20/10/10) ✅
 
-**Requirement**: Enforce ML split ratios with ±2% tolerance.
+**Requirement**: Enforce ML split ratios with ±2% tolerance (single-mode;
+#44 holdout enlargement 2026-07-21: test 15%→10%, holdout 5%→10%).
 
-**Implementation**: `nodes/split_enforcer.py:22-133`
+**Implementation**: `nodes/split_enforcer.py:15-133` (ratio gates; min-samples from :133)
 - ✅ Validates train: 60% ± 2%
 - ✅ Validates validation: 20% ± 2%
-- ✅ Validates test: 15% ± 2%
-- ✅ Validates holdout: 5% ± 2%
+- ✅ Validates test: 10% ± 2%
+- ✅ Validates holdout: 10% ± 2%
 - ✅ Checks minimum 10 samples per split
 
 **Test Coverage**:
-- `test_split_enforcer.py:12-27` - Perfect ratios pass
-- `test_split_enforcer.py:29-42` - Within tolerance passes
-- `test_split_enforcer.py:44-57` - Below tolerance fails
+- `test_split_enforcer.py:20-38` - Perfect ratios pass
+- `test_split_enforcer.py:40-62` - Legacy 60/20/15/5 now FAILS (#44 pin)
+- `test_split_enforcer.py:64-80` - Within tolerance passes
+- `test_split_enforcer.py:82-99` - Below tolerance fails
 
 ### 3. Preprocessing Isolation ✅
 
@@ -349,7 +351,7 @@ if not qc_passed:
 
 **Key Test Scenarios**:
 1. ✅ QC gate enforcement (blocks training when QC fails)
-2. ✅ Split ratio validation (60/20/15/5 ± 2%)
+2. ✅ Split ratio validation (60/20/10/10 ± 2%)
 3. ✅ Preprocessing isolation (fit on train only)
 4. ✅ HPO on validation set
 5. ✅ Test set touched once
@@ -654,7 +656,7 @@ async def _persist_training_run(self, output: Dict[str, Any]) -> bool:
 | **MLflowInfo** | ⚠️ Partial | 70% | 3 missing fields (TODO) |
 | **QCGateBlockedError** | ✅ Complete | 100% | Error contract followed |
 | **QC Gate Enforcement** | ✅ Complete | 100% | MANDATORY gate works |
-| **Split Enforcement** | ✅ Complete | 100% | 60/20/15/5 ± 2% enforced |
+| **Split Enforcement** | ✅ Complete | 100% | 60/20/10/10 ± 2% enforced |
 | **Preprocessing Isolation** | ✅ Complete | 100% | Fit on train only |
 | **HPO on Validation** | ✅ Complete | 100% | Uses validation set |
 | **Test Set Once** | ✅ Complete | 100% | Final eval only |
@@ -677,7 +679,7 @@ The `model_trainer` agent achieves **100% contract compliance** with all critica
 ✅ **Complete**:
 - Input validation
 - QC gate enforcement (MANDATORY)
-- Split ratio enforcement (60/20/15/5 ± 2%)
+- Split ratio enforcement (60/20/10/10 ± 2%)
 - Preprocessing isolation (fit on train only)
 - Hyperparameter optimization logic
 - Model training workflow

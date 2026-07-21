@@ -32,14 +32,14 @@ class TestLoadSplits:
                 "row_count": 200,
             },
             "test_data": {
-                "X": np.random.rand(150, 10),
-                "y": np.random.randint(0, 2, 150),
-                "row_count": 150,
+                "X": np.random.rand(100, 10),
+                "y": np.random.randint(0, 2, 100),
+                "row_count": 100,
             },
             "holdout_data": {
-                "X": np.random.rand(50, 10),
-                "y": np.random.randint(0, 2, 50),
-                "row_count": 50,
+                "X": np.random.rand(100, 10),
+                "y": np.random.randint(0, 2, 100),
+                "row_count": 100,
             },
         }
 
@@ -63,8 +63,8 @@ class TestLoadSplits:
 
         assert result["train_samples"] == 600
         assert result["validation_samples"] == 200
-        assert result["test_samples"] == 150
-        assert result["holdout_samples"] == 50
+        assert result["test_samples"] == 100
+        assert result["holdout_samples"] == 100
         assert result["total_samples"] == 1000
 
     async def test_calculates_split_ratios(self, valid_splits):
@@ -73,11 +73,11 @@ class TestLoadSplits:
 
         result = await load_splits(state)
 
-        # Expected: 60/20/15/5
+        # Expected: 60/20/10/10 (#44 holdout enlargement)
         assert result["train_ratio"] == 0.60
         assert result["validation_ratio"] == 0.20
-        assert result["test_ratio"] == 0.15
-        assert result["holdout_ratio"] == 0.05
+        assert result["test_ratio"] == 0.10
+        assert result["holdout_ratio"] == 0.10
 
     async def test_error_when_experiment_id_without_feast_or_db(self):
         """Should return error when experiment_id present but Feast and DB unavailable."""

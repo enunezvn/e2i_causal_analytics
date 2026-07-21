@@ -223,11 +223,13 @@ CREATE TABLE IF NOT EXISTS ml_split_registry (
     config_name VARCHAR(100) NOT NULL UNIQUE,
     config_version VARCHAR(20) NOT NULL DEFAULT '1.0.0',
     
-    -- Split ratios (must sum to 1.0)
+    -- Split ratios (must sum to 1.0). Backlog #44 (2026-07-21, migration 114):
+    -- test 0.15→0.10, holdout 0.05→0.10 — goldstd holdout enlargement, lockstep
+    -- with src/ml/synthetic/generators/base.py::_assign_splits.
     train_ratio DECIMAL(3,2) NOT NULL DEFAULT 0.60,
     validation_ratio DECIMAL(3,2) NOT NULL DEFAULT 0.20,
-    test_ratio DECIMAL(3,2) NOT NULL DEFAULT 0.15,
-    holdout_ratio DECIMAL(3,2) NOT NULL DEFAULT 0.05,
+    test_ratio DECIMAL(3,2) NOT NULL DEFAULT 0.10,
+    holdout_ratio DECIMAL(3,2) NOT NULL DEFAULT 0.10,
     
     -- Temporal boundaries
     data_start_date DATE NOT NULL,

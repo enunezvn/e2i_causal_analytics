@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate ML split ratios and detect data leakage.
 
-    CRITICAL: This enforces the E2I split policy:
+    CRITICAL: This enforces the E2I split policy (#44 holdout enlargement
+    2026-07-21: test 15%→10%, holdout 5%→10%):
     - Train: 60% ± 2%
     - Validation: 20% ± 2%
-    - Test: 15% ± 2%
-    - Holdout: 5% ± 2%
+    - Test: 10% ± 2%
+    - Holdout: 10% ± 2%
 
     This also checks for potential data leakage by ensuring splits are properly
     isolated.
@@ -51,7 +52,7 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     # `_run_repeated_splits` orchestrator built the per-fold split via
     # `RepeatedStratifiedSplitter`, ratios + holdout requirements are
     # owned by the repeated-mode contract (70/15/15 + no holdout) and the
-    # legacy 60/20/15/5 expectation does NOT apply. The splitter's own
+    # single-mode 60/20/10/10 expectation does NOT apply. The splitter's own
     # invariants (`test_repeated_splitter.py`) guarantee per-fold
     # train/val/test disjointness; the leakage `_check_duplicate_indices`
     # path still runs and operates on the explicit `indices` key the
@@ -71,12 +72,15 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
         }
         tolerance = 0.05  # widened — splitter's stratified shuffle leaves ±2-3% slack at small N
     else:
-        # E2I ML Foundation split policy (legacy single-mode contract).
+        # E2I ML Foundation split policy (single-mode contract). Backlog #44
+        # (2026-07-21): test 0.15→0.10, holdout 0.05→0.10 — lockstep with the
+        # seed quota in src/ml/synthetic/generators/base.py::_assign_splits
+        # (goldstd holdout enlargement; Remibrutinib holdout n≈415→≈844).
         expected_ratios = {
             "train": 0.60,
             "validation": 0.20,
-            "test": 0.15,
-            "holdout": 0.05,
+            "test": 0.10,
+            "holdout": 0.10,
         }
         tolerance = 0.02  # ±2%
     # Add small epsilon for floating point comparison (0.62 - 0.60 may be 0.0200000001)

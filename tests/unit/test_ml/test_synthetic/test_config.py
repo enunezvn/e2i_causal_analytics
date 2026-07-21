@@ -263,10 +263,12 @@ class TestSplitBoundaries:
         """Test SplitBoundaries ratio validation."""
         boundaries = SplitBoundaries()
 
+        # Backlog #44 (2026-07-21): test 0.15→0.10, holdout 0.05→0.10 so the
+        # gold-standard holdout doubles at the next full reseed.
         assert boundaries.train_ratio == 0.60
         assert boundaries.validation_ratio == 0.20
-        assert boundaries.test_ratio == 0.15
-        assert boundaries.holdout_ratio == 0.05
+        assert boundaries.test_ratio == 0.10
+        assert boundaries.holdout_ratio == 0.10
 
         # Ratios should sum to 1.0
         total = (

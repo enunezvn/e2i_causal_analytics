@@ -45,7 +45,7 @@ _PRE_P3_INVARIANT = {
         "prior_therapy_lines": "b14ef7b8c273c3f5",
         "age_at_diagnosis": "5f0f191c6166a2d2",
         "geographic_region": "2e57809069fb0ac7",
-        "data_split": "57c10764069cebb3",
+        "data_split": "bf0f985689e143c3",  # re-pinned for #44 split policy 60/20/10/10 (only data_split moved; all other columns held)
         "copay_support": "8ae5b0b33943ad52",
         "copay_support_propensity": "a41d21b251de602e",
         "psp_enrolled": "b0ff8a972ebfe483",
@@ -71,7 +71,7 @@ _PRE_P3_INVARIANT = {
         "prior_therapy_lines": "12bcebfc603e8979",
         "age_at_diagnosis": "34ca4305e39a8ce1",
         "geographic_region": "cfea1e7674329b01",
-        "data_split": "c1570c894741bb45",
+        "data_split": "9a071042dba9492c",  # re-pinned for #44 split policy 60/20/10/10 (only data_split moved; all other columns held)
         "copay_support": "97711255df1feee9",
         "copay_support_propensity": "4c2db6c443a8d193",
         "psp_enrolled": "675c23408d7dd6f0",

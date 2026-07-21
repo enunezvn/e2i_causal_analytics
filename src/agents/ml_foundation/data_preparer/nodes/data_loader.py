@@ -26,22 +26,26 @@ logger = logging.getLogger(__name__)
 
 
 def _legacy_split_config() -> SplitConfig:
-    """Build the 60/20/15/5 holdout-bearing config the model_trainer
-    ``split_enforcer`` legacy single-mode contract expects.
+    """Build the 60/20/10/10 holdout-bearing config the model_trainer
+    ``split_enforcer`` single-mode contract expects (#44 holdout enlargement
+    2026-07-21: test 0.15→0.10, holdout 0.05→0.10, lockstep with the enforcer's
+    expected_ratios and the seed quota in generators/base.py).
 
-    The plain ``random_split`` fallback otherwise defaults to 60/20/20 with a
-    0-sample holdout, which the enforcer hard-fails (``ratios_valid=False``)
-    both on the empty-holdout check and on the test-ratio drift (20% vs 15%).
-    Only the random fallback is reconciled here: it cleanly honours these
-    config ratios. The entity (hash-bucketed) and temporal (ratios computed
-    from data) fallbacks have different mechanics and are intentionally left
-    unchanged to keep the blast radius minimal.
+    The splitter's generic defaults are 60/20/20 with a 0-sample holdout,
+    which the enforcer hard-fails (``ratios_valid=False``) both on the
+    empty-holdout check and on the test-ratio drift (20% vs 10%). The
+    ``random_split`` and ``entity_split`` fallbacks are reconciled here: both
+    cleanly honour these config ratios (entity_split cuts cumulative hash
+    bands on them, mirroring SplitAwareRepository.assign_split). The temporal
+    fallback is intentionally left unchanged — it splits on day windows
+    (val_days/test_days), takes no ratio config, and has no holdout concept;
+    grafting one on is separate surgery.
     """
     return SplitConfig(
         train_ratio=0.60,
         val_ratio=0.20,
-        test_ratio=0.15,
-        holdout_ratio=0.05,
+        test_ratio=0.10,
+        holdout_ratio=0.10,
     )
 
 
@@ -332,7 +336,11 @@ def _load_from_files(
     splitter = get_data_splitter()
     if entity_column and entity_column in df.columns:
         logger.info("Applying entity split on '%s'", entity_column)
-        result = splitter.entity_split(df, entity_column=entity_column)
+        # 60/20/10/10 hash bands — config-less entity_split falls back to the
+        # generic 60/20/20/0 defaults, which the split_enforcer hard-fails.
+        result = splitter.entity_split(
+            df, entity_column=entity_column, config=_legacy_split_config()
+        )
     elif date_column in df.columns:
         logger.info("Applying temporal split on '%s'", date_column)
         result = splitter.temporal_split(
@@ -343,7 +351,7 @@ def _load_from_files(
         )
     else:
         logger.info("No entity or date column — applying random split")
-        # Request the 60/20/15/5 holdout-bearing contract so the downstream
+        # Request the 60/20/10/10 holdout-bearing contract so the downstream
         # split_enforcer does not hard-fail on a 0-sample holdout.
         result = splitter.random_split(df, config=_legacy_split_config())
 
@@ -437,9 +445,12 @@ async def _load_sample_data(
             test_days=30,
         )
     elif entity_column and entity_column in df.columns:
-        result = splitter.entity_split(df, entity_column=entity_column)
+        # 60/20/10/10 hash bands — see _load_from_files' entity branch.
+        result = splitter.entity_split(
+            df, entity_column=entity_column, config=_legacy_split_config()
+        )
     else:
-        # Request the 60/20/15/5 holdout-bearing contract so the downstream
+        # Request the 60/20/10/10 holdout-bearing contract so the downstream
         # split_enforcer does not hard-fail on a 0-sample holdout.
         result = splitter.random_split(df, config=_legacy_split_config())
 

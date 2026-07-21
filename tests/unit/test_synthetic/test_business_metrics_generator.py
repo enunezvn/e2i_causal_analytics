@@ -280,7 +280,7 @@ class TestDataSplitDistribution:
             assert split in valid_splits, f"Invalid split: {split}"
 
     def test_data_split_approximate_ratios(self):
-        """Test data_split follows approximate 60/20/15/5 ratios."""
+        """Test data_split follows approximate 60/20/10/10 ratios (#44 policy)."""
         config = GeneratorConfig(n_records=2000, seed=42)
         gen = BusinessMetricsGenerator(config)
 
@@ -288,11 +288,13 @@ class TestDataSplitDistribution:
 
         split_counts = df["data_split"].value_counts(normalize=True)
 
-        # Base generator uses 60/20/15/5 ratios with tolerance
+        # Base generator uses 60/20/10/10 ratios with tolerance. _assign_splits is a
+        # row-share quota (not date-banded), so at n=2000 every split — including the
+        # 10% holdout — is reliably present.
         assert abs(split_counts.get("train", 0) - 0.60) < 0.15
         assert abs(split_counts.get("validation", 0) - 0.20) < 0.10
-        assert abs(split_counts.get("test", 0) - 0.15) < 0.10
-        # holdout is small (5%), may or may not be present depending on date distribution
+        assert abs(split_counts.get("test", 0) - 0.10) < 0.10
+        assert abs(split_counts.get("holdout", 0) - 0.10) < 0.10
 
 
 class TestStatisticalFields:

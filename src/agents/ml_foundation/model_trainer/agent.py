@@ -117,7 +117,7 @@ class ModelTrainerAgent:
 
     Responsibilities:
     - QC gate enforcement (MANDATORY)
-    - Strict split enforcement (60/20/15/5)
+    - Strict split enforcement (60/20/10/10)
     - Preprocessing isolation (fit on train only)
     - Hyperparameter optimization (Optuna on validation)
     - Model training (train on train set)
