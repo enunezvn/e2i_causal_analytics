@@ -34,7 +34,7 @@ All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row
 | 12 | WS1-MP-003 | F1 Score | WS1 MP | `2 * P * R / (P + R)` | 0.75 | 0.60 | 0.45 | Daily |
 | 13 | WS1-MP-004 | Recall@Top-K | WS1 MP | `TP_at_K / total_positives` | 0.60 | 0.45 | 0.30 | Daily |
 | 14 | WS1-MP-005 | Brier Score | WS1 MP | `mean((p - y)^2)` | 0.15 | 0.25 | 0.35 | Daily |
-| 15 | WS1-MP-006 | Calibration Slope | WS1 MP | `logistic_reg(y ~ p).slope` | 1.0 | 0.8 | 0.6 | Weekly |
+| 15 | WS1-MP-006 | Calibration Slope Deviation | WS1 MP | `1 + mean(\|slope_i - 1\|)` | 1.0 ± 0.05 | ± 0.15 | beyond | Weekly |
 | 16 | WS1-MP-007 | SHAP Coverage | WS1 MP | `has_shap / total_predictions` | 0.95 | 0.80 | 0.60 | Daily |
 | 17 | WS1-MP-008 | Fairness Gap (dRecall) — ⚠️ DECOMMISSIONED (#1068) | WS1 MP | `max_group(R) - min_group(R)` | 0.05 | 0.10 | 0.20 | Weekly |
 | 18 | WS1-MP-009 | Feature Drift (PSI) | WS1 MP | `sum (q-p) * ln(q/p)` | 0.10 | 0.20 | 0.25 | Daily |
@@ -618,26 +618,26 @@ These KPIs monitor the predictive quality, calibration, explainability, and fair
 
 ---
 
-### WS1-MP-006: Calibration Slope
+### WS1-MP-006: Calibration Slope Deviation
 
 | Field | Value |
 |-------|-------|
 | **ID** | `WS1-MP-006` |
-| **Name** | Calibration Slope |
-| **Definition** | Slope of predicted versus actual probability regression (reliability diagram) |
-| **Formula** | `logistic_regression(y ~ predicted_prob).slope` |
+| **Name** | Calibration Slope Deviation |
+| **Definition** | Brand headline = 1 + mean(\|slope - 1\|) over the gold-standard models' holdout calibration slopes; per-model TRUE slopes (with holdout n and bootstrap CI) are in the `calibration_slope_detail` payload |
+| **Formula** | `1 + mean(\|logistic_regression(y ~ predicted_prob).slope - 1\|)` over per-model holdout slopes |
 | **Calculation Type** | Direct |
 | **Direction** | Band around ideal 1.0 (deviation-from-1.0 metric; both directions away are worse) |
-| **Unit** | Slope coefficient |
+| **Unit** | Slope-band units (headline >= 1.0 by construction) |
 | **Frequency** | Weekly |
 | **Source Tables** | `ml_predictions` |
 | **Source Columns** | `ml_predictions.calibration_score` |
 | **Helper View** | None |
-| **Good** | abs(slope - 1.0) <= 0.05 |
-| **Warning** | abs(slope - 1.0) <= 0.15 |
-| **Critical** | abs(slope - 1.0) > 0.15 |
+| **Good** | abs(value - 1.0) <= 0.05 |
+| **Warning** | abs(value - 1.0) <= 0.15 |
+| **Critical** | abs(value - 1.0) > 0.15 |
 
-A slope of 1.0 indicates perfectly calibrated probability predictions. Values below 1.0 suggest overconfident predictions; values above 1.0 suggest under-confident (over-dispersed) predictions. This KPI uses the band threshold mode (#1117): status derives from the absolute deviation from the ideal, not from a monotone comparison.
+Each gold-standard model's holdout **calibration slope** is a true Cox slope: 1.0 is perfectly calibrated, below 1.0 over-confident, above 1.0 under-confident (over-dispersed). The **brand headline is NOT a slope** — it is the deviation fold `1 + mean(|slope_i - 1|)` (renamed from "Calibration Slope", 2026-07-21), which stays in slope-band units so the band threshold (#1117) applies unchanged while killing signed cancellation: slopes 0.70 and 1.30 read 1.30 (CRITICAL), not a signed-mean 1.00 (GOOD). Because the fold discards direction, the per-model true slopes — with holdout n and bootstrap CI — are surfaced in the KPI result's `calibration_slope_detail` metadata; note the persistence/discontinuation mirror pair scores the same patients with mirrored labels, so 2 of a brand's 4 slots are one correlated draw. The metric storage key in `ml_performance_metrics` remains `calibration_slope` (per-model true slopes).
 
 **Calculator**: `ModelPerformanceCalculator._calc_calibration_slope`
 

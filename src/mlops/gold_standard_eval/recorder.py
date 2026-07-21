@@ -65,6 +65,7 @@ class MetricRecorder:
         *,
         source: str,
         split_version: str | None = None,
+        cis: dict[str, tuple[float, float]] | None = None,
     ) -> None:
         """Delete prior rows for this (model_version, source, split_version), then insert.
 
@@ -80,6 +81,12 @@ class MetricRecorder:
                 Must be ``None`` until row-level metadata storage is implemented
                 (P2); passing a non-None value would cause the delete filter to
                 match no rows while the insert still fires, breaking idempotency.
+            cis: Optional ``{metric_name: (ci_lower, ci_upper)}`` mapping passed
+                through to every ``record_metrics`` call — the repository writes
+                the interval into the matching metric row's existing
+                ``ci_lower``/``ci_upper`` columns. In practice only the holdout
+                headline (a single point) passes this, for the bootstrap
+                ``calibration_slope`` CI (B2); trend recordings omit it.
         """
         if split_version is not None:
             raise NotImplementedError(
@@ -119,6 +126,7 @@ class MetricRecorder:
                 measured_at_month,  # window_end   = same (month-grain; caller refines if needed)
                 measured_at=measured_at_month,
                 source=source,
+                cis=cis,
             )
 
     async def record_curves(

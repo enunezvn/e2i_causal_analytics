@@ -5,6 +5,8 @@ metrics (brand-reactive), falling back to the existing corpus SQL / MLflow legs
 when no gold-standard data is available.
 """
 
+import pytest
+
 from src.kpi.calculators.model_performance import ModelPerformanceCalculator
 from src.kpi.models import CalculationType, KPIMetadata, KPIThreshold, Workstream
 
@@ -112,7 +114,20 @@ def test_brier_uses_per_brand_goldstd_average():
     assert result.value == 0.18
 
 
-def test_calibration_uses_per_brand_goldstd_average():
+def _band_kpi() -> KPIMetadata:
+    """WS1-MP-006 with the real (unchanged) band threshold from kpi_definitions.yaml."""
+    return KPIMetadata(
+        id="WS1-MP-006",
+        name="Calibration Slope Deviation",
+        definition="Calibration Slope Deviation",
+        formula="f",
+        calculation_type=CalculationType.DIRECT,
+        workstream=Workstream.WS1_MODEL_PERFORMANCE,
+        threshold=KPIThreshold(ideal=1.0, good_tolerance=0.05, warning_tolerance=0.15),
+    )
+
+
+def test_calibration_uses_per_brand_goldstd_aggregate():
     store = {
         "ml_model_registry": [{"id": "1", "model_name": "hcp_adoption_fabhalta_goldstd_lr_v1"}],
         "ml_performance_metrics": [
@@ -125,8 +140,131 @@ def test_calibration_uses_per_brand_goldstd_average():
         ],
     }
     calc = ModelPerformanceCalculator(db_client=_SyncClient(store))
-    result = calc.calculate(_kpi("WS1-MP-006", "Calibration"), {"brand": "Fabhalta"})
-    assert result.value == 0.95
+    result = calc.calculate(_band_kpi(), {"brand": "Fabhalta"})
+    # B3: headline = 1 + mean(|slope - 1|) -> a single 0.95 reads 1.05.
+    assert result.value == pytest.approx(1.05)
+    assert result.status == "good"  # deviation 0.05 <= good_tolerance
+
+
+def test_calibration_signed_cancellation_is_dead():
+    """0.70 & 1.30 must surface as 1.30 (CRITICAL), not signed-mean 1.00 (GOOD)."""
+    store = {
+        "ml_model_registry": [
+            {"id": "1", "model_name": "initiation_kisqali_goldstd_lr_v1"},
+            {"id": "2", "model_name": "persistence_kisqali_goldstd_lr_v1"},
+        ],
+        "ml_performance_metrics": [
+            {
+                "model_id": "1",
+                "metric_name": "calibration_slope",
+                "metric_value": 0.70,
+                "source": "holdout",
+            },
+            {
+                "model_id": "2",
+                "metric_name": "calibration_slope",
+                "metric_value": 1.30,
+                "source": "holdout",
+            },
+        ],
+    }
+    calc = ModelPerformanceCalculator(db_client=_SyncClient(store))
+    result = calc.calculate(_band_kpi(), {"brand": "Kisqali"})
+    assert result.value == pytest.approx(1.30)
+    assert result.status == "critical"
+
+
+def test_calibration_detail_surfaced_in_result_metadata():
+    """B2 payload: per-model slopes + holdout n + CI ride in KPIResult.metadata
+    so a wide-CI red is visibly a small-sample red."""
+    store = {
+        "ml_model_registry": [
+            {"id": "1", "model_name": "persistence_remibrutinib_goldstd_lr_v1"},
+        ],
+        "ml_performance_metrics": [
+            {
+                "model_id": "1",
+                "metric_name": "calibration_slope",
+                "metric_value": 1.4455,
+                "source": "holdout",
+                "sample_size": 415,
+                "ci_lower": 1.2192,
+                "ci_upper": 1.6704,
+            },
+        ],
+    }
+    calc = ModelPerformanceCalculator(db_client=_SyncClient(store))
+    result = calc.calculate(_band_kpi(), {"brand": "Remibrutinib"})
+    detail = result.metadata["calibration_slope_detail"]
+    assert detail["aggregation"] == "one_plus_mean_abs_deviation"
+    entry = detail["models"][0]
+    assert entry["model_name"] == "persistence_remibrutinib_goldstd_lr_v1"
+    assert entry["slope"] == pytest.approx(1.4455)
+    assert entry["n"] == 415
+    assert entry["ci_lower"] == pytest.approx(1.2192)
+    assert entry["ci_upper"] == pytest.approx(1.6704)
+
+
+def test_calibration_detail_null_ci_rows_degrade_gracefully():
+    """Pre-next-eval DB state: slope rows with NULL ci/sample_size still produce
+    a detail entry with None fields (no crash, no fabricated interval)."""
+    store = {
+        "ml_model_registry": [{"id": "1", "model_name": "initiation_kisqali_goldstd_lr_v1"}],
+        "ml_performance_metrics": [
+            {
+                "model_id": "1",
+                "metric_name": "calibration_slope",
+                "metric_value": 0.97,
+                "source": "holdout",
+                "sample_size": None,
+                "ci_lower": None,
+                "ci_upper": None,
+            },
+        ],
+    }
+    calc = ModelPerformanceCalculator(db_client=_SyncClient(store))
+    result = calc.calculate(_band_kpi(), {"brand": "Kisqali"})
+    assert result.value == pytest.approx(1.03)
+    entry = result.metadata["calibration_slope_detail"]["models"][0]
+    assert entry["n"] is None
+    assert entry["ci_lower"] is None
+    assert entry["ci_upper"] is None
+
+
+def test_ws1_mp006_named_for_deviation_semantics():
+    """The headline is 1 + mean(|slope - 1|), NOT a literal slope — the KPI's
+    display name/definition/formula must say so (codex HIGH: a consumer reading
+    'Calibration Slope' would misread the folded value as a slope). The metric
+    storage key (`calibration_slope`) is unchanged — this is labeling only."""
+    from src.kpi.registry import KPIRegistry
+
+    KPIRegistry.reset()
+    try:
+        kpi = KPIRegistry().get("WS1-MP-006")
+        assert kpi is not None
+        assert kpi.name == "Calibration Slope Deviation"
+        assert "1 + mean(|slope - 1|)" in kpi.definition
+        # The definition must point readers at the per-model TRUE slopes.
+        assert "detail" in kpi.definition
+        assert "1 + mean(" in kpi.formula
+    finally:
+        KPIRegistry.reset()
+
+
+def test_ws1_mp006_band_in_kpi_definitions_unchanged():
+    """B3 keeps the headline in slope-band units — the YAML band MUST stay as-is."""
+    from src.kpi.registry import KPIRegistry
+
+    KPIRegistry.reset()
+    try:
+        kpi = KPIRegistry().get("WS1-MP-006")
+        assert kpi is not None and kpi.threshold is not None
+        assert kpi.threshold.ideal == 1.0
+        assert kpi.threshold.good_tolerance == 0.05
+        assert kpi.threshold.warning_tolerance == 0.15
+        assert kpi.threshold.target is None
+    finally:
+        KPIRegistry.reset()
 
 
 def test_roc_auc_falls_back_when_no_goldstd(monkeypatch):

@@ -80,9 +80,12 @@ const mockKPIs = [
   },
   {
     id: 'WS1-MP-006',
-    name: 'Calibration Slope',
-    definition: 'Slope of predicted vs actual probability regression',
-    formula: 'logistic_regression(y ~ predicted_prob).slope',
+    // Mirrors kpi_definitions.yaml (renamed 2026-07-21, WS-B3): the headline
+    // is a deviation fold, not a literal slope.
+    name: 'Calibration Slope Deviation',
+    definition:
+      "Brand headline = 1 + mean(|slope - 1|) over the gold-standard models' holdout calibration slopes; per-model TRUE slopes with holdout n and bootstrap CI are in the calibration_slope_detail payload",
+    formula: '1 + mean(|logistic_regression(y ~ predicted_prob).slope - 1|) over per-model holdout slopes',
     calculation_type: 'direct',
     workstream: 'ws1_model_performance',
     tables: ['ml_predictions'],

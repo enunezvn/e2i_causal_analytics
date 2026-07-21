@@ -3,6 +3,7 @@ import numpy as np
 from src.mlops.gold_standard_eval.scorer import (
     METRIC_NAMES,
     _calibration_slope,
+    calibration_slope_ci,
     confusion,
     holdout_curve_records,
     roc_points,
@@ -141,3 +142,54 @@ def test_holdout_curve_records_single_class_confusion_only():
     s = np.array([0.2, 0.6, 0.9])
     recs = holdout_curve_records(y, s)
     assert [r[0] for r in recs] == ["confusion_matrix"]
+
+
+# ---------------------------------------------------------------------------
+# calibration_slope_ci() — bootstrap percentile CI for the holdout slope (B2)
+# ---------------------------------------------------------------------------
+
+
+def _calibratable(n: int = 200, seed: int = 0):
+    """Well-calibrated binary sample: y drawn from its own score -> slope ~ 1."""
+    rng = np.random.default_rng(seed)
+    p = rng.uniform(0.05, 0.95, size=n)
+    y = (rng.uniform(size=n) < p).astype(int)
+    return y, p
+
+
+def test_calibration_slope_ci_emits_bounds_n_and_level():
+    y, s = _calibratable()
+    out = calibration_slope_ci(y, s, n_boot=200, seed=7)
+    assert out is not None
+    assert out["ci_lower"] < out["ci_upper"]
+    # Holdout n travels with the CI so a wide-CI red is visibly a small-sample red.
+    assert out["n"] == len(y)
+    assert out["n_boot"] == 200
+    assert out["ci_level"] == 0.95
+    # A percentile CI on a well-behaved sample brackets the point estimate.
+    point = _calibration_slope(y, s)
+    assert out["ci_lower"] <= point <= out["ci_upper"]
+
+
+def test_calibration_slope_ci_deterministic_for_fixed_seed():
+    y, s = _calibratable()
+    a = calibration_slope_ci(y, s, n_boot=100, seed=13)
+    b = calibration_slope_ci(y, s, n_boot=100, seed=13)
+    assert a == b  # identical resamples -> bit-identical CI (idempotent re-runs)
+
+
+def test_calibration_slope_ci_none_for_single_class():
+    # The point slope itself is unfittable -> no CI (never a fabricated interval).
+    assert calibration_slope_ci(np.array([1, 1, 1, 1]), np.array([0.2, 0.4, 0.6, 0.8])) is None
+
+
+def test_calibration_slope_ci_none_for_empty():
+    assert calibration_slope_ci(np.array([]), np.array([])) is None
+
+
+def test_score_does_not_leak_ci_keys_as_metric_rows():
+    # The CI must land in the row's ci_lower/ci_upper COLUMNS via the recorder,
+    # never as separate metric_name rows — score() keys become metric rows 1:1.
+    y, s = _calibratable()
+    out = score(y, s)
+    assert not any(k.startswith("ci_") or "_ci" in k for k in out)

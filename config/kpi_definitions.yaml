@@ -331,9 +331,13 @@ ws1_model_performance:
     
   calibration_slope:
     id: "WS1-MP-006"
-    name: "Calibration Slope"
-    definition: "Slope of predicted vs actual probability regression"
-    formula: "logistic_regression(y ~ predicted_prob).slope"
+    # Renamed from "Calibration Slope" (2026-07-21, WS-B3): the brand headline
+    # is a deviation FOLD in slope-band units, not a literal slope — labeling
+    # it a slope misled consumers of the name/definition. The metric storage
+    # key (`calibration_slope` rows in ml_performance_metrics) is unchanged.
+    name: "Calibration Slope Deviation"
+    definition: "Brand headline = 1 + mean(|slope - 1|) over the gold-standard models' holdout calibration slopes (kills signed cancellation; stays in slope-band units). Per-model TRUE slopes with holdout n and bootstrap CI are in the calibration_slope_detail payload"
+    formula: "1 + mean(|logistic_regression(y ~ predicted_prob).slope - 1|) over per-model holdout slopes"
     calculation_type: direct
     tables:
       - ml_predictions

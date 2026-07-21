@@ -7,7 +7,7 @@ Implements calculators for model performance metrics:
 - F1 Score
 - Recall@Top-K
 - Brier Score
-- Calibration Slope
+- Calibration Slope Deviation
 - SHAP Coverage
 - Feature Drift (PSI)
 
@@ -31,7 +31,7 @@ Unavailability reasons:
   - db_query_returned_empty[:<note>]  (no rows / NULL value)
 """
 
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -96,8 +96,12 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         context = context or {}
 
-        # Route to specific calculator based on KPI ID
-        calculator_map = {
+        # Route to specific calculator based on KPI ID. Each _calc_* returns
+        # ``(value, error)``; a calculator MAY return a third element — a dict
+        # merged into KPIResult.metadata (e.g. WS1-MP-006's per-model
+        # calibration_slope_detail) so KPI-specific detail reaches the payload
+        # without widening the shared 2-tuple contract for every metric.
+        calculator_map: dict[str, Callable[[dict[str, Any]], tuple[Any, ...]]] = {
             "WS1-MP-001": self._calc_roc_auc,
             "WS1-MP-002": self._calc_pr_auc,
             "WS1-MP-003": self._calc_f1_score,
@@ -116,16 +120,21 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             )
 
         try:
-            value, error = calc_func(context)
+            outcome = calc_func(context)
+            value, error = outcome[0], outcome[1]
+            extra_metadata = outcome[2] if len(outcome) > 2 else None
             # Determine if lower is better
             lower_is_better = kpi.id in {"WS1-MP-005", "WS1-MP-009"}
             status = self._evaluate_status(kpi, value, lower_is_better)
+            metadata: dict[str, Any] = {"context": context, "lower_is_better": lower_is_better}
+            if extra_metadata:
+                metadata.update(extra_metadata)
             return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
                 error=error,
-                metadata={"context": context, "lower_is_better": lower_is_better},
+                metadata=metadata,
             )
         except Exception as e:
             return KPIResult(  # type: ignore[call-arg]
@@ -153,14 +162,12 @@ class ModelPerformanceCalculator(KPICalculatorBase):
 
     # ------------------------------------------------------------------ gold-standard helper
 
-    def _goldstd_metric(self, context: dict[str, Any], metric_name: str) -> float | None:
-        """Per-brand average of the gold-standard models' holdout ``metric_name``.
+    def _goldstd_summary(self, context: dict[str, Any]) -> dict[str, Any] | None:
+        """Per-brand gold-standard holdout summary (best-effort, never raises).
 
-        Best-effort PRIMARY source for the dashboard: ``context['brand']`` scopes
-        to that brand's ``*_goldstd_lr_v1`` staging models (absent/All -> all 12).
-        Returns ``None`` (caller then falls back to the existing corpus/MLflow
-        legs) when no gold-standard data is available or a read fails — never
-        raises, never fabricates.
+        ``context['brand']`` scopes to that brand's ``*_goldstd_lr_v1`` staging
+        models (absent/All -> all 12). Returns ``None`` when no gold-standard
+        data is available or a read fails — never fabricates.
         """
         from src.kpi.goldstd_model_perf import summarize_sync
 
@@ -168,6 +175,17 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             summary = summarize_sync(self.db_client, context.get("brand"))
         except Exception:
             return None
+        return summary or None
+
+    def _goldstd_metric(self, context: dict[str, Any], metric_name: str) -> float | None:
+        """Per-brand aggregate of the gold-standard models' holdout ``metric_name``.
+
+        Best-effort PRIMARY source for the dashboard. Returns ``None`` (caller
+        then falls back to the existing corpus/MLflow legs) when no
+        gold-standard data is available or a read fails — never raises, never
+        fabricates.
+        """
+        summary = self._goldstd_summary(context)
         if not summary:
             return None
         val = summary.get(metric_name)
@@ -244,17 +262,28 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "brier_score")
 
-    def _calc_calibration_slope(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
-        """Calculate WS1-MP-006: Calibration Slope.
+    def _calc_calibration_slope(
+        self, context: dict[str, Any]
+    ) -> tuple[float | None, str | None, dict[str, Any] | None]:
+        """Calculate WS1-MP-006: Calibration Slope Deviation.
 
-        PRIMARY: per-brand average of the gold-standard models' holdout
-        ``calibration_slope``. FALLBACK: MLflow (fail-closed; no fabricated default).
+        PRIMARY: per-brand aggregate of the gold-standard models' holdout
+        ``calibration_slope`` — ``1 + mean(|slope_i - 1|)``, computed by
+        ``goldstd_model_perf.average_holdout`` (kills signed cancellation while
+        staying in slope-band units, so the kpi_definitions band applies
+        unchanged). The third tuple element carries the per-model detail
+        (slope, holdout n, bootstrap CI) into ``KPIResult.metadata`` so a
+        wide-CI red is visibly a small-sample red.
+        FALLBACK: MLflow (fail-closed; no fabricated default).
         """
-        gs = self._goldstd_metric(context, "calibration_slope")
-        if gs is not None:
-            return gs, None
+        summary = self._goldstd_summary(context)
+        if summary and summary.get("calibration_slope") is not None:
+            detail = summary.get("calibration_slope_detail")
+            extra = {"calibration_slope_detail": detail} if detail else None
+            return float(summary["calibration_slope"]), None, extra
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "calibration_slope")
+        value, error = self._get_metric_from_mlflow(model_name, "calibration_slope")
+        return value, error, None
 
     # ------------------------------------------------------------------ SQL-backed / hybrid metrics
 

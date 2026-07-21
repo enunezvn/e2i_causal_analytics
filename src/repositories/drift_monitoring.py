@@ -37,7 +37,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -477,6 +477,12 @@ class PerformanceMetricRecord(BaseModel):
     # When None the key is omitted from to_db_row() so the DB default applies; when set
     # (e.g. 'backtest_wf' / 'holdout') the value is written explicitly.
     source: Optional[str] = None
+    # Bootstrap CI for the metric value (ml_performance_metrics.ci_lower/ci_upper,
+    # nullable DECIMAL(12,6) columns that pre-date this field — NO migration).
+    # Omitted from to_db_row() when None so rows without a CI keep NULL columns
+    # (pre-B2 behaviour unchanged for every existing caller).
+    ci_lower: Optional[float] = None
+    ci_upper: Optional[float] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def to_db_row(self) -> Dict[str, Any]:
@@ -497,6 +503,11 @@ class PerformanceMetricRecord(BaseModel):
         # Emit source only when explicitly set; absence lets the DB default ('mlflow') apply.
         if self.source is not None:
             row["source"] = self.source
+        # Emit the CI columns only when set; absence keeps them NULL.
+        if self.ci_lower is not None:
+            row["ci_lower"] = self.ci_lower
+        if self.ci_upper is not None:
+            row["ci_upper"] = self.ci_upper
         return row
 
     @classmethod
@@ -1058,6 +1069,7 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         *,
         measured_at: Optional[datetime] = None,
         source: Optional[str] = None,
+        cis: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> List[PerformanceMetricRecord]:
         """Record performance metrics for a model.
 
@@ -1074,6 +1086,11 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
             source: Tag for the metric origin (e.g. ``'backtest_wf'`` /
                 ``'holdout'``).  When None the DB column default (``'mlflow'``)
                 is preserved via the ``to_db_row()`` omission rule.
+            cis: Optional ``{metric_name: (ci_lower, ci_upper)}`` mapping. The
+                interval is written to the MATCHING metric's row only (existing
+                nullable ``ci_lower``/``ci_upper`` columns); metrics absent from
+                the mapping keep NULL columns. Used by the gold-standard holdout
+                eval for the bootstrap ``calibration_slope`` CI (B2).
         """
         if not self.client or not metrics:
             return []
@@ -1094,6 +1111,10 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
             }
             if measured_at is not None:
                 kwargs["measured_at"] = measured_at
+            ci = (cis or {}).get(metric_name)
+            if ci is not None:
+                kwargs["ci_lower"] = float(ci[0])
+                kwargs["ci_upper"] = float(ci[1])
             records.append(PerformanceMetricRecord(**kwargs))
 
         data = [r.to_db_row() for r in records]
