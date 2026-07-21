@@ -18,16 +18,16 @@ class TestEnforceSplits:
     """Test split ratio validation and leakage detection."""
 
     async def test_validates_perfect_split_ratios(self):
-        """Should pass with perfect 60/20/15/5 ratios."""
+        """Should pass with perfect 60/20/10/10 ratios (#44 holdout enlargement)."""
         state = {
             "train_ratio": 0.60,
             "validation_ratio": 0.20,
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 600,
             "validation_samples": 200,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -37,17 +37,41 @@ class TestEnforceSplits:
         assert "validated" in result["split_validation_message"].lower()
         assert len(result["leakage_warnings"]) == 0
 
+    async def test_fails_on_legacy_15_5_ratios(self):
+        """Red-first #44 pin: the pre-enlargement 60/20/15/5 design must now
+        FAIL the single-mode contract — |0.15-0.10| and |0.05-0.10| both exceed
+        the ±2% tolerance. Guards against the enforcer silently accepting a
+        substrate seeded with the old quota after the ratio change ships."""
+        state = {
+            "train_ratio": 0.60,
+            "validation_ratio": 0.20,
+            "test_ratio": 0.15,  # legacy design
+            "holdout_ratio": 0.05,  # legacy design
+            "train_samples": 600,
+            "validation_samples": 200,
+            "test_samples": 150,
+            "holdout_samples": 50,
+            "total_samples": 1000,
+        }
+
+        result = await enforce_splits(state)
+
+        assert result["split_ratios_valid"] is False
+        failed = [c for c in result["split_ratio_checks"] if "outside" in c.lower()]
+        assert any("test" in c.lower() for c in failed)
+        assert any("holdout" in c.lower() for c in failed)
+
     async def test_allows_ratios_within_tolerance(self):
         """Should pass with ratios within ±2% tolerance."""
         state = {
             "train_ratio": 0.61,  # 60% + 1%
             "validation_ratio": 0.19,  # 20% - 1%
-            "test_ratio": 0.15,  # 15% exact
-            "holdout_ratio": 0.05,  # 5% exact
+            "test_ratio": 0.10,  # 10% exact
+            "holdout_ratio": 0.10,  # 10% exact
             "train_samples": 610,
             "validation_samples": 190,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -59,13 +83,13 @@ class TestEnforceSplits:
         """Should fail when train ratio below 58% (60% - 2%)."""
         state = {
             "train_ratio": 0.57,  # Below threshold
-            "validation_ratio": 0.20,
-            "test_ratio": 0.18,
-            "holdout_ratio": 0.05,
+            "validation_ratio": 0.21,
+            "test_ratio": 0.11,
+            "holdout_ratio": 0.11,
             "train_samples": 570,
-            "validation_samples": 200,
-            "test_samples": 180,
-            "holdout_samples": 50,
+            "validation_samples": 210,
+            "test_samples": 110,
+            "holdout_samples": 110,
             "total_samples": 1000,
         }
 
@@ -79,12 +103,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.58,
             "validation_ratio": 0.23,  # Above threshold
-            "test_ratio": 0.14,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.09,
+            "holdout_ratio": 0.10,
             "train_samples": 580,
             "validation_samples": 230,
-            "test_samples": 140,
-            "holdout_samples": 50,
+            "test_samples": 90,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -151,12 +175,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.62,  # 60% + 2% (exact boundary)
             "validation_ratio": 0.18,  # 20% - 2% (exact boundary)
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 620,
             "validation_samples": 180,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -169,12 +193,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.60,
             "validation_ratio": 0.20,
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 600,
             "validation_samples": 200,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -192,12 +216,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.60,
             "validation_ratio": 0.20,
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 600,
             "validation_samples": 200,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -213,12 +237,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.50,  # Too low
             "validation_ratio": 0.30,  # Too high
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 500,
             "validation_samples": 300,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -232,12 +256,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.60,
             "validation_ratio": 0.20,
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 600,
             "validation_samples": 200,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
         }
 
@@ -250,12 +274,12 @@ class TestEnforceSplits:
         state = {
             "train_ratio": 0.50,  # Too low (violation 1)
             "validation_ratio": 0.30,  # Too high (violation 2)
-            "test_ratio": 0.10,  # Too low (violation 3)
-            "holdout_ratio": 0.08,  # Too high (violation 4)
+            "test_ratio": 0.05,  # Too low (violation 3)
+            "holdout_ratio": 0.13,  # Too high (violation 4)
             "train_samples": 500,
             "validation_samples": 300,
-            "test_samples": 100,
-            "holdout_samples": 80,
+            "test_samples": 50,
+            "holdout_samples": 130,
             "total_samples": 980,  # Doesn't sum to 1.0 (violation 5)
         }
 
@@ -623,8 +647,8 @@ class TestClassPresenceGuard:
         state = {
             "train_ratio": 0.60,
             "validation_ratio": 0.20,
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": len(train_y),
             "validation_samples": len(val_y),
             "test_samples": len(test_y),
@@ -700,12 +724,12 @@ class TestClassPresenceGuard:
         state = {
             "train_ratio": 0.60,
             "validation_ratio": 0.20,
-            "test_ratio": 0.15,
-            "holdout_ratio": 0.05,
+            "test_ratio": 0.10,
+            "holdout_ratio": 0.10,
             "train_samples": 600,
             "validation_samples": 200,
-            "test_samples": 150,
-            "holdout_samples": 50,
+            "test_samples": 100,
+            "holdout_samples": 100,
             "total_samples": 1000,
             "problem_type": "binary_classification",
         }

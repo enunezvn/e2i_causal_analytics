@@ -82,14 +82,20 @@ class SplitValidator:
     def __init__(
         self,
         config: Optional[SyntheticDataConfig] = None,
-        ratio_tolerance: float = 0.05,
+        ratio_tolerance: float = 0.02,
     ):
         """
         Initialize split validator.
 
         Args:
             config: Synthetic data config with split boundaries
-            ratio_tolerance: Maximum allowed deviation from expected ratios
+            ratio_tolerance: Maximum allowed deviation from expected ratios.
+                Default tightened 0.05→0.02 with backlog #44 (2026-07-21): the
+                row-quota seed assignment is exact to whole-date chunk rounding
+                (<1pp on full-size seeds, measured pooled holdout 4.995% vs the
+                then-designed 5%), and 0.05 would let the PRE-enlargement 15/5
+                design pass borderline against the new 10/10 expectations.
+                Matches split_enforcer.py's ±2% single-mode tolerance.
         """
         self.config = config or SyntheticDataConfig()
         self.ratio_tolerance = ratio_tolerance

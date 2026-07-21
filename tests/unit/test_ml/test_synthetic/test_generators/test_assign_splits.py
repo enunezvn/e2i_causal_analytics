@@ -23,7 +23,12 @@ import pytest
 from src.ml.synthetic.config import DGPType
 from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
 
-DESIGNED = {"train": 0.60, "validation": 0.20, "test": 0.15, "holdout": 0.05}
+# Backlog #44 (goldstd holdout enlargement, 2026-07-21): the designed quota is
+# 60/20/10/10 — test 0.15→0.10 and holdout 0.05→0.10 so the gold-standard
+# holdout roughly doubles at the next --anchor-to-now reseed (Remibrutinib
+# n≈415→≈844, calibration-slope SE ≈0.08). These MUST match the default ratios
+# dict in ``BaseGenerator._assign_splits`` (src/ml/synthetic/generators/base.py).
+DESIGNED = {"train": 0.60, "validation": 0.20, "test": 0.10, "holdout": 0.10}
 
 
 def _generator(**config_kwargs) -> PatientGenerator:
@@ -62,7 +67,7 @@ def _anchored_bimodal_dates(
 
 class TestAssignSplitsRowMass:
     def test_row_mass_shares_under_anchored_skew(self) -> None:
-        """THE #864 case: bimodal anchored dates must still yield ~60/20/15/5
+        """THE #864 case: bimodal anchored dates must still yield ~60/20/10/10
         ROW shares (the dense recent window holds ~2% of rows per unique day,
         so whole-date boundary rounding is bounded by ~0.02 per split)."""
         gen = _generator()
@@ -74,7 +79,7 @@ class TestAssignSplitsRowMass:
         assert shares.get("holdout", 0.0) == pytest.approx(DESIGNED["holdout"], abs=0.03)
 
     def test_uniform_dates_keep_designed_shares(self) -> None:
-        """The legacy uniform-density case must keep working: ~60/20/15/5."""
+        """The legacy uniform-density case must keep working: ~60/20/10/10."""
         gen = _generator()
         rng = np.random.default_rng(7)
         start = dt.date(2022, 1, 1)
@@ -162,5 +167,5 @@ class TestPatientGeneratorAnchoredSplits:
         dist = df["data_split"].value_counts(normalize=True)
         assert dist.get("train", 0.0) == pytest.approx(0.60, abs=0.07)
         assert dist.get("validation", 0.0) == pytest.approx(0.20, abs=0.05)
-        assert dist.get("test", 0.0) == pytest.approx(0.15, abs=0.05)
-        assert dist.get("holdout", 0.0) == pytest.approx(0.05, abs=0.04)
+        assert dist.get("test", 0.0) == pytest.approx(0.10, abs=0.05)
+        assert dist.get("holdout", 0.0) == pytest.approx(0.10, abs=0.04)

@@ -154,27 +154,34 @@ class SplitBoundaries:
     """
     Chronological split boundaries for ML-compliant data splitting.
 
-    Splits are patient-level and temporal:
+    Splits are patient-level and temporal (#44 holdout enlargement 2026-07-21:
+    test 15%→10%, holdout 5%→10%):
     - Train: 60% (2022-01-01 to 2023-06-30)
     - Validation: 20% (2023-07-01 to 2024-03-31)
-    - Test: 15% (2024-04-01 to 2024-09-30)
-    - Holdout: 5% (2024-10-01 to 2024-12-31)
+    - Test: 10%
+    - Holdout: 10%
+
+    NOTE: under the operative ``--anchor-to-now`` seed path the splits are cut
+    on cumulative ROW share (``BaseGenerator._assign_splits``), not on these
+    legacy calendar boundaries; the date fields below document the historical
+    non-anchored band and are consumed only by ``get_split_for_date`` (tests).
+    The RATIOS are the fields that must stay in lockstep with the seed quota.
     """
 
     data_start_date: date = date(2022, 1, 1)
     data_end_date: date = date(2024, 12, 31)
 
-    # Split boundaries
+    # Split boundaries (legacy non-anchored band documentation — see NOTE above)
     train_end_date: date = date(2023, 6, 30)
     validation_end_date: date = date(2024, 3, 31)
     test_end_date: date = date(2024, 9, 30)
     # Holdout is everything after test_end_date
 
-    # Ratios (for validation)
+    # Ratios (for validation; lockstep with _assign_splits' default quota)
     train_ratio: float = 0.60
     validation_ratio: float = 0.20
-    test_ratio: float = 0.15
-    holdout_ratio: float = 0.05
+    test_ratio: float = 0.10
+    holdout_ratio: float = 0.10
 
     # Gap between splits to prevent temporal leakage
     temporal_gap_days: int = 7

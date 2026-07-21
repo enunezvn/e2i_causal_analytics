@@ -186,12 +186,20 @@ class TestSplitConfig:
         config = SplitConfig()
 
         assert config.config_name == "e2i_pilot_v3"
-        assert config.config_version == "3.0.0"
+        # Backlog #44 (2026-07-21): v3.1.0 = holdout enlargement (test 0.15→0.10,
+        # holdout 0.05→0.10). Ratios must mirror the operative reseed quota in
+        # src/ml/synthetic/generators/base.py::_assign_splits.
+        assert config.config_version == "3.1.0"
         assert config.train_ratio == 0.60
         assert config.validation_ratio == 0.20
-        assert config.test_ratio == 0.15
-        assert config.holdout_ratio == 0.05
+        assert config.test_ratio == 0.10
+        assert config.holdout_ratio == 0.10
         assert config.temporal_gap_days == 7
+        # The four ratios are a complete partition of the data.
+        total = (
+            config.train_ratio + config.validation_ratio + config.test_ratio + config.holdout_ratio
+        )
+        assert abs(total - 1.0) < 1e-9
 
     def test_custom_config(self):
         """Test custom SplitConfig values."""

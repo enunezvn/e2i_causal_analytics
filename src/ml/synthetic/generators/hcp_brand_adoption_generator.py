@@ -33,11 +33,13 @@ from src.ml.synthetic.generators.hcp_adoption_artifact import (
 
 _NON_ADOPTER_VALUE = "NON_ADOPTER"
 
+# Backlog #44 (2026-07-21): test 0.15→0.10, holdout 0.05→0.10 — lockstep with
+# BaseGenerator._assign_splits' default quota (goldstd holdout enlargement).
 _DEFAULT_SPLIT_PROPORTIONS: Dict[str, float] = {
     "train": 0.60,
     "validation": 0.20,
-    "test": 0.15,
-    "holdout": 0.05,
+    "test": 0.10,
+    "holdout": 0.10,
 }
 _SPLIT_ORDER = ("train", "validation", "test", "holdout")
 
@@ -73,7 +75,7 @@ def generate_hcp_brand_adoption_frame(
     n_months:
         Number of trailing monthly buckets for consideration_date.
     split_proportions:
-        {split_name: fraction}.  Defaults to 60/20/15/5.  Stratified by
+        {split_name: fraction}.  Defaults to 60/20/10/10 (#44).  Stratified by
         ``adopted`` so both classes appear in every split.
 
     Returns

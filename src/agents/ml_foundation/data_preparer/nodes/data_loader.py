@@ -26,12 +26,14 @@ logger = logging.getLogger(__name__)
 
 
 def _legacy_split_config() -> SplitConfig:
-    """Build the 60/20/15/5 holdout-bearing config the model_trainer
-    ``split_enforcer`` legacy single-mode contract expects.
+    """Build the 60/20/10/10 holdout-bearing config the model_trainer
+    ``split_enforcer`` single-mode contract expects (#44 holdout enlargement
+    2026-07-21: test 0.15→0.10, holdout 0.05→0.10, lockstep with the enforcer's
+    expected_ratios and the seed quota in generators/base.py).
 
     The plain ``random_split`` fallback otherwise defaults to 60/20/20 with a
     0-sample holdout, which the enforcer hard-fails (``ratios_valid=False``)
-    both on the empty-holdout check and on the test-ratio drift (20% vs 15%).
+    both on the empty-holdout check and on the test-ratio drift (20% vs 10%).
     Only the random fallback is reconciled here: it cleanly honours these
     config ratios. The entity (hash-bucketed) and temporal (ratios computed
     from data) fallbacks have different mechanics and are intentionally left
@@ -40,8 +42,8 @@ def _legacy_split_config() -> SplitConfig:
     return SplitConfig(
         train_ratio=0.60,
         val_ratio=0.20,
-        test_ratio=0.15,
-        holdout_ratio=0.05,
+        test_ratio=0.10,
+        holdout_ratio=0.10,
     )
 
 
@@ -343,7 +345,7 @@ def _load_from_files(
         )
     else:
         logger.info("No entity or date column — applying random split")
-        # Request the 60/20/15/5 holdout-bearing contract so the downstream
+        # Request the 60/20/10/10 holdout-bearing contract so the downstream
         # split_enforcer does not hard-fail on a 0-sample holdout.
         result = splitter.random_split(df, config=_legacy_split_config())
 
@@ -439,7 +441,7 @@ async def _load_sample_data(
     elif entity_column and entity_column in df.columns:
         result = splitter.entity_split(df, entity_column=entity_column)
     else:
-        # Request the 60/20/15/5 holdout-bearing contract so the downstream
+        # Request the 60/20/10/10 holdout-bearing contract so the downstream
         # split_enforcer does not hard-fail on a 0-sample holdout.
         result = splitter.random_split(df, config=_legacy_split_config())
 

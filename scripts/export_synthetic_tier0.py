@@ -16,7 +16,7 @@ Contract decisions (mirrors the Optum mart cohort dirs):
   ``days_to_treatment`` is populated only for initiators (outcome-derived);
   the *other* cohort's outcome is dropped per cell (``persistent_180d`` is the
   exact complement of ``discontinued_180d`` — a perfect label leak).
-- ``data_split`` is REASSIGNED (stratified random 60/20/15/5, seeded): the
+- ``data_split`` is REASSIGNED (stratified random 60/20/10/10, seeded): the
   generator's chronological split is scrambled by the --anchor-to-now date
   remap (observed: holdout 61% / train 25%), unusable for tier0 training.
 - ``is_synthetic`` is kept on every row (provenance is non-negotiable).
@@ -63,11 +63,13 @@ _INDICATION_COVARIATES: dict[str, list[str]] = {
 # All patient outcome columns; each patient cell keeps ONLY its own target.
 _PATIENT_OUTCOMES = ["treatment_initiated", "discontinued_180d", "persistent_180d"]
 
-_SPLIT_RATIOS = {"train": 0.60, "validation": 0.20, "test": 0.15, "holdout": 0.05}
+# #44 (2026-07-21): mirrors the seed quota in generators/base.py::_assign_splits
+# (test 0.15→0.10, holdout 0.05→0.10 — goldstd holdout enlargement).
+_SPLIT_RATIOS = {"train": 0.60, "validation": 0.20, "test": 0.10, "holdout": 0.10}
 
 
 def _assign_splits(df: pd.DataFrame, target: str, seed: int) -> pd.Series:
-    """Stratified random 60/20/15/5 split assignment (one row per unit)."""
+    """Stratified random 60/20/10/10 split assignment (one row per unit)."""
     rng = np.random.default_rng(seed)
     split = pd.Series("train", index=df.index)
     for _, idx in df.groupby(df[target]).groups.items():

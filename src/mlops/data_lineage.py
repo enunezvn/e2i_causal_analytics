@@ -40,7 +40,7 @@ Usage:
     tracker.record_split(
         source_id=source_id,
         split_type="temporal",
-        ratios={"train": 0.6, "val": 0.2, "test": 0.15, "holdout": 0.05},
+        ratios={"train": 0.6, "val": 0.2, "test": 0.10, "holdout": 0.10},
         split_column="date",
     )
 
