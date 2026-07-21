@@ -1450,9 +1450,9 @@ gitdb==4.0.12 \
     # via
     #   -r requirements.txt
     #   gitpython
-gitpython==3.1.50 \
-    --hash=sha256:80da2d12504d52e1f998772dc5baf6e553f8d2fcfe1fcc226c9d9a2ee3372dcc \
-    --hash=sha256:d352abe2908d07355014abdd21ddf798c2a961469239afec4962e9da884858f9
+gitpython==3.1.51 \
+    --hash=sha256:22c9c94bb6b0b9f3c7157c684fece45a414cea204586b600beae6cd4570dcd6d \
+    --hash=sha256:d5b29685708f3c80a56db040b665bfd69492c8e150b5848532af8013b686c5a4
     # via
     #   -r requirements.txt
     #   mlflow-skinny
@@ -4059,9 +4059,9 @@ pyarrow==21.0.0 \
     #   -r requirements.txt
     #   datasets
     #   mlflow
-pyasn1==0.6.3 \
-    --hash=sha256:697a8ecd6d98891189184ca1fa05d1bb00e2f84b5977c481452050549c8a72cf \
-    --hash=sha256:a80184d120f0864a52a073acc6fc642847d0be408e7c7252f31390c0f4eadcde
+pyasn1==0.6.4 \
+    --hash=sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81 \
+    --hash=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b
     # via
     #   -r requirements.txt
     #   pyasn1-modules
