@@ -28,6 +28,7 @@ from src.agents.ml_foundation.data_preparer.ingestion import (
 from src.agents.ml_foundation.data_preparer.nodes.data_loader import (
     _drop_unhashable_columns,
     _load_from_files,
+    _load_sample_data,
     _split_from_column,
 )
 
@@ -262,6 +263,55 @@ class TestLoadFromFiles:
         assert total == len(df)
         # Test split honours the 10% (not 20%) contract expected by the enforcer.
         assert len(result["test"]) == int(len(df) * 0.10)
+
+    def test_entity_fallback_produces_holdout_for_split_enforcer(self, tmp_path: Path) -> None:
+        """Codex #44 round 5: the entity fallback called ``entity_split``
+        config-less, inheriting the splitter's generic 60/20/20/0 defaults —
+        hash bands with NO holdout — which the model_trainer split_enforcer
+        hard-fails on (empty holdout + test-ratio drift). Like the random
+        fallback above, it must request the 60/20/10/10 holdout-bearing
+        contract."""
+        df = pd.DataFrame(
+            {
+                "patient_id": [f"PAT_{i:06d}" for i in range(200)],
+                "treatment_initiated": [i % 2 for i in range(200)],
+            }
+        )
+        p = tmp_path / "e2i_ml_v3_patient_journeys.parquet"
+        df.to_parquet(p)
+
+        result = _load_from_files(
+            {"type": "file_dir", "path": str(tmp_path)},
+            entity_column="patient_id",
+            date_column="nonexistent_date",
+        )
+
+        assert result["holdout"] is not None
+        assert len(result["holdout"]) > 0
+        total = (
+            len(result["train"]) + len(result["val"]) + len(result["test"]) + len(result["holdout"])
+        )
+        assert total == len(df)
+
+    @pytest.mark.asyncio
+    async def test_sample_data_entity_fallback_produces_holdout(self) -> None:
+        """Codex #44 round-5 sibling: ``_load_sample_data``'s entity fallback
+        also called ``entity_split`` config-less. Dodge the (preferred)
+        temporal branch via a nonexistent date column so the entity branch
+        runs on ``metric_id`` (unique per row — hash bands apply per row)."""
+        result = await _load_sample_data(
+            data_source="business_metrics",
+            n_samples=200,
+            entity_column="metric_id",
+            date_column="nonexistent_date",
+        )
+
+        assert result["holdout"] is not None
+        assert len(result["holdout"]) > 0
+        total = (
+            len(result["train"]) + len(result["val"]) + len(result["test"]) + len(result["holdout"])
+        )
+        assert total == 200
 
     def test_unknown_type_raises(self) -> None:
         with pytest.raises(IngestionError, match="Unknown file data_source"):
