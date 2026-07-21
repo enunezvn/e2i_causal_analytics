@@ -39,8 +39,9 @@ class FakeRepo:
         *,
         measured_at: dt.datetime | None = None,
         source: str | None = None,
+        cis: dict[str, tuple[float, float]] | None = None,
     ) -> list:
-        self.calls.append(("record", measured_at, tuple(sorted(metrics.items())), source))
+        self.calls.append(("record", measured_at, tuple(sorted(metrics.items())), source, cis))
         return []
 
     async def record_curve(
@@ -144,11 +145,50 @@ async def test_record_run_passes_metrics_through(monkeypatch):
 
     await rec.record_run("mv", [(m1, metrics, 200)], source="backtest_wf")
 
-    # record call tuple: ("record", measured_at, sorted_items_tuple, source)
-    _, measured_at, items_tuple, src = repo.calls[1]
+    # record call tuple: ("record", measured_at, sorted_items_tuple, source, cis)
+    _, measured_at, items_tuple, src, _cis = repo.calls[1]
     assert measured_at == m1
     assert dict(items_tuple) == metrics
     assert src == "backtest_wf"
+
+
+@pytest.mark.asyncio
+async def test_record_run_passes_cis_to_record_metrics(monkeypatch):
+    """B2: a bootstrap CI keyed by metric name flows through to record_metrics
+    so the repository can write it into the row's ci_lower/ci_upper columns."""
+    import src.mlops.gold_standard_eval.recorder as R
+
+    monkeypatch.setattr(R, "_resolve_model_id", _async_mid)
+
+    repo = FakeRepo()
+    rec = MetricRecorder(repo)
+    m1 = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+
+    await rec.record_run(
+        "mv",
+        [(m1, {"calibration_slope": 1.4455, "auc_roc": 0.66}, 415)],
+        source="holdout",
+        cis={"calibration_slope": (1.22, 1.67)},
+    )
+
+    # record call tuple: ("record", measured_at, sorted_items_tuple, source, cis)
+    assert repo.calls[1][4] == {"calibration_slope": (1.22, 1.67)}
+
+
+@pytest.mark.asyncio
+async def test_record_run_cis_defaults_to_none(monkeypatch):
+    """Callers that omit cis (e.g. the walk-forward trend) record no CI."""
+    import src.mlops.gold_standard_eval.recorder as R
+
+    monkeypatch.setattr(R, "_resolve_model_id", _async_mid)
+
+    repo = FakeRepo()
+    rec = MetricRecorder(repo)
+    m1 = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+
+    await rec.record_run("mv", [(m1, {"auc_roc": 0.8}, 100)], source="backtest_wf")
+
+    assert repo.calls[1][4] is None
 
 
 @pytest.mark.asyncio

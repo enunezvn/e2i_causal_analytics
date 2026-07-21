@@ -48,6 +48,69 @@ def _calibration_slope(y_true: "np.ndarray", y_score: "np.ndarray") -> "float | 
         return None
 
 
+def calibration_slope_ci(
+    y_true: "np.ndarray",
+    y_score: "np.ndarray",
+    *,
+    n_boot: int = 1000,
+    seed: int = 20260721,
+    ci_level: float = 0.95,
+) -> "dict | None":
+    """Bootstrap percentile CI for the Cox calibration slope (holdout, B2).
+
+    Resamples ``(y_true, y_score)`` pairs WITH replacement ``n_boot`` times,
+    refits the slope on each resample, and takes the percentile interval of the
+    successful resample slopes. The RNG seed is fixed so re-runs of the eval
+    are deterministic (idempotent delete-then-insert recording stays stable).
+
+    The CI is NOT a metric row of its own: the recorder writes it into the
+    ``ci_lower``/``ci_upper`` columns of the ``calibration_slope`` row, and the
+    sample size ``n`` rides the row's existing ``sample_size`` column — so a
+    wide-CI red is visibly a small-sample red in the KPI detail payload.
+
+    Returns ``None`` (never a fabricated interval) when the point slope itself
+    is unfittable, or when fewer than half the resamples produced a slope — a
+    percentile interval over a thin sliver of degenerate resamples would be
+    misleading rather than informative.
+
+    Args:
+        y_true:   Ground-truth binary labels (0/1).
+        y_score:  Predicted probability scores for the positive class.
+        n_boot:   Number of bootstrap resamples (default 1000).
+        seed:     RNG seed (fixed default for determinism).
+        ci_level: Central coverage of the interval (default 0.95, matching the
+                  ``ml_performance_metrics.ci_level`` column default).
+
+    Returns:
+        ``{"ci_lower", "ci_upper", "n", "n_boot", "n_effective", "ci_level"}``
+        or ``None``.
+    """
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score, dtype=float)
+    n = int(y_true.size)
+    if n == 0 or _calibration_slope(y_true, y_score) is None:
+        return None
+    rng = np.random.default_rng(seed)
+    slopes: list[float] = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        s = _calibration_slope(y_true[idx], y_score[idx])
+        if s is not None:
+            slopes.append(s)
+    if len(slopes) < max(2, n_boot // 2):
+        return None
+    alpha = 1.0 - ci_level
+    lo, hi = np.percentile(np.asarray(slopes), [100.0 * alpha / 2.0, 100.0 * (1.0 - alpha / 2.0)])
+    return {
+        "ci_lower": float(lo),
+        "ci_upper": float(hi),
+        "n": n,
+        "n_boot": int(n_boot),
+        "n_effective": len(slopes),
+        "ci_level": float(ci_level),
+    }
+
+
 def score(
     y_true: "np.ndarray",
     y_score: "np.ndarray",

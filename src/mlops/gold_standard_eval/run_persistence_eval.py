@@ -56,7 +56,11 @@ import numpy as np
 from src.mlops.gold_standard_eval.cohort_spec import DISCONTINUATION, PERSISTENCE
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
 from src.mlops.gold_standard_eval.recorder import HOLDOUT_CURVE_SOURCE, MetricRecorder
-from src.mlops.gold_standard_eval.scorer import holdout_curve_records, score
+from src.mlops.gold_standard_eval.scorer import (
+    calibration_slope_ci,
+    holdout_curve_records,
+    score,
+)
 from src.mlops.gold_standard_eval.walk_forward import WalkForwardRunner
 
 logger = logging.getLogger(__name__)
@@ -286,11 +290,20 @@ async def _run_one_cohort(
 
     latest = _pd.to_datetime(holdout_frame["journey_start_date"]).max()
     holdout_ts = latest.to_pydatetime().replace(tzinfo=timezone.utc)
+    # B2: bootstrap percentile CI for the holdout calibration slope, written
+    # into the calibration_slope row's existing ci_lower/ci_upper columns
+    # (n rides the row's sample_size). None when unfittable — never fabricated.
+    slope_ci = calibration_slope_ci(y_holdout, y_score)
     await recorder.record_run(
         model_handle,
         [(holdout_ts, holdout_metrics, n_holdout)],
         source=_HOLDOUT_SOURCE,
         split_version=None,
+        cis=(
+            {"calibration_slope": (slope_ci["ci_lower"], slope_ci["ci_upper"])}
+            if slope_ci
+            else None
+        ),
     )
 
     # --- 6b. Holdout confusion matrix + ROC curve (source='holdout_curve'). --- #
