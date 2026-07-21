@@ -23,8 +23,10 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIHistory: vi.fn(),
   useKPIHistoryCoverage: vi.fn(),
   useKPIHistoryMultiBrand: vi.fn(),
+  useKPIHistoryNowcast: vi.fn(),
   useKPIMetadata: vi.fn(),
   useKPIList: vi.fn(),
+  RX_VOLUME_KPI_IDS: new Set(['WS3-BI-005', 'WS3-BI-006', 'WS3-BI-007']),
 }));
 
 import {
@@ -32,6 +34,7 @@ import {
   useKPIHistory,
   useKPIHistoryCoverage,
   useKPIHistoryMultiBrand,
+  useKPIHistoryNowcast,
   useKPIMetadata,
   useKPIList,
 } from '@/hooks/api/use-kpi';
@@ -42,6 +45,7 @@ const mockUseKPIHistoryCoverage = useKPIHistoryCoverage as unknown as ReturnType
 const mockUseKPIHistoryMultiBrand = useKPIHistoryMultiBrand as unknown as ReturnType<
   typeof vi.fn
 >;
+const mockUseKPIHistoryNowcast = useKPIHistoryNowcast as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIMetadata = useKPIMetadata as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIList = useKPIList as unknown as ReturnType<typeof vi.fn>;
 
@@ -205,6 +209,17 @@ beforeEach(() => {
       isRefetching: false,
     })),
   );
+  // Nowcast (backlog #45): no data by default — the page then renders the
+  // plain history chart with no nowcast affordance (the PR-C degradation
+  // path). Dedicated specs live in TimeSeries.nowcast.test.tsx.
+  mockUseKPIHistoryNowcast.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+    isRefetching: false,
+  });
 });
 
 // Per-brand NBRx series for the compare-mode tests. May 2026 deliberately has

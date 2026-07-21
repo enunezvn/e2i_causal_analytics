@@ -24,6 +24,7 @@ import {
   getKPIValue,
   getKPIHistory,
   getKPIHistoryCoverage,
+  getKPIHistoryNowcast,
   calculateKPI,
   batchCalculateKPIs,
   invalidateKPICache,
@@ -42,6 +43,7 @@ import type {
   KPIListParams,
   KPIListResponse,
   KPIMetadata,
+  KPINowcastHistoryResponse,
   KPIResult,
   WorkstreamListResponse,
 } from '@/types/kpi';
@@ -268,6 +270,41 @@ export function useKPIHistoryMultiBrand(kpiId: string, brands: readonly string[]
       staleTime: 10 * 60 * 1000, // 10 minutes — matches useKPIHistory
       enabled: !!kpiId,
     })),
+  });
+}
+
+/**
+ * The Rx-volume KPI family (WS3-BI-005 TRx / WS3-BI-006 NRx / WS3-BI-007
+ * NBRx) — the ONLY KPIs whose history carries the claims-lag nowcast overlay.
+ * Mirrors the backend gate: /history/nowcast 422s every other family.
+ */
+export const RX_VOLUME_KPI_IDS: ReadonlySet<string> = new Set([
+  'WS3-BI-005',
+  'WS3-BI-006',
+  'WS3-BI-007',
+]);
+
+/**
+ * Hook to fetch the claims-lag provisional/nowcast series for one Rx-volume
+ * KPI (backlog #45). Follows the useKPIHistory conventions (same brand-param
+ * and staleTime semantics; '' brand = global scope).
+ *
+ * HARD-gated to RX_VOLUME_KPI_IDS: the endpoint 422s other families, so the
+ * family gate cannot be overridden through `options` — off-family consumers
+ * simply never fire the request.
+ */
+export function useKPIHistoryNowcast(
+  kpiId: string,
+  brand?: string,
+  options?: Omit<UseQueryOptions<KPINowcastHistoryResponse, Error>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery({
+    queryKey: [...queryKeys.kpi.all(), 'history-nowcast', kpiId, brand ?? ''] as const,
+    queryFn: () => getKPIHistoryNowcast(kpiId, brand),
+    staleTime: 10 * 60 * 1000, // 10 minutes — matches useKPIHistory
+    ...options,
+    // AFTER the options spread: the family gate must always apply.
+    enabled: RX_VOLUME_KPI_IDS.has(kpiId) && (options?.enabled ?? true),
   });
 }
 

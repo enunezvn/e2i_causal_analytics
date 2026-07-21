@@ -11,6 +11,10 @@
  *  - `useKPIMetadata()` — display name for the selected KPI
  *  - `useKPIHistoryMultiBrand()` — per-brand series for the "Compare Brands"
  *    overlay (one line per brand scope, offered when coverage has ≥2 brands)
+ *  - `useKPIHistoryNowcast()` — claims-lag provisional/nowcast series for the
+ *    Rx-volume family only (backlog #45): recent months whose claims are
+ *    still arriving render as a dashed provisional tail (via MetricTrend),
+ *    with an opt-in nowcast overlay (default OFF, persisted per user)
  *
  * The page's former "Model performance" mode (walk-forward backtest trends per
  * cohort × brand) moved to the Model Performance page — see the sibling PR.
@@ -56,7 +60,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { mergeBrandSeries, type DatedValue } from '@/lib/timeseries-brands';
-import { KPICard } from '@/components/visualizations';
+import { KPICard, MetricTrend, type MetricDataPoint } from '@/components/visualizations';
 import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import {
@@ -64,8 +68,10 @@ import {
   useKPIHistory,
   useKPIHistoryCoverage,
   useKPIHistoryMultiBrand,
+  useKPIHistoryNowcast,
   useKPIMetadata,
   useKPIList,
+  RX_VOLUME_KPI_IDS,
 } from '@/hooks/api/use-kpi';
 
 // =============================================================================
@@ -115,6 +121,29 @@ function brandColor(brand: string, index: number): string {
   return BRAND_COLORS[brand] ?? FALLBACK_BRAND_COLORS[index % FALLBACK_BRAND_COLORS.length];
 }
 
+// "Show Nowcast" is a per-user VIEW preference — default OFF (the honest
+// mature series stays the default view) — persisted like the Home
+// sibling-brand toggle (PR #1303 `e2i-<page>-<what>` key convention).
+const SHOW_NOWCAST_STORAGE_KEY = 'e2i-timeseries-show-nowcast';
+
+function loadShowNowcast(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(SHOW_NOWCAST_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveShowNowcast(show: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(SHOW_NOWCAST_STORAGE_KEY, String(show));
+  } catch {
+    // Ignore storage errors (private mode etc.) — the in-session state applies.
+  }
+}
+
 const TIME_RANGES: { value: string; label: string; days: number }[] = [
   { value: '30d', label: '30 Days', days: 30 },
   { value: '60d', label: '60 Days', days: 60 },
@@ -152,6 +181,25 @@ const formatTooltipValue: TooltipValueFormatter<ValueType, NameType> = (value) =
   return '';
 };
 
+/**
+ * Honest, user-facing cause for a nowcast-less response. Mirrors the
+ * endpoint's `insufficient_maturity` reason contract — never a fabricated
+ * fallback completion factor, never a silent hide.
+ */
+function nowcastUnavailableText(reason: string | null | undefined): string {
+  if (!reason) return 'not estimable for this scope.';
+  if (reason === 'arrival_plane_not_populated')
+    return 'claims-arrival dates are not populated on this dataset yet.';
+  if (reason.startsWith('arrival_plane_partial'))
+    return 'claims-arrival dates cover only part of this dataset.';
+  if (reason === 'insufficient_mature_months')
+    return 'too few mature months to estimate claims completion honestly.';
+  if (reason === 'no_arrived_claims')
+    return 'no claims have arrived inside the observation window.';
+  if (reason === 'no_data') return 'no claims data exists for this scope.';
+  return `${reason}.`;
+}
+
 interface ChartPoint {
   date: string;
   value: number;
@@ -167,6 +215,9 @@ function TimeSeries() {
   const [brand, setBrand] = useState<string>('');
   const [timeRange, setTimeRange] = useState<string>('1825d');
   const [compareBrands, setCompareBrands] = useState<boolean>(false);
+  // Claims-lag nowcast overlay preference (Rx-volume KPIs only). Default OFF —
+  // the honest mature series is the default view; persisted per user.
+  const [showNowcast, setShowNowcast] = useState<boolean>(loadShowNowcast);
 
   const days = rangeToDays(timeRange);
 
@@ -216,6 +267,10 @@ function TimeSeries() {
   // Per-brand series for the compare overlay. Zero queries while off; each
   // query shares the single-brand cache key, so toggling never refetches.
   const compareQueries = useKPIHistoryMultiBrand(kpiId, comparing ? namedBrands : []);
+  // Claims-lag provisional/nowcast series — Rx-volume family ONLY (the
+  // endpoint 422s other KPIs; the hook carries the same hard gate).
+  const isRxVolume = RX_VOLUME_KPI_IDS.has(kpiId);
+  const kpiNowcast = useKPIHistoryNowcast(kpiId, brand, { enabled: isRxVolume });
 
   // ---- Chart series ----
   const kpiSeries: ChartPoint[] = useMemo(() => {
@@ -271,6 +326,51 @@ function TimeSeries() {
 
   const seriesLabel = kpiMetadata.data?.name ?? kpiId;
 
+  // ---- Claims-lag provisional/nowcast view (backlog #45) ----
+  const nowcastData = isRxVolume ? kpiNowcast.data : undefined;
+  // Chart rows for the provisional view, sourced from the nowcast endpoint:
+  // its mature_value matches /history by contract, and the anchor-cap
+  // frontier month is excluded server-side (its arrivals pile up at the
+  // anchor date) — so it stays excluded here. Same time-range cutoff.
+  const nowcastSeries: MetricDataPoint[] = useMemo(() => {
+    if (!nowcastData || nowcastData.insufficient_maturity) return [];
+    const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    return (nowcastData.points ?? [])
+      .filter((p) => {
+        const t = Date.parse(p.metric_date);
+        return Number.isNaN(t) ? true : t >= cutoffMs;
+      })
+      .map((p) => ({
+        timestamp: p.metric_date,
+        value: p.mature_value,
+        provisional: p.provisional,
+        completionFactor: p.completion_factor ?? null,
+        nowcastValue: p.nowcast_value ?? null,
+        nowcastCiLower: p.nowcast_ci_lower ?? null,
+        nowcastCiUpper: p.nowcast_ci_upper ?? null,
+      }));
+  }, [nowcastData, days]);
+  const provisionalCount = useMemo(
+    () => nowcastSeries.filter((p) => p.provisional).length,
+    [nowcastSeries]
+  );
+  // The provisional view replaces the plain chart ONLY when it adds honest
+  // information (a provisional tail exists in range). Every other state —
+  // off-family KPI, compare mode, fetch error, insufficient maturity, or an
+  // all-mature window — keeps the existing chart untouched.
+  const showProvisionalChart = !comparing && !kpiNowcast.error && provisionalCount > 0;
+  // Rx KPI whose nowcast is honestly unavailable: disabled toggle + reason.
+  const nowcastUnavailable =
+    isRxVolume && !comparing && nowcastData?.insufficient_maturity === true;
+
+  const toggleShowNowcast = () => {
+    setShowNowcast((v) => {
+      const next = !v;
+      saveShowNowcast(next);
+      return next;
+    });
+  };
+
   // ---- Summary metrics ----
   const summary = useMemo(() => {
     const values = kpiSeries.map((p) => p.value);
@@ -318,7 +418,25 @@ function TimeSeries() {
   const handleExport = () => {
     const exportData = comparing
       ? { kpiId, days, brands: namedBrands, series: compareRows }
-      : { kpiId, brand, days, series: kpiSeries };
+      : {
+          kpiId,
+          brand,
+          days,
+          series: kpiSeries,
+          // Provenance for the on-screen provisional view: the claims
+          // frontier and the per-month provisional/nowcast fields ride along
+          // so an exported chart cannot silently shed its maturity caveats.
+          ...(showProvisionalChart
+            ? {
+                nowcast: {
+                  data_through: nowcastData?.data_through ?? null,
+                  anchor_cap_month: nowcastData?.anchor_cap_month ?? null,
+                  ci_level: nowcastData?.ci_level ?? null,
+                  points: nowcastSeries,
+                },
+              }
+            : {}),
+        };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
       type: 'application/json',
     });
@@ -386,8 +504,24 @@ function TimeSeries() {
         `Series on screen: ${summary.count} monthly points — current ${summary.current}, average ${summary.average.toFixed(1)}, min ${summary.min}, max ${summary.max}.`
       );
     }
+    if (showProvisionalChart) {
+      lines.push(
+        `Claims lag: the ${provisionalCount} most recent charted month(s) are provisional (claims still maturing); nowcast overlay ${showNowcast ? 'shown' : 'available but off'}.`
+      );
+    }
     return lines.join('\n');
-  }, [seriesLabel, kpiId, brand, timeRange, comparing, compareBrandStats, summary]);
+  }, [
+    seriesLabel,
+    kpiId,
+    brand,
+    timeRange,
+    comparing,
+    compareBrandStats,
+    summary,
+    showProvisionalChart,
+    provisionalCount,
+    showNowcast,
+  ]);
   usePageChatContext(pageChatSummary);
 
   return (
@@ -583,6 +717,29 @@ function TimeSeries() {
                   {comparing ? 'per-brand comparison' : 'historical values'} — last {days} days
                 </CardDescription>
               </div>
+              {/* Claims-lag nowcast toggle — Rx-volume KPIs only. Offered
+                  when the provisional view is on screen; while the arrival
+                  plane cannot support an honest nowcast it stays DISABLED
+                  with the reason spelled out (never silently absent, never
+                  a fabricated overlay). */}
+              {(showProvisionalChart || nowcastUnavailable) && (
+                <div className="flex flex-col items-end gap-1">
+                  <Button
+                    variant={showNowcast && showProvisionalChart ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={toggleShowNowcast}
+                    aria-pressed={showNowcast && showProvisionalChart}
+                    disabled={!showProvisionalChart}
+                  >
+                    Show Nowcast
+                  </Button>
+                  {nowcastUnavailable && (
+                    <p className="max-w-[280px] text-right text-xs text-muted-foreground">
+                      Nowcast unavailable — {nowcastUnavailableText(nowcastData?.reason)}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -630,6 +787,58 @@ function TimeSeries() {
                   ))}
                 </LineChart>
               </ResponsiveContainer>
+            ) : showProvisionalChart ? (
+              <>
+                {/* Provisional view (Rx-volume KPIs with a populated claims
+                    arrival plane): MetricTrend splits the series into a solid
+                    mature segment + dashed provisional tail, with the opt-in
+                    nowcast overlay. Values are the same mature series the
+                    plain chart shows — only the recency styling is added. */}
+                <MetricTrend
+                  name={seriesLabel}
+                  data={nowcastSeries}
+                  height={400}
+                  color="var(--color-chart-2)"
+                  showHeader={false}
+                  showNowcast={showNowcast}
+                  timestampFormatter={formatDate}
+                  valueFormatter={(v) => v.toLocaleString()}
+                />
+                {/* Legend/footnote: define "provisional", disclose the claims
+                    frontier + the excluded anchor-cap month, and echo the
+                    synthetic-substrate disclosure shown at the top. */}
+                <div
+                  data-testid="nowcast-footnote"
+                  className="mt-3 space-y-1 text-xs text-muted-foreground"
+                >
+                  <p>
+                    <span className="font-medium text-foreground">Provisional</span> months
+                    (dashed tail, hollow markers): claims for these service months are still
+                    arriving, so a real-world feed would still revise them upward. Claims
+                    observed through {formatDate(nowcastData?.data_through ?? undefined)}.
+                  </p>
+                  {nowcastData?.anchor_cap_month && (
+                    <p>
+                      The frontier month ({formatDate(nowcastData.anchor_cap_month)}) is
+                      excluded from this view — its claim arrivals pile up at the anchor
+                      date and would read as a false spike.
+                    </p>
+                  )}
+                  {showNowcast && (
+                    <p>
+                      Nowcast (faint line): the provisional count grossed up by the
+                      empirically estimated completion factor; shaded band ={' '}
+                      {Math.round((nowcastData?.ci_level ?? 0.95) * 100)}% bootstrap CI.
+                    </p>
+                  )}
+                  {kpiValue.data?.data_source === 'synthetic' && (
+                    <p>
+                      Series computed on the synthetic demo substrate (see the demo-data
+                      notice above).
+                    </p>
+                  )}
+                </div>
+              </>
             ) : (
               <ResponsiveContainer width="100%" height={400}>
                 <LineChart data={kpiSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>

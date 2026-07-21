@@ -360,6 +360,68 @@ export interface KPISegmentedHistoryResponse {
   series: KPIHistorySegmentSeries[];
 }
 
+// =============================================================================
+// KPI CLAIMS-LAG NOWCAST (backlog #45 — Rx-volume family only)
+// =============================================================================
+
+/**
+ * One monthly point of the claims-lag nowcast overlay.
+ *
+ * Mirrors the generated `KPINowcastPoint` schema (types/generated/api.ts) —
+ * a DEDICATED model server-side so the shared `/history` point stays
+ * byte-untouched.
+ */
+export interface KPINowcastPoint {
+  /** Service month (YYYY-MM-DD, first of month). */
+  metric_date: string;
+  /** The base KPI value over ALL events (the eventual truth; matches /history). */
+  mature_value: number;
+  /** Events whose claim_available_date <= frontier (the as-of under-count). */
+  provisional_value: number;
+  /** True while the month's claims are still maturing (not fully arrived). */
+  provisional: boolean;
+  /** Estimated fraction of the month's claims arrived as of the frontier
+   *  (empirical chain-ladder CF; null when younger than the lag support). */
+  completion_factor?: number | null;
+  /** provisional_value / completion_factor (the grossed-up estimate). */
+  nowcast_value?: number | null;
+  /** Bootstrap CI lower bound (provisional months only). */
+  nowcast_ci_lower?: number | null;
+  /** Bootstrap CI upper bound (provisional months only). */
+  nowcast_ci_upper?: number | null;
+}
+
+/**
+ * Claims-lag provisional/nowcast monthly series for one Rx-volume KPI
+ * (WS3-BI-005 TRx / WS3-BI-006 NRx / WS3-BI-007 NBRx; other KPIs 422).
+ *
+ * When the completion curve cannot be estimated honestly,
+ * `insufficient_maturity` is true, `reason` says why and `points` is EMPTY —
+ * never a fabricated fallback completion factor.
+ */
+export interface KPINowcastHistoryResponse {
+  kpi_id: string;
+  /** '' = global / all brands. */
+  brand: string;
+  /** Prescription frontier (max event_date) backing the as-of view. */
+  data_through?: string | null;
+  /** True when no honest completion curve could be estimated (see reason). */
+  insufficient_maturity: boolean;
+  /** no_data | arrival_plane_not_populated | arrival_plane_partial: <months>
+   *  | insufficient_mature_months | no_arrived_claims | null. */
+  reason?: string | null;
+  /** Mature service months backing the completion curve. */
+  mature_months_used: number;
+  /** Frontier month excluded from estimation and output (anchor-cap pile-up). */
+  anchor_cap_month?: string | null;
+  /** Share of events carrying claim_available_date (1.0 = fully stamped). */
+  arrival_plane_coverage?: number | null;
+  /** Nominal bootstrap CI level. */
+  ci_level: number;
+  count: number;
+  points: KPINowcastPoint[];
+}
+
 /** History coverage for one KPI: which scopes have a real series. */
 export interface KPIHistoryCoverageEntry {
   kpi_id: string;
