@@ -223,8 +223,14 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
     { id: 'ate_trx', name: 'ATE on TRx', category: 'causal', value: 0.156, previousValue: 0.142, target: 0.18, description: 'Average treatment effect on prescriptions', trend: 'up', status: 'healthy', sparkline: [0.12, 0.13, 0.14, 0.145, 0.15, 0.155, 0.156] },
     { id: 'roi', name: 'Campaign ROI', category: 'causal', value: 3.8, previousValue: 3.2, target: 4.5, unit: 'x', description: 'Return on marketing investment', trend: 'up', status: 'healthy', sparkline: [2.8, 3, 3.2, 3.4, 3.5, 3.7, 3.8] },
   ],
+  // Each per-brand demo set carries ONE sibling-brand exemplar (brand field
+  // set) so Demo Mode exhibits the same visible-but-labeled semantic as live
+  // data: brand-hard-bound KPIs compute portfolio-wide, so another brand's
+  // card renders under a brand scope — badged "sibling brand: X", hideable
+  // via the grid toggle. Values mirror that brand's own demo set.
   Remibrutinib: [
     { id: 'remi_trx', name: 'TRx', category: 'commercial', value: 45230, previousValue: 42150, target: 50000, description: 'Total Remibrutinib prescriptions', trend: 'up', status: 'healthy', sparkline: [38, 40, 41, 42, 43, 44, 45] },
+    { id: 'fab_trx_sibling', name: 'Fabhalta TRx', category: 'commercial', brand: 'Fabhalta', value: 28450, previousValue: 26800, target: 32000, description: 'Total Fabhalta prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [24, 25, 26, 26.5, 27, 28, 28.4] },
     { id: 'remi_nrx', name: 'New TRx', category: 'commercial', value: 12340, previousValue: 11200, target: 14000, description: 'New Remibrutinib prescriptions', trend: 'up', status: 'healthy', sparkline: [9, 10, 10.5, 11, 11.5, 12, 12.3] },
     { id: 'remi_share', name: 'CSU Market Share', category: 'market', value: 18.2, previousValue: 15.8, target: 25, unit: '%', description: 'Share in CSU market', trend: 'up', status: 'warning', sparkline: [12, 13, 14, 15, 16, 17, 18.2] },
     { id: 'remi_hcp', name: 'Allergists Reached', category: 'hcp', value: 4520, previousValue: 4100, target: 5500, description: 'Allergists engaged', trend: 'up', status: 'warning', sparkline: [3.5, 3.8, 4, 4.1, 4.2, 4.4, 4.5] },
@@ -232,6 +238,7 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   ],
   Fabhalta: [
     { id: 'fab_trx', name: 'TRx', category: 'commercial', value: 28450, previousValue: 26800, target: 32000, description: 'Total Fabhalta prescriptions', trend: 'up', status: 'healthy', sparkline: [24, 25, 26, 26.5, 27, 28, 28.4] },
+    { id: 'kis_trx_sibling', name: 'Kisqali TRx', category: 'commercial', brand: 'Kisqali', value: 51750, previousValue: 49300, target: 55000, description: 'Total Kisqali prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [45, 46, 47, 48, 49, 50, 51.7] },
     { id: 'fab_nrx', name: 'New TRx', category: 'commercial', value: 6890, previousValue: 6200, target: 8000, description: 'New Fabhalta prescriptions', trend: 'up', status: 'warning', sparkline: [5, 5.5, 6, 6.2, 6.4, 6.7, 6.9] },
     { id: 'fab_share', name: 'PNH Market Share', category: 'market', value: 22.5, previousValue: 20.1, target: 28, unit: '%', description: 'Share in PNH market', trend: 'up', status: 'healthy', sparkline: [16, 17, 18, 19, 20, 21, 22.5] },
     { id: 'fab_hcp', name: 'Hematologists Reached', category: 'hcp', value: 2890, previousValue: 2650, target: 3500, description: 'Hematologists engaged', trend: 'up', status: 'warning', sparkline: [2.2, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9] },
@@ -239,6 +246,7 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   ],
   Kisqali: [
     { id: 'kis_trx', name: 'TRx', category: 'commercial', value: 51750, previousValue: 49300, target: 55000, description: 'Total Kisqali prescriptions', trend: 'up', status: 'healthy', sparkline: [45, 46, 47, 48, 49, 50, 51.7] },
+    { id: 'remi_trx_sibling', name: 'Remibrutinib TRx', category: 'commercial', brand: 'Remibrutinib', value: 45230, previousValue: 42150, target: 50000, description: 'Total Remibrutinib prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [38, 40, 41, 42, 43, 44, 45] },
     { id: 'kis_nrx', name: 'New TRx', category: 'commercial', value: 9310, previousValue: 9490, target: 10000, description: 'New Kisqali prescriptions', trend: 'down', status: 'warning', sparkline: [8.5, 9, 9.5, 9.6, 9.5, 9.4, 9.3] },
     { id: 'kis_share', name: 'CDK4/6 Market Share', category: 'market', value: 38.2, previousValue: 37.5, target: 42, unit: '%', description: 'Share in CDK4/6 market', trend: 'up', status: 'healthy', sparkline: [35, 36, 36.5, 37, 37.5, 38, 38.2] },
     { id: 'kis_hcp', name: 'Oncologists Reached', category: 'hcp', value: 5040, previousValue: 5050, target: 6000, description: 'Oncologists engaged', trend: 'stable', status: 'warning', sparkline: [4.8, 4.9, 5, 5.05, 5.02, 5.04, 5.04] },
@@ -702,6 +710,21 @@ function Home() {
     (kpi: KPIMetric): boolean =>
       !!kpi.brand && selectedBrand !== 'All' && kpi.brand !== selectedBrand,
     [selectedBrand]
+  );
+
+  // Single badge renderer shared by BOTH card paths (live and Demo Mode) so
+  // the labeling logic can never diverge between them (codex parity finding).
+  // Same vocabulary as the narrative channel's "[sibling brand: X]" tag so
+  // grid and insight text stay coherent. undefined for own-brand, brandless,
+  // and All-scope cards.
+  const siblingBadge = useCallback(
+    (kpi: KPIMetric): React.ReactNode =>
+      isSiblingKpi(kpi) ? (
+        <Badge variant="outline" className="text-[10px] px-1 py-0">
+          sibling brand: {kpi.brand}
+        </Badge>
+      ) : undefined,
+    [isSiblingKpi]
   );
 
   // Sibling-brand cards present in the computed set (pre-hide, so the toggle
@@ -1316,17 +1339,7 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
-                              // Same vocabulary as the narrative channel's
-                              // "[sibling brand: X]" tag so grid and insight
-                              // text stay coherent. Absent for own-brand,
-                              // brandless, and All-scope cards.
-                              badge={
-                                isSiblingKpi(kpi) ? (
-                                  <Badge variant="outline" className="text-[10px] px-1 py-0">
-                                    sibling brand: {kpi.brand}
-                                  </Badge>
-                                ) : undefined
-                              }
+                              badge={siblingBadge(kpi)}
                             />
                           );
                         }
@@ -1345,6 +1358,7 @@ function Home() {
                             description={kpi.description}
                             higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                             size="sm"
+                            badge={siblingBadge(kpi)}
                           />
                         );
                       })}

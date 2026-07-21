@@ -364,4 +364,52 @@ describe('Home sibling-brand badge + hide toggle (Workstream A)', () => {
     // ...and the toggle stays rendered so the user can turn the cards back on.
     expect(screen.getByRole('checkbox', { name: /hide other brands/i })).toBeChecked();
   });
+
+  // ==========================================================================
+  // Demo Mode (API offline) parity — codex HIGH: the demo-mode KPICard call
+  // must apply the SAME badge/toggle logic as the live path. Each per-brand
+  // SAMPLE_KPIS set carries one sibling-brand exemplar for this.
+  // ==========================================================================
+
+  describe('Demo Mode (API offline) parity', () => {
+    beforeEach(() => {
+      (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: new Error('API offline'),
+      });
+    });
+
+    it('badges the sibling-brand sample card under a selected brand (parity with live path)', async () => {
+      renderWithAllProviders(<Home />);
+
+      // Demo mode is announced, and under 'All' nothing is badged.
+      expect(screen.getByText('API Offline (using sample data)')).toBeInTheDocument();
+      expect(screen.queryByText(/sibling brand:/)).not.toBeInTheDocument();
+
+      await selectBrand('Remibrutinib');
+
+      // The Remibrutinib demo set's Fabhalta exemplar renders badged; the
+      // own-brand cards stay unbadged — identical logic to the live path.
+      expect(screen.getByText('Fabhalta TRx')).toBeInTheDocument();
+      expect(screen.getByText('sibling brand: Fabhalta')).toBeInTheDocument();
+      expect(screen.queryByText('sibling brand: Remibrutinib')).not.toBeInTheDocument();
+    });
+
+    it('hide toggle removes the sibling-brand sample card via the same visible set', async () => {
+      renderWithAllProviders(<Home />);
+      await selectBrand('Remibrutinib');
+
+      const toggle = screen.getByRole('checkbox', { name: /hide other brands/i });
+      expect(toggle).not.toBeChecked();
+
+      fireEvent.click(toggle);
+      expect(screen.queryByText('Fabhalta TRx')).not.toBeInTheDocument();
+      // Own-brand demo cards remain.
+      expect(screen.getByText('TRx')).toBeInTheDocument();
+
+      fireEvent.click(toggle);
+      expect(screen.getByText('Fabhalta TRx')).toBeInTheDocument();
+    });
+  });
 });
