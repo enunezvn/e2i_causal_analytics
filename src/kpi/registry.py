@@ -22,6 +22,21 @@ from src.kpi.models import (
     Workstream,
 )
 
+# Workstream data-plane defaults (constraint-aware insights, 2026-07-20): the
+# plane a KPI's numbers ride on when the yaml carries no per-KPI override.
+# WS1 model/DQ metrics are computed on-platform (current as shown, no source
+# lag); WS2/WS3/brand KPIs mix claims + CRM per KPI, so they default to mixed
+# and the yaml overrides the clear-cut ones (claims-fed outcome metrics,
+# CRM-fed rep dispositions).
+_DATA_PLANE_DEFAULTS: dict[Workstream, str] = {
+    Workstream.WS1_DATA_QUALITY: "platform",
+    Workstream.WS1_MODEL_PERFORMANCE: "platform",
+    Workstream.WS2_TRIGGERS: "mixed",
+    Workstream.WS3_BUSINESS: "mixed",
+    Workstream.BRAND_SPECIFIC: "mixed",
+    Workstream.CAUSAL_METRICS: "platform",
+}
+
 
 class KPIRegistry:
     """Registry for KPI definitions loaded from YAML configuration."""
@@ -140,6 +155,12 @@ class KPIRegistry:
             note=data.get("note"),
             windowable=data.get("windowable", "not_applicable"),
             window=data.get("window"),
+            actionability=data.get("actionability"),
+            actionability_owner=data.get("actionability_owner"),
+            levers=data.get("levers", []),
+            data_plane=data.get("data_plane", _DATA_PLANE_DEFAULTS.get(workstream)),
+            measurement_caveat=data.get("measurement_caveat"),
+            direction=data.get("direction"),
         )
 
     def _determine_causal_library(self, workstream: Workstream, data: dict) -> CausalLibrary:

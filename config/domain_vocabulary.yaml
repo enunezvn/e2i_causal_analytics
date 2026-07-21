@@ -2445,6 +2445,38 @@ brand_ndc_codes:
 
 
 # =============================================================================
+# DATA CONSTRAINTS (constraint-aware insights, 2026-07-20)
+# =============================================================================
+# Per-brand measurement-constraint profiles consumed by
+# src/insights/data_constraint_context.py (the home-KPI narrative's constraint
+# grounding). claims_lag_band is the ONLY LM-facing lag figure — the validated
+# operational band for claims adjudication; the per-source scalar lags in
+# edge_case_taxonomy.data_source_lag stay SERVER-SIDE (deferral logic) until
+# TRIG-DECOMP reconciles the two with per-brand completeness curves. Vendor
+# names are deliberately NOT rendered to the LM (no invented brand-vendor
+# pairings; coverage is described generically).
+
+data_constraints:
+  claims_lag_band: "1-3 months"
+  crm_source: "Veeva CRM"
+  brands:
+    Remibrutinib:
+      disease: "chronic spontaneous urticaria (CSU)"
+      prevalence_class: >-
+        common chronic condition (large addressable population; the
+        refractory/biologic-experienced subset is smaller)
+    Kisqali:
+      disease: "HR+/HER2- advanced breast cancer"
+      prevalence_class: >-
+        oncology population of moderate size (metastatic subset of a common
+        cancer)
+    Fabhalta:
+      disease: "paroxysmal nocturnal hemoglobinuria (PNH)"
+      prevalence_class: >-
+        ultra-rare disease (very small patient universe; small samples and
+        volatile rates are expected)
+
+# =============================================================================
 # METADATA
 # =============================================================================
 

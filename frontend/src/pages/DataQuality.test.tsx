@@ -115,7 +115,7 @@ const dimensionFixtures: Record<
 > = {
   'WS1-DQ-003': { value: 0.8, status: 'good', target: 0.75, name: 'Cross-source Match Rate' },
   'WS1-DQ-005': { value: 0.94, status: 'warning', target: 0.95, name: 'Completeness Pass Rate' },
-  'WS1-DQ-006': { value: 0.105, status: 'critical', target: 0.05, name: 'Geographic Consistency' },
+  'WS1-DQ-006': { value: 0.105, status: 'critical', target: 0.05, name: 'Geographic Consistency Gap' },
   'WS1-DQ-007': { value: 1.25, status: 'good', target: 3, name: 'Data Lag (Median)' },
   'WS1-DQ-009': { value: 21, status: 'good', target: 24, name: 'Time-to-Release (TTR)' },
 };

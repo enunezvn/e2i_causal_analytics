@@ -130,7 +130,7 @@ def test_dq006_status_is_lower_is_better():
     calc = DataQualityCalculator(db_client=MagicMock())
     kpi = KPIMetadata(
         id="WS1-DQ-006",
-        name="Geographic Consistency",
+        name="Geographic Consistency Gap",
         definition="max gap",
         formula="max_region(|share_source - share_universe|)",
         calculation_type=CalculationType.DERIVED,

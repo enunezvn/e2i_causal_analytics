@@ -10,6 +10,10 @@ export interface StrategicInsightResponse {
   is_fallback: boolean;
   generated_at: string;
   provenance: string;
+  /** Channel 2 of the constraint-aware two-channel triage (home-kpis today):
+   *  structural escalation/investment considerations, rendered as a distinct
+   *  block. Null/absent on surfaces that do not produce it. */
+  structural_considerations?: string | null;
 }
 
 export interface KGInsightRequest {

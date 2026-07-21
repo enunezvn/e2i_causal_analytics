@@ -231,7 +231,7 @@ class DataQualityCalculator(KPICalculatorBase):
         return float(result[0]["pass_rate"])
 
     def _calc_geographic_consistency(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-DQ-006: Geographic Consistency.
+        """Calculate WS1-DQ-006: Geographic Consistency Gap.
 
         Formula: max_region(|share_source - share_universe|) — the maximum
         absolute gap between the source's regional distribution and the

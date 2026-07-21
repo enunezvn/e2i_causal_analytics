@@ -17454,6 +17454,8 @@ export interface components {
             generated_at: string;
             /** Provenance */
             provenance: string;
+            /** Structural Considerations */
+            structural_considerations?: string | null;
         };
         /**
          * SuggestionsRequest

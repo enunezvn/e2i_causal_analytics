@@ -201,6 +201,18 @@ class KPIMetadata(BaseModel):
     note: str | None = None
     windowable: str = "not_applicable"  # "clean" | "needs_care" | "not_applicable"
     window: dict[str, Any] | None = None  # {column, legs?, look_forward_days?} for windowable KPIs
+    # Constraint-aware insight classification (2026-07-20 plan). Deterministic
+    # inputs to the narrative builder — the LM cites these instead of
+    # re-deciding actionability / caveats per generation; the frontend can badge
+    # grid rows from the same fields.
+    actionability: str | None = None  # reader_actionable | structurally_constrained | mixed
+    actionability_owner: str | None = None  # brand_team | data_strategy | platform
+    levers: list[str] = Field(default_factory=list)
+    data_plane: str | None = (
+        None  # claims | crm | platform | mixed (workstream default in registry)
+    )
+    measurement_caveat: str | None = None
+    direction: str | None = None  # lower_is_better | higher_is_better (display hint)
 
 
 def _utc_now() -> datetime:

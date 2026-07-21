@@ -41,7 +41,7 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS1-DQ-003 | Cross-source Match Rate | `data_source_tracking.match_rate_*` → `v_kpi_cross_source_match` (Task 5) | MAPPED | match_rate=0.904 |
 | WS1-DQ-004 | Stacking Lift | `data_source_tracking.stacking_lift_percentage` → `v_kpi_stacking_lift` (Task 5) | MAPPED | lift_score=15.66 |
 | WS1-DQ-005 | Completeness Pass Rate | `patient_journeys` (patient_id/brand/event_date non-null) → `data_quality_completeness_pass_rate` | MAPPED | pass_rate=0.999 |
-| WS1-DQ-006 | Geographic Consistency | `patient_journeys.geographic_region` + `reference_universe` (universe_type=patient) → `data_quality_geographic_consistency` | MAPPED | max_gap=0.120 |
+| WS1-DQ-006 | Geographic Consistency Gap | `patient_journeys.geographic_region` + `reference_universe` (universe_type=patient) → `data_quality_geographic_consistency` | MAPPED | max_gap=0.120 |
 | WS1-DQ-007 | Data Lag (Median) | `patient_journeys.data_lag_hours` → `v_kpi_data_lag` — **stamped by Task 5b** | MAPPED | median_lag_days=7.96 |
 | WS1-DQ-009 | Time-to-Release (TTR) | `etl_pipeline_metrics.time_to_release_hours` → `v_kpi_time_to_release` (Task 5) | MAPPED | avg_ttr_hours=58.59 |
 | WS1-MP-001 | ROC-AUC | `ml_predictions.model_auc` → `model_performance_roc_auc` — **stamped by `stamp_model_metrics`** | MAPPED | roc_auc=0.774 |

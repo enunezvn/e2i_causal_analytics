@@ -201,6 +201,18 @@ class VocabularyRegistry:
         result: dict[str, Any] = self._data.get("kpis", {})
         return result
 
+    def get_data_constraints(self) -> dict[str, Any]:
+        """
+        Get the per-brand data-constraint profiles (constraint-aware insights,
+        2026-07-20): claims_lag_band, crm_source, and brands.{disease,
+        prevalence_class}. Consumed by src.insights.data_constraint_context.
+
+        Returns:
+            Dictionary of data-constraint configuration ({} when unauthored).
+        """
+        result: dict[str, Any] = self._data.get("data_constraints", {})
+        return result
+
     def get_kpi_names(self) -> list[str]:
         """
         Get list of KPI names.

@@ -25,7 +25,7 @@ All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row
 | 3 | WS1-DQ-003 | Cross-source Match Rate | WS1 DQ | `records_matched / total_records` | 0.75 | 0.60 | 0.40 | Daily |
 | 4 | WS1-DQ-004 | Stacking Lift | WS1 DQ | `(stacked - baseline) / baseline` | 0.15 | 0.10 | 0.05 | Daily |
 | 5 | WS1-DQ-005 | Completeness Pass Rate | WS1 DQ | `1 - (null_critical / total)` | 0.95 | 0.90 | 0.80 | Daily |
-| 6 | WS1-DQ-006 | Geographic Consistency | WS1 DQ | `max \|share_source - share_universe\|` | 0.05 | 0.10 | 0.20 | Weekly |
+| 6 | WS1-DQ-006 | Geographic Consistency Gap | WS1 DQ | `max \|share_source - share_universe\|` | 0.05 | 0.10 | 0.20 | Weekly |
 | 7 | WS1-DQ-007 | Data Lag (Median) | WS1 DQ | `median(ingestion - source)` | 3 days | 7 days | 14 days | Daily |
 | 8 | WS1-DQ-008 | Label Quality (IAA) — ⚠️ DECOMMISSIONED (T8) | WS1 DQ | `avg(agreement_score)` | 0.85 | 0.70 | 0.60 | Weekly |
 | 9 | WS1-DQ-009 | Time-to-Release (TTR) | WS1 DQ | `run_completed - source_timestamp` | 24 hrs | 48 hrs | 72 hrs | Daily |
@@ -349,12 +349,12 @@ Critical fields checked: `patient_id`, `brand`, `event_date`. Records from the m
 
 ---
 
-### WS1-DQ-006: Geographic Consistency
+### WS1-DQ-006: Geographic Consistency Gap
 
 | Field | Value |
 |-------|-------|
 | **ID** | `WS1-DQ-006` |
-| **Name** | Geographic Consistency |
+| **Name** | Geographic Consistency Gap (lower is better — a GAP, not a score) |
 | **Definition** | Maximum absolute gap between source share and universe share across regions |
 | **Formula** | `max_region(\|share_source - share_universe\|)` |
 | **Calculation Type** | Derived |
@@ -1500,7 +1500,7 @@ The following KPIs use lower-is-better evaluation:
 
 | ID | Name | Target | Warning | Critical |
 |----|------|--------|---------|----------|
-| WS1-DQ-006 | Geographic Consistency | 0.05 | 0.10 | 0.20 |
+| WS1-DQ-006 | Geographic Consistency Gap | 0.05 | 0.10 | 0.20 |
 | WS1-DQ-007 | Data Lag (Median) | 3 days | 7 days | 14 days |
 | WS1-DQ-009 | Time-to-Release (TTR) | 24 hrs | 48 hrs | 72 hrs |
 | WS1-MP-005 | Brier Score | 0.15 | 0.25 | 0.35 |
