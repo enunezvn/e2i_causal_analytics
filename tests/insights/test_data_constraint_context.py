@@ -15,9 +15,11 @@ Contracts under test:
   per-source ingest/feed lag class (as an aggregate class band only); the
   vocabulary's per-source scalar lags (12d/14d/...) and vendor names must
   still NOT render (two contradictory lag SSOTs invite LM confusion);
-* lag-class reconciliation (C0) — the band is presented as the emulated
-  real-world adjudication/runout constraint, and the narrative states that
-  adjudication lag is not simulated in the synthetic substrate;
+* lag-class reconciliation (C0, codex-REVISE scoped wording) — the band's
+  under-count claim is scoped to REAL-WORLD claims, and the narrative states
+  that adjudication lag is not simulated in this synthetic substrate, so
+  recent windows do not under-count for that reason (displayed figures must
+  never be discounted on the band's account);
 * prevalence direction guard — verbatim text: prevalence explains small
   samples and volatility, NOT low engagement/testing/coverage rates;
 * claims-plane KPIs present get the lag attachment; CRM/platform-plane KPIs
@@ -123,22 +125,26 @@ def test_caveats_render_for_tagged_kpis_only():
 
 @pytest.mark.parametrize("brand", _BRANDS + ("All",))
 def test_reconciled_wording_distinguishes_lag_classes(brand):
-    """C0 lag-vocabulary reconciliation (plan 2026-07-21): the narrative must
-    (a) present the 1-3-month band as the emulated REAL-WORLD claims
-    adjudication/runout constraint, (b) name the DISTINCT 7-14 day per-source
-    ingest/feed lag class (aggregate band only — the per-source scalar and
-    vendor prohibitions itemized in
-    test_per_brand_profile_renders_with_single_lag_claim are unchanged), and
-    (c) state that adjudication lag is not simulated in the synthetic
-    substrate — while (d) keeping the attribute-don't-recommend instruction
-    intact."""
+    """C0 lag-vocabulary reconciliation (plan 2026-07-21; codex-REVISE scoped
+    wording): the narrative must (a) scope the 1-3-month band's under-count
+    claim to REAL-WORLD claims (never a factual statement about the displayed
+    synthetic figures), (b) name the DISTINCT 7-14 day per-source ingest/feed
+    lag class (aggregate band only — the per-source scalar and vendor
+    prohibitions itemized in
+    test_per_brand_profile_renders_with_single_lag_claim are unchanged),
+    (c) state that adjudication lag is not simulated here, SO recent windows
+    do not under-count for that reason (the explicit no-discount scoping),
+    and (d) keep the attribute-don't-recommend instruction intact."""
     ctx = build_constraint_context(brand, _METAS)
     assert ctx
     assert "adjudication/runout" in ctx
-    assert "emulated real-world" in ctx.lower()
+    assert "In real-world claims" in ctx
     assert "7-14 day" in ctx
     assert "ingest/feed" in ctx
-    assert "not simulated in the synthetic substrate" in ctx
+    assert (
+        "adjudication lag is not simulated, so recent windows do not under-count for that reason"
+        in ctx
+    )
     assert "attribute, do not recommend" in ctx
 
 

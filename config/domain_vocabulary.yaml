@@ -2455,9 +2455,10 @@ brand_ndc_codes:
 #      constraint (the validated operational band). It is NOT simulated in
 #      the synthetic substrate: a cosmetic data_lag_hours ingest plane exists
 #      (src/ml/synthetic/generators/data_lag.py) but no KPI filters events by
-#      it, and no adjudication/arrival plane exists. The narrative states it
-#      as the emulated constraint, and it is the ONLY LM-facing
-#      claims-adjudication lag figure.
+#      it, and no adjudication/arrival plane exists. The narrative scopes
+#      its under-count claim to real-world claims (never the displayed
+#      synthetic figures), and it is the ONLY LM-facing claims-adjudication
+#      lag figure.
 #   2. edge_case_taxonomy.data_source_lag — the 7-14 day per-source
 #      ingest/feed lags. SERVER-SIDE (label-deferral logic); the narrative
 #      names this class only as an aggregate band. Per-source scalars and
