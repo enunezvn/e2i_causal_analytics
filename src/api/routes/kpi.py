@@ -40,6 +40,8 @@ from src.api.schemas.kpi import (
     KPIHistorySegmentSeries,
     KPIListResponse,
     KPIMetadataResponse,
+    KPINowcastHistoryResponse,
+    KPINowcastPoint,
     KPIResultResponse,
     KPISegmentedHistoryResponse,
     KPIThresholdResponse,
@@ -723,6 +725,84 @@ async def get_kpi_history_segmented(
             )
             for s in series
         ],
+    )
+
+
+@router.get(
+    "/{kpi_id}/history/nowcast",
+    response_model=KPINowcastHistoryResponse,
+    summary="Get KPI history with claims-lag provisional/nowcast overlay",
+    description=(
+        "Monthly mature / provisional / nowcast series for the Rx-volume family "
+        "(WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx), computed live from "
+        "the migration-116 claims-arrival lag triangle (backlog #45) — NOT from "
+        "the materialized kpi_history table, whose figures stay the mature "
+        "values. The completion factor is re-estimated empirically from mature "
+        "service months (chain-ladder); when that cannot be done honestly the "
+        "response says insufficient_maturity=true with a reason and carries no "
+        "nowcast values."
+    ),
+    operation_id="get_kpi_history_nowcast",
+)
+async def get_kpi_history_nowcast(
+    kpi_id: str,
+    brand: str | None = Query(default=None, description="Brand filter ('' / omitted = global)"),
+    start_date: str | None = Query(default=None, description="Earliest metric_date (YYYY-MM-DD)"),
+    end_date: str | None = Query(default=None, description="Latest metric_date (YYYY-MM-DD)"),
+) -> KPINowcastHistoryResponse:
+    """Return the provisional/nowcast monthly series for an Rx-volume KPI.
+
+    422 (not 404 / empty-series) for off-family KPIs — the sibling
+    ``/history/segmented`` convention for "this KPI can never serve this
+    view": the caller relays the error honestly instead of drawing an empty
+    chart, and one route family keeps one unsupported-KPI contract. (404 is
+    reserved for unknown KPI ids, per /metadata.)
+    """
+    from src.kpi.nowcast.completion_factor import (
+        NOWCAST_KPI_QUERY_FAMILIES,
+        estimate_completion_from_rows,
+        fetch_nowcast_rows,
+    )
+
+    if kpi_id not in NOWCAST_KPI_QUERY_FAMILIES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"KPI '{kpi_id}' has no claims-lag nowcast series. Nowcast-capable "
+                f"KPIs (Rx-volume family): {sorted(NOWCAST_KPI_QUERY_FAMILIES)}"
+            ),
+        )
+
+    rows = await fetch_nowcast_rows(kpi_id, brand=brand)
+    result = estimate_completion_from_rows(rows)
+    points = [
+        KPINowcastPoint(
+            metric_date=p.month.isoformat(),
+            mature_value=p.mature_value,
+            provisional_value=p.provisional_value,
+            provisional=not p.is_mature,
+            completion_factor=p.completion_factor,
+            nowcast_value=p.nowcast_value,
+            nowcast_ci_lower=p.nowcast_ci[0] if p.nowcast_ci else None,
+            nowcast_ci_upper=p.nowcast_ci[1] if p.nowcast_ci else None,
+        )
+        for p in result.months
+        # ISO dates compare lexicographically == chronologically.
+        if (start_date is None or p.month.isoformat() >= start_date)
+        and (end_date is None or p.month.isoformat() <= end_date)
+    ]
+    return KPINowcastHistoryResponse(
+        kpi_id=kpi_id,
+        brand=brand or "",
+        data_through=result.frontier.isoformat() if result.frontier else None,
+        insufficient_maturity=result.insufficient_maturity,
+        reason=result.reason,
+        mature_months_used=len(result.mature_months),
+        anchor_cap_month=(result.anchor_cap_month.isoformat() if result.anchor_cap_month else None),
+        arrival_plane_coverage=result.arrival_plane_coverage,
+        ci_level=result.ci_level,
+        count=len(points),
+        points=points,
     )
 
 
