@@ -77,6 +77,11 @@ from src.mlops.gold_standard_eval.cohort_deployer import train_cohort_model
 from src.mlops.gold_standard_eval.cohort_spec import make_patient_spec
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
 
+# Same rationale as test_initiation_calibration.py: the faithful 3-brand fixture
+# (~15s setup locally, 2-3x on the loaded 2-core CI runner) breaches the global
+# 30s cap, and timeout_method=thread kills the xdist worker on breach.
+pytestmark = pytest.mark.timeout(120)
+
 # --- backlog #43 (folded into COMM-ARMS Phase 2) --------------------------------------
 # Per-brand PINNED baselines replace the old single absolute band [0.75, 0.83]. WHY the
 # reshape: the old gate was a single-seed (seed 42) point estimate on a quantity with

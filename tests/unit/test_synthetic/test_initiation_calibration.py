@@ -40,6 +40,14 @@ from src.mlops.gold_standard_eval.cohort_deployer import train_cohort_model
 from src.mlops.gold_standard_eval.cohort_spec import make_patient_spec
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
 
+# The module fixture generates 3 brands x 20k patients and fits 3 calibrated LRs
+# (~21s setup on a fast idle box; 2-3x that on the loaded 2-core CI runner). The
+# global 30s cap with timeout_method=thread KILLS the xdist worker process on
+# breach ("node down"), poisoning the whole Unit lane — give the known-heavy
+# faithful fits the same headroom the Heavy lane grants (COMM-ARMS Phase 4
+# widened the frame/feature matrix enough to tip the old razor-thin margin).
+pytestmark = pytest.mark.timeout(120)
+
 
 def _faithful(brand: Brand, n: int = 20000, seed: int = 42) -> dict:
     """Train the REAL gold-standard initiation model (FeatureBuilder 7-cov + calibrated
