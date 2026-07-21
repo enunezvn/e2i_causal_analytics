@@ -39,26 +39,27 @@ class TestModelTrainerAgent:
             "problem_type": "binary_classification",
             "enable_hpo": False,
             "early_stopping": False,
-            # Pre-loaded splits
+            # Pre-loaded splits: 60/20/10/10 (#44 policy) with disjoint indices,
+            # as real splits partitioning one source frame would have.
             "train_data": {
-                "X": pd.DataFrame(np.random.rand(600, 10)),
+                "X": pd.DataFrame(np.random.rand(600, 10), index=range(0, 600)),
                 "y": np.random.randint(0, 2, 600),
                 "row_count": 600,
             },
             "validation_data": {
-                "X": pd.DataFrame(np.random.rand(200, 10)),
+                "X": pd.DataFrame(np.random.rand(200, 10), index=range(600, 800)),
                 "y": np.random.randint(0, 2, 200),
                 "row_count": 200,
             },
             "test_data": {
-                "X": pd.DataFrame(np.random.rand(150, 10)),
-                "y": np.random.randint(0, 2, 150),
-                "row_count": 150,
+                "X": pd.DataFrame(np.random.rand(100, 10), index=range(800, 900)),
+                "y": np.random.randint(0, 2, 100),
+                "row_count": 100,
             },
             "holdout_data": {
-                "X": pd.DataFrame(np.random.rand(50, 10)),
-                "y": np.random.randint(0, 2, 50),
-                "row_count": 50,
+                "X": pd.DataFrame(np.random.rand(100, 10), index=range(900, 1000)),
+                "y": np.random.randint(0, 2, 100),
+                "row_count": 100,
             },
             # Disable MLflow for unit tests
             "enable_mlflow": False,
@@ -157,5 +158,5 @@ class TestModelTrainerAgent:
 
         assert result["train_samples"] == 600
         assert result["validation_samples"] == 200
-        assert result["test_samples"] == 150
+        assert result["test_samples"] == 100
         assert result["total_samples"] == 1000

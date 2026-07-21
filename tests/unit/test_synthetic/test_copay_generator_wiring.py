@@ -32,7 +32,7 @@ _PRE_COPAY_DIGESTS = {
         "prior_therapy_lines": "b14ef7b8c273c3f5",
         "age_at_diagnosis": "5f0f191c6166a2d2",
         "geographic_region": "2e57809069fb0ac7",
-        "data_split": "57c10764069cebb3",
+        "data_split": "bf0f985689e143c3",  # re-pinned for #44 split policy 60/20/10/10 (only data_split moved; all other columns held)
     },
     "Kisqali:7": {
         "patient_journey_id": "9d37ed3c10cda091",
@@ -47,7 +47,7 @@ _PRE_COPAY_DIGESTS = {
         "prior_therapy_lines": "12bcebfc603e8979",
         "age_at_diagnosis": "34ca4305e39a8ce1",
         "geographic_region": "cfea1e7674329b01",
-        "data_split": "c1570c894741bb45",
+        "data_split": "9a071042dba9492c",  # re-pinned for #44 split policy 60/20/10/10 (only data_split moved; all other columns held)
     },
 }
 
