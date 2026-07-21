@@ -55,6 +55,8 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -179,6 +181,29 @@ const WORKSTREAM_ORDER = [
 // longer occur, since the tab list is derived from the computed (non-null) KPIs.
 // The calculators, per-KPI definitions, and the Brand SELECTOR are all unchanged.
 const HIDDEN_HOME_WORKSTREAMS = new Set<string>([]);
+
+// "Hide other brands' KPIs" (sibling-brand cards) is a per-user VIEW preference
+// — default OFF (visible-but-labeled is the platform's documented semantic) —
+// persisted like the other UI preferences (cf. hooks/use-user-preferences).
+const HIDE_SIBLING_KPIS_STORAGE_KEY = 'e2i-home-hide-sibling-kpis';
+
+function loadHideSiblingKpis(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(HIDE_SIBLING_KPIS_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveHideSiblingKpis(hide: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(HIDE_SIBLING_KPIS_STORAGE_KEY, String(hide));
+  } catch {
+    // Ignore storage errors (private mode etc.) — the in-session state applies.
+  }
+}
 
 // KPI cards are non-interactive by design. The Model Performance cards used to
 // drill to /model-performance, but that page does not inherit the dashboard's
@@ -412,6 +437,13 @@ function Home() {
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
+  // KPI-grid view preference: hide sibling-brand cards (default OFF =
+  // visible-but-labeled). Initialized from, and persisted to, localStorage.
+  const [hideSiblingKpis, setHideSiblingKpis] = useState<boolean>(loadHideSiblingKpis);
+  const handleHideSiblingKpisChange = useCallback((hide: boolean) => {
+    setHideSiblingKpis(hide);
+    saveHideSiblingKpis(hide);
+  }, []);
 
   // ==========================================================================
   // API HOOKS - Wire up to real backend data
@@ -672,6 +704,22 @@ function Home() {
     [selectedBrand]
   );
 
+  // Sibling-brand cards present in the computed set (pre-hide, so the toggle
+  // stays rendered — and reversible — while it is hiding them). 0 under 'All'
+  // by construction, so the toggle never renders as a dead control there.
+  const siblingKpiCount = useMemo(
+    () => computedKPIs.filter(isSiblingKpi).length,
+    [computedKPIs, isSiblingKpi]
+  );
+
+  // Grid-visible set: with the toggle ON, sibling-brand cards leave the grid,
+  // the tab list, and the counts TOGETHER (never orphaned). Everything below
+  // (tabs, per-tab grid, banner counts, "Showing N of M") derives from here.
+  const visibleKPIs = useMemo(
+    () => (hideSiblingKpis ? computedKPIs.filter((kpi) => !isSiblingKpi(kpi)) : computedKPIs),
+    [hideSiblingKpis, computedKPIs, isSiblingKpi]
+  );
+
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
   // computed over synthetic data — the Home tiles (summary), the Model Accuracy
   // tile (the gold-standard eval runs over a synthetic cohort → is_synthetic_cohort),
@@ -690,7 +738,7 @@ function Home() {
   // construction); the fixed demo categories apply only to SAMPLE_KPIS.
   const kpiCategories = useMemo(() => {
     if (!liveKpiMode) return KPI_CATEGORIES;
-    const present = new Set(computedKPIs.map((k) => k.category));
+    const present = new Set(visibleKPIs.map((k) => k.category));
     const ordered = WORKSTREAM_ORDER.filter((ws) => present.has(ws));
     const extras = [...present]
       .filter((ws) => !WORKSTREAM_ORDER.includes(ws))
@@ -700,7 +748,7 @@ function Home() {
       label: WORKSTREAM_META[ws]?.label ?? (ws === 'other' ? 'Other' : ws),
       icon: WORKSTREAM_META[ws]?.icon ?? BarChart3,
     }));
-  }, [liveKpiMode, computedKPIs]);
+  }, [liveKpiMode, visibleKPIs]);
 
   // Keep the active tab valid across demo/live category sets.
   const activeCategory = useMemo(() => {
@@ -710,28 +758,30 @@ function Home() {
 
   // Filter KPIs by category and brand (uses API data when available)
   const filteredKPIs = useMemo(() => {
-    if (activeCategory === 'all') return computedKPIs;
-    return computedKPIs.filter((kpi) => kpi.category === activeCategory);
-  }, [computedKPIs, activeCategory]);
+    if (activeCategory === 'all') return visibleKPIs;
+    return visibleKPIs.filter((kpi) => kpi.category === activeCategory);
+  }, [visibleKPIs, activeCategory]);
 
-  // Calculate summary stats (uses API data when available)
+  // Calculate summary stats (uses API data when available). Counts the
+  // grid-VISIBLE set so the brand banner always matches the cards on screen
+  // (sibling cards hidden by the toggle leave the counts too).
   const summaryStats = useMemo(() => {
-    const healthyCount = computedKPIs.filter((k) => k.status === 'healthy').length;
-    const warningCount = computedKPIs.filter((k) => k.status === 'warning').length;
-    const criticalCount = computedKPIs.filter((k) => k.status === 'critical').length;
+    const healthyCount = visibleKPIs.filter((k) => k.status === 'healthy').length;
+    const warningCount = visibleKPIs.filter((k) => k.status === 'warning').length;
+    const criticalCount = visibleKPIs.filter((k) => k.status === 'critical').length;
 
     // Enhance with API health data if available
     const apiHealthy = kpiHealthData?.status === 'healthy';
 
     return {
-      total: computedKPIs.length,
+      total: visibleKPIs.length,
       healthy: healthyCount,
       warning: warningCount,
       critical: criticalCount,
       apiConnected: !!kpiListData,
       apiHealthy,
     };
-  }, [computedKPIs, kpiHealthData, kpiListData]);
+  }, [visibleKPIs, kpiHealthData, kpiListData]);
 
   // Visible alerts: REAL monitoring alerts only (no fabricated fallback).
   // Stable string ids (the old `Number(a.id) || Math.random()` broke
@@ -902,9 +952,11 @@ function Home() {
     if (modelSummary?.available && modelSummary.accuracy != null) {
       lines.push(`Model accuracy (avg): ${(modelSummary.accuracy * 100).toFixed(1)}%.`);
     }
-    if (computedKPIs.length > 0) {
+    // The VISIBLE set: what the user actually sees (sibling-brand cards hidden
+    // by the toggle are excluded, keeping the chat grounding on-screen-honest).
+    if (visibleKPIs.length > 0) {
       lines.push(
-        `KPI grid: ${computedKPIs.length} computed KPIs, e.g. ${computedKPIs
+        `KPI grid: ${visibleKPIs.length} computed KPIs, e.g. ${visibleKPIs
           .slice(0, 4)
           .map((k) => k.name)
           .join(', ')}.`
@@ -928,7 +980,7 @@ function Home() {
     kpiSummary,
     activeExp,
     modelSummary,
-    computedKPIs,
+    visibleKPIs,
     trustedHealth,
     opportunities,
   ]);
@@ -1158,6 +1210,27 @@ function Home() {
                     {selectedBrand === 'All' ? 'Portfolio-wide' : selectedBrand} metrics
                   </CardDescription>
                 </div>
+                {/* Grid-scoped view toggle for sibling-brand cards. Rendered
+                    only while such cards exist in the computed set (counted
+                    PRE-hide, so it stays reversible while ON) — never a dead
+                    control under 'All' or for a purely own-brand grid. */}
+                {siblingKpiCount > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="hide-sibling-kpis"
+                      checked={hideSiblingKpis}
+                      onCheckedChange={(checked) =>
+                        handleHideSiblingKpisChange(checked === true)
+                      }
+                    />
+                    <Label
+                      htmlFor="hide-sibling-kpis"
+                      className="text-xs cursor-pointer text-muted-foreground"
+                    >
+                      Hide other brands&apos; KPIs
+                    </Label>
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -1176,7 +1249,7 @@ function Home() {
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
                 {liveKpiMode && batchSettled && !batchFailed && (
                   <p className="text-xs text-muted-foreground">
-                    Showing {computedKPIs.length} of {effectiveKPIs.length} defined KPIs
+                    Showing {visibleKPIs.length} of {effectiveKPIs.length} defined KPIs
                     {selectedBrand !== 'All' ? ` for ${selectedBrand}` : ''}
                   </p>
                 )}
@@ -1188,6 +1261,23 @@ function Home() {
                     </TabsTrigger>
                   ))}
                 </TabsList>
+
+                {/* Live-mode guard: with zero visible KPIs there are no tabs and
+                    no TabsContent, so without this the grid would go silently
+                    blank — e.g. if the sibling-hide toggle removed every
+                    computed card. Say so honestly (and keep the toggle above
+                    rendered, so the choice is reversible). */}
+                {liveKpiMode && batchSettled && !batchFailed && kpiCategories.length === 0 && (
+                  <EmptyState
+                    title="No KPIs available"
+                    description={
+                      hideSiblingKpis && siblingKpiCount > 0
+                        ? `Every computed KPI in this scope belongs to another brand — ${siblingKpiCount} hidden by the "Hide other brands' KPIs" toggle.`
+                        : 'No KPI values have been computed for this scope yet.'
+                    }
+                    className="p-6"
+                  />
+                )}
 
                 {kpiCategories.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
