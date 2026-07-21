@@ -243,8 +243,8 @@ lineage:
       description: >
         Per-cohort tier0 inputs. Brand-filtered (default Remibrutinib), DGP
         answer-key columns excluded, opposite-cohort outcome dropped,
-        data_split REASSIGNED stratified-random 60/20/15/5, is_synthetic
-        kept on every row.
+        data_split REASSIGNED stratified-random 60/20/10/10 (#44; was
+        60/20/15/5), is_synthetic kept on every row.
 
     - id: ds-int-synthetic-ground-truth
       displayName: Synthetic Ground-Truth Sidecar (TRUE_ATE)

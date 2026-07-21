@@ -84,12 +84,13 @@ sharedProperties:
     description: >
       ML split assignment (PG enum data_split_type: train | validation | test
       | holdout | unassigned). CAVEAT — two regimes exist platform-wide:
-      Supabase loads use chronological 60/20/15/5 with 7-day temporal gaps and
-      patient-level isolation (ml_split_registry + assign_patient_split() +
-      run_leakage_audit()), while the synthetic tier0 exporter and the
-      HCP-adoption mart adapter REASSIGN stratified-random 60/20/15/5. Do not
-      treat this property as carrying a single global semantic; the governing
-      DataSplitConfig (split_config_id) is the source of truth per row.
+      Supabase loads use chronological 60/20/10/10 (#44 v3.1.0; was 60/20/15/5)
+      with 7-day temporal gaps and patient-level isolation (ml_split_registry +
+      assign_patient_split() + run_leakage_audit()), while the synthetic tier0
+      exporter and the HCP-adoption mart adapter REASSIGN stratified-random
+      60/20/10/10 (#44; was 60/20/15/5). Do not treat this property as carrying
+      a single global semantic; the governing DataSplitConfig (split_config_id)
+      is the source of truth per row.
   - id: is-synthetic
     apiName: isSynthetic
     displayName: Is Synthetic
