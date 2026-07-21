@@ -12,7 +12,7 @@ no network). Properties asserted (red-first contract):
     + record-builder determinism
   - is_synthetic == True on every generated row
   - complement property: persistent_180d == 1 - discontinued_180d
-  - split ratios 60/20/15/5 (train/validation/test/holdout)
+  - split ratios 60/20/10/10 (train/validation/test/holdout; #44 holdout enlargement)
 
 Run:
     cd <worktree> && PYTHONPATH=$PWD python -m pytest \
@@ -127,8 +127,11 @@ def test_hcp_records_builder_deterministic_and_json_safe():
     assert sample["is_synthetic"] is True
 
 
-def test_hcp_split_ratios_60_20_15_5():
-    """Stratified split lands on the designed 60/20/15/5 proportions (within rounding)."""
+def test_hcp_split_ratios_60_20_10_10():
+    """Stratified split lands on the designed 60/20/10/10 proportions (within rounding).
+
+    #44 holdout enlargement (2026-07-21): test 15%→10%, holdout 5%→10%.
+    """
     df = _build(n_hcps=1000, seed=427)
     # Per brand the split is computed independently; check one brand's distribution.
     sub = df[df["brand"] == "Remibrutinib"]
@@ -136,9 +139,9 @@ def test_hcp_split_ratios_60_20_15_5():
     frac = sub["data_split"].value_counts(normalize=True)
     assert abs(frac.get("train", 0) - 0.60) <= 0.02, f"train {frac.get('train')}"
     assert abs(frac.get("validation", 0) - 0.20) <= 0.02, f"validation {frac.get('validation')}"
-    assert abs(frac.get("test", 0) - 0.15) <= 0.02, f"test {frac.get('test')}"
-    assert abs(frac.get("holdout", 0) - 0.05) <= 0.02, f"holdout {frac.get('holdout')}"
-    # exact counts for n=1000: 600/200/150/50
+    assert abs(frac.get("test", 0) - 0.10) <= 0.02, f"test {frac.get('test')}"
+    assert abs(frac.get("holdout", 0) - 0.10) <= 0.02, f"holdout {frac.get('holdout')}"
+    # exact counts for n=1000: 600/200/100/100
     assert n == 1000
 
 

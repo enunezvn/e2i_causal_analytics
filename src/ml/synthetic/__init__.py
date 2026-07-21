@@ -6,7 +6,7 @@ for pipeline validation. Supports 5 Data Generating Processes (DGPs) across 3 br
 
 Key Features:
 - Known TRUE_ATE values for DoWhy validation
-- ML-compliant splits (60/20/15/5)
+- ML-compliant splits (60/20/10/10)
 - Zero data leakage (patient-level isolation)
 - Schema-compliant with Supabase tables
 """

@@ -23,7 +23,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SplitConfig:
-    """Configuration for data splitting."""
+    """Configuration for data splitting.
+
+    NOTE: these defaults (60/20/20, no holdout) are generic library defaults
+    for this multi-strategy utility — they are NOT the E2I split policy.
+    The E2I policy is 60/20/10/10 (#44 holdout enlargement 2026-07-21; single
+    source: ml_split_registry + generators/base.py seed quota). Policy-bound
+    callers must pass ratios explicitly — see
+    data_preparer/nodes/data_loader.py::_legacy_split_config.
+    """
 
     train_ratio: float = 0.6
     val_ratio: float = 0.2

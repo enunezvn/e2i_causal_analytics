@@ -40,10 +40,20 @@ flowchart TD
     G -->|No| H[Fix Errors<br/>See Common Pitfalls]
     H --> F
     G -->|Yes| I[Load into Supabase]
-    I --> J[Assign Data Splits<br/>Chronological 60/20/15/5]
+    I --> J[Assign Data Splits<br/>Chronological 60/20/10/10]
     J --> K[Run Leakage Audit]
     K --> L[Ready for Pipeline]
 ```
+
+> **Split-ratio scope (#44, 2026-07-21)**: the step above uses the DB-side
+> `assign_patient_split()` + `ml_split_registry` path (see
+> [Data Split Assignment](#data-split-assignment) below); the registry policy is
+> 60/20/10/10 since config v3.1.0 (was 60/20/15/5). Note the SQL function is
+> DATE-banded off the registry's boundary dates, so the realized ratios depend
+> on your data's date distribution. The standalone parquet-mart RWD converters
+> (`scripts/rwd_common.py`, `scripts/convert_*`) deliberately retain their own
+> 60/20/15/5 ratios — that substrate is separate from the synthetic goldstd
+> policy and was not changed by #44.
 
 ---
 
@@ -286,8 +296,8 @@ The E2I pipeline uses **chronological splitting** with patient-level isolation t
 |-------|-------|---------|
 | Train | 60% | Model training |
 | Validation | 20% | Hyperparameter tuning |
-| Test | 15% | Final evaluation |
-| Holdout | 5% | Causal holdout for refutation |
+| Test | 10% (#44; was 15%) | Final evaluation |
+| Holdout | 10% (#44; was 5%) | Causal holdout for refutation |
 
 ### Assignment Rules
 
@@ -306,7 +316,7 @@ INSERT INTO ml_split_registry (
     temporal_gap_days, patient_level_isolation, split_strategy
 ) VALUES (
     'v1_chronological', '1.0.0',
-    0.60, 0.20, 0.15, 0.05,
+    0.60, 0.20, 0.10, 0.10,
     '2024-01-01', '2025-12-31',
     '2025-06-30', '2025-09-30', '2025-11-30',
     7, TRUE, 'chronological'

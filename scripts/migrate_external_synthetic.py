@@ -7,7 +7,7 @@ to be compatible with the canonical main system (src/ml/synthetic/).
 
 Key Fixes:
 1. Brand ENUM case: lowercase -> Capitalized (e.g., 'remibrutinib' -> 'Remibrutinib')
-2. Missing holdout split: Re-splits data to include holdout (60/20/15/5)
+2. Missing holdout split: Re-splits data to include holdout (60/20/10/10)
 3. Schema validation: Ensures Supabase compatibility
 
 Usage:
@@ -56,12 +56,13 @@ BRAND_CASE_FIX = {
     "kisqali": "Kisqali",
 }
 
-# Split ratios (canonical: 60/20/15/5)
+# Split ratios (canonical: 60/20/10/10 — #44 holdout enlargement 2026-07-21,
+# lockstep with src/ml/synthetic/generators/base.py::_assign_splits)
 SPLIT_RATIOS = {
     "train": 0.60,
     "validation": 0.20,
-    "test": 0.15,
-    "holdout": 0.05,
+    "test": 0.10,
+    "holdout": 0.10,
 }
 
 
@@ -104,7 +105,7 @@ def add_holdout_split(
     seed: int = 42,
 ) -> Tuple[pd.DataFrame, Dict[str, int]]:
     """
-    Re-split data to include holdout split (60/20/15/5).
+    Re-split data to include holdout split (60/20/10/10).
 
     The external system only had 3 splits (train/validation/test).
     This function re-assigns splits to include holdout.

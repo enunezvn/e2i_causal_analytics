@@ -35,13 +35,14 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.repositories.sample_data import SampleDataGenerator  # noqa: E402,I001
 
 
-# Per codex consult 2026-05-04 (agent a847abbf19d4da2e9):
+# Per codex consult 2026-05-04 (agent a847abbf19d4da2e9), ratios updated to
+# the #44 60/20/10/10 policy (2026-07-21) — conclusions unchanged:
 # - n=200 is the smallest reliable boundary above the Step 5 split-validation
-#   floor (60/20/15/5 yields train=120/val=40/test=30/holdout=10).
+#   floor (60/20/10/10 yields train=120/val=40/test=20/holdout=20).
 # - prev=10% gives ~12 positives per training set, enough for stratified
 #   splitting to produce at least one positive per partition.
 # - prev=2% with n=200 is the documented "must-skip" weak-signal regime:
-#   60/20/15/5 yields ~2-4 positives across all splits — split stratify
+#   60/20/10/10 yields ~2-4 positives across all splits — split stratify
 #   may fail or pass non-deterministically. We do NOT assert success there;
 #   we only assert that ml_patients itself produces valid data.
 SCALE_GRID = [
@@ -129,7 +130,7 @@ def test_ml_patients_produces_valid_frame_at_scale(n_patients: int, positive_rat
 def test_ml_patients_at_weak_signal_boundary(n_patients: int, positive_rate: float) -> None:
     """At very low prevalence (≤5%), only assert generation succeeds.
 
-    Per codex consult 2026-05-04: at n=200/prev=2%, the 60/20/15/5 split
+    Per codex consult 2026-05-04: at n=200/prev=2%, the 60/20/10/10 split
     will produce splits with 0-1 positives. Step-5 validation is
     expected to fail or produce unstable signals. This test ONLY pins
     that the generator itself does not crash; it does NOT assert
@@ -149,23 +150,24 @@ def test_ml_patients_at_weak_signal_boundary(n_patients: int, positive_rate: flo
 
 
 def test_step5_split_floor_passes_at_n200_prev10() -> None:
-    """At n=200/prev=10%, the 60/20/15/5 split yields enough positives
+    """At n=200/prev=10%, the 60/20/10/10 split yields enough positives
     in every split for stratified splitting to succeed.
 
     The 2026-04-24 baseline established that n=47 fails Step 5 with
-    `split_validation_error` (train=28/val=9/test=7/holdout=3). At
-    n=200, the corresponding split is train=120/val=40/test=30/holdout=10
-    with ~12 expected positives — comfortably above the documented
-    `min_samples_per_split=10` floor (`run_tier0_test.py:5573-5581`).
+    `split_validation_error`. At n=200, the corresponding split is
+    train=120/val=40/test=20/holdout=20 with ~12 expected positives —
+    comfortably above the documented `min_samples_per_split=10` floor
+    (`run_tier0_test.py:5573-5581`). Ratios follow the #44 holdout
+    enlargement (2026-07-21): test 15%→10%, holdout 5%→10%.
     """
     gen = SampleDataGenerator(seed=42)
     df = gen.ml_patients(n_patients=200, positive_rate=0.10)
 
-    # 60/20/15/5 split
+    # 60/20/10/10 split
     n = len(df)
     train_n = int(n * 0.60)
     val_n = int(n * 0.20)
-    test_n = int(n * 0.15)
+    test_n = int(n * 0.10)
     holdout_n = n - train_n - val_n - test_n
 
     assert train_n >= 10, f"train_n={train_n} below min_samples_per_split"
@@ -187,12 +189,12 @@ def test_step5_split_floor_passes_at_n200_prev10() -> None:
 
 def test_step5_split_floor_below_threshold_at_n47() -> None:
     """At n=47 (the empirical Optum discontinuation/persistence size),
-    the 60/20/15/5 split breaks the min_samples_per_split=10 default.
+    the 60/20/10/10 split breaks the min_samples_per_split=10 default.
 
-    This test documents the empirical floor: at n=47, train=28/val=9/test=7/
-    holdout=3 — val/test/holdout all below the default min=10 gate. The
-    2026-04-24 baseline showed this exact pattern fails with
-    `split_validation_error` at Step 5.
+    This test documents the empirical floor: at n=47, train=28/val=9/test=4/
+    holdout=6 — val/test/holdout all below the default min=10 gate. The
+    2026-04-24 baseline showed this pattern (then 60/20/15/5) fails with
+    `split_validation_error` at Step 5; the #44 ratios violate the same floor.
 
     This test does NOT assert that Step 5 fails (would require running
     the full pipeline). It asserts the SPLIT MATH violates the documented
@@ -204,7 +206,7 @@ def test_step5_split_floor_below_threshold_at_n47() -> None:
     n = len(df)
     train_n = int(n * 0.60)
     val_n = int(n * 0.20)
-    test_n = int(n * 0.15)
+    test_n = int(n * 0.10)
     holdout_n = n - train_n - val_n - test_n
 
     # Floor violation — documented as the empirical Step 5 failure cause.

@@ -119,14 +119,23 @@ _DRIFT_DEFAULT = (0.30, 1.05)  # any unmapped feature still drifts coherently (n
 
 @dataclass
 class SplitConfig:
-    """ML split configuration matching database schema."""
+    """ML split configuration matching database schema (ml_split_registry).
+
+    v3.1.0 — backlog #44 goldstd holdout enlargement (2026-07-21): test_ratio
+    0.15→0.10, holdout_ratio 0.05→0.10, lockstep with the OPERATIVE seed quota
+    in src/ml/synthetic/generators/base.py::_assign_splits and migration 114.
+    NOTE: this generator is a legacy JSON-export path (not the reseed path);
+    the date fields document the historical fixed band consumed by
+    ``assign_split`` below — the live substrate is cut on row-share quotas,
+    so the ratios (not the dates) are the fields that must stay in sync.
+    """
 
     config_name: str = "e2i_pilot_v3"
-    config_version: str = "3.0.0"
+    config_version: str = "3.1.0"
     train_ratio: float = 0.60
     validation_ratio: float = 0.20
-    test_ratio: float = 0.15
-    holdout_ratio: float = 0.05
+    test_ratio: float = 0.10
+    holdout_ratio: float = 0.10
     data_start_date: date = date(2025, 1, 1)
     data_end_date: date = date(2025, 10, 31)
     train_end_date: date = date(2025, 6, 30)

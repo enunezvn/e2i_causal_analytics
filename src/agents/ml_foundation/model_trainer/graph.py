@@ -172,7 +172,7 @@ def create_model_trainer_graph() -> CompiledStateGraph:
 
     Critical gates:
     - QC gate MUST pass before any training
-    - Split ratios MUST be valid (60/20/15/5 ± 2%)
+    - Split ratios MUST be valid (60/20/10/10 ± 2%)
     - Class imbalance detection uses LLM to recommend strategy
     - Preprocessing fit ONLY on train
     - Resampling applied ONLY to train (NEVER validation/test)

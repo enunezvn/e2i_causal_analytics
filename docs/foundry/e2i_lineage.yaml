@@ -243,8 +243,8 @@ lineage:
       description: >
         Per-cohort tier0 inputs. Brand-filtered (default Remibrutinib), DGP
         answer-key columns excluded, opposite-cohort outcome dropped,
-        data_split REASSIGNED stratified-random 60/20/15/5, is_synthetic
-        kept on every row.
+        data_split REASSIGNED stratified-random 60/20/10/10 (#44; was
+        60/20/15/5), is_synthetic kept on every row.
 
     - id: ds-int-synthetic-ground-truth
       displayName: Synthetic Ground-Truth Sidecar (TRUE_ATE)
@@ -686,8 +686,9 @@ lineage:
       description: >
         Map columns to E2I schema, generate ids, map enums, derive causal
         variables, Pandera-validate, load in FK order, register split
-        config, assign chronological 60/20/15/5 splits (7-day gaps, patient
-        isolation), propagate to child tables, run leakage audit.
+        config, assign chronological 60/20/10/10 splits (#44; was
+        60/20/15/5; 7-day gaps, patient isolation), propagate to child
+        tables, run leakage audit.
 
     # -------------------------------------------------------- ML pipeline
     - id: tf-tier0-pipeline
@@ -899,10 +900,11 @@ lineage:
       registers its models is_synthetic=False (real serving champions
       trained on synthetic scenario data).
     - >
-      TWO data_split REGIMES: chronological 60/20/15/5 with 7-day gaps +
-      patient isolation for DB loads vs stratified-random 60/20/15/5 in the
-      synthetic tier0 exporter and HCP-adoption adapter. The governing
-      DataSplitConfig row is the per-dataset source of truth.
+      TWO data_split REGIMES: chronological 60/20/10/10 with 7-day gaps +
+      patient isolation for DB loads vs stratified-random 60/20/10/10 in the
+      synthetic tier0 exporter and HCP-adoption adapter (#44; both were
+      60/20/15/5). The governing DataSplitConfig row is the per-dataset
+      source of truth.
     - >
       LEAKAGE GOVERNANCE IS CONVERTER-SPECIFIC: CSU converter applies NO
       lookback window (POST-INDEX columns flagged in

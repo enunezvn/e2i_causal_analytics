@@ -308,16 +308,25 @@ class BaseGenerator(ABC, Generic[T]):
         Args:
             dates: List of ISO date strings (or any homogeneous sortable
                 date-like values, e.g. pd.Timestamp).
-            ratios: Split ratios. Uses default 60/20/15/5 if not provided.
+            ratios: Split ratios. Uses default 60/20/10/10 if not provided.
 
         Returns:
             List of split assignments.
         """
+        # Backlog #44 (goldstd holdout enlargement, 2026-07-21): test 0.15→0.10,
+        # holdout 0.05→0.10. This dict is THE operative split lever for every
+        # seeded table (all 9 call sites pass no ratios): the WS1-MP-006
+        # Remibrutinib gold-standard holdout was n=415 (a ~5% chronological-tail
+        # quota whose calibration slope sat at the 99.6th percentile of random
+        # slices); doubling the quota yields n≈844 (slope SE ≈0.08). Must stay
+        # in lockstep with split_enforcer.py expected_ratios, SplitBoundaries
+        # (config.py), SplitConfig (src/ml/data_generator.py) and the
+        # ml_split_registry row (migration 114).
         ratios = ratios or {
             "train": 0.60,
             "validation": 0.20,
-            "test": 0.15,
-            "holdout": 0.05,
+            "test": 0.10,
+            "holdout": 0.10,
         }
         if not dates:
             return []

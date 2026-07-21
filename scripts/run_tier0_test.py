@@ -3462,10 +3462,11 @@ async def step_5_model_trainer(
 
     elif use_combined:
         # ----- branch 2: combined entity+temporal split --------------------
-        # Step A: peel off 5% holdout (entity-isolated) via deterministic
+        # Step A: peel off 10% holdout (entity-isolated) via deterministic
         #   permutation, so the same entities always land in holdout across
-        #   reruns.
-        # Step B: try combined_split on the remaining 95% to produce
+        #   reruns. (#44 holdout enlargement: 5%→10%, lockstep with the seed
+        #   quota and split_enforcer's 60/20/10/10 single-mode contract.)
+        # Step B: try combined_split on the remaining 90% to produce
         #   train/val/test using temporal + entity-level boundaries.  If the
         #   date span is too compressed for the desired ratios, fall back
         #   to an entity-aware stratified split that still preserves entity
@@ -3491,20 +3492,20 @@ async def step_5_model_trainer(
         unique_entities = list(eids_aligned.unique())
         rng = np.random.default_rng(42)
         permuted = list(rng.permutation(len(unique_entities)))
-        holdout_n = max(1, int(round(len(unique_entities) * 0.05)))
+        holdout_n = max(1, int(round(len(unique_entities) * 0.10)))
         holdout_entities = {unique_entities[i] for i in permuted[:holdout_n]}
         holdout_mask = eids_aligned.isin(holdout_entities)
         holdout_X = X[holdout_mask].copy()
         holdout_y = y[holdout_mask].copy()
 
-        # Working subset (95%) — keeps original X-indices so the model
+        # Working subset (90%) — keeps original X-indices so the model
         # trainer's split-validation sees disjoint row indices.
         rest_X = X[~holdout_mask].copy()
         rest_y = y[~holdout_mask].copy()
         rest_eids = eids_aligned[~holdout_mask].copy()
         rest_dates = dates_aligned[~holdout_mask].copy()
 
-        # Step B — try combined_split on the 95% remainder.  Construct a
+        # Step B — try combined_split on the 90% remainder.  Construct a
         # frame keyed by X's original row index so we can pull row labels
         # back out and mask X/y directly.
         work_df = pd.DataFrame(
@@ -3524,7 +3525,7 @@ async def step_5_model_trainer(
             # is a real bug and should propagate. (4-MIN-5)
             span_days = 30
         val_days = max(1, int(round(span_days * 0.20)))
-        test_days = max(1, int(round(span_days * 0.15)))
+        test_days = max(1, int(round(span_days * 0.10)))  # #44: test 15%→10%
 
         splitter = DataSplitter(random_seed=42)
         # combined_split resets indices internally — we therefore need to
@@ -3544,23 +3545,23 @@ async def step_5_model_trainer(
         val_ids = list(rest_split.val["__row_id__"]) if len(rest_split.val) else []
         test_ids = list(rest_split.test["__row_id__"]) if len(rest_split.test) else []
         # combined_split is "usable" when its output lands inside the
-        # E2I split policy gates (60/20/15 over the 95% remainder of the
+        # E2I split policy gates (60/20/10 over the 90% remainder of the
         # data, evaluated with the same ±2% tolerance the model trainer's
         # split_enforcer uses on the global ratios).  A skewed split
         # (e.g. 67/19/14 because the date span is too narrow for the
         # configured val_days/test_days) gets demoted to the stratified
         # fallback so the model trainer's strict ratio gates pass.
         # ----------------------------------------------------------------
-        # Map global ratios → 95%-remainder ratios:
-        #   train: 0.60 / 0.95 ≈ 0.6316
-        #   val:   0.20 / 0.95 ≈ 0.2105
-        #   test:  0.15 / 0.95 ≈ 0.1579
-        # Tolerance on the remainder: 0.02 / 0.95 ≈ 0.0211
+        # Map global ratios (60/20/10/10 since #44) → 90%-remainder ratios:
+        #   train: 0.60 / 0.90 ≈ 0.6667
+        #   val:   0.20 / 0.90 ≈ 0.2222
+        #   test:  0.10 / 0.90 ≈ 0.1111
+        # Tolerance on the remainder: 0.02 / 0.90 ≈ 0.0222
         rest_size = len(rest_X)
-        target_train = 0.60 / 0.95
-        target_val = 0.20 / 0.95
-        target_test = 0.15 / 0.95
-        ratio_tol = 0.02 / 0.95
+        target_train = 0.60 / 0.90
+        target_val = 0.20 / 0.90
+        target_test = 0.10 / 0.90
+        ratio_tol = 0.02 / 0.90
         usable = (
             bool(train_ids)
             and bool(val_ids)
@@ -3596,7 +3597,7 @@ async def step_5_model_trainer(
                 rest_X,
                 rest_y,
                 rest_eids,
-                test_size=0.15 / 0.95,
+                test_size=0.10 / 0.90,
                 stratify=rest_y,
                 random_state=42,
             )
@@ -3625,19 +3626,20 @@ async def step_5_model_trainer(
 
     else:
         # ----- branch 3: legacy stratified random 4-way --------------------
-        # Stage 1: peel off 5% holdout, stratified on y -> trainval_test (95%) + holdout (5%)
+        # Stage 1: peel off 10% holdout (#44: was 5%), stratified on y
+        #   -> trainval_test (90%) + holdout (10%)
         trainval_test_X, holdout_X, trainval_test_y, holdout_y = train_test_split(
             X,
             y,
-            test_size=0.05,
+            test_size=0.10,
             stratify=y,
             random_state=42,
         )
-        # Stage 2: from trainval_test (95%), peel off test -> trainval (80%) + test (15% of total)
+        # Stage 2: from trainval_test (90%), peel off test -> trainval (80%) + test (10% of total)
         trainval_X, test_X, trainval_y, test_y = train_test_split(
             trainval_test_X,
             trainval_test_y,
-            test_size=0.15 / 0.95,
+            test_size=0.10 / 0.90,
             stratify=trainval_test_y,
             random_state=42,
         )
