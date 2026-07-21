@@ -269,9 +269,10 @@ def generate_week_cohort(week_start: date, hcp_df: pd.DataFrame) -> Dict[str, pd
     # metrics, +9 change tracking, +10 claims arrival plane). Sequence
     # numbering runs on the merged treatments frame BEFORE the frontier filter
     # so an rx keeps its sequence number as later prescriptions cross the
-    # frontier in later runs; the arrival stamp likewise runs pre-filter (the
-    # filter keys on event_date, so surviving rows keep their drawn lags and
-    # re-runs upsert byte-equal no-ops).
+    # frontier in later runs. The arrival stamp draws each row's lag as a pure
+    # function of (seed, treatment_event_id) — order/filter/concat cannot
+    # reassign it, so byte-equal re-run upserts hold STRUCTURALLY (codex
+    # diff-review 2026-07-21), not incidentally to generator ordering.
     patients = stamp_data_lag_hours(patients, seed=seed + 6)
     treatments = stamp_sequence_number(treatments)
     treatments = stamp_claim_arrival(treatments, seed=seed + 10)

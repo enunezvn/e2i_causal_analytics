@@ -1,10 +1,12 @@
 """Backlog #45 PR-A — synthetic claims ARRIVAL plane (stamp_claim_arrival).
 
 The stamp is a post-generation pass on treatment_events (same discipline as
-stamp_data_lag_hours / stamp_sequence_number): its OWN np.random.default_rng
-stream, vocabulary-driven parameters (data_constraints.adjudication_lag_dgp),
-and two NEW columns only — claim_available_date (= event_date + drawn
-adjudication lag) and adjudication_lag_days. NO existing column may change
+stamp_data_lag_hours / stamp_sequence_number): per-row lags KEYED on
+(seed, treatment_event_id) — hashed uniform through the inverse gamma CDF, no
+rng stream consumed — with vocabulary-driven parameters
+(data_constraints.adjudication_lag_dgp), and two NEW columns only —
+claim_available_date (= event_date + drawn adjudication lag) and
+adjudication_lag_days. NO existing column may change
 (additive-only, the migration-113 guard), no KPI reads the new columns, and
 the #43 persistence/initiation calibration pins are structurally immune
 (they train on PatientGenerator output, never treatment_events).
@@ -17,7 +19,10 @@ Contracts under test:
 * CRM / configured-zero-lag event types get claim_available_date NULL and
   adjudication_lag_days 0 (they are not on the claims arrival plane);
 * rows with no event_date get NULL for both columns (fail-empty);
-* deterministic given seed; input frame never mutated;
+* deterministic given seed; ORDER-INDEPENDENT per treatment_event_id (codex
+  diff-review 2026-07-21 — reordering reassigns nothing); input never mutated;
+* the REAL append entrypoint (build_frontier_datasets) emits stamped,
+  frontier-filtered claims rows (arrival dates may exceed the frontier);
 * ADDITIVE INVARIANCE on a REAL generated treatment_events frame: every
   pre-existing column byte-identical, exactly the two new columns added;
 * loader carries both columns (TABLE_COLUMNS) and tolerates their absence
@@ -250,3 +255,58 @@ def test_frontier_week_cohort_carries_arrival_columns():
     assert not rx.empty
     assert rx["claim_available_date"].notna().all()
     assert rx["adjudication_lag_days"].astype(int).ge(1).all()
+
+
+@pytest.mark.unit
+def test_lags_are_order_independent_per_event_id():
+    """Codex diff-review finding 1 (2026-07-21): per-row lags must be a pure
+    function of (seed, treatment_event_id), NOT of the frame's row order —
+    the substrate's PKs are deterministic (positional f-strings in
+    base._generate_ids / 'pnh_<pid>' / 'trxc_<i>'), so a keyed draw makes the
+    frontier byte-equal re-run upsert claim structural instead of incidental
+    to generator ordering. Reordering the same frame must reassign NOTHING."""
+    df = _frame(["prescription", "lab_test", "consultation", "crm_engagement"], 300)
+    df.loc[[5, 17], "event_date"] = None
+    shuffled = df.sample(frac=1, random_state=99).reset_index(drop=True)
+    a = stamp_claim_arrival(df, seed=52).set_index("treatment_event_id")
+    b = stamp_claim_arrival(shuffled, seed=52).set_index("treatment_event_id")
+    b = b.loc[a.index]  # align on the stable PK
+    pd.testing.assert_series_equal(
+        a["adjudication_lag_days"], b["adjudication_lag_days"], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        a["claim_available_date"], b["claim_available_date"], check_names=False
+    )
+
+
+@pytest.mark.unit
+def test_build_frontier_datasets_stamps_arrival_and_survives_filter():
+    """Codex diff-review finding 2 (2026-07-21): cover the REAL append
+    entrypoint, not just generate_week_cohort — build_frontier_datasets must
+    emit treatment_events whose claims rows carry the arrival columns AFTER
+    the frontier filter (stamps run pre-filter; surviving rows keep their
+    drawn lags). claim_available_date legitimately EXCEEDS the frontier for
+    not-yet-arrived claims — the intended nowcast mechanism."""
+    from datetime import timedelta
+
+    from src.ml.synthetic.frontier_append import EPOCH, build_frontier_datasets
+    from src.ml.synthetic.generators import GeneratorConfig, HCPGenerator
+
+    frontier = EPOCH + timedelta(days=13)
+    datasets = build_frontier_datasets(
+        frontier=frontier,
+        include_coverage=False,
+        hcp_frame_factory=lambda: HCPGenerator(
+            GeneratorConfig(id_prefix="scv", seed=42, n_records=60)
+        ).generate(),
+    )
+    te = datasets["treatment_events"]
+    assert "claim_available_date" in te.columns and "adjudication_lag_days" in te.columns
+    # every surviving row respects the frontier filter (keyed on event_date)
+    assert (pd.to_datetime(te["event_date"]) <= pd.Timestamp(frontier)).all()
+    rx = te[te["event_type"] == "prescription"]
+    assert not rx.empty
+    assert rx["claim_available_date"].notna().all()
+    assert rx["adjudication_lag_days"].astype(int).ge(1).all()
+    # the arrival plane extends BEYOND the frontier (not-yet-arrived claims)
+    assert (pd.to_datetime(rx["claim_available_date"]) > pd.Timestamp(frontier)).any()
