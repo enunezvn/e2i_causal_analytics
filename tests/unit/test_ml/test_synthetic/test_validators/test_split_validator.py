@@ -143,10 +143,11 @@ class TestSplitValidator:
 
     def test_legacy_15_5_frame_fails_ratio_validation(self, validator):
         """Red-first #44 pin: a frame seeded with the PRE-enlargement 60/20/15/5
-        quota must now trip ratio warnings for test AND holdout — the 5pp gap to
-        the new 10/10 design exceeds the tightened tolerance. Guards against the
-        validator silently blessing an old-quota substrate (the previous 0.05
-        tolerance made 15%-vs-10% pass borderline)."""
+        quota must be REJECTED (``is_valid=False``, ratio errors recorded) — the
+        5pp gap to the new 10/10 design exceeds the tightened tolerance. Ratio
+        violations are an ENFORCED failure, not a warning: warnings-only let an
+        old-quota substrate pass every gate (codex finding 1), and the previous
+        0.05 tolerance made 15%-vs-10% pass borderline on top of that."""
         rows = []
         pid = 0
         for split, n in [("train", 600), ("validation", 200), ("test", 150), ("holdout", 50)]:
@@ -157,11 +158,12 @@ class TestSplitValidator:
 
         result = validator.validate(df=df, entity_column="patient_id", split_column="data_split")
 
+        assert result.is_valid is False
         assert result.ratio_errors["test"] == pytest.approx(0.05, abs=0.001)
         assert result.ratio_errors["holdout"] == pytest.approx(0.05, abs=0.001)
-        ratio_warnings = [w for w in result.warnings if "differs from expected" in w]
-        assert any("'test'" in w for w in ratio_warnings)
-        assert any("'holdout'" in w for w in ratio_warnings)
+        ratio_errors = [e for e in result.errors if "differs from expected" in e]
+        assert any("'test'" in e for e in ratio_errors)
+        assert any("'holdout'" in e for e in ratio_errors)
 
     def test_detect_entity_overlap(self, validator, entity_overlap_df):
         """Test detection of entity overlap across splits."""

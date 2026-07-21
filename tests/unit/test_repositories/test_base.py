@@ -617,12 +617,13 @@ class TestAssignSplit:
             split = SplitAwareRepository.assign_split(patient_id)
             splits[split] += 1
 
-        # Expected ratios: train=60%, validation=20%, test=15%, holdout=5%
-        # Allow 2% tolerance
+        # Expected ratios (#44 holdout enlargement): train=60%, validation=20%,
+        # test=10%, holdout=10% — lockstep with the seed quota and the
+        # split_enforcer's single-mode contract. Allow 2% tolerance.
         assert 0.58 <= splits["train"] / 10000 <= 0.62
         assert 0.18 <= splits["validation"] / 10000 <= 0.22
-        assert 0.13 <= splits["test"] / 10000 <= 0.17
-        assert 0.03 <= splits["holdout"] / 10000 <= 0.07
+        assert 0.08 <= splits["test"] / 10000 <= 0.12
+        assert 0.08 <= splits["holdout"] / 10000 <= 0.12
 
     def test_returns_valid_split(self):
         """Test that only valid split names are returned."""
@@ -662,7 +663,7 @@ class TestAssignSplit:
             expected_split = "train"
         elif normalized < 0.80:
             expected_split = "validation"
-        elif normalized < 0.95:
+        elif normalized < 0.90:  # #44: test band shrinks 15%→10%
             expected_split = "test"
         else:
             expected_split = "holdout"

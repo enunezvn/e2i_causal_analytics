@@ -760,8 +760,8 @@ objectTypes:
       - { apiName: configVersion, column: config_version, baseType: string, description: "Default 1.0.0." }
       - { apiName: trainRatio, column: train_ratio, baseType: double, description: "Default 0.60." }
       - { apiName: validationRatio, column: validation_ratio, baseType: double, description: "Default 0.20." }
-      - { apiName: testRatio, column: test_ratio, baseType: double, description: "Default 0.15." }
-      - { apiName: holdoutRatio, column: holdout_ratio, baseType: double, description: "Default 0.05." }
+      - { apiName: testRatio, column: test_ratio, baseType: double, description: "Default 0.10 (#44; was 0.15)." }
+      - { apiName: holdoutRatio, column: holdout_ratio, baseType: double, description: "Default 0.10 (#44; was 0.05)." }
       - { apiName: dataStartDate, column: data_start_date, baseType: date }
       - { apiName: dataEndDate, column: data_end_date, baseType: date }
       - { apiName: trainEndDate, column: train_end_date, baseType: date,

@@ -120,21 +120,20 @@ class TestSyntheticDataPipelineIntegration:
         ]
         journey_dates = sorted(journey_dates)
 
-        # Assign splits chronologically
-        train_cutoff = date(2023, 6, 30)
-        val_cutoff = date(2024, 3, 31)
-        test_cutoff = date(2024, 9, 30)
-
-        data_splits = []
-        for d in journey_dates:
-            if d <= train_cutoff:
-                data_splits.append("train")
-            elif d <= val_cutoff:
-                data_splits.append("validation")
-            elif d <= test_cutoff:
-                data_splits.append("test")
-            else:
-                data_splits.append("holdout")
+        # Assign splits chronologically by ROW quota (60/20/10/10, #44), mirroring
+        # the operative seed scheme (BaseGenerator._assign_splits cuts on cumulative
+        # row share). The previous fixed 2023/2024 date cutoffs yielded ~50/25/17/8
+        # over the uniform 3-year span — a ratio drift the SplitValidator only
+        # tolerated while ratio violations were warnings-only.
+        n_train = int(n_patients * 0.60)
+        n_val = int(n_patients * 0.20)
+        n_test = int(n_patients * 0.10)
+        data_splits = (
+            ["train"] * n_train
+            + ["validation"] * n_val
+            + ["test"] * n_test
+            + ["holdout"] * (n_patients - n_train - n_val - n_test)
+        )
 
         patient_df = pd.DataFrame(
             {
@@ -429,13 +428,13 @@ class TestPipelineValidationPhase6:
                 ],
                 "data_split": ["train"] * int(n_patients * 0.6)
                 + ["validation"] * int(n_patients * 0.2)
-                + ["test"] * int(n_patients * 0.15)
+                + ["test"] * int(n_patients * 0.10)
                 + ["holdout"]
                 * (
                     n_patients
                     - int(n_patients * 0.6)
                     - int(n_patients * 0.2)
-                    - int(n_patients * 0.15)
+                    - int(n_patients * 0.10)
                 ),
                 "disease_severity": disease_severity,
                 "academic_hcp": academic_hcp,
@@ -754,8 +753,8 @@ class TestValidatorIntegration:
                 ],
                 "data_split": ["train"] * 60
                 + ["validation"] * 20
-                + ["test"] * 15
-                + ["holdout"] * 5,
+                + ["test"] * 10
+                + ["holdout"] * 10,
                 "disease_severity": np.random.uniform(0, 10, n),
                 "academic_hcp": np.random.binomial(1, 0.3, n),
                 "engagement_score": np.random.uniform(0, 10, n),

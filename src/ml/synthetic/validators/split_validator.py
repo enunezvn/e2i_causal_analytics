@@ -194,10 +194,18 @@ class SplitValidator:
             result.ratio_errors[split] = error
 
             if error > self.ratio_tolerance:
-                result.warnings.append(
+                # #44 (2026-07-21, codex finding 1): ratio violations are an
+                # ENFORCED failure, not a warning. Warnings-only meant a frame
+                # seeded with the pre-enlargement 60/20/15/5 quota still passed
+                # every is_valid gate. This module has no production consumers
+                # (test-only-by-design, see module docstring), so the semantic
+                # flip breaks no caller; the design intent ("Correct split
+                # ratios" is a validated property) is now actually enforced.
+                result.errors.append(
                     f"Split '{split}' ratio {ratio:.2%} differs from expected "
                     f"{expected:.2%} by {error:.2%}"
                 )
+                result.is_valid = False
 
     def _validate_entity_isolation(
         self,
