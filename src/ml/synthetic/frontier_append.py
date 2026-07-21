@@ -84,6 +84,7 @@ from src.ml.synthetic.generators.coverage_tables_generator import (
     CoverageTablesGenerator,
 )
 from src.ml.synthetic.generators.data_lag import (
+    stamp_claim_arrival,
     stamp_data_lag_hours,
     stamp_sequence_number,
 )
@@ -265,11 +266,15 @@ def generate_week_cohort(week_start: date, hcp_df: pd.DataFrame) -> Dict[str, pd
     ).generate()
 
     # Stamps mirror generate_datasets' seed offsets (+6 data-lag, +8 model
-    # metrics, +9 change tracking). Sequence numbering runs on the merged
-    # treatments frame BEFORE the frontier filter so an rx keeps its sequence
-    # number as later prescriptions cross the frontier in later runs.
+    # metrics, +9 change tracking, +10 claims arrival plane). Sequence
+    # numbering runs on the merged treatments frame BEFORE the frontier filter
+    # so an rx keeps its sequence number as later prescriptions cross the
+    # frontier in later runs; the arrival stamp likewise runs pre-filter (the
+    # filter keys on event_date, so surviving rows keep their drawn lags and
+    # re-runs upsert byte-equal no-ops).
     patients = stamp_data_lag_hours(patients, seed=seed + 6)
     treatments = stamp_sequence_number(treatments)
+    treatments = stamp_claim_arrival(treatments, seed=seed + 10)
     predictions = stamp_model_metrics(predictions, seed=seed + 8)
     triggers = stamp_change_tracking(triggers, seed=seed + 9)
 

@@ -54,6 +54,7 @@ from src.ml.synthetic.generators.causal_paths_generator import CausalPathsGenera
 from src.ml.synthetic.generators.change_tracking import stamp_change_tracking
 from src.ml.synthetic.generators.coverage_tables_generator import CoverageTablesGenerator
 from src.ml.synthetic.generators.data_lag import (
+    stamp_claim_arrival,
     stamp_data_lag_hours,
     stamp_sequence_number,
 )
@@ -356,6 +357,16 @@ def generate_datasets(
     # (sequence_number=1) counts the synthetic new prescriptions.
     if "treatment_events" in datasets and not datasets["treatment_events"].empty:
         datasets["treatment_events"] = stamp_sequence_number(datasets["treatment_events"])
+
+    # Backlog #45 (migration 115): claims ARRIVAL plane — claim_available_date /
+    # adjudication_lag_days on treatment_events (vocab-driven gamma per source
+    # class). Runs AFTER the injected-Rx concat above, so conversion Rx carry
+    # lags too. seed+10 is the next free stamp offset (+6 data lag, +8 model
+    # metrics, +9 change tracking). NO base KPI reads these columns.
+    if "treatment_events" in datasets and not datasets["treatment_events"].empty:
+        datasets["treatment_events"] = stamp_claim_arrival(
+            datasets["treatment_events"], seed=seed + 10
+        )
 
     # WS1-MP-002..008 + CM-004: stamp model-quality metrics onto synthetic
     # ml_predictions so the model-performance KPIs return non-NULL from synthetic.
