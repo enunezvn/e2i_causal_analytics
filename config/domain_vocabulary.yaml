@@ -2452,13 +2452,16 @@ brand_ndc_codes:
 # grounding). Two DISTINCT lag classes exist (vocabulary reconciled
 # 2026-07-21, plan C0):
 #   1. claims_lag_band — the emulated REAL-WORLD claims adjudication/runout
-#      constraint (the validated operational band). It is NOT simulated in
-#      the synthetic substrate: a cosmetic data_lag_hours ingest plane exists
-#      (src/ml/synthetic/generators/data_lag.py) but no KPI filters events by
-#      it, and no adjudication/arrival plane exists. The narrative scopes
-#      its under-count claim to real-world claims (never the displayed
-#      synthetic figures), and it is the ONLY LM-facing claims-adjudication
-#      lag figure.
+#      constraint (the validated operational band). As of backlog #45 the
+#      band is OPERATIONALIZED in the substrate by adjudication_lag_dgp
+#      below: every claims-derived treatment_event carries a drawn
+#      claim_available_date/adjudication_lag_days (the arrival plane,
+#      stamped by src/ml/synthetic/generators/data_lag.stamp_claim_arrival).
+#      Displayed KPI figures remain the MATURE values — no base KPI filters
+#      on the arrival columns (they feed only the provisional/nowcast
+#      overlay), so the narrative's no-discount guarantee stays true. The
+#      band's under-count claim stays scoped to real-world claims, and it
+#      is the ONLY LM-facing claims-adjudication lag figure.
 #   2. edge_case_taxonomy.data_source_lag — the 7-14 day per-source
 #      ingest/feed lags. SERVER-SIDE (label-deferral logic); the narrative
 #      names this class only as an aggregate band. Per-source scalars and
@@ -2469,6 +2472,32 @@ brand_ndc_codes:
 data_constraints:
   claims_lag_band: "1-3 months"
   crm_source: "Veeva CRM"
+  # Backlog #45: the synthetic ADJUDICATION arrival-plane parameters. This
+  # OPERATIONALIZES claims_lag_band in the substrate (the band is no longer
+  # purely descriptive). Per source-class lag in DAYS; the completion-factor
+  # estimator (PR-B) never reads these — it re-estimates the completion curve
+  # empirically from the arrival plane (self-validating). Calibration MEASURED
+  # 2026-07-21 (numpy, n=200k draws, round+clip applied): pharmacy_claims
+  # median 33.0d / mean 36.1d / p95 70d — median inside the 1-3-month
+  # (30-90d) band; medical_claims median 55.0d / mean 60.0d / p95 116d —
+  # slower, per real-world medical-claims runout.
+  adjudication_lag_dgp:
+    distribution: gamma            # right-skewed, non-negative, long runout tail
+    source_classes:
+      pharmacy_claims:             # event_type = prescription
+        shape: 4.0
+        scale: 9.0                 # measured median 33d (in the 1-3mo band)
+        clip_days: [7, 120]
+        applies_to_event_types: [prescription]
+      medical_claims:              # labs/procedures/consults adjudicate slower
+        shape: 4.0
+        scale: 15.0                # measured median 55d
+        clip_days: [14, 180]
+        applies_to_event_types: [lab_test, procedure, consultation]
+    # Event types outside every source class (triggers plane / Veeva CRM has
+    # lifecycle timestamps already): adjudication_lag_days=0 and
+    # claim_available_date NULL — they are not on the claims arrival plane.
+    crm_zero_lag: true
   brands:
     Remibrutinib:
       disease: "chronic spontaneous urticaria (CSU)"

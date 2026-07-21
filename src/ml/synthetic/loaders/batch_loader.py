@@ -229,6 +229,15 @@ TABLE_COLUMNS = {
         # index. NRx counts sequence_number=1 prescriptions; stamped by
         # sequence_number.stamp_sequence_number in the load script.
         "sequence_number",
+        # Backlog #45 (migration 115): synthetic claims ARRIVAL plane, stamped by
+        # data_lag.stamp_claim_arrival (seed+10) in the load script AND in weekly
+        # frontier-append cohorts. NO base KPI reads them (nowcast overlay only).
+        # NOTE: the DB's source_timestamp/data_source columns are deliberately NOT
+        # whitelisted — they are LEGACY-generator (data_generator.py) columns, not
+        # in the reseed path, measured live-NULL on all synthetic rows (codex-folded
+        # design C2 finding); the arrival plane uses its own explicit columns.
+        "claim_available_date",
+        "adjudication_lag_days",
         "data_split",
         "is_synthetic",
     ],
@@ -652,6 +661,12 @@ OPTIONAL_COLUMNS = frozenset(
     {
         "data_lag_hours",  # patient_journeys (Shard 09 WS1-DQ-007 enrichment stamp)
         "sequence_number",  # treatment_events (NRx ordering enrichment stamp)
+        # treatment_events claims ARRIVAL plane (backlog #45, migration 115):
+        # stamped by data_lag.stamp_claim_arrival; nullable — the frozen base
+        # substrate and pre-#45 append cohorts predate the columns, so their
+        # absence must never be a critical validation error.
+        "claim_available_date",
+        "adjudication_lag_days",
         # treatment_events PNH lab columns (#1116 BR-003): populated only on
         # pnh_flow_cytometry rows; other treatment_events producers (e.g. the
         # injected conversion prescriptions) legitimately omit them.
