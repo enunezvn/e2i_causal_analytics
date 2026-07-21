@@ -9,9 +9,17 @@ data_plane / measurement_caveat from the KPI registry) for the KPIs actually
 present in the grounding.
 
 Contracts under test:
-* lag SSOT precedence — the per-brand claims-lag BAND is the only LM-facing
-  lag figure; the vocabulary's per-source scalar lags (12d/14d/...) must NOT
-  render (two contradictory lag SSOTs invite LM confusion);
+* lag SSOT precedence (reconciled 2026-07-21, plan C0) — the per-brand
+  claims-lag BAND is the only LM-facing claims-ADJUDICATION lag figure,
+  stated once; the narrative additionally names the DISTINCT 7-14 day
+  per-source ingest/feed lag class (as an aggregate class band only); the
+  vocabulary's per-source scalar lags (12d/14d/...) and vendor names must
+  still NOT render (two contradictory lag SSOTs invite LM confusion);
+* lag-class reconciliation (C0, codex-REVISE scoped wording) — the band's
+  under-count claim is scoped to REAL-WORLD claims, and the narrative states
+  that adjudication lag is not simulated in this synthetic substrate, so
+  recent windows do not under-count for that reason (displayed figures must
+  never be discounted on the band's account);
 * prevalence direction guard — verbatim text: prevalence explains small
   samples and volatility, NOT low engagement/testing/coverage rates;
 * claims-plane KPIs present get the lag attachment; CRM/platform-plane KPIs
@@ -73,7 +81,11 @@ _METAS = [
 def test_per_brand_profile_renders_with_single_lag_claim(brand):
     ctx = build_constraint_context(brand, _METAS)
     assert ctx, f"{brand} must have a constraint profile"
-    # the ONLY LM-facing lag figure is the brand band; one claim, no scalars
+    # the brand band is the ONLY claims-adjudication lag figure: one claim.
+    # Per-source scalars/vendors stay forbidden — itemized below. (The
+    # aggregate "7-14 day" ingest/feed CLASS band is a distinct, permitted
+    # figure asserted in test_reconciled_wording_distinguishes_lag_classes;
+    # it contains none of the itemized scalar tokens.)
     assert ctx.lower().count("1-3 month") == 1
     for scalar in ("12d", "14d", "7d", "10d", "IQVIA_APLD", "HealthVerity", "Komodo"):
         assert scalar not in ctx, f"per-source scalar lag {scalar!r} leaked into LM context"
@@ -109,6 +121,31 @@ def test_caveats_render_for_tagged_kpis_only():
     roc_lines = [line for line in ctx.splitlines() if "ROC-AUC" in line]
     for line in roc_lines:
         assert "caveat" not in line.lower()
+
+
+@pytest.mark.parametrize("brand", _BRANDS + ("All",))
+def test_reconciled_wording_distinguishes_lag_classes(brand):
+    """C0 lag-vocabulary reconciliation (plan 2026-07-21; codex-REVISE scoped
+    wording): the narrative must (a) scope the 1-3-month band's under-count
+    claim to REAL-WORLD claims (never a factual statement about the displayed
+    synthetic figures), (b) name the DISTINCT 7-14 day per-source ingest/feed
+    lag class (aggregate band only — the per-source scalar and vendor
+    prohibitions itemized in
+    test_per_brand_profile_renders_with_single_lag_claim are unchanged),
+    (c) state that adjudication lag is not simulated here, SO recent windows
+    do not under-count for that reason (the explicit no-discount scoping),
+    and (d) keep the attribute-don't-recommend instruction intact."""
+    ctx = build_constraint_context(brand, _METAS)
+    assert ctx
+    assert "adjudication/runout" in ctx
+    assert "In real-world claims" in ctx
+    assert "7-14 day" in ctx
+    assert "ingest/feed" in ctx
+    assert (
+        "adjudication lag is not simulated, so recent windows do not under-count for that reason"
+        in ctx
+    )
+    assert "attribute, do not recommend" in ctx
 
 
 def test_all_brand_scope_renders_portfolio_profiles():

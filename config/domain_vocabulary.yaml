@@ -2449,12 +2449,22 @@ brand_ndc_codes:
 # =============================================================================
 # Per-brand measurement-constraint profiles consumed by
 # src/insights/data_constraint_context.py (the home-KPI narrative's constraint
-# grounding). claims_lag_band is the ONLY LM-facing lag figure — the validated
-# operational band for claims adjudication; the per-source scalar lags in
-# edge_case_taxonomy.data_source_lag stay SERVER-SIDE (deferral logic) until
-# TRIG-DECOMP reconciles the two with per-brand completeness curves. Vendor
-# names are deliberately NOT rendered to the LM (no invented brand-vendor
-# pairings; coverage is described generically).
+# grounding). Two DISTINCT lag classes exist (vocabulary reconciled
+# 2026-07-21, plan C0):
+#   1. claims_lag_band — the emulated REAL-WORLD claims adjudication/runout
+#      constraint (the validated operational band). It is NOT simulated in
+#      the synthetic substrate: a cosmetic data_lag_hours ingest plane exists
+#      (src/ml/synthetic/generators/data_lag.py) but no KPI filters events by
+#      it, and no adjudication/arrival plane exists. The narrative scopes
+#      its under-count claim to real-world claims (never the displayed
+#      synthetic figures), and it is the ONLY LM-facing claims-adjudication
+#      lag figure.
+#   2. edge_case_taxonomy.data_source_lag — the 7-14 day per-source
+#      ingest/feed lags. SERVER-SIDE (label-deferral logic); the narrative
+#      names this class only as an aggregate band. Per-source scalars and
+#      vendor names are deliberately NOT rendered to the LM (no invented
+#      brand-vendor pairings; coverage is described generically). Per-brand
+#      completeness-curve reconciliation remains a TRIG-DECOMP stake.
 
 data_constraints:
   claims_lag_band: "1-3 months"

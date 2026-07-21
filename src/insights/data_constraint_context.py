@@ -11,10 +11,16 @@ re-deciding actionability per generation.
 
 Contracts (locked by tests/insights/test_data_constraint_context.py):
 
-* **Lag SSOT precedence** — the per-brand ``claims_lag_band`` is the ONLY
-  LM-facing lag figure, stated exactly once; the vocabulary's per-source
-  scalar lags (edge_case_taxonomy.data_source_lag) stay server-side. Two
-  contradictory lag figures in one prompt invite LM confusion.
+* **Lag SSOT precedence (reconciled 2026-07-21, plan C0)** — the per-brand
+  ``claims_lag_band`` is the ONLY LM-facing claims-ADJUDICATION lag figure,
+  stated exactly once, with the under-count claim explicitly SCOPED to
+  real-world claims: this synthetic substrate does not simulate adjudication
+  lag, so recent windows do not under-count for that reason (the narrative
+  must never invite a discount of displayed synthetic figures). The DISTINCT
+  7-14 day per-source ingest/feed lag class is named once as an aggregate
+  band only; the vocabulary's per-source scalar lags and vendor names
+  (edge_case_taxonomy.data_source_lag) stay server-side. Two contradictory
+  lag figures for the SAME class in one prompt invite LM confusion.
 * **Prevalence direction guard** — verbatim: prevalence explains small samples
   and volatility, NOT low engagement/testing/coverage rates.
 * **Loud degradation** — ANY failure returns ``""``: availability is preserved
@@ -114,10 +120,15 @@ def build_constraint_context(brand: str, metas: list[Any]) -> str:
                 f"Measurement constraints for {brand} ({profile.get('disease')}; {prevalence}):",
             ]
         body = [
-            f"- Claims-derived figures reflect a {lag_band} adjudication lag; the most "
-            "recent windows under-count true outcomes (trend is more reliable than "
-            "level there). This lag and vendor claims coverage are DATA-STRATEGY "
-            "constraints — the reader cannot fix them; attribute, do not recommend.",
+            f"- In real-world claims, a {lag_band} adjudication/runout lag means "
+            "the most recent windows under-count true outcomes (trend is more "
+            "reliable than level there); this band is distinct from the shorter "
+            "7-14 day per-source ingest/feed lags, which are handled server-side "
+            "and are not a second lag on these figures. In this synthetic "
+            "substrate, adjudication lag is not simulated, so recent windows do "
+            "not under-count for that reason. This lag and vendor claims coverage "
+            "are DATA-STRATEGY constraints — the reader cannot fix them; "
+            "attribute, do not recommend.",
             f"- CRM-derived figures ({crm}) have no source lag and are current as shown.",
             f"- {_PREVALENCE_GUARD}",
         ]
