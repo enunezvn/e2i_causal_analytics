@@ -85,7 +85,7 @@ import statistics
 from bisect import bisect_left
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
 from src.kpi.models import KPIStatus
 
@@ -649,27 +649,30 @@ async def _trigger_monthly_ratio(
     the data, so counting it would read as a false decline in the final month.
     Calendar-completeness (``_complete_months``) still uses ALL dates — a month
     is complete or not regardless of which of its triggers have matured.
+
+    Rows with an unparseable ``trigger_timestamp`` are dropped at bucketing
+    (they have no month), so every bucketed row carries a valid parsed date.
     """
-    by_month: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    by_month: Dict[date, List[Tuple[date, Dict[str, Any]]]] = defaultdict(list)
     dates: List[date] = []
     for r in await _fetch_triggers(client, cache):
         d = _to_date(r.get("trigger_timestamp"))
         if d is None:
             continue
         dates.append(d)
-        by_month[_month_start(d)].append(r)
+        by_month[_month_start(d)].append((d, r))
     cutoff: Optional[date] = None
     if mature_days > 0 and dates:
         cutoff = max(dates) - timedelta(days=mature_days)
     points: List[Dict[str, Any]] = []
     for m in _complete_months(dates):
-        rows = by_month.get(m, [])
+        pairs = by_month.get(m, [])
         if cutoff is not None:
-            rows = [r for r in rows if (_to_date(r.get("trigger_timestamp")) or cutoff) <= cutoff]
-        den = sum(1 for r in rows if denominator(r))
+            pairs = [(d, r) for d, r in pairs if d <= cutoff]
+        den = sum(1 for _, r in pairs if denominator(r))
         if den == 0:
             continue
-        num = sum(1 for r in rows if numerator(r))
+        num = sum(1 for _, r in pairs if numerator(r))
         points.append(_point(kpi_meta, "", m, num / den))
     return points
 

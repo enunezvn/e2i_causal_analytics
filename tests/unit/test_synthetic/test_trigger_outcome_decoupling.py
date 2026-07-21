@@ -188,7 +188,21 @@ _STREAM_FIELDS = [
     "lead_time_days",
     "outcome_tracked",
 ]
-_STREAM_DIGEST = "5b7b668b03f6e9750a7b01aabda28a43a35f58cb2b699dfe288bae796b7b0d45"
+_STREAM_DIGEST = "6c2f05b5711f3685c35ba1f1663796243a2d13cd2871aeb140e8409ea9d0ad80"
+
+
+def _stable_token(v) -> str:
+    """Pandas-version-proof scalar serialization: ``to_csv`` default float/
+    datetime formatting is an implementation detail that could re-format on a
+    dependency bump and fire the pin without any stream shift. ``float.hex``
+    is bit-exact, bools collapse to 0/1, timestamps to isoformat."""
+    if isinstance(v, (bool, np.bool_)):
+        return "1" if v else "0"
+    if isinstance(v, float):  # np.float64 subclasses float
+        return v.hex()
+    if isinstance(v, pd.Timestamp):
+        return v.isoformat()
+    return str(v)
 
 
 @pytest.mark.unit
@@ -196,7 +210,11 @@ def test_non_outcome_trigger_fields_stream_is_pinned():
     _, df, _ = _generate()
     missing = [f for f in _STREAM_FIELDS if f not in df.columns]
     assert not missing, f"stream-pinned fields missing from the frame: {missing}"
-    digest = hashlib.sha256(df[_STREAM_FIELDS].to_csv(index=False).encode()).hexdigest()
+    payload = "\n".join(
+        "\x1f".join(_stable_token(v) for v in row)
+        for row in df[_STREAM_FIELDS].itertuples(index=False, name=None)
+    )
+    digest = hashlib.sha256(payload.encode()).hexdigest()
     assert digest == _STREAM_DIGEST, (
         "TriggerGenerator per-record RNG stream shifted (non-acceptance/outcome "
         "fields changed for a fixed seed). If the change is INTENTIONAL, re-pin "
