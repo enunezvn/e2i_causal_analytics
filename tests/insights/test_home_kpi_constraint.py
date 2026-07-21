@@ -110,6 +110,39 @@ def test_thousands_separator_forms_are_equivalent():
     assert out["is_fallback"] is True
 
 
+def test_sign_stripped_negative_is_rejected():
+    """Codex H1: a negative grounded value quoted WITHOUT its sign flips a
+    decline into a gain — the wrong-direction narrative this surface exists to
+    prevent. '-8.0' and '8.0' are distinct tokens."""
+    g = _g()
+    g["kpi_table"] = "Action Rate Uplift [ws2_triggers]: -8.0% (warning)"
+    stripped = _pred("Action Rate Uplift shows an 8.0% lift.")
+    with patch.object(home_kpi, "run_signature", return_value=stripped) as rs:
+        out = home_kpi.generate_insight(g)
+    assert out["is_fallback"] is True
+    assert rs.call_count == 2
+
+
+def test_verbatim_negative_and_unicode_minus_pass():
+    g = _g()
+    g["kpi_table"] = "Action Rate Uplift [ws2_triggers]: -8.0% (warning)"
+    for quote in ("-8.0%", "−8.0%"):  # ASCII hyphen and U+2212 minus
+        ok = _pred(f"Action Rate Uplift sits at {quote} — a decline needing attention.")
+        with patch.object(home_kpi, "run_signature", return_value=ok):
+            out = home_kpi.generate_insight(g)
+        assert out["is_fallback"] is False, quote
+
+
+def test_range_digits_stay_individually_quotable():
+    """Deliberate stance (codex M2 declined): '1-3 months' licenses '1' and
+    '3' individually — honest phrasings like 'up to 3 months' must not be
+    rejected; range fidelity is the prompt's job, not the subset guard's."""
+    ok = _pred("Claims lag can reach 3 months for these outcome metrics.")
+    with patch.object(home_kpi, "run_signature", return_value=ok):
+        out = home_kpi.generate_insight(_g())
+    assert out["is_fallback"] is False
+
+
 def test_build_grounding_renders_lower_is_better_hint():
     meta = SimpleNamespace(
         id="WS1-DQ-006",

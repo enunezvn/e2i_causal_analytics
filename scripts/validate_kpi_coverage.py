@@ -128,7 +128,7 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
         columns=["patient_journeys.data_quality_score"]
     ),
     KPIDefinition(
-        id="WS1-DQ-006", name="Geographic Consistency", workstream="WS1",
+        id="WS1-DQ-006", name="Geographic Consistency Gap", workstream="WS1",
         category="Data Quality", calculation_type=CalculationType.DERIVED,
         tables=["patient_journeys"],
         columns=["patient_journeys.geographic_region", "patient_journeys.state"]

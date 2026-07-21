@@ -186,14 +186,43 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
 # Thousands separators are normalized first ("12,345" ≡ "12345"): _fmt_value
 # renders large volumes with commas and the LM may cite either form — both
 # must tokenize identically or a verbatim quote gets falsely rejected.
-_DIGIT_RE = re.compile(r"\d+(?:\.\d+)?")
+#
+# SIGN-AWARE (codex review): a negative grounded value ("-8.0%") tokenizes
+# WITH its sign, so an LM stripping the minus ("an 8.0% uplift") is rejected —
+# reporting a decline as a gain is precisely the wrong-direction narrative
+# this surface exists to prevent. A minus counts as part of the number only
+# when it is not preceded by a digit/letter/dot, keeping ranges ("1-3
+# months" -> {1, 3}) and hyphenated identifiers ("adherent_180d" -> {180})
+# tokenizing exactly as before; unicode minus/en-dash are normalized first.
+#
+# Known limitations (deliberate, weighed against false-rejection cost):
+# * Small shared integers ("2 of 44" licenses "2") cannot catch small-number
+#   invention — the guard is a SUBSET check, not a semantics checker; range
+#   fidelity ("1-3 months" vs "3-month lag") is the prompt's job, and making
+#   ranges atomic would reject honest phrasings like "up to 3 months".
+# * Re-rounded forms ("~10%" for 10.2%) are rejected BY DESIGN — the retry +
+#   factual fallback is the recovery path (serving degraded-but-true beats
+#   serving a figure the grounding cannot vouch for).
+# * Spelled-out numbers ("ten percent") carry no digits and bypass the guard;
+#   the signature instructs citing the given values verbatim.
+_DIGIT_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d)")
+_MINUS_VARIANTS_RE = re.compile(r"[−–]")  # − (minus sign), – (en dash)
 
 _NO_CONTEXT = "No data-constraint context is available for this scope."
 
 
 def _digit_sequences(text: str) -> set[str]:
-    return set(_DIGIT_RE.findall(_THOUSANDS_RE.sub("", text)))
+    text = _THOUSANDS_RE.sub("", _MINUS_VARIANTS_RE.sub("-", text))
+    out: set[str] = set()
+    for m in _DIGIT_RE.finditer(text):
+        tok = m.group()
+        if tok.startswith("-"):
+            prev = text[m.start() - 1] if m.start() > 0 else " "
+            if prev.isalnum() or prev == ".":
+                tok = tok[1:]  # "1-3" / "x-3": hyphen, not a sign
+        out.add(tok)
+    return out
 
 
 def _digit_violation(outputs: list[str], corpus: str) -> str | None:
