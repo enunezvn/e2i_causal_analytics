@@ -35,6 +35,7 @@ import type {
   KPIHistoryCoverageResponse,
   KPIHistoryResponse,
   KPIListParams,
+  KPINowcastHistoryResponse,
   KPISegmentedHistoryResponse,
   KPIListResponse,
   KPIMetadata,
@@ -192,6 +193,24 @@ export async function getKPIHistorySegmented(
   return get<KPISegmentedHistoryResponse>(
     `${KPI_BASE}/${encodeURIComponent(kpiId)}/history/segmented`,
     { axis, brand, value }
+  );
+}
+
+/**
+ * Get the claims-lag provisional/nowcast monthly series for one Rx-volume KPI.
+ *
+ * Computed live from the claims-arrival lag triangle (migration 116) — NOT
+ * the materialized kpi_history table, whose figures stay the mature values.
+ * Only TRx/NRx/NBRx (WS3-BI-005/006/007) are served; other KPIs 422 — gate
+ * calls via RX_VOLUME_KPI_IDS (hooks/api/use-kpi).
+ */
+export async function getKPIHistoryNowcast(
+  kpiId: string,
+  brand?: string
+): Promise<KPINowcastHistoryResponse> {
+  return get<KPINowcastHistoryResponse>(
+    `${KPI_BASE}/${encodeURIComponent(kpiId)}/history/nowcast`,
+    { brand }
   );
 }
 
