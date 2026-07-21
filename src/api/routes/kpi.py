@@ -752,17 +752,24 @@ async def get_kpi_history_nowcast(
 ) -> KPINowcastHistoryResponse:
     """Return the provisional/nowcast monthly series for an Rx-volume KPI.
 
-    422 (not 404 / empty-series) for off-family KPIs — the sibling
+    Unknown KPI ids are 404 FIRST — the same registry lookup /metadata uses
+    (``calculator.get_kpi_metadata`` delegates to ``registry.get``). Then 422
+    (not empty-series) for known-but-off-family KPIs — the sibling
     ``/history/segmented`` convention for "this KPI can never serve this
     view": the caller relays the error honestly instead of drawing an empty
-    chart, and one route family keeps one unsupported-KPI contract. (404 is
-    reserved for unknown KPI ids, per /metadata.)
+    chart, and one route family keeps one unsupported-KPI contract.
     """
     from src.kpi.nowcast.completion_factor import (
         NOWCAST_KPI_QUERY_FAMILIES,
         estimate_completion_from_rows,
         fetch_nowcast_rows,
     )
+
+    if get_registry().get(kpi_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"KPI not found: {kpi_id}",
+        )
 
     if kpi_id not in NOWCAST_KPI_QUERY_FAMILIES:
         raise HTTPException(

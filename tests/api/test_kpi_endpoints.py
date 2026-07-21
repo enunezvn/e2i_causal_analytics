@@ -877,9 +877,20 @@ class TestKPIHistoryNowcastEndpoint:
         ]
 
     def test_off_family_kpi_is_422_with_family_detail(self):
+        # WS3-BI-010 EXISTS in the registry (it's just not Rx-volume) -> 422.
         resp = client.get("/api/kpis/WS3-BI-010/history/nowcast")
         assert resp.status_code == 422
         assert "WS3-BI-005" in resp.text
+
+    def test_unknown_kpi_id_is_404_not_422(self):
+        # Nonexistent id -> 404 via the same registry lookup /metadata uses
+        # (get_registry().get), BEFORE the off-family 422. The app's global
+        # handler rewraps 404 bodies in the EndpointNotFoundError envelope
+        # (src/api/main.py), so — like the sibling /metadata 404 tests —
+        # assert on the status + envelope category, not the detail text.
+        resp = client.get("/api/kpis/WS3-BI-999/history/nowcast")
+        assert resp.status_code == 404
+        assert "not_found" in resp.text
 
     def test_on_family_returns_series_shape_and_round_trips(self):
         from src.api.schemas.kpi import KPINowcastHistoryResponse
