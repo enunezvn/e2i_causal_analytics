@@ -57,18 +57,53 @@ def select_goldstd_models(registry_rows: Any, brand: Optional[str]) -> list[dict
 
 
 def average_holdout(models: list[dict], metric_rows: Any) -> Optional[dict[str, Any]]:
-    """Average holdout ``metric_value`` per metric over the given models.
+    """Aggregate holdout ``metric_value`` per metric over the given models.
 
-    Returns ``{n_models, accuracy, precision, recall, f1, auc_roc}`` where each
-    metric is the mean over models that have a (non-null) ``source='holdout'``
-    row, or ``None`` if none do (never fabricated). Returns ``None`` when there
-    are no models.
+    Every metric EXCEPT ``calibration_slope`` is the signed mean over models
+    that have a (non-null) ``source='holdout'`` row, or ``None`` if none do
+    (never fabricated). Returns ``None`` when there are no models.
+
+    ``calibration_slope`` aggregates as ``1 + mean(|slope_i - 1|)`` — a
+    deviation-from-ideal fold mapped back into slope-band units so the
+    WS1-MP-006 band in ``config/kpi_definitions.yaml`` (ideal 1.0, tolerances
+    0.05/0.15) applies UNCHANGED. Two design flaws of the previous signed mean
+    (codex-confirmed, 2026-07-21 frontend review) motivate this:
+
+    * **Signed cancellation**: slope is a both-directions-bad metric (<1
+      over-confident, >1 under-confident). Slopes 0.70 and 1.30 signed-mean to
+      1.00 and read GOOD; under the fold they read 1.30 = CRITICAL. Opposite
+      miscalibrations can no longer cancel into a green headline.
+    * **Mirror-pair correlation**: the persistence and discontinuation models
+      score the SAME patients with mirrored labels
+      (``persistent_180d == 1 - discontinued_180d``), so 2 of a brand's 4
+      slots are one correlated holdout draw, not independent evidence. The
+      fold cannot remove that correlation — the per-model
+      ``calibration_slope_detail`` below exposes each slope (with holdout n
+      and bootstrap CI) so the DIRECTION and pairing of deviations stay
+      visible instead of vanishing into a single signed number.
+
+    When any ``calibration_slope`` rows exist the summary also carries
+    ``calibration_slope_detail``::
+
+        {
+          "aggregation": "one_plus_mean_abs_deviation",
+          "models": [  # sorted by model_name for a stable payload
+            {"model_name": str | None, "slope": float,
+             "n": int | None, "ci_lower": float | None, "ci_upper": float | None},
+            ...
+          ],
+        }
+
+    ``n``/``ci_lower``/``ci_upper`` come from the row's ``sample_size`` /
+    ``ci_lower`` / ``ci_upper`` columns and degrade to ``None`` on pre-B2 rows
+    where the eval has not yet written them (never fabricated).
     """
     model_ids = {m["id"] for m in models}
     if not model_ids:
         return None
-    sums: dict[str, float] = {}
-    counts: dict[str, int] = {}
+    names = {m["id"]: m.get("model_name") for m in models}
+    values: dict[str, list[float]] = {}
+    slope_detail: list[dict[str, Any]] = []
     for row in metric_rows or []:
         if row.get("model_id") not in model_ids:
             continue
@@ -78,11 +113,35 @@ def average_holdout(models: list[dict], metric_rows: Any) -> Optional[dict[str, 
         val = row.get("metric_value")
         if name not in GOLDSTD_METRICS or val is None:
             continue
-        sums[name] = sums.get(name, 0.0) + float(val)
-        counts[name] = counts.get(name, 0) + 1
+        values.setdefault(name, []).append(float(val))
+        if name == "calibration_slope":
+            ci_lo = row.get("ci_lower")
+            ci_hi = row.get("ci_upper")
+            n = row.get("sample_size")
+            slope_detail.append(
+                {
+                    "model_name": names.get(row.get("model_id")),
+                    "slope": float(val),
+                    "n": int(n) if n is not None else None,
+                    "ci_lower": float(ci_lo) if ci_lo is not None else None,
+                    "ci_upper": float(ci_hi) if ci_hi is not None else None,
+                }
+            )
     summary: dict[str, Any] = {"n_models": len(model_ids)}
     for m in GOLDSTD_METRICS:
-        summary[m] = (sums[m] / counts[m]) if counts.get(m) else None
+        vals = values.get(m)
+        if not vals:
+            summary[m] = None
+        elif m == "calibration_slope":
+            summary[m] = 1.0 + sum(abs(v - 1.0) for v in vals) / len(vals)
+        else:
+            summary[m] = sum(vals) / len(vals)
+    if slope_detail:
+        slope_detail.sort(key=lambda d: d.get("model_name") or "")
+        summary["calibration_slope_detail"] = {
+            "aggregation": "one_plus_mean_abs_deviation",
+            "models": slope_detail,
+        }
     return summary
 
 
@@ -96,9 +155,12 @@ def _registry_query(client: Any) -> Any:
 
 
 def _metrics_query(client: Any, model_ids: list[str]) -> Any:
+    # sample_size + ci_lower/ci_upper feed the calibration_slope per-model
+    # detail (holdout n + bootstrap CI); NULL on rows the eval has not yet
+    # rewritten — average_holdout degrades those to None.
     return (
         client.table("ml_performance_metrics")
-        .select("model_id,metric_name,metric_value,source")
+        .select("model_id,metric_name,metric_value,source,sample_size,ci_lower,ci_upper")
         .in_("model_id", list(model_ids))
         .eq("source", "holdout")
     )
