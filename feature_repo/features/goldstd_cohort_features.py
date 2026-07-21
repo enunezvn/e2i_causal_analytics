@@ -66,7 +66,8 @@ goldstd_cohort_source = PostgreSQLSource(
             copay_support::BIGINT AS copay_support,
             psp_enrolled::BIGINT AS psp_enrolled,
             rep_detailing_high::BIGINT AS rep_detailing_high,
-            sample_dropped::BIGINT AS sample_dropped
+            sample_dropped::BIGINT AS sample_dropped,
+            trigger_accepted::BIGINT AS trigger_accepted
         FROM patient_journeys
         WHERE event_date >= NOW() - INTERVAL '2000 days'
     """,
@@ -178,6 +179,16 @@ goldstd_cohort_features_fv = FeatureView(
             dtype=Int64,
             description="Sample-dropped commercial arm, 0/1 (initiation only; "
             "NULL until the next synthetic reseed).",
+        ),
+        # --- COMM-ARMS Phase 4: trigger_accepted commercial arm ---
+        # NBA trigger acceptance at the patient level; enters ONLY the initiation
+        # latent (initiation_outcomes), like rep/sample above. Real pre-index
+        # outcome signal, not leakage. NULL until the next synthetic reseed.
+        Field(
+            name="trigger_accepted",
+            dtype=Int64,
+            description="NBA trigger-acceptance commercial arm, 0/1 (initiation "
+            "only; NULL until the next synthetic reseed).",
         ),
     ],
     source=goldstd_cohort_source,

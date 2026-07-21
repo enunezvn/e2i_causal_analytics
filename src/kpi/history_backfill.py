@@ -85,7 +85,7 @@ import statistics
 from bisect import bisect_left
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
 from src.kpi.models import KPIStatus
 
@@ -636,27 +636,43 @@ async def _trigger_monthly_ratio(
     cache: Optional[Dict[str, Any]],
     numerator: Callable[[Dict[str, Any]], bool],
     denominator: Callable[[Dict[str, Any]], bool],
+    mature_days: int = 0,
 ) -> List[Dict[str, Any]]:
     """Shared monthly num/den recast over triggers.trigger_timestamp.
 
     Months with an empty denominator are skipped (mirrors NULLIF -> NULL: no
     fabricated 0.0 on an empty cohort).
+
+    ``mature_days`` > 0 excludes triggers whose forward outcome window has not
+    fully elapsed at the data frontier (max trigger date): a trigger fired 5
+    days before the frontier has only 5 days of its 30d conversion window in
+    the data, so counting it would read as a false decline in the final month.
+    Calendar-completeness (``_complete_months``) still uses ALL dates — a month
+    is complete or not regardless of which of its triggers have matured.
+
+    Rows with an unparseable ``trigger_timestamp`` are dropped at bucketing
+    (they have no month), so every bucketed row carries a valid parsed date.
     """
-    by_month: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    by_month: Dict[date, List[Tuple[date, Dict[str, Any]]]] = defaultdict(list)
     dates: List[date] = []
     for r in await _fetch_triggers(client, cache):
         d = _to_date(r.get("trigger_timestamp"))
         if d is None:
             continue
         dates.append(d)
-        by_month[_month_start(d)].append(r)
+        by_month[_month_start(d)].append((d, r))
+    cutoff: Optional[date] = None
+    if mature_days > 0 and dates:
+        cutoff = max(dates) - timedelta(days=mature_days)
     points: List[Dict[str, Any]] = []
     for m in _complete_months(dates):
-        rows = by_month.get(m, [])
-        den = sum(1 for r in rows if denominator(r))
+        pairs = by_month.get(m, [])
+        if cutoff is not None:
+            pairs = [(d, r) for d, r in pairs if d <= cutoff]
+        den = sum(1 for _, r in pairs if denominator(r))
         if den == 0:
             continue
-        num = sum(1 for r in rows if numerator(r))
+        num = sum(1 for _, r in pairs if numerator(r))
         points.append(_point(kpi_meta, "", m, num / den))
     return points
 
@@ -664,16 +680,28 @@ async def _trigger_monthly_ratio(
 async def _backfill_tr001_precision(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """WS2-TR-001: (outcome_tracked AND outcome_value > 0) / outcome_tracked.
+    """WS2-TR-001 definition v2 (migration 113): accepted-and-converted /
+    accepted-and-tracked — the declared "trigger accepted AND downstream
+    outcome achieved" truth shape.
 
-    Mirrors ``trigger_performance_precision``.
+    Mirrors ``trigger_performance_precision`` v2 EXACTLY (lockstep: a backfill
+    computing the old tracked-only ratio would write historical points on a
+    different definition than the live reading), including the 30d maturation
+    guard — the live SQL scores only triggers whose conversion window has fully
+    elapsed (window (frontier-60d, frontier-30d]); without the same guard here
+    the final backfilled month would read a false decline from late-month
+    triggers whose windows extend past the data frontier.
     """
     return await _trigger_monthly_ratio(
         client,
         kpi_meta,
         cache,
-        numerator=lambda r: bool(r.get("outcome_tracked")) and (r.get("outcome_value") or 0) > 0,
-        denominator=lambda r: bool(r.get("outcome_tracked")),
+        numerator=lambda r: r.get("acceptance_status") == "accepted"
+        and bool(r.get("outcome_tracked"))
+        and float(r.get("outcome_value") or 0) > 0,
+        denominator=lambda r: r.get("acceptance_status") == "accepted"
+        and bool(r.get("outcome_tracked")),
+        mature_days=30,
     )
 
 

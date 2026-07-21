@@ -170,6 +170,19 @@ def brand_scoped_query_id(base_query_id: str) -> str:
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
 
 
+def brand_region_query_id(base_query_id: str) -> str:
+    """Brand+region-scoped query id (migration 113 — WS2 trigger variants).
+
+    ``{base}_brand_region`` binds brand as ``$1`` and region as ``$2``. Same
+    additive-sibling + self-suffixing rules as :func:`region_query_id` /
+    :func:`brand_scoped_query_id` (absent from
+    :data:`SYNTHETIC_TWINNED_QUERY_IDS`; ``resolve_kpi_query_id`` no-ops on the
+    already-suffixed id).
+    """
+    qid = f"{base_query_id}_brand_region"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
 def windowed_query_id(base_query_id: str, *, region: bool) -> str:
     """Windowed variant id for a base KPI query (Phase 1, additive).
 

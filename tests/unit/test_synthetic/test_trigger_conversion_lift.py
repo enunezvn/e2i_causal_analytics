@@ -4,6 +4,7 @@ is non-degenerate. The frame/registry COMPUTES the realized rate; the generator 
 seeds the data."""
 
 import pandas as pd
+import pytest
 
 from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.trigger_generator import (
@@ -11,6 +12,11 @@ from src.ml.synthetic.generators.trigger_generator import (
     TriggerGenerator,
 )
 from src.services.kpi_resolution import _compute_conversion_outcome
+
+# Faithful FULL_SIZES-scale lift measurement (~8s locally, 2-3x on the loaded
+# 2-core CI runner) sits too close to the global 30s cap, which kills the xdist
+# worker on breach (timeout_method=thread) — same headroom as the calibration gates.
+pytestmark = pytest.mark.timeout(120)
 
 
 def _patient_frame(n=400):

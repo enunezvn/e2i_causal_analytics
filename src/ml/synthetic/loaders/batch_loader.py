@@ -185,10 +185,12 @@ TABLE_COLUMNS = {
         "psp_enrolled",
         "rep_detailing_high",
         "sample_dropped",
+        "trigger_accepted",
         "copay_support_propensity",
         "psp_enrolled_propensity",
         "rep_detailing_high_propensity",
         "sample_dropped_propensity",
+        "trigger_accepted_propensity",
         "insurance_access_score",
         # Shard 09 Task 5b WS1-DQ-007: recent ingest lag (column exists on the DB,
         # integer; stamped on the synthetic frame by data_lag.stamp_data_lag_hours).

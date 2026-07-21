@@ -141,6 +141,35 @@ _SAMPLE_CATE = {
     "low_severity": 0.04,
 }
 
+# COMM-ARMS Phase 4 (2026-07-20): trigger_accepted — the NBA trigger-acceptance arm,
+# folded into the INITIATION latent alongside treatment_arm + rep + sample (the same
+# additive-independent fold, initiation_outcomes.py). Patient-level semantics: ">=1 NBA
+# trigger for this patient was accepted by the rep during the journey"; the trigger
+# GENERATOR makes the triggers table's acceptance_status consistent with this arm
+# (arm=1 <=> >=1 accepted trigger) so the DB-level join carries the same plant.
+# Confounded on disease_severity (reps prioritize + accept triggers on sicker patients,
+# and severity drives the initiation baseline — a REAL backdoor) + engagement_score
+# (engaged HCPs action triggers more), both already-allowlisted covariates.
+# Constants are MEASURED, not guessed (harness: seed-21 n=8000 sweep + the full
+# recovery gate, 2026-07-20). The CATE map keeps the copay-shaped wide high-medium
+# gap because the n=8000 CausalForestDML medium-segment resolution floor (Phases 1-3)
+# is an estimator property, not map-specific — and it recovered FIRST TRY: ATE
+# |est-true| < 0.15 at ALL 12 seed-brand cells (seeds 21/7/99/123 x 3 brands) and
+# strict high>med>low ordering at the gate seed for all 3 brands. Design band +4-7pp
+# (between rep's +3-6 and psp's +5-10); realized planted ATE Remibrutinib 0.0674 /
+# Kisqali 0.0876 (1.40 scale) / Fabhalta 0.0501 (0.70 scale). Share 0.5786 (measured,
+# brand-invariant) — chosen ABOVE the 0.50 trigger-level acceptance marginal so the
+# trigger generator's arm-conditional mixture (q1[accepted] = 0.50/share ~ 0.864)
+# can reproduce ACCEPTANCE_STATUS_P exactly with q0[accepted] = 0.
+_TRIGGER_ACC_BETA_SEVERITY = 0.22  # sicker patients' triggers get accepted more
+_TRIGGER_ACC_BETA_ENGAGEMENT = 0.15  # engaged HCPs accept more (centered at 5)
+_TRIGGER_ACC_INTERCEPT = -0.20  # base share ~0.579 (measured)
+_TRIGGER_ACC_CATE = {
+    "high_severity": 0.40,
+    "medium_severity": 0.15,
+    "low_severity": 0.05,
+}
+
 ARM_REGISTRY: Dict[str, ArmSpec] = {
     "treatment_arm": ArmSpec(
         name="treatment_arm",
@@ -195,6 +224,17 @@ ARM_REGISTRY: Dict[str, ArmSpec] = {
         cate_by_segment=_SAMPLE_CATE,
         target_outcomes=("treatment_initiated",),
         center={"engagement_score": 5.0},
+    ),
+    "trigger_accepted": ArmSpec(
+        name="trigger_accepted",
+        confounders={
+            "disease_severity": _TRIGGER_ACC_BETA_SEVERITY,
+            "engagement_score": _TRIGGER_ACC_BETA_ENGAGEMENT,
+        },
+        intercept=_TRIGGER_ACC_INTERCEPT,
+        cate_by_segment=_TRIGGER_ACC_CATE,
+        target_outcomes=("treatment_initiated",),
+        center={"disease_severity": 5.0, "engagement_score": 5.0},
     ),
 }
 

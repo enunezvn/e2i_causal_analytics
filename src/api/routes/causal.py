@@ -845,6 +845,10 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             # the confounder-contract guard is satisfied without a new covariate.
             "rep_detailing_high",
             "sample_dropped",
+            # COMM-ARMS Phase 4: trigger_accepted (NBA trigger acceptance), the fourth
+            # arm in the initiation latent. Backdoor {disease_severity, engagement_score}
+            # is already in the covariate list below.
+            "trigger_accepted",
         ],
         "outcome": [
             "persistent_180d",

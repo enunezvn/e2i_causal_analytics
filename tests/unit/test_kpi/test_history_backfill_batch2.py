@@ -347,19 +347,39 @@ class TestTriggerRatios:
         assert points[0]["status"] == "good"  # 10 <= target 14, lower-is-better
 
     def test_tr001_precision_and_tr008_cfr(self):
+        """TR-001 asserts the v2 (migration 113) truth shape: accepted-and-
+        converted / accepted-and-tracked. The non-accepted converted row must be
+        EXCLUDED from both sides (under v1 it would have counted in both).
+
+        The frontier row pushes max(trigger_timestamp) to March so the January
+        triggers are MATURE (their 30d windows fit inside the data) — TR-001
+        mirrors the live SQL's maturation guard and would otherwise skip the
+        month entirely."""
         rows = _pad_month(
             [
+                _trigger_row("2026-03-02T08:00:00+00:00", trigger_id="frontier"),
                 _trigger_row(
                     "2026-01-05T08:00:00+00:00",
                     trigger_id="hit",
+                    acceptance_status="accepted",
                     outcome_tracked=True,
                     outcome_value=2.0,
                 ),
                 _trigger_row(
                     "2026-01-06T08:00:00+00:00",
                     trigger_id="miss",
+                    acceptance_status="accepted",
                     outcome_tracked=True,
                     outcome_value=0.0,
+                ),
+                # decoupled substrate (COMM-ARMS Phase 4): a REJECTED trigger can
+                # convert — v2 precision must ignore it entirely.
+                _trigger_row(
+                    "2026-01-06T09:00:00+00:00",
+                    trigger_id="rejected-converted",
+                    acceptance_status="rejected",
+                    outcome_tracked=True,
+                    outcome_value=1.5,
                 ),
                 _trigger_row(
                     "2026-01-07T08:00:00+00:00",
@@ -380,6 +400,37 @@ class TestTriggerRatios:
         assert precision[0]["value"] == pytest.approx(1 / 2)
         cfr = _run(hb._backfill_tr008_cfr(client, _meta("WS2-TR-008")))
         assert cfr[0]["value"] == pytest.approx(1 / 2)
+
+    def test_tr001_precision_excludes_immature_triggers(self):
+        """Codex pass-1 (plan-2 teammate review) M3: a trigger whose 30d
+        conversion window extends past the data frontier must NOT be scored —
+        counting it reads a false decline in the final month (its conversion
+        simply has not materialized inside the data yet). Frontier = 02-20, so
+        the cutoff is 01-21: the 01-25 accepted-not-converted row is IMMATURE
+        and excluded; without the guard precision would read 1/2 instead of 1."""
+        rows = _pad_month(
+            [
+                _trigger_row("2026-02-20T08:00:00+00:00", trigger_id="frontier"),
+                _trigger_row(
+                    "2026-01-05T08:00:00+00:00",
+                    trigger_id="mature-hit",
+                    acceptance_status="accepted",
+                    outcome_tracked=True,
+                    outcome_value=2.0,
+                ),
+                _trigger_row(
+                    "2026-01-25T08:00:00+00:00",
+                    trigger_id="immature-miss",
+                    acceptance_status="accepted",
+                    outcome_tracked=True,
+                    outcome_value=0.0,
+                ),
+            ]
+        )
+        client = _FakeClient({"triggers": rows})
+        precision = _run(hb._backfill_tr001_precision(client, _meta("WS2-TR-001")))
+        assert len(precision) == 1
+        assert precision[0]["value"] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,8 @@ def test_registry_contains_the_existing_arm_and_commercial_arms():
         # COMM-ARMS Phase 3: two arms folding into the treatment_initiated latent.
         "rep_detailing_high",
         "sample_dropped",
+        # COMM-ARMS Phase 4: NBA trigger acceptance, also in the initiation latent.
+        "trigger_accepted",
     }
 
 

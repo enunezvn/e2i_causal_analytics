@@ -50,9 +50,11 @@ def _fit_bundle(spec, seed: int) -> dict[str, Any]:
             # COMM-ARMS Phase 3: rep_detailing_high + sample_dropped are the initiation
             # cohort's 8th + 9th covariates (they fold into treatment_initiated). Same
             # fit-time requirement as copay/psp above. persistence/discontinuation specs
-            # do not list them and ignore these columns.
+            # do not list them and ignore these columns. Phase 4 adds trigger_accepted
+            # as initiation's 10th on the same rationale.
             "rep_detailing_high": rng.integers(0, 2, n),
             "sample_dropped": rng.integers(0, 2, n),
+            "trigger_accepted": rng.integers(0, 2, n),
             spec.label_column: rng.integers(0, 2, n),
         }
     )
@@ -108,9 +110,10 @@ class TestRoutingByModelName:
         # so each model must be handed EXACTLY its own set — a superset trips the
         # incomplete/incorrect-vector guard the #576 null-trap describes. COMM-ARMS
         # Phase 3: initiation consumes rep_detailing_high + sample_dropped (they fold into
-        # treatment_initiated); Phase 1/2: persistence consumes copay_support + psp_enrolled
-        # (they enter the discontinuation logit). Mirrors production, where predictions.py
-        # builds raw_features from each cohort's own base_covariates.
+        # treatment_initiated), plus trigger_accepted from Phase 4; Phase 1/2: persistence
+        # consumes copay_support + psp_enrolled (they enter the discontinuation logit).
+        # Mirrors production, where predictions.py builds raw_features from each cohort's
+        # own base_covariates.
         raw_base = {
             "disease_severity": 5.61,
             "academic_hcp": 0,
@@ -120,7 +123,7 @@ class TestRoutingByModelName:
             "comorbidity_burden": 2,
             "prior_therapy_lines": 1,
         }
-        raw_init = dict(raw_base, rep_detailing_high=1, sample_dropped=0)
+        raw_init = dict(raw_base, rep_detailing_high=1, sample_dropped=0, trigger_accepted=1)
         raw_pers = dict(raw_base, copay_support=1, psp_enrolled=1)
 
         out_init = await service.predict(

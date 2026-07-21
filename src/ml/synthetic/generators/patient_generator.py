@@ -56,6 +56,11 @@ _PSP_SPAWN_KEY = 0x9527
 # column not causally downstream of who-initiates) stays byte-identical to pre-Phase-3.
 _REP_SPAWN_KEY = 0x8EE9
 _SAMPLE_SPAWN_KEY = 0x5A3D
+# Phase 4: INDEPENDENT substream for the trigger_accepted arm (NBA trigger acceptance).
+# Like rep/sample it feeds the INITIATION latent, so it is assigned BEFORE that outcome —
+# from its own substream, so the main self._rng stream and every pre-existing column
+# (including the four earlier commercial arms) stays byte-identical to pre-Phase-4.
+_TRIGGER_ACC_SPAWN_KEY = 0x7ACC
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -186,7 +191,22 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             },
             _sample_rng,
         )
-        # Brand-scaled latent CATE maps for the two arms (same _BRAND_CATE_SCALE SSOT the
+        # Phase 4 (COMM-ARMS): trigger_accepted — NBA trigger acceptance, the fourth arm
+        # in the initiation latent. Confounded on disease_severity + engagement_score
+        # (both drawn above), from its OWN independent substream.
+        _trigger_acc_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(_TRIGGER_ACC_SPAWN_KEY,))
+        )
+        trigger_acc_spec = ARM_REGISTRY["trigger_accepted"]
+        trigger_accepted, trigger_acc_propensity = assign_arm_from_spec(
+            trigger_acc_spec,
+            {
+                "disease_severity": confounders["disease_severity"],
+                "engagement_score": np.asarray(engagement_scores, dtype=float),
+            },
+            _trigger_acc_rng,
+        )
+        # Brand-scaled latent CATE maps for the three arms (same _BRAND_CATE_SCALE SSOT the
         # arm/copay/psp maps use) — NOT the _INIT_LATENT_CATE_BOOST (that is treatment_arm's).
         _rep_scale = _BRAND_CATE_SCALE.get(brand_enum, 1.0)
         rep_cate = {
@@ -194,6 +214,9 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         }
         sample_cate = {
             seg: round(val * _rep_scale, 4) for seg, val in sample_spec.cate_by_segment.items()
+        }
+        trigger_acc_cate = {
+            seg: round(val * _rep_scale, 4) for seg, val in trigger_acc_spec.cate_by_segment.items()
         }
 
         prognostic_offset = initiation_prognostic_offset(
@@ -214,6 +237,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             rep_cate=rep_cate,
             sample_dropped=sample_dropped,
             sample_cate=sample_cate,
+            trigger_accepted=trigger_accepted,
+            trigger_cate=trigger_acc_cate,
         )
         treatment_initiated = _init["treatment_initiated"]
         tau_i = _init["tau_i"]
@@ -223,6 +248,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # the biologic-differential rebuild below, which re-draws initiation on that brand).
         rep_rd_by_segment = _init["rep_rd_by_segment"]
         sample_rd_by_segment = _init["sample_rd_by_segment"]
+        trigger_rd_by_segment = _init["trigger_rd_by_segment"]
 
         # Hoist region generation here so it can be passed into the DGP (region now
         # carries real leakage-safe signal via _DISC_REGION_LOGIT) and reused in the
@@ -473,10 +499,13 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 # Phase 1/2/3 (COMM-ARMS): all four commercial arms are POPULATED.
                 "rep_detailing_high": rep_detailing_high,
                 "sample_dropped": sample_dropped,
+                # Phase 4 (COMM-ARMS): trigger_accepted is POPULATED.
+                "trigger_accepted": trigger_accepted,
                 "copay_support_propensity": np.round(copay_propensity, 4),
                 "psp_enrolled_propensity": np.round(psp_propensity, 4),
                 "rep_detailing_high_propensity": np.round(rep_propensity, 4),
                 "sample_dropped_propensity": np.round(sample_propensity, 4),
+                "trigger_accepted_propensity": np.round(trigger_acc_propensity, 4),
                 "insurance_access_score": np.round(insurance_access, 4),
                 "comorbidity_burden": comorbidity_burden,
                 "prior_therapy_lines": prior_therapy_lines,
@@ -490,7 +519,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # treatment_effect_estimate / days_to_treatment are rewritten). No-op (returns
         # tau_i unchanged, cate_by_biologic=None) when the frame carries no
         # Remibrutinib rows with a populated biologic_experienced.
-        tau_i, cate_by_biologic, rep_rd_by_segment, sample_rd_by_segment = (
+        tau_i, cate_by_biologic, rep_rd_by_segment, sample_rd_by_segment, trigger_rd_by_segment = (
             self._apply_biologic_differential(
                 df,
                 np.asarray(segment),
@@ -502,8 +531,11 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 rep_cate=rep_cate,
                 sample_dropped=sample_dropped,
                 sample_cate=sample_cate,
+                trigger_accepted=trigger_accepted,
+                trigger_cate=trigger_acc_cate,
                 rep_rd_by_segment=rep_rd_by_segment,
                 sample_rd_by_segment=sample_rd_by_segment,
+                trigger_rd_by_segment=trigger_rd_by_segment,
             )
         )
         cate_map = rd_map_from_tau(np.asarray(segment), tau_i)
@@ -587,6 +619,15 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "cate_by_segment": sample_rd_by_segment,
             },
         }
+        # Phase 4 (COMM-ARMS): trigger_accepted targets ONLY treatment_initiated,
+        # exactly like rep/sample above.
+        assert trigger_rd_by_segment is not None
+        df.attrs["true_ate_by_arm"]["trigger_accepted"] = {
+            "treatment_initiated": {
+                "ate": float(np.mean([trigger_rd_by_segment[str(s)] for s in segment])),
+                "cate_by_segment": trigger_rd_by_segment,
+            },
+        }
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
         return df
@@ -604,10 +645,14 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         rep_cate: Dict[str, float],
         sample_dropped: np.ndarray,
         sample_cate: Dict[str, float],
+        trigger_accepted: np.ndarray,
+        trigger_cate: Dict[str, float],
         rep_rd_by_segment: Optional[Dict[str, float]],
         sample_rd_by_segment: Optional[Dict[str, float]],
+        trigger_rd_by_segment: Optional[Dict[str, float]],
     ) -> tuple[
         np.ndarray,
+        Optional[Dict[str, float]],
         Optional[Dict[str, float]],
         Optional[Dict[str, float]],
         Optional[Dict[str, float]],
@@ -640,7 +685,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         biologic = df["biologic_experienced"].to_numpy()
         mask = (df["brand"].to_numpy() == Brand.REMIBRUTINIB.value) & ~pd.isna(biologic)
         if not mask.any():
-            return tau_i, None, rep_rd_by_segment, sample_rd_by_segment
+            return tau_i, None, rep_rd_by_segment, sample_rd_by_segment, trigger_rd_by_segment
         idx = np.where(mask)[0]
         bio = biologic[idx].astype(float)  # 0=naive, 1=experienced
         modifier = biologic_cate_modifier(bio)
@@ -662,6 +707,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             rep_cate=rep_cate,
             sample_dropped=np.asarray(sample_dropped)[idx],
             sample_cate=sample_cate,
+            trigger_accepted=np.asarray(trigger_accepted)[idx],
+            trigger_cate=trigger_cate,
             cate_modifier=modifier,
         )
         y_new = _bio["treatment_initiated"]
@@ -713,7 +760,12 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             if _bio["sample_rd_by_segment"] is not None
             else sample_rd_by_segment
         )
-        return final_tau, cate_by_biologic, rep_rd_out, sample_rd_out
+        trigger_rd_out = (
+            {**(trigger_rd_by_segment or {}), **_bio["trigger_rd_by_segment"]}
+            if _bio["trigger_rd_by_segment"] is not None
+            else trigger_rd_by_segment
+        )
+        return final_tau, cate_by_biologic, rep_rd_out, sample_rd_out, trigger_rd_out
 
     def _generate_confounders(
         self,

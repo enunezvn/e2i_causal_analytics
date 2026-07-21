@@ -40,6 +40,14 @@ from src.mlops.gold_standard_eval.cohort_deployer import train_cohort_model
 from src.mlops.gold_standard_eval.cohort_spec import make_patient_spec
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
 
+# The module fixture generates 3 brands x 20k patients and fits 3 calibrated LRs
+# (~21s setup on a fast idle box; 2-3x that on the loaded 2-core CI runner). The
+# global 30s cap with timeout_method=thread KILLS the xdist worker process on
+# breach ("node down"), poisoning the whole Unit lane — give the known-heavy
+# faithful fits the same headroom the Heavy lane grants (COMM-ARMS Phase 4
+# widened the frame/feature matrix enough to tip the old razor-thin margin).
+pytestmark = pytest.mark.timeout(120)
+
 
 def _faithful(brand: Brand, n: int = 20000, seed: int = 42) -> dict:
     """Train the REAL gold-standard initiation model (FeatureBuilder 7-cov + calibrated
@@ -70,29 +78,34 @@ def faithful() -> dict:
     return {b: _faithful(b) for b in Brand}
 
 
-# Per-brand initiation AUC ceiling — UNIFORM 0.86 after COMM-ARMS Phase 3.
+# Per-brand initiation AUC ceiling — UNIFORM 0.885 after COMM-ARMS Phase 4.
 #
 # History: Remibrutinib carried a higher 0.85 ceiling because CLIN-SEG-P3's biologic-
 # experience differential sharpened its severity->initiation gradient (0.804 -> ~0.839).
-# COMM-ARMS Phase 3 (2026-07-20) adds rep_detailing_high + sample_dropped to the initiation
+# COMM-ARMS Phase 3 (2026-07-20) added rep_detailing_high + sample_dropped to the initiation
 # SPEC (_BASE9_INITIATION): both arms fold into the treatment_initiated latent AND are
 # pre-index (assigned from academic_hcp + engagement_score, BEFORE the initiation decision),
 # so letting the model observe them is real observable-driver signal — the exact analogue of
-# copay/psp on persistence, NOT leakage. Measured (seed=42, n=20000, 23 encoded features):
-# Remibrutinib 0.846 / Fabhalta 0.829 / Kisqali 0.846 (Kisqali/Fabhalta gain the most —
-# they lack the biologic lift so rep/sample add the most marginal AUC). Re-based to a
-# uniform 0.86 (~0.014-0.031 headroom) which still fails on gross leakage (>0.9).
-_INIT_AUC_CEILING = {"Remibrutinib": 0.86, "Fabhalta": 0.86, "Kisqali": 0.86}
+# copay/psp on persistence, NOT leakage. Measured then (seed=42, n=20000, 23 encoded
+# features): Remibrutinib 0.846 / Fabhalta 0.829 / Kisqali 0.846 → uniform 0.86.
+# COMM-ARMS Phase 4 (2026-07-20) adds trigger_accepted (the NBA trigger-acceptance arm,
+# _BASE10_INITIATION) — same pre-index observable-driver rationale. Measured (seed=42,
+# n=20000, 25 encoded features): Remibrutinib 0.8614 / Fabhalta 0.8480 / Kisqali 0.8700
+# (Kisqali gains most — its 1.40 brand CATE scale makes the new arm's fold strongest).
+# Re-based to a uniform 0.885 (~0.015-0.037 headroom) which still fails on gross
+# leakage (>0.9).
+_INIT_AUC_CEILING = {"Remibrutinib": 0.885, "Fabhalta": 0.885, "Kisqali": 0.885}
 
 
 def test_initiation_auc_in_target_band(faithful):
     for b, m in faithful.items():
         # prevalence-banded construction pins initiation prevalence at ~0.35
         assert 0.25 <= m["init_prev"] <= 0.45, f"{b.value}: init_prev {m['init_prev']} out of band"
-        # 9 covariates (_BASE9_INITIATION: _BASE7 + rep_detailing_high + sample_dropped)
-        # → ~23 encoded features (was 19 for the 7-covariate set; 9 for the legacy base-3).
+        # 10 covariates (_BASE10_INITIATION: _BASE7 + rep_detailing_high +
+        # sample_dropped + trigger_accepted) → ~25 encoded features (was 23 for the
+        # 9-covariate set; 19 for 7; 9 for the legacy base-3).
         assert m["n_features"] >= 15, (
-            f"{b.value}: only {m['n_features']} encoded features (expected the 9-covariate set)"
+            f"{b.value}: only {m['n_features']} encoded features (expected the 10-covariate set)"
         )
         ceiling = _INIT_AUC_CEILING.get(b.value, 0.83)
         assert 0.78 <= m["auc"] <= ceiling, (

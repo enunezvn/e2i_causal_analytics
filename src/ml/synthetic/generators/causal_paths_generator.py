@@ -59,14 +59,17 @@ _HCP_QUESTIONS: Tuple[Tuple[str, str, List[str], str], ...] = (
 # randomized experiment in the gold standard: control_group_flag is a randomized
 # holdout, so control_group_flag -> action_taken has an EMPTY backdoor set (no
 # confounder to adjust for — randomization breaks every back-door path). The
-# second edge, acceptance_status -> conversion_flag, is the designed effect
-# (conversion_flag is the DB STORED-GENERATED column outcome_value>0, set only for
-# accepted triggers) with priority as an EFFECT MODIFIER (not a confounder), so its
-# modeled backdoor set is also empty. Both are direct edges (no mediator injected).
+# second edge, acceptance_status -> conversion_flag, changed meaning with
+# COMM-ARMS Phase 4: conversion_flag is now the REAL "prescription landed in the
+# 30d window" outcome (tracked triggers of EVERY acceptance status), and
+# acceptance is driven by the patient-level trigger_accepted arm, which is
+# CONFOUNDED on disease_severity + engagement_score (treatment_arm.ARM_REGISTRY
+# SSOT) — so the edge now carries a real backdoor set instead of the pre-P4
+# "empty by construction" (outcome_value was only set for accepted triggers).
 _TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
     # (start_node, end_node, confounders_controlled)
     ("control_group_flag", "action_taken", []),
-    ("acceptance_status", "conversion_flag", []),
+    ("acceptance_status", "conversion_flag", ["disease_severity", "engagement_score"]),
 )
 
 # Commercial-KPI grain (2026-07-07). The registry modeled patient/HCP/trigger

@@ -51,6 +51,7 @@ class InitiationOutcome(TypedDict):
     arm_rd_by_segment: Dict[str, float]
     rep_rd_by_segment: Optional[Dict[str, float]]
     sample_rd_by_segment: Optional[Dict[str, float]]
+    trigger_rd_by_segment: Optional[Dict[str, float]]
 
 
 def generate_initiation_outcome(
@@ -66,6 +67,8 @@ def generate_initiation_outcome(
     rep_cate: Dict[str, float] | None = None,
     sample_dropped: np.ndarray | None = None,
     sample_cate: Dict[str, float] | None = None,
+    trigger_accepted: np.ndarray | None = None,
+    trigger_cate: Dict[str, float] | None = None,
     cate_modifier: np.ndarray | None = None,
 ) -> InitiationOutcome:
     """Build ``treatment_initiated`` with treatment_arm + rep_detailing_high +
@@ -105,7 +108,16 @@ def generate_initiation_outcome(
     else:
         tau_samp = np.zeros(len(segs), dtype=float)
         samp_contribution = np.zeros(len(segs), dtype=float)
-    baseline = baseline + rep_contribution + samp_contribution
+    # COMM-ARMS Phase 4: trigger_accepted, the fourth arm in the shared latent —
+    # identical additive-independent fold, no interactions.
+    if trigger_accepted is not None and trigger_cate is not None:
+        trig = np.asarray(trigger_accepted, dtype=int)
+        tau_trig = np.array([float(trigger_cate[str(s)]) for s in segs], dtype=float)
+        trig_contribution = trig.astype(float) * tau_trig
+    else:
+        tau_trig = np.zeros(len(segs), dtype=float)
+        trig_contribution = np.zeros(len(segs), dtype=float)
+    baseline = baseline + rep_contribution + samp_contribution + trig_contribution
 
     # treatment_arm keeps its tuned latent-CATE boost (T11), applied to the map BEFORE
     # delegation so the core stays boost-agnostic (identical to binary_outcome_with_cate).
@@ -157,10 +169,24 @@ def generate_initiation_outcome(
         )
         sample_rd = rd_map_from_tau(segs, tau_samp_i)
 
+    trigger_rd: Optional[Dict[str, float]] = None
+    if trigger_accepted is not None and trigger_cate is not None:
+        trig_eff_baseline = baseline - trig_contribution + arm_folded
+        _, tau_trig_i = binarize_score(
+            score,
+            trig_eff_baseline,
+            tau_trig,
+            segs,
+            target_prevalence=_INIT_TARGET_PREVALENCE,
+            noise_std=_INIT_NOISE_STD,
+        )
+        trigger_rd = rd_map_from_tau(segs, tau_trig_i)
+
     return {
         "treatment_initiated": treatment_initiated,
         "tau_i": tau_arm_i,
         "arm_rd_by_segment": rd_map_from_tau(segs, tau_arm_i),
         "rep_rd_by_segment": rep_rd,
         "sample_rd_by_segment": sample_rd,
+        "trigger_rd_by_segment": trigger_rd,
     }

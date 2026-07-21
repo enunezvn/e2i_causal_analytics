@@ -121,9 +121,12 @@ def test_hcp_adoption_chain_is_clean_two_hop():
 
 def test_trigger_grain_edges_emitted_with_empty_and_modeled_backdoor():
     """The trigger grain seeds two SSOT edges: the randomized RCT
-    (control_group_flag -> action_taken, EMPTY backdoor) and the effect-modifier
-    question (acceptance_status -> conversion_flag, EMPTY backdoor; priority is an
-    effect modifier, not a confounder). Both per brand."""
+    (control_group_flag -> action_taken, EMPTY backdoor) and the acceptance
+    question (acceptance_status -> conversion_flag). Since COMM-ARMS Phase 4
+    planted trigger_accepted with {disease_severity, engagement_score}
+    confounders, acceptance is CONFOUNDED and its SSOT edge must model that
+    backdoor (an empty set would tell the estimator adjustment is unnecessary).
+    Both per brand."""
     df = CausalPathsGenerator(GeneratorConfig(seed=11, n_records=30)).generate()
     edges = set(zip(df["start_node"], df["end_node"], strict=False))
     assert ("control_group_flag", "action_taken") in edges
@@ -144,7 +147,8 @@ def test_trigger_grain_edges_emitted_with_empty_and_modeled_backdoor():
     mod = df[(df.start_node == "acceptance_status") & (df.end_node == "conversion_flag")]
     assert len(mod) >= 1
     for _, row in mod.iterrows():
-        assert list(row["confounders_controlled"]) == []
+        # Phase 4's trigger_accepted arm confounders — the backdoor the DGP plants.
+        assert list(row["confounders_controlled"]) == ["disease_severity", "engagement_score"]
         assert row["grain"] == "trigger"
 
 
