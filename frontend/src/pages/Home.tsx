@@ -55,6 +55,8 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -96,6 +98,10 @@ interface KPIMetric {
   trend: 'up' | 'down' | 'stable';
   status: 'healthy' | 'warning' | 'critical' | 'neutral';
   sparkline?: number[];
+  /** Hard-bound brand for brand_specific KPIs (kpi_definitions.yaml BR-00x);
+   *  absent for portfolio-wide KPIs. Drives the sibling-brand badge + the
+   *  "hide other brands' KPIs" toggle. */
+  brand?: string;
 }
 
 interface AgentInsight {
@@ -176,6 +182,29 @@ const WORKSTREAM_ORDER = [
 // The calculators, per-KPI definitions, and the Brand SELECTOR are all unchanged.
 const HIDDEN_HOME_WORKSTREAMS = new Set<string>([]);
 
+// "Hide other brands' KPIs" (sibling-brand cards) is a per-user VIEW preference
+// — default OFF (visible-but-labeled is the platform's documented semantic) —
+// persisted like the other UI preferences (cf. hooks/use-user-preferences).
+const HIDE_SIBLING_KPIS_STORAGE_KEY = 'e2i-home-hide-sibling-kpis';
+
+function loadHideSiblingKpis(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(HIDE_SIBLING_KPIS_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveHideSiblingKpis(hide: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(HIDE_SIBLING_KPIS_STORAGE_KEY, String(hide));
+  } catch {
+    // Ignore storage errors (private mode etc.) — the in-session state applies.
+  }
+}
+
 // KPI cards are non-interactive by design. The Model Performance cards used to
 // drill to /model-performance, but that page does not inherit the dashboard's
 // brand selection — a user who picked a brand here would silently land on
@@ -194,8 +223,14 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
     { id: 'ate_trx', name: 'ATE on TRx', category: 'causal', value: 0.156, previousValue: 0.142, target: 0.18, description: 'Average treatment effect on prescriptions', trend: 'up', status: 'healthy', sparkline: [0.12, 0.13, 0.14, 0.145, 0.15, 0.155, 0.156] },
     { id: 'roi', name: 'Campaign ROI', category: 'causal', value: 3.8, previousValue: 3.2, target: 4.5, unit: 'x', description: 'Return on marketing investment', trend: 'up', status: 'healthy', sparkline: [2.8, 3, 3.2, 3.4, 3.5, 3.7, 3.8] },
   ],
+  // Each per-brand demo set carries ONE sibling-brand exemplar (brand field
+  // set) so Demo Mode exhibits the same visible-but-labeled semantic as live
+  // data: brand-hard-bound KPIs compute portfolio-wide, so another brand's
+  // card renders under a brand scope — badged "sibling brand: X", hideable
+  // via the grid toggle. Values mirror that brand's own demo set.
   Remibrutinib: [
     { id: 'remi_trx', name: 'TRx', category: 'commercial', value: 45230, previousValue: 42150, target: 50000, description: 'Total Remibrutinib prescriptions', trend: 'up', status: 'healthy', sparkline: [38, 40, 41, 42, 43, 44, 45] },
+    { id: 'fab_trx_sibling', name: 'Fabhalta TRx', category: 'commercial', brand: 'Fabhalta', value: 28450, previousValue: 26800, target: 32000, description: 'Total Fabhalta prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [24, 25, 26, 26.5, 27, 28, 28.4] },
     { id: 'remi_nrx', name: 'New TRx', category: 'commercial', value: 12340, previousValue: 11200, target: 14000, description: 'New Remibrutinib prescriptions', trend: 'up', status: 'healthy', sparkline: [9, 10, 10.5, 11, 11.5, 12, 12.3] },
     { id: 'remi_share', name: 'CSU Market Share', category: 'market', value: 18.2, previousValue: 15.8, target: 25, unit: '%', description: 'Share in CSU market', trend: 'up', status: 'warning', sparkline: [12, 13, 14, 15, 16, 17, 18.2] },
     { id: 'remi_hcp', name: 'Allergists Reached', category: 'hcp', value: 4520, previousValue: 4100, target: 5500, description: 'Allergists engaged', trend: 'up', status: 'warning', sparkline: [3.5, 3.8, 4, 4.1, 4.2, 4.4, 4.5] },
@@ -203,6 +238,7 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   ],
   Fabhalta: [
     { id: 'fab_trx', name: 'TRx', category: 'commercial', value: 28450, previousValue: 26800, target: 32000, description: 'Total Fabhalta prescriptions', trend: 'up', status: 'healthy', sparkline: [24, 25, 26, 26.5, 27, 28, 28.4] },
+    { id: 'kis_trx_sibling', name: 'Kisqali TRx', category: 'commercial', brand: 'Kisqali', value: 51750, previousValue: 49300, target: 55000, description: 'Total Kisqali prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [45, 46, 47, 48, 49, 50, 51.7] },
     { id: 'fab_nrx', name: 'New TRx', category: 'commercial', value: 6890, previousValue: 6200, target: 8000, description: 'New Fabhalta prescriptions', trend: 'up', status: 'warning', sparkline: [5, 5.5, 6, 6.2, 6.4, 6.7, 6.9] },
     { id: 'fab_share', name: 'PNH Market Share', category: 'market', value: 22.5, previousValue: 20.1, target: 28, unit: '%', description: 'Share in PNH market', trend: 'up', status: 'healthy', sparkline: [16, 17, 18, 19, 20, 21, 22.5] },
     { id: 'fab_hcp', name: 'Hematologists Reached', category: 'hcp', value: 2890, previousValue: 2650, target: 3500, description: 'Hematologists engaged', trend: 'up', status: 'warning', sparkline: [2.2, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9] },
@@ -210,6 +246,7 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   ],
   Kisqali: [
     { id: 'kis_trx', name: 'TRx', category: 'commercial', value: 51750, previousValue: 49300, target: 55000, description: 'Total Kisqali prescriptions', trend: 'up', status: 'healthy', sparkline: [45, 46, 47, 48, 49, 50, 51.7] },
+    { id: 'remi_trx_sibling', name: 'Remibrutinib TRx', category: 'commercial', brand: 'Remibrutinib', value: 45230, previousValue: 42150, target: 50000, description: 'Total Remibrutinib prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [38, 40, 41, 42, 43, 44, 45] },
     { id: 'kis_nrx', name: 'New TRx', category: 'commercial', value: 9310, previousValue: 9490, target: 10000, description: 'New Kisqali prescriptions', trend: 'down', status: 'warning', sparkline: [8.5, 9, 9.5, 9.6, 9.5, 9.4, 9.3] },
     { id: 'kis_share', name: 'CDK4/6 Market Share', category: 'market', value: 38.2, previousValue: 37.5, target: 42, unit: '%', description: 'Share in CDK4/6 market', trend: 'up', status: 'healthy', sparkline: [35, 36, 36.5, 37, 37.5, 38, 38.2] },
     { id: 'kis_hcp', name: 'Oncologists Reached', category: 'hcp', value: 5040, previousValue: 5050, target: 6000, description: 'Oncologists engaged', trend: 'stable', status: 'warning', sparkline: [4.8, 4.9, 5, 5.05, 5.02, 5.04, 5.04] },
@@ -408,6 +445,13 @@ function Home() {
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
+  // KPI-grid view preference: hide sibling-brand cards (default OFF =
+  // visible-but-labeled). Initialized from, and persisted to, localStorage.
+  const [hideSiblingKpis, setHideSiblingKpis] = useState<boolean>(loadHideSiblingKpis);
+  const handleHideSiblingKpisChange = useCallback((hide: boolean) => {
+    setHideSiblingKpis(hide);
+    saveHideSiblingKpis(hide);
+  }, []);
 
   // ==========================================================================
   // API HOOKS - Wire up to real backend data
@@ -543,6 +587,10 @@ function Home() {
         trend: 'stable' as const,
         status: 'neutral' as const,
         unit: kpi.unit,
+        // Brand hard-binding (API KPIMetadataResponse.brand) — used to be
+        // dropped here, which left the grid unable to label sibling-brand
+        // cards under a selected brand.
+        brand: kpi.brand ?? undefined,
       }));
   }, [kpiListData]);
 
@@ -652,6 +700,49 @@ function Home() {
       }));
   }, [liveKpiMode, batchSettled, batchFailed, effectiveKPIs, valueByKpiId]);
 
+  // A sibling-brand KPI: hard-bound to a specific brand (kpi_definitions.yaml)
+  // that is NOT the selected one. The brand_specific calculators compute
+  // portfolio-wide, so these cards render under any brand scope — the platform
+  // semantic is visible-but-labeled (the home-insights narrative deliberately
+  // references them tagged "[sibling brand: X]", src/insights/home_kpi.py),
+  // NOT a silent hard filter.
+  const isSiblingKpi = useCallback(
+    (kpi: KPIMetric): boolean =>
+      !!kpi.brand && selectedBrand !== 'All' && kpi.brand !== selectedBrand,
+    [selectedBrand]
+  );
+
+  // Single badge renderer shared by BOTH card paths (live and Demo Mode) so
+  // the labeling logic can never diverge between them (codex parity finding).
+  // Same vocabulary as the narrative channel's "[sibling brand: X]" tag so
+  // grid and insight text stay coherent. undefined for own-brand, brandless,
+  // and All-scope cards.
+  const siblingBadge = useCallback(
+    (kpi: KPIMetric): React.ReactNode =>
+      isSiblingKpi(kpi) ? (
+        <Badge variant="outline" className="text-[10px] px-1 py-0">
+          sibling brand: {kpi.brand}
+        </Badge>
+      ) : undefined,
+    [isSiblingKpi]
+  );
+
+  // Sibling-brand cards present in the computed set (pre-hide, so the toggle
+  // stays rendered — and reversible — while it is hiding them). 0 under 'All'
+  // by construction, so the toggle never renders as a dead control there.
+  const siblingKpiCount = useMemo(
+    () => computedKPIs.filter(isSiblingKpi).length,
+    [computedKPIs, isSiblingKpi]
+  );
+
+  // Grid-visible set: with the toggle ON, sibling-brand cards leave the grid,
+  // the tab list, and the counts TOGETHER (never orphaned). Everything below
+  // (tabs, per-tab grid, banner counts, "Showing N of M") derives from here.
+  const visibleKPIs = useMemo(
+    () => (hideSiblingKpis ? computedKPIs.filter((kpi) => !isSiblingKpi(kpi)) : computedKPIs),
+    [hideSiblingKpis, computedKPIs, isSiblingKpi]
+  );
+
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
   // computed over synthetic data — the Home tiles (summary), the Model Accuracy
   // tile (the gold-standard eval runs over a synthetic cohort → is_synthetic_cohort),
@@ -670,7 +761,7 @@ function Home() {
   // construction); the fixed demo categories apply only to SAMPLE_KPIS.
   const kpiCategories = useMemo(() => {
     if (!liveKpiMode) return KPI_CATEGORIES;
-    const present = new Set(computedKPIs.map((k) => k.category));
+    const present = new Set(visibleKPIs.map((k) => k.category));
     const ordered = WORKSTREAM_ORDER.filter((ws) => present.has(ws));
     const extras = [...present]
       .filter((ws) => !WORKSTREAM_ORDER.includes(ws))
@@ -680,7 +771,7 @@ function Home() {
       label: WORKSTREAM_META[ws]?.label ?? (ws === 'other' ? 'Other' : ws),
       icon: WORKSTREAM_META[ws]?.icon ?? BarChart3,
     }));
-  }, [liveKpiMode, computedKPIs]);
+  }, [liveKpiMode, visibleKPIs]);
 
   // Keep the active tab valid across demo/live category sets.
   const activeCategory = useMemo(() => {
@@ -690,28 +781,30 @@ function Home() {
 
   // Filter KPIs by category and brand (uses API data when available)
   const filteredKPIs = useMemo(() => {
-    if (activeCategory === 'all') return computedKPIs;
-    return computedKPIs.filter((kpi) => kpi.category === activeCategory);
-  }, [computedKPIs, activeCategory]);
+    if (activeCategory === 'all') return visibleKPIs;
+    return visibleKPIs.filter((kpi) => kpi.category === activeCategory);
+  }, [visibleKPIs, activeCategory]);
 
-  // Calculate summary stats (uses API data when available)
+  // Calculate summary stats (uses API data when available). Counts the
+  // grid-VISIBLE set so the brand banner always matches the cards on screen
+  // (sibling cards hidden by the toggle leave the counts too).
   const summaryStats = useMemo(() => {
-    const healthyCount = computedKPIs.filter((k) => k.status === 'healthy').length;
-    const warningCount = computedKPIs.filter((k) => k.status === 'warning').length;
-    const criticalCount = computedKPIs.filter((k) => k.status === 'critical').length;
+    const healthyCount = visibleKPIs.filter((k) => k.status === 'healthy').length;
+    const warningCount = visibleKPIs.filter((k) => k.status === 'warning').length;
+    const criticalCount = visibleKPIs.filter((k) => k.status === 'critical').length;
 
     // Enhance with API health data if available
     const apiHealthy = kpiHealthData?.status === 'healthy';
 
     return {
-      total: computedKPIs.length,
+      total: visibleKPIs.length,
       healthy: healthyCount,
       warning: warningCount,
       critical: criticalCount,
       apiConnected: !!kpiListData,
       apiHealthy,
     };
-  }, [computedKPIs, kpiHealthData, kpiListData]);
+  }, [visibleKPIs, kpiHealthData, kpiListData]);
 
   // Visible alerts: REAL monitoring alerts only (no fabricated fallback).
   // Stable string ids (the old `Number(a.id) || Math.random()` broke
@@ -882,9 +975,11 @@ function Home() {
     if (modelSummary?.available && modelSummary.accuracy != null) {
       lines.push(`Model accuracy (avg): ${(modelSummary.accuracy * 100).toFixed(1)}%.`);
     }
-    if (computedKPIs.length > 0) {
+    // The VISIBLE set: what the user actually sees (sibling-brand cards hidden
+    // by the toggle are excluded, keeping the chat grounding on-screen-honest).
+    if (visibleKPIs.length > 0) {
       lines.push(
-        `KPI grid: ${computedKPIs.length} computed KPIs, e.g. ${computedKPIs
+        `KPI grid: ${visibleKPIs.length} computed KPIs, e.g. ${visibleKPIs
           .slice(0, 4)
           .map((k) => k.name)
           .join(', ')}.`
@@ -908,7 +1003,7 @@ function Home() {
     kpiSummary,
     activeExp,
     modelSummary,
-    computedKPIs,
+    visibleKPIs,
     trustedHealth,
     opportunities,
   ]);
@@ -1138,6 +1233,27 @@ function Home() {
                     {selectedBrand === 'All' ? 'Portfolio-wide' : selectedBrand} metrics
                   </CardDescription>
                 </div>
+                {/* Grid-scoped view toggle for sibling-brand cards. Rendered
+                    only while such cards exist in the computed set (counted
+                    PRE-hide, so it stays reversible while ON) — never a dead
+                    control under 'All' or for a purely own-brand grid. */}
+                {siblingKpiCount > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="hide-sibling-kpis"
+                      checked={hideSiblingKpis}
+                      onCheckedChange={(checked) =>
+                        handleHideSiblingKpisChange(checked === true)
+                      }
+                    />
+                    <Label
+                      htmlFor="hide-sibling-kpis"
+                      className="text-xs cursor-pointer text-muted-foreground"
+                    >
+                      Hide other brands&apos; KPIs
+                    </Label>
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -1156,7 +1272,7 @@ function Home() {
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
                 {liveKpiMode && batchSettled && !batchFailed && (
                   <p className="text-xs text-muted-foreground">
-                    Showing {computedKPIs.length} of {effectiveKPIs.length} defined KPIs
+                    Showing {visibleKPIs.length} of {effectiveKPIs.length} defined KPIs
                     {selectedBrand !== 'All' ? ` for ${selectedBrand}` : ''}
                   </p>
                 )}
@@ -1168,6 +1284,23 @@ function Home() {
                     </TabsTrigger>
                   ))}
                 </TabsList>
+
+                {/* Live-mode guard: with zero visible KPIs there are no tabs and
+                    no TabsContent, so without this the grid would go silently
+                    blank — e.g. if the sibling-hide toggle removed every
+                    computed card. Say so honestly (and keep the toggle above
+                    rendered, so the choice is reversible). */}
+                {liveKpiMode && batchSettled && !batchFailed && kpiCategories.length === 0 && (
+                  <EmptyState
+                    title="No KPIs available"
+                    description={
+                      hideSiblingKpis && siblingKpiCount > 0
+                        ? `Every computed KPI in this scope belongs to another brand — ${siblingKpiCount} hidden by the "Hide other brands' KPIs" toggle.`
+                        : 'No KPI values have been computed for this scope yet.'
+                    }
+                    className="p-6"
+                  />
+                )}
 
                 {kpiCategories.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
@@ -1206,6 +1339,7 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
+                              badge={siblingBadge(kpi)}
                             />
                           );
                         }
@@ -1224,6 +1358,7 @@ function Home() {
                             description={kpi.description}
                             higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                             size="sm"
+                            badge={siblingBadge(kpi)}
                           />
                         );
                       })}
