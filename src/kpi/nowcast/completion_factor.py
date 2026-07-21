@@ -54,6 +54,16 @@ MATURITY GUARD (codex adversarial review, finding 3 — MANDATORY):
   substrate: NULL offsets) — the result says so EXPLICITLY
   (``insufficient_maturity=True`` + machine-readable ``reason``) and carries
   **no nowcast values whatsoever**. Never a fabricated or fallback CF.
+* The plane guard is enforced at BOTH granularities: globally
+  (``arrival_plane_not_populated`` — the pre-reseed substrate) and PER MONTH
+  (``arrival_plane_partial``). A month whose own coverage is below tolerance
+  inside an otherwise-stamped substrate is a structural data-integrity
+  anomaly (post-115-reseed all claims rows are stamped; the realistic cause
+  is a frontier-append cohort loaded without the stamp pass), so the WHOLE
+  call fails loud rather than silently dropping the month or fabricating a
+  near-zero nowcast for it. The anchor-cap frontier month is out of the
+  per-month guard's scope — it is structurally excluded from estimation and
+  output, so its stamping state cannot fabricate any displayed value.
 """
 
 from __future__ import annotations
@@ -215,6 +225,37 @@ def estimate_completion_from_rows(
         return _insufficient(
             f"arrival_plane_not_populated: coverage {coverage:.4f} < "
             f"{1.0 - cfg.max_unstamped_fraction:.4f}",
+            frontier=frontier,
+            data_min=data_min,
+            anchor_cap_month=anchor_cap_month,
+            coverage=coverage,
+            config=cfg,
+        )
+
+    # ---- per-month stamping guard (whole-call fail-loud) ------------------
+    # Post-115-reseed EVERY claims row is stamped, so a month whose own
+    # coverage falls below tolerance inside an otherwise-stamped substrate
+    # cannot arise in healthy operation — it signals a structural regression
+    # (the frontier-append / BatchLoader silent-drop class). We fail the WHOLE
+    # call rather than silently excluding the month: a per-month drop renders
+    # in the UI as an innocuously missing point (exactly the silent-drop
+    # failure mode), while the mature series stays available via /history, so
+    # a loud refusal costs little and surfaces the anomaly immediately. The
+    # anchor-cap frontier month is out of scope here — it is structurally
+    # excluded from estimation and output, so its stamping state cannot
+    # fabricate any displayed value (mass unstamping is still caught by the
+    # global guard above).
+    partial_months = sorted(
+        m
+        for m, h in hists.items()
+        if m != anchor_cap_month
+        and sum(h.values()) > 0
+        and (h.get(None, 0) / sum(h.values())) > cfg.max_unstamped_fraction
+    )
+    if partial_months:
+        return _insufficient(
+            "arrival_plane_partial: unstamped months "
+            + ", ".join(m.isoformat() for m in partial_months),
             frontier=frontier,
             data_min=data_min,
             anchor_cap_month=anchor_cap_month,

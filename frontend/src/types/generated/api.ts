@@ -12120,7 +12120,7 @@ export interface components {
             insufficient_maturity: boolean;
             /**
              * Reason
-             * @description Machine-readable cause when insufficient_maturity (no_data | arrival_plane_not_populated | insufficient_mature_months | no_arrived_claims)
+             * @description Machine-readable cause when insufficient_maturity (no_data | arrival_plane_not_populated | arrival_plane_partial | insufficient_mature_months | no_arrived_claims)
              */
             reason?: string | null;
             /**

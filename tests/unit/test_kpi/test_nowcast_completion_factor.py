@@ -208,6 +208,45 @@ class TestMaturityGuard:
         assert result.reason == "no_data"
         assert result.months == []
 
+    def test_all_null_month_in_stamped_substrate_fails_loud(self):
+        # Mixed substrate: 29 stamped months + ONE month whose rows are ALL
+        # unstamped (50 rows = 0.17% globally -> passes the GLOBAL coverage
+        # guard). Post-115-reseed every claims row is stamped, so this pattern
+        # is a structural data-integrity anomaly (the frontier-append /
+        # BatchLoader silent-drop regression class) — the call must fail LOUD,
+        # never fabricate a nowcast (the pre-fix bug: nowcast=0.0, a fake
+        # collapse) and never silently drop the month.
+        hists = {m: dict(_EXACT_HIST) for m in _month_range("2024-01-01", "2026-05-01")}
+        hists["2026-04-01"] = {None: 50}
+        rows = _rows(hists, frontier="2026-06-15", data_min="2024-01-01")
+        result = estimate_completion_from_rows(rows)
+        assert result.insufficient_maturity is True
+        assert "arrival_plane_partial" in result.reason
+        assert "2026-04-01" in result.reason
+        assert result.months == []
+
+    def test_within_tolerance_unstamped_rows_do_not_trip_month_guard(self):
+        # A stray unstamped row inside tolerance (5/1000 = 0.5% < 1%) is not
+        # an anomaly; the month still nowcasts.
+        hists = {m: dict(_EXACT_HIST) for m in _month_range("2024-01-01", "2026-05-01")}
+        hists["2026-04-01"] = {10: 200, 40: 300, 70: 300, 100: 150, 130: 45, None: 5}
+        rows = _rows(hists, frontier="2026-06-15", data_min="2024-01-01")
+        result = estimate_completion_from_rows(rows)
+        assert result.insufficient_maturity is False
+        apr = _by_month(result)["2026-04-01"]
+        assert apr.nowcast_value is not None
+
+    def test_unstamped_anchor_cap_month_does_not_trip_month_guard(self):
+        # The frontier month is structurally excluded from estimation AND
+        # output, so its stamping state cannot fabricate any displayed value;
+        # the per-month guard scopes to months actually used.
+        hists = {m: dict(_EXACT_HIST) for m in _month_range("2024-01-01", "2026-05-01")}
+        hists["2026-06-01"] = {None: 40}
+        rows = _rows(hists, frontier="2026-06-15", data_min="2024-01-01")
+        result = estimate_completion_from_rows(rows)
+        assert result.insufficient_maturity is False
+        assert "2026-06-01" not in {p.month.isoformat() for p in result.months}
+
 
 # ---------------------------------------------------------------------------
 # Bootstrap CI
