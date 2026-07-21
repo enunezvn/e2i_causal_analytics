@@ -295,12 +295,19 @@ Configured in `SplitBoundaries` (`src/ml/synthetic/config.py`).
 
 ### Chronological Boundaries
 
-| Split | Date Range | Ratio |
+| Split | Date Range (legacy band) | Ratio |
 |-------|-----------|-------|
 | Train | 2022-01-01 to 2023-06-30 | 60% |
 | Validation | 2023-07-01 to 2024-03-31 | 20% |
-| Test | 2024-04-01 to 2024-09-30 | 15% |
-| Holdout | 2024-10-01 to 2024-12-31 | 5% |
+| Test | 2024-04-01 to 2024-09-30 | 10% (#44; was 15%) |
+| Holdout | 2024-10-01 to 2024-12-31 | 10% (#44; was 5%) |
+
+> **Note (#44, 2026-07-21)**: under the operative `--anchor-to-now` seed path,
+> splits are cut on cumulative ROW share (`BaseGenerator._assign_splits`), not
+> on these legacy calendar boundaries — the date columns document the historical
+> non-anchored band and are consumed only by `get_split_for_date` (tests). The
+> ratios are the operative policy (see `SplitBoundaries` in
+> `src/ml/synthetic/config.py`).
 
 ### Anti-Leakage Guarantees
 
@@ -311,7 +318,7 @@ The `SplitValidator` (`src/ml/synthetic/validators/split_validator.py`) enforces
 3. **7-day temporal gap** -- `temporal_gap_days=7` between splits prevents information bleeding across boundaries.
 4. **Cross-dataset consistency** -- When validating multiple tables, the same patient must be in the same split across all tables.
 5. **Target leakage detection** -- Checks for suspicious distribution differences between train and test targets.
-6. **Ratio tolerance** -- Split ratios must be within 5% of expected values.
+6. **Ratio tolerance** -- Split ratios must be within 2% of expected values (#44; was 5% -- the looser tolerance let a legacy 60/20/15/5 frame pass borderline against the 10/10 policy).
 
 ### Validation Integration
 

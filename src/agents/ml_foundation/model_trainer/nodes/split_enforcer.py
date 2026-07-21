@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate ML split ratios and detect data leakage.
 
-    CRITICAL: This enforces the E2I split policy:
+    CRITICAL: This enforces the E2I split policy (#44 holdout enlargement
+    2026-07-21: test 15%→10%, holdout 5%→10%):
     - Train: 60% ± 2%
     - Validation: 20% ± 2%
-    - Test: 15% ± 2%
-    - Holdout: 5% ± 2%
+    - Test: 10% ± 2%
+    - Holdout: 10% ± 2%
 
     This also checks for potential data leakage by ensuring splits are properly
     isolated.
