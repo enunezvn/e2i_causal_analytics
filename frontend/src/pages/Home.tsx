@@ -96,6 +96,10 @@ interface KPIMetric {
   trend: 'up' | 'down' | 'stable';
   status: 'healthy' | 'warning' | 'critical' | 'neutral';
   sparkline?: number[];
+  /** Hard-bound brand for brand_specific KPIs (kpi_definitions.yaml BR-00x);
+   *  absent for portfolio-wide KPIs. Drives the sibling-brand badge + the
+   *  "hide other brands' KPIs" toggle. */
+  brand?: string;
 }
 
 interface AgentInsight {
@@ -543,6 +547,10 @@ function Home() {
         trend: 'stable' as const,
         status: 'neutral' as const,
         unit: kpi.unit,
+        // Brand hard-binding (API KPIMetadataResponse.brand) — used to be
+        // dropped here, which left the grid unable to label sibling-brand
+        // cards under a selected brand.
+        brand: kpi.brand ?? undefined,
       }));
   }, [kpiListData]);
 
@@ -651,6 +659,18 @@ function Home() {
         status: mapKpiStatus(valueByKpiId.get(kpi.id)?.status),
       }));
   }, [liveKpiMode, batchSettled, batchFailed, effectiveKPIs, valueByKpiId]);
+
+  // A sibling-brand KPI: hard-bound to a specific brand (kpi_definitions.yaml)
+  // that is NOT the selected one. The brand_specific calculators compute
+  // portfolio-wide, so these cards render under any brand scope — the platform
+  // semantic is visible-but-labeled (the home-insights narrative deliberately
+  // references them tagged "[sibling brand: X]", src/insights/home_kpi.py),
+  // NOT a silent hard filter.
+  const isSiblingKpi = useCallback(
+    (kpi: KPIMetric): boolean =>
+      !!kpi.brand && selectedBrand !== 'All' && kpi.brand !== selectedBrand,
+    [selectedBrand]
+  );
 
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
   // computed over synthetic data — the Home tiles (summary), the Model Accuracy
@@ -1206,6 +1226,17 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
+                              // Same vocabulary as the narrative channel's
+                              // "[sibling brand: X]" tag so grid and insight
+                              // text stay coherent. Absent for own-brand,
+                              // brandless, and All-scope cards.
+                              badge={
+                                isSiblingKpi(kpi) ? (
+                                  <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                    sibling brand: {kpi.brand}
+                                  </Badge>
+                                ) : undefined
+                              }
                             />
                           );
                         }
