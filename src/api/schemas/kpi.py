@@ -555,3 +555,124 @@ class KPISegmentedHistoryResponse(BaseModel):
             }
         }
     )
+
+
+class KPINowcastPoint(BaseModel):
+    """One monthly point of the claims-lag nowcast overlay (backlog #45).
+
+    DEDICATED model rather than new optional fields on ``KPIHistoryPoint``:
+    Pydantic serializes every declared field, so extending the shared point
+    model would inject new ``null``/``false`` keys into every existing
+    ``/history`` and ``/history/segmented`` payload (and mutate their generated
+    api.ts schema). A separate model keeps those consumers byte-untouched; the
+    api.ts delta is purely additive.
+    """
+
+    metric_date: str = Field(..., description="Service month (YYYY-MM-DD, first of month)")
+    mature_value: float = Field(
+        ...,
+        description=(
+            "The base KPI value over ALL events (the eventual truth — available "
+            "because the synthetic substrate is omniscient). Matches /history."
+        ),
+    )
+    provisional_value: float = Field(
+        ...,
+        description="Events whose claim_available_date <= frontier (the as-of under-count)",
+    )
+    provisional: bool = Field(
+        ...,
+        description="True while the month's claims are still maturing (not fully arrived)",
+    )
+    completion_factor: float | None = Field(
+        None,
+        description=(
+            "Estimated fraction of the month's claims arrived as of the frontier "
+            "(empirical chain-ladder CF; None when the month is younger than the "
+            "observed lag support)"
+        ),
+    )
+    nowcast_value: float | None = Field(
+        None, description="provisional_value / completion_factor (the grossed-up estimate)"
+    )
+    nowcast_ci_lower: float | None = Field(
+        None, description="Bootstrap CI lower bound (provisional months only)"
+    )
+    nowcast_ci_upper: float | None = Field(
+        None, description="Bootstrap CI upper bound (provisional months only)"
+    )
+
+
+class KPINowcastHistoryResponse(BaseModel):
+    """Claims-lag provisional/nowcast monthly series for one Rx-volume KPI.
+
+    Computed LIVE from the migration-116 lag-triangle registry queries
+    (mirroring the migration-110 segmented-history pattern) — never from the
+    materialized ``kpi_history`` table, whose values stay the mature figures.
+    When the completion curve cannot be estimated honestly
+    (``insufficient_maturity=True``: too few mature months, or the arrival
+    plane is not populated yet), ``points`` is EMPTY and ``reason`` says why —
+    never a fabricated fallback completion factor.
+    """
+
+    kpi_id: str
+    brand: str = Field("", description="'' = global / all brands")
+    data_through: str | None = Field(
+        None, description="Prescription frontier (max event_date) backing the as-of view"
+    )
+    insufficient_maturity: bool = Field(
+        ...,
+        description="True when no honest completion curve could be estimated (see reason)",
+    )
+    reason: str | None = Field(
+        None,
+        description=(
+            "Machine-readable cause when insufficient_maturity "
+            "(no_data | arrival_plane_not_populated | arrival_plane_partial | "
+            "insufficient_mature_months | no_arrived_claims)"
+        ),
+    )
+    mature_months_used: int = Field(
+        0, description="Mature service months backing the completion curve"
+    )
+    anchor_cap_month: str | None = Field(
+        None,
+        description=(
+            "Frontier month excluded from estimation and output (the #853 anchor-cap pile-up month)"
+        ),
+    )
+    arrival_plane_coverage: float | None = Field(
+        None, description="Share of events carrying claim_available_date (1.0 = fully stamped)"
+    )
+    ci_level: float = Field(0.95, description="Nominal bootstrap CI level")
+    count: int = Field(..., description="Number of points")
+    points: list[KPINowcastPoint] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_id": "WS3-BI-005",
+                "brand": "Remibrutinib",
+                "data_through": "2026-07-21",
+                "insufficient_maturity": False,
+                "reason": None,
+                "mature_months_used": 30,
+                "anchor_cap_month": "2026-07-01",
+                "arrival_plane_coverage": 1.0,
+                "ci_level": 0.95,
+                "count": 2,
+                "points": [
+                    {
+                        "metric_date": "2026-05-01",
+                        "mature_value": 1322.0,
+                        "provisional_value": 1057.0,
+                        "provisional": True,
+                        "completion_factor": 0.8,
+                        "nowcast_value": 1321.25,
+                        "nowcast_ci_lower": 1274.0,
+                        "nowcast_ci_upper": 1369.0,
+                    }
+                ],
+            }
+        }
+    )

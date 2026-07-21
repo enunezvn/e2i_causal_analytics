@@ -842,3 +842,129 @@ class TestKPIHistorySegmentedEndpoint:
         assert body["series"] == []
         assert body["count"] == 0
         assert body["data_through"] is None
+
+
+class TestKPIHistoryNowcastEndpoint:
+    """GET /api/kpis/{kpi_id}/history/nowcast (migration 116 live compute, #45).
+
+    Rows mirror the migration-116 triangle shape (service_month /
+    arrival_offset_days / n + data_min / frontier scalars). The live DB does
+    NOT yet carry the arrival columns (migration 115 is PR-A), so everything
+    here synthesizes rows — fetch_nowcast_rows is always patched.
+    """
+
+    @staticmethod
+    def _rows(first="2025-01-01", last="2026-05-01", frontier="2026-06-15"):
+        from datetime import date as _date
+
+        hist = {10: 200, 40: 300, 70: 300, 100: 150, 130: 50}
+        months = []
+        d = _date.fromisoformat(first)
+        stop = _date.fromisoformat(last)
+        while d <= stop:
+            months.append(d.isoformat())
+            d = _date(d.year + (d.month == 12), (d.month % 12) + 1, 1)
+        return [
+            {
+                "service_month": m,
+                "arrival_offset_days": o,
+                "n": n,
+                "data_min": first,
+                "frontier": frontier,
+            }
+            for m in months
+            for o, n in hist.items()
+        ]
+
+    def test_off_family_kpi_is_422_with_family_detail(self):
+        # WS3-BI-010 EXISTS in the registry (it's just not Rx-volume) -> 422.
+        resp = client.get("/api/kpis/WS3-BI-010/history/nowcast")
+        assert resp.status_code == 422
+        assert "WS3-BI-005" in resp.text
+
+    def test_unknown_kpi_id_is_404_not_422(self):
+        # Nonexistent id -> 404 via the same registry lookup /metadata uses
+        # (get_registry().get), BEFORE the off-family 422. The app's global
+        # handler rewraps 404 bodies in the EndpointNotFoundError envelope
+        # (src/api/main.py), so — like the sibling /metadata 404 tests —
+        # assert on the status + envelope category, not the detail text.
+        resp = client.get("/api/kpis/WS3-BI-999/history/nowcast")
+        assert resp.status_code == 404
+        assert "not_found" in resp.text
+
+    def test_on_family_returns_series_shape_and_round_trips(self):
+        from src.api.schemas.kpi import KPINowcastHistoryResponse
+
+        with patch(
+            "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
+            new=AsyncMock(return_value=self._rows()),
+        ) as fetch:
+            resp = client.get(
+                "/api/kpis/WS3-BI-005/history/nowcast",
+                params={"brand": "Remibrutinib"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        fetch.assert_awaited_once_with("WS3-BI-005", brand="Remibrutinib")
+        assert body["kpi_id"] == "WS3-BI-005"
+        assert body["brand"] == "Remibrutinib"
+        assert body["data_through"] == "2026-06-15"
+        assert body["insufficient_maturity"] is False
+        assert body["anchor_cap_month"] == "2026-06-01"
+        assert body["count"] == len(body["points"]) == 17
+        # Schema round-trip.
+        parsed = KPINowcastHistoryResponse.model_validate(body)
+        assert parsed.points[0].metric_date == "2025-01-01"
+        # Mature head: CF=1, nowcast == provisional == mature, no CI.
+        head = body["points"][0]
+        assert head["provisional"] is False
+        assert head["completion_factor"] == pytest.approx(1.0)
+        assert head["nowcast_value"] == pytest.approx(head["mature_value"])
+        assert head["nowcast_ci_lower"] is None
+        # Provisional tail: under-count + nowcast recovering mature + CI.
+        tail = body["points"][-1]
+        assert tail["metric_date"] == "2026-05-01"
+        assert tail["provisional"] is True
+        assert tail["completion_factor"] == pytest.approx(0.5)
+        assert tail["provisional_value"] < tail["mature_value"]
+        assert tail["nowcast_value"] == pytest.approx(tail["mature_value"], rel=1e-9)
+        assert tail["nowcast_ci_lower"] is not None
+        assert tail["nowcast_ci_lower"] <= tail["nowcast_value"] <= tail["nowcast_ci_upper"]
+
+    def test_insufficient_maturity_is_explicit_with_no_points(self):
+        with patch(
+            "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
+            new=AsyncMock(return_value=self._rows(first="2026-01-01")),
+        ):
+            resp = client.get("/api/kpis/WS3-BI-006/history/nowcast")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["insufficient_maturity"] is True
+        assert "insufficient_mature_months" in body["reason"]
+        assert body["points"] == []
+        assert body["count"] == 0
+
+    def test_start_end_date_filter_points(self):
+        with patch(
+            "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
+            new=AsyncMock(return_value=self._rows()),
+        ):
+            resp = client.get(
+                "/api/kpis/WS3-BI-007/history/nowcast",
+                params={"start_date": "2026-03-01", "end_date": "2026-04-30"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [p["metric_date"] for p in body["points"]] == ["2026-03-01", "2026-04-01"]
+
+    def test_empty_rows_report_no_data(self):
+        with patch(
+            "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
+            new=AsyncMock(return_value=[]),
+        ):
+            resp = client.get("/api/kpis/WS3-BI-005/history/nowcast")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["insufficient_maturity"] is True
+        assert body["reason"] == "no_data"
+        assert body["points"] == []

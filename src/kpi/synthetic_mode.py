@@ -263,6 +263,23 @@ def windowed_axis_query_id(base_query_id: str, *, axis: str) -> str:
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
 
 
+def nowcast_triangle_query_id(base_query_id: str) -> str:
+    """Claims-arrival lag-triangle variant id for an Rx-volume base query
+    (migration 116, backlog #45).
+
+    ``{base}_nowcast_triangle[_include_synthetic]``: one call returns the full
+    per-service-month arrival-offset histogram — rows of (service_month,
+    arrival_offset_days, n) plus the prescription data_min/frontier scalars —
+    feeding the completion-factor nowcast estimator
+    (:mod:`src.kpi.nowcast.completion_factor`). Same additive/suffixing rules
+    as :func:`monthly_axis_query_id`: the variants are ADDITIVE and absent from
+    :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so the suffix is appended HERE under
+    the showcase flag.
+    """
+    qid = f"{base_query_id}_nowcast_triangle"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
 def monthly_axis_query_id(base_query_id: str, *, axis: str) -> str:
     """Monthly-series-grouped variant id for an axis-scoped base query.
 
