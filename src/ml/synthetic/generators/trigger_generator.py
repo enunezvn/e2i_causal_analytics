@@ -194,7 +194,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             # arm, acceptance_status is drawn from the arm-conditional mixture and
             # per-patient consistency is enforced (arm=1 <=> >=1 accepted trigger).
             mixture = self._acceptance_mixture()
-            records = []
+            records: list[Dict] = []
             triggers_per_patient = max(1, n // len(self.patient_df))
 
             for _, patient in self.patient_df.iterrows():
@@ -318,14 +318,16 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         if len(tx) == 0:
             return hit
         brand_col = "brand" if "brand" in tx.columns else None
-        dates_by_key: Dict[Any, np.ndarray] = {}
+        raw_dates_by_key: Dict[Any, list] = {}
         ev_dates = pd.to_datetime(tx["event_date"], errors="coerce")
         keys = zip(tx["patient_id"], tx[brand_col], strict=False) if brand_col else tx["patient_id"]
         for key, d in zip(keys, ev_dates, strict=False):
             if pd.isna(d):
                 continue
-            dates_by_key.setdefault(key, []).append(d.to_datetime64())
-        dates_by_key = {k: np.sort(np.asarray(v)) for k, v in dates_by_key.items()}
+            raw_dates_by_key.setdefault(key, []).append(d.to_datetime64())
+        dates_by_key: Dict[Any, np.ndarray] = {
+            k: np.sort(np.asarray(v)) for k, v in raw_dates_by_key.items()
+        }
         ts = pd.to_datetime(triggers["trigger_timestamp"]).to_numpy()
         tbrand = triggers["brand"] if "brand" in triggers.columns else triggers.get("brand_id")
         for i, (pid, t) in enumerate(zip(triggers["patient_id"], ts, strict=False)):

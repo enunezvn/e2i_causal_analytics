@@ -35,8 +35,12 @@ _NINE = _EIGHT + ("psp_enrolled",)
 # initiation now also carries 9 covariates — but a DIFFERENT ninth pair: the two rep/
 # sample arms, NOT copay/psp. persistence/discontinuation still exclude rep/sample.
 _NINE_INITIATION = _SEVEN + ("rep_detailing_high", "sample_dropped")
+# COMM-ARMS Phase 4 (2026-07-20): initiation gains trigger_accepted, planted in the
+# treatment_initiated latent (same rationale as rep/sample — real initiation signal).
+# persistence/discontinuation still exclude it.
+_TEN_INITIATION = _NINE_INITIATION + ("trigger_accepted",)
 _EXPECTED_COVARIATES = {
-    "initiation": _NINE_INITIATION,
+    "initiation": _TEN_INITIATION,
     "persistence": _NINE,
     "discontinuation": _NINE,
 }
@@ -73,14 +77,16 @@ def test_persistence_cohorts_use_nine_covariates():
 
 def test_initiation_uses_rep_sample_not_copay_psp():
     """COMM-ARMS Phase 3: initiation gains rep_detailing_high + sample_dropped, which
-    fold into the treatment_initiated latent (real initiation signal). It must STILL
-    exclude copay_support + psp_enrolled: those enter the discontinuation logit, not
-    treatment_initiated, so fetching them for initiation would widen its serving
-    contract for features carrying no initiation signal (the mirror rationale that keeps
-    rep/sample off persistence/discontinuation)."""
+    fold into the treatment_initiated latent (real initiation signal). Phase 4 adds
+    trigger_accepted on the same rationale. It must STILL exclude copay_support +
+    psp_enrolled: those enter the discontinuation logit, not treatment_initiated, so
+    fetching them for initiation would widen its serving contract for features carrying
+    no initiation signal (the mirror rationale that keeps rep/sample/trigger off
+    persistence/discontinuation)."""
     init_covs = make_patient_spec("initiation", "Remibrutinib").base_covariates
-    assert init_covs == _NINE_INITIATION
+    assert init_covs == _TEN_INITIATION
     assert "rep_detailing_high" in init_covs and "sample_dropped" in init_covs
+    assert "trigger_accepted" in init_covs
     assert "copay_support" not in init_covs and "psp_enrolled" not in init_covs
 
 

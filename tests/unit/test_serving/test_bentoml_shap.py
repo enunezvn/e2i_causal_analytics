@@ -47,11 +47,12 @@ def _fit_bundle(spec, seed: int) -> dict[str, Any]:
             "prior_therapy_lines": rng.integers(0, 4, n),
             # COMM-ARMS Phase 3: rep_detailing_high + sample_dropped are the enriched
             # initiation cohort's 8th + 9th covariates (they fold into the
-            # treatment_initiated latent). Must be present at fit time so the
-            # FeatureBuilder learns them as numeric; the 3-covariate INITIATION constant
-            # ignores these extra columns.
+            # treatment_initiated latent); Phase 4 adds trigger_accepted as the 10th.
+            # Must be present at fit time so the FeatureBuilder learns them as numeric;
+            # the 3-covariate INITIATION constant ignores these extra columns.
             "rep_detailing_high": rng.integers(0, 2, n),
             "sample_dropped": rng.integers(0, 2, n),
+            "trigger_accepted": rng.integers(0, 2, n),
             spec.label_column: rng.integers(0, 2, n),
         }
     )
@@ -77,8 +78,9 @@ class TestShapEndpoint:
         satisfies additivity (base + sum(shap) == inner-LR margin)."""
         bundle = _fit_bundle(make_patient_spec("initiation", "Kisqali"), 7)
         service = _service_with_models(serving_module, {"initiation_kisqali_goldstd_lr_v1": bundle})
-        # initiation is now a 9-covariate gold-standard model (T11 + COMM-ARMS Phase 3:
-        # rep_detailing_high + sample_dropped fold into treatment_initiated) — supply all 9.
+        # initiation is now a 10-covariate gold-standard model (T11 + COMM-ARMS Phase 3:
+        # rep_detailing_high + sample_dropped fold into treatment_initiated; Phase 4:
+        # trigger_accepted) — supply all 10.
         raw = {
             "disease_severity": 5.26,
             "academic_hcp": 0,
@@ -89,6 +91,7 @@ class TestShapEndpoint:
             "prior_therapy_lines": 1,
             "rep_detailing_high": 1,
             "sample_dropped": 0,
+            "trigger_accepted": 1,
         }
 
         out = await service.shap(
