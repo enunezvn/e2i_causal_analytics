@@ -18,6 +18,7 @@ acceptance x outcome table were structurally empty — precision was unfalsifiab
 """
 
 import hashlib
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -188,21 +189,32 @@ _STREAM_FIELDS = [
     "lead_time_days",
     "outcome_tracked",
 ]
-_STREAM_DIGEST = "6c2f05b5711f3685c35ba1f1663796243a2d13cd2871aeb140e8409ea9d0ad80"
+_STREAM_DIGEST = "51d2dd36990bdf4478450e5ebb9deb17b418496f1e69dc9902615973f794cc03"
 
 
 def _stable_token(v) -> str:
-    """Pandas-version-proof scalar serialization: ``to_csv`` default float/
-    datetime formatting is an implementation detail that could re-format on a
-    dependency bump and fire the pin without any stream shift. ``float.hex``
-    is bit-exact, bools collapse to 0/1, timestamps to isoformat."""
+    """Pandas/numpy-version-proof scalar serialization: ``to_csv`` default
+    float/datetime formatting is an implementation detail that could re-format
+    on a dependency bump and fire the pin without any stream shift.
+
+    * floats (incl. np.floating — float32 does NOT subclass float) → bit-exact
+      ``float.hex``; ints via ``int()`` so numpy scalar repr never leaks in;
+    * datetimes → ``isoformat()`` regardless of container (datetime.datetime,
+      datetime.date, pd.Timestamp — a Timestamp subclasses datetime), so the
+      digest is invariant to object-vs-datetime64 dtype inference;
+    * every token is length-prefixed so the \\x1f/\\n join is injective even
+      if a future string value contains a separator."""
     if isinstance(v, (bool, np.bool_)):
-        return "1" if v else "0"
-    if isinstance(v, float):  # np.float64 subclasses float
-        return v.hex()
-    if isinstance(v, pd.Timestamp):
-        return v.isoformat()
-    return str(v)
+        s = "1" if v else "0"
+    elif isinstance(v, (float, np.floating)):
+        s = float(v).hex()
+    elif isinstance(v, (int, np.integer)):
+        s = str(int(v))
+    elif isinstance(v, (datetime, date)):
+        s = v.isoformat()
+    else:
+        s = str(v)
+    return f"{len(s)}:{s}"
 
 
 @pytest.mark.unit
