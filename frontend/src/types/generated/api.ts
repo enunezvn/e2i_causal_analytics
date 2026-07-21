@@ -3525,6 +3525,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/kpis/{kpi_id}/history/nowcast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get KPI history with claims-lag provisional/nowcast overlay
+         * @description Monthly mature / provisional / nowcast series for the Rx-volume family (WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx), computed live from the migration-116 claims-arrival lag triangle (backlog #45) — NOT from the materialized kpi_history table, whose figures stay the mature values. The completion factor is re-estimated empirically from mature service months (chain-ladder); when that cannot be done honestly the response says insufficient_maturity=true with a reason and carries no nowcast values.
+         */
+        get: operations["get_kpi_history_nowcast"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/kpis/calculate": {
         parameters: {
             query?: never;
@@ -12043,6 +12063,148 @@ export interface components {
              * @description Additional notes
              */
             note?: string | null;
+        };
+        /**
+         * KPINowcastHistoryResponse
+         * @description Claims-lag provisional/nowcast monthly series for one Rx-volume KPI.
+         *
+         *     Computed LIVE from the migration-116 lag-triangle registry queries
+         *     (mirroring the migration-110 segmented-history pattern) — never from the
+         *     materialized ``kpi_history`` table, whose values stay the mature figures.
+         *     When the completion curve cannot be estimated honestly
+         *     (``insufficient_maturity=True``: too few mature months, or the arrival
+         *     plane is not populated yet), ``points`` is EMPTY and ``reason`` says why —
+         *     never a fabricated fallback completion factor.
+         * @example {
+         *       "anchor_cap_month": "2026-07-01",
+         *       "arrival_plane_coverage": 1,
+         *       "brand": "Remibrutinib",
+         *       "ci_level": 0.95,
+         *       "count": 2,
+         *       "data_through": "2026-07-21",
+         *       "insufficient_maturity": false,
+         *       "kpi_id": "WS3-BI-005",
+         *       "mature_months_used": 30,
+         *       "points": [
+         *         {
+         *           "completion_factor": 0.8,
+         *           "mature_value": 1322,
+         *           "metric_date": "2026-05-01",
+         *           "nowcast_ci_lower": 1274,
+         *           "nowcast_ci_upper": 1369,
+         *           "nowcast_value": 1321.25,
+         *           "provisional": true,
+         *           "provisional_value": 1057
+         *         }
+         *       ]
+         *     }
+         */
+        KPINowcastHistoryResponse: {
+            /** Kpi Id */
+            kpi_id: string;
+            /**
+             * Brand
+             * @description '' = global / all brands
+             * @default
+             */
+            brand: string;
+            /**
+             * Data Through
+             * @description Prescription frontier (max event_date) backing the as-of view
+             */
+            data_through?: string | null;
+            /**
+             * Insufficient Maturity
+             * @description True when no honest completion curve could be estimated (see reason)
+             */
+            insufficient_maturity: boolean;
+            /**
+             * Reason
+             * @description Machine-readable cause when insufficient_maturity (no_data | arrival_plane_not_populated | insufficient_mature_months | no_arrived_claims)
+             */
+            reason?: string | null;
+            /**
+             * Mature Months Used
+             * @description Mature service months backing the completion curve
+             * @default 0
+             */
+            mature_months_used: number;
+            /**
+             * Anchor Cap Month
+             * @description Frontier month excluded from estimation and output (the #853 anchor-cap pile-up month)
+             */
+            anchor_cap_month?: string | null;
+            /**
+             * Arrival Plane Coverage
+             * @description Share of events carrying claim_available_date (1.0 = fully stamped)
+             */
+            arrival_plane_coverage?: number | null;
+            /**
+             * Ci Level
+             * @description Nominal bootstrap CI level
+             * @default 0.95
+             */
+            ci_level: number;
+            /**
+             * Count
+             * @description Number of points
+             */
+            count: number;
+            /** Points */
+            points?: components["schemas"]["KPINowcastPoint"][];
+        };
+        /**
+         * KPINowcastPoint
+         * @description One monthly point of the claims-lag nowcast overlay (backlog #45).
+         *
+         *     DEDICATED model rather than new optional fields on ``KPIHistoryPoint``:
+         *     Pydantic serializes every declared field, so extending the shared point
+         *     model would inject new ``null``/``false`` keys into every existing
+         *     ``/history`` and ``/history/segmented`` payload (and mutate their generated
+         *     api.ts schema). A separate model keeps those consumers byte-untouched; the
+         *     api.ts delta is purely additive.
+         */
+        KPINowcastPoint: {
+            /**
+             * Metric Date
+             * @description Service month (YYYY-MM-DD, first of month)
+             */
+            metric_date: string;
+            /**
+             * Mature Value
+             * @description The base KPI value over ALL events (the eventual truth — available because the synthetic substrate is omniscient). Matches /history.
+             */
+            mature_value: number;
+            /**
+             * Provisional Value
+             * @description Events whose claim_available_date <= frontier (the as-of under-count)
+             */
+            provisional_value: number;
+            /**
+             * Provisional
+             * @description True while the month's claims are still maturing (not fully arrived)
+             */
+            provisional: boolean;
+            /**
+             * Completion Factor
+             * @description Estimated fraction of the month's claims arrived as of the frontier (empirical chain-ladder CF; None when the month is younger than the observed lag support)
+             */
+            completion_factor?: number | null;
+            /**
+             * Nowcast Value
+             * @description provisional_value / completion_factor (the grossed-up estimate)
+             */
+            nowcast_value?: number | null;
+            /**
+             * Nowcast Ci Lower
+             * @description Bootstrap CI lower bound (provisional months only)
+             */
+            nowcast_ci_lower?: number | null;
+            /**
+             * Nowcast Ci Upper
+             * @description Bootstrap CI upper bound (provisional months only)
+             */
+            nowcast_ci_upper?: number | null;
         };
         /**
          * KPIResultResponse
@@ -25969,6 +26131,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KPISegmentedHistoryResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description KPI not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_kpi_history_nowcast: {
+        parameters: {
+            query?: {
+                /** @description Brand filter ('' / omitted = global) */
+                brand?: string | null;
+                /** @description Earliest metric_date (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Latest metric_date (YYYY-MM-DD) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path: {
+                kpi_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KPINowcastHistoryResponse"];
                 };
             };
             /** @description Authentication required */
