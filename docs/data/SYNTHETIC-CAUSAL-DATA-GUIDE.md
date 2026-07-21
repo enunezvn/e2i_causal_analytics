@@ -280,10 +280,11 @@ and a load through the real `load_rwd_data` entry point):
   (`persistent_180d` is the exact complement of `discontinued_180d`).
 - **Clinically coherent panels** — off-indication covariates (oncology/PNH markers on
   CSU patients) are pruned per brand.
-- **Usable splits** — the exporter reassigns stratified 60/20/15/5 splits per cohort,
-  recorded in `e2i_ml_v3_split_registry.json`. (Historically this also worked around
-  issue #864 — the snapshot's `data_split` was scrambled by the `--anchor-to-now`
-  remap; fixed 2026-06-10, snapshots now carry exact 60/20/15/5 row shares.)
+- **Usable splits** — the exporter reassigns stratified 60/20/10/10 splits per cohort
+  (#44; was 60/20/15/5), recorded in `e2i_ml_v3_split_registry.json`. (Historically
+  this also worked around issue #864 — the snapshot's `data_split` was scrambled by
+  the `--anchor-to-now` remap; fixed 2026-06-10, snapshots carry exact seed-quota
+  row shares: 60/20/10/10 since #44, 60/20/15/5 before.)
 
 AUCs are *intentionally* moderate (the DGP's latent noise keeps labels stochastic —
 required for the prevalence band and realistic causal recovery); anything near 1.0
@@ -371,7 +372,7 @@ safety, full chat-path reachability).
 - **Snapshot `data_split`** — issue #864 (chronological splits scrambled by the
   `--anchor-to-now` remap: holdout 61%/train 25%) is FIXED as of 2026-06-10:
   `_assign_splits` now fills row-mass quotas in date order, so every table carries
-  exact 60/20/15/5 shares. Boundary dates may chunk across ADJACENT splits (the
+  exact 60/20/10/10 shares (#44; was 60/20/15/5). Boundary dates may chunk across ADJACENT splits (the
   anchor cap concentrates ~40% of derived-table rows on the reference date). The
   tier0 exporter still reassigns stratified splits per cohort by design.
 - **OOM discipline** (droplet) — `LOKY_MAX_CPU_COUNT=1`; read parquet with explicit

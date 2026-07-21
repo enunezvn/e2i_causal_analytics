@@ -238,8 +238,8 @@ def get_dataset_stats(
           Splits:
             train: 6,000 (60.0%)
             validation: 2,000 (20.0%)
-            test: 1,500 (15.0%)
-            holdout: 500 (5.0%)
+            test: 1,000 (10.0%)
+            holdout: 1,000 (10.0%)
           Brands:
             Remibrutinib: 3,500
             Fabhalta: 3,200
