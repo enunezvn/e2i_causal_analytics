@@ -208,7 +208,9 @@ class KPIMetadata(BaseModel):
     actionability: str | None = None  # reader_actionable | structurally_constrained | mixed
     actionability_owner: str | None = None  # brand_team | data_strategy | platform
     levers: list[str] = Field(default_factory=list)
-    data_plane: str | None = None  # claims | crm | platform | mixed (workstream default in registry)
+    data_plane: str | None = (
+        None  # claims | crm | platform | mixed (workstream default in registry)
+    )
     measurement_caveat: str | None = None
     direction: str | None = None  # lower_is_better | higher_is_better (display hint)
 

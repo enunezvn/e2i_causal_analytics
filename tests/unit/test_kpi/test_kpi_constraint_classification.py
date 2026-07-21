@@ -93,9 +93,7 @@ def test_ws3_commercial_kpis_are_reader_actionable_with_commercial_levers(regist
         assert kpi.actionability == "reader_actionable"
         assert kpi.actionability_owner == "brand_team"
         assert kpi.levers, f"{kpi_id} must name commercial levers"
-        assert kpi.measurement_caveat, (
-            f"{kpi_id} carries the claims-maturity trend-vs-level caveat"
-        )
+        assert kpi.measurement_caveat, f"{kpi_id} carries the claims-maturity trend-vs-level caveat"
 
 
 def test_dq006_is_structurally_constrained_owned_by_data_strategy(registry):
