@@ -130,8 +130,8 @@ def brier_score_kpi():
 def calibration_slope_kpi():
     return KPIMetadata(
         id="WS1-MP-006",
-        name="Calibration Slope",
-        definition="Reliability diagram slope",
+        name="Calibration Slope Deviation",
+        definition="Reliability diagram slope deviation fold",
         formula="custom",
         calculation_type=CalculationType.DIRECT,
         workstream=Workstream.WS1_MODEL_PERFORMANCE,
@@ -460,7 +460,7 @@ class TestBrierScoreUnavailability:
 
 
 class TestCalibrationSlopeUnavailability:
-    """WS1-MP-006 Calibration Slope: 5 unavailability paths."""
+    """WS1-MP-006 Calibration Slope Deviation: 5 unavailability paths."""
 
     def test_mlflow_client_unavailable(
         self, calculator_no_mlflow, calibration_slope_kpi, monkeypatch

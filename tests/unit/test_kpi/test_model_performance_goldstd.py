@@ -118,8 +118,8 @@ def _band_kpi() -> KPIMetadata:
     """WS1-MP-006 with the real (unchanged) band threshold from kpi_definitions.yaml."""
     return KPIMetadata(
         id="WS1-MP-006",
-        name="Calibration Slope",
-        definition="Calibration Slope",
+        name="Calibration Slope Deviation",
+        definition="Calibration Slope Deviation",
         formula="f",
         calculation_type=CalculationType.DIRECT,
         workstream=Workstream.WS1_MODEL_PERFORMANCE,
@@ -229,6 +229,26 @@ def test_calibration_detail_null_ci_rows_degrade_gracefully():
     assert entry["n"] is None
     assert entry["ci_lower"] is None
     assert entry["ci_upper"] is None
+
+
+def test_ws1_mp006_named_for_deviation_semantics():
+    """The headline is 1 + mean(|slope - 1|), NOT a literal slope — the KPI's
+    display name/definition/formula must say so (codex HIGH: a consumer reading
+    'Calibration Slope' would misread the folded value as a slope). The metric
+    storage key (`calibration_slope`) is unchanged — this is labeling only."""
+    from src.kpi.registry import KPIRegistry
+
+    KPIRegistry.reset()
+    try:
+        kpi = KPIRegistry().get("WS1-MP-006")
+        assert kpi is not None
+        assert kpi.name == "Calibration Slope Deviation"
+        assert "1 + mean(|slope - 1|)" in kpi.definition
+        # The definition must point readers at the per-model TRUE slopes.
+        assert "detail" in kpi.definition
+        assert "1 + mean(" in kpi.formula
+    finally:
+        KPIRegistry.reset()
 
 
 def test_ws1_mp006_band_in_kpi_definitions_unchanged():

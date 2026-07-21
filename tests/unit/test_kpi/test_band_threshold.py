@@ -28,9 +28,9 @@ from src.kpi.registry import KPIRegistry
 def _band_kpi() -> KPIMetadata:
     return KPIMetadata(
         id="WS1-MP-006",
-        name="Calibration Slope",
+        name="Calibration Slope Deviation",
         definition="Reliability diagram slope",
-        formula="logistic_regression(y ~ predicted_prob).slope",
+        formula="1 + mean(|logistic_regression(y ~ predicted_prob).slope - 1|)",
         calculation_type=CalculationType.DIRECT,
         workstream=Workstream.WS1_MODEL_PERFORMANCE,
         threshold=KPIThreshold(ideal=1.0, good_tolerance=0.05, warning_tolerance=0.15),

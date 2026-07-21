@@ -7,7 +7,7 @@ Implements calculators for model performance metrics:
 - F1 Score
 - Recall@Top-K
 - Brier Score
-- Calibration Slope
+- Calibration Slope Deviation
 - SHAP Coverage
 - Feature Drift (PSI)
 
@@ -265,7 +265,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
     def _calc_calibration_slope(
         self, context: dict[str, Any]
     ) -> tuple[float | None, str | None, dict[str, Any] | None]:
-        """Calculate WS1-MP-006: Calibration Slope.
+        """Calculate WS1-MP-006: Calibration Slope Deviation.
 
         PRIMARY: per-brand aggregate of the gold-standard models' holdout
         ``calibration_slope`` — ``1 + mean(|slope_i - 1|)``, computed by
