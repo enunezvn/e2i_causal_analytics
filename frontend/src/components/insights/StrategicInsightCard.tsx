@@ -1,6 +1,11 @@
-import { RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronDown, RefreshCw, Sparkles } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import type { GroundingChip } from '@/types/insights';
 
 interface StrategicInsightCardProps {
@@ -78,14 +83,21 @@ export function StrategicInsightCard({
               </ul>
             )}
             {structuralConsiderations && (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-                <p className="mb-1 font-medium text-amber-700 dark:text-amber-400">
-                  Structural constraints — escalation &amp; investment considerations
-                </p>
-                <p className="whitespace-pre-line text-muted-foreground">
-                  {structuralConsiderations}
-                </p>
-              </div>
+              /* Supplementary channel: collapsed by default (frontend review
+                 2026-07-22) — escalation/investment context for data-strategy
+                 owners, expandable on demand so it never crowds the
+                 recommendations above. */
+              <Collapsible className="rounded-md border border-amber-500/30 bg-amber-500/5 text-sm">
+                <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 p-3 text-left font-medium text-amber-700 dark:text-amber-400">
+                  <span>Structural constraints — escalation &amp; investment considerations</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <p className="whitespace-pre-line px-3 pb-3 text-muted-foreground">
+                    {structuralConsiderations}
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
             )}
             {grounding.length > 0 && (
               <div className="flex flex-wrap gap-2 pt-1">

@@ -262,6 +262,13 @@ async def home_kpi_insight(
     def _load() -> dict[str, Any]:
         calc = get_kpi_calculator()
         metas = calc.list_kpis()
+        # Brand scope (frontend review 2026-07-22): under a selected brand,
+        # another brand's hard-bound KPIs leave the batch, the grounding, AND
+        # the constraint context together — mirroring the dashboard grid's
+        # automatic brand scoping (build_grounding re-applies the same filter
+        # as defense in depth).
+        if req.brand != "All":
+            metas = [m for m in metas if not m.brand or m.brand == req.brand]
         # Same context shape the dashboard's POST /kpis/batch sends; use_cache
         # means this usually re-reads the values the grid just computed.
         context: dict[str, Any] = {}

@@ -55,4 +55,33 @@ describe('StrategicInsightCard', () => {
     await userEvent.click(btn);
     expect(onGenerate).toHaveBeenCalledOnce();
   });
+
+  // Structural constraints are a supplementary channel — collapsed by default,
+  // expandable on click (frontend review 2026-07-22).
+  describe('structural considerations collapsible', () => {
+    it('renders the header collapsed by default — the content is hidden until expanded', async () => {
+      render(
+        <StrategicInsightCard
+          insight="Adherence drives NRx."
+          structuralConsiderations="Claims lag gates outcome metrics."
+        />
+      );
+      const trigger = screen.getByRole('button', {
+        name: /structural constraints — escalation & investment considerations/i,
+      });
+      expect(trigger).toHaveAttribute('data-state', 'closed');
+      expect(screen.queryByText(/claims lag gates outcome metrics/i)).not.toBeInTheDocument();
+
+      await userEvent.click(trigger);
+      expect(screen.getByText(/claims lag gates outcome metrics/i)).toBeInTheDocument();
+
+      await userEvent.click(trigger);
+      expect(screen.queryByText(/claims lag gates outcome metrics/i)).not.toBeInTheDocument();
+    });
+
+    it('renders no structural block at all when the channel is empty', () => {
+      render(<StrategicInsightCard insight="Adherence drives NRx." structuralConsiderations="" />);
+      expect(screen.queryByText(/structural constraints/i)).not.toBeInTheDocument();
+    });
+  });
 });

@@ -61,9 +61,6 @@ export interface KPICardProps {
   icon?: React.ReactNode;
   /** Custom color class for the value */
   valueColor?: string;
-  /** Optional badge rendered between the header and the value (e.g. the
-   *  Home grid's "sibling brand: X" chip on brand-hard-bound KPIs). */
-  badge?: React.ReactNode;
 }
 
 // =============================================================================
@@ -162,7 +159,6 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
       size = 'md',
       icon,
       valueColor,
-      badge,
     },
     ref
   ) => {
@@ -288,9 +284,6 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
             )}
           </div>
         </div>
-
-        {/* Optional badge (e.g. sibling-brand chip) */}
-        {badge && <div className="mb-1">{badge}</div>}
 
         {/* Value and trend */}
         <div className="flex items-baseline gap-2 mb-2">

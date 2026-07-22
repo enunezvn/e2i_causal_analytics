@@ -11,6 +11,15 @@
   proved insufficient there) without its placeholder machinery.
 * build_grounding renders a [lower is better] hint from the registry direction
   field (the WS1-DQ-006 rename's second half).
+* Brand scoping (frontend review 2026-07-22): under a selected brand, another
+  brand's hard-bound KPIs are EXCLUDED from the grounding (rows, coverage
+  denominator, chips) — the dashboard grid applies the identical filter, so
+  the narrative can never cite a card that is not on screen. Supersedes the
+  "[sibling brand: X]" tagging.
+* Lag-leak guard (same review): the claims adjudication/runout constraint is
+  stated once, in structural_considerations only. Channel-1 leakage earns one
+  fresh-sample retry; a persistent leak is SERVED (logged) — a repeated caveat
+  is a style defect, never worth the factual fallback.
 """
 
 from types import SimpleNamespace
@@ -141,6 +150,105 @@ def test_range_digits_stay_individually_quotable():
     with patch.object(home_kpi, "run_signature", return_value=ok):
         out = home_kpi.generate_insight(_g())
     assert out["is_fallback"] is False
+
+
+def test_lag_leak_in_channel_1_retries_once_with_fresh_sample():
+    leaking = _pred(
+        "Trigger Recall at 67.5% is good; the adjudication/runout lag under-counts recent windows.",
+        structural="Claims adjudication lag of 1-3 months gates outcome metrics.",
+    )
+    clean = _pred(
+        "Trigger Recall at 67.5% is good.",
+        structural="Claims adjudication lag of 1-3 months gates outcome metrics.",
+    )
+    with patch.object(home_kpi, "run_signature", side_effect=[leaking, clean]) as rs:
+        out = home_kpi.generate_insight(_g())
+    assert out["is_fallback"] is False
+    assert "adjudication" not in out["insight"]
+    assert rs.call_count == 2
+    assert rs.call_args_list[1].kwargs.get("lm_cache") is False
+
+
+def test_persistent_lag_leak_is_served_not_degraded_to_fallback():
+    leaking = _pred(
+        "Trigger Recall at 67.5% is good; runout gates the recent windows.",
+        structural="Claims adjudication lag of 1-3 months gates outcome metrics.",
+    )
+    with patch.object(home_kpi, "run_signature", return_value=leaking) as rs:
+        out = home_kpi.generate_insight(_g())
+    assert out["is_fallback"] is False  # style defect, not an ungrounded figure
+    assert rs.call_count == 2
+    assert "runout" in out["insight"]
+
+
+def test_lag_terms_in_structural_channel_alone_are_not_a_leak():
+    ok = _pred(
+        "Trigger Recall at 67.5% is good; TRx Share at 25.6% needs commercial focus.",
+        ["Focus call-plan coverage to lift TRx Share from 25.6%."],
+        structural="A 1-3 months adjudication/runout lag gates the outcome metrics.",
+    )
+    with patch.object(home_kpi, "run_signature", return_value=ok) as rs:
+        out = home_kpi.generate_insight(_g())
+    assert out["is_fallback"] is False
+    assert rs.call_count == 1
+
+
+def _brand_metas():
+    own = SimpleNamespace(
+        id="FAB-001",
+        name="Fabhalta - % PNH Tested",
+        workstream=SimpleNamespace(value="brand_specific"),
+        unit=None,
+        value_format="percent",
+        brand="Fabhalta",
+        direction=None,
+    )
+    sibling = SimpleNamespace(
+        id="KIS-001",
+        name="Kisqali - Dx Adoption",
+        workstream=SimpleNamespace(value="brand_specific"),
+        unit=None,
+        value_format="percent",
+        brand="Kisqali",
+        direction=None,
+    )
+    portfolio = SimpleNamespace(
+        id="WS3-BI-001",
+        name="Total TRx",
+        workstream=SimpleNamespace(value="ws3_business"),
+        unit=None,
+        value_format=None,
+        brand=None,
+        direction=None,
+    )
+    results = [
+        SimpleNamespace(kpi_id="FAB-001", value=0.63, error=None, status="good"),
+        SimpleNamespace(kpi_id="KIS-001", value=0.21, error=None, status="good"),
+        SimpleNamespace(kpi_id="WS3-BI-001", value=11634.0, error=None, status="informational"),
+    ]
+    return [own, sibling, portfolio], results
+
+
+def test_build_grounding_scopes_out_other_brands_hard_bound_kpis():
+    metas, results = _brand_metas()
+    g = home_kpi.build_grounding("Fabhalta", None, metas, results)
+    assert "Fabhalta - % PNH Tested" in g["kpi_table"]
+    assert "Total TRx" in g["kpi_table"]
+    # The other brand's row leaves the table, the coverage denominator, and
+    # the chips together — never a tagged leftover.
+    assert "Kisqali" not in g["kpi_table"]
+    assert "sibling brand" not in g["kpi_table"]
+    assert g["coverage"] == "2 of 2 defined KPIs computed for this scope"
+    chips = {c["label"]: c["value"] for c in g["grounding"]}
+    assert chips["Computed"] == "2/2"
+
+
+def test_build_grounding_keeps_every_brand_first_class_under_all():
+    metas, results = _brand_metas()
+    g = home_kpi.build_grounding("All", None, metas, results)
+    assert "Fabhalta - % PNH Tested" in g["kpi_table"]
+    assert "Kisqali - Dx Adoption" in g["kpi_table"]
+    assert g["coverage"] == "3 of 3 defined KPIs computed for this scope"
 
 
 def test_build_grounding_renders_lower_is_better_hint():

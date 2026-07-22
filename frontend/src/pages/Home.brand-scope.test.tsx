@@ -1,21 +1,23 @@
 /**
- * Home Page — Sibling-Brand Badge + Hide Toggle Tests (Workstream A)
- * ==================================================================
+ * Home Page — Automatic Brand Scoping of the KPI Grid
+ * ===================================================
  *
  * The 5 brand_specific KPIs are per-brand hard-bound (kpi_definitions.yaml:
  * BR-001/002 Remibrutinib, BR-003 Fabhalta, BR-004/005 Kisqali) but compute
- * portfolio-wide, so another brand's cards render under any brand-selector
- * value. The home-insights narrative deliberately references them tagged
- * "[sibling brand: X]" (src/insights/home_kpi.py) — so the grid fix is
- * visible-but-labeled, NOT a hard filter:
+ * portfolio-wide. Frontend review 2026-07-22: the brand selector itself is the
+ * filter — under a selected brand, other brands' cards are scoped out of the
+ * grid AUTOMATICALLY (no badge, no "hide other brands" toggle; supersedes the
+ * earlier visible-but-labeled semantic). Under 'All' every brand's cards are
+ * first-class. The backend insight grounding (src/insights/home_kpi.py)
+ * applies the identical scope so narrative and grid stay coherent.
  *
- * - A1: the apiKPIs transform carries kpi.brand through (it used to drop it).
- * - A2: sibling-brand cards get a "sibling brand: {brand}" badge (same
- *       vocabulary as the narrative channel) — only under a selected brand.
- * - A3: a "hide other brands' KPIs" toggle scoped to the KPI grid, default
- *       OFF, persisted in localStorage.
- * - A4: tabs/counters stay coherent with the toggle on; the empty-state path
- *       renders (never a silent blank grid) if every computed KPI is hidden.
+ * - S1: sibling-brand cards leave the grid, tabs, and counts together under a
+ *       selected brand; own-brand and portfolio (brandless) cards remain.
+ * - S2: under 'All' nothing is filtered and nothing is badged.
+ * - S3: the "Showing N of M" denominator counts only in-scope definitions.
+ * - S4: honest empty state (never a silent blank grid) when every computed
+ *       KPI belongs to another brand.
+ * - S5: Demo Mode (API offline) applies the same scoping to SAMPLE_KPIS.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -67,8 +69,6 @@ import { useOpportunities } from '@/hooks/api/use-gaps';
 import { useHomeKpiInsight } from '@/hooks/api/use-insights';
 import { useAlerts, useBrandModelSummary } from '@/hooks/api/use-monitoring';
 import { getValidated } from '@/lib/api-client';
-
-const HIDE_SIBLING_KPIS_STORAGE_KEY = 'e2i-home-hide-sibling-kpis';
 
 /** Reset all Home hooks to their honest "no data yet" defaults. */
 function resetHomeHookDefaults() {
@@ -194,7 +194,7 @@ function bannerStat(label: string): string | null | undefined {
   return labelEl.parentElement?.querySelector('.font-semibold')?.textContent;
 }
 
-describe('Home sibling-brand badge + hide toggle (Workstream A)', () => {
+describe('Home automatic brand scoping of the KPI grid', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetHomeHookDefaults();
@@ -202,36 +202,40 @@ describe('Home sibling-brand badge + hide toggle (Workstream A)', () => {
   });
 
   // ==========================================================================
-  // A1 + A2 — badge on sibling-brand cards only, under a selected brand only
+  // S2 — 'All' scope: nothing filtered, nothing badged, no toggle anywhere
   // ==========================================================================
 
-  it('shows no sibling-brand badge (and no hide toggle) under the All selector', () => {
+  it("shows every brand's cards first-class under the All selector", () => {
     mockLiveKpis(BRAND_KPIS);
     renderWithAllProviders(<Home />);
 
-    // All three brand cards render (visible-but-labeled semantic: nothing is
-    // filtered), but under 'All' every brand is in scope — no badge, no toggle.
     expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
     expect(screen.getByText('Fabhalta - % PNH Tested')).toBeInTheDocument();
     expect(screen.getByText('Kisqali - Dx Adoption')).toBeInTheDocument();
     expect(screen.queryByText(/sibling brand:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Hide other brands/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing 3 of 3 defined KPIs/)).toBeInTheDocument();
   });
 
-  it('badges sibling-brand cards — and only those — under a selected brand', async () => {
+  // ==========================================================================
+  // S1 — selected brand: other brands' cards leave grid + counts automatically
+  // ==========================================================================
+
+  it("scopes other brands' cards out of the grid automatically under a selected brand", async () => {
     mockLiveKpis(BRAND_KPIS);
     renderWithAllProviders(<Home />);
     await selectBrand('Remibrutinib');
 
-    // Sibling cards stay visible AND get the narrative channel's vocabulary.
-    expect(screen.getByText('sibling brand: Fabhalta')).toBeInTheDocument();
-    expect(screen.getByText('sibling brand: Kisqali')).toBeInTheDocument();
-    // The own-brand card is never badged.
     expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
-    expect(screen.queryByText('sibling brand: Remibrutinib')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fabhalta - % PNH Tested')).not.toBeInTheDocument();
+    expect(screen.queryByText('Kisqali - Dx Adoption')).not.toBeInTheDocument();
+    // No residue of the superseded visible-but-labeled semantic.
+    expect(screen.queryByText(/sibling brand:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Hide other brands/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /hide other brands/i })).not.toBeInTheDocument();
   });
 
-  it('does not badge brandless (portfolio) KPIs under a selected brand', async () => {
+  it('keeps brandless (portfolio) KPIs visible under a selected brand', async () => {
     mockLiveKpis([
       { id: 'WS3-BI-001', name: 'TRx Growth', workstream: 'ws3_business', value: 5.2 },
       ...BRAND_KPIS,
@@ -239,73 +243,17 @@ describe('Home sibling-brand badge + hide toggle (Workstream A)', () => {
     renderWithAllProviders(<Home />);
     await selectBrand('Fabhalta');
 
-    // Business is the first (active) tab: the brandless KPI renders unbadged.
+    // Business is the first (active) tab: the brandless KPI renders.
     expect(screen.getByText('TRx Growth')).toBeInTheDocument();
-    expect(screen.queryByText(/sibling brand:/)).not.toBeInTheDocument();
 
-    // The Brand tab carries the badges for the two non-Fabhalta cards.
+    // The Brand tab holds only the own-brand card.
     activateTab(/Brand$/);
-    expect(screen.getByText('sibling brand: Remibrutinib')).toBeInTheDocument();
-    expect(screen.getByText('sibling brand: Kisqali')).toBeInTheDocument();
-    expect(screen.queryByText('sibling brand: Fabhalta')).not.toBeInTheDocument();
-  });
-
-  // ==========================================================================
-  // A3 — hide toggle (default OFF, grid-scoped, persisted)
-  // ==========================================================================
-
-  it('hide toggle removes sibling-brand cards from grid + counts, and restores them', async () => {
-    mockLiveKpis(BRAND_KPIS);
-    renderWithAllProviders(<Home />);
-    await selectBrand('Remibrutinib');
-
-    // Default OFF: everything visible-but-labeled.
-    const toggle = screen.getByRole('checkbox', { name: /hide other brands/i });
-    expect(toggle).not.toBeChecked();
-    expect(screen.getByText(/Showing 3 of 3 defined KPIs/)).toBeInTheDocument();
-
-    // ON: sibling cards leave the grid AND the shown-count together.
-    fireEvent.click(toggle);
-    expect(screen.queryByText('Fabhalta - % PNH Tested')).not.toBeInTheDocument();
-    expect(screen.queryByText('Kisqali - Dx Adoption')).not.toBeInTheDocument();
-    expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
-    expect(screen.getByText(/Showing 1 of 3 defined KPIs/)).toBeInTheDocument();
-
-    // OFF again: sibling cards come back.
-    fireEvent.click(toggle);
     expect(screen.getByText('Fabhalta - % PNH Tested')).toBeInTheDocument();
-    expect(screen.getByText('Kisqali - Dx Adoption')).toBeInTheDocument();
-    expect(screen.getByText(/Showing 3 of 3 defined KPIs/)).toBeInTheDocument();
+    expect(screen.queryByText('Remi - AH Uncontrolled %')).not.toBeInTheDocument();
+    expect(screen.queryByText('Kisqali - Dx Adoption')).not.toBeInTheDocument();
   });
 
-  it('persists the toggle choice to localStorage', async () => {
-    mockLiveKpis(BRAND_KPIS);
-    renderWithAllProviders(<Home />);
-    await selectBrand('Remibrutinib');
-
-    const toggle = screen.getByRole('checkbox', { name: /hide other brands/i });
-    fireEvent.click(toggle);
-    expect(localStorage.getItem(HIDE_SIBLING_KPIS_STORAGE_KEY)).toBe('true');
-    fireEvent.click(toggle);
-    expect(localStorage.getItem(HIDE_SIBLING_KPIS_STORAGE_KEY)).toBe('false');
-  });
-
-  it('initializes hidden from a persisted preference', async () => {
-    localStorage.setItem(HIDE_SIBLING_KPIS_STORAGE_KEY, 'true');
-    mockLiveKpis(BRAND_KPIS);
-    renderWithAllProviders(<Home />);
-    await selectBrand('Remibrutinib');
-
-    expect(screen.getByRole('checkbox', { name: /hide other brands/i })).toBeChecked();
-    expect(screen.queryByText('Fabhalta - % PNH Tested')).not.toBeInTheDocument();
-    expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
-  });
-
-  // ==========================================================================
-  // A4 — tab derivation / counters / empty state with the toggle on
-  // ==========================================================================
-
-  it('brand banner counters count only visible cards with the toggle on', async () => {
+  it('brand banner counters count only in-scope cards', async () => {
     mockLiveKpis([
       { ...BRAND_KPIS[0], status: 'good' },
       { ...BRAND_KPIS[1], status: 'warning' },
@@ -314,61 +262,71 @@ describe('Home sibling-brand badge + hide toggle (Workstream A)', () => {
     renderWithAllProviders(<Home />);
     await selectBrand('Remibrutinib');
 
-    // Toggle OFF: all three cards count (visible-but-labeled).
-    expect(bannerStat('KPIs')).toBe('3');
-    expect(bannerStat('On Track')).toBe('2');
-    expect(bannerStat('Attention')).toBe('1');
-
-    // Toggle ON: only the own-brand card remains counted.
-    fireEvent.click(screen.getByRole('checkbox', { name: /hide other brands/i }));
+    // Selected brand: only the own-brand card is counted.
     expect(bannerStat('KPIs')).toBe('1');
     expect(bannerStat('On Track')).toBe('1');
     expect(bannerStat('Attention')).toBe('0');
   });
 
-  it('keeps tabs coherent with the toggle on: sibling-only workstreams drop out', async () => {
+  it('drops sibling-only workstreams from the tab list under a selected brand', async () => {
+    mockLiveKpis([
+      { id: 'WS3-BI-001', name: 'TRx Growth', workstream: 'ws3_business', value: 5.2 },
+      { id: 'BR-003', name: 'Fabhalta - % PNH Tested', workstream: 'brand_specific', brand: 'Fabhalta', value: 63 },
+    ]);
+    renderWithAllProviders(<Home />);
+
+    // 'All': the Brand tab is present.
+    expect(screen.getByRole('tab', { name: /Brand$/ })).toBeInTheDocument();
+
+    await selectBrand('Remibrutinib');
+    // Remibrutinib has no own-brand card here → the Brand tab drops out with it.
+    const tablist = screen.getByRole('tablist');
+    expect(within(tablist).queryByText('Brand')).not.toBeInTheDocument();
+    expect(screen.getByText('TRx Growth')).toBeInTheDocument();
+  });
+
+  // ==========================================================================
+  // S3 — "Showing N of M": denominator counts only in-scope definitions
+  // ==========================================================================
+
+  it('scopes the "Showing N of M" denominator to the selected brand', async () => {
     mockLiveKpis([
       { id: 'WS3-BI-001', name: 'TRx Growth', workstream: 'ws3_business', value: 5.2 },
       ...BRAND_KPIS,
     ]);
     renderWithAllProviders(<Home />);
-    await selectBrand('Remibrutinib');
+    expect(screen.getByText(/Showing 4 of 4 defined KPIs/)).toBeInTheDocument();
 
-    // Brand tab present while its own-brand card is visible.
-    expect(screen.getByRole('tab', { name: /Brand$/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('checkbox', { name: /hide other brands/i }));
-    // Remibrutinib keeps its own-brand card, so the Brand tab survives...
-    expect(screen.getByRole('tab', { name: /Brand$/ })).toBeInTheDocument();
-    activateTab(/Brand$/);
-    expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
-    expect(screen.queryByText('Fabhalta - % PNH Tested')).not.toBeInTheDocument();
+    await selectBrand('Remibrutinib');
+    // 2 in scope (portfolio + own-brand); the other 2 brands' definitions
+    // must not inflate the denominator.
+    expect(screen.getByText(/Showing 2 of 2 defined KPIs for Remibrutinib/)).toBeInTheDocument();
   });
 
-  it('renders an honest empty state (never a silent blank grid) when the toggle hides every computed KPI', async () => {
+  // ==========================================================================
+  // S4 — honest empty state when the scope holds only other brands' cards
+  // ==========================================================================
+
+  it('renders an honest empty state (never a silent blank grid) when every computed KPI is out of scope', async () => {
     // Pathological guard: a brand with NO own-brand computed card. Real data
     // keeps >=1 own-brand card per brand, but the empty-state path must hold.
     mockLiveKpis([BRAND_KPIS[1], BRAND_KPIS[2]]); // Fabhalta + Kisqali only
     renderWithAllProviders(<Home />);
     await selectBrand('Remibrutinib');
 
-    const toggle = screen.getByRole('checkbox', { name: /hide other brands/i });
-    fireEvent.click(toggle);
-
-    // Everything visible is gone — the grid must say so, not go blank...
     expect(screen.queryByText('Fabhalta - % PNH Tested')).not.toBeInTheDocument();
     expect(screen.queryByText('Kisqali - Dx Adoption')).not.toBeInTheDocument();
     expect(screen.getByText('No KPIs available')).toBeInTheDocument();
-    // ...the Brand tab drops out of the tablist...
+    expect(
+      screen.getByText(/belongs to another brand — 2 scoped out by the Remibrutinib selection/)
+    ).toBeInTheDocument();
+    // ...and the Brand tab drops out of the tablist with the cards.
     const tablist = screen.getByRole('tablist');
     expect(within(tablist).queryByText('Brand')).not.toBeInTheDocument();
-    // ...and the toggle stays rendered so the user can turn the cards back on.
-    expect(screen.getByRole('checkbox', { name: /hide other brands/i })).toBeChecked();
   });
 
   // ==========================================================================
-  // Demo Mode (API offline) parity — codex HIGH: the demo-mode KPICard call
-  // must apply the SAME badge/toggle logic as the live path. Each per-brand
-  // SAMPLE_KPIS set carries one sibling-brand exemplar for this.
+  // S5 — Demo Mode (API offline) parity: SAMPLE_KPIS get the same scoping
   // ==========================================================================
 
   describe('Demo Mode (API offline) parity', () => {
@@ -380,36 +338,20 @@ describe('Home sibling-brand badge + hide toggle (Workstream A)', () => {
       });
     });
 
-    it('badges the sibling-brand sample card under a selected brand (parity with live path)', async () => {
+    it('filters the sibling-brand sample card under a selected brand (parity with live path)', async () => {
       renderWithAllProviders(<Home />);
 
-      // Demo mode is announced, and under 'All' nothing is badged.
+      // Demo mode is announced, and under 'All' nothing is filtered.
       expect(screen.getByText('API Offline (using sample data)')).toBeInTheDocument();
-      expect(screen.queryByText(/sibling brand:/)).not.toBeInTheDocument();
 
       await selectBrand('Remibrutinib');
 
-      // The Remibrutinib demo set's Fabhalta exemplar renders badged; the
-      // own-brand cards stay unbadged — identical logic to the live path.
-      expect(screen.getByText('Fabhalta TRx')).toBeInTheDocument();
-      expect(screen.getByText('sibling brand: Fabhalta')).toBeInTheDocument();
-      expect(screen.queryByText('sibling brand: Remibrutinib')).not.toBeInTheDocument();
-    });
-
-    it('hide toggle removes the sibling-brand sample card via the same visible set', async () => {
-      renderWithAllProviders(<Home />);
-      await selectBrand('Remibrutinib');
-
-      const toggle = screen.getByRole('checkbox', { name: /hide other brands/i });
-      expect(toggle).not.toBeChecked();
-
-      fireEvent.click(toggle);
+      // The Remibrutinib demo set's Fabhalta exemplar is scoped out; the
+      // own-brand cards remain — identical logic to the live path.
       expect(screen.queryByText('Fabhalta TRx')).not.toBeInTheDocument();
-      // Own-brand demo cards remain.
       expect(screen.getByText('TRx')).toBeInTheDocument();
-
-      fireEvent.click(toggle);
-      expect(screen.getByText('Fabhalta TRx')).toBeInTheDocument();
+      expect(screen.queryByText(/sibling brand:/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Hide other brands/)).not.toBeInTheDocument();
     });
   });
 });
