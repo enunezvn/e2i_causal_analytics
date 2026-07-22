@@ -2468,10 +2468,71 @@ brand_ndc_codes:
 #      vendor names are deliberately NOT rendered to the LM (no invented
 #      brand-vendor pairings; coverage is described generically). Per-brand
 #      completeness-curve reconciliation remains a TRIG-DECOMP stake.
+#
+# mitigation_playbook (2026-07-22, frontend-review item 2b — strategy agreed
+# with the product owner) is the ONE deliberate exception to the no-vendor
+# rule above: an AUTHORED playbook of proxy source classes that deliver
+# faster SIGNAL than adjudicated claims (faster CLOSED claims are not
+# purchasable — the band IS the payer adjudication lifecycle + runout).
+# Its illustrative vendor names ARE rendered to the LM, gated two ways:
+# the signature carries vendor_validation_criteria the LM must apply before
+# naming any vendor, and src/insights/home_kpi.py enforces a deterministic
+# vendor-allowlist guard (a known-vendor mention absent from the rendered
+# context is rejected fail-closed, like an invented digit). The playbook is
+# also served verbatim to the UI as StrategicInsightResponse.mitigation_playbook.
 
 data_constraints:
   claims_lag_band: "1-3 months"
   crm_source: "Veeva CRM"
+  # Claims-lag mitigation playbook — AUTHORED, deterministic (see the header
+  # comment above for the vendor-rendering exception + guard). Latency bands
+  # are class-level figures, not vendor promises. Wording rule: never restate
+  # the "1-3 months" band here — the constraint context must carry exactly ONE
+  # claims-adjudication lag figure (locked by
+  # tests/insights/test_data_constraint_context.py).
+  mitigation_playbook:
+    preamble: >-
+      Faster adjudicated (closed) claims are not achievable — the
+      adjudication/runout band above is the payer lifecycle itself, not a
+      vendor inefficiency. Faster SIGNAL is achievable via leading-indicator
+      proxy sources; proxies are trend indicators layered on the closed-claims
+      plane, never replacement levels.
+    vendor_note: >-
+      Vendor names are illustrative examples of each source class, subject to
+      data-strategy procurement validation (coverage, compliance, tokenized
+      linkage) — not vetted or contracted suppliers.
+    vendor_validation_criteria:
+      - "Named on this playbook's illustrative-vendor list — never introduce a vendor from memory"
+      - "Paired only with the source class this playbook pairs it with"
+      - "Any latency stated for it matches this playbook's band for that source class"
+      - "Framed as an illustrative example pending data-strategy validation, never as a vetted or contracted supplier"
+    source_classes:
+      - name: "Specialty pharmacy / hub dispense & status feeds"
+        latency: "24-72 hours from dispense"
+        coverage: >-
+          near-census on own-brand dispenses for specialty-distributed
+          products, with referral and prior-authorization status visible
+          upstream of the claim — the strongest proxy for this portfolio
+        illustrative_vendors: [AssistRx, CareMetx, CoverMyMeds]
+      - name: "Open (pre-adjudicated) claims"
+        latency: "1-7 days from service"
+        coverage: >-
+          partial capture and unsettled reversals — reliable for
+          trend/direction, not final levels
+        illustrative_vendors: [IQVIA, Symphony Health, Komodo Health, HealthVerity, PurpleLab]
+      - name: "Lab & EHR feeds"
+        latency: "days from result"
+        coverage: >-
+          diagnosis-gated leading indicators (e.g. PNH testing ahead of
+          Fabhalta claims); coverage varies by network
+        illustrative_vendors: [Prognos Health, Truveta, Datavant]
+      - name: "Completion-factor nowcast on closed claims"
+        latency: "immediate (modeled)"
+        coverage: >-
+          models the as-of-today under-count of recent claim windows from the
+          arrival plane
+        status: "already live in this platform (the provisional/nowcast KPI overlay)"
+        illustrative_vendors: []
   # Backlog #45: the synthetic ADJUDICATION arrival-plane parameters. This
   # OPERATIONALIZES claims_lag_band in the substrate (the band is no longer
   # purely descriptive). Per source-class lag in DAYS; the completion-factor

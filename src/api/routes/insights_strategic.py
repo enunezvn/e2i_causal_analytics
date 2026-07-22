@@ -40,6 +40,30 @@ class GroundingChip(BaseModel):
     value: str
 
 
+class MitigationSourceClass(BaseModel):
+    """One proxy source class from the authored claims-lag mitigation playbook
+    (domain_vocabulary.yaml data_constraints.mitigation_playbook)."""
+
+    name: str
+    latency: str
+    coverage: str
+    illustrative_vendors: list[str] = Field(default_factory=list)
+    # e.g. "already live in this platform (the provisional/nowcast KPI overlay)"
+    status: str | None = None
+
+
+class MitigationPlaybook(BaseModel):
+    """The authored claims-lag mitigation playbook, served VERBATIM (never
+    LM-generated) so the structural-constraints block is actionable: proxy
+    source classes, class-level latency bands, coverage caveats, illustrative
+    vendors pending data-strategy validation (frontend review 2026-07-22,
+    item 2b)."""
+
+    preamble: str
+    vendor_note: str
+    source_classes: list[MitigationSourceClass] = Field(default_factory=list)
+
+
 class StrategicInsightResponse(BaseModel):
     insight: str
     key_takeaways: list[str] = Field(default_factory=list)
@@ -53,6 +77,10 @@ class StrategicInsightResponse(BaseModel):
     # so channel-1 recommendations are not diluted. None on surfaces that do
     # not produce it.
     structural_considerations: str | None = None
+    # Deterministic companion to the structural block (home-kpis today):
+    # authored playbook rendered by the page beneath the LM channel. None on
+    # surfaces that do not produce it, and on playbook authoring failures.
+    mitigation_playbook: MitigationPlaybook | None = None
 
 
 def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightResponse:
@@ -64,6 +92,7 @@ def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightRespo
         generated_at=datetime.now(timezone.utc).isoformat(),
         provenance=provenance,
         structural_considerations=payload.get("structural_considerations"),
+        mitigation_playbook=payload.get("mitigation_playbook"),
     )
 
 
@@ -331,6 +360,14 @@ async def home_kpi_insight(
         # self-heals instead of pinning the degraded narrative for an hour.
         degraded = payload.get("is_fallback") or not g["data_constraint_context"]
         await cache_set(key, payload, ttl_seconds=300 if degraded else 3600)
+    # Authored playbook, attached OUTSIDE the cached LM payload: deterministic
+    # from the vocabulary, so a vocab edit shows immediately (the "dcc" cache
+    # component already forces a fresh narrative for the same edit). None on
+    # authoring failure — the block simply doesn't render.
+    payload = {
+        **payload,
+        "mitigation_playbook": data_constraint_context.build_mitigation_playbook(),
+    }
     return _finalize(payload, provenance="Registry KPIs recomputed for this scope (server-derived)")
 
 

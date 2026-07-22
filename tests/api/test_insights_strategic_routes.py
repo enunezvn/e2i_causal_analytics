@@ -757,6 +757,31 @@ def test_home_kpi_insight_all_us_portfolio_scope(test_client, monkeypatch):
     assert chips["Territory"] == "All US"
 
 
+def test_home_kpi_insight_carries_the_authored_mitigation_playbook(test_client, monkeypatch):
+    """Item 2b (2026-07-22): the claims-lag mitigation playbook is served
+    VERBATIM from the vocabulary — deterministic, present even when the
+    narrative itself is the factual fallback, so the structural block stays
+    actionable regardless of LM availability."""
+    seen_contexts = []
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator",
+        lambda: _fake_kpi_calculator(seen_contexts),
+    )
+    _force_insight_cache_miss(monkeypatch)
+    r = test_client.post("/api/insights/home-kpis", json={"brand": "Fabhalta"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True  # no LM in tests — playbook unaffected
+    pb = data["mitigation_playbook"]
+    assert pb is not None
+    assert "Faster adjudicated (closed) claims are not achievable" in pb["preamble"]
+    assert "not vetted or contracted suppliers" in pb["vendor_note"]
+    by_name = {sc["name"]: sc for sc in pb["source_classes"]}
+    assert "IQVIA" in by_name["Open (pre-adjudicated) claims"]["illustrative_vendors"]
+    nowcast = by_name["Completion-factor nowcast on closed claims"]
+    assert nowcast["status"] and "live" in nowcast["status"]
+
+
 def test_home_kpi_insight_degrades_on_backend_error(test_client, monkeypatch):
     def _boom():
         raise RuntimeError("supabase unreachable")

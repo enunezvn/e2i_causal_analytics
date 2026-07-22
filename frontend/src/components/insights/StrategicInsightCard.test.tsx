@@ -84,4 +84,62 @@ describe('StrategicInsightCard', () => {
       expect(screen.queryByText(/structural constraints/i)).not.toBeInTheDocument();
     });
   });
+
+  // Item 2b (2026-07-22): the authored claims-lag mitigation playbook renders
+  // inside the same collapsible, beneath the LM channel — deterministic and
+  // therefore present even when the LM omits channel 2.
+  describe('mitigation playbook', () => {
+    const playbook = {
+      preamble: 'Faster adjudicated (closed) claims are not achievable.',
+      vendor_note: 'Illustrative examples — not vetted or contracted suppliers.',
+      source_classes: [
+        {
+          name: 'Open (pre-adjudicated) claims',
+          latency: '1-7 days from service',
+          coverage: 'partial capture — trend, not levels',
+          illustrative_vendors: ['IQVIA', 'Symphony Health'],
+          status: null,
+        },
+        {
+          name: 'Completion-factor nowcast on closed claims',
+          latency: 'immediate (modeled)',
+          coverage: 'models the as-of-today under-count',
+          illustrative_vendors: [],
+          status: 'already live in this platform',
+        },
+      ],
+    };
+
+    it('renders the playbook inside the collapsible after expanding', async () => {
+      render(
+        <StrategicInsightCard
+          insight="Adherence drives NRx."
+          structuralConsiderations="Claims lag gates outcome metrics."
+          mitigationPlaybook={playbook}
+        />
+      );
+      expect(screen.queryByText(/faster adjudicated/i)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /structural constraints/i }));
+      expect(screen.getByText(/mitigation playbook — faster signal/i)).toBeInTheDocument();
+      expect(screen.getByText(/faster adjudicated \(closed\) claims are not achievable/i)).toBeInTheDocument();
+      expect(screen.getByText(/open \(pre-adjudicated\) claims/i)).toBeInTheDocument();
+      expect(screen.getByText(/IQVIA, Symphony Health/)).toBeInTheDocument();
+      expect(screen.getByText(/already live in this platform/i)).toBeInTheDocument();
+      expect(screen.getByText(/not vetted or contracted suppliers/i)).toBeInTheDocument();
+    });
+
+    it('renders the collapsible for the playbook even when the LM structural channel is empty', async () => {
+      render(
+        <StrategicInsightCard
+          insight="Adherence drives NRx."
+          structuralConsiderations=""
+          mitigationPlaybook={playbook}
+        />
+      );
+      const trigger = screen.getByRole('button', { name: /structural constraints/i });
+      expect(trigger).toHaveAttribute('data-state', 'closed');
+      await userEvent.click(trigger);
+      expect(screen.getByText(/mitigation playbook — faster signal/i)).toBeInTheDocument();
+    });
+  });
 });

@@ -60,7 +60,18 @@ try:
         and what would improve if it were lifted (e.g. faster claims feeds,
         tokenized data linking). NEVER recommend that this reader fix a
         constraint they cannot change, and NEVER treat a caveat-flagged value
-        as a real performance level.
+        as a real performance level. When discussing how the claims lag could
+        be mitigated, cite the authored mitigation playbook in
+        data_constraint_context (source classes, latency bands, coverage
+        caveats) — faster closed claims are not achievable, only faster
+        signal via those proxies. Before naming ANY data vendor, VALIDATE the
+        mention against every one of the playbook's vendor validation
+        criteria: the vendor is on the playbook's illustrative list (never
+        introduce one from memory), it is paired only with the source class
+        the playbook pairs it with, any latency you state for it matches the
+        playbook's band for that class, and it is framed as an illustrative
+        example pending data-strategy validation — never as a vetted or
+        contracted supplier. If any check fails, name the source class only.
 
         State each structural constraint exactly ONCE, in
         structural_considerations only. Channel 1 (interpretation and
@@ -232,6 +243,36 @@ _NO_CONTEXT = "No data-constraint context is available for this scope."
 # anyway (logged).
 _LAG_LEAK_RE = re.compile(r"adjudicat|runout", re.IGNORECASE)
 
+# Vendor-allowlist guard (frontend review 2026-07-22, item 2b): the constraint
+# context now carries the authored mitigation playbook, whose illustrative
+# vendors are the ONLY vendors the LM may name. Enforced as a subset check
+# against the rendered corpus — exactly like the digit guard: a KNOWN data
+# vendor (lexicon in data_constraint_context) mentioned in any channel that
+# the corpus does not itself name is an invented vendor endorsement, rejected
+# fail-closed (retry, then factual fallback). Word-boundary, case-insensitive;
+# a truly novel invented name is out of lexicon reach (documented limitation —
+# the signature's validation criteria are the instruction-layer defense).
+_VENDOR_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _vendor_patterns() -> dict[str, re.Pattern[str]]:
+    if not _VENDOR_PATTERNS:
+        from src.insights.data_constraint_context import KNOWN_DATA_VENDORS
+
+        for name in KNOWN_DATA_VENDORS:
+            _VENDOR_PATTERNS[name] = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+    return _VENDOR_PATTERNS
+
+
+def _vendor_violation(outputs: list[str], corpus: str) -> str | None:
+    """First known data-vendor name in ``outputs`` that ``corpus`` does not
+    itself name, or None."""
+    joined = " ".join(outputs)
+    for name, pattern in _vendor_patterns().items():
+        if pattern.search(joined) and not pattern.search(corpus):
+            return name
+    return None
+
 
 def _digit_sequences(text: str) -> set[str]:
     text = _THOUSANDS_RE.sub("", _MINUS_VARIANTS_RE.sub("-", text))
@@ -280,7 +321,11 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
         interpretation = str(getattr(pred, "interpretation", "")).strip()
         takeaways = normalize_list(getattr(pred, "key_takeaways", []))
         structural = str(getattr(pred, "structural_considerations", "") or "").strip()
-        violation = _digit_violation([interpretation, *takeaways, structural], corpus)
+        outputs = [interpretation, *takeaways, structural]
+        violation = _digit_violation(outputs, corpus)
+        if violation is None:
+            vendor = _vendor_violation(outputs, corpus)
+            violation = f"vendor {vendor}" if vendor else None
         lag_leak = bool(_LAG_LEAK_RE.search(" ".join([interpretation, *takeaways])))
         if interpretation and violation is None:
             if lag_leak and attempt == 1:
@@ -303,7 +348,7 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
                 "is_fallback": False,
             }
         logger.warning(
-            "home-KPI insight attempt %d rejected (digit %r absent from grounding corpus%s); %s",
+            "home-KPI insight attempt %d rejected (%r absent from grounding corpus%s); %s",
             attempt,
             violation,
             "" if interpretation else "; empty interpretation",

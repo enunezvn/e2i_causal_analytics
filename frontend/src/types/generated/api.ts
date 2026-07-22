@@ -12960,6 +12960,39 @@ export interface components {
          */
         MemoryType: "episodic" | "procedural" | "semantic" | "all";
         /**
+         * MitigationPlaybook
+         * @description The authored claims-lag mitigation playbook, served VERBATIM (never
+         *     LM-generated) so the structural-constraints block is actionable: proxy
+         *     source classes, class-level latency bands, coverage caveats, illustrative
+         *     vendors pending data-strategy validation (frontend review 2026-07-22,
+         *     item 2b).
+         */
+        MitigationPlaybook: {
+            /** Preamble */
+            preamble: string;
+            /** Vendor Note */
+            vendor_note: string;
+            /** Source Classes */
+            source_classes?: components["schemas"]["MitigationSourceClass"][];
+        };
+        /**
+         * MitigationSourceClass
+         * @description One proxy source class from the authored claims-lag mitigation playbook
+         *     (domain_vocabulary.yaml data_constraints.mitigation_playbook).
+         */
+        MitigationSourceClass: {
+            /** Name */
+            name: string;
+            /** Latency */
+            latency: string;
+            /** Coverage */
+            coverage: string;
+            /** Illustrative Vendors */
+            illustrative_vendors?: string[];
+            /** Status */
+            status?: string | null;
+        };
+        /**
          * ModelComparisonResponse
          * @description Flat A/B comparison contract consumed by the Model Performance page.
          *
@@ -17618,6 +17651,7 @@ export interface components {
             provenance: string;
             /** Structural Considerations */
             structural_considerations?: string | null;
+            mitigation_playbook?: components["schemas"]["MitigationPlaybook"] | null;
         };
         /**
          * SuggestionsRequest

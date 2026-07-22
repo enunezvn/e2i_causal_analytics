@@ -3,6 +3,26 @@ export interface GroundingChip {
   value: string;
 }
 
+/** One proxy source class from the authored claims-lag mitigation playbook
+ *  (domain_vocabulary.yaml data_constraints.mitigation_playbook). */
+export interface MitigationSourceClass {
+  name: string;
+  latency: string;
+  coverage: string;
+  illustrative_vendors: string[];
+  /** e.g. "already live in this platform (the provisional/nowcast KPI overlay)" */
+  status?: string | null;
+}
+
+/** The authored claims-lag mitigation playbook, served VERBATIM (never
+ *  LM-generated) so the structural-constraints block is actionable
+ *  (frontend review 2026-07-22, item 2b). */
+export interface MitigationPlaybook {
+  preamble: string;
+  vendor_note: string;
+  source_classes: MitigationSourceClass[];
+}
+
 export interface StrategicInsightResponse {
   insight: string;
   key_takeaways: string[];
@@ -14,6 +34,9 @@ export interface StrategicInsightResponse {
    *  structural escalation/investment considerations, rendered as a distinct
    *  block. Null/absent on surfaces that do not produce it. */
   structural_considerations?: string | null;
+  /** Deterministic companion to the structural block (home-kpis today).
+   *  Null/absent on surfaces that do not produce it. */
+  mitigation_playbook?: MitigationPlaybook | null;
 }
 
 export interface KGInsightRequest {

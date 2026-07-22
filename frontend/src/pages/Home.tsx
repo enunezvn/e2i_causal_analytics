@@ -1328,6 +1328,7 @@ function Home() {
             insight={kpiInsight.data?.insight}
             keyTakeaways={kpiInsight.data?.key_takeaways}
             structuralConsiderations={kpiInsight.data?.structural_considerations}
+            mitigationPlaybook={kpiInsight.data?.mitigation_playbook}
             grounding={kpiInsight.data?.grounding}
             isLoading={kpiInsight.isPending}
             error={kpiInsight.error?.message ?? null}

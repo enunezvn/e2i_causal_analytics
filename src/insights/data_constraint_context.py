@@ -26,6 +26,17 @@ Contracts (locked by tests/insights/test_data_constraint_context.py):
   names (edge_case_taxonomy.data_source_lag) stay server-side. Two
   contradictory lag figures for the SAME class in one prompt invite LM
   confusion.
+* **Mitigation playbook (2026-07-22, frontend-review item 2b — the ONE
+  deliberate exception to the no-vendor rule, product-owner approved)** — the
+  authored ``data_constraints.mitigation_playbook`` renders after the lag
+  bullet: proxy source classes that deliver faster SIGNAL than adjudicated
+  claims (faster CLOSED claims are not purchasable), each with a class-level
+  latency band, coverage caveat, and ILLUSTRATIVE vendors, plus the
+  vendor-validation criteria the LM must apply before naming any vendor.
+  The playbook must not restate the claims-lag band (single-lag-figure
+  contract above). ``KNOWN_DATA_VENDORS`` below is the guard lexicon:
+  src.insights.home_kpi rejects (fail-closed) any lexicon vendor the LM
+  mentions that the rendered context does not itself name.
 * **Prevalence direction guard** — verbatim: prevalence explains small samples
   and volatility, NOT low engagement/testing/coverage rates.
 * **Loud degradation** — ANY failure returns ``""``: availability is preserved
@@ -50,6 +61,38 @@ _PREVALENCE_GUARD = (
     "NOT low engagement/testing/coverage rates — those remain actionable."
 )
 
+# Guard lexicon for the home-KPI vendor-allowlist check: the playbook's
+# illustrative vendors PLUS well-known claims/Rx/EHR data vendors the LM might
+# import from memory. Single-word stems ("Komodo", "Prognos") deliberately
+# match their full names too. Case-insensitive, word-boundary matching in
+# home_kpi — so no entry may be an ordinary English word (e.g. "ICON" stays
+# out; "Symphony Health" is the entry, not "Symphony").
+KNOWN_DATA_VENDORS: tuple[str, ...] = (
+    # mitigation_playbook illustrative vendors (allowlisted via the rendered context)
+    "AssistRx",
+    "CareMetx",
+    "CoverMyMeds",
+    "IQVIA",
+    "Symphony Health",
+    "Komodo",
+    "HealthVerity",
+    "PurpleLab",
+    "Prognos",
+    "Truveta",
+    "Datavant",
+    # NOT in the playbook — a mention of any of these is an out-of-allowlist
+    # vendor pairing and is rejected fail-closed by the guard
+    "Optum",
+    "Merative",
+    "MarketScan",
+    "Clarify Health",
+    "Veradigm",
+    "Inovalon",
+    "Definitive Healthcare",
+    "Milliman",
+    "ConnectiveRx",
+)
+
 
 def _constraints() -> dict[str, Any]:
     from src.ontology.vocabulary_registry import VocabularyRegistry
@@ -65,6 +108,72 @@ def brands_with_profiles() -> tuple[str, ...]:
         return tuple((_constraints().get("brands") or {}).keys())
     except Exception:  # noqa: BLE001 — introspection helper, never raises
         return ()
+
+
+def _squash(text: Any) -> str:
+    """Collapse folded-scalar newlines/indentation to single spaces."""
+    return " ".join(str(text or "").split())
+
+
+def _playbook_lines(data: dict[str, Any]) -> list[str]:
+    """Render the authored mitigation playbook for the LM context. Raises on a
+    missing/empty playbook — an authoring regression must degrade LOUDLY (the
+    route's "Constraint context: unavailable" chip), never silently revert the
+    narrative to an unactionable lag statement."""
+    pb = data.get("mitigation_playbook") or {}
+    classes = pb.get("source_classes") or []
+    criteria = pb.get("vendor_validation_criteria") or []
+    if not classes or not criteria:
+        raise ValueError("data_constraints.mitigation_playbook missing or incomplete")
+    lines = [
+        "Claims-lag mitigation playbook (authored — cite it, never invent sources or vendors):",
+        f"{_squash(pb.get('preamble'))}",
+    ]
+    for sc in classes:
+        entry = f"- {_squash(sc.get('name'))} ({_squash(sc.get('latency'))}): {_squash(sc.get('coverage'))}"
+        vendors = sc.get("illustrative_vendors") or []
+        if vendors:
+            entry += f". Illustrative vendors: {', '.join(vendors)}"
+        if sc.get("status"):
+            entry += f" — {_squash(sc.get('status'))}"
+        lines.append(f"{entry}.")
+    numbered = "; ".join(f"({i}) {_squash(c)}" for i, c in enumerate(criteria, 1))
+    lines.append(
+        f"Vendor validation criteria — before naming ANY vendor, verify every one of: {numbered}. "
+        "If any check fails, name the source class only."
+    )
+    lines.append(_squash(pb.get("vendor_note")))
+    return [line for line in lines if line]
+
+
+def build_mitigation_playbook() -> dict[str, Any] | None:
+    """The authored playbook as a structured payload for the UI (rendered
+    verbatim in the structural-constraints block — deterministic, never
+    LM-generated). Returns None on any failure: the playbook block simply
+    doesn't render, while the narrative (whose own loud-degradation contract
+    is build_constraint_context's) is unaffected."""
+    try:
+        pb = _constraints().get("mitigation_playbook") or {}
+        classes = [
+            {
+                "name": _squash(sc.get("name")),
+                "latency": _squash(sc.get("latency")),
+                "coverage": _squash(sc.get("coverage")),
+                "illustrative_vendors": list(sc.get("illustrative_vendors") or []),
+                "status": _squash(sc["status"]) if sc.get("status") else None,
+            }
+            for sc in (pb.get("source_classes") or [])
+        ]
+        if not classes:
+            raise ValueError("data_constraints.mitigation_playbook missing or incomplete")
+        return {
+            "preamble": _squash(pb.get("preamble")),
+            "vendor_note": _squash(pb.get("vendor_note")),
+            "source_classes": classes,
+        }
+    except Exception as e:  # noqa: BLE001 — additive block, never a 500
+        logger.warning("mitigation playbook unavailable: %s", e)
+        return None
 
 
 def _kpi_lines(metas: list[Any]) -> list[str]:
@@ -138,6 +247,7 @@ def build_constraint_context(brand: str, metas: list[Any]) -> str:
             "under-count for recent windows. This lag and vendor claims coverage "
             "are DATA-STRATEGY constraints — the reader cannot fix them; "
             "attribute, do not recommend.",
+            *_playbook_lines(data),
             f"- CRM-derived figures ({crm}) have no source lag and are current as shown.",
             f"- {_PREVALENCE_GUARD}",
         ]
