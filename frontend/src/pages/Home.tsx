@@ -55,8 +55,6 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -182,28 +180,14 @@ const WORKSTREAM_ORDER = [
 // The calculators, per-KPI definitions, and the Brand SELECTOR are all unchanged.
 const HIDDEN_HOME_WORKSTREAMS = new Set<string>([]);
 
-// "Hide other brands' KPIs" (sibling-brand cards) is a per-user VIEW preference
-// — default OFF (visible-but-labeled is the platform's documented semantic) —
-// persisted like the other UI preferences (cf. hooks/use-user-preferences).
-const HIDE_SIBLING_KPIS_STORAGE_KEY = 'e2i-home-hide-sibling-kpis';
-
-function loadHideSiblingKpis(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    return localStorage.getItem(HIDE_SIBLING_KPIS_STORAGE_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function saveHideSiblingKpis(hide: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(HIDE_SIBLING_KPIS_STORAGE_KEY, String(hide));
-  } catch {
-    // Ignore storage errors (private mode etc.) — the in-session state applies.
-  }
-}
+// Sibling-brand KPI cards (brand-hard-bound KPIs belonging to a brand other
+// than the selected one) are scoped OUT of the grid automatically when a
+// specific brand is selected (frontend review 2026-07-22). This supersedes the
+// earlier visible-but-labeled semantic (badge + "Hide other brands' KPIs"
+// toggle): brand selection itself is the filter — no extra user work. Under
+// 'All' every brand's cards remain first-class. The backend insight grounding
+// (src/insights/home_kpi.py) applies the same scope so narrative and grid stay
+// coherent.
 
 // KPI cards are non-interactive by design. The Model Performance cards used to
 // drill to /model-performance, but that page does not inherit the dashboard's
@@ -224,10 +208,10 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
     { id: 'roi', name: 'Campaign ROI', category: 'causal', value: 3.8, previousValue: 3.2, target: 4.5, unit: 'x', description: 'Return on marketing investment', trend: 'up', status: 'healthy', sparkline: [2.8, 3, 3.2, 3.4, 3.5, 3.7, 3.8] },
   ],
   // Each per-brand demo set carries ONE sibling-brand exemplar (brand field
-  // set) so Demo Mode exhibits the same visible-but-labeled semantic as live
-  // data: brand-hard-bound KPIs compute portfolio-wide, so another brand's
-  // card renders under a brand scope — badged "sibling brand: X", hideable
-  // via the grid toggle. Values mirror that brand's own demo set.
+  // set) so Demo Mode exercises the same brand-scoping as live data:
+  // brand-hard-bound KPIs compute portfolio-wide, but under a selected brand
+  // another brand's card is filtered from the grid automatically. Values
+  // mirror that brand's own demo set.
   Remibrutinib: [
     { id: 'remi_trx', name: 'TRx', category: 'commercial', value: 45230, previousValue: 42150, target: 50000, description: 'Total Remibrutinib prescriptions', trend: 'up', status: 'healthy', sparkline: [38, 40, 41, 42, 43, 44, 45] },
     { id: 'fab_trx_sibling', name: 'Fabhalta TRx', category: 'commercial', brand: 'Fabhalta', value: 28450, previousValue: 26800, target: 32000, description: 'Total Fabhalta prescriptions (brand-bound KPI, computes portfolio-wide)', trend: 'up', status: 'healthy', sparkline: [24, 25, 26, 26.5, 27, 28, 28.4] },
@@ -445,13 +429,6 @@ function Home() {
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
-  // KPI-grid view preference: hide sibling-brand cards (default OFF =
-  // visible-but-labeled). Initialized from, and persisted to, localStorage.
-  const [hideSiblingKpis, setHideSiblingKpis] = useState<boolean>(loadHideSiblingKpis);
-  const handleHideSiblingKpisChange = useCallback((hide: boolean) => {
-    setHideSiblingKpis(hide);
-    saveHideSiblingKpis(hide);
-  }, []);
 
   // ==========================================================================
   // API HOOKS - Wire up to real backend data
@@ -702,45 +679,37 @@ function Home() {
 
   // A sibling-brand KPI: hard-bound to a specific brand (kpi_definitions.yaml)
   // that is NOT the selected one. The brand_specific calculators compute
-  // portfolio-wide, so these cards render under any brand scope — the platform
-  // semantic is visible-but-labeled (the home-insights narrative deliberately
-  // references them tagged "[sibling brand: X]", src/insights/home_kpi.py),
-  // NOT a silent hard filter.
+  // portfolio-wide, so their results exist under any brand scope — but the
+  // brand selector IS the filter: these cards are scoped out of the grid
+  // automatically (no badge, no toggle).
   const isSiblingKpi = useCallback(
     (kpi: KPIMetric): boolean =>
       !!kpi.brand && selectedBrand !== 'All' && kpi.brand !== selectedBrand,
     [selectedBrand]
   );
 
-  // Single badge renderer shared by BOTH card paths (live and Demo Mode) so
-  // the labeling logic can never diverge between them (codex parity finding).
-  // Same vocabulary as the narrative channel's "[sibling brand: X]" tag so
-  // grid and insight text stay coherent. undefined for own-brand, brandless,
-  // and All-scope cards.
-  const siblingBadge = useCallback(
-    (kpi: KPIMetric): React.ReactNode =>
-      isSiblingKpi(kpi) ? (
-        <Badge variant="outline" className="text-[10px] px-1 py-0">
-          sibling brand: {kpi.brand}
-        </Badge>
-      ) : undefined,
-    [isSiblingKpi]
-  );
-
-  // Sibling-brand cards present in the computed set (pre-hide, so the toggle
-  // stays rendered — and reversible — while it is hiding them). 0 under 'All'
-  // by construction, so the toggle never renders as a dead control there.
+  // Sibling-brand cards scoped out of the computed set — feeds the honest
+  // empty-state message when a scope holds ONLY other brands' cards. 0 under
+  // 'All' by construction.
   const siblingKpiCount = useMemo(
     () => computedKPIs.filter(isSiblingKpi).length,
     [computedKPIs, isSiblingKpi]
   );
 
-  // Grid-visible set: with the toggle ON, sibling-brand cards leave the grid,
-  // the tab list, and the counts TOGETHER (never orphaned). Everything below
-  // (tabs, per-tab grid, banner counts, "Showing N of M") derives from here.
+  // Grid-visible set: sibling-brand cards leave the grid, the tab list, and
+  // the counts TOGETHER (never orphaned). Everything below (tabs, per-tab
+  // grid, banner counts, "Showing N of M") derives from here.
   const visibleKPIs = useMemo(
-    () => (hideSiblingKpis ? computedKPIs.filter((kpi) => !isSiblingKpi(kpi)) : computedKPIs),
-    [hideSiblingKpis, computedKPIs, isSiblingKpi]
+    () => computedKPIs.filter((kpi) => !isSiblingKpi(kpi)),
+    [computedKPIs, isSiblingKpi]
+  );
+
+  // "Showing N of M" denominator: defined KPIs that are IN scope for the
+  // selected brand (own-brand + portfolio-wide). Counting other brands'
+  // definitions would overstate what this scope could ever show.
+  const scopedDefinedKpiCount = useMemo(
+    () => effectiveKPIs.filter((kpi) => !isSiblingKpi(kpi)).length,
+    [effectiveKPIs, isSiblingKpi]
   );
 
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
@@ -1233,27 +1202,6 @@ function Home() {
                     {selectedBrand === 'All' ? 'Portfolio-wide' : selectedBrand} metrics
                   </CardDescription>
                 </div>
-                {/* Grid-scoped view toggle for sibling-brand cards. Rendered
-                    only while such cards exist in the computed set (counted
-                    PRE-hide, so it stays reversible while ON) — never a dead
-                    control under 'All' or for a purely own-brand grid. */}
-                {siblingKpiCount > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="hide-sibling-kpis"
-                      checked={hideSiblingKpis}
-                      onCheckedChange={(checked) =>
-                        handleHideSiblingKpisChange(checked === true)
-                      }
-                    />
-                    <Label
-                      htmlFor="hide-sibling-kpis"
-                      className="text-xs cursor-pointer text-muted-foreground"
-                    >
-                      Hide other brands&apos; KPIs
-                    </Label>
-                  </div>
-                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -1272,7 +1220,7 @@ function Home() {
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
                 {liveKpiMode && batchSettled && !batchFailed && (
                   <p className="text-xs text-muted-foreground">
-                    Showing {visibleKPIs.length} of {effectiveKPIs.length} defined KPIs
+                    Showing {visibleKPIs.length} of {scopedDefinedKpiCount} defined KPIs
                     {selectedBrand !== 'All' ? ` for ${selectedBrand}` : ''}
                   </p>
                 )}
@@ -1287,15 +1235,14 @@ function Home() {
 
                 {/* Live-mode guard: with zero visible KPIs there are no tabs and
                     no TabsContent, so without this the grid would go silently
-                    blank — e.g. if the sibling-hide toggle removed every
-                    computed card. Say so honestly (and keep the toggle above
-                    rendered, so the choice is reversible). */}
+                    blank — e.g. if brand scoping filtered every computed card.
+                    Say so honestly. */}
                 {liveKpiMode && batchSettled && !batchFailed && kpiCategories.length === 0 && (
                   <EmptyState
                     title="No KPIs available"
                     description={
-                      hideSiblingKpis && siblingKpiCount > 0
-                        ? `Every computed KPI in this scope belongs to another brand — ${siblingKpiCount} hidden by the "Hide other brands' KPIs" toggle.`
+                      siblingKpiCount > 0
+                        ? `Every computed KPI in this scope belongs to another brand — ${siblingKpiCount} scoped out by the ${selectedBrand} selection.`
                         : 'No KPI values have been computed for this scope yet.'
                     }
                     className="p-6"
@@ -1339,7 +1286,6 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
-                              badge={siblingBadge(kpi)}
                             />
                           );
                         }
@@ -1358,7 +1304,6 @@ function Home() {
                             description={kpi.description}
                             higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                             size="sm"
-                            badge={siblingBadge(kpi)}
                           />
                         );
                       })}
@@ -1383,6 +1328,7 @@ function Home() {
             insight={kpiInsight.data?.insight}
             keyTakeaways={kpiInsight.data?.key_takeaways}
             structuralConsiderations={kpiInsight.data?.structural_considerations}
+            mitigationPlaybook={kpiInsight.data?.mitigation_playbook}
             grounding={kpiInsight.data?.grounding}
             isLoading={kpiInsight.isPending}
             error={kpiInsight.error?.message ?? null}

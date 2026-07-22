@@ -670,8 +670,12 @@ def _fake_kpi_calculator(seen_contexts):
             batch.add_result(
                 KPIResult(kpi_id="WS2-TR-001", value=None, error="no view for this scope")
             )
-            # Sibling-brand KPI: computes portfolio-wide, must be TAGGED under
-            # a different brand scope so the LM can't misattribute it.
+            # Sibling-brand KPI: computes portfolio-wide, but under a different
+            # brand scope it must be EXCLUDED from the grounding entirely
+            # (automatic brand scoping, 2026-07-22 — mirrors the dashboard
+            # grid); under 'All' it stays first-class. Returned unconditionally
+            # here to prove the grounding filter drops it even when the batch
+            # carries it.
             batch.add_result(KPIResult(kpi_id="KIS-CLI-001", value=2890.0, status=KPIStatus.GOOD))
             return batch
 
@@ -699,16 +703,14 @@ def test_home_kpi_insight_fallback_is_server_derived(test_client, monkeypatch):
     assert "Holdout Accuracy [ws1_model_performance]: 87.4%" in data["insight"]
     # the not-computed KPI is excluded, and coverage says so honestly
     assert "Trigger Precision" not in data["insight"]
-    assert "3 of 4 defined KPIs computed" in data["insight"]
-    # another brand's KPI computes portfolio-wide -> tagged, not misattributed
-    assert (
-        "Kisqali - Oncologist Reach [brand_specific]: 2,890 (good) [sibling brand: Kisqali]"
-        in (data["insight"])
-    )
+    # another brand's hard-bound KPI is scoped out of the grounding entirely
+    # (automatic brand scoping) — including the coverage denominator.
+    assert "Kisqali - Oncologist Reach" not in data["insight"]
+    assert "2 of 3 defined KPIs computed" in data["insight"]
     chips = {c["label"]: c["value"] for c in data["grounding"]}
     assert chips["Brand"] == "Fabhalta"
     assert chips["Territory"] == "Northeast"
-    assert chips["Computed"] == "3/4"
+    assert chips["Computed"] == "2/3"
     assert data["provenance"] == "Registry KPIs recomputed for this scope (server-derived)"
 
 
@@ -747,10 +749,37 @@ def test_home_kpi_insight_all_us_portfolio_scope(test_client, monkeypatch):
     data = r.json()
     assert seen_contexts == [{}]
     assert "All brands (portfolio) / All US" in data["insight"]
-    # No brand scope -> brand-specific rows are first-class, never tagged.
-    assert "[sibling brand:" not in data["insight"]
+    # No brand scope -> every brand's hard-bound rows are first-class.
+    assert "Kisqali - Oncologist Reach [brand_specific]: 2,890 (good)" in data["insight"]
+    assert "4 of 4 defined KPIs computed" not in data["insight"]  # WS2 row honest-null
+    assert "3 of 4 defined KPIs computed" in data["insight"]
     chips = {c["label"]: c["value"] for c in data["grounding"]}
     assert chips["Territory"] == "All US"
+
+
+def test_home_kpi_insight_carries_the_authored_mitigation_playbook(test_client, monkeypatch):
+    """Item 2b (2026-07-22): the claims-lag mitigation playbook is served
+    VERBATIM from the vocabulary — deterministic, present even when the
+    narrative itself is the factual fallback, so the structural block stays
+    actionable regardless of LM availability."""
+    seen_contexts = []
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator",
+        lambda: _fake_kpi_calculator(seen_contexts),
+    )
+    _force_insight_cache_miss(monkeypatch)
+    r = test_client.post("/api/insights/home-kpis", json={"brand": "Fabhalta"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True  # no LM in tests — playbook unaffected
+    pb = data["mitigation_playbook"]
+    assert pb is not None
+    assert "Faster adjudicated (closed) claims are not achievable" in pb["preamble"]
+    assert "not vetted or contracted suppliers" in pb["vendor_note"]
+    by_name = {sc["name"]: sc for sc in pb["source_classes"]}
+    assert "IQVIA" in by_name["Open (pre-adjudicated) claims"]["illustrative_vendors"]
+    nowcast = by_name["Completion-factor nowcast on closed claims"]
+    assert nowcast["status"] and "live" in nowcast["status"]
 
 
 def test_home_kpi_insight_degrades_on_backend_error(test_client, monkeypatch):

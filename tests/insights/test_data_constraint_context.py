@@ -13,8 +13,16 @@ Contracts under test:
   claims-lag BAND is the only LM-facing claims-ADJUDICATION lag figure,
   stated once; the narrative additionally names the DISTINCT 7-14 day
   per-source ingest/feed lag class (as an aggregate class band only); the
-  vocabulary's per-source scalar lags (12d/14d/...) and vendor names must
-  still NOT render (two contradictory lag SSOTs invite LM confusion);
+  vocabulary's per-source scalar lags (12d/14d/...) must still NOT render
+  (two contradictory lag SSOTs invite LM confusion). The former blanket
+  vendor-name prohibition is NARROWED (2026-07-22, item 2b, product-owner
+  approved): the authored mitigation playbook's illustrative vendors render
+  — only inside the playbook block, guarded by home_kpi's vendor allowlist;
+* mitigation playbook — authored source classes (SP/hub feeds, open claims,
+  lab/EHR, the already-live completion-factor nowcast) render with latency
+  bands, coverage caveats, illustrative vendors, and the LM-facing vendor
+  validation criteria; the playbook never restates the claims-lag band; a
+  missing playbook degrades the WHOLE context loudly ("");
 * lag-class reconciliation (C0, reworded for the backlog #45 arrival plane) —
   the band's under-count claim is scoped to REAL-WORLD claims, and the
   narrative states that the claims ARRIVAL plane IS simulated in this
@@ -38,6 +46,7 @@ import pytest
 from src.insights.data_constraint_context import (
     brands_with_profiles,
     build_constraint_context,
+    build_mitigation_playbook,
 )
 
 _BRANDS = ("Remibrutinib", "Kisqali", "Fabhalta")
@@ -82,13 +91,17 @@ _METAS = [
 def test_per_brand_profile_renders_with_single_lag_claim(brand):
     ctx = build_constraint_context(brand, _METAS)
     assert ctx, f"{brand} must have a constraint profile"
-    # the brand band is the ONLY claims-adjudication lag figure: one claim.
-    # Per-source scalars/vendors stay forbidden — itemized below. (The
-    # aggregate "7-14 day" ingest/feed CLASS band is a distinct, permitted
-    # figure asserted in test_reconciled_wording_distinguishes_lag_classes;
-    # it contains none of the itemized scalar tokens.)
+    # the brand band is the ONLY claims-adjudication lag figure: one claim —
+    # the mitigation playbook (2026-07-22) must NOT restate it. Per-source
+    # scalar lags stay forbidden — itemized below. (The aggregate "7-14 day"
+    # ingest/feed CLASS band is a distinct, permitted figure asserted in
+    # test_reconciled_wording_distinguishes_lag_classes; it contains none of
+    # the itemized scalar tokens.) The former blanket vendor-name prohibition
+    # is narrowed, product-owner approved (item 2b): playbook vendors render,
+    # but ONLY inside the playbook block — see
+    # test_playbook_vendors_render_only_inside_the_playbook_block.
     assert ctx.lower().count("1-3 month") == 1
-    for scalar in ("12d", "14d", "7d", "10d", "IQVIA_APLD", "HealthVerity", "Komodo"):
+    for scalar in ("12d", "14d", "7d", "10d", "IQVIA_APLD"):
         assert scalar not in ctx, f"per-source scalar lag {scalar!r} leaked into LM context"
 
 
@@ -150,6 +163,94 @@ def test_reconciled_wording_distinguishes_lag_classes(brand):
     assert "mature values" in ctx
     assert "do not under-count" in ctx
     assert "attribute, do not recommend" in ctx
+
+
+# ---- Mitigation playbook (frontend review 2026-07-22, item 2b) ----------------
+_PLAYBOOK_CLASSES = (
+    "Specialty pharmacy / hub dispense & status feeds",
+    "Open (pre-adjudicated) claims",
+    "Lab & EHR feeds",
+    "Completion-factor nowcast on closed claims",
+)
+
+
+def test_mitigation_playbook_renders_with_criteria():
+    ctx = build_constraint_context("Remibrutinib", _METAS)
+    assert "Claims-lag mitigation playbook" in ctx
+    # The honest core claim: closed claims cannot be made faster, signal can.
+    assert "Faster adjudicated (closed) claims are not achievable" in ctx
+    for cls in _PLAYBOOK_CLASSES:
+        assert cls in ctx, f"source class {cls!r} missing from playbook"
+    # The already-shipped mitigation is credited, not re-recommended blind.
+    assert "already live in this platform" in ctx
+    # LM-facing vendor validation criteria are itemized with a fail-shut rule.
+    assert "Vendor validation criteria" in ctx
+    assert "never introduce a vendor from memory" in ctx
+    assert "If any check fails, name the source class only." in ctx
+    assert "not vetted or contracted suppliers" in ctx
+
+
+def test_playbook_vendors_render_only_inside_the_playbook_block():
+    """The plan-C0 no-vendor rule is superseded ONLY for playbook vendors
+    (product-owner approved 2026-07-22), and only inside the playbook block —
+    nothing above it may name a vendor."""
+    ctx = build_constraint_context("Remibrutinib", _METAS)
+    head = ctx[: ctx.index("Claims-lag mitigation playbook")]
+    for vendor in ("IQVIA", "Symphony Health", "Komodo Health", "HealthVerity", "AssistRx"):
+        assert vendor in ctx, f"illustrative vendor {vendor!r} missing from playbook"
+        assert vendor not in head, f"vendor {vendor!r} leaked above the playbook block"
+
+
+def test_every_playbook_vendor_is_covered_by_the_guard_lexicon():
+    """Guard-visibility invariant: every vendor authored into the playbook must
+    be detectable by the home-KPI vendor guard's lexicon — otherwise an
+    out-of-playbook pairing of that vendor could never be caught."""
+    import re
+
+    from src.insights.data_constraint_context import KNOWN_DATA_VENDORS, _constraints
+
+    patterns = [re.compile(rf"\b{re.escape(n)}\b", re.IGNORECASE) for n in KNOWN_DATA_VENDORS]
+    playbook = _constraints()["mitigation_playbook"]
+    for sc in playbook["source_classes"]:
+        for vendor in sc.get("illustrative_vendors") or []:
+            assert any(p.search(vendor) for p in patterns), (
+                f"playbook vendor {vendor!r} invisible to the guard lexicon"
+            )
+
+
+def test_build_mitigation_playbook_structure():
+    pb = build_mitigation_playbook()
+    assert pb is not None
+    assert pb["preamble"].startswith("Faster adjudicated (closed) claims are not achievable")
+    assert "not vetted or contracted suppliers" in pb["vendor_note"]
+    by_name = {sc["name"]: sc for sc in pb["source_classes"]}
+    assert set(by_name) == set(_PLAYBOOK_CLASSES)
+    open_claims = by_name["Open (pre-adjudicated) claims"]
+    assert "IQVIA" in open_claims["illustrative_vendors"]
+    assert "1-7 days" in open_claims["latency"]
+    nowcast = by_name["Completion-factor nowcast on closed claims"]
+    assert nowcast["status"] and "live" in nowcast["status"]
+    assert nowcast["illustrative_vendors"] == []
+
+
+def test_build_mitigation_playbook_degrades_to_none(monkeypatch):
+    import src.insights.data_constraint_context as dcc
+
+    monkeypatch.setattr(dcc, "_constraints", lambda: {})
+    assert build_mitigation_playbook() is None
+
+
+def test_missing_playbook_degrades_constraint_context_loudly(monkeypatch):
+    """An authoring regression (playbook dropped from the vocabulary) must take
+    the whole context down the loud path ("" -> route warning chip + short
+    TTL), never silently revert the narrative to an unactionable lag
+    statement."""
+    import src.insights.data_constraint_context as dcc
+
+    real = dict(dcc._constraints())
+    real.pop("mitigation_playbook", None)
+    monkeypatch.setattr(dcc, "_constraints", lambda: real)
+    assert dcc.build_constraint_context("Remibrutinib", _METAS) == ""
 
 
 def test_all_brand_scope_renders_portfolio_profiles():
