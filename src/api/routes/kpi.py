@@ -706,7 +706,9 @@ async def get_kpi_history_segmented(
             detail=f"Unknown {axis} value '{value}'. Expected one of {canonical_buckets(axis)}",
         )
 
-    rows = await fetch_segmented_rows(kpi_id, axis=axis, brand=brand)
+    # '' is the UI's All-Brands scope, but the migration-110 SQL only treats
+    # NULL as all-brands ('' would be a literal brand that never matches).
+    rows = await fetch_segmented_rows(kpi_id, axis=axis, brand=brand or None)
     series, data_through = shape_segmented_series(
         rows, axis=axis, value=value, start_date=start_date, end_date=end_date
     )
@@ -780,7 +782,10 @@ async def get_kpi_history_nowcast(
             ),
         )
 
-    rows = await fetch_nowcast_rows(kpi_id, brand=brand)
+    # '' is the UI's All-Brands scope, but the migration-116 triangle SQL only
+    # treats NULL as all-brands ('' would be a literal brand that never
+    # matches — live symptom: reason=no_data disabling the nowcast toggle).
+    rows = await fetch_nowcast_rows(kpi_id, brand=brand or None)
     result = estimate_completion_from_rows(rows)
     points = [
         KPINowcastPoint(

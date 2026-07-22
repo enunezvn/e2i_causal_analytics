@@ -787,6 +787,24 @@ class TestKPIHistorySegmentedEndpoint:
         assert medium["points"][1] == {"metric_date": "2026-02-01", "value": 0.0, "status": None}
         fetch.assert_awaited_once_with("WS3-BI-005", axis="segment", brand="Remibrutinib")
 
+    def test_empty_brand_param_means_global_scope(self):
+        # The UI's All-Brands scope sends ?brand= (empty string), and the
+        # platform contract is '' == global ("'' / omitted = global" in the
+        # route docs). The migration-110 SQL treats NULL as all-brands but ''
+        # as a literal brand name that never matches, so the route must
+        # normalize '' -> None before fetching.
+        with patch(
+            "src.kpi.segmented_history.fetch_segmented_rows",
+            new=AsyncMock(return_value=self._rows()),
+        ) as fetch:
+            resp = client.get(
+                "/api/kpis/WS3-BI-005/history/segmented",
+                params={"axis": "segment", "brand": ""},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["brand"] == ""
+        fetch.assert_awaited_once_with("WS3-BI-005", axis="segment", brand=None)
+
     def test_therapy_line_axis_and_value_filter(self):
         rows = [
             {
@@ -930,6 +948,22 @@ class TestKPIHistoryNowcastEndpoint:
         assert tail["nowcast_value"] == pytest.approx(tail["mature_value"], rel=1e-9)
         assert tail["nowcast_ci_lower"] is not None
         assert tail["nowcast_ci_lower"] <= tail["nowcast_value"] <= tail["nowcast_ci_upper"]
+
+    def test_empty_brand_param_means_global_scope(self):
+        # Same '' == global normalization as /history/segmented: the Time
+        # Series page's All-Brands scope sends ?brand=, and the migration-116
+        # triangle SQL ($1 IS NULL OR brand = $1) returns zero rows for '' —
+        # which surfaced live as reason=no_data disabling the nowcast toggle.
+        with patch(
+            "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
+            new=AsyncMock(return_value=self._rows()),
+        ) as fetch:
+            resp = client.get("/api/kpis/WS3-BI-005/history/nowcast", params={"brand": ""})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["brand"] == ""
+        assert body["insufficient_maturity"] is False
+        fetch.assert_awaited_once_with("WS3-BI-005", brand=None)
 
     def test_insufficient_maturity_is_explicit_with_no_points(self):
         with patch(
