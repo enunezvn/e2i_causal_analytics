@@ -322,19 +322,24 @@ def test_materialize_gate_failure_is_fail_loud_and_rolls_feast_back():
     assert rb_idx < exit_idx, (
         "gate failure must roll feast back, THEN exit 1 (rollback before exit)"
     )
-    # The helper itself preserves the rollback semantics: checkout PREV_SHA, THEN
-    # force-recreate the services it is handed (restore the Feast the old API uses).
+    # The helper itself preserves the rollback semantics: reset --hard to PREV_SHA,
+    # THEN force-recreate the services it is handed (restore the Feast the old API
+    # uses). Since PR #1317 the rollback is `git reset --hard` — a raw-sha `checkout`
+    # detaches HEAD and the forward path never reattaches it (2026-07-21 incident).
     import re as _re
 
     helper_m = _re.search(r"rollback_to_prev\(\)\s*\{(.*?)\n\s*\}", script, _re.DOTALL)
     assert helper_m, "rollback_to_prev() helper definition not found"
     helper = helper_m.group(1)
-    assert 'git checkout "$PREV_SHA"' in helper, "rollback_to_prev must check out PREV_SHA"
+    assert 'git reset --hard "$PREV_SHA"' in helper, (
+        "rollback_to_prev must `git reset --hard` to PREV_SHA (NOT `git checkout` — "
+        "a raw-sha checkout detaches the droplet HEAD; PR #1317)"
+    )
     assert "--force-recreate" in helper and '"$@"' in helper, (
         "rollback_to_prev must force-recreate the services passed to it"
     )
-    assert helper.index('git checkout "$PREV_SHA"') < helper.index("--force-recreate"), (
-        "helper must checkout PREV_SHA THEN force-recreate (rollback before recreate)"
+    assert helper.index('git reset --hard "$PREV_SHA"') < helper.index("--force-recreate"), (
+        "helper must reset to PREV_SHA THEN force-recreate (rollback before recreate)"
     )
 
 

@@ -11,7 +11,8 @@ rollback — so ``feast`` is stranded at NEW_SHA with no automated rollback.
 These tests extract the VERBATIM ``script:`` block (asserting it carries no ``${{ }}``
 GitHub-Actions interpolation, so it round-trips), then execute it under ``bash`` with
 PATH-shimmed stubs for ``git``/``docker``/``curl``/``date``/``seq``/``sleep``. We force specific
-commands to fail and assert the OBSERVABLE rollback effects — which SHA we ``git checkout``,
+commands to fail and assert the OBSERVABLE rollback effects — which SHA we roll back to
+(``git reset --hard``, which keeps HEAD attached — PR #1317),
 which services get force-recreated afterward, the operator WARN on a double-fault, and the exit
 code — NOT the inline text, so the test survives the ``rollback_to_prev()`` helper refactor.
 
@@ -75,7 +76,7 @@ if [ "$1" = "rev-parse" ] && [ "$2" = "HEAD" ]; then
   n=$(cat "$c" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" > "$c"
   if [ "$n" -le 1 ]; then printf '%s\n' "$PREV_SHA"; else printf '%s\n' "$NEW_SHA"; fi
 fi
-# status (clean tree) / fetch / reset / checkout / diff all exit 0 with no stdout.
+# status (clean tree) / fetch / reset / diff all exit 0 with no stdout.
 exit 0
 """
 
@@ -83,7 +84,9 @@ exit 0
 #   * the materializer heartbeat probe prints HEARTBEAT (default fresh) so the
 #     freshness gate PASSES and flow REACHES the app-up (else we'd divert to the
 #     materializer rollback and never exercise the #563 bug);
-#   * any `up -d` AFTER a `git checkout` is a ROLLBACK up (toggle FAIL_ROLLBACK_UP);
+#   * any `up -d` AFTER the rollback `git reset --hard $PREV_SHA` is a ROLLBACK up
+#     (toggle FAIL_ROLLBACK_UP) — the SHA disambiguates from the forward
+#     `git reset --hard origin/main`;
 #   * a forward `up -d` carrying app services is the app-up (toggle FAIL_APP_UP);
 #   * a forward `up -d` without app services is the feast-up (toggle FAIL_FEAST_UP).
 _DOCKER_STUB = r"""#!/usr/bin/env bash
@@ -93,7 +96,7 @@ case "$args" in
   *materializer_heartbeat*) printf '%s\n' "${HEARTBEAT:-1001}"; exit 0 ;;
 esac
 if printf '%s' "$args" | grep -q -- 'up -d'; then
-  if grep -q 'git checkout' "$CALL_LOG"; then
+  if grep -q -- "git reset --hard $PREV_SHA" "$CALL_LOG"; then
     [ "${FAIL_ROLLBACK_UP:-0}" = "1" ] && exit 1
     exit 0
   fi
@@ -202,9 +205,11 @@ def _run(tmp_path: Path, **toggles: str) -> tuple[int, str, list[str]]:
 # --------------------------------------------------------------------------- #
 # Assertion helpers — observable effects, not inline text
 # --------------------------------------------------------------------------- #
-def _checkout_prev_idx(calls: list[str]) -> int | None:
+def _rollback_prev_idx(calls: list[str]) -> int | None:
+    """Index of the rollback `git reset --hard PREV_SHA` (the forward path resets to
+    origin/main, never to PREV_SHA, so the SHA is the unambiguous rollback marker)."""
     for i, c in enumerate(calls):
-        if c.startswith("git checkout") and PREV_SHA in c:
+        if c.startswith("git reset") and PREV_SHA in c:
             return i
     return None
 
@@ -223,11 +228,11 @@ def _services_in(line: str | None) -> set[str]:
 
 
 def _services_in_rollback(calls: list[str], idx: int) -> set[str]:
-    """Union of recreate-target services across EVERY `up -d` after the checkout.
+    """Union of recreate-target services across EVERY `up -d` after the rollback reset.
 
     The #563 rollback now splits the GHCR app/frontend tier (pulled, recreated
     --no-build) from the locally-built sidecars (--build) into SEPARATE `up`s, so a
-    single 'first up after checkout' no longer carries the whole rolled-back set."""
+    single 'first up after the rollback' no longer carries the whole rolled-back set."""
     out: set[str] = set()
     for c in calls[idx + 1 :]:
         if "up -d" in c:
@@ -236,9 +241,9 @@ def _services_in_rollback(calls: list[str], idx: int) -> set[str]:
 
 
 def _app_up_was_invoked(calls: list[str]) -> bool:
-    """A forward (pre-checkout) `up -d` carrying app services."""
+    """A forward (pre-rollback) `up -d` carrying app services."""
     for c in calls:
-        if c.startswith("git checkout"):
+        if c.startswith("git reset") and PREV_SHA in c:
             return False
         if "up -d" in c and " api" in c:
             return True
@@ -257,11 +262,11 @@ def test_deploy_script_extracts_verbatim_with_no_gha_interpolation() -> None:
 
 
 def test_app_up_failure_rolls_back_feast_and_app_to_prev(tmp_path: Path) -> None:
-    """#563 core: when the app-services `up` fails, the deploy must checkout PREV_SHA
-    and recreate BOTH the feast tier and the app tier, then exit 1.
+    """#563 core: when the app-services `up` fails, the deploy must reset --hard back
+    to PREV_SHA and recreate BOTH the feast tier and the app tier, then exit 1.
 
     RED on the unfixed deploy.yml: `set -e` aborts after the failed app `up` BEFORE the
-    health-check rollback, so there is NO `git checkout PREV_SHA` and feast stays at
+    health-check rollback, so there is NO rollback to PREV_SHA and feast stays at
     NEW_SHA. We first assert it failed for the RIGHT reason, then assert the fix."""
     code, out, calls = _run(tmp_path, FAIL_APP_UP="1")
 
@@ -269,9 +274,9 @@ def test_app_up_failure_rolls_back_feast_and_app_to_prev(tmp_path: Path) -> None
     # force-recreated forward (stranded at NEW_SHA) before the failure.
     assert _app_up_was_invoked(calls), "app-services `up` was never reached:\n" + "\n".join(calls)
 
-    ci = _checkout_prev_idx(calls)
+    ci = _rollback_prev_idx(calls)
     assert ci is not None, (
-        "expected a rollback `git checkout " + PREV_SHA + "` after the app-up failure, "
+        "expected a rollback `git reset --hard " + PREV_SHA + "` after the app-up failure, "
         "but none ran (set -e aborted before any rollback). Calls:\n" + "\n".join(calls)
     )
     rolled = _services_in_rollback(calls, ci)
@@ -306,7 +311,7 @@ def test_materializer_gate_failure_still_rolls_back_feast_only(tmp_path: Path) -
     roll feast+materializer back to PREV_SHA and exit 1 — and must NOT have flipped the
     app services. Passes on both the unfixed and the fixed deploy.yml."""
     code, out, calls = _run(tmp_path, HEARTBEAT="0")
-    ci = _checkout_prev_idx(calls)
+    ci = _rollback_prev_idx(calls)
     assert ci is not None, "materializer-gate failure must roll back to PREV_SHA"
     assert {"feast", "feast-materializer"} <= _services_in(_first_up_after(calls, ci))
     assert not _app_up_was_invoked(calls), (
@@ -320,7 +325,7 @@ def test_health_check_failure_rolls_back_app_services(tmp_path: Path) -> None:
     health check never passes, the existing health-path rollback must recreate the app
     services at PREV_SHA and exit 1. Passes on both the unfixed and the fixed deploy.yml."""
     code, out, calls = _run(tmp_path, FAIL_HEALTH="1")
-    ci = _checkout_prev_idx(calls)
+    ci = _rollback_prev_idx(calls)
     assert ci is not None, "health-check failure must roll back to PREV_SHA"
     assert APP_SERVICES <= _services_in_rollback(calls, ci)
     assert code == 1
