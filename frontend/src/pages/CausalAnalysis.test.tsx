@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
@@ -176,6 +176,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     });
     (useCausalDiscoveryInsight as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: vi.fn(),
+      reset: vi.fn(),
       isPending: false,
       error: null,
       data: undefined,
@@ -208,6 +209,61 @@ describe('CausalAnalysis — unified agent-led page', () => {
     // header on the landing (Leaderboard) tab, even before a discovery run.
     expect(await screen.findByText(/strategic interpretation/i)).toBeInTheDocument();
   }, 20000);
+
+  // Strategic Interpretation gating + reset (2026-07-23 frontend review): the
+  // interpretation must be grounded in a completed discovery run, reset on a
+  // grain/brand switch (no stale text), and auto-regenerate when a fresh run
+  // completes.
+  describe('strategic interpretation gating + reset', () => {
+    it('disables generation until a discovery run has completed', async () => {
+      mockDiscover(); // job: null — nothing discovered yet
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      const btn = await screen.findByRole('button', { name: /generate strategic insight/i });
+      expect(btn).toBeDisabled();
+      expect(screen.getByText(/run discover causal effects/i)).toBeInTheDocument();
+    }, 20000);
+
+    it('auto-generates the interpretation once discovery completes, grounded in the effects', async () => {
+      const mutate = vi.fn();
+      (useCausalDiscoveryInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate,
+        reset: vi.fn(),
+        isPending: false,
+        error: null,
+        data: undefined,
+      });
+      mockDiscover({ job: COMPLETED_JOB });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+      expect(mutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          brand: 'All brands',
+          grain: 'patient',
+          effects: expect.arrayContaining([
+            expect.objectContaining({ treatment: 'treatment_arm', outcome: 'persistent_180d' }),
+          ]),
+        })
+      );
+    }, 20000);
+
+    it('resets the interpretation when the brand changes (no stale text)', async () => {
+      const user = userEvent.setup();
+      const reset = vi.fn();
+      (useCausalDiscoveryInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate: vi.fn(),
+        reset,
+        isPending: false,
+        error: null,
+        data: { insight: 'stale brand-A read', key_takeaways: [], grounding: [], is_fallback: false },
+      });
+      mockDiscover({ job: COMPLETED_JOB });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      reset.mockClear(); // ignore the reset that fires on initial mount
+      await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+      await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+      await waitFor(() => expect(reset).toHaveBeenCalled());
+    }, 20000);
+  });
 
   it('offers grain + brand facets; brand defaults to all (null) for the patient grain', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });

@@ -17,6 +17,11 @@ interface StrategicInsightCardProps {
   isLoading?: boolean;
   error?: string | null;
   onGenerate?: () => void;
+  /** Gate the generate/regenerate action. When true the buttons are disabled
+   * (e.g. discovery has not run yet, so there are no effects to interpret) and
+   * `disabledHint` explains why. */
+  disabled?: boolean;
+  disabledHint?: string;
   isFallback?: boolean;
   provenance?: string;
   generatedAt?: string;
@@ -39,6 +44,8 @@ export function StrategicInsightCard({
   isLoading,
   error,
   onGenerate,
+  disabled = false,
+  disabledHint,
   isFallback,
   provenance,
   generatedAt,
@@ -66,16 +73,21 @@ export function StrategicInsightCard({
           <div className="space-y-2">
             <p className="text-sm text-destructive">{error}</p>
             {onGenerate && (
-              <Button variant="outline" onClick={onGenerate}>
+              <Button variant="outline" onClick={onGenerate} disabled={disabled}>
                 <Sparkles className="mr-2 h-4 w-4" /> Try again
               </Button>
             )}
           </div>
         )}
         {!isLoading && !error && !insight && onGenerate && (
-          <Button variant="outline" onClick={onGenerate}>
-            <Sparkles className="mr-2 h-4 w-4" /> Generate strategic insight
-          </Button>
+          <div className="space-y-2">
+            <Button variant="outline" onClick={onGenerate} disabled={disabled}>
+              <Sparkles className="mr-2 h-4 w-4" /> Generate strategic insight
+            </Button>
+            {disabled && disabledHint && (
+              <p className="text-sm text-muted-foreground">{disabledHint}</p>
+            )}
+          </div>
         )}
         {!isLoading && !error && insight && (
           <>
@@ -158,7 +170,13 @@ export function StrategicInsightCard({
               {provenance && <span>{provenance}</span>}
               {generatedAt && <span>· {new Date(generatedAt).toLocaleString()}</span>}
               {onGenerate && (
-                <Button variant="ghost" size="sm" className="ml-auto h-7" onClick={onGenerate}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-7"
+                  onClick={onGenerate}
+                  disabled={disabled}
+                >
                   <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Regenerate
                 </Button>
               )}
