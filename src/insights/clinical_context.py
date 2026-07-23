@@ -110,7 +110,15 @@ def format_clinical_positioning(brand: Optional[str]) -> str:
     """
     if not brand:
         return ""
-    return _CLINICAL_POSITIONING.get(brand, "")
+    # Case-insensitive match: a brand-casing drift (e.g. "kisqali") must NOT
+    # silently DISABLE the clinical gate — suppressing clinically off-target
+    # recommendations is the point, so a silent miss is the failure mode that
+    # matters most. A genuinely unknown brand still fails open ("") by contract.
+    key = brand.strip().casefold()
+    for name, positioning in _CLINICAL_POSITIONING.items():
+        if name.casefold() == key:
+            return positioning
+    return ""
 
 
 def _digit_free(text: Any) -> Optional[str]:

@@ -209,16 +209,33 @@ def test_comm_arm_edges_surface_all_five_levers_per_brand():
 
 
 def test_comm_arm_edge_confounders_match_arm_registry_ssot():
-    """Each edge must carry the arm's EXACT DGP backdoor set (ARM_REGISTRY is the
-    SSOT). A hardcoded set that drifts from the DGP would tell the estimator to
-    adjust for the wrong columns → a confounded estimate. This locks them."""
+    """Each edge must carry the arm's EXACT DGP backdoor set AND point only at the
+    arm's planted target_outcomes (ARM_REGISTRY is the SSOT). A hardcoded set that
+    drifts from the DGP would tell the estimator to adjust for the wrong columns
+    → a confounded estimate, or surface a lever→outcome the DGP never planted.
+    This locks BOTH invariants to the live registry (not a local mirror)."""
+    from collections import defaultdict
+
     from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
     from src.ml.synthetic.generators.causal_paths_generator import _COMM_ARM_EDGES
 
-    for arm, _outcome, confounders, _lo, _hi in _COMM_ARM_EDGES:
+    edge_outcomes = defaultdict(set)
+    for arm, outcome, confounders, _lo, _hi in _COMM_ARM_EDGES:
         assert set(confounders) == set(ARM_REGISTRY[arm].confounders), (
             f"{arm} edge confounders {sorted(confounders)} != ARM_REGISTRY "
             f"{sorted(ARM_REGISTRY[arm].confounders)}"
+        )
+        assert outcome in ARM_REGISTRY[arm].target_outcomes, (
+            f"{arm} edge outcome {outcome!r} not in ARM_REGISTRY target_outcomes "
+            f"{tuple(ARM_REGISTRY[arm].target_outcomes)}"
+        )
+        edge_outcomes[arm].add(outcome)
+    # Completeness: edges surface EXACTLY the planted target_outcomes per arm —
+    # none spurious (subset above), none missing (equality here).
+    for arm, outcomes in edge_outcomes.items():
+        assert outcomes == set(ARM_REGISTRY[arm].target_outcomes), (
+            f"{arm} edges cover {sorted(outcomes)} != target_outcomes "
+            f"{sorted(ARM_REGISTRY[arm].target_outcomes)}"
         )
 
 

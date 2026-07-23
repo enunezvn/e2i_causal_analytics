@@ -471,7 +471,12 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
         # so the FalkorDB sync builds (:Variable arm)-[:CAUSES]->(:Variable outcome).
         for brand in _BRANDS:
             for arm, outcome, arm_confounders, lo, hi in _COMM_ARM_EDGES:
-                rng = _commercial_edge_rng(brand, arm, outcome)
+                # Namespace the value RNG with the same ``arm|`` prefix the path_id
+                # uses (_comm_arm_path_id), so both id AND display values are
+                # content-addressed over the same key — an arm edge and a
+                # _COMMERCIAL_EDGES edge that ever shared a (brand, start, end)
+                # would draw independent values, not identical ones.
+                rng = _commercial_edge_rng(f"arm|{brand}", arm, outcome)
                 effect = round(float(rng.uniform(lo, hi)), 4)
                 disc = (now - timedelta(days=int(rng.integers(0, 25)))).date()
                 rows.append(

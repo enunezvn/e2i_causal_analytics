@@ -101,6 +101,9 @@ def test_format_clinical_positioning_is_brand_specific_and_fail_open():
     # Fail-open: unknown / missing brand yields "".
     assert format_clinical_positioning("Nonexistent") == ""
     assert format_clinical_positioning(None) == ""
+    # Case-insensitive: a brand-casing drift must NOT silently disable the gate.
+    assert format_clinical_positioning("kisqali") == format_clinical_positioning("Kisqali")
+    assert format_clinical_positioning("  REMIBRUTINIB ") == remi
 
 
 def test_build_grounding_carries_clinical_positioning_and_chip():
