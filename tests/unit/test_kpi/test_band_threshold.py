@@ -33,7 +33,7 @@ def _band_kpi() -> KPIMetadata:
         formula="1 + mean(|logistic_regression(y ~ predicted_prob).slope - 1|)",
         calculation_type=CalculationType.DIRECT,
         workstream=Workstream.WS1_MODEL_PERFORMANCE,
-        threshold=KPIThreshold(ideal=1.0, good_tolerance=0.05, warning_tolerance=0.15),
+        threshold=KPIThreshold(ideal=1.0, good_tolerance=0.10, warning_tolerance=0.15),
     )
 
 
@@ -51,7 +51,10 @@ class TestRegistryLoadsBandThreshold:
         assert kpi is not None
         assert kpi.threshold is not None
         assert kpi.threshold.ideal == 1.0
-        assert kpi.threshold.good_tolerance == 0.05
+        # 0.05 -> 0.10 (2026-07-23): the folded headline's sampling-noise floor
+        # at the current holdout sizes is ~1.08 even for perfect calibration;
+        # rationale + frontier pins in test_ws1_frontier_thresholds.py.
+        assert kpi.threshold.good_tolerance == 0.10
         assert kpi.threshold.warning_tolerance == 0.15
         # Band mode replaces the monotone target entirely.
         assert kpi.threshold.target is None

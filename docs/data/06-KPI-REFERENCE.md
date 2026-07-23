@@ -31,10 +31,10 @@ All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row
 | 9 | WS1-DQ-009 | Time-to-Release (TTR) | WS1 DQ | `run_completed - source_timestamp` | 24 hrs | 48 hrs | 72 hrs | Daily |
 | 10 | WS1-MP-001 | ROC-AUC | WS1 MP | `integral TPR d(FPR)` | 0.80 | 0.70 | 0.60 | Daily |
 | 11 | WS1-MP-002 | PR-AUC | WS1 MP | `integral Precision d(Recall)` | 0.70 | 0.55 | 0.40 | Daily |
-| 12 | WS1-MP-003 | F1 Score | WS1 MP | `2 * P * R / (P + R)` | 0.75 | 0.60 | 0.45 | Daily |
+| 12 | WS1-MP-003 | F1 Score | WS1 MP | `2 * P * R / (P + R)` | 0.65 | 0.60 | 0.45 | Daily |
 | 13 | WS1-MP-004 | Recall@Top-K | WS1 MP | `TP_at_K / total_positives` | 0.60 | 0.45 | 0.30 | Daily |
-| 14 | WS1-MP-005 | Brier Score | WS1 MP | `mean((p - y)^2)` | 0.15 | 0.25 | 0.35 | Daily |
-| 15 | WS1-MP-006 | Calibration Slope Deviation | WS1 MP | `1 + mean(\|slope_i - 1\|)` | 1.0 ± 0.05 | ± 0.15 | beyond | Weekly |
+| 14 | WS1-MP-005 | Brier Score | WS1 MP | `mean((p - y)^2)` | 0.185 | 0.25 | 0.35 | Daily |
+| 15 | WS1-MP-006 | Calibration Slope Deviation | WS1 MP | `1 + mean(\|slope_i - 1\|)` | 1.0 ± 0.10 | ± 0.15 | beyond | Weekly |
 | 16 | WS1-MP-007 | SHAP Coverage | WS1 MP | `has_shap / total_predictions` | 0.95 | 0.80 | 0.60 | Daily |
 | 17 | WS1-MP-008 | Fairness Gap (dRecall) — ⚠️ DECOMMISSIONED (#1068) | WS1 MP | `max_group(R) - min_group(R)` | 0.05 | 0.10 | 0.20 | Weekly |
 | 18 | WS1-MP-009 | Feature Drift (PSI) | WS1 MP | `sum (q-p) * ln(q/p)` | 0.10 | 0.20 | 0.25 | Daily |
@@ -560,9 +560,11 @@ These KPIs monitor the predictive quality, calibration, explainability, and fair
 | **Source Tables** | `ml_predictions` |
 | **Source Columns** | `ml_predictions.model_precision`, `ml_predictions.model_recall` |
 | **Helper View** | None |
-| **Target** | >= 0.75 |
-| **Warning** | < 0.75 and >= 0.60 |
+| **Target** | >= 0.65 |
+| **Warning** | < 0.65 and >= 0.45 (the `warning` field is unused in higher-is-better mode) |
 | **Critical** | < 0.45 |
+
+**Note**: Target retuned 0.75 → 0.65 (2026-07-23, DGP-aware frontier): the max-over-cutoffs F1 ceiling at the gold-standard models' measured holdout AUC/prevalence is ~0.70–0.72 brand-mean, and the models capture 96–97% of it — the old target sat above what a perfect model could reach. 0.65 keeps ~0.03 absolute degradation headroom before WARNING.
 
 **Calculator**: `ModelPerformanceCalculator._calc_f1_score`
 
@@ -608,11 +610,11 @@ These KPIs monitor the predictive quality, calibration, explainability, and fair
 | **Source Tables** | `ml_predictions` |
 | **Source Columns** | `ml_predictions.brier_score` |
 | **Helper View** | None |
-| **Target** | <= 0.15 |
-| **Warning** | > 0.15 and <= 0.25 |
-| **Critical** | > 0.35 |
+| **Target** | <= 0.185 |
+| **Warning** | > 0.185 and <= 0.25 |
+| **Critical** | > 0.25 (lower-is-better mode: CRITICAL fires above the `warning` bound; the `critical` field is unused) |
 
-**Note**: V3 schema addition. A Brier score of 0 means perfect calibration; 0.25 is the score of a coin flip for balanced classes.
+**Note**: V3 schema addition. A Brier score of 0 means perfect calibration; 0.25 is the score of a coin flip for balanced classes. Target retuned 0.15 → 0.185 (2026-07-23, DGP-aware frontier): the perfectly-calibrated Brier floor at the measured holdout AUC/prevalence is 0.174–0.178 brand-mean (only the initiation cohort, AUC 0.84+, can reach 0.15) and recalibration recovers <= 0.001 — the models already sit at their floor.
 
 **Calculator**: `ModelPerformanceCalculator._calc_brier_score`
 
@@ -633,9 +635,11 @@ These KPIs monitor the predictive quality, calibration, explainability, and fair
 | **Source Tables** | `ml_predictions` |
 | **Source Columns** | `ml_predictions.calibration_score` |
 | **Helper View** | None |
-| **Good** | abs(value - 1.0) <= 0.05 |
+| **Good** | abs(value - 1.0) <= 0.10 |
 | **Warning** | abs(value - 1.0) <= 0.15 |
 | **Critical** | abs(value - 1.0) > 0.15 |
+
+Good tolerance retuned 0.05 → 0.10 (2026-07-23): the folded headline has a sampling-noise floor — E[1 + mean(\|s−1\|)] ≈ 1.08 for a *perfectly calibrated* brand at the current holdout sizes (three cohorts n≈850 + hcp_adoption n=250) — so the 0.05 green band was statistically unreachable. 0.10 sits above the floor while genuine miscalibration (a per-model slope whose bootstrap CI excludes 1) still reads WARNING.
 
 Each gold-standard model's holdout **calibration slope** is a true Cox slope: 1.0 is perfectly calibrated, below 1.0 over-confident, above 1.0 under-confident (over-dispersed). The **brand headline is NOT a slope** — it is the deviation fold `1 + mean(|slope_i - 1|)` (renamed from "Calibration Slope", 2026-07-21), which stays in slope-band units so the band threshold (#1117) applies unchanged while killing signed cancellation: slopes 0.70 and 1.30 read 1.30 (CRITICAL), not a signed-mean 1.00 (GOOD). Because the fold discards direction, the per-model true slopes — with holdout n and bootstrap CI — are surfaced in the KPI result's `calibration_slope_detail` metadata; note the persistence/discontinuation mirror pair scores the same patients with mirrored labels, so 2 of a brand's 4 slots are one correlated draw. The metric storage key in `ml_performance_metrics` remains `calibration_slope` (per-model true slopes).
 
