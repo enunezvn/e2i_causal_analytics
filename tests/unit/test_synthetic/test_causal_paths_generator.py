@@ -4,21 +4,29 @@ data_split enum-exact; brand from brand_type; we do NOT touch the 50 stale real 
 
 from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.causal_paths_generator import (
+    N_COMM_ARM_ROWS,
     N_COMMERCIAL_ROWS,
     CausalPathsGenerator,
 )
+
+# Grains whose edges are DIRECT (1-hop, no mediator): the trigger RCT/effect-
+# modifier edges and the patient-grain commercial-arm edges.
+_DIRECT_EDGE_GRAINS = ("trigger", "patient_arm")
 
 
 def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
     n = 12
     df = CausalPathsGenerator(GeneratorConfig(seed=8, n_records=n)).generate()
-    # HCP/trigger/commercial rows are ADDITIVE fixed blocks (6 HCP + 6 trigger +
-    # N_COMMERCIAL_ROWS commercial), independent of the n_records knob.
-    assert len(df) == n + 12 + N_COMMERCIAL_ROWS
+    # HCP/trigger/commercial/patient-arm rows are ADDITIVE fixed blocks (6 HCP +
+    # 6 trigger + N_COMMERCIAL_ROWS commercial + N_COMM_ARM_ROWS patient-arm),
+    # independent of the n_records knob.
+    assert len(df) == n + 12 + N_COMMERCIAL_ROWS + N_COMM_ARM_ROWS
     assert df["causal_effect_size"].notna().all()  # CM-003 non-NULL
     assert (
-        df[df["grain"] != "trigger"]["mediators_identified"].apply(lambda m: len(m) >= 1).all()
-    )  # CM-005 (trigger RCT edges are direct, no mediator)
+        df[~df["grain"].isin(_DIRECT_EDGE_GRAINS)]["mediators_identified"]
+        .apply(lambda m: len(m) >= 1)
+        .all()
+    )  # CM-005 (trigger + patient-arm edges are direct, no mediator)
     assert df["is_synthetic"].all()
     # data_split enum-exact (faithful: train/validation/test/holdout/unassigned)
     assert set(df["data_split"]).issubset({"holdout", "test", "train", "unassigned", "validation"})
@@ -163,3 +171,67 @@ def test_patient_edges_retain_treatment_arm_start_and_grain():
         "persistent_180d",
         "discontinued_180d",
     }
+
+
+# ---------------------------------------------------------------------------
+# Patient-grain commercial-arm edges (2026-07-23): surface the five planted
+# commercial levers on the discovery leaderboard (they were estimable but had no
+# causal_paths edges, so only treatment_arm ever appeared). Direct 1-hop edges,
+# content-addressed for idempotent targeted upsert (no full reseed).
+# ---------------------------------------------------------------------------
+
+_EXPECTED_ARM_OUTCOMES = {
+    "copay_support": {"adherent_180d", "low_gap_180d", "persistent_180d"},
+    "psp_enrolled": {"adherent_180d", "persistent_180d"},
+    "rep_detailing_high": {"treatment_initiated"},
+    "sample_dropped": {"treatment_initiated"},
+    "trigger_accepted": {"treatment_initiated"},
+}
+
+
+def test_comm_arm_edges_surface_all_five_levers_per_brand():
+    df = CausalPathsGenerator(GeneratorConfig(seed=7, n_records=20)).generate()
+    arm_rows = df[df["grain"] == "patient_arm"]
+    # Every (arm -> outcome) pair present, for every brand, as a direct 1-hop edge.
+    for arm, outcomes in _EXPECTED_ARM_OUTCOMES.items():
+        got = set(arm_rows[arm_rows["start_node"] == arm]["end_node"])
+        assert got == outcomes, f"{arm}: expected {outcomes}, got {got}"
+    for _, row in arm_rows.iterrows():
+        assert row["path_length"] == 1
+        assert list(row["mediators_identified"]) == []
+        assert row["causal_chain"]["nodes"] == [row["start_node"], row["end_node"]]
+    per_brand = {
+        b: set(zip(g["start_node"], g["end_node"], strict=False))
+        for b, g in arm_rows.groupby("brand")
+    }
+    assert set(per_brand) == {"Remibrutinib", "Kisqali", "Fabhalta"}
+    assert all(len(edges) == 8 for edges in per_brand.values())  # 8 arm->outcome edges each
+
+
+def test_comm_arm_edge_confounders_match_arm_registry_ssot():
+    """Each edge must carry the arm's EXACT DGP backdoor set (ARM_REGISTRY is the
+    SSOT). A hardcoded set that drifts from the DGP would tell the estimator to
+    adjust for the wrong columns → a confounded estimate. This locks them."""
+    from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
+    from src.ml.synthetic.generators.causal_paths_generator import _COMM_ARM_EDGES
+
+    for arm, _outcome, confounders, _lo, _hi in _COMM_ARM_EDGES:
+        assert set(confounders) == set(ARM_REGISTRY[arm].confounders), (
+            f"{arm} edge confounders {sorted(confounders)} != ARM_REGISTRY "
+            f"{sorted(ARM_REGISTRY[arm].confounders)}"
+        )
+
+
+def test_comm_arm_rows_for_upsert_are_content_addressed_and_idempotent():
+    from src.ml.synthetic.generators.causal_paths_generator import comm_arm_rows_for_upsert
+
+    a = comm_arm_rows_for_upsert()
+    b = comm_arm_rows_for_upsert()
+    ids_a = [r["path_id"] for r in a]
+    ids_b = [r["path_id"] for r in b]
+    assert ids_a == ids_b  # stable across calls (content-addressed)
+    assert len(ids_a) == len(set(ids_a))  # no collisions
+    assert all(pid.startswith("scp_a") for pid in ids_a)  # arm namespace
+    assert len(a) == N_COMM_ARM_ROWS
+    # The generator-only 'grain' column is projected out for the DB insert.
+    assert all("grain" not in r for r in a)
