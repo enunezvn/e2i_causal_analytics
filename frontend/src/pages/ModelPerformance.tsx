@@ -67,8 +67,10 @@ import {
   useRocCurve,
 } from '@/hooks/api/use-monitoring';
 import { useModelsStatus } from '@/hooks/api/use-predictions';
+import { useKPIList } from '@/hooks/api/use-kpi';
 import { useModelPerformanceInsight } from '@/hooks/api';
 import type { ModelEndpointHealth } from '@/types/predictions';
+import { Workstream, type KPIThreshold } from '@/types/kpi';
 import type {
   ConfusionMatrixResponse,
   PerformanceAlertItem,
@@ -95,6 +97,36 @@ const METRIC_OPTIONS: { value: string; label: string }[] = [
   { value: 'f1', label: 'F1 Score' },
   { value: 'auc_roc', label: 'AUC-ROC' },
 ];
+
+// Trend metrics that ARE canonical WS1 model-performance KPIs. The Home KPI
+// grid statuses these same metrics (brand-aggregated over the gold-standard
+// holdouts) against kpi_definitions.yaml targets; the Current card here must
+// speak the same threshold language or the two surfaces contradict each other
+// (green here read as "meets target" when it only meant "not degrading").
+// accuracy/precision/recall have no canonical KPI threshold and keep the
+// alert/degradation semantics.
+const TREND_METRIC_KPI_ID: Record<string, string> = {
+  auc_roc: 'WS1-MP-001',
+  f1: 'WS1-MP-003',
+};
+
+/**
+ * Mirror of the backend's higher-is-better Threshold.evaluate
+ * (src/kpi/models.py): >= target GOOD; < critical CRITICAL; else WARNING.
+ * The threshold values come from the KPI list API (kpi_definitions.yaml is
+ * the single source of truth) — only the evaluation is mirrored here.
+ * Returns null when the KPI has no usable threshold (caller falls back to
+ * the existing alert semantics).
+ */
+function kpiThresholdStatus(
+  value: number,
+  threshold: KPIThreshold | null | undefined
+): 'healthy' | 'warning' | 'critical' | null {
+  if (!threshold || threshold.target == null) return null;
+  if (value >= threshold.target) return 'healthy';
+  if (threshold.critical != null && value < threshold.critical) return 'critical';
+  return 'warning';
+}
 
 // Performance metrics are recorded ~monthly (backtest sweep), so a 30-day
 // window catches only ~1-2 points and the trend chart renders degenerate /
@@ -347,6 +379,12 @@ function ModelPerformance() {
 
   // -- Live data ----------------------------------------------------------
   const modelsQuery = useModelsStatus();
+
+  // Canonical WS1 KPI thresholds for the Current-metric card (Home KPI-grid
+  // parity). Metadata only — cheap, cached 5 min by react-query. Failure or
+  // loading degrades to the previous alert-only semantics (never blocks the
+  // page).
+  const kpiListQuery = useKPIList({ workstream: Workstream.WS1_MODEL_PERFORMANCE });
   // Stabilise `models` reference so memo deps don't change on every render.
   const models = useMemo<ModelEndpointHealth[]>(
     () => modelsQuery.data?.models ?? [],
@@ -674,19 +712,40 @@ function ModelPerformance() {
       )}
 
       {/* Metrics KPI Cards — wired to live trend */}
-      {!isTrendLoading && trendQuery.data && (
+      {!isTrendLoading && trendQuery.data && (() => {
+        // Status the Current card against the canonical WS1 KPI threshold
+        // (same thresholds as the Home Model Performance tiles) when the
+        // metric IS one of those KPIs; an alert breach still escalates to
+        // critical. Keyed on the RESPONSE's metric_name (not selector state)
+        // so the color never races ahead of the value it describes.
+        const kpiId = TREND_METRIC_KPI_ID[trendQuery.data.metric_name];
+        const kpiThreshold = kpiId
+          ? kpiListQuery.data?.kpis?.find((k) => k.id === kpiId)?.threshold
+          : null;
+        const targetStatus = kpiThresholdStatus(trendQuery.data.current_value, kpiThreshold);
+        const currentStatus = trendQuery.data.alert_threshold_breached
+          ? 'critical'
+          : targetStatus ?? 'healthy';
+        return (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <KPICard
+            className="perf-current-card"
             title={`Current ${trendQuery.data.metric_name}`}
             value={(trendQuery.data.current_value * 100).toFixed(1)}
             unit="%"
-            status={trendQuery.data.alert_threshold_breached ? 'critical' : 'healthy'}
+            status={currentStatus}
+            description={
+              kpiThreshold?.target != null
+                ? `Statused against the ${kpiId} target (≥ ${(kpiThreshold.target * 100).toFixed(0)}%) — the same holdout KPI thresholds as the Home Model Performance tiles.`
+                : undefined
+            }
           />
           <KPICard
+            className="perf-baseline-card"
             title={`Baseline ${trendQuery.data.metric_name}`}
             value={(trendQuery.data.baseline_value * 100).toFixed(1)}
             unit="%"
-            status="healthy"
+            status="neutral"
           />
           <KPICard
             title="Change"
@@ -700,7 +759,8 @@ function ModelPerformance() {
             status={trendQuery.data.trend === 'degrading' ? 'critical' : 'healthy'}
           />
         </div>
-      )}
+        );
+      })()}
 
       {/* Visualization Tabs */}
       <Tabs defaultValue="trend" className="space-y-6">
@@ -981,23 +1041,30 @@ function ModelPerformance() {
                 />
               ) : comparisonQuery.data ? (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {/* Comparison values are informational — a green status here
+                      previously claimed "healthy" for BOTH sides of the
+                      comparison regardless of the numbers. Neutral is honest;
+                      the verdict card below carries the conclusion. */}
                   <KPICard
+                    className="compare-value-card"
                     title={`${comparisonQuery.data.model_id} ${comparisonQuery.data.metric_name}`}
                     value={(comparisonQuery.data.model_value * 100).toFixed(1)}
                     unit="%"
-                    status="healthy"
+                    status="neutral"
                   />
                   <KPICard
+                    className="compare-value-card"
                     title={`${comparisonQuery.data.other_model_id} ${comparisonQuery.data.metric_name}`}
                     value={(comparisonQuery.data.other_model_value * 100).toFixed(1)}
                     unit="%"
-                    status="healthy"
+                    status="neutral"
                   />
                   <KPICard
+                    className="compare-value-card"
                     title="Difference"
                     value={(comparisonQuery.data.difference * 100).toFixed(2)}
                     unit="%"
-                    status="healthy"
+                    status="neutral"
                   />
                   {/*
                     "Better model" is a model HANDLE (a long string like
