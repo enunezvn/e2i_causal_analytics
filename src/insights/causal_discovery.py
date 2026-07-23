@@ -31,7 +31,18 @@ try:
         The registry context lists commercial chains modeled OUTSIDE this
         leaderboard's estimation scope (curated, directional): you may mention them
         as additional modeled coverage, but NEVER present them as discovered
-        effects and NEVER attribute numbers to them."""
+        effects and NEVER attribute numbers to them.
+
+        You are also given the brand's labeled CLINICAL POSITIONING (target
+        population + line of therapy). GATE every recommendation by it: if a
+        discovered effect, segment, or audience implies targeting a population
+        OUTSIDE the brand's labeled target population or line of therapy, say so
+        explicitly and do NOT recommend acting on it — even when the modeled
+        effect is favourable. A statistically strong effect in a clinically
+        off-target population (e.g. treatment-naive patients for an
+        antihistamine-refractory indication) is NOT an actionable commercial
+        recommendation. When the clinical positioning is empty, proceed without
+        this gate rather than inventing one."""
 
         scope: str = dspy.InputField(desc="Brand + analysis grain")
         effects_table: str = dspy.InputField(
@@ -40,6 +51,12 @@ try:
         gate_summary: str = dspy.InputField(desc="Counts by gate status")
         registry_context: str = dspy.InputField(
             desc="Commercial chains modeled in the registry, outside estimation scope (no figures)"
+        )
+        clinical_positioning: str = dspy.InputField(
+            desc=(
+                "The brand's labeled target population + line of therapy; gate every "
+                "recommendation by it (empty when unavailable — then no clinical gate)"
+            )
         )
 
         interpretation: str = dspy.OutputField(
@@ -67,6 +84,7 @@ def build_grounding(
     grain: str,
     effects: list[dict[str, Any]],
     causal_drivers: list[dict[str, Any]] | None = None,
+    clinical_positioning: str = "",
 ) -> dict[str, Any]:
     def _rank(e: dict[str, Any]) -> float:
         return abs(float(e.get("ate") or 0))
@@ -97,12 +115,16 @@ def build_grounding(
     ]
     if named:
         chips.append({"label": "Registry chains", "value": str(len(named))})
+    positioning = (clinical_positioning or "").strip()
+    if positioning:
+        chips.append({"label": "Clinical positioning", "value": "applied"})
     return {
         "scope": f"{brand} / {grain}",
         "effects_table": effects_table,
         "gate_summary": gate_summary,
         "registry_context": format_qualitative_context(drivers),
         "has_registry_context": bool(named),
+        "clinical_positioning": positioning,
         "grounding": chips,
     }
 
@@ -112,6 +134,11 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
         f"For {g['scope']}, discovered effects (by |ATE|):\n{g['effects_table']}\n"
         f"Gate distribution: {g['gate_summary']}. "
         + (f"{g['registry_context']} " if g.get("has_registry_context") else "")
+        + (
+            f"Clinical positioning: {g['clinical_positioning']} "
+            if g.get("clinical_positioning")
+            else ""
+        )
         + "(Factual summary — LLM interpretation unavailable.)"
     )
     first_line = g["effects_table"].splitlines()[0] if g["effects_table"] else g["gate_summary"]
@@ -130,6 +157,7 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
         effects_table=g["effects_table"],
         gate_summary=g["gate_summary"],
         registry_context=g["registry_context"],
+        clinical_positioning=g.get("clinical_positioning", ""),
     )
     if pred is None:
         return _fallback(g)
