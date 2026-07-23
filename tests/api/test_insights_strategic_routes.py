@@ -83,8 +83,7 @@ def test_causal_discovery_insight_gates_on_clinical_positioning(test_client):
     assert r.status_code == 200, r.text
     data = r.json()
     assert any(
-        c["label"] == "Clinical positioning" and c["value"] == "applied"
-        for c in data["grounding"]
+        c["label"] == "Clinical positioning" and c["value"] == "applied" for c in data["grounding"]
     )
     # Remibrutinib's antihistamine-refractory positioning reaches the narrative.
     assert "treatment-naive" in data["insight"].lower()
