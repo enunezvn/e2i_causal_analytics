@@ -206,7 +206,7 @@ jobs:
             # place — previously inline copies drifted (one carried --renew-anon-volumes,
             # the other did not). Every `up` is BEST-EFFORT (`|| echo WARN`) so `set -e` can
             # NEVER abort mid-rollback before the caller's `exit 1`. Recompute COMPOSE_CMD
-            # after the checkout so the overlay matches the PREV_SHA tree (a pre-flip commit
+            # after the reset so the overlay matches the PREV_SHA tree (a pre-flip commit
             # falls back to the dev overlay).
             #
             # #563 double-fault avoidance: the GHCR-backed app/frontend tier
@@ -222,8 +222,17 @@ jobs:
             # carry the /app/.venv anon-volume mask, so renew repopulates it from the
             # PREV_SHA image; harmless no-op for the sidecars (named volume + ro binds only).
             rollback_to_prev() {
-              git checkout "$PREV_SHA" \
-                || echo "==> WARN: rollback checkout to ${PREV_SHA:0:7} failed"
+              # `reset --hard`, NOT `git checkout "$PREV_SHA"`: a raw-sha checkout DETACHES
+              # HEAD, and the forward path's `reset --hard origin/main` moves a detached
+              # HEAD without ever reattaching — the 2026-07-21 rollback left the droplet
+              # checkout detached for two days, during which the unheld `main` branch got
+              # silently taken over by `gh pr merge --delete-branch` runs in worktrees.
+              # The droplet's main is a pure mirror of origin/main (never pushed from),
+              # so rewinding the branch ref is safe — the next successful deploy's
+              # `reset --hard origin/main` moves it forward again. The pre-deploy dirty-
+              # tracked-files guard has already run, so there is nothing to clobber.
+              git reset --hard "$PREV_SHA" \
+                || echo "==> WARN: rollback reset to ${PREV_SHA:0:7} failed"
               COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
               # Partition the requested services into the GHCR-backed app/frontend tier
               # (pull, never local-build) and the locally-built sidecars (--build). No
