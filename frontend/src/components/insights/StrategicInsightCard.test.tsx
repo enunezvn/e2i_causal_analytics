@@ -56,6 +56,32 @@ describe('StrategicInsightCard', () => {
     expect(onGenerate).toHaveBeenCalledOnce();
   });
 
+  // Gating (2026-07-23): the generate/regenerate action must be disabled until a
+  // discovery run has produced effects to interpret — otherwise a user can
+  // synthesize an interpretation of an empty leaderboard.
+  it('disables the Generate button and shows the hint when disabled', async () => {
+    const onGenerate = vi.fn();
+    render(
+      <StrategicInsightCard
+        onGenerate={onGenerate}
+        disabled
+        disabledHint="Run Discover Causal Effects first."
+      />
+    );
+    const btn = screen.getByRole('button', { name: /generate strategic insight/i });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/run discover causal effects first/i)).toBeInTheDocument();
+    await userEvent.click(btn);
+    expect(onGenerate).not.toHaveBeenCalled();
+  });
+
+  it('disables the Regenerate button when disabled', () => {
+    render(
+      <StrategicInsightCard insight="Adherence drives NRx." onGenerate={vi.fn()} disabled />
+    );
+    expect(screen.getByRole('button', { name: /regenerate/i })).toBeDisabled();
+  });
+
   // Structural constraints are a supplementary channel — collapsed by default,
   // expandable on click (frontend review 2026-07-22).
   describe('structural considerations collapsible', () => {

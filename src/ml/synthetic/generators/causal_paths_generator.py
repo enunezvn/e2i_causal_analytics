@@ -72,6 +72,62 @@ _TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
     ("acceptance_status", "conversion_flag", ["disease_severity", "engagement_score"]),
 )
 
+# Patient-grain COMMERCIAL-ARM edges (2026-07-23). The DGP plants recoverable,
+# confounded effects for five commercial levers on the patient cohort
+# (copay_support / psp_enrolled / rep_detailing_high / sample_dropped /
+# trigger_accepted — the treatment_arm.ARM_REGISTRY SSOT), and
+# ``_CAUSAL_DATASET_SPECS['patient_journeys']`` (src/api/routes/causal.py)
+# ALREADY allowlists every arm as a treatment AND its backdoor confounders. But
+# the discovery leaderboard enumerates ONLY (treatment, outcome) pairs present in
+# ``causal_paths`` (``_discover_candidate_questions``), and until now only
+# treatment_arm had edges — so the strong planted levers were INVISIBLE on the
+# leaderboard (reachable only via the manual "Pose your own question" panel).
+# These edges surface them. Each carries the arm's EXACT DGP backdoor set (a
+# subset of the dataset-spec covariate allowlist, so the confounder-contract
+# guard is satisfied and estimation de-biases correctly instead of reporting the
+# confounded naive diff). Direct 1-hop edges (no mediator), mirroring
+# _TRIGGER_EDGES. Content-addressed like _COMMERCIAL_EDGES → idempotent targeted
+# upsert (no full cohort reseed; the patient_journeys arm data already exists).
+# The stored causal_effect_size is a registry/KG DISPLAY value in the arm's
+# design band; the leaderboard RE-ESTIMATES on real rows.
+_COMM_ARM_EDGES: Tuple[Tuple[str, str, Tuple[str, ...], float, float], ...] = (
+    # (arm, outcome, confounders_controlled, effect_band_lo, effect_band_hi)
+    ("copay_support", "adherent_180d", ("insurance_access_score", "disease_severity"), 0.08, 0.14),
+    ("copay_support", "low_gap_180d", ("insurance_access_score", "disease_severity"), 0.06, 0.12),
+    (
+        "copay_support",
+        "persistent_180d",
+        ("insurance_access_score", "disease_severity"),
+        0.06,
+        0.11,
+    ),
+    (
+        "psp_enrolled",
+        "adherent_180d",
+        ("disease_severity", "engagement_score", "academic_hcp"),
+        0.06,
+        0.11,
+    ),
+    (
+        "psp_enrolled",
+        "persistent_180d",
+        ("disease_severity", "engagement_score", "academic_hcp"),
+        0.05,
+        0.10,
+    ),
+    ("rep_detailing_high", "treatment_initiated", ("academic_hcp", "engagement_score"), 0.03, 0.06),
+    ("sample_dropped", "treatment_initiated", ("academic_hcp", "engagement_score"), 0.02, 0.05),
+    (
+        "trigger_accepted",
+        "treatment_initiated",
+        ("disease_severity", "engagement_score"),
+        0.04,
+        0.07,
+    ),
+)
+
+N_COMM_ARM_ROWS = len(_COMM_ARM_EDGES) * len(_BRANDS)
+
 # Commercial-KPI grain (2026-07-07). The registry modeled patient/HCP/trigger
 # outcomes only, so "what drives TRx?" was a genuine substrate-coverage gap in
 # chat and on every strategic-insight surface. These are CURATED synthetic
@@ -191,6 +247,14 @@ def _commercial_path_id(brand: str, start: str, end: str) -> str:
     return "scp_c" + digest.hexdigest()[:11]
 
 
+def _comm_arm_path_id(brand: str, start: str, end: str) -> str:
+    """Content-addressed id for a patient-grain commercial-arm edge, namespaced
+    scp_a*, 16 chars (varchar(20) cap). The ``arm|`` prefix keeps the id space
+    disjoint from _commercial_path_id even for a shared (brand, start, end)."""
+    digest = hashlib.sha1(f"arm|{brand}|{start}|{end}".encode(), usedforsecurity=False)
+    return "scp_a" + digest.hexdigest()[:11]
+
+
 def commercial_rows_for_upsert() -> List[dict]:
     """The commercial grain as DB-shaped records for the targeted apply script
     (scripts/seed_commercial_causal_paths.py).
@@ -211,6 +275,26 @@ def commercial_rows_for_upsert() -> List[dict]:
     # json round-trip strips the numpy scalars a DataFrame leaves in records
     # (np.int64/np.bool_ break postgrest's stdlib-json serializer, PR #1098).
     records: List[dict] = json.loads(com[cols].to_json(orient="records"))
+    return records
+
+
+def comm_arm_rows_for_upsert() -> List[dict]:
+    """The patient-grain commercial-arm edges as DB-shaped records for the
+    targeted apply script (scripts/seed_comm_arm_causal_paths.py).
+
+    Content-addressed (scp_a*), so the upsert on path_id is idempotent and needs
+    NO full cohort reseed — the ``patient_journeys`` arm data already exists; this
+    only adds the leaderboard-enumeration edges pointing at it. Same column
+    projection as ``commercial_rows_for_upsert`` (the generator-only 'grain'
+    column is dropped — the DB has no such column)."""
+    import json
+
+    from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
+
+    df = CausalPathsGenerator(GeneratorConfig(n_records=0)).generate()
+    arm = df[df["grain"] == "patient_arm"]
+    cols = [c for c in TABLE_COLUMNS["causal_paths"] if c in arm.columns]
+    records: List[dict] = json.loads(arm[cols].to_json(orient="records"))
     return records
 
 
@@ -379,6 +463,48 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                         "created_at": now.isoformat(),
                         "is_synthetic": True,
                         "grain": "commercial",
+                    }
+                )
+        # Patient-grain commercial-arm edges — ADDITIVE fixed block (8 edges x 3
+        # brands), content-addressed (idempotent targeted upsert; see
+        # _COMM_ARM_EDGES). Direct 1-hop edges (no mediator, like _TRIGGER_EDGES)
+        # so the FalkorDB sync builds (:Variable arm)-[:CAUSES]->(:Variable outcome).
+        for brand in _BRANDS:
+            for arm, outcome, arm_confounders, lo, hi in _COMM_ARM_EDGES:
+                # Namespace the value RNG with the same ``arm|`` prefix the path_id
+                # uses (_comm_arm_path_id), so both id AND display values are
+                # content-addressed over the same key — an arm edge and a
+                # _COMMERCIAL_EDGES edge that ever shared a (brand, start, end)
+                # would draw independent values, not identical ones.
+                rng = _commercial_edge_rng(f"arm|{brand}", arm, outcome)
+                effect = round(float(rng.uniform(lo, hi)), 4)
+                disc = (now - timedelta(days=int(rng.integers(0, 25)))).date()
+                rows.append(
+                    {
+                        "path_id": _comm_arm_path_id(brand, arm, outcome),
+                        "discovery_date": disc.isoformat(),
+                        "causal_chain": {"nodes": [arm, outcome]},
+                        "start_node": arm,
+                        "end_node": outcome,
+                        "intermediate_nodes": [],
+                        "path_length": 1,
+                        "causal_effect_size": effect,
+                        "confidence_level": round(float(rng.uniform(0.80, 0.95)), 3),
+                        "method_used": "backdoor.linear_regression",
+                        "confounders_controlled": list(arm_confounders),
+                        "mediators_identified": [],
+                        "time_lag_days": int(rng.integers(7, 60)),
+                        "validation_status": "validated",
+                        "business_impact_estimate": round(effect * float(rng.uniform(1e5, 5e5)), 2),
+                        "data_split": "unassigned",
+                        "direct_effect": effect,
+                        "indirect_effect": 0.0,
+                        "brand": brand,
+                        "region": str(rng.choice(_REGIONS)),
+                        "confirmation_count": int(rng.integers(1, 5)),
+                        "created_at": now.isoformat(),
+                        "is_synthetic": True,
+                        "grain": "patient_arm",
                     }
                 )
         return pd.DataFrame(rows)

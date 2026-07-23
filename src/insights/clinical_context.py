@@ -61,6 +61,66 @@ async def fetch_clinical_payload(brand: Optional[str], outcome: str = "TRx") -> 
         return None
 
 
+# Curated, label-derived clinical POSITIONING per brand: the labeled target
+# population and line of therapy. Unlike ``format_clinical_context`` (which
+# grounds the digit-guarded executive-brief / HTE surfaces and MUST be
+# digit-free), this grounds the causal-discovery strategic interpretation — a
+# surface that already reports effect figures — so accurate receptor / line-of-
+# therapy names (HR+/HER2-, antihistamine-refractory) are kept, not stripped.
+# These are REAL prescribing-label facts, NOT invented placeholders, and they
+# GATE commercial recommendations by clinical appropriateness: a modeled effect
+# favouring a population OUTSIDE the labeled target is clinically off-target even
+# when the number looks good (e.g. treatment-naive patients are not the target
+# for an antihistamine-refractory indication). Limitations-of-use and
+# contraindications are deliberately EXCLUDED (product decision 2026-07-23) —
+# this is positioning, not a safety summary.
+_CLINICAL_POSITIONING: dict[str, str] = {
+    "Remibrutinib": (
+        "Labeled target population: chronic spontaneous urticaria that remains "
+        "symptomatic despite H1-antihistamine therapy — an antihistamine-refractory, "
+        "later-line population, not treatment-naive patients. Treatment-naive or "
+        "antihistamine-responsive segments fall outside the label's target even when "
+        "their modeled response is favourable, so do not recommend prioritising them."
+    ),
+    "Fabhalta": (
+        "Labeled target population: adults with paroxysmal nocturnal hemoglobinuria, "
+        "positioned as an oral monotherapy — including patients switching from anti-C5 "
+        "therapy. The commercial target is the diagnosed PNH population; broader anemia "
+        "or undiagnosed cohorts are outside the label even when a modeled effect looks strong."
+    ),
+    "Kisqali": (
+        "Labeled target population: HR-positive, HER2-negative breast cancer — advanced or "
+        "metastatic disease combined with endocrine therapy, and node-positive early breast "
+        "cancer in the adjuvant setting. Endocrine-eligible HR+/HER2- patients are the target; "
+        "HER2-positive or hormone-receptor-negative segments are off-label even if modeled "
+        "response is high."
+    ),
+}
+
+
+def format_clinical_positioning(brand: Optional[str]) -> str:
+    """The curated, label-derived target-population + line-of-therapy positioning
+    for ``brand`` (empty string if unknown/unbranded).
+
+    Grounds the causal-discovery strategic interpretation so its commercial
+    recommendations are GATED by clinical appropriateness — a strong modeled
+    effect in a clinically off-target population is not an actionable
+    recommendation. Fail-open by contract: an unknown brand yields ``""`` and the
+    interpretation proceeds without a clinical gate.
+    """
+    if not brand:
+        return ""
+    # Case-insensitive match: a brand-casing drift (e.g. "kisqali") must NOT
+    # silently DISABLE the clinical gate — suppressing clinically off-target
+    # recommendations is the point, so a silent miss is the failure mode that
+    # matters most. A genuinely unknown brand still fails open ("") by contract.
+    key = brand.strip().casefold()
+    for name, positioning in _CLINICAL_POSITIONING.items():
+        if name.casefold() == key:
+            return positioning
+    return ""
+
+
 def _digit_free(text: Any) -> Optional[str]:
     """``text`` stripped, if it is a non-empty digit-free string, else None."""
     if not isinstance(text, str):

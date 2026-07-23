@@ -937,6 +937,22 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
+# Row cap for the discovery leaderboard's per-question estimate (2026-07-23). The
+# patient outcomes are quantile-thresholded binaries whose latent CATE attenuates
+# to a small risk difference, and brand-scoping cuts rows to ~1/3, so the prior
+# 1500 cap left the medium-severity commercial-arm effects (recovery-gated at
+# n=8000) pulling to the estimator's noise floor. 5000 (~1650/brand scoped)
+# resolves the strong + most medium effects AND is what lets them clear the
+# refutation gate: MEASURED 2026-07-23 in the prod container, copay_support->
+# adherent_180d is BLOCKED (E-value sensitivity, 2/3 tests) at 1500 but PASSES at
+# 5000. The cost is real and accepted (owner decision): each full agent estimation
+# is ~158s at 5000 (~82s at 1500), so the 30-question patient_journeys leaderboard
+# is a ~79-min BACKGROUND job — NOT interactive. That is acceptable because the run
+# is async (submit->poll, 8h TTL) and fills STRONGEST-FIRST (see _prerank_questions),
+# so the top effects surface within minutes. The cheap FWL / partial-correlation
+# PRE-RANK screens stay at 1500 (they only order candidates; not the reported estimate).
+_DISCOVERY_ROW_CAP = 5000
+
 
 def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool:
     """Whether this question's treatment is RANDOMIZED by design.
@@ -1066,6 +1082,7 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "psp_enrolled",
         "rep_detailing_high",  # Phase 3: 0/1 initiation-latent arm, float-coerced
         "sample_dropped",  # Phase 3: 0/1 initiation-latent arm, float-coerced
+        "trigger_accepted",  # Phase 4: 0/1 initiation-latent arm, float-coerced (SMALLINT in DB)
         "insurance_access_score",
     },
     "hcp_adoption": {
@@ -1705,7 +1722,7 @@ async def _run_discover_effects_task(
                 treatment_var=t,
                 outcome_var=o,
                 covariates=q.adjustment_set,
-                limit=1500,
+                limit=_DISCOVERY_ROW_CAP,
                 brand=q_brand,
             )
             # The loader EXPANDS categorical covariates (e.g. geographic_region)
@@ -1718,7 +1735,7 @@ async def _run_discover_effects_task(
                 treatment_var=t,
                 outcome_var=o,
                 dataset=dataset,
-                limit=1500,
+                limit=_DISCOVERY_ROW_CAP,
                 auto_discover=True,
                 brand=q_brand,
             )

@@ -477,15 +477,30 @@ async def causal_discovery_insight(
     # keeps OUT of estimation runs — cited as additional modeled coverage,
     # digit-free. fetch fails soft to [] — a registry hiccup never blocks.
     from src.insights.causal_context import fetch_commercial_drivers
+    from src.insights.clinical_context import format_clinical_positioning
 
     drivers = await fetch_commercial_drivers(
         req.brand, outcomes=("TRx", "NRx", "market share", "ROI")
     )
+    # Clinical setting (2026-07-23): the brand's labeled target population + line
+    # of therapy GATE the commercial recommendations — a strong modeled effect in
+    # a clinically off-target population is not actionable. Curated label facts
+    # (no network); an unknown brand yields "" and the interpretation proceeds
+    # without a clinical gate.
+    positioning = format_clinical_positioning(req.brand)
     g = causal_discovery.build_grounding(
-        req.brand, req.grain, [e.model_dump() for e in req.effects], causal_drivers=drivers
+        req.brand,
+        req.grain,
+        [e.model_dump() for e in req.effects],
+        causal_drivers=drivers,
+        clinical_positioning=positioning,
     )
+    # Fold the positioning into the cache key so an edit to it (or a brand whose
+    # positioning changes) never serves a stale, ungated interpretation.
     key = cache_key(
-        "causal-discovery", req.brand, {"t": g["effects_table"], "r": g["registry_context"]}
+        "causal-discovery",
+        req.brand,
+        {"t": g["effects_table"], "r": g["registry_context"], "cp": g["clinical_positioning"]},
     )
     cached = await cache_get(key)
     if cached is not None:

@@ -18,7 +18,7 @@
  * @module pages/CausalAnalysis
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -240,6 +240,49 @@ export default function CausalAnalysis() {
   // Agentic strategic read of the discovered-effects leaderboard (on-demand LLM
   // interpretation grounded in the real ranked effects).
   const causalInsight = useCausalDiscoveryInsight();
+  const { mutate: generateCausalInsight, reset: resetCausalInsight } = causalInsight;
+  // The interpretation must be grounded in a COMPLETED discovery run for the
+  // current (grain, brand) — never an empty or in-flight leaderboard. Build the
+  // payload once per effects identity so the auto-regenerate and the manual
+  // Regenerate share it.
+  const insightEffects = useMemo(
+    () =>
+      (effects ?? [])
+        .filter((e): e is DiscoveredEffect & { ate: number } => e.ate != null)
+        .map((e) => ({
+          treatment: e.treatment,
+          outcome: e.outcome,
+          ate: e.ate,
+          ate_ci_lower: e.ate_ci_lower ?? undefined,
+          ate_ci_upper: e.ate_ci_upper ?? undefined,
+          status: e.status,
+          selected_estimator: e.selected_estimator ?? undefined,
+        })),
+    [effects]
+  );
+  const discoveryComplete = !!job && job.status === 'completed';
+  const canGenerateInsight = discoveryComplete && insightEffects.length > 0;
+  // The (dataset, brand) the interpretation was SUBMITTED for. The LLM response
+  // carries no scope, so we tag the submitted scope ourselves and only surface a
+  // result while it still matches the active facets — closing the async race
+  // auto-regenerate opens: a run fired for scope A that resolves AFTER the user
+  // switches to scope B (resetCausalInsight cleared the old data, but the late
+  // mutation's onSuccess repopulates causalInsight.data) is suppressed instead of
+  // rendered — and mislabeled — under B. Mirrors manualScope/manualResult.
+  const [causalInsightScope, setCausalInsightScope] = useState<{
+    dataset: string;
+    brand: string | null;
+  } | null>(null);
+  const runInsight = useCallback(() => {
+    setCausalInsightScope({ dataset, brand: brandArg });
+    generateCausalInsight({ brand: brandArg ?? 'All brands', grain, effects: insightEffects });
+  }, [generateCausalInsight, brandArg, grain, insightEffects, dataset]);
+  const insightInScope =
+    causalInsightScope?.dataset === dataset && causalInsightScope?.brand === brandArg;
+  const causalInsightData = insightInScope ? causalInsight.data : undefined;
+  // Tracks the (scope, job) the interpretation was last auto-fired for, so a
+  // completed discovery regenerates exactly once. Reset on scope change below.
+  const causalInsightKeyRef = useRef<string | null>(null);
 
   // ── Manual "Pose your own question" panel ──────────────────────────────────
   const [manualOpen, setManualOpen] = useState(false);
@@ -320,11 +363,29 @@ export default function CausalAnalysis() {
   // Both the drilled-into deep view and a completed manual analysis are scoped
   // to (dataset, brand); on a grain/brand switch, drop them so nothing from the
   // previous scope lingers under the new one. (The leaderboard itself resets in
-  // useDiscoverEffects.)
+  // useDiscoverEffects.) The strategic interpretation is scoped the SAME way —
+  // reset it too, so a brand-A read never lingers under brand B until the next
+  // discovery re-fires it (the stale-interpretation bug).
   useEffect(() => {
     setSelectedId(null);
     resetManual();
-  }, [dataset, brandArg, resetManual]);
+    resetCausalInsight();
+    setCausalInsightScope(null);
+    causalInsightKeyRef.current = null;
+  }, [dataset, brandArg, resetManual, resetCausalInsight]);
+
+  // Auto-regenerate the strategic interpretation when a fresh discovery run
+  // completes for the current scope (keyed on the job identity so it fires once
+  // per distinct run, not on every poll/re-render). Mirrors the treatment-
+  // effects tab's auto-generate. Gating on `discoveryComplete` guarantees an
+  // interpretation is never synthesized before "Discover Causal Effects" runs.
+  useEffect(() => {
+    if (!canGenerateInsight) return;
+    const key = `${dataset}-${brandArg ?? ALL_BRANDS}-${job?.job_id ?? ''}`;
+    if (causalInsightKeyRef.current === key) return;
+    causalInsightKeyRef.current = key;
+    runInsight();
+  }, [canGenerateInsight, dataset, brandArg, job?.job_id, runInsight]);
 
   // The brand of the effect currently drilled into (each effect is brand-scoped,
   // even when the run filter is "All brands"); falls back to the filter.
@@ -600,31 +661,21 @@ export default function CausalAnalysis() {
               available; grounds an on-demand LLM read in the real discovered
               effects). */}
           <StrategicInsightCard
-            isLoading={causalInsight.isPending}
-            error={causalInsight.error?.message ?? null}
-            insight={causalInsight.data?.insight}
-            keyTakeaways={causalInsight.data?.key_takeaways}
-            grounding={causalInsight.data?.grounding}
-            isFallback={causalInsight.data?.is_fallback}
-            provenance={causalInsight.data?.provenance}
-            generatedAt={causalInsight.data?.generated_at}
-            onGenerate={() =>
-              causalInsight.mutate({
-                brand: brandArg ?? 'All brands',
-                grain,
-                effects: (effects ?? [])
-                  .filter((e): e is DiscoveredEffect & { ate: number } => e.ate != null)
-                  .map((e) => ({
-                    treatment: e.treatment,
-                    outcome: e.outcome,
-                    ate: e.ate,
-                    ate_ci_lower: e.ate_ci_lower ?? undefined,
-                    ate_ci_upper: e.ate_ci_upper ?? undefined,
-                    status: e.status,
-                    selected_estimator: e.selected_estimator ?? undefined,
-                  })),
-              })
+            isLoading={insightInScope && causalInsight.isPending}
+            error={insightInScope ? (causalInsight.error?.message ?? null) : null}
+            insight={causalInsightData?.insight}
+            keyTakeaways={causalInsightData?.key_takeaways}
+            grounding={causalInsightData?.grounding}
+            isFallback={causalInsightData?.is_fallback}
+            provenance={causalInsightData?.provenance}
+            generatedAt={causalInsightData?.generated_at}
+            disabled={!canGenerateInsight}
+            disabledHint={
+              discoveryComplete
+                ? 'This run produced no effects with a usable estimate to interpret.'
+                : 'Run Discover Causal Effects to ground this interpretation in the selected grain and brand.'
             }
+            onGenerate={runInsight}
           />
 
           {/* Leaderboard */}

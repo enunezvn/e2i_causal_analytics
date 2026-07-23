@@ -60,6 +60,35 @@ def test_causal_discovery_insight_fallback(test_client):
     assert data["generated_at"]
 
 
+def test_causal_discovery_insight_gates_on_clinical_positioning(test_client):
+    # The brand's labeled target population + line of therapy grounds the
+    # interpretation so a modeled effect in a clinically off-target population is
+    # not recommended (curated label facts — no network, hermetic in CI).
+    body = {
+        "brand": "Remibrutinib",
+        "grain": "patient",
+        "effects": [
+            {
+                "treatment": "treatment_arm",
+                "outcome": "persistent_180d",
+                "ate": 0.088,
+                "ate_ci_lower": 0.087,
+                "ate_ci_upper": 0.089,
+                "status": "proceed",
+                "selected_estimator": "LinearDML",
+            }
+        ],
+    }
+    r = test_client.post("/api/insights/causal-discovery", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert any(
+        c["label"] == "Clinical positioning" and c["value"] == "applied" for c in data["grounding"]
+    )
+    # Remibrutinib's antihistamine-refractory positioning reaches the narrative.
+    assert "treatment-naive" in data["insight"].lower()
+
+
 def test_predictive_cohort_insight_fallback(test_client):
     body = {
         "model_version": "csu_adherence_v3",
