@@ -252,7 +252,13 @@ def test_ws1_mp006_named_for_deviation_semantics():
 
 
 def test_ws1_mp006_band_in_kpi_definitions_unchanged():
-    """B3 keeps the headline in slope-band units — the YAML band MUST stay as-is."""
+    """B3 keeps the headline in slope-band units — the YAML stays in BAND mode.
+
+    The exact good_tolerance value is owned by test_ws1_frontier_thresholds.py
+    (0.05 -> 0.10 on 2026-07-23: the folded headline's sampling-noise floor at
+    the current holdout sizes is ~1.08 even under perfect calibration); this
+    test pins the band STRUCTURE the fold depends on.
+    """
     from src.kpi.registry import KPIRegistry
 
     KPIRegistry.reset()
@@ -260,7 +266,7 @@ def test_ws1_mp006_band_in_kpi_definitions_unchanged():
         kpi = KPIRegistry().get("WS1-MP-006")
         assert kpi is not None and kpi.threshold is not None
         assert kpi.threshold.ideal == 1.0
-        assert kpi.threshold.good_tolerance == 0.05
+        assert kpi.threshold.good_tolerance == 0.10
         assert kpi.threshold.warning_tolerance == 0.15
         assert kpi.threshold.target is None
     finally:

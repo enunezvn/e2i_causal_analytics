@@ -282,7 +282,13 @@ ws1_model_performance:
       - ml_predictions.model_recall
     view: null
     threshold:
-      target: 0.75
+      # DGP-aware frontier retune (2026-07-23): the max-over-cutoffs F1
+      # ceiling at the gold-standard models' measured holdout AUC/prevalence
+      # is ~0.70-0.72 brand-mean (binormal sim), and the models capture
+      # 96-97% of it — the old 0.75 target sat ABOVE the ceiling, so even a
+      # perfect model read WARNING. 0.65 (~93% of ceiling) statuses a healthy
+      # model GOOD with ~0.03 absolute degradation headroom before yellow.
+      target: 0.65
       warning: 0.60
       critical: 0.45
     frequency: daily
@@ -321,7 +327,13 @@ ws1_model_performance:
       - ml_predictions.brier_score
     view: null
     threshold:
-      target: 0.15
+      # DGP-aware frontier retune (2026-07-23): the PERFECTLY-calibrated
+      # Brier floor at the measured holdout AUC/prevalence is 0.174-0.178
+      # brand-mean — only the initiation cohort (AUC 0.84+) can reach the old
+      # 0.15 target, and recalibration recovers <= 0.001 (the models already
+      # sit at their floor). 0.185 = floor + noise/drift margin (~1.5x the
+      # brand-mean SE). Lower-is-better: `warning` is the yellow/red bound.
+      target: 0.185
       warning: 0.25
       critical: 0.35
     frequency: daily
@@ -348,9 +360,16 @@ ws1_model_performance:
       # Band threshold (#1117): calibration slope is a deviation-from-1.0
       # metric — ideal is exactly 1.0, both directions away are worse
       # (<1 over-confident, >1 over-dispersed). Status derives from
-      # abs(slope - ideal): GOOD <= 0.05, WARNING <= 0.15, CRITICAL beyond.
+      # abs(slope - ideal): GOOD <= 0.10, WARNING <= 0.15, CRITICAL beyond.
+      # good_tolerance 0.05 -> 0.10 (2026-07-23): the folded headline has a
+      # sampling-noise floor — E[1 + mean|s-1|] ~= 1.08 for a PERFECTLY
+      # calibrated brand at the current holdout sizes (3 cohorts n~850 +
+      # hcp_adoption n=250) — so the 0.05 green band was statistically
+      # unreachable. 0.10 sits above the floor while genuine miscalibration
+      # (per-model slope CI excluding 1, e.g. the 2026-07 Remi mirror-pair
+      # at 1.236) still reads WARNING.
       ideal: 1.0
-      good_tolerance: 0.05
+      good_tolerance: 0.10
       warning_tolerance: 0.15
     frequency: weekly
     workstream: WS1
