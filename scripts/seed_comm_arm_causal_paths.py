@@ -21,6 +21,16 @@ After applying, sync the KG so the arms appear as chains too:
 
 import argparse
 import asyncio
+import sys
+from pathlib import Path
+
+# Add the repo root to sys.path so ``python scripts/seed_comm_arm_causal_paths.py``
+# can import ``src``. Run that way, sys.path[0] is scripts/ (not the repo root), so
+# the ``from src...`` import below would fail with ModuleNotFoundError; the app
+# server only resolves ``src`` because gunicorn runs with cwd=/app on the path.
+# Mirrors the bootstrap in sibling scripts (e.g. sample_ml_pipeline.py); harmless
+# when run as a module or with PYTHONPATH already set.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.ml.synthetic.generators.causal_paths_generator import comm_arm_rows_for_upsert
 

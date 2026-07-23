@@ -23,8 +23,9 @@ Usage::
     python scripts/sync_causal_paths_to_falkordb.py --execute
 
 Env (read from the process; use ``set -a; source .env``): SUPABASE_URL,
-SUPABASE_SERVICE_KEY, FALKORDB_HOST, FALKORDB_PORT, FALKORDB_PASSWORD,
-FALKORDB_GRAPH_NAME (default ``e2i_causal``).
+SUPABASE_SERVICE_KEY, FALKORDB_URL (preferred, e.g.
+``redis://:pw@falkordb:6379/0``) or the discrete FALKORDB_HOST / FALKORDB_PORT /
+FALKORDB_PASSWORD, FALKORDB_GRAPH_NAME (default ``e2i_causal``).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ import argparse
 import os
 import sys
 from typing import Any, Dict, List, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -200,9 +202,21 @@ def main() -> int:
 
     from falkordb import FalkorDB  # imported lazily so dry-run needs no driver
 
-    host = os.environ.get("FALKORDB_HOST", "localhost")
-    port = int(os.environ.get("FALKORDB_PORT", "6379"))
-    password = os.environ.get("FALKORDB_PASSWORD") or None
+    # Prefer FALKORDB_URL — the single connection var the platform/compose actually
+    # sets (e.g. redis://:pw@falkordb:6379/0). Without this the discrete-var
+    # fallback defaults to localhost:6379 and refuses the connection inside the
+    # container. Mirrors the app client (falkordb_client.py::_parse_falkordb_config)
+    # and sibling scripts (cleanup_falkordb_shells.py::_connect).
+    falkordb_url = os.environ.get("FALKORDB_URL")
+    if falkordb_url:
+        parsed = urlparse(falkordb_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 6379
+        password = parsed.password
+    else:
+        host = os.environ.get("FALKORDB_HOST", "localhost")
+        port = int(os.environ.get("FALKORDB_PORT", "6379"))
+        password = os.environ.get("FALKORDB_PASSWORD") or None
     graph_name = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
     db = FalkorDB(host=host, port=port, password=password)
     g = db.select_graph(graph_name)
