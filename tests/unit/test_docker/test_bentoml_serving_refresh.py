@@ -86,7 +86,7 @@ fi
 if [ "$1" = "diff" ]; then
   printf '%s\n' "${DIFF_FILES:-scripts/bentoml/e2i_serving_service.py}"
 fi
-# status (clean) / fetch / reset / checkout all exit 0 silently.
+# status (clean) / fetch / reset all exit 0 silently.
 exit 0
 """
 
@@ -94,7 +94,8 @@ exit 0
 #   * materializer heartbeat -> fresh (>= GATE_START) so flow reaches app + bentoml;
 #   * a forward `up -d` carrying ` bentoml` is the bentoml refresh (toggle FAIL_BENTOML_UP);
 #   * a forward `up -d` carrying ` api`     is the app flip;
-#   * any `up -d` AFTER a `git checkout` is a ROLLBACK up.
+#   * any `up -d` AFTER the rollback `git reset --hard $PREV_SHA` is a ROLLBACK up
+#     (the SHA disambiguates from the forward `git reset --hard origin/main`).
 _DOCKER_STUB = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$CALL_LOG"
 args="$*"
@@ -102,7 +103,7 @@ case "$args" in
   *materializer_heartbeat*) printf '%s\n' "${HEARTBEAT:-1001}"; exit 0 ;;
 esac
 if printf '%s' "$args" | grep -q -- 'up -d'; then
-  if grep -q 'git checkout' "$CALL_LOG"; then
+  if grep -q -- "git reset --hard $PREV_SHA" "$CALL_LOG"; then
     exit 0
   fi
   case "$args" in
@@ -209,17 +210,19 @@ def _run(tmp_path: Path, **toggles: str) -> tuple[int, str, list[str]]:
 # --------------------------------------------------------------------------- #
 # Assertion helpers
 # --------------------------------------------------------------------------- #
-def _checkout_prev_idx(calls: list[str]) -> int | None:
+def _rollback_prev_idx(calls: list[str]) -> int | None:
+    """Index of the rollback `git reset --hard PREV_SHA` (the forward path resets to
+    origin/main, never to PREV_SHA, so the SHA is the unambiguous rollback marker)."""
     for i, c in enumerate(calls):
-        if c.startswith("git checkout") and PREV_SHA in c:
+        if c.startswith("git reset") and PREV_SHA in c:
             return i
     return None
 
 
 def _forward_bentoml_up_idx(calls: list[str]) -> int | None:
-    """Index of a forward (pre-checkout) `up -d ... bentoml`."""
+    """Index of a forward (pre-rollback) `up -d ... bentoml`."""
     for i, c in enumerate(calls):
-        if c.startswith("git checkout"):
+        if c.startswith("git reset") and PREV_SHA in c:
             return None
         if "up -d" in c and " bentoml" in c:
             return i
@@ -290,7 +293,7 @@ def _rolled_services(rollback_up: str | None) -> set[str]:
 
 
 def _rolled_services_all(calls: list[str], idx: int) -> set[str]:
-    """Union of rolled-back services across EVERY `up -d` after the checkout.
+    """Union of rolled-back services across EVERY `up -d` after the rollback reset.
 
     The #563 rollback splits the GHCR app/frontend tier (pulled, --no-build) from the
     locally-built sidecars like bentoml (--build) into SEPARATE `up`s, so the app tier
@@ -312,9 +315,9 @@ def test_bentoml_health_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path:
     )
     fwd = _forward_bentoml_up_idx(calls)
     assert fwd is not None, "the forward bentoml recreate must have run:\n" + "\n".join(calls)
-    ci = _checkout_prev_idx(calls)
+    ci = _rollback_prev_idx(calls)
     assert ci is not None and ci > fwd, (
-        "a failed bentoml readiness gate must roll back via `git checkout " + PREV_SHA + "` "
+        "a failed bentoml readiness gate must roll back via `git reset --hard " + PREV_SHA + "` "
         "AFTER the forward recreate. Calls:\n" + "\n".join(calls)
     )
     rolled = _rolled_services_all(calls, ci)
@@ -334,7 +337,7 @@ def test_bentoml_up_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path: Pat
     code, out, calls = _run(
         tmp_path, DIFF_FILES="scripts/bentoml/e2i_serving_service.py", FAIL_BENTOML_UP="1"
     )
-    ci = _checkout_prev_idx(calls)
+    ci = _rollback_prev_idx(calls)
     assert ci is not None, "a failed bentoml `up` must roll back to PREV_SHA. Calls:\n" + "\n".join(
         calls
     )
