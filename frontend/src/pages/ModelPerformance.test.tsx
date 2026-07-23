@@ -41,6 +41,10 @@ vi.mock('@/hooks/api/use-predictions', () => ({
   useModelsStatus: vi.fn(),
 }));
 
+vi.mock('@/hooks/api/use-kpi', () => ({
+  useKPIList: vi.fn(),
+}));
+
 import ModelPerformance from './ModelPerformance';
 import {
   usePerformanceTrend,
@@ -50,6 +54,7 @@ import {
   useRocCurve,
 } from '@/hooks/api/use-monitoring';
 import { useModelsStatus } from '@/hooks/api/use-predictions';
+import { useKPIList } from '@/hooks/api/use-kpi';
 
 // =============================================================================
 // FIXTURES
@@ -145,6 +150,29 @@ const mockConfusion = {
   measured_at: '2026-06-10T00:00:00Z',
 };
 
+// WS1 model-performance KPI metadata — the SAME thresholds kpi_definitions.yaml
+// serves to the Home KPI grid (fractions, not percents). The page must status
+// its "Current <metric>" card against these so both surfaces tell one story.
+const mockKpiList = {
+  kpis: [
+    {
+      id: 'WS1-MP-001',
+      name: 'ROC-AUC',
+      workstream: 'ws1_model_performance',
+      threshold: { target: 0.8, warning: 0.7, critical: 0.6 },
+    },
+    {
+      id: 'WS1-MP-003',
+      name: 'F1 Score',
+      workstream: 'ws1_model_performance',
+      threshold: { target: 0.75, warning: 0.6, critical: 0.45 },
+    },
+  ],
+  total: 2,
+  workstream: 'ws1_model_performance',
+  causal_library: null,
+};
+
 const mockRoc = {
   model_id: 'propensity_v2.1.0',
   available: true,
@@ -200,6 +228,24 @@ function setHooksToSuccess() {
   });
   (useRocCurve as ReturnType<typeof vi.fn>).mockReturnValue({
     data: mockRoc,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: mockKpiList,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+}
+
+/** Override the trend hook with a given metric/value/breach state. */
+function setTrend(overrides: Partial<typeof mockTrend>) {
+  (usePerformanceTrend as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: { ...mockTrend, ...overrides },
     isLoading: false,
     isError: false,
     error: null,
@@ -701,6 +747,103 @@ describe('ModelPerformance', () => {
       expect(note).toHaveTextContent(/not the calibrated champion/i);
       // mockTrend's latest history point is 2026-05-17 — the data boundary.
       expect(note).toHaveTextContent(/data coverage through May 17/i);
+    });
+  });
+
+  // ===========================================================================
+  // Threshold-aware statuses (Home KPI-grid parity)
+  //
+  // The Home "Model Performance" tiles status brand-aggregated holdout metrics
+  // against kpi_definitions.yaml targets; this page used to color the same
+  // metrics green whenever they weren't DEGRADING (alert/trend semantics), so
+  // a brand could read yellow on Home and all-green here for identical data.
+  // The Current card must now share the canonical WS1 thresholds (from the
+  // KPI list API), and reference-value cards must be neutral, not green.
+  // ===========================================================================
+  describe('threshold statuses (Home KPI-grid parity)', () => {
+    beforeEach(() => {
+      setHooksToSuccess();
+    });
+
+    const currentCard = () => document.querySelector('.perf-current-card');
+    const baselineCard = () => document.querySelector('.perf-baseline-card');
+
+    it('Current auc_roc below the WS1-MP-001 target renders WARNING (amber), not green', () => {
+      // Fabhalta discontinuation model's live value: stable (no alert breach)
+      // but below the 0.80 KPI target — Home shows yellow, so must this card.
+      setTrend({ metric_name: 'auc_roc', current_value: 0.7873, alert_threshold_breached: false });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(currentCard()?.className).toContain('border-l-amber-500');
+    });
+
+    it('Current auc_roc at/above target renders healthy (emerald)', () => {
+      setTrend({ metric_name: 'auc_roc', current_value: 0.85, alert_threshold_breached: false });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(currentCard()?.className).toContain('border-l-emerald-500');
+    });
+
+    it('Current auc_roc below the critical threshold renders critical (rose)', () => {
+      setTrend({ metric_name: 'auc_roc', current_value: 0.55, alert_threshold_breached: false });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(currentCard()?.className).toContain('border-l-rose-500');
+    });
+
+    it('alert breach still escalates to critical even above the KPI target', () => {
+      setTrend({ metric_name: 'auc_roc', current_value: 0.85, alert_threshold_breached: true });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(currentCard()?.className).toContain('border-l-rose-500');
+    });
+
+    it('metrics without a canonical WS1 threshold (accuracy) keep alert semantics', () => {
+      setTrend({ metric_name: 'accuracy', current_value: 0.918, alert_threshold_breached: false });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(currentCard()?.className).toContain('border-l-emerald-500');
+    });
+
+    it('KPI list unavailable -> falls back to alert semantics (never blocks the page)', () => {
+      (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      setTrend({ metric_name: 'auc_roc', current_value: 0.7873, alert_threshold_breached: false });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(currentCard()?.className).toContain('border-l-emerald-500');
+    });
+
+    it('Baseline card is neutral — a reference value, not a health claim', () => {
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(baselineCard()?.className).toContain('border-l-gray-400');
+    });
+
+    it('comparison value cards are neutral, not hardcoded green', async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      const compareTab = screen.getByRole('tab', { name: /Comparison/i });
+      await user.click(compareTab);
+
+      const compareSelects = screen.getAllByRole('combobox');
+      await user.click(compareSelects[compareSelects.length - 1]);
+      const churnOption = await screen.findByRole('option', { name: /churn_v1\.5\.2/ });
+      await user.click(churnOption);
+
+      await screen.findByText('Better model');
+      const compareCards = document.querySelectorAll('.compare-value-card');
+      expect(compareCards.length).toBe(3);
+      for (const card of compareCards) {
+        expect(card.className).toContain('border-l-gray-400');
+        expect(card.className).not.toContain('border-l-emerald-500');
+      }
     });
   });
 });
