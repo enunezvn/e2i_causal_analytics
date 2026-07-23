@@ -88,7 +88,11 @@ import { mergeBrandSeries } from '@/lib/timeseries-brands';
 // CONSTANTS (trend controls — ported from the Time Series page)
 // =============================================================================
 
-const DEFAULT_TREND_METRIC = 'accuracy';
+// auc_roc (2026-07-23, WS1 residuals): the default trend metric is the one
+// canonical WS1 KPI the trend cards can threshold-status (WS1-MP-001) — the
+// old 'accuracy' default landed users on a metric with no KPI threshold, so
+// the Current card opened in alert-only semantics.
+const DEFAULT_TREND_METRIC = 'auc_roc';
 
 const METRIC_OPTIONS: { value: string; label: string }[] = [
   { value: 'accuracy', label: 'Accuracy' },

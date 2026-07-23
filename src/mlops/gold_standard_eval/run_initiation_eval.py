@@ -59,9 +59,12 @@ from src.mlops.gold_standard_eval.walk_forward import WalkForwardRunner
 logger = logging.getLogger(__name__)
 
 # Train the champion on these splits (everything except the held-out test +
-# holdout). The holdout headline scores STRICTLY out-of-sample on `holdout`.
+# holdout). The holdout headline scores STRICTLY out-of-sample on the OOS
+# union `test` + `holdout` (2026-07-23 OOS-union policy — rationale in
+# run_persistence_eval, which the per-brand runners share; kept in lockstep
+# here so the superseded pooled runner records comparable headlines).
 _CHAMPION_TRAIN_SPLITS = ("train", "validation")
-_HOLDOUT_SPLIT = "holdout"
+_OOS_EVAL_SPLITS = ("test", "holdout")
 
 # Writable artifact directory (the prod api container mounts a named volume here;
 # /app/data itself is read-only — see #857). Resolved relative to the repo root so
@@ -173,11 +176,11 @@ async def run(db: Any = None) -> dict[str, Any]:
     # --- 6 (compute first). Holdout headline AUC for the registered champion. -#
     # The holdout AUC is BOTH the registry `auc` (honest: the model's real
     # held-out performance) AND the recorded 'holdout' headline point.
-    holdout_frame = frame.loc[frame["data_split"] == _HOLDOUT_SPLIT]
+    holdout_frame = frame.loc[frame["data_split"].isin(_OOS_EVAL_SPLITS)]
     if holdout_frame.empty:
         raise RuntimeError(
-            f"run_initiation_eval: no '{_HOLDOUT_SPLIT}' rows found; cannot "
-            "compute the holdout headline."
+            f"run_initiation_eval: no rows in the OOS eval window (data_split "
+            f"in {_OOS_EVAL_SPLITS}); cannot compute the holdout headline."
         )
     n_holdout = int(len(holdout_frame))
     x_holdout = champion_fb.transform(holdout_frame)  # APPLY (aligned to fit)

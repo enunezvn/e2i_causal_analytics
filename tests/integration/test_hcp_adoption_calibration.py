@@ -50,23 +50,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 _CHAMPION_TRAIN_SPLITS = ("train", "validation")
-_HOLDOUT_SPLIT = "holdout"
+# OOS-union eval window (2026-07-23) — lockstep with
+# run_persistence_eval._OOS_EVAL_SPLITS; rationale documented there.
+_OOS_EVAL_SPLITS = ("test", "holdout")
 # User-accepted band: HCP-adoption AUC is allowed BELOW the 0.80 patient floor.
-# Floor 0.70 sits clearly under the lowest observed (0.765) with headroom; the
-# ceiling is a sanity bound. This guards REGRESSION, not the 0.80 target.
+# Floor 0.70 sits clearly under the lowest observed (0.768 Kisqali on the
+# OOS-union window) with headroom; the ceiling is a sanity bound. This guards
+# REGRESSION, not the 0.80 target.
 _HCP_AUC_FLOOR = 0.70
 _HCP_AUC_CEIL = 0.86
 
 
 async def _faithful_hcp(client, brand: str) -> dict:
     """Train the REAL gold-standard HCP-adoption model exactly as ``_run_one_cohort``
-    does (FeatureBuilder JOIN-load → calibrated LR → holdout-split AUC)."""
+    does (FeatureBuilder JOIN-load → calibrated LR → OOS-union-window AUC)."""
     spec = make_hcp_spec(brand)
     assert spec.label_column == "adopted" and spec.grain == "hcp"
     frame = await FeatureBuilder(spec).load_frame(client, splits=None)
     assert not frame.empty, f"{brand}: HCP load_frame returned an empty frame"
     train = frame[frame["data_split"].isin(_CHAMPION_TRAIN_SPLITS)]
-    holdout = frame[frame["data_split"] == _HOLDOUT_SPLIT]
+    holdout = frame[frame["data_split"].isin(_OOS_EVAL_SPLITS)]
     assert not train.empty and not holdout.empty, f"{brand}: missing train/holdout split"
 
     fb = FeatureBuilder(spec)
