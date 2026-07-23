@@ -263,6 +263,32 @@ describe('CausalAnalysis — unified agent-led page', () => {
       await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
       await waitFor(() => expect(reset).toHaveBeenCalled());
     }, 20000);
+
+    it('never renders an interpretation whose submitted scope is not the active one', () => {
+      // A response sits in the mutation cache but no run was submitted for the
+      // ACTIVE scope (e.g. an auto-regenerated scope-A call resolving AFTER the
+      // user moved on — reset() cleared local data, but the late onSuccess
+      // repopulated it). The scope tag no longer matches, so it must be
+      // suppressed, not shown — and the honest disabled state shows instead.
+      (useCausalDiscoveryInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate: vi.fn(),
+        reset: vi.fn(),
+        isPending: false,
+        error: null,
+        data: {
+          insight: 'STALE CROSS-SCOPE READ',
+          key_takeaways: [],
+          grounding: [],
+          is_fallback: false,
+        },
+      });
+      mockDiscover(); // job: null → no run tags the active scope
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.queryByText(/stale cross-scope read/i)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /generate strategic insight/i })
+      ).toBeDisabled();
+    }, 20000);
   });
 
   it('offers grain + brand facets; brand defaults to all (null) for the patient grain', () => {
