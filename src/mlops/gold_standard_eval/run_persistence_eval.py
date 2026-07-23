@@ -26,8 +26,9 @@ For EACH cohort (persistence, then discontinuation):
    it at ``stage='staging'`` (collision-safe vs the serving champion).
 4. Walk-forward over the full frame → ~36 monthly out-of-sample AUC points.
 5. Record the walk-forward trend (``source='backtest_wf'``, ``split_version=None``).
-6. Holdout headline: score the registered champion on the holdout rows and record
-   ONE point (``source='holdout'``, ``split_version=None``).
+6. Holdout headline: score the registered champion on the OOS union (``test`` +
+   ``holdout`` rows — everything outside its training data) and record ONE point
+   (``source='holdout'``, ``split_version=None``).
 
 After both cohorts are recorded, a complement-validation log check is emitted:
 ``persistent_180d == 1 - discontinued_180d`` in the synthetic DGP, so the two
@@ -75,9 +76,23 @@ DISCONTINUATION_EXPERIMENT_NAME = "discontinuation_goldstd_eval_v1"
 GOLDSTD_MODEL_VERSION = "1.0"
 
 # Train the champion on these splits (everything except the held-out test +
-# holdout). The holdout headline scores STRICTLY out-of-sample on `holdout`.
+# holdout). The holdout headline scores STRICTLY out-of-sample on the OOS
+# UNION `test` + `holdout` — every row the champion never saw.
+#
+# OOS-union policy (2026-07-23, WS1 residuals): the headline previously scored
+# `holdout` alone (patient n~850, hcp n=250). Measured on the live cohorts,
+# single-window draws at those sizes dominate the calibration-slope KPI —
+# random same-size windows of the Remi persistence OOS pool span slope
+# ~1.0-1.24 (sd 0.067 at n=826) around a true OOS slope of ~1.12, so the
+# recorded headline was a window lottery, not a model property. No consumer
+# used `test` (champions train on train+validation; walk-forward re-windows by
+# time), so folding it into the eval window doubles n, tightens every CI, and
+# for the HCP cohort makes the eval invariant to the test/holdout boundary
+# (whose live DB ratios still predate the #44 60/20/10/10 quota). The storage
+# key stays `source='holdout'` — same precedent as WS1-MP-006 keeping its
+# `calibration_slope` storage key after the rename.
 _CHAMPION_TRAIN_SPLITS = ("train", "validation")
-_HOLDOUT_SPLIT = "holdout"
+_OOS_EVAL_SPLITS = ("test", "holdout")
 
 # Writable artifact directory (the prod api container mounts a named volume here;
 # /app/data itself is read-only — see #857). Resolved relative to the repo root so
@@ -200,12 +215,14 @@ async def _run_one_cohort(
 
     # --- 3. Holdout headline AUC (compute before registering). --------------- #
     # The holdout AUC is BOTH the registry `auc` (honest: the model's real
-    # held-out performance) AND the recorded 'holdout' headline point.
-    holdout_frame = frame.loc[frame["data_split"] == _HOLDOUT_SPLIT]
+    # held-out performance) AND the recorded 'holdout' headline point. The
+    # window is the OOS union (test + holdout) — see _OOS_EVAL_SPLITS.
+    holdout_frame = frame.loc[frame["data_split"].isin(_OOS_EVAL_SPLITS)]
     if holdout_frame.empty:
         raise RuntimeError(
-            f"run_persistence_eval [{spec.name}]: no '{_HOLDOUT_SPLIT}' rows "
-            "found; cannot compute the holdout headline."
+            f"run_persistence_eval [{spec.name}]: no rows in the OOS eval "
+            f"window (data_split in {_OOS_EVAL_SPLITS}); cannot compute the "
+            "holdout headline."
         )
     n_holdout = int(len(holdout_frame))
     x_holdout = champion_fb.transform(holdout_frame)  # APPLY (aligned to fit)

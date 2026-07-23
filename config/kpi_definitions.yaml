@@ -363,11 +363,12 @@ ws1_model_performance:
       # abs(slope - ideal): GOOD <= 0.10, WARNING <= 0.15, CRITICAL beyond.
       # good_tolerance 0.05 -> 0.10 (2026-07-23): the folded headline has a
       # sampling-noise floor — E[1 + mean|s-1|] ~= 1.08 for a PERFECTLY
-      # calibrated brand at the current holdout sizes (3 cohorts n~850 +
+      # calibrated brand at the pre-union holdout sizes (3 cohorts n~850 +
       # hcp_adoption n=250) — so the 0.05 green band was statistically
-      # unreachable. 0.10 sits above the floor while genuine miscalibration
-      # (per-model slope CI excluding 1, e.g. the 2026-07 Remi mirror-pair
-      # at 1.236) still reads WARNING.
+      # unreachable. The OOS-union eval window (2026-07-23: test+holdout,
+      # patient n~1700 / hcp n=1000) roughly halves the floor (~1.056); 0.10
+      # stays above it while a genuinely miscalibrated brand (per-model slope
+      # CI excluding 1 on the union window) still reads WARNING.
       ideal: 1.0
       good_tolerance: 0.10
       warning_tolerance: 0.15

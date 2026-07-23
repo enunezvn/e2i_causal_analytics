@@ -320,7 +320,7 @@ describe('ModelPerformance', () => {
     expect(firstId).toBe('propensity_v2.1.0');
     // Other id is initially empty string (no comparison picked yet)
     expect(otherId).toBe('');
-    // Default metric should be 'accuracy'
+    // Comparison metric is a fixed 'accuracy' (independent of the trend default)
     expect(metric).toBe('accuracy');
     // Query MUST be disabled until comparison id is picked
     expect(opts?.enabled).toBe(false);
@@ -660,14 +660,14 @@ describe('ModelPerformance', () => {
       });
     }
 
-    it('defaults: enabled trend query uses metric=accuracy and days=365 (unchanged behavior)', () => {
+    it('defaults: enabled trend query uses metric=auc_roc (WS1-MP-001) and days=365', () => {
       render(<ModelPerformance />, { wrapper: createWrapper() });
 
       const enabled = enabledTrendCalls();
       expect(enabled.length).toBeGreaterThan(0);
       for (const [params] of enabled) {
         expect(params.model_id).toBe('propensity_v2.1.0');
-        expect(params.metric_name).toBe('accuracy');
+        expect(params.metric_name).toBe('auc_roc');
         expect(params.days).toBe(365);
       }
       // Sibling-brand overlay queries stay disabled for non-goldstd models.
@@ -734,7 +734,7 @@ describe('ModelPerformance', () => {
       });
       // Sibling queries inherit the same metric + window as the selected model.
       for (const [params] of enabledTrendCalls().slice(-3)) {
-        expect(params.metric_name).toBe('accuracy');
+        expect(params.metric_name).toBe('auc_roc');
         expect(params.days).toBe(365);
       }
     });
