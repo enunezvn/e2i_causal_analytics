@@ -27,30 +27,40 @@ vi.mock('@/hooks/api/use-graph', () => ({
 
 // Mock the KnowledgeGraph visualization component
 vi.mock('@/components/visualizations/KnowledgeGraph', () => ({
-  KnowledgeGraph: ({ nodes, relationships, isLoading, error, onNodeSelect, onEdgeSelect }: {
+  KnowledgeGraph: ({ nodes, relationships, isLoading, error, onNodeSelect, onEdgeSelect, styleEdgesByEffect }: {
     nodes: unknown[];
     relationships: unknown[];
     isLoading: boolean;
     error: Error | null;
     onNodeSelect?: (node: unknown) => void;
     onEdgeSelect?: (edge: unknown) => void;
+    styleEdgesByEffect?: boolean;
   }) => (
     <div data-testid="knowledge-graph-viz">
       <div data-testid="nodes-count">{nodes.length}</div>
       <div data-testid="relationships-count">{relationships.length}</div>
       <div data-testid="is-loading">{String(isLoading)}</div>
       <div data-testid="has-error">{String(!!error)}</div>
+      <div data-testid="style-by-effect">{String(!!styleEdgesByEffect)}</div>
       <button onClick={() => onNodeSelect?.({ id: 'test-node', name: 'Test Node', type: 'Agent', properties: {}, created_at: '2026-01-04' })}>
         Select Node
       </button>
-      <button onClick={() => onEdgeSelect?.({ id: 'test-edge', type: 'RELATES_TO', source_id: 'a', target_id: 'b', confidence: 0.85, created_at: '2026-01-04' })}>
+      <button onClick={() => onEdgeSelect?.({ id: 'test-edge', type: 'RELATES_TO', source_id: 'a', target_id: 'b', properties: { ate_estimate: 0.42 }, confidence: 0.85, created_at: '2026-01-04' })}>
         Select Edge
       </button>
     </div>
   ),
 }));
 
+// Mock ONLY the KG insight mutation hook (the rest of the barrel stays real):
+// the page's stale-insight guard is exercised by controlling data/reset here.
+vi.mock('@/hooks/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/api')>()),
+  useKnowledgeGraphInsight: vi.fn(),
+}));
+
 import { useNodes, useRelationships } from '@/hooks/api/use-graph';
+import { useKnowledgeGraphInsight } from '@/hooks/api';
 
 // Create wrapper with QueryClientProvider
 function createWrapper() {
@@ -105,6 +115,17 @@ function expectStatValue(description: string, value: string) {
   expect(within(header).getByText(value)).toBeInTheDocument();
 }
 
+// Mutable KG-insight mutation state, reassigned per test. A single object per
+// test keeps `kgInsight.reset` referentially stable across re-renders, exactly
+// like TanStack Query's real useMutation result.
+let mockKgInsight: {
+  mutate: ReturnType<typeof vi.fn>;
+  reset: ReturnType<typeof vi.fn>;
+  data: Record<string, unknown> | undefined;
+  isPending: boolean;
+  error: Error | null;
+};
+
 describe('KnowledgeGraphPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -122,6 +143,16 @@ describe('KnowledgeGraphPage', () => {
       error: null,
       refetch: vi.fn(),
     });
+    mockKgInsight = {
+      mutate: vi.fn(),
+      reset: vi.fn(),
+      data: undefined,
+      isPending: false,
+      error: null,
+    };
+    (useKnowledgeGraphInsight as ReturnType<typeof vi.fn>).mockImplementation(
+      () => mockKgInsight
+    );
   });
 
   // =========================================================================
@@ -285,6 +316,94 @@ describe('KnowledgeGraphPage', () => {
       const select = screen.getByRole('combobox', { name: /brand/i }) as HTMLSelectElement;
       expect(select).toBeInTheDocument();
       expect(select.value).toBe('All');
+    });
+  });
+
+  // =========================================================================
+  // VARIABLE SELECTOR TESTS
+  // =========================================================================
+  // The Variable dropdown derives its options from the brand-scoped graph's
+  // Variable nodes (client-side, no refetch) and narrows the canvas to the
+  // causal chains through the selected variable (ancestors ∪ descendants along
+  // CAUSES + attached structural context).
+
+  describe('Variable selector', () => {
+    it('renders defaulting to All variables, with options from the rendered graph', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const select = screen.getByRole('combobox', { name: /variable/i }) as HTMLSelectElement;
+      expect(select.value).toBe('All');
+      // All-brands scope → all 8 connected Variables are offered.
+      const options = within(select).getAllByRole('option');
+      expect(options).toHaveLength(9); // 'All variables' + 8
+      expect(within(select).getByRole('option', { name: 'outcome' })).toBeInTheDocument();
+    });
+
+    it('narrows the graph to the chains through the selected variable', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const select = screen.getByRole('combobox', { name: /variable/i });
+      fireEvent.change(select, { target: { value: 'var:outcome' } });
+
+      // outcome's chain: treatment (ancestor) + outcome + trx (descendant).
+      // The sideA/sideB pair and the Fabhalta chain are excluded.
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+    });
+
+    it('keeps the selected variable across a brand switch when still in scope', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const variable = screen.getByRole('combobox', { name: /variable/i }) as HTMLSelectElement;
+      fireEvent.change(variable, { target: { value: 'var:outcome' } });
+      const brand = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(brand, { target: { value: 'Kisqali' } });
+
+      // outcome exists in the Kisqali scope → the narrowed view survives the
+      // switch (comparing one variable across brands is the selector's point).
+      expect(variable.value).toBe('var:outcome');
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+    });
+
+    it('clamps back to All variables when the new brand scope lacks the variable', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const variable = screen.getByRole('combobox', { name: /variable/i }) as HTMLSelectElement;
+      fireEvent.change(variable, { target: { value: 'var:adherence' } });
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+
+      const brand = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(brand, { target: { value: 'Kisqali' } });
+
+      // adherence is Fabhalta-only → selection clamps to 'All' and the full
+      // Kisqali scope renders (5 nodes / 3 edges).
+      expect(variable.value).toBe('All');
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('5');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('3');
+    });
+  });
+
+  // =========================================================================
+  // EFFECT-STYLING TESTS
+  // =========================================================================
+  // Brands share the chain topology by design — the brand-specific signal is
+  // each edge's ATE/confidence. When ONE brand is selected the viz styles edges
+  // by that brand's estimates; the All view stays neutral (the deduped
+  // representative edge's ATE belongs to a single arbitrary brand).
+
+  describe('Effect styling', () => {
+    it('is off for All brands and on for a single brand, with a legend', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      expect(screen.getByTestId('style-by-effect')).toHaveTextContent('false');
+      expect(screen.queryByText(/Edges reflect/)).not.toBeInTheDocument();
+
+      const brand = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(brand, { target: { value: 'Fabhalta' } });
+
+      expect(screen.getByTestId('style-by-effect')).toHaveTextContent('true');
+      expect(screen.getByText(/Edges reflect Fabhalta/)).toBeInTheDocument();
     });
   });
 
@@ -498,6 +617,15 @@ describe('KnowledgeGraphPage', () => {
 
       expect(screen.getByText('85.0%')).toBeInTheDocument();
     });
+
+    it('shows the effect size (ATE) when the edge carries one', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      fireEvent.click(screen.getByText('Select Edge'));
+
+      expect(screen.getByText('Effect size (ATE)')).toBeInTheDocument();
+      expect(screen.getByText('0.420')).toBeInTheDocument();
+    });
   });
 
   // =========================================================================
@@ -545,6 +673,50 @@ describe('KnowledgeGraphPage', () => {
 
       expect(
         await screen.findByText(/strategic interpretation/i)
+      ).toBeInTheDocument();
+    });
+
+    it('generates for the currently selected brand', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const brand = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(brand, { target: { value: 'Fabhalta' } });
+      fireEvent.click(screen.getByRole('button', { name: /generate strategic insight/i }));
+
+      expect(mockKgInsight.mutate).toHaveBeenCalledWith({
+        brand: 'Fabhalta',
+        curated_only: true,
+      });
+    });
+
+    it('resets the interpretation on a brand switch (no stale cross-brand text)', () => {
+      // The hook always reports data — simulating a resolved mutation whose
+      // result would otherwise linger (or a late resolution repopulating data
+      // AFTER reset() cleared it, which TanStack mutations do).
+      mockKgInsight.data = {
+        insight: 'Kisqali-centric interpretation',
+        key_takeaways: [],
+        grounding: [],
+        is_fallback: false,
+      };
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      // Never generated in this scope → data is suppressed, Generate offered.
+      expect(screen.queryByText('Kisqali-centric interpretation')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /generate strategic insight/i }));
+      // Submitted for the active scope ('All') → the result now surfaces.
+      expect(screen.getByText('Kisqali-centric interpretation')).toBeInTheDocument();
+
+      mockKgInsight.reset.mockClear();
+      const brand = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(brand, { target: { value: 'Fabhalta' } });
+
+      // Brand switch: the mutation is reset AND the (still-populated) data is
+      // suppressed — the card returns to its Generate state under Fabhalta.
+      expect(mockKgInsight.reset).toHaveBeenCalled();
+      expect(screen.queryByText('Kisqali-centric interpretation')).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /generate strategic insight/i })
       ).toBeInTheDocument();
     });
   });

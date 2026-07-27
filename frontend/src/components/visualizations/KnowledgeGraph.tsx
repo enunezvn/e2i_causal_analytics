@@ -61,6 +61,12 @@ export interface KnowledgeGraphProps {
   onEdgeSelect?: (relationship: GraphRelationship | null) => void;
   /** Called when a node is hovered */
   onNodeHover?: (node: GraphNode | null) => void;
+  /**
+   * Style edges by their causal effect: width ∝ |ATE|, color by sign, opacity
+   * by confidence. Only edges carrying a numeric ``properties.ate_estimate``
+   * (the brand-tagged CAUSES chains) are styled; the rest keep type colors.
+   */
+  styleEdgesByEffect?: boolean;
 }
 
 // =============================================================================
@@ -156,9 +162,39 @@ function transformNode(node: GraphNode): ElementDefinition {
 }
 
 /**
+ * Data-driven edge styling for the brand-scoped causal view: width tracks the
+ * edge's |ATE| (effect magnitude), color its sign (emerald positive, rose
+ * negative), and opacity its confidence. Exported for tests.
+ */
+export function computeEffectStyle(
+  ate: number,
+  confidence: number | undefined
+): { effectWidth: number; effectColor: string; effectOpacity: number } {
+  // |ATE| in the gold standard tops out around 0.5 — clamp so a single outlier
+  // doesn't flatten every other edge to hairline width.
+  const magnitude = Math.min(Math.abs(ate) / 0.5, 1);
+  // Confidence lives in ~[0.7, 0.95]; map [0.5, 1] → [0.35, 1] so the low end
+  // stays visibly fainter without any edge disappearing entirely.
+  const conf = Math.min(Math.max(((confidence ?? 0.5) - 0.5) / 0.5, 0), 1);
+  return {
+    effectWidth: +(1.5 + magnitude * 4.5).toFixed(2),
+    effectColor: ate >= 0 ? '#059669' : '#e11d48', // emerald-600 / rose-600
+    effectOpacity: +(0.35 + conf * 0.65).toFixed(2),
+  };
+}
+
+/**
  * Transform API GraphRelationship to Cytoscape edge element
  */
-function transformRelationship(rel: GraphRelationship): ElementDefinition {
+function transformRelationship(
+  rel: GraphRelationship,
+  styleByEffect = false
+): ElementDefinition {
+  const ate = rel.properties?.ate_estimate;
+  const effect =
+    styleByEffect && typeof ate === 'number'
+      ? computeEffectStyle(ate, rel.confidence)
+      : undefined;
   return {
     data: {
       id: rel.id,
@@ -169,6 +205,7 @@ function transformRelationship(rel: GraphRelationship): ElementDefinition {
       properties: rel.properties,
       // Store original relationship for callbacks
       _original: rel,
+      ...effect,
     },
   };
 }
@@ -178,7 +215,8 @@ function transformRelationship(rel: GraphRelationship): ElementDefinition {
  */
 function transformGraphData(
   nodes: GraphNode[],
-  relationships: GraphRelationship[]
+  relationships: GraphRelationship[],
+  styleEdgesByEffect = false
 ): ElementDefinition[] {
   // Get set of valid node IDs for filtering orphan edges
   const validNodeIds = new Set(nodes.map((n) => n.id));
@@ -191,7 +229,7 @@ function transformGraphData(
     .filter(
       (rel) => validNodeIds.has(rel.source_id) && validNodeIds.has(rel.target_id)
     )
-    .map(transformRelationship);
+    .map((rel) => transformRelationship(rel, styleEdgesByEffect));
 
   return [...nodeElements, ...edgeElements];
 }
@@ -313,7 +351,31 @@ function generateStylesheet(): StylesheetStyle[] {
     },
   }));
 
-  return [...baseStyles, ...entityTypeStyles, ...relationshipTypeStyles];
+  // Effect-styled edges: transformRelationship stamps effectWidth/effectColor/
+  // effectOpacity on edges carrying an ATE when styleEdgesByEffect is on. These
+  // data-driven rules must come AFTER the per-type colors to override them; the
+  // trailing :selected rule re-asserts full opacity so selection stays visible.
+  const effectStyles: StylesheetStyle[] = [
+    {
+      selector: 'edge[effectColor]',
+      style: {
+        // Cytoscape's TS types don't model data() mappers for numeric
+        // properties; the runtime supports them.
+        'width': 'data(effectWidth)' as unknown as number,
+        'line-color': 'data(effectColor)',
+        'target-arrow-color': 'data(effectColor)',
+        'opacity': 'data(effectOpacity)' as unknown as number,
+      },
+    },
+    {
+      selector: 'edge:selected',
+      style: {
+        'opacity': 1,
+      },
+    },
+  ];
+
+  return [...baseStyles, ...entityTypeStyles, ...relationshipTypeStyles, ...effectStyles];
 }
 
 // =============================================================================
@@ -351,6 +413,7 @@ const KnowledgeGraph = React.forwardRef<HTMLDivElement, KnowledgeGraphProps>(
       onNodeSelect,
       onEdgeSelect,
       onNodeHover,
+      styleEdgesByEffect = false,
     },
     ref
   ) => {
@@ -391,8 +454,8 @@ const KnowledgeGraph = React.forwardRef<HTMLDivElement, KnowledgeGraphProps>(
 
     // Memoize elements transformation
     const elements = useMemo(
-      () => transformGraphData(filteredNodes, filteredRelationships),
-      [filteredNodes, filteredRelationships]
+      () => transformGraphData(filteredNodes, filteredRelationships, styleEdgesByEffect),
+      [filteredNodes, filteredRelationships, styleEdgesByEffect]
     );
 
     // Create node lookup for callbacks
