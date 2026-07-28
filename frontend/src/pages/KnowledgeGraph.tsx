@@ -232,26 +232,30 @@ function KnowledgeGraphPage() {
   // list derives from the brand-scoped graph, so it adapts with the brand.
   const [selectedVariable, setSelectedVariable] = useState<string>('All');
 
-  // Agentic strategic interpretation of the (brand-scoped) causal graph. Lazy:
-  // the card renders a "Generate strategic insight" button; the mutation fires
-  // on demand with the current brand + the curated (gold-standard) scope.
+  // Agentic strategic interpretation of the (brand + variable)-scoped causal
+  // graph. Lazy: the card renders a "Generate strategic insight" button; the
+  // mutation fires on demand with the current brand + variable + the curated
+  // (gold-standard) scope, and the backend grounds it in the SAME derived
+  // subgraph this page renders (page-parity, PR #1320 follow-up).
   const kgInsight = useKnowledgeGraphInsight();
-  // The brand the interpretation was SUBMITTED for. The response carries no
-  // scope, so we tag the submitted brand ourselves and only surface a result
-  // while it still matches the active selection — a run fired for brand A that
-  // resolves AFTER the user switches to brand B (reset below cleared the old
-  // data, but the late mutation repopulates kgInsight.data) is suppressed
-  // instead of rendered — and mislabeled — under B. Mirrors CausalAnalysis's
-  // causalInsightScope pattern.
-  const [kgInsightScope, setKgInsightScope] = useState<BrandFilter | null>(null);
+  // The scope (brand + variable) the interpretation was SUBMITTED for. The
+  // response carries no scope, so we tag the submitted scope ourselves and only
+  // surface a result while it still matches the active selection — a run fired
+  // for scope A that resolves AFTER the user switches to scope B (reset below
+  // cleared the old data, but the late mutation repopulates kgInsight.data) is
+  // suppressed instead of rendered — and mislabeled — under B. Mirrors
+  // CausalAnalysis's causalInsightScope pattern. '|' is safe in the tag: brand
+  // names and variable node ids never contain it.
+  const kgScope = `${selectedBrand}|${selectedVariable}`;
+  const [kgInsightScope, setKgInsightScope] = useState<string | null>(null);
   const resetKgInsight = kgInsight.reset;
-  // On a brand switch, drop the previous brand's interpretation so it never
-  // lingers under the new scope (the stale-interpretation bug).
+  // On a brand OR variable switch, drop the previous scope's interpretation so
+  // it never lingers under the new scope (the stale-interpretation bug).
   useEffect(() => {
     resetKgInsight();
     setKgInsightScope(null);
-  }, [selectedBrand, resetKgInsight]);
-  const kgInsightInScope = kgInsightScope === selectedBrand;
+  }, [selectedBrand, selectedVariable, resetKgInsight]);
+  const kgInsightInScope = kgInsightScope === kgScope;
   const kgInsightData = kgInsightInScope ? kgInsight.data : undefined;
 
   // Fetch the causal layer's nodes (Variable + KPI + CausalPath + Region +
@@ -599,10 +603,11 @@ function KnowledgeGraphPage() {
         </Card>
       </div>
 
-      {/* Strategic Interpretation (agentic insight over the brand-scoped graph).
-          Everything rendered is gated on kgInsightInScope so a brand switch
-          returns the card to its Generate state instead of showing the previous
-          brand's interpretation (see the scope-tagging comment above). */}
+      {/* Strategic Interpretation (agentic insight over the brand+variable-scoped
+          graph). Everything rendered is gated on kgInsightInScope so a brand or
+          variable switch returns the card to its Generate state instead of
+          showing the previous scope's interpretation (see the scope-tagging
+          comment above). */}
       <div className="mb-6">
         <StrategicInsightCard
           isLoading={kgInsightInScope && kgInsight.isPending}
@@ -614,8 +619,12 @@ function KnowledgeGraphPage() {
           provenance={kgInsightData?.provenance}
           generatedAt={kgInsightData?.generated_at}
           onGenerate={() => {
-            setKgInsightScope(selectedBrand);
-            kgInsight.mutate({ brand: selectedBrand, curated_only: true });
+            setKgInsightScope(kgScope);
+            kgInsight.mutate({
+              brand: selectedBrand,
+              curated_only: true,
+              variable: selectedVariable === 'All' ? null : selectedVariable,
+            });
           }}
         />
       </div>
