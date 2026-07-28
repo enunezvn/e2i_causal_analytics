@@ -546,7 +546,12 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # discontinued_180d are rewritten). No-op (all None) on frames with no populated
         # complement_inhibitor_status. Returns the prior-C5 persistence RD + the copay/psp
         # persistent RD RE-DERIVED against the prior-C5-rebuilt outcome.
-        priorc5_rd, priorc5_copay_rd, priorc5_psp_rd = self._apply_priorc5_persistence_differential(
+        (
+            priorc5_rd,
+            priorc5_copay_rd,
+            priorc5_psp_rd,
+            priorc5_fab_segment,
+        ) = self._apply_priorc5_persistence_differential(
             df,
             np.asarray(segment),
             confounders,
@@ -655,14 +660,20 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             df.attrs["true_ate_by_arm"]["complement_inhibitor_status"] = {
                 "persistent_180d": {"ate": priorc5_rd},
             }
+            # Marginalize over the FABHALTA cohort's own segments (priorc5_fab_segment),
+            # NOT the whole mixed-brand frame: these RD maps are re-derived on the
+            # Fabhalta subset, so their keys are exactly np.unique(fab_segment). Using
+            # the full-frame `segment` both mis-weights the arm's ground-truth ATE and
+            # KeyErrors when a non-Fabhalta segment is absent from the subset map.
+            assert priorc5_fab_segment is not None  # non-None whenever priorc5_rd is
             if priorc5_copay_rd is not None:
                 df.attrs["true_ate_by_arm"]["copay_support"]["persistent_180d"] = {
-                    "ate": float(np.mean([priorc5_copay_rd[str(s)] for s in segment])),
+                    "ate": float(np.mean([priorc5_copay_rd[str(s)] for s in priorc5_fab_segment])),
                     "cate_by_segment": priorc5_copay_rd,
                 }
             if priorc5_psp_rd is not None:
                 df.attrs["true_ate_by_arm"]["psp_enrolled"]["persistent_180d"] = {
-                    "ate": float(np.mean([priorc5_psp_rd[str(s)] for s in segment])),
+                    "ate": float(np.mean([priorc5_psp_rd[str(s)] for s in priorc5_fab_segment])),
                     "cate_by_segment": priorc5_psp_rd,
                 }
             df.attrs["priorc5_persistent_rd"] = priorc5_rd
@@ -684,7 +695,12 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         brand_cate_scale: float,
         copay_support: Optional[np.ndarray],
         psp_enrolled: Optional[np.ndarray],
-    ) -> tuple[Optional[float], Optional[Dict[str, float]], Optional[Dict[str, float]]]:
+    ) -> tuple[
+        Optional[float],
+        Optional[Dict[str, float]],
+        Optional[Dict[str, float]],
+        Optional[np.ndarray],
+    ]:
         """Fabhalta pilot (#1321): plant the prior-C5 differential on PERSISTENCE.
 
         Rebuilds ``persistent_180d`` / ``discontinued_180d`` for the Fabhalta rows
@@ -703,8 +719,10 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         complement-populated rows), so the subset RD IS the frame RD.
 
         Returns (prior-C5 persistence RD, recomputed copay persistent RD map,
-        recomputed psp persistent RD map). All None on a frame with no populated
-        complement_inhibitor_status (the no-op path).
+        recomputed psp persistent RD map, the Fabhalta-subset segment array). The
+        segment array is the marginalization weight for the copay/psp arm ATEs — its
+        keys match the re-derived RD maps exactly. All None on a frame with no
+        populated complement_inhibitor_status (the no-op path).
         """
         comp = df["complement_inhibitor_status"].to_numpy(dtype=object)
         # complement_inhibitor_status is populated ONLY for Fabhalta rows (draw-then-
@@ -712,7 +730,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         populated = np.array([c is not None and c == c for c in comp])  # c==c filters NaN
         mask = (df["brand"].to_numpy() == Brand.FABHALTA.value) & populated
         if not mask.any():
-            return None, None, None
+            return None, None, None, None
         idx = np.where(mask)[0]
         # "prior" == prior-C5 switch (experienced); "current" == naive.
         experienced = np.array([1 if str(comp[i]) == "prior" else 0 for i in idx], dtype=int)
@@ -747,6 +765,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             _coh["priorc5_persistent_rd"],
             _coh["copay_persistent_rd_by_segment"],
             _coh["psp_persistent_rd_by_segment"],
+            segment[idx],
         )
 
     def _apply_biologic_differential(
