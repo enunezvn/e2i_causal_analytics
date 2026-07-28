@@ -128,6 +128,38 @@ _COMM_ARM_EDGES: Tuple[Tuple[str, str, Tuple[str, ...], float, float], ...] = (
 
 N_COMM_ARM_ROWS = len(_COMM_ARM_EDGES) * len(_BRANDS)
 
+# Fabhalta-ONLY clinical axis (issue #1321 pilot, 2026-07-28). The FIRST
+# brand-DISTINCT causal variable in the gold standard. Every block above is
+# stamped ``for brand in _BRANDS`` — identical generic topology for all three
+# brands. This edge is emitted for FABHALTA ONLY: prior C5-inhibitor exposure
+# (complement_inhibitor_status == "prior" — the eculizumab/ravulizumab switch
+# population) drives LESS iptacopan persistence. Kisqali/Remibrutinib have no
+# C5-inhibitor axis (the column is 100% NULL for them, BRAND_ELIGIBILITY_FIELDS),
+# so their /knowledge-graph never gains this node — the acceptance criterion for
+# a brand-distinct variable set. This is the PILOT that proves the additive
+# brand-distinct pipeline before the Kisqali + Remibrutinib rollout (LoT /
+# combination; antihistamine-refractory / escalation — see the #1321 scope split).
+#
+# The DGP plants the matching effect as a post-hoc, spawn-key-isolated recompute
+# of persistent_180d on the Fabhalta rows (cohort_outcomes.priorc5_cate_modifier
+# + the mean-centered _PRIORC5_MAIN_PULL); it is RECOVERABLE by the real EconML
+# estimator at the discovery row cap (cheapest-disproof harness, 5/5 seeds).
+# NEGATIVE band: prior-C5 -> more discontinuation -> lower persistence (mirrors
+# _COMMERCIAL_EDGES competitor_activity's negative bands). Backdoor =
+# disease_severity is NOT de-confounding (the substrate draws
+# complement_inhibitor_status 50/50 independent of severity — the naive contrast
+# is already unbiased) but a strong PROGNOSTIC precision covariate for
+# ANCOVA-style variance reduction at n=5000 (the nba_triggers baseline_covariate
+# rationale). Content-addressed (scp_f*) -> idempotent targeted upsert, no full
+# reseed; a later reseed cannot silently rewrite it.
+_FABHALTA_CLINICAL_BRAND = "Fabhalta"
+_FABHALTA_CLINICAL_EDGES: Tuple[Tuple[str, str, Tuple[str, ...], float, float], ...] = (
+    # (treatment, outcome, confounders_controlled, effect_band_lo, effect_band_hi)
+    ("complement_inhibitor_status", "persistent_180d", ("disease_severity",), -0.14, -0.08),
+)
+
+N_FABHALTA_CLINICAL_ROWS = len(_FABHALTA_CLINICAL_EDGES)  # brand-gated: Fabhalta only
+
 # Commercial-KPI grain (2026-07-07). The registry modeled patient/HCP/trigger
 # outcomes only, so "what drives TRx?" was a genuine substrate-coverage gap in
 # chat and on every strategic-insight surface. These are CURATED synthetic
@@ -255,6 +287,15 @@ def _comm_arm_path_id(brand: str, start: str, end: str) -> str:
     return "scp_a" + digest.hexdigest()[:11]
 
 
+def _fabhalta_clinical_path_id(start: str, end: str) -> str:
+    """Content-addressed id for a Fabhalta-only clinical-axis edge, namespaced
+    scp_f*, 16 chars (varchar(20) cap). The ``fab|`` prefix keeps the id space
+    disjoint from every other edge family (no brand token — this edge is Fabhalta
+    by construction)."""
+    digest = hashlib.sha1(f"fab|{start}|{end}".encode(), usedforsecurity=False)
+    return "scp_f" + digest.hexdigest()[:11]
+
+
 def commercial_rows_for_upsert() -> List[dict]:
     """The commercial grain as DB-shaped records for the targeted apply script
     (scripts/seed_commercial_causal_paths.py).
@@ -295,6 +336,26 @@ def comm_arm_rows_for_upsert() -> List[dict]:
     arm = df[df["grain"] == "patient_arm"]
     cols = [c for c in TABLE_COLUMNS["causal_paths"] if c in arm.columns]
     records: List[dict] = json.loads(arm[cols].to_json(orient="records"))
+    return records
+
+
+def fabhalta_clinical_rows_for_upsert() -> List[dict]:
+    """The Fabhalta-only clinical-axis edges as DB-shaped records for the
+    targeted apply script (scripts/seed_fabhalta_clinical_causal_paths.py).
+
+    Content-addressed (scp_f*), so the upsert on path_id is idempotent and needs
+    NO full cohort reseed — the ``patient_journeys`` complement_inhibitor_status
+    column already exists; this only adds the leaderboard-enumeration + KG edge
+    pointing at it, for Fabhalta ONLY. Same column projection as the sibling
+    helpers (the generator-only 'grain' column is dropped — the DB has none)."""
+    import json
+
+    from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
+
+    df = CausalPathsGenerator(GeneratorConfig(n_records=0)).generate()
+    fab = df[df["grain"] == "patient_clinical"]
+    cols = [c for c in TABLE_COLUMNS["causal_paths"] if c in fab.columns]
+    records: List[dict] = json.loads(fab[cols].to_json(orient="records"))
     return records
 
 
@@ -507,4 +568,41 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                         "grain": "patient_arm",
                     }
                 )
+        # Fabhalta-ONLY clinical-axis edges — ADDITIVE, brand-GATED (NOT looped
+        # over _BRANDS; see _FABHALTA_CLINICAL_EDGES). Content-addressed (scp_f*),
+        # direct 1-hop (no mediator) so the FalkorDB sync builds
+        # (:Variable complement_inhibitor_status)-[:CAUSES]->(:Variable
+        # persistent_180d) on Fabhalta's KG and NOWHERE else.
+        for treatment, outcome, edge_confounders, lo, hi in _FABHALTA_CLINICAL_EDGES:
+            rng = _commercial_edge_rng(f"fab|{_FABHALTA_CLINICAL_BRAND}", treatment, outcome)
+            effect = round(float(rng.uniform(lo, hi)), 4)  # NEGATIVE band (see edge comment)
+            disc = (now - timedelta(days=int(rng.integers(0, 25)))).date()
+            rows.append(
+                {
+                    "path_id": _fabhalta_clinical_path_id(treatment, outcome),
+                    "discovery_date": disc.isoformat(),
+                    "causal_chain": {"nodes": [treatment, outcome]},
+                    "start_node": treatment,
+                    "end_node": outcome,
+                    "intermediate_nodes": [],
+                    "path_length": 1,
+                    "causal_effect_size": effect,
+                    "confidence_level": round(float(rng.uniform(0.80, 0.95)), 3),
+                    "method_used": "backdoor.linear_regression",
+                    "confounders_controlled": list(edge_confounders),
+                    "mediators_identified": [],
+                    "time_lag_days": int(rng.integers(7, 60)),
+                    "validation_status": "validated",
+                    "business_impact_estimate": round(effect * float(rng.uniform(1e5, 5e5)), 2),
+                    "data_split": "unassigned",
+                    "direct_effect": effect,
+                    "indirect_effect": 0.0,
+                    "brand": _FABHALTA_CLINICAL_BRAND,
+                    "region": str(rng.choice(_REGIONS)),
+                    "confirmation_count": int(rng.integers(1, 5)),
+                    "created_at": now.isoformat(),
+                    "is_synthetic": True,
+                    "grain": "patient_clinical",
+                }
+            )
         return pd.DataFrame(rows)

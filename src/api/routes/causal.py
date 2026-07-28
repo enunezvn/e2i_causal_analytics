@@ -849,6 +849,17 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             # arm in the initiation latent. Backdoor {disease_severity, engagement_score}
             # is already in the covariate list below.
             "trigger_accepted",
+            # #1321 Fabhalta pilot: prior C5-inhibitor exposure (the FIRST
+            # brand-DISTINCT treatment). A text column ("current"/"prior") derived
+            # to 1.0 for "prior" (the switch population) by _derive_is_prior_c5
+            # below. Its causal_paths edge is emitted for Fabhalta ONLY, so
+            # _discover_candidate_questions surfaces the leaderboard question only
+            # on the Fabhalta cohort (the row's brand="Fabhalta" scopes the data
+            # load via q_brand); Kisqali/Remibrutinib carry no such edge and the
+            # column is 100% NULL for them. Also a Fabhalta effect-MODIFIER (in the
+            # covariate list + _BRAND_CLINICAL_COVARIATES below — dual-role, like
+            # treatment_initiated is treatment+outcome).
+            "complement_inhibitor_status",
         ],
         "outcome": [
             "persistent_180d",
@@ -875,6 +886,13 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             # other brands). ige_level is NOT here — it stays a descriptive KPI axis
             # (Remibrutinib is a BTK inhibitor, not anti-IgE; no IgE causal effect).
             "biologic_experienced",
+            # #1321 Fabhalta pilot: prior C5-inhibitor exposure is ALSO a
+            # Fabhalta-only pre-treatment EFFECT MODIFIER (the DGP plants a
+            # differential CATE — prior-C5-experienced patients respond less to
+            # iptacopan). Brand-scoped below so it is offered only when Fabhalta is
+            # the row filter (NULL for the other brands). Derived to 1.0/0.0 by
+            # _derive_is_prior_c5, exactly like biologic_experienced's 0/1 flag.
+            "complement_inhibitor_status",
             # Phase 1 (COMM-ARMS): the NUMERIC access gradient derived from
             # insurance_type. This is copay_support's backdoor — it MUST stay
             # allowlisted or a copay estimate reports the confounded naive
@@ -995,7 +1013,14 @@ _BRAND_CLINICAL_COVARIATES: Dict[str, frozenset] = {
     # gate stays green. ige_level is intentionally NOT here (descriptive only).
     "Remibrutinib": frozenset({"urticaria_severity_uas7", "biologic_experienced"}),
     "Kisqali": frozenset({"ecog_performance_status"}),
-    "Fabhalta": frozenset({"egfr", "proteinuria_g_day", "ldh_ratio"}),
+    # complement_inhibitor_status (#1321 pilot) is Fabhalta's planted CATE
+    # effect-modifier (prior-C5-experienced respond less to iptacopan); it is in
+    # BRAND_ELIGIBILITY_FIELDS["Fabhalta"] so test_brand_covariate_consistency
+    # stays green. Brand-scoped so it is dropped from the all-brands adjustment
+    # set (NULL for non-Fabhalta rows), exactly like biologic_experienced.
+    "Fabhalta": frozenset(
+        {"egfr", "proteinuria_g_day", "ldh_ratio", "complement_inhibitor_status"}
+    ),
 }
 # Union of every indication-specific clinical covariate — the columns that must be
 # dropped from the adjustment set unless the selected brand vouches for them.
@@ -1036,6 +1061,8 @@ _COLUMN_LABELS: Dict[str, str] = {
     "academic_hcp": "Academic HCP",
     "geographic_region": "Geographic region",
     "biologic_experienced": "Biologic-experienced (prior anti-IgE)",
+    # #1321 Fabhalta pilot: prior C5-inhibitor switch (eculizumab/ravulizumab).
+    "complement_inhibitor_status": "Prior C5-inhibitor (switch)",
     "copay_support": "Copay support",
     "psp_enrolled": "Patient support program",
     # COMM-ARMS Phase 3: two initiation-latent commercial arms.
@@ -1084,6 +1111,10 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "sample_dropped",  # Phase 3: 0/1 initiation-latent arm, float-coerced
         "trigger_accepted",  # Phase 4: 0/1 initiation-latent arm, float-coerced (SMALLINT in DB)
         "insurance_access_score",
+        # #1321 Fabhalta pilot: text "current"/"prior" -> 1.0/0.0 via
+        # _derive_is_prior_c5 (below), then float-coerced like acceptance_status
+        # on nba_triggers (both derivation + numeric membership, belt-and-braces).
+        "complement_inhibitor_status",
     },
     "hcp_adoption": {
         "peer_influence_score",
@@ -1129,7 +1160,22 @@ def _derive_presence(value: Any) -> float:
     return 0.0 if text == "" or text.lower() in {"none", "false", "0"} else 1.0
 
 
+def _derive_is_prior_c5(value: Any) -> float:
+    """complement_inhibitor_status -> 1.0 when 'prior' (the eculizumab/ravulizumab
+    switch population), else 0.0 (#1321 Fabhalta pilot). The treatment contrast is
+    prior-C5-experienced vs C5-naive; None (off-brand) is NOT reached here because
+    the derivation only runs on non-None values (a NULL complement_inhibitor_status
+    stays None and drops the row as a missing treatment — but the question is
+    Fabhalta-scoped, where the column is always populated)."""
+    if value is None:
+        return 0.0
+    return 1.0 if str(value).strip().lower() == "prior" else 0.0
+
+
 _CAUSAL_NUMERIC_DERIVATIONS: Dict[str, Dict[str, Callable[[Any], float]]] = {
+    "patient_journeys": {
+        "complement_inhibitor_status": _derive_is_prior_c5,
+    },
     "nba_triggers": {
         "acceptance_status": _derive_is_accepted,
         "action_taken": _derive_presence,

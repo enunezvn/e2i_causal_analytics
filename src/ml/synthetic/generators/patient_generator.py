@@ -36,7 +36,7 @@ from ..dgp.treatment_arm import (
     rd_map_from_tau,
 )
 from .base import BaseGenerator, GeneratorConfig
-from .cohort_outcomes import generate_discontinuation_outcomes
+from .cohort_outcomes import PRIORC5_SPAWN_KEY, generate_discontinuation_outcomes
 
 # Independent SeedSequence spawn_key for the copay arm, so wiring Phase 1 does
 # NOT shift the generator's main self._rng stream (mirrors Phase 3's
@@ -540,6 +540,26 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         )
         cate_map = rd_map_from_tau(np.asarray(segment), tau_i)
 
+        # Fabhalta pilot (#1321): plant the prior-C5 differential on PERSISTENCE.
+        # Post-hoc + an independent substream so the main self._rng stream — and every
+        # non-Fabhalta row — stays byte-identical (only Fabhalta persistent_180d /
+        # discontinued_180d are rewritten). No-op (all None) on frames with no populated
+        # complement_inhibitor_status. Returns the prior-C5 persistence RD + the copay/psp
+        # persistent RD RE-DERIVED against the prior-C5-rebuilt outcome.
+        priorc5_rd, priorc5_copay_rd, priorc5_psp_rd = self._apply_priorc5_persistence_differential(
+            df,
+            np.asarray(segment),
+            confounders,
+            geographic_region=np.asarray(geographic_region),
+            insurance_type=np.asarray(insurance_type),
+            age_at_diagnosis=np.asarray(age_at_diagnosis),
+            comorbidity_burden=np.asarray(comorbidity_burden),
+            prior_therapy_lines=np.asarray(prior_therapy_lines),
+            brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
+            copay_support=copay_support,
+            psp_enrolled=psp_enrolled,
+        )
+
         # Store ground truth metadata (realized values from the wired DGP)
         df.attrs["true_ate"] = float(np.mean(tau_i))
         df.attrs["cate_by_segment"] = cate_map
@@ -628,9 +648,106 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "cate_by_segment": trigger_rd_by_segment,
             },
         }
+        # Fabhalta pilot (#1321): the prior-C5 persistence arm + reconcile the copay/psp
+        # persistent RD to the prior-C5-rebuilt outcome. Only fires on Fabhalta frames
+        # (priorc5_rd is None otherwise), so every other brand's attrs are unchanged.
+        if priorc5_rd is not None:
+            df.attrs["true_ate_by_arm"]["complement_inhibitor_status"] = {
+                "persistent_180d": {"ate": priorc5_rd},
+            }
+            if priorc5_copay_rd is not None:
+                df.attrs["true_ate_by_arm"]["copay_support"]["persistent_180d"] = {
+                    "ate": float(np.mean([priorc5_copay_rd[str(s)] for s in segment])),
+                    "cate_by_segment": priorc5_copay_rd,
+                }
+            if priorc5_psp_rd is not None:
+                df.attrs["true_ate_by_arm"]["psp_enrolled"]["persistent_180d"] = {
+                    "ate": float(np.mean([priorc5_psp_rd[str(s)] for s in segment])),
+                    "cate_by_segment": priorc5_psp_rd,
+                }
+            df.attrs["priorc5_persistent_rd"] = priorc5_rd
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
         return df
+
+    def _apply_priorc5_persistence_differential(
+        self,
+        df: pd.DataFrame,
+        segment: np.ndarray,
+        confounders: Dict[str, np.ndarray],
+        *,
+        geographic_region: np.ndarray,
+        insurance_type: np.ndarray,
+        age_at_diagnosis: np.ndarray,
+        comorbidity_burden: np.ndarray,
+        prior_therapy_lines: np.ndarray,
+        brand_cate_scale: float,
+        copay_support: Optional[np.ndarray],
+        psp_enrolled: Optional[np.ndarray],
+    ) -> tuple[Optional[float], Optional[Dict[str, float]], Optional[Dict[str, float]]]:
+        """Fabhalta pilot (#1321): plant the prior-C5 differential on PERSISTENCE.
+
+        Rebuilds ``persistent_180d`` / ``discontinued_180d`` for the Fabhalta rows
+        (where ``complement_inhibitor_status`` is populated) with a mean-preserving
+        prior-C5 treatment-effect MODIFIER + a mean-centered prior-C5 persistence
+        MAIN effect (both keyed on complement_inhibitor_status == "prior", the C5
+        switch population). Runs POST-HOC on the built frame, drawing fresh noise from
+        an INDEPENDENT deterministic substream (PRIORC5_SPAWN_KEY), so:
+          * the generator's main ``self._rng`` stream is never perturbed, and
+          * every non-Fabhalta row (complement_inhibitor_status NULL) is byte-identical.
+
+        copay_support + psp_enrolled are re-passed for the Fabhalta rows so this
+        rebuild — which overwrites the Fabhalta persistence outcome — does NOT clobber
+        their planted effects; their per-segment RD is RE-DERIVED against the rebuilt
+        (prior-C5-noise) score. A Fabhalta frame is single-brand (mask covers all
+        complement-populated rows), so the subset RD IS the frame RD.
+
+        Returns (prior-C5 persistence RD, recomputed copay persistent RD map,
+        recomputed psp persistent RD map). All None on a frame with no populated
+        complement_inhibitor_status (the no-op path).
+        """
+        comp = df["complement_inhibitor_status"].to_numpy(dtype=object)
+        # complement_inhibitor_status is populated ONLY for Fabhalta rows (draw-then-
+        # discard gating); a non-null value marks the pilot cohort.
+        populated = np.array([c is not None and c == c for c in comp])  # c==c filters NaN
+        mask = (df["brand"].to_numpy() == Brand.FABHALTA.value) & populated
+        if not mask.any():
+            return None, None, None
+        idx = np.where(mask)[0]
+        # "prior" == prior-C5 switch (experienced); "current" == naive.
+        experienced = np.array([1 if str(comp[i]) == "prior" else 0 for i in idx], dtype=int)
+
+        # Independent substream keyed off the frame seed — reproducible AND orthogonal
+        # to the main stream (spawn_key guarantees non-overlap with self._rng).
+        c5_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(PRIORC5_SPAWN_KEY,))
+        )
+        _coh = generate_discontinuation_outcomes(
+            rng=c5_rng,
+            treatment_arm=df["treatment_arm"].to_numpy()[idx].astype(int),
+            disease_severity=confounders["disease_severity"][idx],
+            academic_hcp=confounders["academic_hcp"][idx],
+            geographic_region=np.asarray(geographic_region)[idx],
+            insurance_type=np.asarray(insurance_type)[idx],
+            age_at_diagnosis=np.asarray(age_at_diagnosis)[idx],
+            comorbidity_burden=np.asarray(comorbidity_burden)[idx],
+            prior_therapy_lines=np.asarray(prior_therapy_lines)[idx],
+            segment=segment[idx],
+            brand_cate_scale=brand_cate_scale,
+            copay_support=(np.asarray(copay_support)[idx] if copay_support is not None else None),
+            psp_enrolled=(np.asarray(psp_enrolled)[idx] if psp_enrolled is not None else None),
+            priorc5_experienced=experienced,
+        )
+        # Write the rebuilt persistence columns back (Fabhalta rows only).
+        for col in ("persistent_180d", "discontinued_180d"):
+            arr = df[col].to_numpy().copy()
+            arr[idx] = _coh[col]
+            df[col] = arr
+        return (
+            _coh["priorc5_persistent_rd"],
+            _coh["copay_persistent_rd_by_segment"],
+            _coh["psp_persistent_rd_by_segment"],
+        )
 
     def _apply_biologic_differential(
         self,
