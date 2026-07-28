@@ -118,46 +118,47 @@ _DISC_NOISE_SD = 0.25
 # expected_response). Strictly positive so the validator never sees a negative.
 PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY = 0.05
 
-# --- Fabhalta pilot (#1321): prior-C5-inhibitor differential on persistence -------
-# complement_inhibitor_status == "prior" marks the prior-C5 SWITCH population
-# (patients inadequately controlled on a C5 inhibitor — eculizumab/ravulizumab —
-# before iptacopan). Two FAITHFUL, RECOVERABLE effects, both validated by the
-# cheapest-disproof harness at n>=8000 (5/5) BEFORE any substrate write:
-#   * MAIN effect — prior-C5 patients are HARDER to retain (higher discontinuation).
-#     MEAN-CENTERED on the realized prior-C5 prevalence, so the c5=1-vs-c5=0 contrast
+# --- Brand-distinct clinical-axis differential on persistence (#1321) ------------
+# A per-unit 0/1 "axis" indicator — the brand-DISTINCT causal variables in the gold
+# standard, ONE axis per brand (Fabhalta complement_inhibitor_status == "prior", the
+# prior-C5 switch; Kisqali advanced-line disease_stage; Remibrutinib uncontrolled
+# UAS7) — drives TWO faithful, recoverable effects on persistence, both validated by
+# the cheapest-disproof harness at n>=8000 BEFORE any substrate write:
+#   * MAIN effect — axis=1 patients are HARDER to retain (higher discontinuation).
+#     MEAN-CENTERED on the realized axis prevalence, so the axis=1-vs-axis=0 contrast
 #     is fully recoverable while the marginal discontinuation prevalence
 #     (test_persistence_calibration band) is UNCHANGED by construction.
-#   * MODIFIER — prior-C5-EXPERIENCED patients carry an ATTENUATED iptacopan effect
-#     (multiplicative on the treatment logit term); MEAN-PRESERVING at the prevalence
-#     so the population persistence ATE and the existing Fabhalta gate are UNCHANGED
-#     (biologic Phase-3 precedent, treatment_arm._BIOLOGIC_*).
-# Both values are a SYNTHETIC DESIGN CHOICE (like the biologic 2x spread), NOT a
-# number from real iptacopan trials. Fabhalta's CATE scale is deliberately flat
-# (0.70), so the mean-preserving spread is WIDER than biologic's (3.5x vs 2x) to
-# clear the estimator noise floor — the harness disproved a 1.9x spread (3/5).
-_PRIORC5_MAIN_PULL = 0.55  # logit; prior-C5 -> more discontinuation (mean-centered)
-_PRIORC5_EXPERIENCED_MULT = 0.40  # experienced -> attenuated treatment effect
-# Independent SeedSequence spawn_key for the Fabhalta prior-C5 persistence recompute,
-# so the post-hoc rebuild never perturbs the generator's main self._rng stream
-# (mirrors treatment_arm._BIOLOGIC_SPAWN_KEY). "C5" in hex.
-PRIORC5_SPAWN_KEY = 0xC5
+#   * MODIFIER — axis=1 patients carry an ATTENUATED treatment effect (multiplicative
+#     on the treatment logit term); MEAN-PRESERVING at the prevalence so the population
+#     persistence ATE and the existing per-brand gate are UNCHANGED (biologic Phase-3
+#     precedent, treatment_arm._BIOLOGIC_*).
+# main_pull / exp_mult are a SYNTHETIC DESIGN CHOICE (like the biologic 2x spread), NOT
+# a number from any real trial, and are TUNED PER BRAND to clear the estimator noise
+# floor at that brand's CATE scale (a FLATTER scale needs a WIDER mean-preserving
+# spread). The defaults below are the Fabhalta pilot's values — its flat 0.70 scale
+# needed 0.55 / 0.40 (a 3.5x spread; the harness disproved a 1.9x spread at 3/5) — so an
+# unparameterized call is byte-identical to the shipped Fabhalta pilot.
+_AXIS_MAIN_PULL_DEFAULT = 0.55  # logit; axis=1 -> more discontinuation (mean-centered)
+_AXIS_EXP_MULT_DEFAULT = 0.40  # axis=1 -> attenuated treatment effect
 
 
-def priorc5_cate_modifier(experienced: np.ndarray) -> np.ndarray:
-    """Per-unit MEAN-PRESERVING multiplicative CATE modifier from prior-C5 experience.
+def axis_cate_modifier(
+    experienced: np.ndarray, exp_mult: float = _AXIS_EXP_MULT_DEFAULT
+) -> np.ndarray:
+    """Per-unit MEAN-PRESERVING multiplicative CATE modifier from a 0/1 axis indicator.
 
-    ``experienced`` is 0 (naive) / 1 (prior-C5 switch). The experienced multiplier is
-    fixed (_PRIORC5_EXPERIENCED_MULT); the naive multiplier is solved so the
-    prevalence-weighted mean is 1.0 — the population treatment effect (and the
-    existing Fabhalta persistence gate) are preserved. A degenerate cohort (all one
+    ``experienced`` is 0 (baseline) / 1 (the brand-distinct axis population). The
+    experienced multiplier is fixed (``exp_mult``); the baseline multiplier is solved so
+    the prevalence-weighted mean is 1.0 — the population treatment effect (and the
+    existing per-brand persistence gate) are preserved. A degenerate cohort (all one
     level) returns all-ones (no modification). Biologic Phase-3 precedent.
     """
     exp = np.asarray(experienced, dtype=float)
     prev = float(np.mean(exp >= 0.5))
     if prev <= 0.0 or prev >= 1.0:
         return np.ones_like(exp)
-    naive_mult = (1.0 - prev * _PRIORC5_EXPERIENCED_MULT) / (1.0 - prev)
-    return np.where(exp >= 0.5, _PRIORC5_EXPERIENCED_MULT, naive_mult)
+    naive_mult = (1.0 - prev * exp_mult) / (1.0 - prev)
+    return np.where(exp >= 0.5, exp_mult, naive_mult)
 
 
 class DiscontinuationOutcomes(TypedDict):
@@ -170,10 +171,10 @@ class DiscontinuationOutcomes(TypedDict):
     retention_benefit: np.ndarray
     copay_persistent_rd_by_segment: Dict[str, float]
     psp_persistent_rd_by_segment: Dict[str, float]
-    # Fabhalta pilot (#1321): the scalar prior-C5 persistence RD ground truth
-    # (naive - experienced; positive = prior-C5 patients persist LESS). None off
-    # the Fabhalta prior-C5 path. The per-segment maps above stay copay/psp only.
-    priorc5_persistent_rd: float | None
+    # Brand-distinct axis (#1321): the scalar axis persistence RD ground truth
+    # (baseline - axis; positive = axis=1 patients persist LESS). None off the axis
+    # path. The per-segment maps above stay copay/psp only.
+    axis_persistent_rd: float | None
 
 
 def generate_discontinuation_outcomes(
@@ -191,7 +192,9 @@ def generate_discontinuation_outcomes(
     brand_cate_scale: float,
     copay_support: np.ndarray | None = None,
     psp_enrolled: np.ndarray | None = None,
-    priorc5_experienced: np.ndarray | None = None,
+    axis_experienced: np.ndarray | None = None,
+    axis_main_pull: float = _AXIS_MAIN_PULL_DEFAULT,
+    axis_exp_mult: float = _AXIS_EXP_MULT_DEFAULT,
 ) -> DiscontinuationOutcomes:
     """Draw discontinued_180d (and its complement persistent_180d) + a
     non-negative retention_benefit covariate.
@@ -205,10 +208,14 @@ def generate_discontinuation_outcomes(
             Kisqali probe differs from a Remibrutinib probe (INDEX CATE-by-brand).
         copay_support: optional per-unit 0/1 second commercial arm (Phase 1). When
             None the equation is byte-identical to the pre-copay DGP.
-        priorc5_experienced: Fabhalta pilot (#1321) optional per-unit 0/1 prior-C5
-            switch indicator (1 = complement_inhibitor_status == "prior"). Drives a
-            mean-preserving treatment-effect MODIFIER + a mean-centered persistence
-            MAIN effect. When None the equation is byte-identical to the pre-pilot DGP.
+        axis_experienced: brand-distinct axis (#1321) optional per-unit 0/1 indicator
+            (1 = that brand's axis population, e.g. prior-C5 switch / advanced-line /
+            uncontrolled-UAS7). Drives a mean-preserving treatment-effect MODIFIER + a
+            mean-centered persistence MAIN effect. When None the equation is
+            byte-identical to the pre-pilot DGP.
+        axis_main_pull / axis_exp_mult: the axis MAIN-pull logit + the MODIFIER's
+            experienced multiplier, tuned PER BRAND to clear the estimator noise floor
+            at that brand's CATE scale. Default to the Fabhalta pilot values.
     """
     n = len(treatment_arm)
     seg_treat = np.array([_DISC_TREATMENT_LOGIT.get(str(s), -0.70) for s in segment], dtype=float)
@@ -216,25 +223,24 @@ def generate_discontinuation_outcomes(
         [_DISC_REGION_LOGIT.get(str(r), 0.0) for r in geographic_region], dtype=float
     )
     ins_pull = np.array([_INS_DISC_PULL.get(str(i), 0.0) for i in insurance_type], dtype=float)
-    # Fabhalta pilot (#1321): prior-C5 differential. c5_mod MULTIPLIES the treatment
-    # term (attenuated iptacopan effect for prior-C5-experienced, mean-preserving);
-    # c5_main is a MEAN-CENTERED additive pull (prior-C5 -> more discontinuation,
-    # prevalence-preserving), kept SEPARATE like copay/psp. Both default OFF, and
-    # `x * 1.0` / `+ 0.0` are exact for finite floats, so the equation is
-    # byte-identical to the pre-pilot DGP when priorc5_experienced is None.
-    if priorc5_experienced is not None:
-        c5 = np.asarray(priorc5_experienced, dtype=float)
-        c5_prev = float(np.mean(c5 >= 0.5))
-        c5_mod: np.ndarray | float = priorc5_cate_modifier(c5)
-        c5_main: np.ndarray | float = _PRIORC5_MAIN_PULL * (c5 - c5_prev)
+    # Brand-distinct axis (#1321): axis_mod MULTIPLIES the treatment term (attenuated
+    # effect for axis=1, mean-preserving); axis_main is a MEAN-CENTERED additive pull
+    # (axis=1 -> more discontinuation, prevalence-preserving), kept SEPARATE like
+    # copay/psp. Both default OFF, and `x * 1.0` / `+ 0.0` are exact for finite floats,
+    # so the equation is byte-identical to the pre-pilot DGP when axis_experienced is None.
+    if axis_experienced is not None:
+        axis = np.asarray(axis_experienced, dtype=float)
+        axis_prev = float(np.mean(axis >= 0.5))
+        axis_mod: np.ndarray | float = axis_cate_modifier(axis, axis_exp_mult)
+        axis_main: np.ndarray | float = axis_main_pull * (axis - axis_prev)
     else:
-        c5_prev = 0.0
-        c5_mod = 1.0
-        c5_main = 0.0
+        axis_prev = 0.0
+        axis_mod = 1.0
+        axis_main = 0.0
     arm_core = brand_cate_scale * seg_treat * treatment_arm  # unmodified causal term
     logit = (
         _DISC_INTERCEPT
-        + arm_core * c5_mod  # causal effect (x prior-C5 modifier when pilot active)
+        + arm_core * axis_mod  # causal effect (x brand-axis modifier when active)
         + _DISC_SEVERITY_COEF * disease_severity
         + _DISC_ACADEMIC_COEF * academic_hcp
         + region_pull
@@ -266,8 +272,8 @@ def generate_discontinuation_outcomes(
         psp_pull = np.zeros(n, dtype=float)
     copay_realized = copay_pull * copay
     psp_realized = psp_pull * psp
-    # c5_main defaults to 0.0 (scalar) -> `+ 0.0` no-op, byte-identical when off.
-    p_disc = expit(logit + copay_realized + psp_realized + c5_main)
+    # axis_main defaults to 0.0 (scalar) -> `+ 0.0` no-op, byte-identical when off.
+    p_disc = expit(logit + copay_realized + psp_realized + axis_main)
     discontinued = (rng.random(n) < p_disc).astype(int)
     persistent = 1 - discontinued
     # Non-negative retention benefit: scales with severity (high-severity persisters
@@ -291,32 +297,34 @@ def generate_discontinuation_outcomes(
         )
         base_for_psp = logit[mask] + copay_realized[mask]
         psp_rd[str(seg_name)] = float(np.mean(expit(base_for_psp) - expit(base_for_psp + p_pull)))
-    # Fabhalta pilot (#1321): scalar prior-C5 persistence RD ground truth (naive -
-    # experienced) — the counterfactual the recovery probe compares LinearDML
-    # against. Flip BOTH channels (treatment-term modifier + mean-centered main
-    # pull) on the logit each row actually got, holding confounders/noise/other-arms
-    # fixed. Positive => prior-C5 patients persist LESS. None off the pilot path.
-    priorc5_rd: float | None
-    if priorc5_experienced is not None and 0.0 < c5_prev < 1.0:
-        exp_mult = _PRIORC5_EXPERIENCED_MULT
-        naive_mult = (1.0 - c5_prev * exp_mult) / (1.0 - c5_prev)
-        base_wo_treat = logit - arm_core * c5_mod  # intercept + confounders + noise
+    # Brand-distinct axis (#1321): scalar axis persistence RD ground truth (baseline -
+    # axis) — the counterfactual the recovery probe compares LinearDML against. Flip
+    # BOTH channels (treatment-term modifier + mean-centered main pull) on the logit
+    # each row actually got, holding confounders/noise/other-arms fixed. Positive =>
+    # axis=1 patients persist LESS. None off the axis path.
+    axis_persistent_rd: float | None
+    if axis_experienced is not None and 0.0 < axis_prev < 1.0:
+        naive_mult = (1.0 - axis_prev * axis_exp_mult) / (1.0 - axis_prev)
+        base_wo_treat = logit - arm_core * axis_mod  # intercept + confounders + noise
         other_arms = copay_realized + psp_realized
         lg_naive = (
-            base_wo_treat + arm_core * naive_mult + other_arms + _PRIORC5_MAIN_PULL * (-c5_prev)
+            base_wo_treat + arm_core * naive_mult + other_arms + axis_main_pull * (-axis_prev)
         )
         lg_exp = (
-            base_wo_treat + arm_core * exp_mult + other_arms + _PRIORC5_MAIN_PULL * (1.0 - c5_prev)
+            base_wo_treat
+            + arm_core * axis_exp_mult
+            + other_arms
+            + axis_main_pull * (1.0 - axis_prev)
         )
-        # persist_naive - persist_exp = expit(lg_exp) - expit(lg_naive)
-        priorc5_rd = float(np.mean(expit(lg_exp) - expit(lg_naive)))
+        # persist_baseline - persist_axis = expit(lg_axis) - expit(lg_naive)
+        axis_persistent_rd = float(np.mean(expit(lg_exp) - expit(lg_naive)))
     else:
-        priorc5_rd = None
+        axis_persistent_rd = None
     return {
         "discontinued_180d": discontinued,
         "persistent_180d": persistent,
         "retention_benefit": np.clip(retention_benefit, 0.0, None),
         "copay_persistent_rd_by_segment": copay_rd,
         "psp_persistent_rd_by_segment": psp_rd,
-        "priorc5_persistent_rd": priorc5_rd,
+        "axis_persistent_rd": axis_persistent_rd,
     }
