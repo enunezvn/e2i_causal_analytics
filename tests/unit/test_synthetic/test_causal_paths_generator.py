@@ -6,12 +6,14 @@ from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.causal_paths_generator import (
     N_COMM_ARM_ROWS,
     N_COMMERCIAL_ROWS,
+    N_FABHALTA_CLINICAL_ROWS,
     CausalPathsGenerator,
 )
 
 # Grains whose edges are DIRECT (1-hop, no mediator): the trigger RCT/effect-
-# modifier edges and the patient-grain commercial-arm edges.
-_DIRECT_EDGE_GRAINS = ("trigger", "patient_arm")
+# modifier edges, the patient-grain commercial-arm edges, and the Fabhalta-only
+# clinical-axis edge (#1321 pilot).
+_DIRECT_EDGE_GRAINS = ("trigger", "patient_arm", "patient_clinical")
 
 
 def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
@@ -20,7 +22,7 @@ def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
     # HCP/trigger/commercial/patient-arm rows are ADDITIVE fixed blocks (6 HCP +
     # 6 trigger + N_COMMERCIAL_ROWS commercial + N_COMM_ARM_ROWS patient-arm),
     # independent of the n_records knob.
-    assert len(df) == n + 12 + N_COMMERCIAL_ROWS + N_COMM_ARM_ROWS
+    assert len(df) == n + 12 + N_COMMERCIAL_ROWS + N_COMM_ARM_ROWS + N_FABHALTA_CLINICAL_ROWS
     assert df["causal_effect_size"].notna().all()  # CM-003 non-NULL
     assert (
         df[~df["grain"].isin(_DIRECT_EDGE_GRAINS)]["mediators_identified"]
@@ -252,3 +254,47 @@ def test_comm_arm_rows_for_upsert_are_content_addressed_and_idempotent():
     assert len(a) == N_COMM_ARM_ROWS
     # The generator-only 'grain' column is projected out for the DB insert.
     assert all("grain" not in r for r in a)
+
+
+# ---------------------------------------------------------------------------
+# Fabhalta-only clinical-axis edge (#1321 pilot): the FIRST brand-DISTINCT causal
+# variable in the gold standard. Emitted for Fabhalta ONLY (Kisqali/Remibrutinib
+# have no C5-inhibitor axis), so their KG never gains this node.
+# ---------------------------------------------------------------------------
+
+
+def test_fabhalta_clinical_edge_is_brand_distinct_and_negative():
+    """complement_inhibitor_status -> persistent_180d exists for Fabhalta ONLY, as a
+    direct 1-hop NEGATIVE-effect edge (prior-C5 -> less persistence) with the
+    disease_severity precision covariate. Kisqali/Remibrutinib must NOT carry it —
+    that brand-distinctness IS the pilot's acceptance criterion."""
+    df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=20)).generate()
+    clin = df[df["grain"] == "patient_clinical"]
+    assert len(clin) == N_FABHALTA_CLINICAL_ROWS == 1
+    row = clin.iloc[0]
+    assert row["brand"] == "Fabhalta"
+    assert row["start_node"] == "complement_inhibitor_status"
+    assert row["end_node"] == "persistent_180d"
+    assert row["path_length"] == 1
+    assert list(row["mediators_identified"]) == []
+    assert row["causal_chain"]["nodes"] == ["complement_inhibitor_status", "persistent_180d"]
+    assert list(row["confounders_controlled"]) == ["disease_severity"]
+    assert row["causal_effect_size"] < 0, "prior-C5 REDUCES persistence -> negative display effect"
+    # Brand-distinctness: no other brand carries a complement_inhibitor_status edge.
+    others = df[df["start_node"] == "complement_inhibitor_status"]
+    assert set(others["brand"]) == {"Fabhalta"}
+
+
+def test_fabhalta_clinical_rows_for_upsert_are_content_addressed_and_idempotent():
+    from src.ml.synthetic.generators.causal_paths_generator import (
+        fabhalta_clinical_rows_for_upsert,
+    )
+
+    a = fabhalta_clinical_rows_for_upsert()
+    b = fabhalta_clinical_rows_for_upsert()
+    ids_a = [r["path_id"] for r in a]
+    assert ids_a == [r["path_id"] for r in b]  # stable across calls (content-addressed)
+    assert len(ids_a) == len(set(ids_a)) == N_FABHALTA_CLINICAL_ROWS
+    assert all(pid.startswith("scp_f") for pid in ids_a)  # Fabhalta clinical namespace
+    assert all(r["brand"] == "Fabhalta" for r in a)
+    assert all("grain" not in r for r in a)  # generator-only column projected out

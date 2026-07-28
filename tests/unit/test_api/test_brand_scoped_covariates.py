@@ -26,6 +26,7 @@ _FULL = [
     "ldh_ratio",
     "urticaria_severity_uas7",
     "biologic_experienced",
+    "complement_inhibitor_status",  # #1321 Fabhalta-only modifier
 ]
 _UNIVERSALS = ["disease_severity", "age_at_diagnosis", "academic_hcp"]
 
@@ -41,7 +42,10 @@ def test_all_brands_keeps_universals_only():
     [
         ("Remibrutinib", ["urticaria_severity_uas7", "biologic_experienced"]),
         ("Kisqali", ["ecog_performance_status"]),
-        ("Fabhalta", ["egfr", "proteinuria_g_day", "ldh_ratio"]),
+        (
+            "Fabhalta",
+            ["egfr", "proteinuria_g_day", "ldh_ratio", "complement_inhibitor_status"],
+        ),
     ],
 )
 def test_brand_keeps_universals_plus_own_clinical(brand, expected_clinical):
@@ -95,3 +99,42 @@ def test_api_map_is_subset_of_dgp_ssot():
         )
     # The union used for gating matches what the maps declare.
     assert _ALL_CLINICAL_COVARIATES == frozenset().union(*_BRAND_CLINICAL_COVARIATES.values())
+
+
+def test_complement_inhibitor_status_is_dual_role_treatment_and_fabhalta_modifier():
+    """#1321 pilot: complement_inhibitor_status is wired as BOTH a treatment (the
+    main-effect edge) and a Fabhalta-scoped effect-modifier (the covariate), with a
+    text->0/1 derivation and a display label. Locks the full plumbing so a partial
+    revert (e.g. treatment added but derivation dropped) fails loudly."""
+    from src.api.routes.causal import (
+        _CAUSAL_DATASET_SPECS,
+        _CAUSAL_NUMERIC_COLUMNS,
+        _CAUSAL_NUMERIC_DERIVATIONS,
+        _COLUMN_LABELS,
+        _derive_is_prior_c5,
+    )
+
+    spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
+    assert "complement_inhibitor_status" in spec["treatment"]  # main-effect edge treatment
+    assert "complement_inhibitor_status" in spec["covariate"]  # effect-modifier role
+    assert "complement_inhibitor_status" in _CAUSAL_NUMERIC_COLUMNS["patient_journeys"]
+    assert (
+        _CAUSAL_NUMERIC_DERIVATIONS["patient_journeys"]["complement_inhibitor_status"]
+        is _derive_is_prior_c5
+    )
+    assert "complement_inhibitor_status" in _COLUMN_LABELS
+    # It is a Fabhalta covariate ONLY (dropped for the other brands / all-brands).
+    assert "complement_inhibitor_status" in _BRAND_CLINICAL_COVARIATES["Fabhalta"]
+    for other in ("Remibrutinib", "Kisqali"):
+        assert "complement_inhibitor_status" not in _BRAND_CLINICAL_COVARIATES[other]
+
+
+def test_derive_is_prior_c5_maps_switch_population_to_one():
+    """'prior' (the eculizumab/ravulizumab switch population) -> 1.0; 'current' and a
+    NULL off-brand cell -> 0.0. The treatment contrast is prior-vs-current."""
+    from src.api.routes.causal import _derive_is_prior_c5
+
+    assert _derive_is_prior_c5("prior") == 1.0
+    assert _derive_is_prior_c5("PRIOR") == 1.0  # case-insensitive, like _derive_is_accepted
+    assert _derive_is_prior_c5("current") == 0.0
+    assert _derive_is_prior_c5(None) == 0.0
