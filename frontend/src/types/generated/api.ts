@@ -5223,7 +5223,10 @@ export interface paths {
         put?: never;
         /**
          * Knowledge Graph Insight
-         * @description Strategic interpretation of the curated knowledge graph for a brand (server-derived grounding).
+         * @description Strategic interpretation of the curated knowledge graph for a brand
+         *     (server-derived grounding, page-parity: the same type filters, brand scoping,
+         *     parallel-edge collapse, and optional variable neighborhood the page renders —
+         *     see src.insights.knowledge_graph's scoping helpers).
          */
         post: operations["knowledge_graph_insight_api_insights_knowledge_graph_post"];
         delete?: never;
@@ -11610,7 +11613,13 @@ export interface components {
             /** Full Name */
             full_name?: string | null;
         };
-        /** KGInsightRequest */
+        /**
+         * KGInsightRequest
+         * @description Only the SCOPE is caller-supplied (brand + optional variable node id from
+         *     the page's selectors); the graph itself is read server-side, so a bogus
+         *     variable can only produce an honest "not in scope" response, never a
+         *     grounded-looking insight from arbitrary data.
+         */
         KGInsightRequest: {
             /**
              * Brand
@@ -11622,6 +11631,8 @@ export interface components {
              * @default true
              */
             curated_only: boolean;
+            /** Variable */
+            variable?: string | null;
         };
         /**
          * KPICalculationContext
