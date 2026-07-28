@@ -1,4 +1,12 @@
-"""Knowledge-graph strategic insight: interpret the curated KG for a brand."""
+"""Knowledge-graph strategic insight: interpret the curated KG for a brand.
+
+The scoping helpers here are a server-side port of the /knowledge-graph page's
+client-side pipeline (frontend/src/pages/KnowledgeGraph.tsx: causalGoldStandardGraph,
+dedupeParallelEdges, variableNeighborhoodGraph). The insight must be grounded in
+the SAME graph the analyst is looking at — same type filters, same brand scoping,
+same parallel-edge collapse, same variable neighborhood — or the narrative and the
+canvas silently disagree.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +17,134 @@ from typing import Any
 from src.insights.common import normalize_list, run_signature
 
 logger = logging.getLogger(__name__)
+
+# Page-parity fetch scope: exactly what the page requests from /graph/nodes and
+# /graph/relationships (its CAUSAL_NODE_TYPES / CAUSAL_REL_TYPES constants and
+# NODE_FETCH_LIMIT / REL_FETCH_LIMIT = 2000, the backend cap).
+PAGE_ENTITY_TYPES = ["Variable", "KPI", "CausalPath", "Region"]
+PAGE_RELATIONSHIP_TYPES = ["CAUSES", "EXPLAINS", "INFLUENCES", "AFFECTS"]
+PAGE_FETCH_LIMIT = 2000
+
+# NOTE on shapes: SemanticMemory.list_relationships flattens edge properties into
+# the top level of each dict (brand/region/confidence are direct keys), unlike the
+# frontend's nested ``properties`` object. These helpers take that flat shape.
+
+
+def dedupe_parallel_edges(relationships: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse the per-(brand x region) physical copies of each logical edge.
+
+    The gold-standard sync MERGEs one edge per {brand, region}, so a single
+    ``a -CAUSES-> b`` appears up to 3 brands x 4 regions = 12 times. Keyed by
+    (source, type, target); keeps the highest-confidence copy as representative,
+    surfacing the union of brands/regions and a ``parallel_edge_count``.
+    Counting the copies as distinct relationships would overstate the edge
+    profile the analyst sees by up to 12x.
+    """
+    by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for r in relationships:
+        key = (str(r.get("source_id")), str(r.get("type")), str(r.get("target_id")))
+        entry = by_key.get(key)
+        if entry is None:
+            entry = {"edge": r, "brands": set(), "regions": set(), "count": 0}
+            by_key[key] = entry
+        entry["count"] += 1
+        if isinstance(r.get("brand"), str):
+            entry["brands"].add(r["brand"])
+        if isinstance(r.get("region"), str):
+            entry["regions"].add(r["region"])
+        if float(r.get("confidence") or 0) > float(entry["edge"].get("confidence") or 0):
+            entry["edge"] = r
+    deduped = []
+    for entry in by_key.values():
+        edge = {k: v for k, v in entry["edge"].items() if k not in ("brand", "region")}
+        if entry["brands"]:
+            edge["brands"] = sorted(entry["brands"])
+        if entry["regions"]:
+            edge["regions"] = sorted(entry["regions"])
+        if entry["count"] > 1:
+            edge["parallel_edge_count"] = entry["count"]
+        deduped.append(edge)
+    return deduped
+
+
+def causal_gold_standard_graph(
+    nodes: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    brand: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Derive the causal gold-standard graph the page renders for ``brand``.
+
+    'All' keeps every causal edge; a brand keeps its tagged edges (matched
+    case-insensitively — the graph holds 'Kisqali' AND 'kisqali' dupes) plus the
+    untagged brand-agnostic structural edges. Then only nodes touched by >=1
+    kept edge survive (no isolated singletons), and parallel copies collapse.
+    """
+    target = brand.lower()
+    kept = [
+        r
+        for r in relationships
+        if brand == "All" or not isinstance(r.get("brand"), str) or r["brand"].lower() == target
+    ]
+    touched = {r.get("source_id") for r in kept} | {r.get("target_id") for r in kept}
+    kept_nodes = [n for n in nodes if n.get("id") in touched]
+    node_ids = {n.get("id") for n in kept_nodes}
+    surviving = [
+        r for r in kept if r.get("source_id") in node_ids and r.get("target_id") in node_ids
+    ]
+    return kept_nodes, dedupe_parallel_edges(surviving)
+
+
+def variable_neighborhood(
+    nodes: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    variable_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Narrow the (brand-scoped) graph to one variable's causal neighborhood:
+    every ancestor and descendant along CAUSES edges (the full chains through
+    it) plus the structural context — non-CAUSES edges touching those nodes,
+    and their far endpoints."""
+    fwd: dict[str, list[str]] = {}
+    rev: dict[str, list[str]] = {}
+    for r in relationships:
+        if r.get("type") != "CAUSES":
+            continue
+        fwd.setdefault(str(r.get("source_id")), []).append(str(r.get("target_id")))
+        rev.setdefault(str(r.get("target_id")), []).append(str(r.get("source_id")))
+
+    def reach(start: str, adj: dict[str, list[str]]) -> set[str]:
+        seen = {start}
+        queue = [start]
+        while queue:
+            for nxt in adj.get(queue.pop(), []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        return seen
+
+    core = reach(variable_id, fwd) | reach(variable_id, rev)
+    context: set[str] = set()
+    for r in relationships:
+        if r.get("type") == "CAUSES":
+            continue
+        if r.get("source_id") in core:
+            context.add(str(r.get("target_id")))
+        elif r.get("target_id") in core:
+            context.add(str(r.get("source_id")))
+    keep = core | context
+    kept_nodes = [n for n in nodes if n.get("id") in keep]
+    kept_rels = [
+        r
+        for r in relationships
+        if (
+            r.get("source_id") in core and r.get("target_id") in core
+            if r.get("type") == "CAUSES"
+            else (r.get("source_id") in core or r.get("target_id") in core)
+            and r.get("source_id") in keep
+            and r.get("target_id") in keep
+        )
+    ]
+    return kept_nodes, kept_rels
+
 
 try:
     import dspy

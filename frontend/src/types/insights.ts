@@ -42,6 +42,9 @@ export interface StrategicInsightResponse {
 export interface KGInsightRequest {
   brand: string;
   curated_only?: boolean;
+  /** Variable node id to narrow the grounding to its causal neighborhood
+   *  (the page's variable selector); null interprets the whole brand scope. */
+  variable?: string | null;
 }
 
 export interface ModelPerfInsightRequest {

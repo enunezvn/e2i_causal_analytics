@@ -98,8 +98,17 @@ def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightRespo
 
 # ---- Request models -----------------------------------------------------------
 class KGInsightRequest(BaseModel):
+    """Only the SCOPE is caller-supplied (brand + optional variable node id from
+    the page's selectors); the graph itself is read server-side, so a bogus
+    variable can only produce an honest "not in scope" response, never a
+    grounded-looking insight from arbitrary data."""
+
     brand: str = "All"
     curated_only: bool = True
+    # Variable node id (e.g. "var:persistent_180d") to narrow the grounding to
+    # that variable's causal neighborhood — the page's variable selector
+    # (PR #1320). None interprets the whole brand scope.
+    variable: str | None = None
 
 
 class ModelPerfInsightRequest(BaseModel):
@@ -236,23 +245,41 @@ class TreatmentEffectInsightRequest(BaseModel):
 async def knowledge_graph_insight(
     req: KGInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
-    """Strategic interpretation of the curated knowledge graph for a brand (server-derived grounding)."""
+    """Strategic interpretation of the curated knowledge graph for a brand
+    (server-derived grounding, page-parity: the same type filters, brand scoping,
+    parallel-edge collapse, and optional variable neighborhood the page renders —
+    see src.insights.knowledge_graph's scoping helpers)."""
     from src.memory.semantic_memory import get_semantic_memory
-
-    brand = None if req.brand == "All" else req.brand
 
     def _load() -> dict[str, Any]:
         sm = get_semantic_memory()
-        nodes = sm.list_nodes(limit=500, curated_only=req.curated_only)
-        rels = sm.list_relationships(limit=500, curated_only=req.curated_only)
-        if brand:  # scope edges to the brand when the property is present
-            rels = [r for r in rels if (r.get("properties") or {}).get("brand") in (None, brand)]
+        nodes = sm.list_nodes(
+            entity_types=list(knowledge_graph.PAGE_ENTITY_TYPES),
+            limit=knowledge_graph.PAGE_FETCH_LIMIT,
+            curated_only=req.curated_only,
+        )
+        rels = sm.list_relationships(
+            relationship_types=list(knowledge_graph.PAGE_RELATIONSHIP_TYPES),
+            limit=knowledge_graph.PAGE_FETCH_LIMIT,
+            curated_only=req.curated_only,
+        )
+        g_nodes, g_rels = knowledge_graph.causal_gold_standard_graph(nodes, rels, req.brand)
+        scope = req.brand
+        if req.variable:
+            var_node = next((n for n in g_nodes if n.get("id") == req.variable), None)
+            if var_node is None:
+                return {"missing_variable": req.variable}
+            g_nodes, g_rels = knowledge_graph.variable_neighborhood(g_nodes, g_rels, req.variable)
+            scope = f"{req.brand} / {var_node.get('name', req.variable)} neighborhood"
         return knowledge_graph.build_grounding(
-            req.brand,
-            nodes,
-            rels,
-            node_count=sm.count_nodes(curated_only=req.curated_only),
-            rel_count=len(rels),
+            scope,
+            g_nodes,
+            g_rels,
+            node_count=sm.count_nodes(
+                entity_types=list(knowledge_graph.PAGE_ENTITY_TYPES),
+                curated_only=req.curated_only,
+            ),
+            rel_count=len(g_rels),
         )
 
     try:
@@ -269,7 +296,26 @@ async def knowledge_graph_insight(
             },
             provenance="Curated knowledge graph (unavailable)",
         )
-    key = cache_key("knowledge-graph", req.brand, {"n": g["node_summary"], "e": g["edge_summary"]})
+    if "missing_variable" in g:
+        # The caller-selected variable isn't in this brand's causal graph (a
+        # stale/bogus id, or a variable from another brand's scope). Honest
+        # refusal, NOT the graph-unavailable message and NOT a 404.
+        return _finalize(
+            {
+                "insight": f"The selected variable '{g['missing_variable']}' is not part "
+                f"of the {req.brand} causal graph, so no grounded interpretation can be "
+                "produced for it. Pick a variable from the current view's selector.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Curated knowledge graph (variable not in scope)",
+        )
+    key = cache_key(
+        "knowledge-graph",
+        f"{req.brand}:{req.variable or 'All'}",
+        {"n": g["node_summary"], "e": g["edge_summary"]},
+    )
     cached = await cache_get(key)
     if cached is not None:
         payload = cached

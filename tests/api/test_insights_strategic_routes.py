@@ -174,6 +174,115 @@ def test_knowledge_graph_insight_degrades_on_backend_error(test_client, monkeypa
     assert "unavailable" in data["insight"].lower()
 
 
+# Fixture graph for the KG page-parity tests. Shapes match SemanticMemory list_*
+# output (flat edge properties). Kisqali chain onboarding->nrx, a Fabhalta-only
+# edge (its variable drops out of the Kisqali scope), and an untagged structural
+# EXPLAINS edge kept under every brand.
+_KG_NODES = [
+    {"id": "var:onboarding", "name": "patient_onboarding", "type": "Variable"},
+    {"id": "var:nrx", "name": "nrx_volume", "type": "Variable"},
+    {"id": "var:other", "name": "other_var", "type": "Variable"},
+    {"id": "kpi:trx", "name": "TRx", "type": "KPI"},
+]
+_KG_RELS = [
+    {
+        "id": "e1",
+        "source_id": "var:onboarding",
+        "target_id": "var:nrx",
+        "type": "CAUSES",
+        "brand": "Kisqali",
+        "confidence": 0.9,
+    },
+    {
+        "id": "e2",
+        "source_id": "var:other",
+        "target_id": "var:nrx",
+        "type": "CAUSES",
+        "brand": "Fabhalta",
+        "confidence": 0.8,
+    },
+    {
+        "id": "e3",
+        "source_id": "var:nrx",
+        "target_id": "kpi:trx",
+        "type": "EXPLAINS",
+        "confidence": 0.7,
+    },
+]
+
+
+def _fake_semantic_memory(monkeypatch):
+    from unittest.mock import MagicMock
+
+    sm = MagicMock()
+    sm.list_nodes.return_value = list(_KG_NODES)
+    sm.list_relationships.return_value = list(_KG_RELS)
+    sm.count_nodes.return_value = len(_KG_NODES)
+    monkeypatch.setattr("src.memory.semantic_memory.get_semantic_memory", lambda: sm)
+    return sm
+
+
+def test_knowledge_graph_insight_grounds_on_page_parity_reads(test_client, monkeypatch):
+    """The grounding reads use the page's exact fetch scope (entity/relationship
+    type filters at the 2000 window), not an unfiltered 500-row sample."""
+    from src.insights import knowledge_graph as kg
+
+    sm = _fake_semantic_memory(monkeypatch)
+    r = test_client.post("/api/insights/knowledge-graph", json={"brand": "All"})
+    assert r.status_code == 200, r.text
+    sm.list_nodes.assert_called_once_with(
+        entity_types=kg.PAGE_ENTITY_TYPES, limit=kg.PAGE_FETCH_LIMIT, curated_only=True
+    )
+    sm.list_relationships.assert_called_once_with(
+        relationship_types=kg.PAGE_RELATIONSHIP_TYPES,
+        limit=kg.PAGE_FETCH_LIMIT,
+        curated_only=True,
+    )
+    sm.count_nodes.assert_called_once_with(entity_types=kg.PAGE_ENTITY_TYPES, curated_only=True)
+    data = r.json()
+    assert data["is_fallback"] is True  # no LM in tests -> deterministic fallback
+    # All scope: every node is touched by >=1 edge -> 4 nodes / 3 relationships.
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Nodes"] == "4"
+    assert chips["Relationships"] == "3"
+
+
+def test_knowledge_graph_insight_variable_narrows_grounding(test_client, monkeypatch):
+    """A variable narrows the grounding to its causal neighborhood under the
+    brand scope — the same subgraph the page renders for that selection."""
+    _fake_semantic_memory(monkeypatch)
+    r = test_client.post(
+        "/api/insights/knowledge-graph",
+        json={"brand": "Kisqali", "variable": "var:onboarding"},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    # Scope string carries brand + variable NAME into the narrative.
+    assert "Kisqali / patient_onboarding neighborhood" in data["insight"]
+    # Neighborhood: onboarding -> nrx (chain) + kpi:trx (structural context).
+    # var:other (Fabhalta-only) is excluded by the brand scope before the BFS.
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Nodes"] == "3"
+    assert chips["Relationships"] == "2"
+
+
+def test_knowledge_graph_insight_unknown_variable_degrades_honestly(test_client, monkeypatch):
+    """A variable id outside the brand scope (stale or bogus) yields an honest
+    'not in scope' fallback — never a grounded-looking insight, never a 500."""
+    _fake_semantic_memory(monkeypatch)
+    r = test_client.post(
+        "/api/insights/knowledge-graph",
+        json={"brand": "Kisqali", "variable": "var:other"},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "var:other" in data["insight"]
+    assert "not part of the Kisqali causal graph" in data["insight"]
+    assert data["provenance"] == "Curated knowledge graph (variable not in scope)"
+    assert data["grounding"] == []
+
+
 def test_digital_twin_insight_fallback_is_server_derived(test_client, monkeypatch):
     """Grounding comes from the twin repo + availability map (server-derived);
     with no LM the deterministic fallback narrates the REAL rows and discloses

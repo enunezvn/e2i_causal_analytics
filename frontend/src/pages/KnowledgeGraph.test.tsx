@@ -686,6 +686,21 @@ describe('KnowledgeGraphPage', () => {
       expect(mockKgInsight.mutate).toHaveBeenCalledWith({
         brand: 'Fabhalta',
         curated_only: true,
+        variable: null,
+      });
+    });
+
+    it('generates for the selected variable scope (page-parity grounding)', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const variable = screen.getByRole('combobox', { name: /variable/i });
+      fireEvent.change(variable, { target: { value: 'var:outcome' } });
+      fireEvent.click(screen.getByRole('button', { name: /generate strategic insight/i }));
+
+      expect(mockKgInsight.mutate).toHaveBeenCalledWith({
+        brand: 'All',
+        curated_only: true,
+        variable: 'var:outcome',
       });
     });
 
@@ -715,6 +730,33 @@ describe('KnowledgeGraphPage', () => {
       // suppressed — the card returns to its Generate state under Fabhalta.
       expect(mockKgInsight.reset).toHaveBeenCalled();
       expect(screen.queryByText('Kisqali-centric interpretation')).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /generate strategic insight/i })
+      ).toBeInTheDocument();
+    });
+
+    it('resets the interpretation on a variable switch (no stale cross-scope text)', () => {
+      // Same late-resolution hazard as the brand switch: the insight generated
+      // for the whole-graph scope must not linger once the analyst narrows to
+      // one variable's neighborhood — the narrative would describe a graph the
+      // canvas no longer shows.
+      mockKgInsight.data = {
+        insight: 'Whole-graph interpretation',
+        key_takeaways: [],
+        grounding: [],
+        is_fallback: false,
+      };
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      fireEvent.click(screen.getByRole('button', { name: /generate strategic insight/i }));
+      expect(screen.getByText('Whole-graph interpretation')).toBeInTheDocument();
+
+      mockKgInsight.reset.mockClear();
+      const variable = screen.getByRole('combobox', { name: /variable/i });
+      fireEvent.change(variable, { target: { value: 'var:outcome' } });
+
+      expect(mockKgInsight.reset).toHaveBeenCalled();
+      expect(screen.queryByText('Whole-graph interpretation')).not.toBeInTheDocument();
       expect(
         screen.getByRole('button', { name: /generate strategic insight/i })
       ).toBeInTheDocument();
