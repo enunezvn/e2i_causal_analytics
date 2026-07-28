@@ -1231,6 +1231,109 @@ describe('useCytoscape', () => {
       );
     });
   });
+
+  // ===========================================================================
+  // DEV/DEBUG GRAPH INSPECTION (window.cy)
+  // ===========================================================================
+
+  describe('dev/debug window.cy handle', () => {
+    const cyWindow = () => window as unknown as { cy?: unknown };
+
+    afterEach(() => {
+      delete cyWindow().cy;
+      vi.unstubAllEnvs();
+    });
+
+    it('exposes the live instance on window.cy in dev builds', async () => {
+      // import.meta.env.DEV is true under vitest, so the debug handle is on by default.
+      const { result } = renderHook(() => useCytoscape());
+
+      expect(cyWindow().cy).toBeUndefined();
+
+      act(() => {
+        result.current.initialize(containerDiv);
+      });
+
+      expect(cyWindow().cy).toBe(mockCyInstance);
+    });
+
+    it('clears window.cy when the owning instance is destroyed', async () => {
+      const { result } = renderHook(() => useCytoscape());
+
+      act(() => {
+        result.current.initialize(containerDiv);
+      });
+      expect(cyWindow().cy).toBe(mockCyInstance);
+
+      act(() => {
+        result.current.destroy();
+      });
+
+      expect(cyWindow().cy).toBeUndefined();
+    });
+
+    it('clears window.cy on unmount', async () => {
+      const { result, unmount } = renderHook(() => useCytoscape());
+
+      act(() => {
+        result.current.initialize(containerDiv);
+      });
+      expect(cyWindow().cy).toBe(mockCyInstance);
+
+      unmount();
+
+      expect(cyWindow().cy).toBeUndefined();
+    });
+
+    it('does not clobber another graph handle on destroy', async () => {
+      const { result } = renderHook(() => useCytoscape());
+
+      act(() => {
+        result.current.initialize(containerDiv);
+      });
+
+      // Simulate a second graph having claimed the global handle after us.
+      const otherGraph = { id: 'other-graph' };
+      cyWindow().cy = otherGraph;
+
+      act(() => {
+        result.current.destroy();
+      });
+
+      // Our destroy must not delete a handle that no longer points at our instance.
+      expect(cyWindow().cy).toBe(otherGraph);
+    });
+
+    it('stays off in a production build unless the debug flag is set', async () => {
+      vi.stubEnv('DEV', false);
+      const { result } = renderHook(() => useCytoscape());
+
+      act(() => {
+        result.current.initialize(containerDiv);
+      });
+
+      // No opt-in flag -> no global in prod.
+      expect(cyWindow().cy).toBeUndefined();
+    });
+
+    it('opts in on a production build via the localStorage debug flag', async () => {
+      vi.stubEnv('DEV', false);
+      const getItem = vi
+        .spyOn(Storage.prototype, 'getItem')
+        .mockReturnValue('1');
+
+      const { result } = renderHook(() => useCytoscape());
+
+      act(() => {
+        result.current.initialize(containerDiv);
+      });
+
+      expect(getItem).toHaveBeenCalledWith('e2i-graph-debug');
+      expect(cyWindow().cy).toBe(mockCyInstance);
+
+      getItem.mockRestore();
+    });
+  });
 });
 
 // =============================================================================

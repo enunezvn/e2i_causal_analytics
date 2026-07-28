@@ -278,6 +278,34 @@ function getLayoutOptions(name: LayoutName): LayoutOptions {
 }
 
 // =============================================================================
+// DEV/DEBUG GRAPH INSPECTION
+// =============================================================================
+
+/** `window` augmented with the debug handle to the live Cytoscape instance. */
+type CyDebugWindow = Window & typeof globalThis & { cy?: Core };
+
+/**
+ * Whether to expose the live Cytoscape instance on `window.cy` for console
+ * inspection (e.g. `window.cy.edges().map((e) => e.data())` to eyeball the
+ * rendered causal-edge ATE values without a network fetch).
+ *
+ * On automatically in dev builds. Stripped from production bundles by default —
+ * a developer can opt in on a *deployed* build (which is a production `vite build`,
+ * so `import.meta.env.DEV` is false there) by running
+ * `localStorage.setItem('e2i-graph-debug', '1')` and reloading. Normal users
+ * never get the global.
+ */
+function graphDebugEnabled(): boolean {
+  if (import.meta.env.DEV) return true;
+  try {
+    return localStorage.getItem('e2i-graph-debug') === '1';
+  } catch {
+    // localStorage can throw (privacy mode / disabled storage) — fail closed.
+    return false;
+  }
+}
+
+// =============================================================================
 // HOOK IMPLEMENTATION
 // =============================================================================
 
@@ -410,6 +438,14 @@ export function useCytoscape(
       });
 
       cyRef.current = cy;
+
+      // Dev/debug-only: publish the live instance for console inspection. Last graph
+      // to initialize wins the single `window.cy` handle (the usual Cytoscape console
+      // convention); the matching cleanup in destroy() only clears it if it still
+      // points at this instance, so tearing down one graph can't wipe another's.
+      if (graphDebugEnabled()) {
+        (window as CyDebugWindow).cy = cy;
+      }
     },
     // Note: `elements` is intentionally excluded from dependencies to prevent
     // re-initialization when data changes. Element updates are handled separately
@@ -433,6 +469,12 @@ export function useCytoscape(
    */
   const destroy = useCallback(() => {
     if (cyRef.current) {
+      // Only clear the debug handle if it still points at the instance we're
+      // destroying — avoids a two-graph clobber where unmounting graph A wipes
+      // graph B's live reference.
+      if ((window as CyDebugWindow).cy === cyRef.current) {
+        delete (window as CyDebugWindow).cy;
+      }
       cyRef.current.destroy();
       cyRef.current = null;
     }
