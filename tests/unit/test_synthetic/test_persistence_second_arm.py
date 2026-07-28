@@ -134,14 +134,19 @@ def test_axis_absent_is_byte_identical_to_shipped():
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "main_pull,exp_mult",
-    [(0.55, 0.40), (0.55, 0.55), (0.55, 0.48)],  # Fabhalta / Kisqali / Remibrutinib
+    "main_pull,exp_mult,persist_sign",
+    [
+        (0.55, 0.40, -1),  # Fabhalta      — axis=1 persists LESS (prior-C5 switch churns)
+        (0.55, 0.55, -1),  # Kisqali       — axis=1 persists LESS (advanced-line burden)
+        (-0.55, 2.08, +1),  # Remibrutinib — axis=1 persists MORE (uncontrolled CSU sticks)
+    ],
 )
-def test_axis_reduces_persistence_recoverably_and_mean_preserving(main_pull, exp_mult):
-    """The axis=1 population -> LESS persistence, a clearly recoverable negative RD, while
-    the MEAN-CENTERED main pull keeps the marginal persistence prevalence essentially
-    unchanged vs the no-axis baseline (so the calibration gate + prevalence band are
-    undisturbed) — across all three brands' tuned constants."""
+def test_axis_shifts_persistence_recoverably_and_mean_preserving(main_pull, exp_mult, persist_sign):
+    """Each brand's axis=1 population moves persistence in ITS intended direction by a
+    clearly recoverable RD (Fabhalta/Kisqali negative, Remibrutinib POSITIVE — the
+    2026-07-28 full-inversion), while the MEAN-CENTERED main pull + mean-preserving
+    modifier keep the marginal persistence prevalence essentially unchanged vs the no-axis
+    baseline (so the calibration gate + prevalence band are undisturbed)."""
     ins = _inputs(n=12000)
     n = len(ins["disease_severity"])
     axis = _axis(n)
@@ -155,10 +160,13 @@ def test_axis_reduces_persistence_recoverably_and_mean_preserving(main_pull, exp
     )
     persist = out["persistent_180d"]
     rd = float(persist[axis == 1].mean() - persist[axis == 0].mean())  # axis=1 - axis=0
-    # Recoverable strength: the disproof harness measured ~-0.11 at n>=8000.
-    assert rd < -0.05, f"axis persistence RD not recoverably negative: {rd:.4f}"
-    # axis_persistent_rd attr is the DISC-side RD (positive: more discontinuation).
-    assert out["axis_persistent_rd"] > 0.05
+    # Recoverable strength in the intended direction: harness measured ~0.11-0.15 at n>=8000.
+    assert persist_sign * rd > 0.05, (
+        f"axis persistence RD not recoverable in dir {persist_sign}: {rd:.4f}"
+    )
+    # axis_persistent_rd attr is the DISC-side RD (= -persistence RD), so it carries the
+    # OPPOSITE sign to persist_sign.
+    assert persist_sign * out["axis_persistent_rd"] < -0.05
     # Mean-preserving: the marginal persistence barely moves vs the no-axis baseline.
     assert abs(float(persist.mean()) - float(base["persistent_180d"].mean())) < 0.02
     np.testing.assert_array_equal(persist, 1 - out["discontinued_180d"])

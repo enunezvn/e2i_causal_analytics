@@ -115,14 +115,22 @@ _BRAND_AXIS_DIFFERENTIALS: tuple[_BrandAxisSpec, ...] = (
         exp_mult=0.55,
     ),
     # Remibrutinib — uncontrolled CSU (UAS7 >= 28, high disease activity). cate_scale
-    # 1.00, between Fabhalta's flat 0.70 and Kisqali's 1.40.
+    # 1.00, between Fabhalta's flat 0.70 and Kisqali's 1.40. POSITIVE axis (2026-07-28,
+    # user decision): unlike the other two brands, uncontrolled-CSU patients are STICKIER
+    # — they persist MORE — so this is the FULL multiplicative INVERSION of the shipped
+    # negative design (main_pull -0.55 + exp_mult 2.08 = 1/0.48). BOTH knobs flip: the
+    # mean-centered main pull now REDUCES discontinuation for axis=1 (severe -> clings to
+    # therapy) AND the CATE modifier AMPLIFIES their treatment effect (severe -> responds
+    # better). The disproof harness measured +0.150 (an exact mirror of the -0.150 the
+    # +0.55/0.48 pair gave); a lone main-pull flip nets only +0.027 (below the estimator
+    # floor) because exp_mult<1 alone still drags axis=1 toward LESS persistence.
     _BrandAxisSpec(
         brand=Brand.REMIBRUTINIB.value,
         axis_column="urticaria_severity_uas7",
         positive=lambda v: float(v) >= 28.0,
         spawn_key=0xC7,
-        main_pull=0.55,
-        exp_mult=0.48,
+        main_pull=-0.55,
+        exp_mult=2.08,
     ),
 )
 

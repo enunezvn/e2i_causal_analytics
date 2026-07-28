@@ -54,8 +54,10 @@ _PRE_P4_INVARIANT = {
         "gap_days": "58e13c9a2cf92950",
         # #1321: re-pinned — Remibrutinib's uncontrolled-CSU axis rewrites ONLY these two
         # persistence columns (verified: every other column above held byte-identical).
-        "discontinued_180d": "1d439cd23d1282ea",
-        "persistent_180d": "f1d4fb577f0a422e",
+        # 2026-07-28: re-pinned again — axis INVERTED positive (main -0.55 / exp_mult 2.08);
+        # still ONLY these two columns move (22/24 held byte-identical).
+        "discontinued_180d": "369cbe7c78b8208b",
+        "persistent_180d": "6275ec3f5ed8f6ab",
         "rep_detailing_high": "ac52bccf36c445cb",
         "sample_dropped": "aa06fe312b6613c9",
         "rep_detailing_high_propensity": "2cf5c5252ae003f6",

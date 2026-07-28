@@ -141,9 +141,11 @@ N_COMM_ARM_ROWS = len(_COMM_ARM_EDGES) * len(_BRANDS)
 # The DGP plants each matching effect as a post-hoc, spawn-key-isolated recompute of
 # persistent_180d on that brand's rows (patient_generator._BRAND_AXIS_DIFFERENTIALS +
 # cohort_outcomes.axis_cate_modifier + the mean-centered main pull); each is RECOVERABLE
-# by the real EconML estimator (cheapest-disproof harness). NEGATIVE band: axis=1 -> more
-# discontinuation -> lower persistence (mirrors _COMMERCIAL_EDGES competitor_activity's
-# negative bands). Backdoor = disease_severity is NOT de-confounding (each axis is drawn
+# by the real EconML estimator (cheapest-disproof harness). Fabhalta + Kisqali carry a
+# NEGATIVE band (axis=1 -> more discontinuation -> lower persistence, mirroring
+# _COMMERCIAL_EDGES competitor_activity's negative bands); Remibrutinib is INVERTED
+# (2026-07-28 user decision) — uncontrolled-CSU patients are stickier, so a POSITIVE band
+# (axis=1 -> higher persistence). Backdoor = disease_severity is NOT de-confounding (each axis is drawn
 # independent of severity — the naive contrast is already unbiased) but a strong
 # PROGNOSTIC precision covariate for ANCOVA-style variance reduction (the nba_triggers
 # baseline_covariate rationale). Content-addressed (scp_f*) -> idempotent targeted
@@ -162,13 +164,17 @@ _BRAND_CLINICAL_AXES: Tuple[Tuple[str, str, str, str, Tuple[str, ...], float, fl
     ),
     ("Kisqali", "kis", "disease_stage", "persistent_180d", ("disease_severity",), -0.14, -0.08),
     (
+        # POSITIVE band (2026-07-28, user decision) — the ONE inverted axis: uncontrolled
+        # CSU (UAS7 >= 28) patients are STICKIER, so axis=1 -> HIGHER persistence. Band is
+        # the exact sign-flip of the shipped negative (-0.15, -0.09); the faithful prod-
+        # cohort dry-run recovered +0.148, inside this band. See _BRAND_AXIS_DIFFERENTIALS.
         "Remibrutinib",
         "rem",
         "urticaria_severity_uas7",
         "persistent_180d",
         ("disease_severity",),
-        -0.15,
-        -0.09,
+        0.09,
+        0.15,
     ),
 )
 
@@ -600,7 +606,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
         # (its rng is keyed on content, so the per-brand loop order does not matter).
         for brand, token, treatment, outcome, edge_confounders, lo, hi in _BRAND_CLINICAL_AXES:
             rng = _commercial_edge_rng(f"{token}|{brand}", treatment, outcome)
-            effect = round(float(rng.uniform(lo, hi)), 4)  # NEGATIVE band (see edge comment)
+            effect = round(float(rng.uniform(lo, hi)), 4)  # signed band (see edge comment)
             disc = (now - timedelta(days=int(rng.integers(0, 25)))).date()
             rows.append(
                 {
