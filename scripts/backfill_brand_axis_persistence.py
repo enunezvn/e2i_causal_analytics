@@ -125,8 +125,11 @@ _AXES: dict[str, AxisConfig] = {
         brand_enum=Brand.REMIBRUTINIB,
         axis_column="urticaria_severity_uas7",
         experienced=lambda s: (pd.to_numeric(s, errors="coerce") >= 28).to_numpy(dtype=int),
-        main_pull=0.55,
-        exp_mult=0.48,
+        # POSITIVE axis (2026-07-28): uncontrolled-CSU patients are STICKIER (persist MORE).
+        # Full multiplicative inversion of the other brands (main -0.55 + exp_mult 2.08 =
+        # 1/0.48). MUST match patient_generator._BRAND_AXIS_DIFFERENTIALS.
+        main_pull=-0.55,
+        exp_mult=2.08,
         axis_label="uncontrolled CSU (UAS7 >= 28 vs controlled)",
     ),
 }

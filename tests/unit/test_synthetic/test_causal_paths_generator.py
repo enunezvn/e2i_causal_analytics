@@ -270,9 +270,15 @@ _EXPECTED_AXES = {
 }
 
 
-def test_brand_clinical_axes_are_distinct_and_negative():
-    """Each brand carries its OWN axis -> persistent_180d edge (a direct 1-hop
-    NEGATIVE-effect edge with the disease_severity precision covariate) and NO OTHER
+# Per-brand persistence-effect sign: Fabhalta/Kisqali axis=1 REDUCES persistence
+# (negative); Remibrutinib is INVERTED (2026-07-28) — uncontrolled CSU is stickier, so
+# axis=1 INCREASES persistence (positive).
+_EXPECTED_AXIS_SIGN = {"Fabhalta": -1, "Kisqali": -1, "Remibrutinib": +1}
+
+
+def test_brand_clinical_axes_are_distinct_and_signed():
+    """Each brand carries its OWN axis -> persistent_180d edge (a direct 1-hop edge with
+    the disease_severity precision covariate, signed per _EXPECTED_AXIS_SIGN) and NO OTHER
     brand's axis. That mutual brand-distinctness IS the #1321 acceptance criterion."""
     df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=20)).generate()
     clin = df[df["grain"] == "patient_clinical"]
@@ -284,7 +290,10 @@ def test_brand_clinical_axes_are_distinct_and_negative():
         assert list(row["mediators_identified"]) == []
         assert row["causal_chain"]["nodes"] == [row["start_node"], "persistent_180d"]
         assert list(row["confounders_controlled"]) == ["disease_severity"]
-        assert row["causal_effect_size"] < 0, "axis=1 REDUCES persistence -> negative effect"
+        sign = _EXPECTED_AXIS_SIGN[row["brand"]]
+        assert sign * row["causal_effect_size"] > 0, (
+            f"{row['brand']} axis effect {row['causal_effect_size']:+.4f} not in dir {sign}"
+        )
     # Mutual brand-distinctness: each axis node belongs to EXACTLY its own brand.
     for brand, axis in _EXPECTED_AXES.items():
         carriers = set(df[df["start_node"] == axis]["brand"])
