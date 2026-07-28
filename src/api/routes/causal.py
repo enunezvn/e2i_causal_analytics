@@ -860,6 +860,19 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             # covariate list + _BRAND_CLINICAL_COVARIATES below — dual-role, like
             # treatment_initiated is treatment+outcome).
             "complement_inhibitor_status",
+            # #1321 rollout: two more brand-DISTINCT axes, same recipe as
+            # complement_inhibitor_status. Each is an OBSERVATIONAL treatment (NOT
+            # randomized — so it keeps the unmeasured-confounding gate) whose
+            # causal_paths edge is emitted for its brand ONLY, so the leaderboard
+            # question surfaces only on that brand's cohort:
+            #   * Kisqali — advanced-line CDK4/6 burden, derived to 1.0 for
+            #     disease_stage in {metastatic, stage_iv} by _derive_is_advanced_line.
+            #   * Remibrutinib — uncontrolled CSU, derived to 1.0 for
+            #     urticaria_severity_uas7 >= 28 by _derive_is_uncontrolled_csu.
+            # Both are ALSO brand-scoped effect-MODIFIERS (covariate list +
+            # _BRAND_CLINICAL_COVARIATES below — dual-role).
+            "disease_stage",
+            "urticaria_severity_uas7",
         ],
         "outcome": [
             "persistent_180d",
@@ -893,6 +906,15 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             # the row filter (NULL for the other brands). Derived to 1.0/0.0 by
             # _derive_is_prior_c5, exactly like biologic_experienced's 0/1 flag.
             "complement_inhibitor_status",
+            # #1321 rollout: Kisqali advanced-line burden is ALSO a Kisqali-only
+            # pre-treatment effect MODIFIER (the DGP plants a differential CATE —
+            # advanced-line patients respond less). Brand-scoped below so it is offered
+            # only when Kisqali is the row filter (NULL for the other brands). Derived to
+            # 1.0/0.0 by _derive_is_advanced_line. urticaria_severity_uas7 is ALREADY
+            # above (Remibrutinib's continuous covariate); its axis derivation
+            # (_derive_is_uncontrolled_csu) dichotomizes it in the causal loaders only —
+            # segments.py / KPIs read the raw continuous column via their own loaders.
+            "disease_stage",
             # Phase 1 (COMM-ARMS): the NUMERIC access gradient derived from
             # insurance_type. This is copay_support's backdoor — it MUST stay
             # allowlisted or a copay estimate reports the confounded naive
@@ -1011,8 +1033,14 @@ _BRAND_CLINICAL_COVARIATES: Dict[str, frozenset] = {
     # biologic_experienced (Phase 3) is Remibrutinib's planted CATE effect-modifier;
     # it is in BRAND_ELIGIBILITY_FIELDS["Remibrutinib"] so the subset-consistency
     # gate stays green. ige_level is intentionally NOT here (descriptive only).
+    # urticaria_severity_uas7 is Remibrutinib's #1321 axis (uncontrolled CSU, its
+    # _derive_is_uncontrolled_csu dichotomization is ALSO its planted CATE modifier).
     "Remibrutinib": frozenset({"urticaria_severity_uas7", "biologic_experienced"}),
-    "Kisqali": frozenset({"ecog_performance_status"}),
+    # disease_stage (#1321 rollout) is Kisqali's planted CATE effect-modifier
+    # (advanced-line patients respond less); it is in BRAND_ELIGIBILITY_FIELDS["Kisqali"]
+    # so test_brand_covariate_consistency stays green. Brand-scoped so it is dropped from
+    # the all-brands adjustment set (NULL for non-Kisqali rows).
+    "Kisqali": frozenset({"ecog_performance_status", "disease_stage"}),
     # complement_inhibitor_status (#1321 pilot) is Fabhalta's planted CATE
     # effect-modifier (prior-C5-experienced respond less to iptacopan); it is in
     # BRAND_ELIGIBILITY_FIELDS["Fabhalta"] so test_brand_covariate_consistency
@@ -1063,6 +1091,10 @@ _COLUMN_LABELS: Dict[str, str] = {
     "biologic_experienced": "Biologic-experienced (prior anti-IgE)",
     # #1321 Fabhalta pilot: prior C5-inhibitor switch (eculizumab/ravulizumab).
     "complement_inhibitor_status": "Prior C5-inhibitor (switch)",
+    # #1321 rollout: the two brand-distinct axes' KG-node labels (the node name is the
+    # raw eligibility column; the label states the derived contrast).
+    "disease_stage": "Advanced line (metastatic / stage IV)",
+    "urticaria_severity_uas7": "Uncontrolled CSU (UAS7 ≥ 28)",
     "copay_support": "Copay support",
     "psp_enrolled": "Patient support program",
     # COMM-ARMS Phase 3: two initiation-latent commercial arms.
@@ -1115,6 +1147,10 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         # _derive_is_prior_c5 (below), then float-coerced like acceptance_status
         # on nba_triggers (both derivation + numeric membership, belt-and-braces).
         "complement_inhibitor_status",
+        # #1321 rollout: Kisqali advanced-line, text disease_stage -> 1.0/0.0 via
+        # _derive_is_advanced_line (below). urticaria_severity_uas7 is already numeric
+        # above; its axis derivation coerces the same float, so no new entry is needed.
+        "disease_stage",
     },
     "hcp_adoption": {
         "peer_influence_score",
@@ -1172,9 +1208,47 @@ def _derive_is_prior_c5(value: Any) -> float:
     return 1.0 if str(value).strip().lower() == "prior" else 0.0
 
 
+# #1321 rollout: the two additional brand-distinct axes. Both mirror _derive_is_prior_c5
+# — a text/continuous eligibility column dichotomized to the 0/1 treatment contrast.
+_ADVANCED_LINE_STAGES = {"metastatic", "stage_iv"}
+
+
+def _derive_is_advanced_line(value: Any) -> float:
+    """disease_stage -> 1.0 for the advanced-line CDK4/6 burden (metastatic / stage_iv),
+    else 0.0 (#1321 Kisqali axis). Kisqali-scoped: disease_stage is populated only for
+    Kisqali rows, so None (off-brand) is not reached."""
+    if value is None:
+        return 0.0
+    return 1.0 if str(value).strip().lower() in _ADVANCED_LINE_STAGES else 0.0
+
+
+# UAS7 >= 28 == uncontrolled CSU (high disease activity; the governing urticaria
+# guideline puts "severe" at 28-42 of the 0-42 UAS7). A brand/demo threshold, not a
+# recalculation of UAS7_UNCONTROLLED_THRESHOLD (that is the weekly-score cutoff).
+_UNCONTROLLED_UAS7_THRESHOLD = 28.0
+
+
+def _derive_is_uncontrolled_csu(value: Any) -> float:
+    """urticaria_severity_uas7 -> 1.0 for uncontrolled CSU (UAS7 >= 28), else 0.0 (#1321
+    Remibrutinib axis). Remibrutinib-scoped: uas7 is populated only for Remibrutinib rows.
+    A non-numeric value is treated as 0.0 (never the axis) rather than raising."""
+    if value is None:
+        return 0.0
+    try:
+        return 1.0 if float(value) >= _UNCONTROLLED_UAS7_THRESHOLD else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 _CAUSAL_NUMERIC_DERIVATIONS: Dict[str, Dict[str, Callable[[Any], float]]] = {
     "patient_journeys": {
         "complement_inhibitor_status": _derive_is_prior_c5,
+        # #1321 rollout: the causal loaders see these as the 0/1 axis. urticaria_severity_uas7
+        # is ALSO a Remibrutinib covariate — dichotomizing it there is immaterial (it adjusts
+        # a RANDOMIZED treatment_arm, a precision covariate, not a confounder); segments.py /
+        # KPIs read the raw continuous column via their OWN loaders, unaffected by this map.
+        "disease_stage": _derive_is_advanced_line,
+        "urticaria_severity_uas7": _derive_is_uncontrolled_csu,
     },
     "nba_triggers": {
         "acceptance_status": _derive_is_accepted,

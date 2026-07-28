@@ -27,6 +27,7 @@ _FULL = [
     "urticaria_severity_uas7",
     "biologic_experienced",
     "complement_inhibitor_status",  # #1321 Fabhalta-only modifier
+    "disease_stage",  # #1321 Kisqali-only modifier
 ]
 _UNIVERSALS = ["disease_severity", "age_at_diagnosis", "academic_hcp"]
 
@@ -41,7 +42,7 @@ def test_all_brands_keeps_universals_only():
     "brand,expected_clinical",
     [
         ("Remibrutinib", ["urticaria_severity_uas7", "biologic_experienced"]),
-        ("Kisqali", ["ecog_performance_status"]),
+        ("Kisqali", ["ecog_performance_status", "disease_stage"]),
         (
             "Fabhalta",
             ["egfr", "proteinuria_g_day", "ldh_ratio", "complement_inhibitor_status"],
@@ -138,3 +139,57 @@ def test_derive_is_prior_c5_maps_switch_population_to_one():
     assert _derive_is_prior_c5("PRIOR") == 1.0  # case-insensitive, like _derive_is_accepted
     assert _derive_is_prior_c5("current") == 0.0
     assert _derive_is_prior_c5(None) == 0.0
+
+
+@pytest.mark.parametrize(
+    "axis,brand,derive_name,label_fragment",
+    [
+        ("disease_stage", "Kisqali", "_derive_is_advanced_line", "Advanced line"),
+        ("urticaria_severity_uas7", "Remibrutinib", "_derive_is_uncontrolled_csu", "Uncontrolled"),
+    ],
+)
+def test_new_axis_is_dual_role_treatment_and_brand_modifier(
+    axis, brand, derive_name, label_fragment
+):
+    """#1321 rollout: each new axis is wired as BOTH a treatment (the main-effect edge)
+    and a brand-scoped effect-modifier (the covariate), with a derivation + display
+    label — the same full plumbing as complement_inhibitor_status. A partial revert
+    (treatment added but derivation dropped) fails loudly."""
+    import src.api.routes.causal as causal_mod
+
+    spec = causal_mod._CAUSAL_DATASET_SPECS["patient_journeys"]
+    assert axis in spec["treatment"], f"{axis} missing from treatment (main-effect edge)"
+    assert axis in spec["covariate"], f"{axis} missing from covariate (modifier role)"
+    assert axis in causal_mod._CAUSAL_NUMERIC_COLUMNS["patient_journeys"]
+    assert causal_mod._CAUSAL_NUMERIC_DERIVATIONS["patient_journeys"][axis] is getattr(
+        causal_mod, derive_name
+    )
+    assert label_fragment.lower() in _COLUMN_LABELS[axis].lower()
+    # It is that brand's covariate ONLY (dropped for the other brands / all-brands).
+    assert axis in _BRAND_CLINICAL_COVARIATES[brand]
+    for other in set(_BRAND_CLINICAL_COVARIATES) - {brand}:
+        assert axis not in _BRAND_CLINICAL_COVARIATES[other], f"{axis} leaked into {other}"
+
+
+def test_derive_is_advanced_line_maps_advanced_stages_to_one():
+    """metastatic / stage_iv (advanced-line CDK4/6 burden) -> 1.0; earlier stages and a
+    NULL off-brand cell -> 0.0."""
+    from src.api.routes.causal import _derive_is_advanced_line
+
+    assert _derive_is_advanced_line("metastatic") == 1.0
+    assert _derive_is_advanced_line("STAGE_IV") == 1.0  # case-insensitive
+    assert _derive_is_advanced_line("locally_advanced") == 0.0
+    assert _derive_is_advanced_line("advanced") == 0.0
+    assert _derive_is_advanced_line(None) == 0.0
+
+
+def test_derive_is_uncontrolled_csu_maps_high_uas7_to_one():
+    """UAS7 >= 28 (uncontrolled CSU) -> 1.0; controlled scores and a non-numeric / NULL
+    cell -> 0.0. The threshold is the severe band of the 0-42 UAS7."""
+    from src.api.routes.causal import _derive_is_uncontrolled_csu
+
+    assert _derive_is_uncontrolled_csu(30) == 1.0
+    assert _derive_is_uncontrolled_csu(28.0) == 1.0  # boundary inclusive
+    assert _derive_is_uncontrolled_csu(27) == 0.0
+    assert _derive_is_uncontrolled_csu(None) == 0.0
+    assert _derive_is_uncontrolled_csu("n/a") == 0.0  # non-numeric -> not the axis

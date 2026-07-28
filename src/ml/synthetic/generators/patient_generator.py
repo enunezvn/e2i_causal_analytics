@@ -5,7 +5,8 @@ Generates synthetic patient journeys with embedded causal effects.
 This is the core generator for causal validation.
 """
 
-from typing import Any, Dict, List, Optional, cast
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,7 @@ from ..dgp.treatment_arm import (
     rd_map_from_tau,
 )
 from .base import BaseGenerator, GeneratorConfig
-from .cohort_outcomes import PRIORC5_SPAWN_KEY, generate_discontinuation_outcomes
+from .cohort_outcomes import generate_discontinuation_outcomes
 
 # Independent SeedSequence spawn_key for the copay arm, so wiring Phase 1 does
 # NOT shift the generator's main self._rng stream (mirrors Phase 3's
@@ -61,6 +62,90 @@ _SAMPLE_SPAWN_KEY = 0x5A3D
 # from its own substream, so the main self._rng stream and every pre-existing column
 # (including the four earlier commercial arms) stays byte-identical to pre-Phase-4.
 _TRIGGER_ACC_SPAWN_KEY = 0x7ACC
+
+
+# --- Brand-distinct clinical-axis differentials (#1321) -----------------------------
+# ONE axis per brand — the brand-DISTINCT causal variables in the gold standard. Each
+# is planted POST-HOC on ONLY its brand's rows, from an INDEPENDENT SeedSequence
+# substream (spawn_key), so the generator's main self._rng stream — and every OTHER
+# brand's rows — stay byte-identical. The axis is derived from an already-populated,
+# brand-gated eligibility column (BRAND_ELIGIBILITY_FIELDS): Fabhalta's prior-C5 switch
+# (the shipped pilot), Kisqali's advanced-line disease_stage, Remibrutinib's
+# uncontrolled UAS7. main_pull / exp_mult are TUNED PER BRAND to clear the estimator
+# noise floor at that brand's CATE scale (_BRAND_CATE_SCALE) — see the cheapest-disproof
+# harness. Fabhalta's spawn_key (0xC5) + constants (0.55/0.40) reproduce the shipped
+# pilot bit-for-bit.
+@dataclass(frozen=True)
+class _BrandAxisSpec:
+    brand: str  # Brand.value the axis belongs to
+    axis_column: str  # already-populated brand-gated column the 0/1 axis is derived from
+    positive: Callable[[Any], bool]  # raw column value -> axis == 1 (the "experienced" arm)
+    spawn_key: int  # independent substream, orthogonal to self._rng and to each other
+    main_pull: float  # mean-centered MAIN persistence pull (logit; axis=1 -> less persistent)
+    exp_mult: float  # mean-preserving MODIFIER multiplier for the experienced arm
+
+
+@dataclass(frozen=True)
+class _AxisResult:
+    axis_column: str
+    axis_rd: Optional[float]  # scalar persistence RD ground truth (positive = axis=1 persists less)
+    copay_rd: Optional[Dict[str, float]]  # copay persistent RD RE-DERIVED vs the rebuilt outcome
+    psp_rd: Optional[Dict[str, float]]  # psp persistent RD RE-DERIVED vs the rebuilt outcome
+    segment: np.ndarray  # this brand's rebuilt-row segments (marginalization weights)
+
+
+_BRAND_AXIS_DIFFERENTIALS: tuple[_BrandAxisSpec, ...] = (
+    # Fabhalta pilot — FROZEN (spawn_key + constants reproduce the shipped substrate).
+    _BrandAxisSpec(
+        brand=Brand.FABHALTA.value,
+        axis_column="complement_inhibitor_status",
+        positive=lambda v: str(v).strip().lower() == "prior",
+        spawn_key=0xC5,
+        main_pull=0.55,
+        exp_mult=0.40,
+    ),
+    # Kisqali — advanced-line (metastatic / stage_iv) CDK4/6 disease burden. cate_scale
+    # 1.40 (the strongest), so a NARROWER mean-preserving spread already clears the floor.
+    _BrandAxisSpec(
+        brand=Brand.KISQALI.value,
+        axis_column="disease_stage",
+        positive=lambda v: str(v).strip().lower() in {"metastatic", "stage_iv"},
+        spawn_key=0xC6,
+        main_pull=0.55,
+        exp_mult=0.55,
+    ),
+    # Remibrutinib — uncontrolled CSU (UAS7 >= 28, high disease activity). cate_scale
+    # 1.00, between Fabhalta's flat 0.70 and Kisqali's 1.40.
+    _BrandAxisSpec(
+        brand=Brand.REMIBRUTINIB.value,
+        axis_column="urticaria_severity_uas7",
+        positive=lambda v: float(v) >= 28.0,
+        spawn_key=0xC7,
+        main_pull=0.55,
+        exp_mult=0.48,
+    ),
+)
+
+
+def _size_weighted_merge_rd(
+    maps: List[tuple[Dict[str, float], np.ndarray]],
+) -> Dict[str, float]:
+    """Combine per-brand persistence RD maps into one, weighting each segment's RD by
+    the count of that brand's rebuilt rows in the segment. For a single brand this is
+    the brand's own map; across brands it is the size-weighted average per segment, so
+    the merged keys are exactly the union of rebuilt segments (never a missing key)."""
+    num: Dict[str, float] = {}
+    den: Dict[str, int] = {}
+    for rd, seg in maps:
+        seg_arr = np.asarray(seg)
+        for s in np.unique(seg_arr):
+            key = str(s)
+            if key not in rd:
+                continue
+            w = int((seg_arr == s).sum())
+            num[key] = num.get(key, 0.0) + rd[key] * w
+            den[key] = den.get(key, 0) + w
+    return {k: num[k] / den[k] for k in num if den[k] > 0}
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -540,18 +625,13 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         )
         cate_map = rd_map_from_tau(np.asarray(segment), tau_i)
 
-        # Fabhalta pilot (#1321): plant the prior-C5 differential on PERSISTENCE.
-        # Post-hoc + an independent substream so the main self._rng stream — and every
-        # non-Fabhalta row — stays byte-identical (only Fabhalta persistent_180d /
-        # discontinued_180d are rewritten). No-op (all None) on frames with no populated
-        # complement_inhibitor_status. Returns the prior-C5 persistence RD + the copay/psp
-        # persistent RD RE-DERIVED against the prior-C5-rebuilt outcome.
-        (
-            priorc5_rd,
-            priorc5_copay_rd,
-            priorc5_psp_rd,
-            priorc5_fab_segment,
-        ) = self._apply_priorc5_persistence_differential(
+        # Brand-distinct clinical axes (#1321): plant each present brand's axis
+        # differential on PERSISTENCE, post-hoc + independent substreams, so the main
+        # self._rng stream — and every row that carries no brand-axis — stays
+        # byte-identical (only the axis brands' persistent_180d / discontinued_180d are
+        # rewritten). No-op on frames with no populated axis column. Returns
+        # {brand: _AxisResult} for the ground-truth attrs below.
+        axis_results = self._apply_brand_axis_persistence_differential(
             df,
             np.asarray(segment),
             confounders,
@@ -560,7 +640,6 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             age_at_diagnosis=np.asarray(age_at_diagnosis),
             comorbidity_burden=np.asarray(comorbidity_burden),
             prior_therapy_lines=np.asarray(prior_therapy_lines),
-            brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
             copay_support=copay_support,
             psp_enrolled=psp_enrolled,
         )
@@ -653,35 +732,41 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "cate_by_segment": trigger_rd_by_segment,
             },
         }
-        # Fabhalta pilot (#1321): the prior-C5 persistence arm + reconcile the copay/psp
-        # persistent RD to the prior-C5-rebuilt outcome. Only fires on Fabhalta frames
-        # (priorc5_rd is None otherwise), so every other brand's attrs are unchanged.
-        if priorc5_rd is not None:
-            df.attrs["true_ate_by_arm"]["complement_inhibitor_status"] = {
-                "persistent_180d": {"ate": priorc5_rd},
-            }
-            # Marginalize over the FABHALTA cohort's own segments (priorc5_fab_segment),
-            # NOT the whole mixed-brand frame: these RD maps are re-derived on the
-            # Fabhalta subset, so their keys are exactly np.unique(fab_segment). Using
-            # the full-frame `segment` both mis-weights the arm's ground-truth ATE and
-            # KeyErrors when a non-Fabhalta segment is absent from the subset map.
-            assert priorc5_fab_segment is not None  # non-None whenever priorc5_rd is
-            if priorc5_copay_rd is not None:
-                df.attrs["true_ate_by_arm"]["copay_support"]["persistent_180d"] = {
-                    "ate": float(np.mean([priorc5_copay_rd[str(s)] for s in priorc5_fab_segment])),
-                    "cate_by_segment": priorc5_copay_rd,
-                }
-            if priorc5_psp_rd is not None:
-                df.attrs["true_ate_by_arm"]["psp_enrolled"]["persistent_180d"] = {
-                    "ate": float(np.mean([priorc5_psp_rd[str(s)] for s in priorc5_fab_segment])),
-                    "cate_by_segment": priorc5_psp_rd,
-                }
-            df.attrs["priorc5_persistent_rd"] = priorc5_rd
+        # Brand-distinct clinical axes (#1321): store each rebuilt brand's axis
+        # persistence arm, then reconcile the copay/psp persistent RD to the
+        # axis-rebuilt outcome. Only brands whose axis column is populated in this frame
+        # appear in axis_results, so a frame without any axis leaves every arm unchanged.
+        if axis_results:
+            for res in axis_results.values():
+                if res.axis_rd is not None:
+                    df.attrs["true_ate_by_arm"][res.axis_column] = {
+                        "persistent_180d": {"ate": res.axis_rd},
+                    }
+                    df.attrs[f"{res.axis_column}_persistent_rd"] = res.axis_rd
+            # copay/psp persistence truth marginalized over the UNION of every rebuilt
+            # brand's rows (= the whole frame when all brands carry an axis; a single
+            # brand's subset otherwise). Each brand's RD map is re-derived on its own
+            # rebuilt logit; combine size-weighted per segment so the keys are exactly
+            # the rebuilt segments (never a segment absent from the merged map).
+            rebuilt_segments = np.concatenate([res.segment for res in axis_results.values()])
+            for arm_key, attr in (("copay_support", "copay_rd"), ("psp_enrolled", "psp_rd")):
+                merged = _size_weighted_merge_rd(
+                    [
+                        (getattr(res, attr), res.segment)
+                        for res in axis_results.values()
+                        if getattr(res, attr) is not None
+                    ]
+                )
+                if merged and arm_key in df.attrs["true_ate_by_arm"]:
+                    df.attrs["true_ate_by_arm"][arm_key]["persistent_180d"] = {
+                        "ate": float(np.mean([merged[str(s)] for s in rebuilt_segments])),
+                        "cate_by_segment": merged,
+                    }
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
         return df
 
-    def _apply_priorc5_persistence_differential(
+    def _apply_brand_axis_persistence_differential(
         self,
         df: pd.DataFrame,
         segment: np.ndarray,
@@ -692,81 +777,81 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         age_at_diagnosis: np.ndarray,
         comorbidity_burden: np.ndarray,
         prior_therapy_lines: np.ndarray,
-        brand_cate_scale: float,
         copay_support: Optional[np.ndarray],
         psp_enrolled: Optional[np.ndarray],
-    ) -> tuple[
-        Optional[float],
-        Optional[Dict[str, float]],
-        Optional[Dict[str, float]],
-        Optional[np.ndarray],
-    ]:
-        """Fabhalta pilot (#1321): plant the prior-C5 differential on PERSISTENCE.
+    ) -> Dict[str, _AxisResult]:
+        """Brand-distinct clinical axes (#1321): plant each present brand's axis
+        differential on PERSISTENCE.
 
-        Rebuilds ``persistent_180d`` / ``discontinued_180d`` for the Fabhalta rows
-        (where ``complement_inhibitor_status`` is populated) with a mean-preserving
-        prior-C5 treatment-effect MODIFIER + a mean-centered prior-C5 persistence
-        MAIN effect (both keyed on complement_inhibitor_status == "prior", the C5
-        switch population). Runs POST-HOC on the built frame, drawing fresh noise from
-        an INDEPENDENT deterministic substream (PRIORC5_SPAWN_KEY), so:
+        For every ``_BRAND_AXIS_DIFFERENTIALS`` spec whose axis column is populated for
+        its brand's rows in this frame, rebuild ``persistent_180d`` /
+        ``discontinued_180d`` for THOSE rows with a mean-preserving treatment-effect
+        MODIFIER + a mean-centered persistence MAIN effect (both keyed on the spec's 0/1
+        axis). Runs POST-HOC on the built frame, drawing fresh noise from an INDEPENDENT
+        deterministic substream (``spec.spawn_key``), so:
           * the generator's main ``self._rng`` stream is never perturbed, and
-          * every non-Fabhalta row (complement_inhibitor_status NULL) is byte-identical.
+          * every row that carries no brand-axis is byte-identical.
 
-        copay_support + psp_enrolled are re-passed for the Fabhalta rows so this
-        rebuild — which overwrites the Fabhalta persistence outcome — does NOT clobber
-        their planted effects; their per-segment RD is RE-DERIVED against the rebuilt
-        (prior-C5-noise) score. A Fabhalta frame is single-brand (mask covers all
-        complement-populated rows), so the subset RD IS the frame RD.
+        copay_support + psp_enrolled are re-passed for the rebuilt rows so this rebuild —
+        which overwrites their persistence outcome — does NOT clobber their planted
+        effects; their per-segment RD is RE-DERIVED against the rebuilt (axis-noise)
+        score. Brands are DISJOINT (each rebuilds only its own rows) and use distinct
+        spawn_keys, so the order of application does not affect any value.
 
-        Returns (prior-C5 persistence RD, recomputed copay persistent RD map,
-        recomputed psp persistent RD map, the Fabhalta-subset segment array). The
-        segment array is the marginalization weight for the copay/psp arm ATEs — its
-        keys match the re-derived RD maps exactly. All None on a frame with no
-        populated complement_inhibitor_status (the no-op path).
+        Returns {brand: _AxisResult}. Empty on a frame with no populated axis column.
         """
-        comp = df["complement_inhibitor_status"].to_numpy(dtype=object)
-        # complement_inhibitor_status is populated ONLY for Fabhalta rows (draw-then-
-        # discard gating); a non-null value marks the pilot cohort.
-        populated = np.array([c is not None and c == c for c in comp])  # c==c filters NaN
-        mask = (df["brand"].to_numpy() == Brand.FABHALTA.value) & populated
-        if not mask.any():
-            return None, None, None, None
-        idx = np.where(mask)[0]
-        # "prior" == prior-C5 switch (experienced); "current" == naive.
-        experienced = np.array([1 if str(comp[i]) == "prior" else 0 for i in idx], dtype=int)
-
-        # Independent substream keyed off the frame seed — reproducible AND orthogonal
-        # to the main stream (spawn_key guarantees non-overlap with self._rng).
-        c5_rng = np.random.default_rng(
-            np.random.SeedSequence(self.config.seed, spawn_key=(PRIORC5_SPAWN_KEY,))
-        )
-        _coh = generate_discontinuation_outcomes(
-            rng=c5_rng,
-            treatment_arm=df["treatment_arm"].to_numpy()[idx].astype(int),
-            disease_severity=confounders["disease_severity"][idx],
-            academic_hcp=confounders["academic_hcp"][idx],
-            geographic_region=np.asarray(geographic_region)[idx],
-            insurance_type=np.asarray(insurance_type)[idx],
-            age_at_diagnosis=np.asarray(age_at_diagnosis)[idx],
-            comorbidity_burden=np.asarray(comorbidity_burden)[idx],
-            prior_therapy_lines=np.asarray(prior_therapy_lines)[idx],
-            segment=segment[idx],
-            brand_cate_scale=brand_cate_scale,
-            copay_support=(np.asarray(copay_support)[idx] if copay_support is not None else None),
-            psp_enrolled=(np.asarray(psp_enrolled)[idx] if psp_enrolled is not None else None),
-            priorc5_experienced=experienced,
-        )
-        # Write the rebuilt persistence columns back (Fabhalta rows only).
-        for col in ("persistent_180d", "discontinued_180d"):
-            arr = df[col].to_numpy().copy()
-            arr[idx] = _coh[col]
-            df[col] = arr
-        return (
-            _coh["priorc5_persistent_rd"],
-            _coh["copay_persistent_rd_by_segment"],
-            _coh["psp_persistent_rd_by_segment"],
-            segment[idx],
-        )
+        results: Dict[str, _AxisResult] = {}
+        brand_col = df["brand"].to_numpy()
+        for spec in _BRAND_AXIS_DIFFERENTIALS:
+            if spec.axis_column not in df.columns:
+                continue
+            col = df[spec.axis_column].to_numpy(dtype=object)
+            # The axis column is populated ONLY for its brand's rows (draw-then-discard
+            # gating); a non-null value marks the axis cohort.
+            populated = np.array([c is not None and c == c for c in col])  # c==c filters NaN
+            mask = (brand_col == spec.brand) & populated
+            if not mask.any():
+                continue
+            idx = np.where(mask)[0]
+            experienced = np.array([1 if spec.positive(col[i]) else 0 for i in idx], dtype=int)
+            # Independent substream keyed off the frame seed — reproducible AND
+            # orthogonal to the main stream (spawn_key guarantees non-overlap).
+            axis_rng = np.random.default_rng(
+                np.random.SeedSequence(self.config.seed, spawn_key=(spec.spawn_key,))
+            )
+            _coh = generate_discontinuation_outcomes(
+                rng=axis_rng,
+                treatment_arm=df["treatment_arm"].to_numpy()[idx].astype(int),
+                disease_severity=confounders["disease_severity"][idx],
+                academic_hcp=confounders["academic_hcp"][idx],
+                geographic_region=np.asarray(geographic_region)[idx],
+                insurance_type=np.asarray(insurance_type)[idx],
+                age_at_diagnosis=np.asarray(age_at_diagnosis)[idx],
+                comorbidity_burden=np.asarray(comorbidity_burden)[idx],
+                prior_therapy_lines=np.asarray(prior_therapy_lines)[idx],
+                segment=segment[idx],
+                brand_cate_scale=_BRAND_CATE_SCALE.get(Brand(spec.brand), 1.0),
+                copay_support=(
+                    np.asarray(copay_support)[idx] if copay_support is not None else None
+                ),
+                psp_enrolled=(np.asarray(psp_enrolled)[idx] if psp_enrolled is not None else None),
+                axis_experienced=experienced,
+                axis_main_pull=spec.main_pull,
+                axis_exp_mult=spec.exp_mult,
+            )
+            # Write the rebuilt persistence columns back (this brand's rows only).
+            for out_col in ("persistent_180d", "discontinued_180d"):
+                arr = df[out_col].to_numpy().copy()
+                arr[idx] = _coh[out_col]
+                df[out_col] = arr
+            results[spec.brand] = _AxisResult(
+                axis_column=spec.axis_column,
+                axis_rd=_coh["axis_persistent_rd"],
+                copay_rd=_coh["copay_persistent_rd_by_segment"],
+                psp_rd=_coh["psp_persistent_rd_by_segment"],
+                segment=segment[idx],
+            )
+        return results
 
     def _apply_biologic_differential(
         self,

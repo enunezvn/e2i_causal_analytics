@@ -4,15 +4,15 @@ data_split enum-exact; brand from brand_type; we do NOT touch the 50 stale real 
 
 from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.causal_paths_generator import (
+    N_BRAND_CLINICAL_ROWS,
     N_COMM_ARM_ROWS,
     N_COMMERCIAL_ROWS,
-    N_FABHALTA_CLINICAL_ROWS,
     CausalPathsGenerator,
 )
 
 # Grains whose edges are DIRECT (1-hop, no mediator): the trigger RCT/effect-
-# modifier edges, the patient-grain commercial-arm edges, and the Fabhalta-only
-# clinical-axis edge (#1321 pilot).
+# modifier edges, the patient-grain commercial-arm edges, and the brand-distinct
+# clinical-axis edges (#1321 — one per brand).
 _DIRECT_EDGE_GRAINS = ("trigger", "patient_arm", "patient_clinical")
 
 
@@ -22,7 +22,7 @@ def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
     # HCP/trigger/commercial/patient-arm rows are ADDITIVE fixed blocks (6 HCP +
     # 6 trigger + N_COMMERCIAL_ROWS commercial + N_COMM_ARM_ROWS patient-arm),
     # independent of the n_records knob.
-    assert len(df) == n + 12 + N_COMMERCIAL_ROWS + N_COMM_ARM_ROWS + N_FABHALTA_CLINICAL_ROWS
+    assert len(df) == n + 12 + N_COMMERCIAL_ROWS + N_COMM_ARM_ROWS + N_BRAND_CLINICAL_ROWS
     assert df["causal_effect_size"].notna().all()  # CM-003 non-NULL
     assert (
         df[~df["grain"].isin(_DIRECT_EDGE_GRAINS)]["mediators_identified"]
@@ -257,44 +257,57 @@ def test_comm_arm_rows_for_upsert_are_content_addressed_and_idempotent():
 
 
 # ---------------------------------------------------------------------------
-# Fabhalta-only clinical-axis edge (#1321 pilot): the FIRST brand-DISTINCT causal
-# variable in the gold standard. Emitted for Fabhalta ONLY (Kisqali/Remibrutinib
-# have no C5-inhibitor axis), so their KG never gains this node.
+# Brand-distinct clinical-axis edges (#1321): ONE per brand — the acceptance criterion
+# for a divergent variable set. Each axis column is 100% NULL off-brand, so no other
+# brand's KG gains the node.
 # ---------------------------------------------------------------------------
 
+# (brand, axis treatment node) — each edge is emitted for its brand ONLY.
+_EXPECTED_AXES = {
+    "Fabhalta": "complement_inhibitor_status",
+    "Kisqali": "disease_stage",
+    "Remibrutinib": "urticaria_severity_uas7",
+}
 
-def test_fabhalta_clinical_edge_is_brand_distinct_and_negative():
-    """complement_inhibitor_status -> persistent_180d exists for Fabhalta ONLY, as a
-    direct 1-hop NEGATIVE-effect edge (prior-C5 -> less persistence) with the
-    disease_severity precision covariate. Kisqali/Remibrutinib must NOT carry it —
-    that brand-distinctness IS the pilot's acceptance criterion."""
+
+def test_brand_clinical_axes_are_distinct_and_negative():
+    """Each brand carries its OWN axis -> persistent_180d edge (a direct 1-hop
+    NEGATIVE-effect edge with the disease_severity precision covariate) and NO OTHER
+    brand's axis. That mutual brand-distinctness IS the #1321 acceptance criterion."""
     df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=20)).generate()
     clin = df[df["grain"] == "patient_clinical"]
-    assert len(clin) == N_FABHALTA_CLINICAL_ROWS == 1
-    row = clin.iloc[0]
-    assert row["brand"] == "Fabhalta"
-    assert row["start_node"] == "complement_inhibitor_status"
-    assert row["end_node"] == "persistent_180d"
-    assert row["path_length"] == 1
-    assert list(row["mediators_identified"]) == []
-    assert row["causal_chain"]["nodes"] == ["complement_inhibitor_status", "persistent_180d"]
-    assert list(row["confounders_controlled"]) == ["disease_severity"]
-    assert row["causal_effect_size"] < 0, "prior-C5 REDUCES persistence -> negative display effect"
-    # Brand-distinctness: no other brand carries a complement_inhibitor_status edge.
-    others = df[df["start_node"] == "complement_inhibitor_status"]
-    assert set(others["brand"]) == {"Fabhalta"}
+    assert len(clin) == N_BRAND_CLINICAL_ROWS == 3
+    assert dict(zip(clin["brand"], clin["start_node"], strict=True)) == _EXPECTED_AXES
+    for _, row in clin.iterrows():
+        assert row["end_node"] == "persistent_180d"
+        assert row["path_length"] == 1
+        assert list(row["mediators_identified"]) == []
+        assert row["causal_chain"]["nodes"] == [row["start_node"], "persistent_180d"]
+        assert list(row["confounders_controlled"]) == ["disease_severity"]
+        assert row["causal_effect_size"] < 0, "axis=1 REDUCES persistence -> negative effect"
+    # Mutual brand-distinctness: each axis node belongs to EXACTLY its own brand.
+    for brand, axis in _EXPECTED_AXES.items():
+        carriers = set(df[df["start_node"] == axis]["brand"])
+        assert carriers == {brand}, f"{axis} leaked to {carriers - {brand}}"
 
 
-def test_fabhalta_clinical_rows_for_upsert_are_content_addressed_and_idempotent():
+def test_clinical_axis_rows_for_upsert_are_content_addressed_and_brand_filterable():
     from src.ml.synthetic.generators.causal_paths_generator import (
+        clinical_axis_rows_for_upsert,
         fabhalta_clinical_rows_for_upsert,
     )
 
-    a = fabhalta_clinical_rows_for_upsert()
-    b = fabhalta_clinical_rows_for_upsert()
+    a = clinical_axis_rows_for_upsert()
+    b = clinical_axis_rows_for_upsert()
     ids_a = [r["path_id"] for r in a]
     assert ids_a == [r["path_id"] for r in b]  # stable across calls (content-addressed)
-    assert len(ids_a) == len(set(ids_a)) == N_FABHALTA_CLINICAL_ROWS
-    assert all(pid.startswith("scp_f") for pid in ids_a)  # Fabhalta clinical namespace
-    assert all(r["brand"] == "Fabhalta" for r in a)
+    assert len(ids_a) == len(set(ids_a)) == N_BRAND_CLINICAL_ROWS == 3
+    assert all(pid.startswith("scp_f") for pid in ids_a)  # clinical-axis family namespace
+    assert {r["brand"] for r in a} == set(_EXPECTED_AXES)
     assert all("grain" not in r for r in a)  # generator-only column projected out
+    # Brand filtering: seed only the new brands (Fabhalta already live in prod).
+    new = clinical_axis_rows_for_upsert(["Kisqali", "Remibrutinib"])
+    assert {r["brand"] for r in new} == {"Kisqali", "Remibrutinib"}
+    # Back-compat wrapper still returns the single Fabhalta pilot row.
+    fab = fabhalta_clinical_rows_for_upsert()
+    assert len(fab) == 1 and fab[0]["brand"] == "Fabhalta"

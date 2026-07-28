@@ -59,34 +59,43 @@ def test_disc_persist_present_across_brands():
         assert 0.05 <= df["discontinued_180d"].mean() <= 0.60
 
 
-def test_priorc5_arm_marginalizes_over_fabhalta_segments_on_sparse_mixed_frame():
-    """#1321 regression: on a SMALL MIXED-brand frame the Fabhalta cohort spans only a
-    subset of segments, so the prior-C5-rebuilt copay/psp persistence RD maps carry
-    only those keys. Marginalizing the arm ATE over the whole-frame segment array (the
-    first cut) KeyErrors on a non-Fabhalta segment absent from the subset map — this is
-    exactly the n=5 frame that broke test_id_namespacing. The ATE must be weighted over
-    the FABHALTA rows' own segments, whose keys match the RD map exactly.
+def test_brand_axes_marginalize_copay_psp_over_rebuilt_union_on_sparse_mixed_frame():
+    """#1321 regression: on a SMALL MIXED-brand frame every brand's clinical axis rebuilds
+    its OWN rows' persistence, so each brand's copay/psp persistence RD map carries only
+    its own segments. Marginalizing the copay/psp arm ATE over the whole-frame segment
+    array (the first cut) KeyErrors on a segment absent from a per-brand subset map — this
+    is exactly the n=5 frame that broke test_id_namespacing. The reconciled copay/psp map
+    is a SIZE-WEIGHTED MERGE over the union of rebuilt rows, so its keys are exactly the
+    rebuilt segments and the marginalization never raises.
 
-    seed=1/n=5: the Fabhalta cohort spans a STRICT subset of segments while the full
-    frame carries others from Kisqali/Remibrutinib rows — so the old full-frame
-    marginalization raises and the subset-marginalization passes."""
+    seed=1/n=5: each brand's cohort spans a STRICT subset of the frame's segments — so the
+    old full-frame marginalization raises and the union-merge marginalization passes."""
     cfg = GeneratorConfig(seed=1, n_records=5, dgp_type=DGPType.HETEROGENEOUS)
     df = PatientGenerator(cfg).generate()  # must not raise KeyError
 
-    fab = df[df["brand"] == Brand.FABHALTA.value]
-    assert len(fab) > 0 and fab["complement_inhibitor_status"].notna().all(), "no prior-C5 cohort"
-    fab_segments = set(fab["segment_assignment"].astype(str))
-    # The regression only bites when Fabhalta is SPARSE vs the whole frame.
-    assert fab_segments < set(df["segment_assignment"].astype(str)), (
-        "frame not sparse enough to guard"
-    )
-
+    frame_segments = set(df["segment_assignment"].astype(str))
     arms = df.attrs["true_ate_by_arm"]
-    assert "complement_inhibitor_status" in arms, "prior-C5 main-effect arm missing"
+    axis_col = {
+        Brand.FABHALTA.value: "complement_inhibitor_status",
+        Brand.KISQALI.value: "disease_stage",
+        Brand.REMIBRUTINIB.value: "urticaria_severity_uas7",
+    }
+    present = set(df["brand"].astype(str))
+    assert len(present) >= 2, "frame is not multi-brand — no cross-brand marginalization to guard"
+    # At least one present brand's cohort spans a STRICT subset of the frame's segments,
+    # so the per-brand RD map lacks a whole-frame segment — the guard's premise.
+    assert any(
+        set(df.loc[df["brand"] == b, "segment_assignment"].astype(str)) < frame_segments
+        for b in present
+    ), "no brand cohort is sparse vs the frame — the KeyError guard is vacuous here"
+    # At least one axis arm fired (a brand with >=2 rows spanning both axis levels). A
+    # 1-row / single-value cohort is degenerate (axis_rd is None) and legitimately omitted.
+    assert any(axis_col[b] in arms for b in present if b in axis_col), "no axis arm fired"
+
     for arm in ("copay_support", "psp_enrolled"):
         cate = arms[arm]["persistent_180d"]["cate_by_segment"]
-        # Keys are the Fabhalta subset's segments — NEVER a whole-frame segment the
-        # subset lacks (that is the KeyError this test guards).
-        assert set(cate) <= fab_segments, f"{arm} RD map leaked a non-Fabhalta segment: {set(cate)}"
+        # Keys are exactly the rebuilt (union) segments — NEVER a segment the size-weighted
+        # merged map lacks (that is the KeyError this test guards).
+        assert set(cate) <= frame_segments, f"{arm} RD map leaked an unknown segment: {set(cate)}"
         ate = arms[arm]["persistent_180d"]["ate"]
         assert np.isfinite(ate), f"{arm} persistent ATE is not finite: {ate}"

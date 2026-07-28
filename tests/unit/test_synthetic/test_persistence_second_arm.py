@@ -113,44 +113,52 @@ def test_both_commercial_arms_each_carry_their_own_ordered_persistence_rd():
     np.testing.assert_array_equal(out["persistent_180d"], 1 - out["discontinued_180d"])
 
 
-# --- #1321 Fabhalta pilot: prior-C5 main effect + CATE modifier on persistence -------
-def _priorc5(n, seed=13, prev=0.40):
+# --- #1321 brand-distinct axis: MAIN effect + CATE modifier on persistence -----------
+def _axis(n, seed=13, prev=0.40):
     return (np.random.default_rng(seed).random(n) < prev).astype(int)
 
 
 @pytest.mark.unit
-def test_priorc5_absent_is_byte_identical_to_shipped():
-    """The pilot MUST be off-path invisible: priorc5_experienced=None reproduces the
+def test_axis_absent_is_byte_identical_to_shipped():
+    """The differential MUST be off-path invisible: axis_experienced=None reproduces the
     shipped persistence DGP bit-for-bit (the spawn-key isolation invariant that keeps
-    every non-Fabhalta row untouched on a fresh generate)."""
+    every row without a brand-axis untouched on a fresh generate)."""
     a = generate_discontinuation_outcomes(rng=np.random.default_rng(5), **_inputs())
     b = generate_discontinuation_outcomes(
-        rng=np.random.default_rng(5), priorc5_experienced=None, **_inputs()
+        rng=np.random.default_rng(5), axis_experienced=None, **_inputs()
     )
     np.testing.assert_array_equal(a["persistent_180d"], b["persistent_180d"])
     np.testing.assert_array_equal(a["discontinued_180d"], b["discontinued_180d"])
-    assert a["priorc5_persistent_rd"] is None
+    assert a["axis_persistent_rd"] is None
 
 
 @pytest.mark.unit
-def test_priorc5_reduces_persistence_recoverably_and_mean_preserving():
-    """prior-C5 (switch population) -> LESS persistence, a clearly recoverable
-    negative RD, while the MEAN-CENTERED main pull keeps the marginal persistence
-    prevalence essentially unchanged vs the no-pilot baseline (so the calibration
-    gate + prevalence band are undisturbed)."""
+@pytest.mark.parametrize(
+    "main_pull,exp_mult",
+    [(0.55, 0.40), (0.55, 0.55), (0.55, 0.48)],  # Fabhalta / Kisqali / Remibrutinib
+)
+def test_axis_reduces_persistence_recoverably_and_mean_preserving(main_pull, exp_mult):
+    """The axis=1 population -> LESS persistence, a clearly recoverable negative RD, while
+    the MEAN-CENTERED main pull keeps the marginal persistence prevalence essentially
+    unchanged vs the no-axis baseline (so the calibration gate + prevalence band are
+    undisturbed) — across all three brands' tuned constants."""
     ins = _inputs(n=12000)
     n = len(ins["disease_severity"])
-    c5 = _priorc5(n)
+    axis = _axis(n)
     base = generate_discontinuation_outcomes(rng=np.random.default_rng(5), **ins)
     out = generate_discontinuation_outcomes(
-        rng=np.random.default_rng(5), priorc5_experienced=c5, **ins
+        rng=np.random.default_rng(5),
+        axis_experienced=axis,
+        axis_main_pull=main_pull,
+        axis_exp_mult=exp_mult,
+        **ins,
     )
     persist = out["persistent_180d"]
-    rd = float(persist[c5 == 1].mean() - persist[c5 == 0].mean())  # prior - current
+    rd = float(persist[axis == 1].mean() - persist[axis == 0].mean())  # axis=1 - axis=0
     # Recoverable strength: the disproof harness measured ~-0.11 at n>=8000.
-    assert rd < -0.05, f"prior-C5 persistence RD not recoverably negative: {rd:.4f}"
-    # priorc5_persistent_rd attr is the DISC-side RD (positive: more discontinuation).
-    assert out["priorc5_persistent_rd"] > 0.05
-    # Mean-preserving: the marginal persistence barely moves vs the no-pilot baseline.
+    assert rd < -0.05, f"axis persistence RD not recoverably negative: {rd:.4f}"
+    # axis_persistent_rd attr is the DISC-side RD (positive: more discontinuation).
+    assert out["axis_persistent_rd"] > 0.05
+    # Mean-preserving: the marginal persistence barely moves vs the no-axis baseline.
     assert abs(float(persist.mean()) - float(base["persistent_180d"].mean())) < 0.02
     np.testing.assert_array_equal(persist, 1 - out["discontinued_180d"])

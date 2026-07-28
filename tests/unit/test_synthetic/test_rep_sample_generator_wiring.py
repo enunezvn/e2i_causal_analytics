@@ -55,8 +55,10 @@ _PRE_P3_INVARIANT = {
         "low_gap_180d": "5a81b0ef25c78b11",
         "adherence_rate": "0e4d61f03807522b",
         "gap_days": "58e13c9a2cf92950",
-        "discontinued_180d": "d56dfca4cdb6394f",
-        "persistent_180d": "f546b27139b8eeda",
+        # #1321: re-pinned — Remibrutinib's uncontrolled-CSU axis rewrites ONLY these two
+        # persistence columns (verified: every other column above held byte-identical).
+        "discontinued_180d": "1d439cd23d1282ea",
+        "persistent_180d": "f1d4fb577f0a422e",
     },
     "Kisqali:7": {
         "patient_journey_id": "9d37ed3c10cda091",
@@ -81,8 +83,10 @@ _PRE_P3_INVARIANT = {
         "low_gap_180d": "5e7778a88de98f13",
         "adherence_rate": "69fd0db604a514b9",
         "gap_days": "a845e7fc6c66c4d5",
-        "discontinued_180d": "32a82b0c8dfd24f3",
-        "persistent_180d": "89d30ff833a11488",
+        # #1321: re-pinned — Kisqali's advanced-line axis rewrites ONLY these two
+        # persistence columns (verified: every other column above held byte-identical).
+        "discontinued_180d": "257409c5d397bf2b",
+        "persistent_180d": "7b8edb4b009a2aff",
     },
 }
 
