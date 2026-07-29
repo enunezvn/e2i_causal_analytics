@@ -162,8 +162,12 @@ class DomainMapper:
         score += entity_score * weights.get("entity_regions", 0)
         evidence.extend(entity_evidence)
 
-        # Add base score
-        score += weights.get("base", 0)
+        # Add base score only when the domain has at least one piece of real
+        # evidence. An unconditional base lets evidence-free domains clear
+        # CONFIDENCE_THRESHOLD (MONITORING base 0.4, EXPLANATION base 0.3 vs
+        # threshold 0.3), which made every query classify as multi-domain.
+        if evidence:
+            score += weights.get("base", 0)
 
         # Normalize to [0, 1]
         score = min(score, 1.0)

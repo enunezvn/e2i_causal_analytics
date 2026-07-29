@@ -287,16 +287,19 @@ class FeatureExtractor:
     def _extract_temporal(self, query: str, query_lower: str) -> TemporalFeatures:
         """Extract temporal features from query."""
 
+        # group(0) = full matched text; findall would return capture-group
+        # tuples for multi-group patterns (e.g. "next quarter") and fail
+        # TemporalFeatures validation.
         time_references = []
         for pattern in self.TIME_PATTERNS:
-            matches = re.findall(pattern, query_lower, re.IGNORECASE)
-            time_references.extend(matches)
+            for match in re.finditer(pattern, query_lower, re.IGNORECASE):
+                time_references.append(match.group(0))
 
         # Deduplicate while preserving order
         seen = set()
         unique_refs = []
         for ref in time_references:
-            ref_lower = ref.lower() if isinstance(ref, str) else str(ref).lower()
+            ref_lower = ref.lower()
             if ref_lower not in seen:
                 seen.add(ref_lower)
                 unique_refs.append(ref)
@@ -320,7 +323,9 @@ class FeatureExtractor:
 
         for entity_type, patterns in self.ENTITY_PATTERNS.items():
             for pattern in patterns:
-                matches = re.findall(pattern, query, re.IGNORECASE)
+                # group(0) keeps the full mention ("territory", not the
+                # capture-group fragment "y" that findall would return)
+                matches = [m.group(0) for m in re.finditer(pattern, query, re.IGNORECASE)]
                 if matches:
                     if entity_type not in entity_types:
                         entity_types.append(entity_type)

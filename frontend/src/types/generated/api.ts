@@ -7527,6 +7527,12 @@ export interface components {
             intent_confidence?: number | null;
             /** Routing Rationale */
             routing_rationale?: string | null;
+            /** Routing Pattern */
+            routing_pattern?: string | null;
+            /** Classification Latency Ms */
+            classification_latency_ms?: number | null;
+            /** Used Llm Layer */
+            used_llm_layer?: boolean | null;
         };
         /**
          * ChatSuggestionItem

@@ -90,6 +90,8 @@ class PatternSelector:
                 target_agents=[],
                 confidence=0.0,
                 reasoning="Unable to determine query intent with sufficient confidence",
+                is_followup=is_followup,
+                context_source=context_source,
                 classification_latency_ms=latency_ms,
                 used_llm_layer=used_llm,
             )

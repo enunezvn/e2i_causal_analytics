@@ -646,6 +646,11 @@ export const ChatResponseSchema = z.object({
   execution_time_ms: z.number().nullable().optional(),
   intent: z.string().nullable().optional(),
   intent_confidence: z.number().nullable().optional(),
+  routing_rationale: z.string().nullable().optional(),
+  // 4-stage ClassificationPipeline observability (ORCHESTRATOR_CLASSIFIER_MODE)
+  routing_pattern: z.string().nullable().optional(),
+  classification_latency_ms: z.number().nullable().optional(),
+  used_llm_layer: z.boolean().nullable().optional(),
 });
 
 // =============================================================================

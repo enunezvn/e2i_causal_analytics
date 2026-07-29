@@ -970,6 +970,14 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             response_confidence = orchestrator_result.get("response_confidence", 0.0)
             agents_dispatched = orchestrator_result.get("agents_dispatched", [])
 
+            # 4-stage ClassificationPipeline observability (None when mode=off).
+            # classification_latency_ms is the PIPELINE's own latency from
+            # ClassificationResult, not the node-total classification time.
+            classification = orchestrator_result.get("classification") or {}
+            routing_pattern = orchestrator_result.get("routing_pattern")
+            used_llm_layer = orchestrator_result.get("used_llm_layer")
+            classification_latency_ms = classification.get("classification_latency_ms")
+
             # Phase 3: Extract partial failure information
             has_partial_failure = orchestrator_result.get("has_partial_failure", False)
             successful_agents = orchestrator_result.get("successful_agents", [])
@@ -1015,6 +1023,9 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                     "agents_dispatched": agents_dispatched,
                     "orchestrator_used": True,
                     "response_confidence": response_confidence,
+                    "routing_pattern": routing_pattern,
+                    "classification_latency_ms": classification_latency_ms,
+                    "used_llm_layer": used_llm_layer,
                     "metadata": {
                         **(state.get("metadata") or {}),
                         "orchestrator_used": True,
@@ -1026,6 +1037,10 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                         "failed_agents": failed_agents,
                         "failure_details": failure_details,
                         "orchestrator_status": status,
+                        # 4-stage classifier observability
+                        "routing_pattern": routing_pattern,
+                        "classification_latency_ms": classification_latency_ms,
+                        "used_llm_layer": used_llm_layer,
                     },
                 }
 

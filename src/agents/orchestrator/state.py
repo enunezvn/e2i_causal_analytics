@@ -148,6 +148,14 @@ class OrchestratorState(TypedDict, total=False):
     intent: Optional[IntentClassification]
     entities_extracted: Optional[Dict[str, List[str]]]
 
+    # 4-stage ClassificationPipeline output (ORCHESTRATOR_CLASSIFIER_MODE
+    # shadow/active). `classification` is ClassificationResult.model_dump
+    # minus `stages`; routing_pattern/used_llm_layer are lifted for cheap
+    # access by the router and _build_output.
+    classification: NotRequired[Optional[Dict[str, Any]]]
+    routing_pattern: NotRequired[Optional[str]]
+    used_llm_layer: NotRequired[bool]
+
     # Timing
     classification_latency_ms: int
 

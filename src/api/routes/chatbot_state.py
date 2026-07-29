@@ -73,6 +73,13 @@ class ChatbotState(TypedDict, total=False):
     agents_dispatched: List[str]  # Agents that orchestrator dispatched to
     response_confidence: Optional[float]  # Orchestrator response confidence (0.0-1.0)
 
+    # 4-stage ClassificationPipeline observability (ORCHESTRATOR_CLASSIFIER_MODE)
+    routing_pattern: Optional[
+        str
+    ]  # SINGLE_AGENT | PARALLEL_DELEGATION | TOOL_COMPOSER | CLARIFICATION_NEEDED
+    classification_latency_ms: Optional[float]  # Pipeline's own latency (ClassificationResult)
+    used_llm_layer: Optional[bool]  # Whether the pipeline's LLM layer actually ran
+
     # E2I context filters
     brand_context: Optional[str]
     region_context: Optional[str]
@@ -217,6 +224,9 @@ def create_initial_state(
         orchestrator_used=False,
         agents_dispatched=[],
         response_confidence=None,
+        routing_pattern=None,
+        classification_latency_ms=None,
+        used_llm_layer=None,
         brand_context=brand_context,
         region_context=region_context,
         messages=[],

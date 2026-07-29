@@ -204,6 +204,10 @@ class TestChatResponse:
         assert response.execution_time_ms is None
         assert response.intent is None
         assert response.intent_confidence is None
+        # 4-stage classifier observability defaults
+        assert response.routing_pattern is None
+        assert response.classification_latency_ms is None
+        assert response.used_llm_layer is None
 
     def test_dispatch_observability_fields_populated(self):
         """Test ChatResponse with all dispatch observability fields."""
@@ -221,6 +225,10 @@ class TestChatResponse:
             execution_time_ms=1523.45,
             intent="causal_analysis",
             intent_confidence=0.92,
+            # 4-stage classifier observability
+            routing_pattern="PARALLEL_DELEGATION",
+            classification_latency_ms=2.4,
+            used_llm_layer=False,
         )
         assert response.orchestrator_used is True
         assert response.agents_dispatched == ["causal_impact", "gap_analyzer"]
@@ -229,6 +237,9 @@ class TestChatResponse:
         assert response.execution_time_ms == 1523.45
         assert response.intent == "causal_analysis"
         assert response.intent_confidence == 0.92
+        assert response.routing_pattern == "PARALLEL_DELEGATION"
+        assert response.classification_latency_ms == 2.4
+        assert response.used_llm_layer is False
 
     def test_error_response_includes_execution_time(self):
         """Test that error responses include execution_time_ms."""
@@ -472,6 +483,10 @@ class TestChatEndpoint:
             "response_confidence": 0.87,
             "intent": "causal_analysis",
             "intent_confidence": 0.92,
+            # 4-stage classifier observability (from ChatbotState)
+            "routing_pattern": "SINGLE_AGENT",
+            "classification_latency_ms": 3.1,
+            "used_llm_layer": False,
         }
 
         with patch(
@@ -498,6 +513,10 @@ class TestChatEndpoint:
         assert data["response_confidence"] == 0.87
         assert data["intent"] == "causal_analysis"
         assert data["intent_confidence"] == 0.92
+        # 4-stage classifier observability passes through
+        assert data["routing_pattern"] == "SINGLE_AGENT"
+        assert data["classification_latency_ms"] == 3.1
+        assert data["used_llm_layer"] is False
         # execution_time_ms is always returned
         assert "execution_time_ms" in data
         assert data["execution_time_ms"] > 0
@@ -535,6 +554,9 @@ class TestChatEndpoint:
         # When orchestrator not used, these should be defaults
         assert data["orchestrator_used"] is False
         assert data["agents_dispatched"] == []
+        assert data["routing_pattern"] is None
+        assert data["classification_latency_ms"] is None
+        assert data["used_llm_layer"] is None
 
     def test_chat_generates_title(self, test_client):
         """Test that chat generates a conversation title."""

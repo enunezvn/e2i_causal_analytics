@@ -162,11 +162,27 @@ class DependencyAnalysis(BaseModel):
     has_dependencies: bool = False
     is_parallelizable: bool = True
     dependency_depth: int = Field(default=0, ge=0)
+    # True only when the LLM layer was actually invoked for this analysis —
+    # the detector sets it, and the pipeline reads it into
+    # ClassificationResult.used_llm_layer.
+    used_llm: bool = False
 
 
 # =============================================================================
 # STAGE 4: PATTERN SELECTION / FINAL OUTPUT
 # =============================================================================
+
+
+class ClassificationStages(BaseModel):
+    """Per-stage outputs bundled for observability.
+
+    Feeds the ``features_extracted`` / ``domain_mapping`` /
+    ``dependency_analysis`` JSONB columns of ``classification_logs``.
+    """
+
+    features: ExtractedFeatures
+    domain_mapping: DomainMapping
+    dependency_analysis: DependencyAnalysis
 
 
 class ClassificationResult(BaseModel):
@@ -188,3 +204,7 @@ class ClassificationResult(BaseModel):
     # Performance tracking
     classification_latency_ms: float = Field(default=0.0, ge=0.0)
     used_llm_layer: bool = False
+
+    # Per-stage outputs for logging; excluded from routing state to keep it
+    # light — the classification_logs writer is the intended consumer.
+    stages: Optional[ClassificationStages] = None

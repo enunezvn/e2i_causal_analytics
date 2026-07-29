@@ -51,6 +51,11 @@ x-common-env: &common-env
   # opik-backend on every health check (#952 follow-up). Was previously unset on
   # the containers (the .env value never reached them), so it defaulted to on.
   OPIK_ENABLED: ${OPIK_ENABLED:-true}
+  # 4-stage ClassificationPipeline mode (off | shadow | active). shadow runs
+  # the classifier + logs to classification_logs without touching routing;
+  # active hands routing authority to it when confident. Must be forwarded
+  # here or the in-code default governs regardless of the host .env.
+  ORCHESTRATOR_CLASSIFIER_MODE: ${ORCHESTRATOR_CLASSIFIER_MODE:-shadow}
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

@@ -22,7 +22,12 @@ from .dependency_detector import DependencyDetector
 from .domain_mapper import DomainMapper
 from .feature_extractor import FeatureExtractor
 from .pattern_selector import PatternSelector
-from .schemas import ClassificationResult, DomainMapping, ExtractedFeatures
+from .schemas import (
+    ClassificationResult,
+    ClassificationStages,
+    DomainMapping,
+    ExtractedFeatures,
+)
 
 
 class ClassificationPipeline:
@@ -75,7 +80,6 @@ class ClassificationPipeline:
             ClassificationResult with routing decision
         """
         start_time = time.time()
-        used_llm = False
 
         # =====================================================================
         # Stage 1: Feature Extraction (always rule-based)
@@ -102,8 +106,9 @@ class ClassificationPipeline:
             use_llm=needs_llm and self.enable_llm_layer,
         )
 
-        if needs_llm and self.enable_llm_layer:
-            used_llm = True
+        # used_llm_layer must reflect an actual LLM invocation, not merely
+        # that escalation was requested — the detector is the source of truth.
+        used_llm = dependency_analysis.used_llm
 
         # =====================================================================
         # Stage 4: Pattern Selection
@@ -118,47 +123,13 @@ class ClassificationPipeline:
             used_llm=used_llm,
         )
 
+        result.stages = ClassificationStages(
+            features=features,
+            domain_mapping=domain_mapping,
+            dependency_analysis=dependency_analysis,
+        )
+
         return result
-
-    def classify_sync(
-        self,
-        query: str,
-        context: Optional[dict] = None,
-        is_followup: bool = False,
-        context_source: Optional[str] = None,
-    ) -> ClassificationResult:
-        """
-        Synchronous version of classify for non-async contexts.
-        Note: This version cannot use LLM layer.
-
-        Args:
-            query: User query text
-            context: Optional conversation context
-            is_followup: Whether this is a follow-up query
-            context_source: Source of context if follow-up
-
-        Returns:
-            ClassificationResult with routing decision
-        """
-        import asyncio
-
-        # Try to get existing event loop, create new one if needed
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're in an async context, use run_coroutine_threadsafe
-
-                future = asyncio.run_coroutine_threadsafe(
-                    self.classify(query, context, is_followup, context_source), loop
-                )
-                return future.result(timeout=30)
-            else:
-                return loop.run_until_complete(
-                    self.classify(query, context, is_followup, context_source)
-                )
-        except RuntimeError:
-            # No event loop, create a new one
-            return asyncio.run(self.classify(query, context, is_followup, context_source))
 
     def _should_use_llm(
         self,
