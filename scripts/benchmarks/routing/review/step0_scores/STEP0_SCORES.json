@@ -1,0 +1,614 @@
+{
+ "legacy": {
+  "candidate": "legacy",
+  "n": 337,
+  "pattern_accuracy": 0.7566765578635015,
+  "pattern_accuracy_ci95": [
+   0.7081387047698524,
+   0.7994286568058715
+  ],
+  "agents_exact_rate": 0.47774480712166173,
+  "agents_jaccard_mean": 0.5143422354104847,
+  "per_pattern": {
+   "SINGLE_AGENT": {
+    "gold_n": 276.0,
+    "pred_n": 299.0,
+    "recall": 0.9130434782608695,
+    "precision": 0.842809364548495,
+    "f1": 0.8765217391304349
+   },
+   "PARALLEL_DELEGATION": {
+    "gold_n": 5.0,
+    "pred_n": 36.0,
+    "recall": 0.2,
+    "precision": 0.027777777777777776,
+    "f1": 0.048780487804878044
+   },
+   "TOOL_COMPOSER": {
+    "gold_n": 28.0,
+    "pred_n": 2.0,
+    "recall": 0.07142857142857142,
+    "precision": 1.0,
+    "f1": 0.13333333333333333
+   },
+   "CLARIFICATION_NEEDED": {
+    "gold_n": 28.0,
+    "pred_n": 0.0,
+    "recall": 0.0,
+    "precision": 0.0,
+    "f1": 0.0
+   }
+  },
+  "confusion": {
+   "CLARIFICATION_NEEDED->SINGLE_AGENT": 28,
+   "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1,
+   "PARALLEL_DELEGATION->SINGLE_AGENT": 4,
+   "SINGLE_AGENT->PARALLEL_DELEGATION": 24,
+   "SINGLE_AGENT->SINGLE_AGENT": 252,
+   "TOOL_COMPOSER->PARALLEL_DELEGATION": 11,
+   "TOOL_COMPOSER->SINGLE_AGENT": 15,
+   "TOOL_COMPOSER->TOOL_COMPOSER": 2
+  },
+  "by_source": {
+   "authored": {
+    "n": 76,
+    "pattern_accuracy": 0.6447368421052632,
+    "pattern_accuracy_ci95": [
+     0.5325638542435106,
+     0.7429822130284868
+    ]
+   },
+   "demo": {
+    "n": 48,
+    "pattern_accuracy": 0.7083333333333334,
+    "pattern_accuracy_ci95": [
+     0.5682074007541851,
+     0.8175842114339482
+    ]
+   },
+   "historical": {
+    "n": 115,
+    "pattern_accuracy": 0.8956521739130435,
+    "pattern_accuracy_ci95": [
+     0.8264310767125737,
+     0.9392949658370618
+    ]
+   },
+   "perturbation": {
+    "n": 98,
+    "pattern_accuracy": 0.7040816326530612,
+    "pattern_accuracy_ci95": [
+     0.6073991568880237,
+     0.7853681938489985
+    ]
+   }
+  },
+  "by_followup": {
+   "False": {
+    "n": 237,
+    "pattern_accuracy": 0.7468354430379747,
+    "pattern_accuracy_ci95": [
+     0.6878417482284732,
+     0.7979550101181286
+    ]
+   },
+   "True": {
+    "n": 100,
+    "pattern_accuracy": 0.78,
+    "pattern_accuracy_ci95": [
+     0.6892964640723263,
+     0.8499871766170359
+    ]
+   }
+  },
+  "by_gold_source": {
+   "authored-ground-truth": {
+    "n": 76,
+    "pattern_accuracy": 0.6447368421052632,
+    "pattern_accuracy_ci95": [
+     0.5325638542435106,
+     0.7429822130284868
+    ]
+   },
+   "human-ratified": {
+    "n": 19,
+    "pattern_accuracy": 0.5789473684210527,
+    "pattern_accuracy_ci95": [
+     0.362759033831258,
+     0.7685810883382846
+    ]
+   },
+   "human-triage": {
+    "n": 13,
+    "pattern_accuracy": 0.8461538461538461,
+    "pattern_accuracy_ci95": [
+     0.5776536874893673,
+     0.9567418220347709
+    ]
+   },
+   "llm-judge": {
+    "n": 190,
+    "pattern_accuracy": 0.7684210526315789,
+    "pattern_accuracy_ci95": [
+     0.7034792267819103,
+     0.8227239940804667
+    ]
+   },
+   "llm-judge+human-confirmed": {
+    "n": 39,
+    "pattern_accuracy": 0.9743589743589743,
+    "pattern_accuracy_ci95": [
+     0.8681900970295746,
+     0.9954592969492493
+    ]
+   }
+  },
+  "latency_ms_p50": 640.7,
+  "latency_ms_p95": 1347.3,
+  "llm_share": 0.5637982195845698,
+  "parse_failures": 0,
+  "candidate_errors": 0
+ },
+ "pipeline_rules": {
+  "candidate": "pipeline_rules",
+  "n": 337,
+  "pattern_accuracy": 0.21068249258160238,
+  "pattern_accuracy_ci95": [
+   0.17052819309430892,
+   0.2573583068636901
+  ],
+  "agents_exact_rate": 0.13649851632047477,
+  "agents_jaccard_mean": 0.1661721068249258,
+  "per_pattern": {
+   "SINGLE_AGENT": {
+    "gold_n": 276.0,
+    "pred_n": 59.0,
+    "recall": 0.17391304347826086,
+    "precision": 0.8135593220338984,
+    "f1": 0.2865671641791045
+   },
+   "PARALLEL_DELEGATION": {
+    "gold_n": 5.0,
+    "pred_n": 49.0,
+    "recall": 0.2,
+    "precision": 0.02040816326530612,
+    "f1": 0.03703703703703703
+   },
+   "TOOL_COMPOSER": {
+    "gold_n": 28.0,
+    "pred_n": 1.0,
+    "recall": 0.03571428571428571,
+    "precision": 1.0,
+    "f1": 0.0689655172413793
+   },
+   "CLARIFICATION_NEEDED": {
+    "gold_n": 28.0,
+    "pred_n": 228.0,
+    "recall": 0.75,
+    "precision": 0.09210526315789473,
+    "f1": 0.1640625
+   }
+  },
+  "confusion": {
+   "CLARIFICATION_NEEDED->CLARIFICATION_NEEDED": 21,
+   "CLARIFICATION_NEEDED->SINGLE_AGENT": 7,
+   "PARALLEL_DELEGATION->CLARIFICATION_NEEDED": 2,
+   "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1,
+   "PARALLEL_DELEGATION->SINGLE_AGENT": 2,
+   "SINGLE_AGENT->CLARIFICATION_NEEDED": 191,
+   "SINGLE_AGENT->PARALLEL_DELEGATION": 37,
+   "SINGLE_AGENT->SINGLE_AGENT": 48,
+   "TOOL_COMPOSER->CLARIFICATION_NEEDED": 14,
+   "TOOL_COMPOSER->PARALLEL_DELEGATION": 11,
+   "TOOL_COMPOSER->SINGLE_AGENT": 2,
+   "TOOL_COMPOSER->TOOL_COMPOSER": 1
+  },
+  "by_source": {
+   "authored": {
+    "n": 76,
+    "pattern_accuracy": 0.3026315789473684,
+    "pattern_accuracy_ci95": [
+     0.21091334615348203,
+     0.41334201665743053
+    ]
+   },
+   "demo": {
+    "n": 48,
+    "pattern_accuracy": 0.1875,
+    "pattern_accuracy_ci95": [
+     0.10191390905651461,
+     0.31939867266128563
+    ]
+   },
+   "historical": {
+    "n": 115,
+    "pattern_accuracy": 0.1565217391304348,
+    "pattern_accuracy_ci95": [
+     0.10136128934816126,
+     0.23388753085600156
+    ]
+   },
+   "perturbation": {
+    "n": 98,
+    "pattern_accuracy": 0.21428571428571427,
+    "pattern_accuracy_ci95": [
+     0.14464543404168767,
+     0.30548027492648133
+    ]
+   }
+  },
+  "by_followup": {
+   "False": {
+    "n": 237,
+    "pattern_accuracy": 0.2109704641350211,
+    "pattern_accuracy_ci95": [
+     0.16384711322962847,
+     0.26731394750982057
+    ]
+   },
+   "True": {
+    "n": 100,
+    "pattern_accuracy": 0.21,
+    "pattern_accuracy_ci95": [
+     0.14165654017044627,
+     0.2997996891155716
+    ]
+   }
+  },
+  "by_gold_source": {
+   "authored-ground-truth": {
+    "n": 76,
+    "pattern_accuracy": 0.3026315789473684,
+    "pattern_accuracy_ci95": [
+     0.21091334615348203,
+     0.41334201665743053
+    ]
+   },
+   "human-ratified": {
+    "n": 19,
+    "pattern_accuracy": 0.21052631578947367,
+    "pattern_accuracy_ci95": [
+     0.08507676573617334,
+     0.4333427863088372
+    ]
+   },
+   "human-triage": {
+    "n": 13,
+    "pattern_accuracy": 0.15384615384615385,
+    "pattern_accuracy_ci95": [
+     0.04325817796522907,
+     0.4223463125106327
+    ]
+   },
+   "llm-judge": {
+    "n": 190,
+    "pattern_accuracy": 0.18947368421052632,
+    "pattern_accuracy_ci95": [
+     0.14011794939491531,
+     0.25113714803880527
+    ]
+   },
+   "llm-judge+human-confirmed": {
+    "n": 39,
+    "pattern_accuracy": 0.15384615384615385,
+    "pattern_accuracy_ci95": [
+     0.07247472334686095,
+     0.29729463780372695
+    ]
+   }
+  },
+  "latency_ms_p50": 0.3,
+  "latency_ms_p95": 0.6,
+  "llm_share": 0.0,
+  "parse_failures": 0,
+  "candidate_errors": 0
+ },
+ "pipeline_llm": {
+  "candidate": "pipeline_llm",
+  "n": 337,
+  "pattern_accuracy": 0.6261127596439169,
+  "pattern_accuracy_ci95": [
+   0.573306600855318,
+   0.6760762068552977
+  ],
+  "agents_exact_rate": 0.42433234421364985,
+  "agents_jaccard_mean": 0.43199802176063307,
+  "per_pattern": {
+   "SINGLE_AGENT": {
+    "gold_n": 276.0,
+    "pred_n": 187.0,
+    "recall": 0.6304347826086957,
+    "precision": 0.93048128342246,
+    "f1": 0.7516198704103672
+   },
+   "PARALLEL_DELEGATION": {
+    "gold_n": 5.0,
+    "pred_n": 19.0,
+    "recall": 0.2,
+    "precision": 0.05263157894736842,
+    "f1": 0.08333333333333333
+   },
+   "TOOL_COMPOSER": {
+    "gold_n": 28.0,
+    "pred_n": 45.0,
+    "recall": 0.6071428571428571,
+    "precision": 0.37777777777777777,
+    "f1": 0.4657534246575342
+   },
+   "CLARIFICATION_NEEDED": {
+    "gold_n": 28.0,
+    "pred_n": 86.0,
+    "recall": 0.6785714285714286,
+    "precision": 0.22093023255813954,
+    "f1": 0.3333333333333333
+   }
+  },
+  "confusion": {
+   "CLARIFICATION_NEEDED->CLARIFICATION_NEEDED": 19,
+   "CLARIFICATION_NEEDED->SINGLE_AGENT": 9,
+   "PARALLEL_DELEGATION->CLARIFICATION_NEEDED": 1,
+   "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1,
+   "PARALLEL_DELEGATION->SINGLE_AGENT": 2,
+   "PARALLEL_DELEGATION->TOOL_COMPOSER": 1,
+   "SINGLE_AGENT->CLARIFICATION_NEEDED": 66,
+   "SINGLE_AGENT->PARALLEL_DELEGATION": 9,
+   "SINGLE_AGENT->SINGLE_AGENT": 174,
+   "SINGLE_AGENT->TOOL_COMPOSER": 27,
+   "TOOL_COMPOSER->PARALLEL_DELEGATION": 9,
+   "TOOL_COMPOSER->SINGLE_AGENT": 2,
+   "TOOL_COMPOSER->TOOL_COMPOSER": 17
+  },
+  "by_source": {
+   "authored": {
+    "n": 76,
+    "pattern_accuracy": 0.8157894736842105,
+    "pattern_accuracy_ci95": [
+     0.7142173780141043,
+     0.8869740414884353
+    ]
+   },
+   "demo": {
+    "n": 48,
+    "pattern_accuracy": 0.625,
+    "pattern_accuracy_ci95": [
+     0.48362763408726595,
+     0.747847333225614
+    ]
+   },
+   "historical": {
+    "n": 115,
+    "pattern_accuracy": 0.5739130434782609,
+    "pattern_accuracy_ci95": [
+     0.48258469967350326,
+     0.6604630225610439
+    ]
+   },
+   "perturbation": {
+    "n": 98,
+    "pattern_accuracy": 0.5408163265306123,
+    "pattern_accuracy_ci95": [
+     0.4424804151653546,
+     0.6360730549820498
+    ]
+   }
+  },
+  "by_followup": {
+   "False": {
+    "n": 237,
+    "pattern_accuracy": 0.6371308016877637,
+    "pattern_accuracy_ci95": [
+     0.5741785644621824,
+     0.6957085235081519
+    ]
+   },
+   "True": {
+    "n": 100,
+    "pattern_accuracy": 0.6,
+    "pattern_accuracy_ci95": [
+     0.5020025860174634,
+     0.6905987142287374
+    ]
+   }
+  },
+  "by_gold_source": {
+   "authored-ground-truth": {
+    "n": 76,
+    "pattern_accuracy": 0.8157894736842105,
+    "pattern_accuracy_ci95": [
+     0.7142173780141043,
+     0.8869740414884353
+    ]
+   },
+   "human-ratified": {
+    "n": 19,
+    "pattern_accuracy": 0.6842105263157895,
+    "pattern_accuracy_ci95": [
+     0.4601040750469666,
+     0.8463562100152994
+    ]
+   },
+   "human-triage": {
+    "n": 13,
+    "pattern_accuracy": 0.3076923076923077,
+    "pattern_accuracy_ci95": [
+     0.12680703567070326,
+     0.5763065701492199
+    ]
+   },
+   "llm-judge": {
+    "n": 190,
+    "pattern_accuracy": 0.6210526315789474,
+    "pattern_accuracy_ci95": [
+     0.5503181967954964,
+     0.6869891381032227
+    ]
+   },
+   "llm-judge+human-confirmed": {
+    "n": 39,
+    "pattern_accuracy": 0.358974358974359,
+    "pattern_accuracy_ci95": [
+     0.2274208537281349,
+     0.515818515629512
+    ]
+   }
+  },
+  "latency_ms_p50": 3704.8,
+  "latency_ms_p95": 4822.1,
+  "llm_share": 0.7744807121661721,
+  "parse_failures": 0,
+  "candidate_errors": 0
+ },
+ "single_llm": {
+  "candidate": "single_llm",
+  "n": 337,
+  "pattern_accuracy": 0.6231454005934718,
+  "pattern_accuracy_ci95": [
+   0.5702925476496258,
+   0.6732224292913284
+  ],
+  "agents_exact_rate": 0.45103857566765576,
+  "agents_jaccard_mean": 0.4549950544015826,
+  "per_pattern": {
+   "SINGLE_AGENT": {
+    "gold_n": 276.0,
+    "pred_n": 159.0,
+    "recall": 0.5652173913043478,
+    "precision": 0.9811320754716981,
+    "f1": 0.7172413793103447
+   },
+   "PARALLEL_DELEGATION": {
+    "gold_n": 5.0,
+    "pred_n": 4.0,
+    "recall": 0.2,
+    "precision": 0.25,
+    "f1": 0.22222222222222224
+   },
+   "TOOL_COMPOSER": {
+    "gold_n": 28.0,
+    "pred_n": 74.0,
+    "recall": 0.9642857142857143,
+    "precision": 0.36486486486486486,
+    "f1": 0.5294117647058824
+   },
+   "CLARIFICATION_NEEDED": {
+    "gold_n": 28.0,
+    "pred_n": 100.0,
+    "recall": 0.9285714285714286,
+    "precision": 0.26,
+    "f1": 0.40625
+   }
+  },
+  "confusion": {
+   "CLARIFICATION_NEEDED->CLARIFICATION_NEEDED": 26,
+   "CLARIFICATION_NEEDED->SINGLE_AGENT": 2,
+   "PARALLEL_DELEGATION->CLARIFICATION_NEEDED": 1,
+   "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1,
+   "PARALLEL_DELEGATION->TOOL_COMPOSER": 3,
+   "SINGLE_AGENT->CLARIFICATION_NEEDED": 73,
+   "SINGLE_AGENT->PARALLEL_DELEGATION": 3,
+   "SINGLE_AGENT->SINGLE_AGENT": 156,
+   "SINGLE_AGENT->TOOL_COMPOSER": 44,
+   "TOOL_COMPOSER->SINGLE_AGENT": 1,
+   "TOOL_COMPOSER->TOOL_COMPOSER": 27
+  },
+  "by_source": {
+   "authored": {
+    "n": 76,
+    "pattern_accuracy": 0.881578947368421,
+    "pattern_accuracy_ci95": [
+     0.7900078216321174,
+     0.9364318102667848
+    ]
+   },
+   "demo": {
+    "n": 48,
+    "pattern_accuracy": 0.625,
+    "pattern_accuracy_ci95": [
+     0.48362763408726595,
+     0.747847333225614
+    ]
+   },
+   "historical": {
+    "n": 115,
+    "pattern_accuracy": 0.5304347826086957,
+    "pattern_accuracy_ci95": [
+     0.4397175928599114,
+     0.6191844104131375
+    ]
+   },
+   "perturbation": {
+    "n": 98,
+    "pattern_accuracy": 0.5306122448979592,
+    "pattern_accuracy_ci95": [
+     0.4325246712911884,
+     0.6263904313193651
+    ]
+   }
+  },
+  "by_followup": {
+   "False": {
+    "n": 237,
+    "pattern_accuracy": 0.6751054852320675,
+    "pattern_accuracy_ci95": [
+     0.6130987003230806,
+     0.7315263504698077
+    ]
+   },
+   "True": {
+    "n": 100,
+    "pattern_accuracy": 0.5,
+    "pattern_accuracy_ci95": [
+     0.40383152963549296,
+     0.596168470364507
+    ]
+   }
+  },
+  "by_gold_source": {
+   "authored-ground-truth": {
+    "n": 76,
+    "pattern_accuracy": 0.881578947368421,
+    "pattern_accuracy_ci95": [
+     0.7900078216321174,
+     0.9364318102667848
+    ]
+   },
+   "human-ratified": {
+    "n": 19,
+    "pattern_accuracy": 0.5263157894736842,
+    "pattern_accuracy_ci95": [
+     0.31707809104859486,
+     0.7267019496745859
+    ]
+   },
+   "human-triage": {
+    "n": 13,
+    "pattern_accuracy": 0.15384615384615385,
+    "pattern_accuracy_ci95": [
+     0.04325817796522907,
+     0.4223463125106327
+    ]
+   },
+   "llm-judge": {
+    "n": 190,
+    "pattern_accuracy": 0.6368421052631579,
+    "pattern_accuracy_ci95": [
+     0.5663759830671588,
+     0.7018844824705236
+    ]
+   },
+   "llm-judge+human-confirmed": {
+    "n": 39,
+    "pattern_accuracy": 0.2564102564102564,
+    "pattern_accuracy_ci95": [
+     0.14568780474586973,
+     0.41081656050824766
+    ]
+   }
+  },
+  "latency_ms_p50": 3412.8,
+  "latency_ms_p95": 4932.1,
+  "llm_share": 1.0,
+  "parse_failures": 0,
+  "candidate_errors": 0
+ }
+}
