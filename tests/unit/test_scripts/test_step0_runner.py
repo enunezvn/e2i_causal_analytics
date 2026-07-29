@@ -56,11 +56,7 @@ def test_load_checkpoint_tolerates_and_removes_truncated_tail(tmp_path):
 
 def test_load_checkpoint_raises_on_corrupt_middle_line(tmp_path):
     p = tmp_path / "pred.jsonl"
-    p.write_text(
-        '{"query_id": "q1"}\n'
-        "GARBAGE not json\n"
-        '{"query_id": "q2"}\n'
-    )
+    p.write_text('{"query_id": "q1"}\nGARBAGE not json\n{"query_id": "q2"}\n')
     with pytest.raises(ValueError, match="corrupt"):
         load_checkpoint(p)
 
