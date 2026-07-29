@@ -1,0 +1,29 @@
+{
+  "qid": "q02",
+  "query_text": "Where are the biggest untapped opportunities to grow Remibrutinib market share?",
+  "proposed": "single_agent:gap_analyzer",
+  "forced_intent": "performance_gap",
+  "candidate_agent": "gap_analyzer",
+  "ts": "2026-07-29T15:02:16+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "gap_analyzer",
+      "priority": "critical",
+      "timeout_ms": 20000,
+      "fallback_agent": null
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "gap_analyzer",
+      "success": false,
+      "result": null,
+      "error": "gap_analyzer needs structured inputs that could not be grounded in real data (the dispatch names no brand (parameters / parsed_query entities / user_context), so there is no real business_metrics substrate to derive metrics/segments from); missing: metrics, segments, brand. Supply them via POST /api/gaps/analyze. Failing closed \u2014 no values were fabricated.",
+      "latency_ms": 0
+    }
+  ],
+  "synthesized_response": "I was unable to complete the analysis due to the following errors:\n- gap_analyzer: gap_analyzer needs structured inputs that could not be grounded in real data (the dispatch names no brand (parameters / parsed_query entities / user_context), so there is no real business_metrics substrate to derive metrics/segments from); missing: metrics, segments, brand. Supply them via POST /api/gaps/analyze. Failing closed \u2014 no values were fabricated.\n\nPlease try again or rephrase your question.",
+  "response_confidence": 0.0,
+  "status": "failed",
+  "total_ms": 0.5
+}

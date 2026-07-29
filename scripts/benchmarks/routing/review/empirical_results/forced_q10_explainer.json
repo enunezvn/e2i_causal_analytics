@@ -1,0 +1,29 @@
+{
+  "qid": "q10",
+  "query_text": "Show me the KPI summary for Kisqali",
+  "proposed": "single_agent:explainer",
+  "forced_intent": "explanation",
+  "candidate_agent": "explainer",
+  "ts": "2026-07-29T15:04:54+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "explainer",
+      "priority": "critical",
+      "timeout_ms": 45000,
+      "fallback_agent": null
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "explainer",
+      "success": false,
+      "result": null,
+      "error": "explainer needs structured inputs that could not be grounded in real data (no successful upstream agent results exist in this conversation state to explain, and dispatch.parameters supplies none \u2014 run an analysis first (e.g. a causal, gap or segmentation query), then ask for the explanation); missing: analysis_results. Failing closed \u2014 no values were fabricated.",
+      "latency_ms": 0
+    }
+  ],
+  "synthesized_response": "I was unable to complete the analysis due to the following errors:\n- explainer: explainer needs structured inputs that could not be grounded in real data (no successful upstream agent results exist in this conversation state to explain, and dispatch.parameters supplies none \u2014 run an analysis first (e.g. a causal, gap or segmentation query), then ask for the explanation); missing: analysis_results. Failing closed \u2014 no values were fabricated.\n\nPlease try again or rephrase your question.",
+  "response_confidence": 0.0,
+  "status": "failed",
+  "total_ms": 0.3
+}

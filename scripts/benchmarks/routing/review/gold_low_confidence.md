@@ -1,0 +1,109 @@
+# Gold-stage low-confidence rows (judge confidence < 0.6) — human follow-up
+
+52 rows. The judge recorded its best label + confidence for each; these
+did not clear the 0.6 floor and want a human ruling before they anchor anything.
+
+- **bench-0103** (historical, conf 0.35): "tell me about the indications in the label for Fabhalta"
+  - judge: SINGLE_AGENT / ['explainer'] — No agent contract covers regulatory label/indication lookups; explainer is the catch-all/default fallback for general, unclassified queries per its contract.
+- **bench-0013** (demo, conf 0.45): "What is the intent-to-prescribe delta for Remibrutinib?" [follow-up of: "How can I optimize resource allocation for Remibrutinib in the northeast region?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Ambiguous KPI-like metric ask for a brand, no clear domain (not cohort/causal/gap/prediction); defaults to explainer's catch-all narration per KPI-summary anchor.
+- **bench-0024** (demo, conf 0.45): "What is our trigger precision and acceptance rate this month?" [follow-up of: "Which HCP segments show the strongest treatment effect for Remibrutinib?"]
+  - judge: SINGLE_AGENT / ['health_score'] — Point-in-time model metric ask (precision/acceptance rate) fits health_score's model_health snapshot; no brand/segment tie to prior CATE turn, unrelated new single-domain query.
+- **bench-0076** (historical, conf 0.45): "provide the top 5 kpis that educate causal analysis"
+  - judge: SINGLE_AGENT / ['explainer'] — Garbled but reads as a KPI-summary ask ('top 5 KPIs') with no second domain or brand; falls to explainer's catch-all KPI/narration coverage, per KPI-summary anchor.
+- **bench-0118** (historical, conf 0.45): "can you plot what is the baseline vs upward and downward trends?" [follow-up of: "what is the kisqali NBRx for th epast 30 days"]
+  - judge: SINGLE_AGENT / ['explainer'] — Follow-up asks to visualize/narrate trend of prior Kisqali NBRx KPI (baseline/up/down) — no formal drift statistical test requested, so it's explainer's catch-all visualization/narration of existing KPI data, not drift_monitor.
+- **bench-0190** (perturbation/fragment, conf 0.45): "Remibrutinib intent-to-prescribe delta"
+  - judge: SINGLE_AGENT / ['explainer'] — Fragment with brand+metric but no domain verb (no causal/predict/drift wording); reads as a KPI/metric readout, defaulting to explainer's catch-all narration like the KPI-summary anchor.
+- **bench-0211** (perturbation/paraphrase, conf 0.5): "Can you provide the trigger precision and acceptance rate metrics for the current month?"
+  - judge: CLARIFICATION_NEEDED / [] — No brand/metric maps cleanly to any covered capability; 'trigger precision' and 'acceptance rate' are undefined terms spanning health_score/experiment_monitor/drift_monitor ambiguously — genuinely underspecified.
+- **bench-0002** (demo, conf 0.55): "What is the market share for Kisqali compared to competitors?" [follow-up of: "What are the TRx trends for Kisqali in Q4?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Market share/competitor comparison is a KPI lookup with no dedicated owning agent; falls to explainer's catch-all narration, matching the 'KPI summary' anchor precedent.
+- **bench-0014** (demo, conf 0.55): "What percentage of PNH patients have been tested?"
+  - judge: SINGLE_AGENT / ['cohort_profiler'] — Population-sizing/breakdown question for PNH (Fabhalta) cohort; closest single-domain owner is cohort_profiler despite 'tested' not being a literal covered segment breakdown (contract-gap, not multi-domain).
+- **bench-0051** (historical, conf 0.55): "What is Remibrutinib market share?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple KPI/metric lookup, no dedicated market-share agent; falls to explainer's catch-all narration per KPI-summary anchor, no second domain or dependency.
+- **bench-0052** (historical, conf 0.55): "What is NRx?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple metric-definition question, no brand/domain-specific analytics ask; falls to explainer's catch-all narration/default-dispatch contract.
+- **bench-0056** (historical, conf 0.55): "Hello, what brands are covered?" [follow-up of: "What caused the TRx drop for Kisqali?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Generic platform/brand-coverage question, no specific domain metric; explainer is catch-all fallback for general/unclassified queries per its contract.
+- **bench-0060** (historical, conf 0.55): "What are the top recommendations for Fabhalta?"
+  - judge: SINGLE_AGENT / ['explainer'] — Vague 'top recommendations' with brand but no specific metric/domain (gap, allocation, causal); defaults to explainer's catch-all narration/recommendation-extraction contract.
+- **bench-0066** (historical, conf 0.55): "tell me about models KPIs"
+  - judge: SINGLE_AGENT / ['health_score'] — Model performance KPIs (accuracy/precision/latency/etc) is health_score's model_health capability; vague but maps to one domain, not a fragment lacking any anchor.
+- **bench-0067** (historical, conf 0.55): "What is Total TRx?"
+  - judge: SINGLE_AGENT / ['explainer'] — Generic KPI lookup with no brand/domain-specific analytic ask; falls to explainer's catch-all narration/default dispatch per its contract.
+- **bench-0071** (historical, conf 0.55): "Get the Total TRx for Kisqali in the US region" [follow-up of: "What is the current Total TRx value?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Simple KPI lookup (Total TRx for a brand/region) - no causal, gap, or cohort ask. Falls to explainer as catch-all KPI/metric narration owner, per KPI-summary anchor.
+- **bench-0078** (historical, conf 0.55): "tell me about TRx" [follow-up of: "Hello, what is the current system health?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Generic metric mention (TRx) with no brand/domain specifics or causal/gap/prediction framing; falls to explainer's catch-all narration for general/unclassified queries.
+- **bench-0085** (historical, conf 0.55): "Tell the kisqali trx for the past 30 days"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple KPI lookup (TRx value over a time window) for Kisqali, no causal/gap/cohort ask — falls to explainer's catch-all KPI/narration coverage, per KPI-summary anchor.
+- **bench-0088** (historical, conf 0.55): "what is the TRx for remibrutinib in the past 30 days?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple TRx metric lookup, no causal/gap/cohort ask. Matches KPI-summary anchor routed to explainer as catch-all metric narrator; single domain, no dependency.
+- **bench-0093** (historical, conf 0.55): "what data do you have?" [follow-up of: "tell me about the remibrutinib NRx for the past 90 days"]
+  - judge: CLARIFICATION_NEEDED / [] — Generic meta-question with no brand/metric/domain specified; even with context it's ambiguous whether user wants data catalog, cohort info, or KPI scope.
+- **bench-0101** (historical, conf 0.55): "What is the NBRx trend for Remibrutinib?"
+  - judge: SINGLE_AGENT / ['explainer'] — NBRx trend is a KPI/metric lookup, not causal/gap/prediction-specific; no domain agent explicitly covers raw trend narration, so it defaults to explainer's catch-all KPI summary role.
+- **bench-0104** (historical, conf 0.55): "what is the Fabhalta Trx in the past 30 days?" [follow-up of: "tell me about the indications in the label for Fabhalta"]
+  - judge: SINGLE_AGENT / ['explainer'] — TRx KPI lookup for Fabhalta over a time window is a KPI summary ask, single-domain, catch-all owner explainer; no specific KPI/causal agent contract matches better.
+- **bench-0105** (historical, conf 0.55): "is that above or below baseline?" [follow-up of: "what is the Fabhalta Trx in the past 30 days?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Follow-up to a KPI lookup asking for simple baseline comparison narration; no formal drift/statistical test requested, so it stays with explainer's catch-all KPI narration, in-context.
+- **bench-0106** (historical, conf 0.55): "yes" [follow-up of: "is that above or below baseline? "]
+  - judge: CLARIFICATION_NEEDED / [] — The prior question was already answered; bare 'yes' carries no new brand/metric/domain ask, so no agent contract can be inferred.
+- **bench-0107** (historical, conf 0.55): "Was teh TRx value below or above baseline?" [follow-up of: "what is the kisqali trx in the past 30 days?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Follow-up KPI comparison of the just-reported Kisqali TRx figure vs baseline; simple contextual narration, not statistical drift detection—falls to explainer's catch-all KPI narration.
+- **bench-0108** (historical, conf 0.55): "run both" [follow-up of: "yes"]
+  - judge: CLARIFICATION_NEEDED / [] — Assistant turn is truncated before listing the two options 'both' refers to; no brand/metric/domain pair is recoverable, so intent cannot be routed.
+- **bench-0109** (historical, conf 0.55): "Is the TRx value above or below baseline?" [follow-up of: "what is the TRx for Remibrutinib in the past 30 days?"]
+  - judge: SINGLE_AGENT / ['drift_monitor'] — Comparing a current TRx value against a baseline is drift_monitor's distributional-comparison contract; not a point-in-time health check nor a plain KPI lookup.
+- **bench-0112** (historical, conf 0.55): "can you plot NRX trends for remibrutinib?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple NRx trend plot request, no causal/forecast/gap ask - falls to explainer's catch-all KPI/narration coverage; no other agent contractually owns 'plot trends'.
+- **bench-0120** (historical, conf 0.55): "Chart the TRx trend"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple trend-chart request with a metric (TRx) but no brand/domain-specific analytic ask; falls to explainer's catch-all narration/visualization role, single domain.
+- **bench-0121** (historical, conf 0.55): "What is the current TRx?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple current-KPI lookup with a metric but no brand/domain complexity; explainer is catch-all for such KPI queries, though missing brand adds ambiguity.
+- **bench-0123** (historical, conf 0.55): "How do the high-risk segments for Fabhalta compare in terms of treatment initiation rates?" [follow-up of: "Which patient segments have the worst adherence for Fabhalta?"]
+  - judge: SINGLE_AGENT / ['cohort_profiler'] — Comparing high-risk segments' initiation rates is a segment-tier breakdown of one brand's population, owned by cohort_profiler's severity-tier contract, not a causal/heterogeneity effect estimate.
+- **bench-0129** (historical, conf 0.55): "causal analysis" [follow-up of: "What is the current market share of Remibrutinib compared to its competitors?"]
+  - judge: CLARIFICATION_NEEDED / [] — Fragment 'causal analysis' lacks a specified treatment/outcome pair; even with market-share context, no clear causal_impact query (X causes Y) can be inferred.
+- **bench-0138** (historical, conf 0.55): "What is the current total TRx?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple KPI lookup, no brand/domain-specific analysis; falls to explainer's catch-all KPI/narration coverage, similar to the 'KPI summary for Kisqali' anchor.
+- **bench-0152** (historical, conf 0.55): "Can we analyze the TRx-to-NRx ratios for each severity segment of Remibrutinib to identify any trends or concerns?" [follow-up of: "What is the impact of HCP engagement on TRx performance across the severity segments for Remibrutinib?"]
+  - judge: SINGLE_AGENT / ['explainer'] — TRx/NRx ratio trend-spotting by segment is a KPI/metric narrative ask, not causal/gap/cohort-sizing; falls to explainer's catch-all KPI narration contract, single domain.
+- **bench-0153** (historical, conf 0.55): "chart TRx trends for Remibrutinib across the severity segments"
+  - judge: SINGLE_AGENT / ['explainer'] — Plain KPI/trend charting request, single domain, no causal/predictive ask; falls to explainer's catch-all KPI narration per anchor precedent.
+- **bench-0154** (historical, conf 0.55): "Can we analyze the conversion rates for Remibrutinib in each severity segment over the last year?" [follow-up of: "chart TRx trends for Remibrutinib across the severity segments"]
+  - judge: SINGLE_AGENT / ['explainer'] — Conversion-rate breakdown by segment is a KPI/metric query, not covered specifically by any listed agent; falls to explainer's catch-all KPI narration, single domain, no dependency chain.
+- **bench-0155** (historical, conf 0.55): "What is the current market share of Remibrutinib compared to its competitors in the same therapeutic area?" [follow-up of: "yes"]
+  - judge: SINGLE_AGENT / ['explainer'] — Market share/competitive comparison is a KPI lookup not covered by any specific agent; falls to explainer's catch-all narration per its default/fallback contract.
+- **bench-0158** (historical, conf 0.55): "What is the Trx trend over the last 30 days?"
+  - judge: SINGLE_AGENT / ['explainer'] — Simple TRx trend lookup over a time window - no brand-specific causal/prediction ask, no second domain. Falls to explainer's catch-all KPI narration, per KPI-summary anchor.
+- **bench-0160** (historical, conf 0.55): "How did Remibrutinib's market share trend over the last 12 months relative to Kisqali and Fabhalta?" [follow-up of: "Show me how Remibrutinib's TRx trend over the last 30 days compares to Kisqali and Fabhalta."]
+  - judge: SINGLE_AGENT / ['explainer'] — Simple KPI/trend comparison across brands over time; no causal/gap/prediction domain invoked. Catch-all KPI narration falls to explainer per its contract, single domain.
+- **bench-0162** (historical, conf 0.55): "Render the TRx trend chart for all three brands (Remibrutinib, Kisqali, Fabhalta). Important: issue all three renderKpiTrend tool calls together in one single response (parallel tool calls), not one at a time." [follow-up of: "Yes - check for a causal driver behind that June 2026 spike."]
+  - judge: SINGLE_AGENT / ['explainer'] — Rendering a KPI trend chart across brands is a single visualization/reporting ask (no causal/gap/prediction dependency); falls to explainer's catch-all narration/visual-suggestion contract, not a distinct analytic domain.
+- **bench-0167** (perturbation/paraphrase, conf 0.55): "How does Kisqali's market penetration stack up against other players in this space?"
+  - judge: SINGLE_AGENT / ['explainer'] — Competitive market-position query is a general KPI/narrative ask with no explicit causal/gap/prediction facet; falls to explainer's catch-all narration, single domain.
+- **bench-0168** (perturbation/pronoun_followup, conf 0.55): "And how has that share trended over the last two quarters? Is it growing or losing ground to competitors?" [follow-up of: "What is the market share for Kisqali compared to competitors?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Market-share trend narrative is a KPI/trend summary, no causal/prediction/gap ask; falls to explainer's catch-all narration, consistent with the KPI-summary anchor.
+- **bench-0180** (perturbation/pronoun_followup, conf 0.55): "Why is that segment performing so differently, and can you break down those numbers by geography?" [follow-up of: "Give me an NRx breakdown by patient clinical segment for Remibrutinib"]
+  - judge: PARALLEL_DELEGATION / ['explainer', 'cohort_profiler'] — Explaining existing segment-difference results is explainer's narrative-of-analysis domain; geography breakdown is a new independent cohort_profiler segmentation ask, not dependent on the explanation.
+- **bench-0208** (perturbation/fragment, conf 0.55): "HCP tiers by Rx volume: high/med/low"
+  - judge: SINGLE_AGENT / ['cohort_profiler'] — HCP segmentation by Rx-volume tiers is single-domain cohort/segment sizing; closest analog to cohort_profiler's HCP-by-TRx cohort precedent, despite contract-gap (patients vs HCPs).
+- **bench-0212** (perturbation/typo, conf 0.55): "whats our trigger precision & acceptance rate this mnth?"
+  - judge: CLARIFICATION_NEEDED / [] — No brand and 'trigger precision/acceptance rate' don't map cleanly to any single contract's covered metrics (model_health precision vs interim-trigger vs feedback acceptance) — ambiguous domain.
+- **bench-0213** (perturbation/paraphrase, conf 0.55): "Can you provide metrics on how often our trigger alerts are incorrect and the frequency with which clinicians bypass or override these alerts?"
+  - judge: CLARIFICATION_NEEDED / [] — No listed agent covers clinical 'trigger alert' accuracy/override metrics; not drift, health, or experiment alerts. No brand/domain fits any contract, so intent isn't routable.
+- **bench-0214** (perturbation/fragment, conf 0.55): "trigger false alert rate override rate metrics"
+  - judge: CLARIFICATION_NEEDED / [] — Fragment lacks brand/entity context; 'false alert rate override rate' is garbled, no clear domain (experiment_monitor vs drift_monitor) or actionable metric target inferable.
+- **bench-0219** (perturbation/paraphrase, conf 0.55): "Which therapeutic agents can I access and query within this analytics platform?"
+  - judge: SINGLE_AGENT / ['explainer'] — No specific brand/metric/domain ask—general platform-capability question falls to explainer's catch-all/default-dispatch coverage for unclassified queries.
+- **bench-0248** (perturbation/paraphrase, conf 0.55): "What is the conversion rate metric for Remibrutinib across our patient population?"
+  - judge: SINGLE_AGENT / ['explainer'] — Plain KPI metric lookup for a brand, no second domain or dependency; catch-all narration/KPI ask owned by explainer, analogous to the 'KPI summary for Kisqali' anchor.
+- **bench-0256** (perturbation/pronoun_followup, conf 0.55): "How does that compare to Fabhalta, and what's driving the difference?" [follow-up of: "What is TRx for Kisqali?"]
+  - judge: SINGLE_AGENT / ['explainer'] — Follow-up KPI comparison + plain-language driver explanation; catch-all narrative synthesis, no explicit causal-effect estimation request, so explainer owns it (single domain).
+- **bench-0257** (perturbation/paraphrase, conf 0.55): "What factors are driving this trend or outcome?"
+  - judge: CLARIFICATION_NEEDED / [] — Fragment lacks brand/metric/domain context; no prior turn provided despite 'in-context' note, so intent (explainer vs causal_impact vs drift) is genuinely ambiguous.
+- **bench-0222** (perturbation/pronoun_followup, conf 0.58): "Why is the calibration lagging, and how does that compare to Fabhalta's model performance?" [follow-up of: "What is the ROC-AUC and calibration of the current Kisqali model?"]
+  - judge: TOOL_COMPOSER / ['tool_composer'] — Root-cause of lagging calibration is drift_monitor territory (health_score excludes 'why is metric bad'), while cross-brand comparison to Fabhalta's model performance is health_score; comparison depends on the lag finding -> dependency-linked, 2 domains.

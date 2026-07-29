@@ -1,0 +1,29 @@
+{
+  "qid": "q06",
+  "query_text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption",
+  "proposed": "single_agent:experiment_designer",
+  "forced_intent": "experiment_design",
+  "candidate_agent": "experiment_designer",
+  "ts": "2026-07-29T15:03:16+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "experiment_designer",
+      "priority": "critical",
+      "timeout_ms": 60000,
+      "fallback_agent": null
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "experiment_designer",
+      "success": false,
+      "result": null,
+      "error": "Agent timed out after 60000ms",
+      "latency_ms": 60000
+    }
+  ],
+  "synthesized_response": "I was unable to complete the analysis due to the following errors:\n- experiment_designer: Agent timed out after 60000ms\n\nPlease try again or rephrase your question.",
+  "response_confidence": 0.0,
+  "status": "failed",
+  "total_ms": 60035.7
+}

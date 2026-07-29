@@ -1,0 +1,668 @@
+{
+  "_meta": {
+    "generated": "2026-07-29",
+    "method": "5-agent contract-review team; each agent contract verified against the canonical sources in rank order: .claude/contracts/ tier docs, src/agents/<name>/CONTRACT_VALIDATION.md, and the implementation (agent.py / graph.py / nodes) with file:line evidence. Where doc and implementation disagree, the implementation is today's truth and the discrepancy is listed under 'mismatches'.",
+    "consumers": "scripts/benchmarks/routing/gen_judge_review.py (human-review worksheet) and the #1337 Step 0 gold-judge prompt. Single source of truth for contract text in the routing benchmark.",
+    "boundary_notes": [
+      "health_score vs drift_monitor: the prior 'health_score = NOT ML-model quality' premise is WRONG. health_score HAS a model-health dimension (model_health.py + ModelMetrics accuracy/precision/recall/f1/auc) - it scores whether deployed models are performing acceptably RIGHT NOW against fixed thresholds (point-in-time operational snapshot). drift_monitor owns TEMPORAL/DISTRIBUTIONAL SHIFT vs a baseline (PSI/KS/chi-square on prediction distributions, concept drift, causal-DAG structural drift). Router keyword split proves it: 'model.*perform'->system_health(health_score), 'model.*degrad'->drift_check(drift_monitor). Practical reviewer rule: 'is model X healthy / what's its accuracy' = health_score; 'has model X drifted/degraded/PSI/distribution-shift over time' = drift_monitor.",
+      "All FOUR agents ARE wired into INTENT_TO_AGENTS and reachable from intent_classifier keyword patterns - the 'believed UNMAPPED' premise is FALSE for every one of them. drift_check->drift_monitor (critical/10s), system_health->health_score (critical/5s), resource_allocation->resource_optimizer (critical/20s, plus 'high' in the performance_gap+resource_allocation multi-agent pattern), feedback->feedback_learner (critical/30s). CONTRACT_VALIDATION.md exists for all four.",
+      "'Unmapped agents' in #1337 means unmapped in the 4-stage classifier's DOMAIN_TO_AGENT (8 domains only, pattern_selector.py:26-38): resource_optimizer, health_score, feedback_learner, experiment_monitor have no classifier Domain. ALL 14 chat agents ARE reachable via the legacy router INTENT_TO_AGENTS - the gap is classifier coverage, not prod reachability."
+    ]
+  },
+  "agents": {
+    "cohort_constructor": {
+      "purpose": "Tier-0 ML-pipeline agent that applies FDA/EMA-label inclusion/exclusion criteria to a real patient DataFrame to materialize an eligible cohort (patient IDs + eligibility audit trail + temporal lookback/followup validation) for downstream ML training.",
+      "covers": [
+        "Given structured study params + a patient DataFrame, produce the list of eligible patient_journey_ids for a brand/indication (Remibrutinib/CSU, Fabhalta/PNH, Kisqali/HR+HER2-)",
+        "Apply AND inclusion / AND-NOT exclusion criteria with a per-criterion eligibility log (removed/remaining counts)",
+        "Validate temporal eligibility (lookback_days/followup_days) and emit exclusion stats + config_hash for reproducibility",
+        "Hand off cohort_spec + eligible_patient_ids to data_preparer"
+      ],
+      "does_not_cover": [
+        "Chat/free-text 'how many patients are eligible / size the cohort' questions -> owned by cohort_profiler (constructor cannot run from a chat payload; its resolver fails closed)",
+        "Natural-language explanation of an analysis -> owned by explainer",
+        "Upstream study-scoping (target var, problem type, brand/indication) -> owned by scope_definer (its upstream)",
+        "Downstream feature/QC prep on the eligible set -> owned by data_preparer (its downstream)"
+      ],
+      "internal_pipeline": "LangGraph single dispatch, NO LLM: validate_config -> apply_criteria -> validate_temporal -> generate_metadata -> END (conditional error_handler branch); real entry point is run(patient_df, brand, indication, config)/run_sync, SLA <120s per 100K patients.",
+      "dispatch": "NOT in INTENT_TO_AGENTS -> pipeline-only, not chat-routable. It IS listed in VALID_AGENTS so a chat route could name it, but its dispatcher resolver _resolve_cohort_constructor_input ALWAYS returns NeedsStructuredInput (fails closed with an actionable 'use the ML cohort pipeline' message, missing=('patient_df','brand')). Deliberately NOT in AGENT_METHOD_MAP (Tier 1-5 only); would otherwise fall to default 'analyze', which it doesn't implement. Net: can NEVER be a valid gold routing target for a chat query.",
+      "sources": [
+        ".claude/contracts/tier0/cohort_constructor.md:1-24",
+        "src/agents/cohort_constructor/agent.py:76-97,231-266,516-543",
+        "src/agents/cohort_constructor/graph.py:92-139",
+        "src/agents/orchestrator/nodes/dispatcher.py:1184-1213,1248,1760",
+        "src/agents/orchestrator/_agent_method_map.py:64-69",
+        "src/agents/orchestrator/nodes/router.py:44-185 (absent from INTENT_TO_AGENTS)"
+      ],
+      "distilled_line_verdict": "confirm",
+      "mismatches": [
+        "Contract doc (tier0/cohort_constructor.md) frames a rich request/response contract as if chat/orchestrator-callable; implementation reality is that any chat dispatch fails closed by design (resolver returns NeedsStructuredInput). Doc = pipeline intent, impl = pipeline-only + chat-guard.",
+        "Doc positions scope_definer -> cohort_constructor -> data_preparer and Tier-0 ML Foundation, consistent with impl; no functional discrepancy beyond the routability nuance."
+      ]
+    },
+    "cohort_profiler": {
+      "purpose": "Tier-0 chat companion to cohort_constructor that answers the free-text 'size / define a cohort of ... patients' question with REAL DB-backed per-segment prescribing counts (new-Rx headline + severity tier + line-of-therapy breakdown) for one brand or all brands, never fabricating.",
+      "covers": [
+        "How many patients are eligible / in the Remibrutinib (or Fabhalta / Kisqali) prescribing population?",
+        "Size / define the cohort for <brand>",
+        "Break down the <brand> population by disease-severity tier (low/medium/high)",
+        "Break down the <brand> population by line of therapy (0/1/2/3+ prior lines)",
+        "Same across all supported brands when no brand is named in the query"
+      ],
+      "does_not_cover": [
+        "Materializing the actual eligible patient rows / IDs with FDA-EMA criteria + audit trail for an ML pipeline -> owned by cohort_constructor",
+        "Explaining an upstream analysis in narrative form -> owned by explainer",
+        "Arbitrary KPI/metric questions beyond cohort sizing -> the domain KPI agents (e.g. gap_analyzer) / chat KPI tool"
+      ],
+      "internal_pipeline": "Single dispatch, pure async computation over the shared KPI calculator, NO graph/LLM: analyze() -> _canonical_brand -> per brand _profile_brand [headline NRx (WS3-BI-006) + 3 severity-tier calls + 4 therapy-line calls, each via _value -> asyncio.to_thread(calculator.calculate)] -> _render markdown narrative; <=8 sequential DB-backed KPI calls per brand; fails closed only on genuine empty (no prescribing population / calculator unavailable).",
+      "dispatch": "INTENT_TO_AGENTS['cohort_definition'] -> cohort_profiler, criticality 'critical', timeout_ms=30000, fallback_agent=None (router.py:176-184). 4-stage active classifier: pattern_selector Domain.COHORT_DEFINITION -> cohort_profiler. Resolver _resolve_cohort_profiler_input grounds an optional brand and NEVER fails closed at resolve time; it IS in _FAIL_CLOSED_ON_FAILED_STATUS so an honest empty (status='failed') fails the dispatch rather than laundering a blank profile. Dispatches via default 'analyze' method (intentionally NOT in AGENT_METHOD_MAP -> Tier-0 fall-through); narrative field via AGENT_RESPONSE_FIELDS.",
+      "sources": [
+        "src/agents/cohort_profiler/agent.py:1-197",
+        "src/agents/cohort_profiler/__init__.py:1-13",
+        "src/agents/orchestrator/nodes/router.py:169-184",
+        "src/agents/orchestrator/nodes/dispatcher.py:1216-1234,1251,1285-1299",
+        "src/agents/orchestrator/classifier/pattern_selector.py:34-38",
+        "src/agents/orchestrator/_agent_method_map.py:64-69,209"
+      ],
+      "distilled_line_verdict": "correct: accurate but add specificity -- the segment axes are exactly two (disease-severity tier AND line-of-therapy), it reports population SIZES not a patient list, reuses the mig-105 KPI-calculator path (WS3-BI-006 NRx) so numbers match live chat, and it fails closed (not zero-narrates) when a brand has no prescribing population.",
+      "mismatches": [
+        "No CONTRACT_VALIDATION.md and no tier-doc entry exists for cohort_profiler (newer agent); contract intent lives only in the agent + __init__ docstrings and the router/pattern_selector/dispatcher comments. Implementation is the sole source of truth."
+      ]
+    },
+    "tool_composer": {
+      "purpose": "Tier-1 orchestration agent that answers a MULTI-FACETED query via a 4-phase pipeline (DECOMPOSE -> PLAN -> EXECUTE -> SYNTHESIZE): break the query into 2-6 atomic sub-questions with a dependency DAG, map each sub-question to a registered tool/agent-capability, execute tools in dependency order with retry + circuit-breaker resilience, and synthesize ONE coherent answer with confidence/citations/caveats. It composes OTHER agents' capabilities; it does not compute the analytics itself.",
+      "covers": [
+        "Decomposing a multi-faceted query into 2-6 atomic sub-questions with a DAG (tier1-tool-composer-contracts.md:16-19, 96-116; decomposer.py)",
+        "Planning: mapping each sub-question to a tool across MULTIPLE agent capabilities via the ToolRegistry (planner.py; CONTRACT_VALIDATION.md:8; categories CAUSAL/SEGMENTATION/GAP/EXPERIMENT/PREDICTION/MONITORING/EXPLANATION)",
+        "Dependency-ordered execution with resilience: exponential backoff, circuit breaker, parallel groups (executor.py; tier1-tool-composer-contracts.md:336-529)",
+        "Synthesis of cross-domain results into one NL answer with confidence, citations, caveats (synthesizer.py; ComposedResponse)",
+        "Invoked ONLY when routing classifies the query as MULTI_FACETED / multi-domain-with-dependencies (agent.py:245-247)"
+      ],
+      "does_not_cover": [
+        "Single-domain queries EVEN multi-STEP ones. A single mapped domain/intent always routes SINGLE_AGENT to the domain agent (e.g. causal_impact), which runs its OWN multi-step internal pipeline under one dispatch (pattern_selector.py:127-147)",
+        "Independent multi-domain queries with NO dependencies -> route PARALLEL_DELEGATION, not tool_composer (pattern_selector.py:165-192)",
+        "The routing decision itself: RouterNode/classifier decides; tool_composer is a target, and 'multi_faceted' is a META-signal, NOT an agent domain (router.py:284-298)",
+        "The underlying analytical methods (DoWhy/EconML, SHAP, forecasting): it calls other agents' registered tools",
+        "Ambiguity resolution: that is CLARIFICATION_NEEDED, decided upstream in Stage 4"
+      ],
+      "internal_pipeline": "4 phases, each with its own handler and (for 3 of them) an LLM call: QueryDecomposer (decomposer.py, ~0.3 temp), ToolPlanner (planner.py, ~0.2 temp), PlanExecutor (executor.py, NO LLM - runs tools with backoff + circuit breaker + parallel groups), ResponseSynthesizer (synthesizer.py, ~0.4 temp). SLA 180s (10/15/120/30s per phase). CRITICAL NUANCE for the judge: heavy single-domain agents (causal_impact, heterogeneous_optimizer, cohort_profiler) ALSO run multi-step pipelines internally under ONE dispatch - that internal multi-step-ness is NOT tool_composer's trigger.",
+      "dispatch": "Reached two ways, both converging on the same dispatch. (1) Legacy: IntentClassifierNode sets primary_intent='multi_faceted' -> router.py INTENT_TO_AGENTS['multi_faceted'] = tool_composer, priority=critical, timeout_ms=180000, fallback_agent='explainer' (router.py:159-168, 296-298). (2) 4-stage active mode: pattern=='TOOL_COMPOSER' -> router.py _dispatch_from_classification reuses that same canonical dispatch (router.py:451-458). Entry point ToolComposerAgent.run({query, context}) -> composer.compose(). NOTE: classifier-detected sub_questions/dependencies are NOT currently threaded into tool_composer params (router.py:451-458 comment) - tool_composer re-decomposes from scratch.",
+      "distilled_line_verdict": "correct: 'Decomposes multi-faceted queries, plans + executes across multiple agent capabilities, synthesizes one answer. Warranted only when no single agent's contract covers the ask' is RIGHT on the necessary condition (no single agent covers the ask). Tighten to the platform's operative test: the ask must span >=2 DISTINCT agent-capability domains (or >=2 distinct strong intents) AND those cross-domain sub-questions must be dependency-linked. If >=2 domains but NO dependency between them, it is PARALLEL_DELEGATION, not TOOL_COMPOSER. Cross-domain spanning makes it not-single-agent; the dependency makes it tool_composer rather than parallel.",
+      "mismatches": [
+        "The tier1 contract doc frames tool_composer around its Phase-1 decomposition mechanic (2-6 sub-questions + DAG) without restating the multi-DOMAIN routing GATE. Read alone, the doc invites 'any dependent multi-step query' - exactly the misread the LLM judge made. The gate lives ONLY in the classifier code, not the contract doc.",
+        "The distilled line does not surface that PARALLEL_DELEGATION ALSO spans multiple agent capabilities; only the dependency link separates the two."
+      ],
+      "sources": [
+        ".claude/contracts/tier1-tool-composer-contracts.md:11-34, 694-763",
+        "src/agents/tool_composer/CONTRACT_VALIDATION.md:11-13, 200-209",
+        "src/agents/tool_composer/agent.py:232-262, 445-520",
+        "src/agents/orchestrator/nodes/router.py:159-168, 451-458"
+      ]
+    },
+    "causal_impact": {
+      "purpose": "Estimates the average causal effect of a single treatment on an outcome using DoWhy/EconML, then validates it with refutation and sensitivity tests and renders a natural-language interpretation.",
+      "covers": [
+        "What is the causal effect of HCP engagement frequency on TRx (ATE + 95% CI + p-value)?",
+        "Does increasing copay assistance actually cause higher adherence once we control for these confounders?",
+        "Is this relationship causal or just correlation - does the effect survive placebo / random-common-cause / subset refutation?",
+        "How sensitive is the estimated effect to unmeasured confounding (E-value / robustness value)?",
+        "Build (or auto-discover) the causal DAG for treatment X on outcome Y and estimate the adjusted effect."
+      ],
+      "does_not_cover": [
+        "Which segments respond best / how the effect varies across segments (deep CATE + responder discovery) - owned by heterogeneous_optimizer (causal_impact only emits an optional cate_by_segment hint and hands off).",
+        "Where the biggest ROI/performance-gap opportunities are and their payback - owned by gap_analyzer.",
+        "Designing an A/B test or pre-registration to validate the effect - owned by experiment_designer.",
+        "Forecasting/predicting future outcome values - owned by prediction_synthesizer.",
+        "Solving optimal budget/resource allocation across territories - owned by resource_optimizer."
+      ],
+      "internal_pipeline": "audit_init -> graph_builder (DAG build, optional V4.4 structure auto-discovery) -> adjustment_set_policy -> estimation (DoWhy/EconML ATE) -> refutation (conditional; may skip to interpretation on failure) -> sensitivity (E-value) -> interpretation (NL narrative) -> END - all one SINGLE_AGENT dispatch.",
+      "dispatch": "INTENT_TO_AGENTS['causal_effect'] -> causal_impact, criticality 'critical' (timeout 30s, fallback_agent='explainer'); also first leg of MULTI_AGENT_PATTERNS[('causal_effect','segment_analysis')] as 'critical' (paired with heterogeneous_optimizer 'high').",
+      "sources": [
+        ".claude/contracts/tier2-contracts.md:79-337",
+        "src/agents/causal_impact/agent.py:1-4",
+        "src/agents/causal_impact/graph.py:447-497",
+        "src/agents/orchestrator/nodes/router.py:45-53",
+        "src/agents/orchestrator/nodes/router.py:189-192"
+      ],
+      "distilled_line_verdict": "correct: pipeline is 6 business stages, not 5 - the distilled line omits the adjustment_set_policy stage (between DAG build and estimation) and that DAG build can run auto-discovery (structure learning). Refutation is conditional (skippable on estimation failure). CATE is only an optional side-output hint here, not the agent's job - the '/CATE estimation' phrasing overstates it (heterogeneous_optimizer owns CATE).",
+      "mismatches": [
+        "Contract latency says 'Up to 120s' but router SLA for causal_effect is 30000ms; the doc's own header (60s compute + 30s interp) also disagrees with the 30s dispatch timeout.",
+        "Contract lists a fixed estimation_method default 'backdoor.econml.dml.CausalForestDML' and no auto-discovery in 2.x prose, but implementation supports auto_discover/DAG structure learning (V4.4) as a real graph_builder path.",
+        "Implementation adds an audit_init genesis node and an adjustment_set_policy node not enumerated as pipeline stages in the tier-2 contract."
+      ]
+    },
+    "gap_analyzer": {
+      "purpose": "Detects performance gaps across segments for a brand, estimates ROI/payback to close each gap, and prioritizes the opportunities into actionable buckets (quick wins, steady plays, strategic bets) with value-destroying ones suppressed.",
+      "covers": [
+        "Where are the biggest ROI opportunities for Kisqali?",
+        "Which regions/specialties/deciles have the largest performance gaps vs potential (or vs target/benchmark)?",
+        "What's the ROI, payback period, and difficulty of closing each gap, and which are quick wins vs strategic bets?",
+        "Rank our opportunities by expected revenue impact and tell me the total addressable value."
+      ],
+      "does_not_cover": [
+        "Whether closing a gap will *causally* lift the outcome / estimating the intervention's treatment effect - owned by causal_impact (gap_analyzer suggests it as validation).",
+        "Which segments respond best to an intervention (treatment-effect heterogeneity / CATE) - owned by heterogeneous_optimizer.",
+        "Designing a controlled experiment to validate the top opportunity - owned by experiment_designer (its default suggested_next_agent).",
+        "Running the constrained optimal-allocation solver to distribute a fixed budget across opportunities - owned by resource_optimizer (gap_analyzer sizes/prioritizes but does not solve the allocation)."
+      ],
+      "internal_pipeline": "audit_init -> gap_detector -> roi_calculator -> instrument_analyzer (#357, real IV first-stage F-test strength) -> prioritizer -> formatter -> END - linear, one SINGLE_AGENT dispatch.",
+      "dispatch": "INTENT_TO_AGENTS['performance_gap'] -> gap_analyzer, criticality 'critical' (timeout 20s, no fallback); also fallback_agent for heterogeneous_optimizer's 'segment_analysis'; and first leg of MULTI_AGENT_PATTERNS[('performance_gap','resource_allocation')] as 'critical' (paired with resource_optimizer 'high').",
+      "sources": [
+        ".claude/contracts/tier2-contracts.md:341-568",
+        "src/agents/gap_analyzer/agent.py:1-13",
+        "src/agents/gap_analyzer/graph.py:88-111",
+        "src/agents/gap_analyzer/nodes/instrument_analyzer.py:1-21",
+        "src/agents/gap_analyzer/agent.py:374-524",
+        "src/agents/orchestrator/nodes/router.py:54-62"
+      ],
+      "distilled_line_verdict": "correct: pipeline is now 5 business nodes, not 4 - instrument_analyzer (#357) sits between roi_calculator and prioritizer. Prioritization is a 3-bucket partition (quick_wins / steady_plays / strategic_bets) plus a suppressed value-destroying bucket (T6), not just quick-win/strategic-bet.",
+      "mismatches": [
+        "agent.py module docstring still says 'Linear 4-node pipeline (gap_detector -> roi_calculator -> prioritizer -> formatter)', but graph.py wires 5 business nodes including instrument_analyzer - docstring is stale vs implementation.",
+        "tier-2 output contract (GapAnalyzerOutput) only defines quick_wins + strategic_bets, but the implementation output also emits steady_plays and suppressed_count (T6 3-bucket partition) - contract under-specifies the real output.",
+        "Docstring claims 'minimal LLM usage / Computational' (consistent with 20s SLA), but the instrument_analyzer IV F-test path is an implementation capability absent from the tier-2 contract prose."
+      ]
+    },
+    "heterogeneous_optimizer": {
+      "purpose": "Estimates treatment-effect heterogeneity (CATE) with EconML CausalForestDML, discovers high/low-responder segments, ranks effect-modifier importance, and recommends an optimal treatment-allocation policy across segments.",
+      "covers": [
+        "Which HCP segments respond best (and worst) to increased engagement?",
+        "How does the treatment effect vary across segments - give me the CATE by segment?",
+        "Who are the high vs low responders and what features define them?",
+        "What's the optimal treatment-allocation policy across segments to maximize total lift?",
+        "Which effect modifiers drive the heterogeneity (feature importance)?"
+      ],
+      "does_not_cover": [
+        "The single overall ATE with full refutation/robustness and E-value sensitivity plus DAG construction - owned by causal_impact (heterogeneous_optimizer reports overall_ate as a byproduct but not the refutation/sensitivity suite).",
+        "ROI/opportunity sizing and payback across KPIs - owned by gap_analyzer (its fallback_agent).",
+        "Designing an experiment to validate the segment-specific strategies - owned by experiment_designer (its default suggested_next_agent).",
+        "Forecasting future outcomes - owned by prediction_synthesizer.",
+        "The org-wide constrained budget-allocation solve - owned by resource_optimizer (heterogeneous_optimizer emits per-segment PolicyRecommendation treatment rates, not the global optimizer solution)."
+      ],
+      "internal_pipeline": "audit_init -> estimate_cate (CausalForestDML CATE + heterogeneity_score + feature_importance) -> analyze_segments (high/low responders) -> [hierarchical_analysis (CausalML hierarchical uplift, optional)] -> [uplift_analysis (optional, non-fatal)] -> learn_policy (allocation policy) -> generate_profiles (viz + insights) -> END - one SINGLE_AGENT dispatch.",
+      "dispatch": "INTENT_TO_AGENTS['segment_analysis'] -> heterogeneous_optimizer, criticality 'critical' (timeout 420000ms - raised for real CausalForestDML on the full frame, fallback_agent='gap_analyzer'); also second leg of MULTI_AGENT_PATTERNS[('causal_effect','segment_analysis')] as 'high'.",
+      "sources": [
+        ".claude/contracts/tier2-contracts.md:572-853",
+        "src/agents/heterogeneous_optimizer/agent.py:1-9",
+        "src/agents/heterogeneous_optimizer/graph.py:173-237",
+        "src/agents/heterogeneous_optimizer/CONTRACT_VALIDATION.md:619-629",
+        "src/agents/orchestrator/nodes/router.py:63-85",
+        "src/agents/orchestrator/nodes/router.py:190-191"
+      ],
+      "distilled_line_verdict": "correct: confirm the CausalForestDML -> segment CATE -> high/low responders -> allocation policy core, but the distilled line omits two real stages - hierarchical uplift analysis (CausalML, toggleable) and the non-fatal uplift_analysis node - plus effect-modifier feature_importance and the generate_profiles (viz/insights) output.",
+      "mismatches": [
+        "Contract latency says 'Up to 150s' but the router SLA is 420000ms (7 min); router comment documents a measured 269.7s serialized full-frame run, so the 150s contract figure is stale.",
+        "tier-2 pipeline prose / CONTRACT_VALIDATION node table list only estimate_cate -> analyze_segments -> learn_policy -> generate_profiles, but the implementation inserts optional hierarchical_analysis and uplift_analysis nodes (feature-flagged) between analyze_segments and learn_policy.",
+        "Confidence is computed by a module-level calculate_confidence SSOT because the /segments route invokes the graph directly (graph.ainvoke) and bypasses _build_output - a real dual-callsite detail not reflected in the contract doc."
+      ]
+    },
+    "experiment_designer": {
+      "purpose": "Designs a rigorous causal experiment end-to-end BEFORE it runs — turning a business question into a full, pre-registered A/B/RCT design with power analysis, validity audit, and runnable DoWhy analysis code.",
+      "covers": [
+        "Design an A/B test / RCT / quasi-experiment to validate that X causes Y (e.g. 'design an experiment to test whether higher HCP engagement raises TRx')",
+        "What sample size / duration do I need to detect a Z% effect at 80% power?",
+        "Choose a randomization strategy (unit, method, stratification, blocking, cluster adjustment with ICC)",
+        "Adversarially audit the validity of a proposed design and get mitigation recommendations (selection, confounding, contamination, attrition, external validity)",
+        "Generate a pre-registration document + DoWhy causal-model spec + Python analysis template for an experiment",
+        "Optionally digital-twin pre-screen an intervention before committing to the design (enable_twin_simulation, default OFF)"
+      ],
+      "does_not_cover": [
+        "Monitoring/health of an ALREADY-RUNNING experiment — SRM, enrollment, interim triggers, twin fidelity → experiment_monitor",
+        "Forecasting / ML point predictions → prediction_synthesizer",
+        "Estimating a causal effect (ATE) from existing observational data → causal_impact",
+        "Segment/CATE heterogeneity of an effect → heterogeneous_optimizer"
+      ],
+      "internal_pipeline": "audit_init → context_loader → [optional twin_simulation pre-screen] → design_reasoning (real LLM) → power_analysis → validity_audit → (conditional redesign loop → power_analysis, capped at max_redesign_iterations) → template_generator → END (error_handler branch); one SINGLE_AGENT dispatch",
+      "dispatch": "intent key 'experiment_design' → experiment_designer, priority=critical, timeout=150000ms (raised from 60000ms 2026-07-29 per #1351 — measured 88-90s live), fallback=None (router.py:86-94); also a DISCOVERY_AWARE_AGENT so it may receive a discovered DAG in parameters (router.py:36-41); reachable via classifier SINGLE_AGENT/PARALLEL when active",
+      "sources": [
+        "src/agents/experiment_designer/agent.py:1-122",
+        "src/agents/experiment_designer/graph.py:195-317",
+        "src/agents/experiment_designer/nodes/design_reasoning.py:25-187",
+        "src/agents/experiment_designer/CONTRACT_VALIDATION.md:1-135",
+        ".claude/contracts/tier3-contracts.md:305-345",
+        "src/agents/orchestrator/nodes/router.py:86-94,36-41",
+        "src/agents/orchestrator/nodes/intent_classifier.py:217-222,526"
+      ],
+      "distilled_line_verdict": "confirm — accurate; would append that reasoning is now a REAL LLM call (not mock), plus an optional digital-twin pre-screen and pre-registration/DoWhy code generation are part of the single dispatch",
+      "mismatches": [
+        "CONTRACT_VALIDATION.md:179,217 label design_reasoning and validity_audit as 'Mock LLM (placeholder for Claude)'; implementation calls a real LLM via get_chat_llm (reasoning tier) with an opt-in MARKED mock only when no key is configured AND E2I_ALLOW_MOCK_LLM is set (design_reasoning.py:25,113-117) — doc = stale intent, code = real LLM today",
+        "CONTRACT_VALIDATION.md graph (6 steps) omits the audit_init genesis node, the optional twin_simulation pre-screen node (graph.py:236-264), and the error_handler branch present in graph.py",
+        "CONTRACT_VALIDATION.md §12 marks DSPy integration PENDING/'dspy_integration.py Not created', but src/agents/experiment_designer/dspy_integration.py exists"
+      ]
+    },
+    "experiment_monitor": {
+      "purpose": "Monitors ALREADY-RUNNING A/B experiments for health problems — SRM, enrollment shortfalls, stale data, interim-analysis triggers, and digital-twin fidelity — using deterministic (no-LLM) checks.",
+      "covers": [
+        "Check the health / status / issues of my active (running) experiments",
+        "Is there sample ratio mismatch (SRM) in experiment X? (chi-squared test)",
+        "Have we reached any interim-analysis trigger / milestone?",
+        "Which running experiments have low enrollment or stale data?",
+        "Is the digital-twin prediction fidelity drifting for this experiment (simulated vs actual ATE)?",
+        "Show alerts/recommendations across all active experiments (check_all_active)"
+      ],
+      "does_not_cover": [
+        "DESIGNING a new experiment, sample-size / power calc, validity audit → experiment_designer",
+        "Forecasting / ML predictions → prediction_synthesizer",
+        "Broad system/model health (not experiment-specific) → health_score",
+        "Data/model drift outside an experiment context → drift_monitor"
+      ],
+      "internal_pipeline": "audit_init → health_checker (health + enrollment + stale-data) → srm_detector (chi-squared SRM) → interim_analyzer → fidelity_checker (twin fidelity) → alert_generator → END; deterministic, no LLM; one SINGLE_AGENT dispatch",
+      "dispatch": "IS WIRED — intent key 'experiment_monitor' → experiment_monitor, priority=critical, timeout=15000ms, fallback=None (router.py:149-158); classifier ranks it as the MOST-SPECIFIC experiment intent above experiment_design (intent_classifier.py:143,252-258). NOT unmapped. Not discovery-aware.",
+      "sources": [
+        "src/agents/experiment_monitor/graph.py:1-90",
+        "src/agents/experiment_monitor/CONTRACT_VALIDATION.md:1-90,246-327",
+        "src/agents/orchestrator/nodes/router.py:149-158",
+        "src/agents/orchestrator/nodes/intent_classifier.py:143,252-258,527"
+      ],
+      "distilled_line_verdict": "confirm — accurate; the 'design of new experiments is experiment_designer' boundary is correct and is exactly the classifier's most-specific-first ordering",
+      "mismatches": [
+        "Router hypothesis correction: experiment_monitor is NOT unmapped — it has its own intent key 'experiment_monitor' at criticality=critical (router.py:150).",
+        "No tier contract doc exists for experiment_monitor anywhere in .claude/contracts/ (grep returns zero hits), yet its CONTRACT_VALIDATION.md:13 claims alignment with 'tier3-contracts.md specifications' and its Contract Reference points at tier3 — tier3-contracts.md never names the agent. Doc-vs-source gap.",
+        "CONTRACT_VALIDATION.md §1.1 says '4 nodes in series' while §1.2, the graph flow, and graph.py all show 5 business nodes (+ audit_init genesis) — internal doc inconsistency; implementation = 5 nodes."
+      ]
+    },
+    "drift_monitor": {
+      "purpose": "Detects temporal/distributional drift (data, model-prediction, concept, and causal-DAG structural) by comparing a current window against a baseline window with statistical tests, then aggregates a composite score and alerts.",
+      "covers": [
+        "Has feature/input data drifted vs baseline? (PSI + KS on feature distributions)",
+        "Have model PREDICTIONS drifted / degraded over time? (KS on score dist, chi-square on class dist, PSI)",
+        "Has the feature->target relationship changed? (concept drift: feature-importance correlation + performance degradation across periods)",
+        "Has the causal DAG structure changed? (V4.4 structural drift: added/removed edges, edge-type changes, drift_score) - distinctive to this platform",
+        "Give me drift alerts with severity + recommended actions and an overall drift score over a time window"
+      ],
+      "does_not_cover": [
+        "Point-in-time 'is model X performing acceptably RIGHT NOW / what's its current accuracy/auc/latency' operational snapshot -> health_score (its model_health node)",
+        "Overall platform/component/pipeline/agent-availability health rollup -> health_score",
+        "Acting on drift (retraining, reallocating) -> not this agent"
+      ],
+      "internal_pipeline": "audit_init -> data_drift -> model_drift -> concept_drift -> structural_drift (V4.4) -> alert_aggregator -> END (stateless; SupabaseDataConnector; no LLM)",
+      "dispatch": "INTENT_TO_AGENTS['drift_check'] -> drift_monitor, priority=critical, timeout 10s, no fallback (router.py:131-139). Reachable: intent_classifier 'drift_check' patterns 'drift|shift|distribution.*change|data quality|model.*degrad' (intent_classifier.py:243-246).",
+      "sources": [
+        "src/agents/drift_monitor/agent.py:1-22",
+        "src/agents/drift_monitor/graph.py:6,76-82",
+        "src/agents/drift_monitor/nodes/model_drift.py:1-12,47-193,304-437",
+        "src/agents/drift_monitor/nodes/concept_drift.py:1-12",
+        "src/agents/drift_monitor/nodes/structural_drift_detector.py:1-12",
+        ".claude/contracts/tier3-contracts.md:367-607",
+        "src/agents/orchestrator/nodes/router.py:131-139",
+        "src/agents/orchestrator/nodes/intent_classifier.py:243-246"
+      ],
+      "distilled_line_verdict": "correct: mostly right, but add the 4th detector - structural/causal-DAG drift (V4.4), which is distinctive to this platform and not implied by 'PSI + KS'. The phrase 'ML-model degradation questions live here' is accurate ONLY for temporal/distributional degradation vs a baseline; a current-snapshot 'is the model performing well' question routes to health_score (keyword split: 'model.*degrad'->drift_check, 'model.*perform'->system_health).",
+      "mismatches": [
+        "agent.py docstring calls concept drift a 'placeholder', but concept_drift.py implements real methods (feature-importance correlation + performance degradation). Doc understates implementation.",
+        "Contract input requires features_to_monitor; model drift also needs a model_id and silently returns empty results if absent (model_drift.py:66-72) - a no-op rather than an error for model-only asks."
+      ]
+    },
+    "health_score": {
+      "purpose": "Fast-path, no-LLM platform health rollup that measures FOUR dimensions - component, model, pipeline, agent - at a point in time and composes an overall 0-100 score + letter grade.",
+      "covers": [
+        "What is overall system/platform health right now? (composite score A-F, dashboard-ready)",
+        "Are system COMPONENTS up? (component_health: parallel component status checks)",
+        "Are DATA PIPELINES fresh/succeeding? (pipeline_health: last run/success, freshness, rows)",
+        "Are the deployed MODELS performing acceptably right now? (model_health: current accuracy/precision/recall/f1/auc/latency/error-rate/volume vs fixed thresholds -> healthy/degraded/unhealthy)",
+        "Are the other AGENTS available/reliable? (agent_health: availability, latency, success rate)",
+        "Quick health check (component-only fast variant)"
+      ],
+      "does_not_cover": [
+        "Has anything DRIFTED / shifted / degraded relative to a baseline over time (PSI, KS, prediction-distribution shift, concept/structural drift) -> drift_monitor",
+        "Experiment/trial health (SRM, interim, enrollment) -> experiment_monitor",
+        "Why a specific model/metric is bad (root-cause) -> drift_monitor / explainer"
+      ],
+      "internal_pipeline": "Full: audit_init -> component -> model -> pipeline -> agent -> compose -> END. Quick variant: audit_init -> component -> compose -> END. No LLM; each dimension fail-CLOSED (unmeasured -> excluded, never fabricated 1.0).",
+      "dispatch": "INTENT_TO_AGENTS['system_health'] -> health_score, priority=critical, timeout 5s, no fallback (router.py:122-129). Reachable: intent_classifier 'system_health' patterns 'system.*(health|status)|model.*perform|pipeline.*status' (intent_classifier.py:238-241).",
+      "sources": [
+        "src/agents/health_score/agent.py:1-11",
+        "src/agents/health_score/graph.py:44,85-90,105,138-140",
+        "src/agents/health_score/nodes/model_health.py:1-5,59-135,189-223",
+        "src/agents/health_score/nodes/component_health.py:1-5",
+        "src/agents/health_score/nodes/pipeline_health.py:1-5",
+        "src/agents/health_score/nodes/agent_health.py:1-5",
+        ".claude/contracts/tier3-contracts.md:611-766",
+        "src/agents/orchestrator/nodes/router.py:122-129",
+        "src/agents/orchestrator/nodes/intent_classifier.py:238-241"
+      ],
+      "distilled_line_verdict": "correct: the clause 'NOT ML-model quality (that is drift_monitor)' is WRONG as written. health_score explicitly scores model health as one of its four dimensions via a dedicated model_health.py node and ModelMetrics (accuracy/precision/recall/f1/auc/latency/error-rate). The true boundary is POINT-IN-TIME OPERATIONAL SNAPSHOT vs fixed thresholds (health_score) versus TEMPORAL/DISTRIBUTIONAL SHIFT vs a baseline (drift_monitor) - not 'system vs model'. The router encodes exactly this: 'model.*perform' -> system_health/health_score; 'model.*degrad' -> drift_check/drift_monitor. Everything else in the line (system health, fast path, no LLM, component/pipeline/dashboard, adjacent-to-drift) is confirmed.",
+      "mismatches": [
+        "Contract (tier3) presents model/pipeline/agent dimensions as always-populated Field(...); implementation makes each Optional and fail-closed - an unmeasured dimension is None and EXCLUDED from the composite, not fabricated healthy (agent.py Optional fields; model_health.py:59-135). Implementation is safer than the contract text.",
+        "For the benchmark boundary that was rewritten: 'is model X healthy / what's its accuracy now' IS covered by health_score; only 'has it drifted/degraded over time' belongs to drift_monitor. A cell premised on 'health_score never touches model quality' would mislabel current-snapshot model-health asks."
+      ]
+    },
+    "prediction_synthesizer": {
+      "purpose": "Aggregates predictions from multiple ML models into a single ensemble forecast with model provenance, agreement score, and prediction intervals (optionally enriched with historical context).",
+      "covers": [
+        "Predict/forecast a target for an entity (e.g. 'forecast churn / TRx / adherence for HCP X')",
+        "What is the expected / likely value (probability) of Y over a given time horizon?",
+        "Combine several models into an ensemble prediction (average / weighted / voting / stacking) with a confidence interval",
+        "Give a prediction with model-agreement and uncertainty quantification",
+        "Enrich a forecast with similar historical cases, feature importance, historical accuracy, and trend direction (full graph)"
+      ],
+      "does_not_cover": [
+        "WHY / causal-effect estimation (ATE) → causal_impact",
+        "In-depth explanation of a prediction's drivers → explainer (it even sets suggested_next_agent='explainer')",
+        "Designing an experiment to test a hypothesis → experiment_designer",
+        "Segment/CATE heterogeneity → heterogeneous_optimizer"
+      ],
+      "internal_pipeline": "orchestrate (parallel per-model predictions via asyncio.gather, 5s/model timeout) → combine (ensemble method + z-score intervals + model_agreement = 1−CV) → enrich (similar cases, feature importance, historical accuracy, trend) → END; a 'simple' variant stops after combine; one SINGLE_AGENT dispatch",
+      "dispatch": "intent key 'prediction' → prediction_synthesizer, priority=critical, timeout=15000ms, fallback=None (router.py:95-103). ALSO in MULTI_AGENT_PATTERNS ('prediction'+'explanation') → prediction_synthesizer(critical)+explainer(high), which is a PARALLEL_DELEGATION of TWO agents, not one dispatch (router.py:197-200). Referenced as a focus agent for drift analytics in tier5.",
+      "sources": [
+        "src/agents/prediction_synthesizer/CONTRACT_VALIDATION.md:1-70,156-241,410-416",
+        "src/agents/prediction_synthesizer/agent.py:113-332",
+        "src/agents/orchestrator/nodes/router.py:95-103,197-200",
+        "src/agents/orchestrator/nodes/intent_classifier.py:223-227,151",
+        ".claude/contracts/tier4-contracts.md:233-290"
+      ],
+      "distilled_line_verdict": "confirm — accurate; 'multi-model prediction aggregation and ensemble synthesis with model provenance' matches the orchestrate→combine→enrich pipeline and get_handoff (model provenance + agreement + intervals)",
+      "mismatches": [
+        "model_orchestrator falls back to MOCK predictions when no real ModelClient/registry is wired (CONTRACT_VALIDATION.md:170; model_orchestrator.py:195-208) — labeled/for-testing, but note it is not guaranteed-real inference end-to-end.",
+        "Doc internal inconsistency: §15 lists required memory as Working+Episodic and marks store_prediction (Episodic) COMPLETE, but §10.1 marks Episodic Memory 'No' — §10.1 is stale.",
+        "§17 documents Opik tracing as COMPLETE/enabled, but per project state OPIK is intentionally stopped platform-wide — tracer exists (opik_tracer.py) but is gated off in practice."
+      ]
+    },
+    "resource_optimizer": {
+      "purpose": "Computational (no-LLM core) optimizer that allocates a constrained resource (budget/rep-time/samples/calls) across entities to maximize an objective, with optional what-if scenarios, sensitivity, and ROI/impact projection.",
+      "covers": [
+        "How should we allocate budget/reps/samples/calls across territories/HCPs/segments? (linear/MILP/nonlinear solve)",
+        "Optimize for maximize_outcome / maximize_roi / minimize_cost / balance under budget/capacity/min-coverage/max-frequency constraints",
+        "What-if scenario analysis across allocation options (run_scenarios)",
+        "Constraint sensitivity analysis (shadow prices / sensitivity_analysis)",
+        "Projected total outcome, ROI, and impact-by-segment for a recommended allocation"
+      ],
+      "does_not_cover": [
+        "Where is the performance GAP / opportunity sizing (the 'what to fix' before allocation) -> gap_analyzer",
+        "Causal effect of a lever (does spend CAUSE uplift) -> causal_impact / heterogeneous_optimizer",
+        "Predicting an outcome value -> prediction_synthesizer"
+      ],
+      "internal_pipeline": "Full: audit_init -> formulate -> optimize -> [scenario if run_scenarios] -> project -> END (conditional edges; error_handler branch). Simple variant: audit_init -> formulate -> optimize -> project -> END.",
+      "dispatch": "INTENT_TO_AGENTS['resource_allocation'] -> resource_optimizer, priority=critical, timeout 20s, no fallback (router.py:104-111). ALSO in MULTI_AGENT_PATTERNS[('performance_gap','resource_allocation')] -> ('gap_analyzer' critical, 'resource_optimizer' HIGH) (router.py:193-196). Reachable: intent_classifier 'resource_allocation' patterns '(allocat|optimi|distribut).*(resource|budget|rep)|where.*invest|prioriti' (intent_classifier.py:228-231).",
+      "sources": [
+        "src/agents/resource_optimizer/agent.py:1-5,38-49",
+        "src/agents/resource_optimizer/graph.py:65,98-114,125,159-174",
+        "src/agents/resource_optimizer/nodes/problem_formulator.py:1-4",
+        "src/agents/resource_optimizer/nodes/optimizer.py:1-4",
+        "src/agents/resource_optimizer/nodes/scenario_analyzer.py:1-4",
+        "src/agents/resource_optimizer/nodes/impact_projector.py:1-4",
+        ".claude/contracts/tier4-contracts.md:285-504",
+        "src/agents/orchestrator/nodes/router.py:104-111,193-196"
+      ],
+      "distilled_line_verdict": "confirm: accurate. Optional additions for completeness - it is a real solver (linear/MILP/nonlinear, auto-select), does what-if scenarios and ROI/impact-by-segment projection, and is the 'high' secondary in the performance_gap+resource_allocation multi-agent pattern (gap_analyzer is the critical primary).",
+      "mismatches": [
+        "Contract lists this under BOTH Tier 3 (as a low-success-rate example) and Tier 4 (its real home / full I/O contract); the substantive contract is tier4-contracts.md:285-504. Tier2/Tier5 references are only cross-mentions.",
+        "Contract input marks allocation_targets/constraints as required (min_items=1); agent.py input defaults them to empty lists - a bare 'optimize my budget' query with no targets/constraints won't error at the model but has nothing to solve."
+      ]
+    },
+    "explainer": {
+      "purpose": "Synthesizes upstream agents' analysis_results into an audience-tailored natural-language narrative (executive summary, detailed explanation, insights, visual suggestions, follow-ups), auto-selecting LLM vs deterministic mode by input complexity; also serves as the orchestrator's universal default/fallback agent.",
+      "covers": [
+        "Explain / summarize / interpret these analysis results in plain language (narrative | structured | presentation | brief)",
+        "Tailor an explanation to an audience (executive / analyst / data_scientist)",
+        "Extract findings/recommendations/warnings/opportunities + suggest visuals + follow-up questions from provided results",
+        "Catch-all narration for general/unclassified queries (default dispatch)"
+      ],
+      "does_not_cover": [
+        "Producing the underlying causal effect estimate -> owned by causal_impact (explainer only narrates its output)",
+        "Sizing a gap / opportunity -> owned by gap_analyzer",
+        "Segment/CATE estimation -> owned by heterogeneous_optimizer",
+        "Cohort sizing -> owned by cohort_profiler; cohort materialization -> cohort_constructor",
+        "Multi-sub-question decomposition -> owned by tool_composer (explainer is its fallback, not its substitute)"
+      ],
+      "internal_pipeline": "LangGraph single dispatch (optional LLM): audit_init -> assemble (ContextAssemblerNode) -> reason (DeepReasonerNode) -> generate (NarrativeGeneratorNode) -> END, with an error_handler branch; entry point explain()/summarize()/explain_for_audience(); _should_use_llm gates LLM vs deterministic.",
+      "dispatch": "INTENT_TO_AGENTS['explanation'] -> explainer, criticality 'critical', timeout_ms=45000. ALSO the universal default/fallback: _default_routing (no intent classified) and the unknown-primary-intent single-agent branch both default to explainer; it is the named fallback_agent for 'causal_effect' and 'multi_faceted'/tool_composer; and appears as the secondary in the prediction+explanation multi-agent pattern. 4-stage active classifier: pattern_selector Domain.EXPLANATION -> explainer. Resolver _resolve_explainer_input; in _FAIL_CLOSED_ON_FAILED_STATUS (a graph-errored explanation fails the dispatch, an empty-but-honest one completes).",
+      "sources": [
+        "src/agents/explainer/agent.py:44-104,255-368,413-449,457-482",
+        "src/agents/explainer/graph.py:114-140",
+        "src/agents/explainer/CONTRACT_VALIDATION.md:1-53",
+        "src/agents/orchestrator/nodes/router.py:113-121,197-201,216-217,301-315,467-498",
+        "src/agents/orchestrator/nodes/dispatcher.py:1257,1291",
+        "src/agents/orchestrator/classifier/pattern_selector.py:33"
+      ],
+      "distilled_line_verdict": "confirm",
+      "mismatches": [
+        "Tier label inconsistency: agent.py/CONTRACT_VALIDATION.md call it 'Tier 5 (Self-Improvement)', but functionally it is the general-narration + universal-fallback agent (classifier/router treat EXPLANATION as a normal domain and explainer as the default). Cosmetic, not behavioral.",
+        "CONTRACT_VALIDATION.md is stale vs code: it shows the graph as assemble->reason->generate (missing the audit_init genesis node and error_handler that graph.py:114-140 actually wires), and its Appendix A line counts / get_handoff location (claims agent.py:216-252) are wrong (get_handoff is at 413-449; agent.py is 482 lines). Behavior described is otherwise accurate."
+      ]
+    },
+    "feedback_learner": {
+      "purpose": "Async/batch self-improvement agent: collects a window of user feedback + agent outcomes, mines patterns (LLM reasoning), evaluates responses against a rubric, and emits learning recommendations + knowledge/prompt updates (incl. DSPy training signals).",
+      "covers": [
+        "Analyze a batch of feedback over a time range and find recurring failure/quality patterns (detected_patterns, clusters, root-cause hypotheses)",
+        "Produce learning recommendations (prompt_update/model_retrain/data_update/config_change/new_capability) + priority improvements",
+        "Propose/apply knowledge-base updates (prompts, thresholds, baselines, agent configs)",
+        "Rubric / AI-as-judge evaluation of agent responses (rubric_node)",
+        "Causal-discovery-specific feedback loop: track DAG accuracy by algorithm, recommend params (V4.4 discovery_feedback_node)",
+        "DSPy training-signal collection for MIPROv2/GEPA optimization and learning summaries"
+      ],
+      "does_not_cover": [
+        "Real-time answer to a single user query (it is batch/async, keyed by batch_id + time range, not a per-query responder)",
+        "Live model performance/drift measurement -> health_score / drift_monitor",
+        "Serving the optimized prompts at inference time -> target agents / DSPy runtime, not this agent"
+      ],
+      "internal_pipeline": "audit_init -> enrich (CognitiveRAG) -> collect -> analyze -> [rubric] -> extract -> update -> finalize -> END (conditional edges; discovery-feedback + error_handler branches).",
+      "dispatch": "INTENT_TO_AGENTS['feedback'] -> feedback_learner, priority=critical, timeout 30s, no fallback (router.py:140-147). Reachable: intent_classifier 'feedback' patterns 'feedback|learn.*from|improve.*based on' (intent_classifier.py:248-250).",
+      "sources": [
+        "src/agents/feedback_learner/agent.py:1-10,38-58",
+        "src/agents/feedback_learner/graph.py:57-60,143-184",
+        "src/agents/feedback_learner/nodes/pattern_analyzer.py:1-5",
+        "src/agents/feedback_learner/nodes/learning_extractor.py:1-5",
+        "src/agents/feedback_learner/nodes/knowledge_updater.py:1-5",
+        "src/agents/feedback_learner/nodes/rubric_node.py:1-9",
+        "src/agents/feedback_learner/nodes/discovery_feedback_node.py:1-9",
+        ".claude/contracts/tier5-contracts.md:339-512,643-648",
+        "src/agents/orchestrator/nodes/router.py:140-147"
+      ],
+      "distilled_line_verdict": "confirm: correct core. Add that it is BATCH/async (not real-time), that it also runs rubric AI-judge evaluation and a V4.4 causal-discovery feedback loop, and that its output is patterns -> recommendations -> knowledge/prompt updates (not just 'summaries').",
+      "mismatches": [
+        "Contract note (tier5-contracts.md:643-648) says Tier 5 agents are 'typically NOT dispatched directly by the orchestrator in real-time' - yet router.py:140-147 DOES map intent 'feedback' to it at critical/30s. Its input contract is batch-shaped (batch_id + time_range_start/end), so a live 'learn from my feedback' query has no batch/time-range to bind. Doc-vs-router tension worth flagging for any benchmark cell that treats it as a real-time responder.",
+        "Contract latency = 'no real-time constraint (async)', but the router imposes a 30s SLA."
+      ]
+    }
+  },
+  "routing_patterns": {
+    "SINGLE_AGENT": {
+      "definition": "Query maps to exactly ONE capability domain (is_multi_domain == False, i.e. domain_count <= 1), OR primary domain is EXPLANATION with confidence > 0.7. Routes to the one DOMAIN_TO_AGENT agent. Internal multi-step-ness of that agent is irrelevant - a single-domain query with dependent internal steps still routes here.",
+      "sources": [
+        "pattern_selector.py:8 (docstring), 101-147 (Rule 2 explanation override + Rule 3 single-domain)",
+        "schemas.py:39, 129 (is_multi_domain = len(domains)>1)",
+        "router.py:300-315 (legacy single-agent dispatch on primary intent in INTENT_TO_AGENTS)"
+      ]
+    },
+    "PARALLEL_DELEGATION": {
+      "definition": "Multi-domain (is_multi_domain == True) AND is_parallelizable == True (dependency_analysis has ZERO dependencies). Routes to multiple INDEPENDENT agents, one per detected domain, deduped. Legacy equivalent: hard-coded MULTI_AGENT_PATTERNS pairs, or Fix-1 primary+top-secondary parallel delegation.",
+      "sources": [
+        "pattern_selector.py:9 (docstring), 165-192 (Rule 5)",
+        "dependency_detector.py:126-133 (is_parallelizable = len(dependencies)==0)",
+        "router.py:188-201 (MULTI_AGENT_PATTERNS), 265-293 (Fix-1), 446-449 (4-stage PARALLEL_DELEGATION dispatch)"
+      ]
+    },
+    "TOOL_COMPOSER": {
+      "definition": "Multi-domain (Rule 3 already returned for single-domain) AND NOT parallelizable (has data dependencies between the cross-domain sub-questions). Docstring: 'Use Tool Composer for dependent multi-domain queries.' Routes to tool_composer. Legacy equivalent: primary_intent promoted to 'multi_faceted' only when a sequential/dependency marker joins >=2 DISTINCT strong intents and the pair is not a defined parallel pair.",
+      "sources": [
+        "pattern_selector.py:8-9 (docstring), 194-212 (Rule 6)",
+        "intent_classifier.py:429-450 (multi_faceted promotion: len(strong_components)>=2 + has_sequential_composition + not parallel pair)",
+        "multi_faceted.py:65-108 (sequential-marker SSOT; explicit 'single mapped intent wrongly routes single asks to tool_composer')",
+        "router.py:451-458 (4-stage TOOL_COMPOSER dispatch)"
+      ]
+    },
+    "CLARIFICATION_NEEDED": {
+      "definition": "No domains detected, OR the top domain's confidence < MIN_CONFIDENCE (0.5). Query too ambiguous to route; returns empty target_agents, confidence 0.0. In router ACTIVE mode this pattern (or confidence < 0.5) causes the 4-stage pipeline to ABSTAIN and hand authority back to legacy intent routing rather than blocking.",
+      "sources": [
+        "pattern_selector.py:11 (docstring), 81-97 (Rule 1)",
+        "pattern_selector.py:47 (MIN_CONFIDENCE = 0.5)",
+        "router.py:33 (MIN_ACTIVE_CONFIDENCE=0.5), 434-440 (abstain on CLARIFICATION_NEEDED / low confidence)"
+      ]
+    }
+  },
+  "composition_ruling": {
+    "answer": "Per the platform's own code, the criterion is 'no single agent's capability/domain covers the ask' (the query must span >=2 DISTINCT agent-capability domains, or >=2 distinct strong intents), AND those cross-domain sub-questions must be dependency-linked. 'Query decomposes into multiple dependent steps' is NOT sufficient on its own. If all steps live in ONE domain, the query routes SINGLE_AGENT no matter how many dependent internal steps it has - the domain agent (e.g. causal_impact) runs that multi-step pipeline itself under one dispatch. The dependency signal's ONLY job is to split a multi-DOMAIN query into PARALLEL_DELEGATION (no deps) vs TOOL_COMPOSER (deps). The LLM judge's rule ('needs multiple dependent steps -> TOOL_COMPOSER') is therefore WRONG by the platform's definition; the correct gate is cross-domain/cross-agent spanning first, dependency second.",
+    "evidence": [
+      "pattern_selector.py:127-147 (Rule 3): `if not domain_mapping.is_multi_domain:` returns SINGLE_AGENT BEFORE dependency analysis is ever consulted for composition - single-domain can never reach TOOL_COMPOSER regardless of sub-questions/dependencies.",
+      "pattern_selector.py:194-212 (Rule 6): TOOL_COMPOSER is reachable only after Rule 3 (multi-domain established) AND Rule 5 fails (is_parallelizable False, i.e. dependencies exist).",
+      "schemas.py:129: is_multi_domain = len(domains_detected) > 1, where domains are distinct AGENT-CAPABILITY domains - the spanning test is over capabilities, not steps.",
+      "intent_classifier.py:429-450: promotion to 'multi_faceted' (->tool_composer) requires `len(strong_components) >= 2` DISTINCT strong intents PLUS has_sequential_composition PLUS not a defined parallel pair.",
+      "multi_faceted.py:65-75: explicit design comment - a bare 'then <verb>' from a SINGLE mapped intent 'wrongly routes single asks to the 180s tool_composer'; promotion happens ONLY when the marker joins '>=2 distinct strong intents'.",
+      "router.py:284-298: 'multi_faceted is a META-signal, not an agent domain'; dependent pipelines across >=2 intents go to tool_composer, a lone secondary meta-hint does not.",
+      "agent.py:245-247: tool_composer 'invoked by the Orchestrator when a query is classified as MULTI_FACETED - requiring capabilities from multiple agents combined in novel ways.'"
+    ],
+    "ambiguities": [
+      "RESOLVED — DOC vs CODE gap (the judge's trap): the docs are fixed. PR #1347 (merged 4d0305e8, 2026-07-29) added a 'When Does a Query Route Here? (Routing Gate)' section to tier1-tool-composer-contracts.md (lines 23-70) stating the multi-DOMAIN gate, the Rule 3/5/6 order, and the parallel-pair override. Code and doc now agree; the code was and remains normative. The trap that misled the LLM judge is closed for all future labeling.",
+      "RESOLVED — two live classifiers with non-identical reach (norming rule): gold labels are normed against the contract registry (SSOT), NOT against what either classifier can express. Measured proof neither classifier can be the norm (empirical_results/classifier_measurement_22.json): on q13/q22 legacy scores resource_allocation 0.87/1.00 while the 4-stage maps q13 to explainer ('how' -> EXPLANATION 0.51) and q22 to CLARIFICATION, because DOMAIN_TO_AGENT has no resource domain. Classifier coverage gaps are findings the benchmark exposes (#1337 'unmapped agents'), never constraints on gold.",
+      "RESOLVED — defined parallel pairs override the dependency signal (intentional design, empirically inert on this set): inline intent at intent_classifier.py:160-172 ('deliberately routes as PARALLEL'; the marker is often an incidental preamble; >=3 strong intents still promote) plus mirror test test_multipart_tool_composer_routing.py::test_parallel_pairs_mirror_router establish it as a product decision, not a bug. A/B measurement (stock vs PARALLEL_INTENT_PAIRS emptied) over all 22 disputed queries: ZERO intents change, and has_sequential_composition fires on none of the 22 — the override binds no row, so no PARALLEL verdict option is needed for this review. Nearest candidate q20 (forecast + risk) doesn't trip it: both classifiers route it as plain prediction; whether prediction_synthesizer's uncertainty/risk coverage makes q20 single_agent is that row's normative question, unaffected by the pair rule. If a future query IS a 2-strong-intent defined pair with a sequential marker, gold follows the pair (PARALLEL), per design intent.",
+      "RESOLVED — advisory decomposition (out of scope for labels): the routing label names the correct OWNER of the dispatch; tool_composer re-decomposes from scratch (router.py:451-458), so the classifier's routing-time sub-questions/DAG never bind execution. This distinction affects execution-quality evaluation only — currently moot regardless, since tool_composer crashes on orchestrator dispatch (#1350). No impact on any verdict.",
+      "RESOLVED — domain granularity (bright-line test): 'spans >=2 domains' is decided by the contract registry's covers/does_not_cover ownership. If every capability the ask needs sits in ONE agent's covers list, it is single-domain no matter how many internal steps; it spans only when a needed capability appears in that agent's does_not_cover with a handoff to another agent. domain_mapper keyword scores are the runtime mechanism, NOT the norm — measured (classifier_measurement_22.json): 'how' alone puts EXPLANATION(0.51) on top of q13 (a resource-allocation ask) and drags q16 (verbatim in heterogeneous_optimizer's covers) into a 4-domain PARALLEL_DELEGATION; 9/22 disputed queries collapse to CLARIFICATION_NEEDED. Keyword-tip evidence is a classifier finding, never verdict grounds."
+    ]
+  },
+  "intent_to_agents": {
+    "causal_effect": {
+      "agents": [
+        "causal_impact"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 30000,
+      "fallback_agent": "explainer"
+    },
+    "performance_gap": {
+      "agents": [
+        "gap_analyzer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 20000,
+      "fallback_agent": null
+    },
+    "segment_analysis": {
+      "agents": [
+        "heterogeneous_optimizer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 420000,
+      "fallback_agent": "gap_analyzer"
+    },
+    "experiment_design": {
+      "agents": [
+        "experiment_designer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 150000,
+      "fallback_agent": null
+    },
+    "prediction": {
+      "agents": [
+        "prediction_synthesizer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 15000,
+      "fallback_agent": null
+    },
+    "resource_allocation": {
+      "agents": [
+        "resource_optimizer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 20000,
+      "fallback_agent": null
+    },
+    "explanation": {
+      "agents": [
+        "explainer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 45000,
+      "fallback_agent": null
+    },
+    "system_health": {
+      "agents": [
+        "health_score"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 5000,
+      "fallback_agent": null
+    },
+    "drift_check": {
+      "agents": [
+        "drift_monitor"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 10000,
+      "fallback_agent": null
+    },
+    "feedback": {
+      "agents": [
+        "feedback_learner"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 30000,
+      "fallback_agent": null
+    },
+    "experiment_monitor": {
+      "agents": [
+        "experiment_monitor"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 15000,
+      "fallback_agent": null
+    },
+    "multi_faceted": {
+      "agents": [
+        "tool_composer"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 180000,
+      "fallback_agent": "explainer"
+    },
+    "cohort_definition": {
+      "agents": [
+        "cohort_profiler"
+      ],
+      "criticality": "critical",
+      "timeout_ms": 30000,
+      "fallback_agent": null
+    },
+    "_default_fallback": {
+      "agents": [
+        "explainer"
+      ],
+      "criticality": "medium",
+      "timeout_ms": 30000,
+      "fallback_agent": null,
+      "note": "router.py:301-315 (unknown/absent primary intent) and _default_routing (router.py:484-492) both dispatch explainer(depth=minimal). MULTI_AGENT_PATTERNS (router.py:188-201) add cross-intent parallel pairs: (causal_effect,segment_analysis)->[causal_impact,heterogeneous_optimizer], (performance_gap,resource_allocation)->[gap_analyzer,resource_optimizer], (prediction,explanation)->[prediction_synthesizer,explainer]."
+    }
+  },
+  "classifier_domain_to_agent": {
+    "CAUSAL_ANALYSIS": "causal_impact",
+    "HETEROGENEITY": "heterogeneous_optimizer",
+    "GAP_ANALYSIS": "gap_analyzer",
+    "EXPERIMENTATION": "experiment_designer",
+    "PREDICTION": "prediction_synthesizer",
+    "MONITORING": "drift_monitor",
+    "EXPLANATION": "explainer",
+    "COHORT_DEFINITION": "cohort_profiler"
+  },
+  "router_reachable_agents": [
+    "causal_impact",
+    "gap_analyzer",
+    "heterogeneous_optimizer",
+    "experiment_designer",
+    "prediction_synthesizer",
+    "resource_optimizer",
+    "explainer",
+    "health_score",
+    "drift_monitor",
+    "feedback_learner",
+    "experiment_monitor",
+    "tool_composer",
+    "cohort_profiler"
+  ],
+  "classifier_unmapped_agents": [
+    "resource_optimizer",
+    "health_score",
+    "feedback_learner",
+    "experiment_monitor"
+  ],
+  "not_chat_routable": [
+    "cohort_constructor (exists at src/agents/cohort_constructor; DELIBERATELY bypassed for chat - cohort_definition routes to cohort_profiler instead because cohort_constructor materializes patient rows for the ML pipeline and cannot run from a chat payload; router.py:169-184)",
+    "scope_definer (Tier 0 ML pipeline - no INTENT_TO_AGENTS key; reachable only via ml_training dispatch templates in orchestrator-dispatch.yaml, not the chat classifier)",
+    "data_preparer (Tier 0 - same)",
+    "model_selector (Tier 0 - same)",
+    "model_trainer (Tier 0 - same)",
+    "feature_analyzer (Tier 0 - same)",
+    "model_deployer (Tier 0 - same)",
+    "observability_connector (Tier 0 cross-cutting - same)"
+  ]
+}

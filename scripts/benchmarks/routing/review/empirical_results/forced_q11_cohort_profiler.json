@@ -1,0 +1,86 @@
+{
+  "qid": "q11",
+  "query_text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+  "proposed": "single_agent:cohort_profiler",
+  "forced_intent": "cohort_definition",
+  "candidate_agent": "cohort_profiler",
+  "ts": "2026-07-29T15:04:54+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "cohort_profiler",
+      "priority": "critical",
+      "timeout_ms": 30000,
+      "fallback_agent": null
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "cohort_profiler",
+      "success": true,
+      "result": {
+        "status": "completed",
+        "narrative": "**Patient cohort profile \u2014 all brands**\nEligible prescribing population sized by the clinical segment axes that exist in the data today (new prescriptions, most recent 30 days):\n\n### Remibrutinib \u2014 3,283 new-Rx patients\n\n_By disease-severity tier:_\n\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 834 |\n| Medium severity | 1,738 |\n| High severity | 711 |\n\n_By line of therapy:_\n\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 898 |\n| 1 prior line (2nd line) | 796 |\n| 2 prior lines (3rd line) | 790 |\n| 3+ prior lines (4th line+) | 799 |\n\n### Fabhalta \u2014 3,330 new-Rx patients\n\n_By disease-severity tier:_\n\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 854 |\n| Medium severity | 1,759 |\n| High severity | 717 |\n\n_By line of therapy:_\n\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 909 |\n| 1 prior line (2nd line) | 824 |\n| 2 prior lines (3rd line) | 836 |\n| 3+ prior lines (4th line+) | 761 |\n\n### Kisqali \u2014 3,216 new-Rx patients\n\n_By disease-severity tier:_\n\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 801 |\n| Medium severity | 1,743 |\n| High severity | 672 |\n\n_By line of therapy:_\n\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 860 |\n| 1 prior line (2nd line) | 809 |\n| 2 prior lines (3rd line) | 796 |\n| 3+ prior lines (4th line+) | 751 |\n\n_These are population sizes, not a patient list. To materialize the actual eligible patients for an ML pipeline \u2014 with full inclusion/exclusion criteria and an audit trail \u2014 use the cohort pipeline (scope_definer \u2192 cohort_constructor)._",
+        "cohort_profile": {
+          "segment_axis": "severity+line_of_therapy",
+          "brands": [
+            {
+              "brand": "Remibrutinib",
+              "headline_nrx": 3283.0,
+              "severity": {
+                "low_severity": 834.0,
+                "medium_severity": 1738.0,
+                "high_severity": 711.0
+              },
+              "line": {
+                "0": 898.0,
+                "1": 796.0,
+                "2": 790.0,
+                "3": 799.0
+              }
+            },
+            {
+              "brand": "Fabhalta",
+              "headline_nrx": 3330.0,
+              "severity": {
+                "low_severity": 854.0,
+                "medium_severity": 1759.0,
+                "high_severity": 717.0
+              },
+              "line": {
+                "0": 909.0,
+                "1": 824.0,
+                "2": 836.0,
+                "3": 761.0
+              }
+            },
+            {
+              "brand": "Kisqali",
+              "headline_nrx": 3216.0,
+              "severity": {
+                "low_severity": 801.0,
+                "medium_severity": 1743.0,
+                "high_severity": 672.0
+              },
+              "line": {
+                "0": 860.0,
+                "1": 809.0,
+                "2": 796.0,
+                "3": 751.0
+              }
+            }
+          ]
+        },
+        "confidence": 0.9,
+        "recommendations": [
+          "Materialize the eligible patient list for ML via the cohort pipeline (scope_definer \u2192 cohort_constructor) when you need the actual patient rows, not just the population size."
+        ]
+      },
+      "error": null,
+      "latency_ms": 3575
+    }
+  ],
+  "synthesized_response": "**Patient cohort profile \u2014 all brands**\nEligible prescribing population sized by the clinical segment axes that exist in the data today (new prescriptions, most recent 30 days):\n\n### Remibrutinib \u2014 3,283 new-Rx patients\n\n_By disease-severity tier:_\n\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 834 |\n| Medium severity | 1,738 |\n| High severity | 711 |\n\n_By line of therapy:_\n\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 898 |\n| 1 prior line (2nd line) | 796 |\n| 2 prior lines (3rd line) | 790 |\n| 3+ prior lines (4th line+) | 799 |\n\n### Fabhalta \u2014 3,330 new-Rx patients\n\n_By disease-severity tier:_\n\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 854 |\n| Medium severity | 1,759 |\n| High severity | 717 |\n\n_By line of therapy:_\n\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 909 |\n| 1 prior line (2nd line) | 824 |\n| 2 prior lines (3rd line) | 836 |\n| 3+ prior lines (4th line+) | 761 |\n\n### Kisqali \u2014 3,216 new-Rx patients\n\n_By disease-severity tier:_\n\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 801 |\n| Medium severity | 1,743 |\n| High severity | 672 |\n\n_By line of therapy:_\n\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 860 |\n| 1 prior line (2nd line) | 809 |\n| 2 prior lines (3rd line) | 796 |\n| 3+ prior lines (4th line+) | 751 |\n\n_These are population sizes, not a patient list. To materialize the actual eligible patients for an ML pipeline \u2014 with full inclusion/exclusion criteria and an audit trail \u2014 use the cohort pipeline (scope_definer \u2192 cohort_constructor)._",
+  "response_confidence": 0.9,
+  "status": "completed",
+  "total_ms": 3575.8
+}

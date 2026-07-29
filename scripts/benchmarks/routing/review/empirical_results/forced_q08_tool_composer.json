@@ -1,0 +1,52 @@
+{
+  "qid": "q08",
+  "query_text": "Compare TRx market share for Kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter",
+  "proposed": "agree",
+  "forced_intent": "multi_faceted",
+  "candidate_agent": "tool_composer",
+  "ts": "2026-07-29T15:04:16+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "tool_composer",
+      "priority": "critical",
+      "timeout_ms": 180000,
+      "fallback_agent": "explainer"
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "tool_composer",
+      "success": true,
+      "result": {
+        "success": false,
+        "response": "Unable to complete analysis: Planning failed: Failed to create execution plan: the JSON object must be str, bytes or bytearray, not list",
+        "confidence": 0.0,
+        "composition_id": "comp_53324ce3",
+        "sub_questions_count": 0,
+        "tools_executed": 0,
+        "tools_succeeded": 0,
+        "total_duration_ms": 29904,
+        "supporting_data": {},
+        "citations": [],
+        "caveats": [
+          "Planning failed: Failed to create execution plan: the JSON object must be str, bytes or bytearray, not list"
+        ],
+        "error": null,
+        "metadata": {
+          "phase_durations": {
+            "decompose": 8097
+          }
+        },
+        "timestamp": "2026-07-29T15:04:46.728909+00:00",
+        "status": "FAILED",
+        "errors": []
+      },
+      "error": null,
+      "latency_ms": 30111
+    }
+  ],
+  "synthesized_response": "Unable to complete analysis: Planning failed: Failed to create execution plan: the JSON object must be str, bytes or bytearray, not list",
+  "response_confidence": 0.0,
+  "status": "completed",
+  "total_ms": 30112.3
+}

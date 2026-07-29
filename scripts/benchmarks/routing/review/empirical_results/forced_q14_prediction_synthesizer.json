@@ -1,0 +1,29 @@
+{
+  "qid": "q14",
+  "query_text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+  "proposed": "single_agent:prediction_synthesizer",
+  "forced_intent": "prediction",
+  "candidate_agent": "prediction_synthesizer",
+  "ts": "2026-07-29T15:04:58+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "prediction_synthesizer",
+      "priority": "critical",
+      "timeout_ms": 15000,
+      "fallback_agent": null
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "prediction_synthesizer",
+      "success": false,
+      "result": null,
+      "error": "prediction_synthesizer needs structured inputs that could not be grounded in real data (no registered champion model and no specific real entity to predict for; a chat query names neither, so a prediction cannot be synthesized without inventing an entity \u2014 supply a specific entity_id and prediction_target as structured dispatch parameters); missing: entity_id, prediction_target. Failing closed \u2014 no values were fabricated.",
+      "latency_ms": 0
+    }
+  ],
+  "synthesized_response": "I was unable to complete the analysis due to the following errors:\n- prediction_synthesizer: prediction_synthesizer needs structured inputs that could not be grounded in real data (no registered champion model and no specific real entity to predict for; a chat query names neither, so a prediction cannot be synthesized without inventing an entity \u2014 supply a specific entity_id and prediction_target as structured dispatch parameters); missing: entity_id, prediction_target. Failing closed \u2014 no values were fabricated.\n\nPlease try again or rephrase your question.",
+  "response_confidence": 0.0,
+  "status": "failed",
+  "total_ms": 0.2
+}

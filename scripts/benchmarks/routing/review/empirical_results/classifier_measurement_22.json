@@ -1,0 +1,456 @@
+[
+ {
+  "qid": "q01",
+  "proposed": "single_agent:causal_impact",
+  "query": "why did kisqali trx drop in q1 in the northeast region?",
+  "seq_marker": false,
+  "legacy_intent": "causal_effect",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "causal_effect",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.SINGLE_AGENT",
+  "p4_conf": 0.51,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['why']"
+  ],
+  "p4_targets": [
+   "explainer"
+  ]
+ },
+ {
+  "qid": "q02",
+  "proposed": "single_agent:gap_analyzer",
+  "query": "where are the biggest untapped opportunities to grow remibrutinib market share?",
+  "seq_marker": false,
+  "legacy_intent": "performance_gap",
+  "legacy_conf": 0.9333333333333333,
+  "legacy_secondary": [],
+  "nopair_intent": "performance_gap",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [],
+  "p4_targets": []
+ },
+ {
+  "qid": "q03",
+  "proposed": "single_agent:experiment_designer",
+  "query": "design an experiment to measure whether speaker programs increase fabhalta nrx",
+  "seq_marker": false,
+  "legacy_intent": "experiment_design",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "experiment_design",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.EXPERIMENTATION: 'EXPERIMENTATION'> confidence=0.46 evidence=['experiment', 'design']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q04",
+  "proposed": "single_agent:causal_impact",
+  "query": "what drove the change in new patient starts for fabhalta?",
+  "seq_marker": false,
+  "legacy_intent": "general",
+  "legacy_conf": 0.5,
+  "legacy_secondary": [],
+  "nopair_intent": "general",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.494,
+  "p4_domains": [
+   "domain=<Domain.MONITORING: 'MONITORING'> confidence=0.58 evidence=['change']",
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.35 evidence=['drove']"
+  ],
+  "p4_targets": [
+   "drift_monitor",
+   "causal_impact"
+  ]
+ },
+ {
+  "qid": "q05",
+  "proposed": "single_agent:causal_impact",
+  "query": "what is the causal impact of rep visits on trx for kisqali?",
+  "seq_marker": false,
+  "legacy_intent": "causal_effect",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "causal_effect",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.35 evidence=['impact']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q06",
+  "proposed": "single_agent:experiment_designer",
+  "query": "design an experiment to test whether increasing rep visits improves fabhalta adoption",
+  "seq_marker": false,
+  "legacy_intent": "experiment_design",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [
+   "performance_gap"
+  ],
+  "nopair_intent": "experiment_design",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.SINGLE_AGENT",
+  "p4_conf": 0.64,
+  "p4_domains": [
+   "domain=<Domain.EXPERIMENTATION: 'EXPERIMENTATION'> confidence=0.64 evidence=['experiment', 'test', 'design']"
+  ],
+  "p4_targets": [
+   "experiment_designer"
+  ]
+ },
+ {
+  "qid": "q07",
+  "proposed": "single_agent:causal_impact",
+  "query": "how confident are we in the rep-visit effect - did it pass refutation tests?",
+  "seq_marker": false,
+  "legacy_intent": "general",
+  "legacy_conf": 0.5,
+  "legacy_secondary": [],
+  "nopair_intent": "general",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.469,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['how']",
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.4 evidence=['effect', 'past_tense_analysis']"
+  ],
+  "p4_targets": [
+   "explainer",
+   "causal_impact"
+  ]
+ },
+ {
+  "qid": "q08",
+  "proposed": "agree",
+  "query": "compare trx market share for kisqali vs its competitors over the last 6 months, explain what's driving the dif",
+  "seq_marker": false,
+  "legacy_intent": "multi_faceted",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [
+   "causal_effect",
+   "explanation"
+  ],
+  "nopair_intent": "multi_faceted",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.475,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['explain']",
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.44 evidence=['what', 'where', 'comparison_structure']",
+   "domain=<Domain.GAP_ANALYSIS: 'GAP_ANALYSIS'> confidence=0.44 evidence=['what', 'where', 'comparison_structure']",
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.3 evidence=['conditional_structure']"
+  ],
+  "p4_targets": [
+   "explainer",
+   "heterogeneous_optimizer",
+   "gap_analyzer",
+   "causal_impact"
+  ]
+ },
+ {
+  "qid": "q09",
+  "proposed": "agree",
+  "query": "give me a launch-readiness snapshot for fabhalta: % pnh tested, nrx trend, top adoption barriers, and one expe",
+  "seq_marker": false,
+  "legacy_intent": "general",
+  "legacy_conf": 0.5,
+  "legacy_secondary": [],
+  "nopair_intent": "general",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.EXPERIMENTATION: 'EXPERIMENTATION'> confidence=0.46 evidence=['experiment', 'test']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q10",
+  "proposed": "single_agent:explainer",
+  "query": "show me the kpi summary for kisqali",
+  "seq_marker": false,
+  "legacy_intent": "general",
+  "legacy_conf": 0.5,
+  "legacy_secondary": [],
+  "nopair_intent": "general",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.SINGLE_AGENT",
+  "p4_conf": 0.51,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['how']"
+  ],
+  "p4_targets": [
+   "explainer"
+  ]
+ },
+ {
+  "qid": "q11",
+  "proposed": "single_agent:cohort_profiler",
+  "query": "build a patient cohort for remibrutinib csu with inclusion criteria for adults over 18 diagnosed in 2024",
+  "seq_marker": false,
+  "legacy_intent": "cohort_definition",
+  "legacy_conf": 1.0,
+  "legacy_secondary": [],
+  "nopair_intent": "cohort_definition",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.SINGLE_AGENT",
+  "p4_conf": 0.83,
+  "p4_domains": [
+   "domain=<Domain.COHORT_DEFINITION: 'COHORT_DEFINITION'> confidence=0.83 evidence=['cohort', 'inclusion', 'criteria', 'entity:segment']"
+  ],
+  "p4_targets": [
+   "cohort_profiler"
+  ]
+ },
+ {
+  "qid": "q12",
+  "proposed": "single_agent:causal_impact",
+  "query": "what is driving the drop in remibrutinib nrx in the northeast region this quarter?",
+  "seq_marker": false,
+  "legacy_intent": "causal_effect",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "causal_effect",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.GAP_ANALYSIS: 'GAP_ANALYSIS'> confidence=0.37 evidence=['what', 'entity:region']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q13",
+  "proposed": "single_agent:resource_optimizer",
+  "query": "how can i optimize resource allocation for remibrutinib in the northeast region?",
+  "seq_marker": false,
+  "legacy_intent": "resource_allocation",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "resource_allocation",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.SINGLE_AGENT",
+  "p4_conf": 0.51,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['how']"
+  ],
+  "p4_targets": [
+   "explainer"
+  ]
+ },
+ {
+  "qid": "q14",
+  "proposed": "single_agent:prediction_synthesizer",
+  "query": "predict which hcp segments are most likely to increase fabhalta prescriptions next quarter",
+  "seq_marker": false,
+  "legacy_intent": "segment_analysis",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [
+   "prediction"
+  ],
+  "nopair_intent": "segment_analysis",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.37 evidence=['which', 'entity:HCP', 'entity:drug', 'entity:segment']",
+   "domain=<Domain.PREDICTION: 'PREDICTION'> confidence=0.35 evidence=['predict', 'future_orientation']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q15",
+  "proposed": "extend:cohort_profiler \u2014 HCP-entity cohorts with quantitative KPI thresholds (current contract profiles patient prescribing populations by brand/severity/LoT only)",
+  "query": "build a cohort of high-value hcps who prescribed more than 50 trx last quarter",
+  "seq_marker": false,
+  "legacy_intent": "cohort_definition",
+  "legacy_conf": 1.0,
+  "legacy_secondary": [],
+  "nopair_intent": "cohort_definition",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.526,
+  "p4_domains": [
+   "domain=<Domain.COHORT_DEFINITION: 'COHORT_DEFINITION'> confidence=0.62 evidence=['build a cohort', 'cohort', 'entity:HCP', 'entity:segment']",
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.37 evidence=['who', 'entity:HCP', 'entity:segment']"
+  ],
+  "p4_targets": [
+   "cohort_profiler",
+   "heterogeneous_optimizer"
+  ]
+ },
+ {
+  "qid": "q16",
+  "proposed": "single_agent:heterogeneous_optimizer",
+  "query": "which hcp segments show the strongest treatment effect for remibrutinib?",
+  "seq_marker": false,
+  "legacy_intent": "segment_analysis",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "segment_analysis",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.472,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['how']",
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.49 evidence=['show', 'which', 'entity:HCP', 'entity:drug', 'entity:segment']",
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.35 evidence=['effect']",
+   "domain=<Domain.GAP_ANALYSIS: 'GAP_ANALYSIS'> confidence=0.34 evidence=['show', 'which']"
+  ],
+  "p4_targets": [
+   "explainer",
+   "heterogeneous_optimizer",
+   "causal_impact",
+   "gap_analyzer"
+  ]
+ },
+ {
+  "qid": "q17",
+  "proposed": "single_agent:causal_impact",
+  "query": "did rep actions driven by triggers actually lift prescriptions?",
+  "seq_marker": false,
+  "legacy_intent": "general",
+  "legacy_conf": 0.5,
+  "legacy_secondary": [],
+  "nopair_intent": "general",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.35 evidence=['conditional_structure', 'past_tense_analysis']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q18",
+  "proposed": "single_agent:explainer",
+  "query": "why did the model flag this hcp segment - what features drove the prediction?",
+  "seq_marker": false,
+  "legacy_intent": "segment_analysis",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [
+   "prediction"
+  ],
+  "nopair_intent": "segment_analysis",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.449,
+  "p4_domains": [
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['why']",
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.4 evidence=['drove', 'past_tense_analysis']",
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.37 evidence=['what', 'entity:HCP', 'entity:segment']",
+   "domain=<Domain.PREDICTION: 'PREDICTION'> confidence=0.35 evidence=['predict', 'future_orientation']"
+  ],
+  "p4_targets": [
+   "explainer",
+   "causal_impact",
+   "heterogeneous_optimizer",
+   "prediction_synthesizer"
+  ]
+ },
+ {
+  "qid": "q19",
+  "proposed": "agree",
+  "query": "if conversion rate in the west is below 15%, which patient segments should we prioritize?",
+  "seq_marker": false,
+  "legacy_intent": "segment_analysis",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [
+   "resource_allocation"
+  ],
+  "nopair_intent": "segment_analysis",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.COHORT_DEFINITION: 'COHORT_DEFINITION'> confidence=0.41 evidence=['patient segment', 'entity:segment']",
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.37 evidence=['which', 'entity:region', 'entity:segment']",
+   "domain=<Domain.GAP_ANALYSIS: 'GAP_ANALYSIS'> confidence=0.37 evidence=['which', 'entity:region']",
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.3 evidence=['conditional_structure']"
+  ],
+  "p4_targets": []
+ },
+ {
+  "qid": "q20",
+  "proposed": "agree",
+  "query": "forecast kisqali trx volume for the next two quarters and tell me the biggest risk to that forecast",
+  "seq_marker": false,
+  "legacy_intent": "prediction",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [],
+  "nopair_intent": "prediction",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.SINGLE_AGENT",
+  "p4_conf": 0.5,
+  "p4_domains": [
+   "domain=<Domain.PREDICTION: 'PREDICTION'> confidence=0.5 evidence=['forecast', 'risk', 'future_orientation']"
+  ],
+  "p4_targets": [
+   "prediction_synthesizer"
+  ]
+ },
+ {
+  "qid": "q21",
+  "proposed": "agree",
+  "query": "our kisqali trx dropped in the northeast last quarter while conversion rates for remibrutinib stayed flat, and",
+  "seq_marker": false,
+  "legacy_intent": "cohort_definition",
+  "legacy_conf": 0.8666666666666667,
+  "legacy_secondary": [
+   "experiment_design",
+   "drift_check"
+  ],
+  "nopair_intent": "cohort_definition",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.PARALLEL_DELEGATION",
+  "p4_conf": 0.628,
+  "p4_domains": [
+   "domain=<Domain.CAUSAL_ANALYSIS: 'CAUSAL_ANALYSIS'> confidence=0.65 evidence=['affected', 'caused', 'conditional_structure', 'past_tense_analysis']",
+   "domain=<Domain.EXPERIMENTATION: 'EXPERIMENTATION'> confidence=0.61 evidence=['experiment', 'test', 'conditional_structure', 'future_orientation']",
+   "domain=<Domain.PREDICTION: 'PREDICTION'> confidence=0.6 evidence=['would', 'predict', 'conditional_structure', 'future_orientation']",
+   "domain=<Domain.MONITORING: 'MONITORING'> confidence=0.58 evidence=['drift']",
+   "domain=<Domain.EXPLANATION: 'EXPLANATION'> confidence=0.51 evidence=['understand']",
+   "domain=<Domain.HETEROGENEITY: 'HETEROGENEITY'> confidence=0.47 evidence=['what', 'comparison_structure', 'entity:region', 'entity:drug', 'entity:segment']",
+   "domain=<Domain.GAP_ANALYSIS: 'GAP_ANALYSIS'> confidence=0.47 evidence=['what', 'comparison_structure', 'entity:region']",
+   "domain=<Domain.COHORT_DEFINITION: 'COHORT_DEFINITION'> confidence=0.41 evidence=['patient segment', 'entity:segment']"
+  ],
+  "p4_targets": [
+   "causal_impact",
+   "experiment_designer",
+   "prediction_synthesizer",
+   "drift_monitor",
+   "explainer",
+   "heterogeneous_optimizer",
+   "gap_analyzer",
+   "cohort_profiler"
+  ]
+ },
+ {
+  "qid": "q22",
+  "proposed": "single_agent:resource_optimizer",
+  "query": "optimize resource allocation for remibrutinib in the northeast region \u2014 where should reps, detailing effort, a",
+  "seq_marker": false,
+  "legacy_intent": "resource_allocation",
+  "legacy_conf": 1.0,
+  "legacy_secondary": [],
+  "nopair_intent": "resource_allocation",
+  "pair_override_bound": false,
+  "p4_pattern": "RoutingPattern.CLARIFICATION_NEEDED",
+  "p4_conf": 0.0,
+  "p4_domains": [
+   "domain=<Domain.GAP_ANALYSIS: 'GAP_ANALYSIS'> confidence=0.37 evidence=['where', 'entity:region']"
+  ],
+  "p4_targets": []
+ }
+]
