@@ -40,6 +40,7 @@ from src.agents.experiment_designer.state import (
     ValidityThreat,
 )
 from src.utils.env_diagnostics import env_state
+from src.utils.llm_content import normalize_llm_content
 from src.utils.project_root import find_project_root
 
 logger = logging.getLogger(__name__)
@@ -330,8 +331,8 @@ class ValidityAuditNode:
                 state["status"] = "generating"
                 return state
 
-            # Parse audit response
-            audit = self._parse_audit_response(response.content)
+            # Parse audit response (AIMessage.content is str | list of blocks, #1358)
+            audit = self._parse_audit_response(normalize_llm_content(response.content))
 
             # Calculate latency
             latency_ms = int((time.time() - start_time) * 1000)

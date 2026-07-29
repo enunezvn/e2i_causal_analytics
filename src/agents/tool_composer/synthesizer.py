@@ -13,6 +13,8 @@ from typing import Any, Dict, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.utils.llm_content import normalize_llm_content
+
 from .models.composition_models import (
     ComposedResponse,
     DecompositionResult,
@@ -181,8 +183,8 @@ class ResponseSynthesizer:
 
         response = await self.llm_client.ainvoke(messages)
 
-        # LangChain returns AIMessage with .content attribute
-        return cast(str, response.content)
+        # AIMessage.content is str | list of content blocks (#1350)
+        return normalize_llm_content(response.content)
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from LLM response"""
@@ -197,7 +199,7 @@ class ResponseSynthesizer:
 
         try:
             return cast(Dict[str, Any], json.loads(response))
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, TypeError) as e:
             logger.warning(f"Failed to parse synthesis JSON, using raw response: {e}")
             # Return the raw response as the answer
             return {

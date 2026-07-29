@@ -22,6 +22,7 @@ from src.agents.experiment_designer.state import (
     OutcomeDefinition,
     TreatmentDefinition,
 )
+from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_chat_llm, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
@@ -197,8 +198,8 @@ class DesignReasoningNode:
                     response = await self.fallback_llm.ainvoke(fallback_prompt)
                 state["warnings"] = state.get("warnings", []) + [f"Design used fallback: {str(e)}"]
 
-            # Parse design response
-            design = self._parse_design_response(response.content)
+            # Parse design response (AIMessage.content is str | list of blocks, #1358)
+            design = self._parse_design_response(normalize_llm_content(response.content))
 
             # Calculate latency
             latency_ms = int((time.time() - start_time) * 1000)
