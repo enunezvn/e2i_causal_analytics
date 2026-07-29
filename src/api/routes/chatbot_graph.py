@@ -61,6 +61,7 @@ from src.repositories.chatbot_message import (
     get_chatbot_message_repository,
 )
 from src.utils.llm_attribution import drain_run_usage
+from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_chat_llm, get_llm_provider
 
 # MLflow metrics feature flag
@@ -1622,7 +1623,8 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
     tool_calls = []
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
-            response_text = msg.content  # type: ignore[assignment]
+            # AIMessage.content is str | list of content blocks (#1350)
+            response_text = normalize_llm_content(msg.content)
             # Extract tool calls if present
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 tool_calls = [

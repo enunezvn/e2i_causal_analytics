@@ -901,6 +901,37 @@ class TestFinalizeNode:
                     assert result["streaming_complete"] is True
 
     @pytest.mark.asyncio
+    async def test_finalize_normalizes_content_block_list(self, state_with_messages):
+        """ChatAnthropic on adaptive-thinking models returns a block LIST for
+        AIMessage.content; finalize must persist the text, not the list —
+        the repository contract is ``content: str`` (#1350/#1358 sweep).
+        """
+        state_with_messages["messages"].append(
+            AIMessage(
+                content=[
+                    {"type": "thinking", "thinking": "chain of thought..."},
+                    {"type": "text", "text": "Final response"},
+                ]
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_msg_repo = AsyncMock()
+
+        with patch(
+            "src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client
+        ):
+            with patch(
+                "src.api.routes.chatbot_graph.get_chatbot_message_repository",
+                return_value=mock_msg_repo,
+            ):
+                with patch("src.api.routes.chatbot_graph.CHATBOT_SIGNAL_COLLECTION_ENABLED", False):
+                    await finalize_node(state_with_messages)
+
+        assistant_call = mock_msg_repo.add_message.call_args_list[-1]
+        assert assistant_call.kwargs["content"] == "Final response"
+
+    @pytest.mark.asyncio
     async def test_finalize_saves_to_episodic_memory(self, state_with_tool_results):
         """Test that finalize_node saves significant interactions to episodic memory."""
         state_with_tool_results["messages"] = [AIMessage(content="Important response")]
