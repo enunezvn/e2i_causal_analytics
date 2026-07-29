@@ -1,10 +1,10 @@
 {
   "total_rows": 337,
   "overall_label_distribution": {
-    "SINGLE_AGENT": 269,
-    "TOOL_COMPOSER": 29,
-    "CLARIFICATION_NEEDED": 36,
-    "PARALLEL_DELEGATION": 3
+    "SINGLE_AGENT": 276,
+    "TOOL_COMPOSER": 28,
+    "CLARIFICATION_NEEDED": 28,
+    "PARALLEL_DELEGATION": 5
   },
   "by_source": {
     "demo": {
@@ -13,15 +13,15 @@
       "CLARIFICATION_NEEDED": 3
     },
     "historical": {
-      "CLARIFICATION_NEEDED": 7,
-      "SINGLE_AGENT": 107,
-      "PARALLEL_DELEGATION": 1
+      "CLARIFICATION_NEEDED": 3,
+      "SINGLE_AGENT": 110,
+      "PARALLEL_DELEGATION": 2
     },
     "perturbation": {
-      "SINGLE_AGENT": 70,
-      "PARALLEL_DELEGATION": 2,
-      "TOOL_COMPOSER": 14,
-      "CLARIFICATION_NEEDED": 12
+      "SINGLE_AGENT": 74,
+      "PARALLEL_DELEGATION": 3,
+      "TOOL_COMPOSER": 13,
+      "CLARIFICATION_NEEDED": 8
     },
     "authored": {
       "SINGLE_AGENT": 54,
@@ -36,14 +36,16 @@
     "authored": 76
   },
   "gold_source_counts": {
-    "llm-judge": 242,
+    "llm-judge": 190,
+    "llm-judge+human-confirmed": 39,
     "human-ratified": 19,
+    "human-triage": 13,
     "authored-ground-truth": 76
   },
-  "low_confidence_count": 52,
+  "low_confidence_count": 0,
   "human_anchor_matches": 19,
   "authored_ground_truth": 76,
-  "llm_judged_gold": 242,
+  "llm_judged_gold": 229,
   "unjudged": 0,
   "nightly_disagreements": [
     {
@@ -182,5 +184,12 @@
   "judge_input_tokens": 3003872,
   "judge_output_tokens": 71361,
   "judge_est_cost_usd": 10.08,
-  "judge_model": "claude-sonnet-5"
+  "judge_model": "claude-sonnet-5",
+  "low_confidence_triage": {
+    "date": "2026-07-29",
+    "rows_triaged": 52,
+    "confirmed": 39,
+    "overturned": 13,
+    "notes": "All 52 sub-0.6-confidence llm-judge rows human-triaged; see review/gold_low_confidence.md 'Triage resolutions' section for the per-row rulings and evidence."
+  }
 }
