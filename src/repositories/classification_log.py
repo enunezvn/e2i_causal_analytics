@@ -12,7 +12,8 @@ None; it must never fail or delay the chat turn.
 
 import hashlib
 import logging
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 from src.agents.orchestrator.classifier.schemas import ClassificationResult
 from src.repositories.base import BaseRepository
@@ -79,6 +80,74 @@ class ClassificationLogRepository(BaseRepository):
         except Exception as e:
             logger.warning("Failed to record classification log (fail-open): %s", e)
             return None
+
+    async def fetch_unlabeled(
+        self, *, lookback_days: int = 30, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        """Rows still awaiting a routing-correctness label (#1341 Phase 1).
+
+        Returns recent rows where ``was_correct IS NULL``, newest first.
+        Rows already visited by the judge (``feedback_notes`` set) are
+        included — late explicit feedback may still auto-label them; the
+        labeler itself excludes visited rows from re-judging.
+        """
+        if not self.client:
+            return []
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .select(
+                    "classification_id,query_text,routing_pattern,target_agents,"
+                    "confidence,session_id,user_id,created_at,feedback_notes"
+                )
+                .is_("was_correct", "null")
+                .gte("created_at", cutoff)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return list(result.data or [])
+        except Exception as e:
+            logger.warning("Failed to fetch unlabeled classifications (fail-open): %s", e)
+            return []
+
+    async def apply_label(
+        self,
+        classification_id: str,
+        *,
+        was_correct: Optional[bool] = None,
+        correct_pattern: Optional[str] = None,
+        feedback_notes: Optional[str] = None,
+    ) -> bool:
+        """Write a routing-correctness label onto one row; fail-open.
+
+        ``was_correct=None`` with ``feedback_notes`` set records a judge
+        abstention (row stays awaiting_feedback in v_classification_accuracy
+        but is marked visited).
+        """
+        if not self.client:
+            return False
+        update: Dict[str, Any] = {}
+        if was_correct is not None:
+            update["was_correct"] = was_correct
+        if correct_pattern is not None:
+            update["correct_pattern"] = correct_pattern
+        if feedback_notes is not None:
+            update["feedback_notes"] = feedback_notes
+        if not update:
+            return False
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .update(update)
+                .eq(self.id_column, classification_id)
+                .execute()
+            )
+            return bool(result.data)
+        except Exception as e:
+            logger.warning("Failed to apply classification label (fail-open): %s", e)
+            return False
 
 
 def get_classification_log_repository(supabase_client=None) -> ClassificationLogRepository:

@@ -145,3 +145,89 @@ async def test_optional_context_omitted_when_none(field):
     await repo.record_classification(query_text="q", result=_result())
     inserted = client.table.return_value.insert.call_args[0][0]
     assert field not in inserted
+
+
+def _mock_select_client(rows=None, raises: bool = False):
+    """Mock supporting the chained select().is_().gte().order().limit().execute()."""
+    client = MagicMock()
+    execute = AsyncMock()
+    if raises:
+        execute.side_effect = RuntimeError("db down")
+    else:
+        execute.return_value = MagicMock(data=rows or [])
+    query = client.table.return_value.select.return_value
+    query.is_.return_value.gte.return_value.order.return_value.limit.return_value.execute = execute
+    return client
+
+
+def _mock_update_client(rows=None, raises: bool = False):
+    client = MagicMock()
+    execute = AsyncMock()
+    if raises:
+        execute.side_effect = RuntimeError("db down")
+    else:
+        execute.return_value = MagicMock(data=rows if rows is not None else [{"was_correct": True}])
+    client.table.return_value.update.return_value.eq.return_value.execute = execute
+    return client
+
+
+class TestFetchUnlabeled:
+    async def test_filters_null_was_correct_within_lookback(self):
+        rows = [{"classification_id": "abc", "was_correct": None}]
+        client = _mock_select_client(rows)
+        repo = ClassificationLogRepository(client)
+        result = await repo.fetch_unlabeled(lookback_days=7, limit=100)
+        assert result == rows
+        query = client.table.return_value.select.return_value
+        assert query.is_.call_args[0] == ("was_correct", "null")
+        query.is_.return_value.gte.return_value.order.return_value.limit.assert_called_once_with(
+            100
+        )
+
+    async def test_no_client_returns_empty(self):
+        repo = ClassificationLogRepository(None)
+        assert await repo.fetch_unlabeled() == []
+
+    async def test_failure_fails_open(self):
+        repo = ClassificationLogRepository(_mock_select_client(raises=True))
+        assert await repo.fetch_unlabeled() == []
+
+
+class TestApplyLabel:
+    async def test_sends_label_update_keyed_on_classification_id(self):
+        client = _mock_update_client()
+        repo = ClassificationLogRepository(client)
+        ok = await repo.apply_label(
+            "abc", was_correct=False, correct_pattern="TOOL_COMPOSER", feedback_notes="{}"
+        )
+        assert ok is True
+        update = client.table.return_value.update.call_args[0][0]
+        assert update == {
+            "was_correct": False,
+            "correct_pattern": "TOOL_COMPOSER",
+            "feedback_notes": "{}",
+        }
+        eq_args = client.table.return_value.update.return_value.eq.call_args[0]
+        assert eq_args == ("classification_id", "abc")
+
+    async def test_abstention_writes_notes_only(self):
+        client = _mock_update_client()
+        repo = ClassificationLogRepository(client)
+        ok = await repo.apply_label("abc", feedback_notes='{"source": "llm_judge_abstain"}')
+        assert ok is True
+        update = client.table.return_value.update.call_args[0][0]
+        assert "was_correct" not in update
+
+    async def test_empty_update_is_noop(self):
+        client = _mock_update_client()
+        repo = ClassificationLogRepository(client)
+        assert await repo.apply_label("abc") is False
+        client.table.return_value.update.assert_not_called()
+
+    async def test_no_client_returns_false(self):
+        repo = ClassificationLogRepository(None)
+        assert await repo.apply_label("abc", was_correct=True) is False
+
+    async def test_failure_fails_open(self):
+        repo = ClassificationLogRepository(_mock_update_client(raises=True))
+        assert await repo.apply_label("abc", was_correct=True) is False

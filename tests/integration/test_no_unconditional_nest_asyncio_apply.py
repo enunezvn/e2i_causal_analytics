@@ -361,10 +361,13 @@ def test_nest_asyncio_apply_callsite_count_pinned() -> None:
     #   - src/tasks/dspy_optimization_tasks.py:run_async (DSPy F1 keystone;
     #     gated inside `try: asyncio.get_running_loop()` — same pattern as
     #     feedback_loop_tasks.run_async)
-    # ⇒ 12 total. If the count changes, audit the new callsite(s) for
+    #   - src/tasks/routing_label_tasks.py:run_async (#1341 Phase 1 routing
+    #     labeler; gated inside `try: asyncio.get_running_loop()` — same
+    #     pattern as dspy_optimization_tasks.run_async; audited 2026-07-29)
+    # ⇒ 13 total. If the count changes, audit the new callsite(s) for
     # proper ``is_running`` / ``get_running_loop`` gating, then update
     # the pin below in the same PR.
-    expected = 12
+    expected = 13
     assert len(callsites) == expected, (
         f"nest_asyncio.apply() callsite count drifted in src/ "
         f"(expected {expected}, found {len(callsites)}). Audit each new "
