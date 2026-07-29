@@ -193,3 +193,27 @@ def test_parse_skips_malformed_items_and_truncates():
 def test_parse_rejects_unusable_replies(raw):
     with pytest.raises(ValueError):
         _parse_suggestions(raw)
+
+
+# =============================================================================
+# CONTENT-BLOCK REGRESSION (#1350/#1358 sweep)
+# =============================================================================
+
+
+def test_content_block_list_reply_still_generates(test_client, auth_headers, monkeypatch):
+    """ChatAnthropic on adaptive-thinking models returns a block LIST.
+
+    Pre-fix the route did ``str(reply.content)`` — stringifying the list into
+    unparseable garbage → 502. The fast tier (haiku) returns str today, so
+    this is the latent model-upgrade failure mode pinned as a regression.
+    """
+    blocks = [
+        {"type": "thinking", "thinking": "chain of thought..."},
+        {"type": "text", "text": _good_reply(4)},
+    ]
+    monkeypatch.setattr(chat_module, "get_fast_llm", lambda **kwargs: _FakeLLM(content=blocks))
+
+    resp = test_client.post("/api/chat/suggestions", json=_payload(), headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert [s["title"] for s in resp.json()["suggestions"]] == [f"Pill {i}" for i in range(4)]

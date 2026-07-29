@@ -12,6 +12,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from src.utils.llm_content import normalize_llm_content
+
 from ..state import FeedbackLearnerState, LearningRecommendation
 
 logger = logging.getLogger(__name__)
@@ -239,7 +241,8 @@ class LearningExtractorNode:
                 # Fallback: no tracing
                 response = await self.llm.ainvoke(prompt)
 
-            recommendations = self._parse_recommendations(response.content)
+            # AIMessage.content is str | list of content blocks (#1358)
+            recommendations = self._parse_recommendations(normalize_llm_content(response.content))
             priorities = self._prioritize(recommendations)
 
             return {

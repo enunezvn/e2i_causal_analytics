@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any, Dict, List
 
+from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
@@ -388,6 +389,9 @@ Be specific and quantitative. Avoid generic statements."""
                 # Fallback: no tracing
                 response = await self.llm.ainvoke(synthesis_prompt)
 
+            # AIMessage.content is str | list of content blocks (#1350)
+            response_text = normalize_llm_content(response.content)
+
             # Calculate weighted confidence
             avg_confidence = round(sum(confidences) / len(confidences) if confidences else 0.5, 2)
 
@@ -395,11 +399,11 @@ Be specific and quantitative. Avoid generic statements."""
             follow_ups = self._generate_multi_agent_follow_ups(agent_names, results)
 
             return {
-                "response": response.content,
+                "response": response_text,
                 "confidence": avg_confidence,
                 "recommendations": all_recommendations[:5]
                 if all_recommendations
-                else self._extract_recommendations_from_response(response.content),
+                else self._extract_recommendations_from_response(response_text),
                 "follow_ups": follow_ups,
             }
         except Exception as e:

@@ -37,6 +37,7 @@ from src.agents.multi_faceted import (
     MULTI_FACETED_PATTERNS,
     has_sequential_composition,
 )
+from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
@@ -567,7 +568,8 @@ Respond with ONLY a JSON object:
 
             import json
 
-            result = json.loads(response.content)
+            # AIMessage.content is str | list of content blocks (#1350)
+            result = json.loads(normalize_llm_content(response.content))
             return IntentClassification(
                 primary_intent=result.get("primary_intent", "general"),
                 confidence=result.get("confidence", 0.5),
