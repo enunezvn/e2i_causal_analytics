@@ -13,6 +13,8 @@ import time
 from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
+from src.utils.llm_content import normalize_llm_content
+
 from ..rating_utils import (
     COPILOT_SURFACE,
     SURFACE_RATING_CEILINGS,
@@ -497,7 +499,8 @@ class PatternAnalyzerNode:
                 # Fallback: no tracing
                 response = await self.llm.ainvoke(prompt)
 
-            patterns = self._parse_patterns(response.content)
+            # AIMessage.content is str | list of content blocks (#1358)
+            patterns = self._parse_patterns(normalize_llm_content(response.content))
             clusters = self._cluster_patterns(patterns)
 
             return {

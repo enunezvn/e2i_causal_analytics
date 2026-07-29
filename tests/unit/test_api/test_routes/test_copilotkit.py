@@ -2231,3 +2231,50 @@ class TestCopilotLearningSignals:
             "synthesize_node (success AND error-fallback) and chat_node's "
             "direct-answer path must each collect a learning signal"
         )
+
+
+# =============================================================================
+# CONTENT-BLOCK REGRESSION in the SSE stream (#1350/#1358 sweep)
+# =============================================================================
+
+
+class TestStreamChatResponseContentBlocks:
+    """_stream_chat_response diffs AIMessage.content as a string; on
+    adaptive-thinking models the content is a block LIST (#1350/#1358).
+    Pre-fix the raw list was emitted as the 'text' event payload (and
+    poisoned the incremental diff via list slicing)."""
+
+    @pytest.mark.asyncio
+    async def test_block_list_message_streams_normalized_text(self):
+        import json as jsonlib
+
+        from langchain_core.messages import AIMessage
+
+        from src.api.routes.copilotkit import _stream_chat_response
+
+        async def fake_stream_chatbot(**kwargs):
+            yield {
+                "generate": {
+                    "messages": [
+                        AIMessage(
+                            content=[
+                                {"type": "thinking", "thinking": "chain of thought..."},
+                                {"type": "text", "text": "Final response"},
+                            ]
+                        )
+                    ]
+                }
+            }
+
+        request = ChatRequest(query="hi", user_id="user-1", session_id="s-1")
+        events = []
+        with patch("src.api.routes.chatbot_graph.stream_chatbot", fake_stream_chatbot):
+            async for sse in _stream_chat_response(request, "user-1"):
+                for line in sse.strip().splitlines():
+                    if line.startswith("data: "):
+                        events.append(jsonlib.loads(line[len("data: ") :]))
+
+        text_events = [e for e in events if e["type"] == "text"]
+        assert text_events, f"no text events emitted; got {events}"
+        assert text_events[0]["data"] == "Final response"
+        assert not any(e["type"] == "error" for e in events)

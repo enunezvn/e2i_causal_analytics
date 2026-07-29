@@ -41,6 +41,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.dependencies.auth import require_auth
+from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_fast_llm
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,8 @@ async def generate_chat_suggestions(
         raise HTTPException(status_code=502, detail="suggestion generation failed") from exc
 
     try:
-        suggestions = _parse_suggestions(str(reply.content))
+        # AIMessage.content is str | list of content blocks (#1350)
+        suggestions = _parse_suggestions(normalize_llm_content(reply.content))
     except ValueError as exc:
         logger.warning("chat suggestion reply unusable: %s", exc)
         raise HTTPException(

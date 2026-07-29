@@ -326,6 +326,7 @@ from src.utils.llm_attribution import (
     set_authenticated_user,
     set_chat_attribution,
 )
+from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -4296,15 +4297,18 @@ async def _stream_chat_response(
                         if "messages" in node_output:
                             for msg in node_output["messages"]:
                                 if isinstance(msg, AIMessage) and msg.content:
-                                    if msg.content != response_text:
+                                    # AIMessage.content is str | list of content
+                                    # blocks (#1350); the diff below needs str.
+                                    content_text = normalize_llm_content(msg.content)
+                                    if content_text and content_text != response_text:
                                         new_text = (
-                                            msg.content[len(response_text) :]
+                                            content_text[len(response_text) :]
                                             if response_text
-                                            else msg.content
+                                            else content_text
                                         )
                                         if new_text:
                                             yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
-                                            response_text = msg.content  # type: ignore[assignment]
+                                            response_text = content_text
 
                         # Track dispatch observability fields
                         if "orchestrator_used" in node_output:

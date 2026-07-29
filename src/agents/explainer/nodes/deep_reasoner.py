@@ -12,6 +12,8 @@ import re
 import time
 from typing import Any, Dict, List, Literal, Optional, cast
 
+from src.utils.llm_content import normalize_llm_content
+
 from ..state import ExplainerState, Insight
 
 logger = logging.getLogger(__name__)
@@ -326,7 +328,8 @@ class DeepReasonerNode:
                 # Fallback: no tracing
                 response = await self.llm.ainvoke(prompt)
 
-            parsed = self._parse_reasoning(response.content)
+            # AIMessage.content is str | list of content blocks (#1358)
+            parsed = self._parse_reasoning(normalize_llm_content(response.content))
             parsed["model_used"] = model_name
             return parsed
         except Exception as e:
