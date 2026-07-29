@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.tool_registry.registry import ToolRegistry
+from src.utils.llm_content import normalize_llm_content
 
 from .cache import get_cache_manager
 from .memory_hooks import ToolComposerMemoryHooks, get_tool_composer_memory_hooks
@@ -437,8 +438,8 @@ class ToolPlanner:
 
         response = await self.llm_client.ainvoke(messages)
 
-        # LangChain returns AIMessage with .content attribute
-        return cast(str, response.content)
+        # AIMessage.content is str | list of content blocks (#1350)
+        return normalize_llm_content(response.content)
 
     def _format_columns_block(
         self,
@@ -572,8 +573,8 @@ class ToolPlanner:
 
         try:
             return cast(Dict[str, Any], json.loads(response))
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse planning JSON: {response[:200]}...")
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to parse planning JSON: {str(response)[:200]}...")
             raise PlanningError(f"Invalid JSON in LLM response: {e}") from e
 
     def _build_tool_mappings(self, parsed: Dict[str, Any]) -> List[ToolMapping]:
