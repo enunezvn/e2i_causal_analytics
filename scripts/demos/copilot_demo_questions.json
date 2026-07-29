@@ -1,0 +1,63 @@
+{
+  "source": "docs/demos/COPILOT_CHAT_DEMO_SCENARIOS.md",
+  "notes": "Question set for the Copilot Chat performance/demo pass. Sessions group turns that must share a chat session_id (T5 follow-ups, A.8 repeat, A.9 memory). A.7 (concurrent interrupt) is UI-pass-only and deliberately absent.",
+  "questions": [
+    {"question_id": "1.1", "session": "n1", "tier": "T2", "intent_expected": "kpi_query", "text": "What is TRx for Kisqali?", "expected_path": "KPI engine (highest-volume production query)"},
+    {"question_id": "1.2", "session": "n1", "tier": "T2", "intent_expected": "kpi_query", "text": "What are the TRx trends for Kisqali in Q4?", "expected_path": "KPI engine, trend charting"},
+    {"question_id": "1.3", "session": "n1", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the market share for Kisqali compared to competitors?", "expected_path": "TRx Share windows"},
+    {"question_id": "1.4", "session": "n1", "tier": "T3", "intent_expected": "causal_analysis", "text": "Why did Kisqali TRx drop in Q1 in the northeast region?", "expected_path": "causal_impact (effect estimation + 5 DoWhy refutation tests)"},
+    {"question_id": "1.5", "session": "n1", "tier": "T3", "intent_expected": "causal_analysis", "text": "What is the causal impact of rep visits on TRx for Kisqali?", "expected_path": "causal_impact (ATE with refutation gating)"},
+    {"question_id": "1.6", "session": "n1", "tier": "T5", "intent_expected": "causal_analysis", "text": "Which HCP segments show the strongest effect?", "expected_path": "heterogeneous_optimizer (CATE by segment); reference-chain follow-up", "follow_up": true},
+    {"question_id": "1.7", "session": "n1", "tier": "T5", "intent_expected": "recommendation", "text": "Based on that, how should we reallocate rep effort next quarter?", "expected_path": "resource_optimizer", "follow_up": true},
+
+    {"question_id": "2.1", "session": "n2", "tier": "T3", "intent_expected": "search", "text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024", "expected_path": "cohort_constructor (COHORT_DEFINITION domain)"},
+    {"question_id": "2.2", "session": "n2", "tier": "T2", "intent_expected": "kpi_query", "text": "Give me an NRx breakdown by patient clinical segment for Remibrutinib", "expected_path": "KPI engine, clinical segment breakdown"},
+    {"question_id": "2.3", "session": "n2", "tier": "T2", "intent_expected": "kpi_query", "text": "What are biologic-naive vs biologic-experienced NRx numbers for Remibrutinib?", "expected_path": "KPI engine, segment routing"},
+    {"question_id": "2.4", "session": "n2", "tier": "T3", "intent_expected": "causal_analysis", "text": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?", "expected_path": "causal_impact"},
+    {"question_id": "2.5", "session": "n2", "tier": "T3", "intent_expected": "recommendation", "text": "Where are the biggest untapped opportunities to grow Remibrutinib market share?", "expected_path": "gap_analyzer (ROI opportunity ranking)"},
+    {"question_id": "2.6", "session": "n2", "tier": "T3", "intent_expected": "recommendation", "text": "How can I optimize resource allocation for Remibrutinib in the northeast region?", "expected_path": "resource_optimizer"},
+    {"question_id": "2.7", "session": "n2", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the intent-to-prescribe delta for Remibrutinib?", "expected_path": "brand-specific KPI (Remi - Intent-to-Prescribe delta)"},
+
+    {"question_id": "3.1", "session": "n3", "tier": "T2", "intent_expected": "kpi_query", "text": "What percentage of PNH patients have been tested?", "expected_path": "brand-specific KPI (Fabhalta - % PNH Tested)"},
+    {"question_id": "3.2", "session": "n3", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the current TRx volume for Fabhalta?", "expected_path": "KPI engine"},
+    {"question_id": "3.3", "session": "n3", "tier": "T3", "intent_expected": "prediction", "text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter", "expected_path": "prediction_synthesizer"},
+    {"question_id": "3.4", "session": "n3", "tier": "T3-T4", "intent_expected": "recommendation", "text": "Design an experiment to measure whether speaker programs increase Fabhalta NRx", "expected_path": "experiment_designer with Digital Twin pre-screening"},
+    {"question_id": "3.5", "session": "n3", "tier": "T5", "intent_expected": "recommendation", "text": "What did the digital twin simulation say about expected lift and sample size?", "expected_path": "digital_twin results via experiment_designer", "follow_up": true},
+    {"question_id": "3.6", "session": "n3", "tier": "T3", "intent_expected": "recommendation", "text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption", "expected_path": "experiment_designer (consistency check vs 3.4)"},
+
+    {"question_id": "4.1", "session": "n4", "tier": "T3", "intent_expected": "search", "text": "Create a cohort of HCPs who are oncologists in the northeast", "expected_path": "cohort_constructor"},
+    {"question_id": "4.2", "session": "n4", "tier": "T3", "intent_expected": "search", "text": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter", "expected_path": "cohort_constructor with quantitative criterion"},
+    {"question_id": "4.3", "session": "n4", "tier": "T4", "intent_expected": "multi_faceted", "text": "Segment HCPs by prescription volume into high, medium, and low tiers", "expected_path": "tool composer / segmentation"},
+    {"question_id": "4.4", "session": "n4", "tier": "T3", "intent_expected": "causal_analysis", "text": "Which HCP segments show the strongest treatment effect for Remibrutinib?", "expected_path": "heterogeneous_optimizer (CATE)"},
+    {"question_id": "4.5", "session": "n4", "tier": "T2", "intent_expected": "kpi_query", "text": "What is our trigger precision and acceptance rate this month?", "expected_path": "trigger KPIs (Trigger Precision, Acceptance Rate)"},
+    {"question_id": "4.6", "session": "n4", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the false alert rate and override rate for triggers?", "expected_path": "trigger KPIs"},
+    {"question_id": "4.7", "session": "n4", "tier": "T3", "intent_expected": "causal_analysis", "text": "Did rep actions driven by triggers actually lift prescriptions?", "expected_path": "Action Rate Uplift KPI -> causal framing"},
+
+    {"question_id": "5.1", "session": "n5", "tier": "T2-T3", "intent_expected": "agent_status", "text": "What is the current system health score?", "expected_path": "health_score"},
+    {"question_id": "5.2", "session": "n5", "tier": "T1", "intent_expected": "agent_status", "text": "What agents are available in the system?", "expected_path": "agent registry"},
+    {"question_id": "5.3", "session": "n5", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the ROC-AUC and calibration of the current Kisqali model?", "expected_path": "ML KPIs (ROC-AUC, Calibration Slope Deviation, Brier)"},
+    {"question_id": "5.4", "session": "n5", "tier": "T3", "intent_expected": "kpi_query", "text": "Is there any feature drift in the Kisqali model?", "expected_path": "drift_monitor (Feature Drift PSI)"},
+    {"question_id": "5.5", "session": "n5", "tier": "T3", "intent_expected": "causal_analysis", "text": "Why did the model flag this HCP segment - what features drove the prediction?", "expected_path": "explainer (SHAP interpretability API)"},
+    {"question_id": "5.6", "session": "n5", "tier": "T1", "intent_expected": "general", "text": "Explain what heterogeneous treatment effects mean in our analyses", "expected_path": "explanation, no data fetch"},
+    {"question_id": "5.7", "session": "n5", "tier": "T3", "intent_expected": "causal_analysis", "text": "How confident are we in the rep-visit effect - did it pass refutation tests?", "expected_path": "causal_impact refutation report (fail-closed gating, E-value)"},
+
+    {"question_id": "6.1", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Compare TRx market share for Kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter", "expected_path": "TOOL_COMPOSER - 3 sub-questions with LOGICAL_SEQUENCE dependencies (KPI -> causal -> resource)"},
+    {"question_id": "6.2", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Which regions are underperforming on Remibrutinib conversion rate, and for those regions, what would be the ROI of shifting 20% more rep capacity there?", "expected_path": "TOOL_COMPOSER - ENTITY_TRANSFORMATION dependency"},
+    {"question_id": "6.3", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "If conversion rate in the west is below 15%, which patient segments should we prioritize?", "expected_path": "CONDITIONAL dependency detection"},
+    {"question_id": "6.4", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Give me a launch-readiness snapshot for Fabhalta: % PNH tested, NRx trend, top adoption barriers, and one experiment we should run next", "expected_path": "TOOL_COMPOSER - 4-facet decomposition ending in experiment_designer"},
+    {"question_id": "6.5", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Forecast Kisqali TRx volume for the next two quarters and tell me the biggest risk to that forecast", "expected_path": "prediction_synthesizer + causal/drift context"},
+
+    {"question_id": "A.1", "session": "a1", "tier": "T6", "intent_expected": "greeting", "text": "Hello, how are you?", "expected_path": "greeting - should NOT dispatch agents; instant"},
+    {"question_id": "A.2a", "session": "a2", "tier": "T6", "intent_expected": "help", "text": "What can you do?", "expected_path": "help - capability grounding, instant"},
+    {"question_id": "A.2b", "session": "a2", "tier": "T6", "intent_expected": "help", "text": "What KPIs are available for Kisqali?", "expected_path": "help - capability grounding"},
+    {"question_id": "A.3", "session": "a3", "tier": "T6", "intent_expected": "kpi_query", "text": "Waht is the TRx for Kisqali?", "expected_path": "typo handler - same answer as 1.1, no latency cliff"},
+    {"question_id": "A.4", "session": "a4", "tier": "T6", "intent_expected": "kpi_query", "text": "Show me converson rate for Remibrutnib", "expected_path": "typo in both metric and brand"},
+    {"question_id": "A.5", "session": "a5", "tier": "T6", "intent_expected": "clarification", "text": "Why did it drop?", "expected_path": "cold first message - CLARIFICATION expected, should ask which metric/brand, not hallucinate"},
+    {"question_id": "A.6", "session": "a6", "tier": "T6", "intent_expected": "help", "text": "What is TRx?", "expected_path": "definitional edge - should define, not dump data"},
+    {"question_id": "A.8-cold", "session": "a8", "tier": "T2", "intent_expected": "kpi_query", "text": "What is TRx for Kisqali?", "expected_path": "cold baseline for the repeat test"},
+    {"question_id": "A.8-warm", "session": "a8", "tier": "T5", "intent_expected": "kpi_query", "text": "What is TRx for Kisqali?", "expected_path": "verbatim repeat in same session - should be faster than cold", "follow_up": true},
+    {"question_id": "A.9-seed", "session": "a9", "tier": "T3", "intent_expected": "causal_analysis", "text": "Why did Kisqali TRx drop in Q1 in the northeast region?", "expected_path": "seed turn for the memory follow-up"},
+    {"question_id": "A.9-followup", "session": "a9", "tier": "T5", "intent_expected": "causal_analysis", "text": "Why is this happening?", "expected_path": "T5 memory: episodic context retrieval", "follow_up": true},
+    {"question_id": "A.10", "session": "a10", "tier": "T6", "intent_expected": "multi_faceted", "text": "Our Kisqali TRx dropped in the northeast last quarter while conversion rates for Remibrutinib stayed flat, and I need to understand several things: what actually caused the Kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.", "expected_path": "complexity warning / graceful decomposition, no timeout (60+ words, 4+ domains)"}
+  ]
+}
