@@ -193,3 +193,22 @@ heterogeneous_optimizer agent returned no Remibrutinib records.
 - Re-run axis 1: `.venv/bin/python scripts/benchmarks/routing/gold_judge.py`
   (add `--assemble-only` to rebuild outputs from existing progress).
 - Re-run axis 2: `.venv/bin/python scripts/benchmarks/routing/build_answer_quality.py`.
+
+---
+
+## Addendum — low-confidence triage (2026-07-29, human)
+
+The 52 sub-0.6-confidence llm-judge rows were human-triaged the same day: **39 confirmed,
+13 overturned** (details + evidence in `review/gold_low_confidence.md`, "Triage resolutions").
+Deciding evidence the judge never had: live `chatbot_messages` transcripts (which resolve the
+"yes" / "run both" / "causal analysis" fragments to concrete accepted offers), demo_meta
+intent documentation, and the prod `triggers` table proving trigger precision/acceptance are
+real platform KPIs (coverage gap, not ambiguity).
+
+Post-triage distribution: **SINGLE_AGENT 276 · CLARIFICATION_NEEDED 28 · TOOL_COMPOSER 28 ·
+PARALLEL_DELEGATION 5**. Zero unresolved low-confidence rows remain; `gold_source` now
+distinguishes `llm-judge` (190) / `llm-judge+human-confirmed` (39) / `human-triage` (13) /
+`human-ratified` (19) / `authored-ground-truth` (76).
+
+New finding: the five trigger-KPI rows expose an unowned real capability (trigger
+effectiveness metrics) — candidate contract extension in the spirit of #1356.

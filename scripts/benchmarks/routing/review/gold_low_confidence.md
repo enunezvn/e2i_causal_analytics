@@ -107,3 +107,63 @@ did not clear the 0.6 floor and want a human ruling before they anchor anything.
   - judge: CLARIFICATION_NEEDED / [] — Fragment lacks brand/metric/domain context; no prior turn provided despite 'in-context' note, so intent (explainer vs causal_impact vs drift) is genuinely ambiguous.
 - **bench-0222** (perturbation/pronoun_followup, conf 0.58): "Why is the calibration lagging, and how does that compare to Fabhalta's model performance?" [follow-up of: "What is the ROC-AUC and calibration of the current Kisqali model?"]
   - judge: TOOL_COMPOSER / ['tool_composer'] — Root-cause of lagging calibration is drift_monitor territory (health_score excludes 'why is metric bad'), while cross-brand comparison to Fabhalta's model performance is health_score; comparison depends on the lag finding -> dependency-linked, 2 domains.
+
+---
+
+## Triage resolutions (2026-07-29, human)
+
+All 52 rows above were triaged: **39 confirmed, 13 overturned**. Post-triage there are
+zero unresolved low-confidence rows; the gold file now carries `triage_status` /
+`triage_rationale` per row (overturned rows preserve the judge's label in `pre_triage_*`).
+
+### Evidence consulted
+
+- `data/agent_contracts.json` ownership text (esp. cohort_profiler's "KPI questions beyond
+  cohort sizing" exclusion and drift_monitor's statistical-drift-only scope).
+- `demo_meta.intent_expected` for demo rows (bench-0014/0024 are documented `kpi_query`).
+- Live `chatbot_messages` transcripts for the deictic fragments — the assistant turns the
+  judge never saw resolve bench-0106 ("yes"), bench-0108 ("run both"), bench-0129
+  ("causal analysis").
+- The prod `triggers` table: 37,354 rows with `false_positive_flag` and `acceptance_status`
+  columns — trigger precision / acceptance rate are real platform KPIs, so those asks are a
+  coverage gap, not ambiguity.
+
+### The 13 overturns
+
+| row | judge label | triage label | why |
+|---|---|---|---|
+| bench-0014 | SA/cohort_profiler | SA/explainer | "% PNH Tested" is a documented brand KPI (demo `kpi_query`); cohort_profiler excludes KPI-beyond-sizing |
+| bench-0024 | SA/health_score | SA/explainer | trigger KPIs are business-program metrics from the `triggers` table, not registry-model telemetry |
+| bench-0093 | CLARIFICATION | SA/explainer | data-catalog/platform-capability ask, same family as confirmed bench-0056/0219 |
+| bench-0106 | CLARIFICATION | SA/causal_impact | transcript: "yes" accepts an explicit "Would you like a causal analysis...?" offer |
+| bench-0108 | CLARIFICATION | PARALLEL/[gap_analyzer, explainer] | transcript: "run both" accepts two offered, independent analyses (HCP targeting-gap + payer/formulary pull) |
+| bench-0109 | SA/drift_monitor | SA/explainer | consistency with identical bench-0105/0107; no statistical drift test requested |
+| bench-0123 | SA/cohort_profiler | SA/explainer | initiation-rate-by-segment = KPI beyond cohort sizing (contract exclusion); consistent with bench-0152/0154 |
+| bench-0129 | CLARIFICATION | SA/causal_impact | in-context: causal drivers of the just-discussed Remibrutinib KPIs; transcript corroborates |
+| bench-0211 | CLARIFICATION | SA/explainer | trigger KPIs are real + specific — coverage gap, not ambiguity |
+| bench-0212 | CLARIFICATION | SA/explainer | typo variant of the same trigger-KPI ask |
+| bench-0213 | CLARIFICATION | SA/explainer | paraphrase: false-alert rate / override rate = `false_positive_flag` / `acceptance_status` |
+| bench-0214 | CLARIFICATION | SA/explainer | fragment variant; platform-level trigger KPIs need no brand |
+| bench-0222 | TOOL_COMPOSER | PARALLEL/[drift_monitor, health_score] | two domains but the cross-brand comparison never consumes the root-cause output — not dependency-linked |
+
+### The 39 confirms
+
+- **35 × SA/explainer** — the KPI / platform-capability narration cluster (market share,
+  TRx/NRx/NBRx lookups and trend charts, metric definitions, brand-coverage questions,
+  KPI-by-segment analyses). All consistent with the ratified KPI-summary anchor.
+- **bench-0066** — SA/health_score (model-performance KPIs = model_health snapshot).
+- **bench-0208** — SA/cohort_profiler (HCP tiering; consistent with extend:cohort_profiler, #1356).
+- **bench-0257** — CLARIFICATION (stored without any prior turn; referent unrecoverable).
+- **bench-0180** — PARALLEL/[explainer, cohort_profiler] (independent narrate + new breakdown).
+
+### Post-triage distribution
+
+SINGLE_AGENT **276** (+7) · CLARIFICATION_NEEDED **28** (−8) · TOOL_COMPOSER **28** (−1) ·
+PARALLEL_DELEGATION **5** (+2). SA owners: explainer 111, causal_impact 30, cohort_profiler 29,
+health_score 23 (rest unchanged).
+
+### Follow-up surfaced by triage
+
+The five trigger-KPI rows expose a **coverage gap**: trigger precision / acceptance / override
+metrics exist in the `triggers` table but no agent contract owns them (explainer catch-all is
+the stopgap). Candidate for a contract extension in the same spirit as #1356.
