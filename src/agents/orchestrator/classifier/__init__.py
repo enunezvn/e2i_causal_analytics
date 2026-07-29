@@ -16,6 +16,7 @@ from .pattern_selector import PatternSelector
 from .pipeline import ClassificationPipeline
 from .schemas import (
     ClassificationResult,
+    ClassificationStages,
     Dependency,
     DependencyAnalysis,
     DependencyType,
@@ -36,6 +37,7 @@ __all__ = [
     "DomainMapping",
     "DependencyAnalysis",
     "ClassificationResult",
+    "ClassificationStages",
     "SubQuestion",
     "Dependency",
     # Components

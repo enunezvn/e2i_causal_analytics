@@ -9,9 +9,10 @@ V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
 import logging
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Literal, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from ..state import AgentDispatch, OrchestratorState
+from .intent_classifier import _classifier_mode
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ class RouterNode:
 
     # Priority mapping: critical > high > medium > low
     PRIORITY_ORDER = {"critical": 1, "high": 2, "medium": 3, "low": 4}
+
+    # Active-mode floor: below this the 4-stage pipeline abstains and legacy
+    # intent routing keeps authority (quality guarantee ≥ today's behavior).
+    MIN_ACTIVE_CONFIDENCE = 0.5
 
     # V4.4: Agents that can use discovered DAG for validation
     DISCOVERY_AWARE_AGENTS = [
@@ -211,11 +216,26 @@ class RouterNode:
             # No intent classified, default to explainer
             return self._default_routing(state, start_time)
 
-        dispatch_plan = []
-        parallel_groups = []
+        dispatch_plan: List[AgentDispatch] = []
+        parallel_groups: List[List[str]] = []
+
+        # Active-mode 4-stage classifier dispatch: when the pipeline made a
+        # confident decision, it takes routing authority; on CLARIFICATION /
+        # low confidence / unknown pattern it abstains (returns None) and
+        # legacy intent routing below proceeds unchanged. Shadow/off modes
+        # never enter this branch, keeping today's routing byte-identical.
+        classification = state.get("classification")
+        if _classifier_mode() == "active" and classification:
+            pipeline_plan = self._dispatch_from_classification(classification)
+            if pipeline_plan is not None:
+                dispatch_plan, parallel_groups = pipeline_plan
 
         # Check for multi-agent patterns
-        if intent.get("requires_multi_agent") and intent.get("secondary_intents"):
+        if (
+            not dispatch_plan
+            and intent.get("requires_multi_agent")
+            and intent.get("secondary_intents")
+        ):
             primary_intent = intent["primary_intent"]
             secondary0 = intent["secondary_intents"][0]
             # Order-insensitive lookup: MULTI_AGENT_PATTERNS is keyed canonically,
@@ -396,6 +416,53 @@ class RouterNode:
                 )
             ]
         return filtered_plan
+
+    def _dispatch_from_classification(
+        self, classification: Dict[str, Any]
+    ) -> Optional[tuple[List[AgentDispatch], List[List[str]]]]:
+        """Build a dispatch plan from a 4-stage ClassificationResult dump.
+
+        Returns None to ABSTAIN (CLARIFICATION_NEEDED, low confidence, no
+        targets, or unknown pattern) — the caller then falls back to legacy
+        intent-based routing. Per-agent timeouts/fallbacks are preserved by
+        resolving through ``_get_dispatch_for_agent``.
+        """
+        pattern = classification.get("routing_pattern")
+        targets = [t for t in (classification.get("target_agents") or []) if t]
+        confidence = classification.get("confidence") or 0.0
+
+        if pattern == "CLARIFICATION_NEEDED" or confidence < self.MIN_ACTIVE_CONFIDENCE:
+            logger.info(
+                "classification pipeline abstained (pattern=%s, confidence=%.2f) — legacy routing",
+                pattern,
+                confidence,
+            )
+            return None
+
+        if pattern == "SINGLE_AGENT" and targets:
+            plan = [self._get_dispatch_for_agent(targets[0], "critical")]
+            return plan, self._group_by_priority(plan)
+
+        if pattern == "PARALLEL_DELEGATION" and targets:
+            plan = [self._get_dispatch_for_agent(targets[0], "critical")]
+            plan += [self._get_dispatch_for_agent(t, "high") for t in targets[1:]]
+            return plan, self._group_by_priority(plan)
+
+        if pattern == "TOOL_COMPOSER":
+            # Reuse the canonical tool_composer dispatch (180s SLA, explainer
+            # fallback). Sub-question/dependency handoff into tool_composer
+            # parameters is a follow-up — the dispatcher resolves its own
+            # substrate today.
+            plan = list(self.INTENT_TO_AGENTS["multi_faceted"])
+            return plan, self._group_by_priority(plan)
+
+        logger.info(
+            "classification pipeline produced no dispatchable plan "
+            "(pattern=%s, targets=%s) — legacy routing",
+            pattern,
+            targets,
+        )
+        return None
 
     def _default_routing(self, state: OrchestratorState, start_time: float) -> OrchestratorState:
         """Default routing when intent classification fails.

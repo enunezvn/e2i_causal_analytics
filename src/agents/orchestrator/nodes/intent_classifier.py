@@ -25,8 +25,10 @@ Multi-faceted detection (issues #256 + #288):
     ``tests/unit/test_agents/test_orchestrator/test_multi_faceted_ssot.py``.
 """
 
+import asyncio
 import json
 import logging
+import os
 import re
 import time
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -38,9 +40,83 @@ from src.agents.multi_faceted import (
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
+from ..classifier import ClassificationPipeline
+from ..classifier.schemas import ClassificationResult
 from ..state import IntentClassification, OrchestratorState
 
 logger = logging.getLogger(__name__)
+
+
+def _classifier_mode() -> str:
+    """Read ORCHESTRATOR_CLASSIFIER_MODE lazily: ``off | shadow | active``.
+
+    - ``off``: 4-stage ClassificationPipeline never runs.
+    - ``shadow`` (default): pipeline runs and its decision is surfaced +
+      logged to classification_logs, but routing stays legacy.
+    - ``active``: RouterNode additionally dispatches from the pipeline's
+      decision when it is confident (see RouterNode._dispatch_from_classification).
+
+    Lazy per-call read (not module constant) so ops can flip the droplet
+    ``.env`` + restart, and tests can monkeypatch the env var.
+    """
+    return os.getenv("ORCHESTRATOR_CLASSIFIER_MODE", "shadow").strip().lower()
+
+
+_classification_pipeline: Optional[ClassificationPipeline] = None
+
+# Fire-and-forget classification_logs tasks: held here so they are not
+# garbage-collected mid-flight; done-callback discards them.
+_pending_log_tasks: set = set()
+
+
+def _should_log_classification() -> bool:
+    """Whether to spawn the fire-and-forget classification_logs write.
+
+    Requires a configured Supabase URL AND a non-test environment: the unit
+    suites load the dev box's .env (tests/conftest.py ``load_dotenv``), so a
+    URL-only guard would let every orchestrator unit test write real rows —
+    the 883-A hermeticity lesson. E2I_TESTING_MODE is the repo's existing
+    test-env marker (set unconditionally by tests/conftest.py).
+    """
+    if not os.getenv("SUPABASE_URL"):
+        return False
+    return os.getenv("E2I_TESTING_MODE", "").strip().lower() not in ("1", "true", "yes")
+
+
+def _get_classification_pipeline() -> ClassificationPipeline:
+    """Module singleton — the pipeline is stateless and pure-Python.
+
+    LLM layer stays hard-disabled until the async stage-3 implementation
+    lands (the scaffold's sync call was removed; see dependency_detector).
+    """
+    global _classification_pipeline
+    if _classification_pipeline is None:
+        _classification_pipeline = ClassificationPipeline(llm_client=None, enable_llm_layer=False)
+    return _classification_pipeline
+
+
+async def _log_classification(
+    query: str,
+    result: ClassificationResult,
+    session_id: Optional[str],
+    user_id: Optional[str],
+) -> None:
+    """Write one classification_logs row; strictly fail-open."""
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+        from src.repositories.classification_log import get_classification_log_repository
+
+        client = await get_async_supabase_client()
+        repo = get_classification_log_repository(client)
+        await repo.record_classification(
+            query_text=query,
+            result=result,
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except Exception as e:
+        logger.warning("classification_logs write failed (fail-open): %s", e)
+
 
 # Type alias for intent types
 IntentType = Literal[
@@ -246,14 +322,51 @@ class IntentClassifierNode:
                 conversation_history=state.get("conversation_history"),
             )
 
+        # 4-stage ClassificationPipeline (shadow/active). Fail-open: any
+        # pipeline error leaves legacy classification untouched.
+        pipeline_result: Optional[ClassificationResult] = None
+        mode = _classifier_mode()
+        if mode in ("shadow", "active"):
+            try:
+                raw_query = state.get("query", "")
+                has_history = bool(state.get("conversation_history"))
+                pipeline_result = await _get_classification_pipeline().classify(
+                    query=raw_query,
+                    is_followup=has_history,
+                    context_source="conversation_history" if has_history else None,
+                )
+                if _should_log_classification():
+                    task = asyncio.create_task(
+                        _log_classification(
+                            raw_query,
+                            pipeline_result,
+                            state.get("session_id"),
+                            state.get("user_id"),
+                        )
+                    )
+                    _pending_log_tasks.add(task)
+                    task.add_done_callback(_pending_log_tasks.discard)
+            except Exception as e:
+                pipeline_result = None
+                logger.warning("ClassificationPipeline failed (fail-open, mode=%s): %s", mode, e)
+
         classification_time = int((time.time() - start_time) * 1000)
 
-        return {
+        result_state: OrchestratorState = {
             **state,
             "intent": intent,
             "classification_latency_ms": classification_time,
             "current_phase": "routing",
         }
+        if pipeline_result is not None:
+            # stages excluded from graph state (heavy; the log writer received
+            # the full result object instead).
+            result_state["classification"] = pipeline_result.model_dump(
+                mode="json", exclude={"stages"}
+            )
+            result_state["routing_pattern"] = pipeline_result.routing_pattern.value
+            result_state["used_llm_layer"] = pipeline_result.used_llm_layer
+        return result_state
 
     def _pattern_classify(self, query: str) -> IntentClassification:
         """Fast pattern-based classification.

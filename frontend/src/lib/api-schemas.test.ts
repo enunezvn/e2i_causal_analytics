@@ -276,6 +276,10 @@ describe('Chat Schemas', () => {
         execution_time_ms: 1250.5,
         intent: 'causal_analysis',
         intent_confidence: 0.95,
+        routing_rationale: 'Causal keywords with high pattern confidence',
+        routing_pattern: 'SINGLE_AGENT',
+        classification_latency_ms: 2.4,
+        used_llm_layer: false,
       };
 
       const result = ChatResponseSchema.safeParse(fullResponse);

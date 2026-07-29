@@ -219,6 +219,35 @@ class TestOrchestratorAgent:
         assert "intent_confidence" in result
         assert result["intent_confidence"] >= 0.8
 
+    @pytest.mark.asyncio
+    async def test_classifier_observability_surfaced_in_shadow(self, monkeypatch):
+        """_build_output must expose the 4-stage classifier decision
+        (routing_pattern / used_llm_layer / classification dump) in shadow."""
+        monkeypatch.setenv("ORCHESTRATOR_CLASSIFIER_MODE", "shadow")
+        orchestrator = OrchestratorAgent(allow_mock=True)
+
+        result = await orchestrator.run({"query": "what causes conversion rate changes?"})
+
+        assert result["routing_pattern"] in {
+            "SINGLE_AGENT",
+            "PARALLEL_DELEGATION",
+            "TOOL_COMPOSER",
+            "CLARIFICATION_NEEDED",
+        }
+        assert isinstance(result["used_llm_layer"], bool)
+        assert result["classification"]["routing_pattern"] == result["routing_pattern"]
+
+    @pytest.mark.asyncio
+    async def test_classifier_observability_absent_when_off(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_CLASSIFIER_MODE", "off")
+        orchestrator = OrchestratorAgent(allow_mock=True)
+
+        result = await orchestrator.run({"query": "what causes conversion rate changes?"})
+
+        assert result["routing_pattern"] is None
+        assert result["used_llm_layer"] is None
+        assert result["classification"] is None
+
 
 class TestOrchestratorHelperMethods:
     """Test OrchestratorAgent helper methods."""

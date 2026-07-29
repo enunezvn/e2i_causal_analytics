@@ -4110,6 +4110,11 @@ class ChatResponse(BaseModel):
     intent_confidence: Optional[float] = None
     # Phase 4: Decision rationale for agent routing transparency
     routing_rationale: Optional[str] = None
+    # 4-stage ClassificationPipeline observability (ORCHESTRATOR_CLASSIFIER_MODE
+    # shadow/active; None when off or when the orchestrator was not consulted).
+    routing_pattern: Optional[str] = None
+    classification_latency_ms: Optional[float] = None
+    used_llm_layer: Optional[bool] = None
 
 
 # Generic, client-safe error message for the chat endpoints. Internal
@@ -4243,6 +4248,10 @@ async def _stream_chat_response(
             "intent": None,
             "intent_confidence": None,
             "routing_rationale": None,
+            # 4-stage classifier observability
+            "routing_pattern": None,
+            "classification_latency_ms": None,
+            "used_llm_layer": None,
         }
 
         # Stream through chatbot workflow
@@ -4315,6 +4324,15 @@ async def _stream_chat_response(
                         # Phase 4: Decision rationale for transparency
                         if "routing_rationale" in node_output:
                             dispatch_info["routing_rationale"] = node_output["routing_rationale"]
+                        # 4-stage classifier observability
+                        if "routing_pattern" in node_output:
+                            dispatch_info["routing_pattern"] = node_output["routing_pattern"]
+                        if "classification_latency_ms" in node_output:
+                            dispatch_info["classification_latency_ms"] = node_output[
+                                "classification_latency_ms"
+                            ]
+                        if "used_llm_layer" in node_output:
+                            dispatch_info["used_llm_layer"] = node_output["used_llm_layer"]
 
         # Generate title if not set
         if not conversation_title and response_text:
@@ -4485,6 +4503,10 @@ async def chat(
         intent_confidence = result.get("intent_confidence")
         # Phase 4: Decision rationale for transparency
         routing_rationale = result.get("routing_rationale")
+        # 4-stage classifier observability
+        routing_pattern = result.get("routing_pattern")
+        classification_latency_ms = result.get("classification_latency_ms")
+        used_llm_layer = result.get("used_llm_layer")
 
         # Generate title from query
         title = (
@@ -4514,6 +4536,10 @@ async def chat(
             intent_confidence=intent_confidence,
             # Phase 4: Decision rationale
             routing_rationale=routing_rationale,
+            # 4-stage classifier observability
+            routing_pattern=routing_pattern,
+            classification_latency_ms=classification_latency_ms,
+            used_llm_layer=used_llm_layer,
         )
 
     except Exception as e:

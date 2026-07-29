@@ -19,7 +19,6 @@ from typing import Optional
 
 from anthropic import Anthropic
 
-from .prompts import DEPENDENCY_DETECTION_PROMPT
 from .schemas import (
     Dependency,
     DependencyAnalysis,
@@ -111,12 +110,13 @@ class DependencyDetector:
         dependencies = self._detect_rule_based(query, sub_questions)
 
         # Step 3: Use LLM for complex cases if enabled
+        used_llm = False
         if (
             use_llm
             and self.llm_client
             and self._needs_llm_analysis(query, sub_questions, dependencies)
         ):
-            llm_dependencies = await self._detect_with_llm(query, sub_questions)
+            llm_dependencies, used_llm = await self._detect_with_llm(query, sub_questions)
             # Merge LLM findings with rule-based (prefer LLM for conflicts)
             dependencies = self._merge_dependencies(dependencies, llm_dependencies)
 
@@ -129,6 +129,7 @@ class DependencyDetector:
             has_dependencies=len(dependencies) > 0,
             is_parallelizable=len(dependencies) == 0,
             dependency_depth=depth,
+            used_llm=used_llm,
         )
 
     # =========================================================================
@@ -201,7 +202,6 @@ class DependencyDetector:
         Detect dependencies using rule-based patterns.
         """
         dependencies = []
-        query.lower()
 
         for i, sq in enumerate(sub_questions[1:], start=1):
             text_lower = sq.text.lower()
@@ -276,35 +276,16 @@ class DependencyDetector:
 
     async def _detect_with_llm(
         self, query: str, sub_questions: list[SubQuestion]
-    ) -> list[Dependency]:
-        """Use LLM to detect semantic dependencies."""
-        if not self.llm_client:
-            return []
+    ) -> tuple[list[Dependency], bool]:
+        """Use LLM to detect semantic dependencies.
 
-        # Format sub-questions for prompt
-        sq_text = "\n".join([f"{sq.id}: {sq.text}" for sq in sub_questions])
-
-        prompt = DEPENDENCY_DETECTION_PROMPT.format(
-            query=query,
-            sub_questions=sq_text,
-        )
-
-        try:
-            self.llm_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=500,
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            # Parse LLM response (expecting JSON)
-            # Implementation would parse the response and create Dependency objects
-            # For now, return empty list as placeholder
-            return []
-
-        except Exception as e:
-            # Log error and fall back to rule-based only
-            print(f"LLM dependency detection failed: {e}")
-            return []
+        Not yet implemented: the original scaffold issued a *blocking* sync
+        ``Anthropic.messages.create`` from async code and discarded the
+        response. Until an async client + JSON response parse lands, this is
+        a no-op reporting ``used_llm=False`` so ``used_llm_layer`` stays
+        honest. Returns ``(dependencies, used_llm)``.
+        """
+        return [], False
 
     def _merge_dependencies(
         self,

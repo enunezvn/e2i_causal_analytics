@@ -426,6 +426,10 @@ class OrchestratorAgent:
             "synthesis_latency_ms": state.get("synthesis_latency_ms", 0),
             "intent_classified": (intent := state.get("intent")) and intent["primary_intent"],
             "intent_confidence": (intent := state.get("intent")) and intent["confidence"] or 0.0,
+            # 4-stage ClassificationPipeline (shadow/active) — None when off.
+            "classification": state.get("classification"),
+            "routing_pattern": state.get("routing_pattern"),
+            "used_llm_layer": state.get("used_llm_layer"),
         }
 
     def _generate_query_id(self) -> str:

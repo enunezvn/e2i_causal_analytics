@@ -243,3 +243,84 @@ class TestSSEFormat:
         assert "data:" in content or response.headers["content-type"].startswith(
             "text/event-stream"
         )
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_graph.stream_chatbot")
+    async def test_dispatch_info_carries_classifier_observability(self, mock_stream_chatbot):
+        """The dispatch_info SSE event must carry the 4-stage classifier
+        fields (routing_pattern / classification_latency_ms / used_llm_layer)
+        when a node emits them, and default them to None otherwise."""
+        import json as _json
+
+        async def mock_stream(*args, **kwargs):
+            yield {
+                "orchestrator": {
+                    "response_text": "Analysis done.",
+                    "orchestrator_used": True,
+                    "agents_dispatched": ["causal_impact"],
+                    "routing_pattern": "SINGLE_AGENT",
+                    "classification_latency_ms": 2.7,
+                    "used_llm_layer": False,
+                }
+            }
+            yield {"finalize": {"response_text": "Analysis done.", "streaming_complete": True}}
+
+        mock_stream_chatbot.return_value = mock_stream()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/api/copilotkit/chat/stream",
+                json={
+                    "query": "What caused the TRx drop?",
+                    "user_id": "user-123",
+                    "request_id": "req-456",
+                },
+            )
+
+        assert response.status_code == 200
+        dispatch_events = [
+            _json.loads(line[len("data: ") :])
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and '"dispatch_info"' in line
+        ]
+        assert len(dispatch_events) == 1
+        info = dispatch_events[0]["data"]
+        assert info["routing_pattern"] == "SINGLE_AGENT"
+        assert info["classification_latency_ms"] == 2.7
+        assert info["used_llm_layer"] is False
+        assert info["orchestrator_used"] is True
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_graph.stream_chatbot")
+    async def test_dispatch_info_classifier_fields_default_none(self, mock_stream_chatbot):
+        """Without classifier output (mode=off / non-orchestrator turns) the
+        dispatch_info keys are present but None."""
+        import json as _json
+
+        async def mock_stream(*args, **kwargs):
+            yield {"generate": {"response_text": "Hi!"}}
+            yield {"finalize": {"response_text": "Hi!", "streaming_complete": True}}
+
+        mock_stream_chatbot.return_value = mock_stream()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/api/copilotkit/chat/stream",
+                json={
+                    "query": "Hello",
+                    "user_id": "user-123",
+                    "request_id": "req-456",
+                },
+            )
+
+        assert response.status_code == 200
+        dispatch_events = [
+            _json.loads(line[len("data: ") :])
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and '"dispatch_info"' in line
+        ]
+        assert len(dispatch_events) == 1
+        info = dispatch_events[0]["data"]
+        assert info["routing_pattern"] is None
+        assert info["classification_latency_ms"] is None
+        assert info["used_llm_layer"] is None
