@@ -5,7 +5,7 @@
 **Specialist Reference**: `.claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md`
 **Version**: 2.1
 **Validation Date**: 2026-02-09 (Updated)
-**Status**: 95% COMPLIANT - DSPy Integration Pending
+**Status**: 95% COMPLIANT — DSPy module present but not yet wired (§12)
 **Test Results**: 394/394 tests passing
 
 ---
@@ -114,13 +114,30 @@ The implementation uses `TypedDict` with all required state fields:
 
 ### 4.1 Graph Architecture ✅
 
-**Contract Workflow**:
+**Contract Workflow** (tier3-contracts.md):
 ```
 START → context_loader → design_reasoning → power_analysis → validity_audit →
 (conditional: redesign → power_analysis) → template_generator → END
 ```
 
-**Implementation**: `src/agents/experiment_designer/graph.py:87-196`
+**Implementation Workflow** (`create_experiment_designer_graph`):
+```
+audit_init (genesis) → context_loader → [twin_simulation]? → design_reasoning →
+power_analysis → validity_audit → (conditional: redesign → power_analysis) →
+template_generator → END
+```
+- `audit_init`: genesis node for the tamper-evident audit chain; this is the
+  graph entry point (not `context_loader`).
+- `twin_simulation`: optional digital-twin pre-screen. Wired by default at
+  build time (`enable_twin_simulation=True`) but stays dark at runtime unless
+  `state["enable_twin_simulation"]` is also set (default False, seeded from
+  `ExperimentDesignerInput`); `enable_twin_simulation=False` excises the node
+  entirely so `context_loader` flows straight to `design_reasoning`.
+- `error_handler`: every business node routes here on `status == "failed"`,
+  then to END.
+
+**Implementation**: `src/agents/experiment_designer/graph.py`
+(`create_experiment_designer_graph`)
 
 | Workflow Step | Required | Implemented | Status |
 |--------------|----------|-------------|--------|
@@ -176,13 +193,17 @@ START → context_loader → design_reasoning → power_analysis → validity_au
 
 | Requirement | Implemented | Status |
 |-------------|-------------|--------|
-| LLM reasoning | Mock LLM (placeholder for Claude) | ✅ Compliant* |
+| LLM reasoning | Real LLM via `get_chat_llm` (reasoning tier) | ✅ Compliant* |
 | Design types | RCT, Cluster_RCT, Quasi_Experimental, Observational | ✅ Compliant |
 | Treatment definition | Full treatment specification | ✅ Compliant |
 | Outcome definition | Primary/secondary outcomes | ✅ Compliant |
 | Rationale generation | Design rationale | ✅ Compliant |
 
-*Note: Uses mock LLM for testing. Production will use Claude Sonnet/Opus.
+*Note: Production uses the real reasoning-tier LLM (`get_chat_llm`, see
+`design_reasoning.py:25,113-117`). A MARKED mock is used ONLY when no LLM key is
+configured AND an explicit opt-in flag is set — `E2I_ALLOW_MOCK_LLM` for
+design_reasoning (keyless Tier 1-5 harness, #606), `EXPERIMENT_DESIGNER_USE_MOCK_LLM=1`
+for validity_audit (#471). Without the flag, a missing key fails loud.
 
 ### 5.3 Power Analysis Node ✅
 
@@ -214,7 +235,7 @@ START → context_loader → design_reasoning → power_analysis → validity_au
 
 | Requirement | Implemented | Status |
 |-------------|-------------|--------|
-| LLM red-teaming | Mock LLM (placeholder) | ✅ Compliant* |
+| LLM red-teaming | Real LLM (`ChatAnthropic` via `_get_validity_llm`); raises on missing key | ✅ Compliant* |
 | Internal validity threats | Selection, confounding, contamination | ✅ Compliant |
 | External validity threats | Generalizability limits | ✅ Compliant |
 | Statistical concerns | Multiple testing, power | ✅ Compliant |
@@ -260,12 +281,13 @@ START → context_loader → design_reasoning → power_analysis → validity_au
 | Node | Target (ms) | Achieved | Status |
 |------|-------------|----------|--------|
 | Context Loader | <100 | <50 | ✅ Compliant |
-| Design Reasoning | <5000 | <200 (mock) | ✅ Compliant* |
+| Design Reasoning | <5000 | <200 (test mock) | ✅ Compliant* |
 | Power Analysis | <100 | <10 | ✅ Compliant |
-| Validity Audit | <5000 | <200 (mock) | ✅ Compliant* |
+| Validity Audit | <5000 | <200 (test mock) | ✅ Compliant* |
 | Template Generator | <500 | <50 | ✅ Compliant |
 
-*LLM nodes use mock implementations; production latency will vary.
+*Figures measured under the test-injected mock LLM. In production these nodes
+call a real LLM (§5.2, §5.4) and latency is dominated by the LLM call.
 
 ### 6.2 Latency Tracking ✅
 
@@ -307,8 +329,8 @@ All nodes record latency in `node_latencies_ms` dictionary.
 | Dependency | Status | Notes |
 |------------|--------|-------|
 | Orchestrator Agent | Ready | Receives requests from Tier 1 |
-| Knowledge Store | **Mock** | Placeholder implementation |
-| Claude LLM | **Mock** | Placeholder for Claude API |
+| Knowledge Store | Wired (honest-empty default) | Prod default is `EmptyKnowledgeStore` (F10 audit — returns empty context, never fabricates); real validation learnings via `ExperimentKnowledgeStore` when available; `MockKnowledgeStore` retained for explicit test injection only (`context_loader.py`) |
+| LLM | **Real** | Via `get_chat_llm` reasoning tier / `ChatAnthropic` (§5.2, §5.4); marked mock only under explicit opt-in flags |
 
 ### 8.2 Downstream Integrations
 
@@ -320,15 +342,13 @@ All nodes record latency in `node_latencies_ms` dictionary.
 
 ### 8.3 Integration Blockers
 
-1. **Knowledge Store**: Mock implementation in `context_loader.py`. Requires:
-   - Real vector store connection
-   - Historical experiment retrieval
-   - Organizational defaults loading
+1. **Richer knowledge retrieval** (remaining gap): the prod-default
+   `EmptyKnowledgeStore` returns honest-empty org context; vector-store-backed
+   similar-experiment retrieval and organizational-defaults loading remain
+   future work (`ExperimentKnowledgeStore` covers validation learnings only).
 
-2. **Claude LLM Integration**: Mock in `design_reasoning.py` and `validity_audit.py`. Requires:
-   - Claude API configuration
-   - Prompt templates finalization
-   - Response parsing validation
+2. ~~**Claude LLM Integration**~~ — RESOLVED: real LLM wired in
+   `design_reasoning.py` and `validity_audit.py` (§5.2, §5.4).
 
 ---
 
@@ -380,26 +400,32 @@ All nodes record latency in `node_latencies_ms` dictionary.
 
 ## 11. Next Steps
 
-1. **Replace Mock LLM**: Integrate Claude API for `design_reasoning` and `validity_audit` nodes
-2. **Replace Mock Knowledge Store**: Connect to actual repository layer
+1. ~~Replace Mock LLM~~ — DONE: real LLM wired for `design_reasoning` and `validity_audit` (§5.2, §5.4)
+2. **Richer Knowledge Retrieval**: vector-store similar-experiment retrieval + org defaults (prod default is honest-empty, §8.3)
 3. **Add E2E Integration Tests**: Test with real Orchestrator handoffs
 4. **Performance Benchmarking**: Measure real LLM latency under load
 5. **Digital Twin Integration Testing**: Validate twin fidelity tool E2E
 
 ---
 
-## 12. DSPy Integration Contract (PENDING)
+## 12. DSPy Integration Contract (PARTIAL — module present)
 
 **Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
 
 **DSPy Role**: Sender (generates training signals for feedback_learner)
 
+**Status (2026-07-29)**: `src/agents/experiment_designer/dspy_integration.py` EXISTS
+(v4.2) and defines the Sender-side training-signal structures and DSPy signatures.
+It is NOT yet imported/wired into the running experiment_designer agent graph
+(verified: no internal import from `agent.py`/`graph.py`/nodes), so signal emission
+from live design sessions is not active. Full end-to-end wiring is tracked separately.
+
 | Requirement | Contract | Implementation | Status | Notes |
 |-------------|----------|----------------|--------|-------|
-| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
-| Signal Type | InvestigationPlanSignature | Not implemented | PENDING | For experiment planning optimization |
-| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
-| TrainingSignal Structure | Required | Not implemented | PENDING | See below |
+| DSPy Type | Sender | Defined in `dspy_integration.py` | MODULE-PRESENT | Not yet wired into agent graph |
+| Signal Type | InvestigationPlanSignature | `ExperimentDesignTrainingSignal` + signatures | MODULE-PRESENT | Structures defined; live emission not active |
+| `dspy_integration.py` | Required file | Present (v4.2) | IMPLEMENTED | File exists (was stale "Not created") |
+| TrainingSignal Structure | Required | `ExperimentDesignTrainingSignal` dataclass | IMPLEMENTED | Richer dataclass; illustrative TypedDict below |
 
 **TrainingSignal Structure**:
 ```python

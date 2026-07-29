@@ -8,7 +8,7 @@ Performance Target: <20s total execution time
 
 Architecture:
 - Type: Standard Agent (Computational focus, minimal LLM usage)
-- Workflow: Linear 4-node pipeline (gap_detector → roi_calculator → prioritizer → formatter)
+- Workflow: Linear 5-node pipeline (gap_detector → roi_calculator → instrument_analyzer → prioritizer → formatter)
 - Parallelization: Segment analysis runs in parallel for throughput
 - Economics: Pharma-specific ROI calculations
 """

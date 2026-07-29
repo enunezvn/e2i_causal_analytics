@@ -4,13 +4,15 @@
 **Tier**: 5 (Self-Improvement)
 **Version**: 4.3
 **Validation Date**: 2026-02-09 (Updated)
-**Status**: 95% COMPLIANT - DSPy Integration Pending
+**Status**: COMPLIANT — DSPy Recipient integration implemented and wired (§17)
 
 ---
 
 ## Executive Summary
 
 The Explainer agent is a Tier 5 Self-Improvement agent that synthesizes complex analyses into clear, actionable explanations tailored to different audiences. This validation confirms the implementation aligns with tier5-contracts.md specifications and specialist documentation.
+
+> **Role note**: Although organizationally labeled Tier 5 (Self-Improvement), the explainer functions as the platform's general-narration agent and universal default/fallback. The router/classifier treat `EXPLANATION` as a normal domain (`router.py` `INTENT_TO_AGENTS["explanation"]`), and the explainer is the orchestrator's default dispatch for unclassified/unmapped intents (`_default_routing`) and the named `fallback_agent` for the `causal_effect` and `multi_faceted`/tool_composer routes.
 
 **Test Results**: 270/270 passing (100%)
 **Test Duration**: 0.83s
@@ -19,7 +21,7 @@ The Explainer agent is a Tier 5 Self-Improvement agent that synthesizes complex 
 |----------|--------|-------|
 | Core Contract Compliance | ✅ 100% | All I/O, state, nodes implemented |
 | Tri-Memory Architecture | ✅ COMPLIANT | Working, Episodic, Semantic integrated |
-| DSPy Integration | PENDING | Recipient role not yet implemented |
+| DSPy Integration | ✅ IMPLEMENTED | Recipient role wired: `dspy_integration.py` (v4.2) consumed by `nodes/narrative_generator.py` (§17) |
 
 ---
 
@@ -45,12 +47,16 @@ The Explainer agent is a Tier 5 Self-Improvement agent that synthesizes complex 
 ### 1.3 Graph Flow
 
 ```
-assemble → reason → generate → END
-              ↓ (on error)
-         error_handler → END
+audit_init (genesis) → assemble → reason → generate → END
+                          │          │
+                          └──────────┴──(on error)──→ error_handler → END
 ```
 
-**Verified in**: `graph.py:23-111`
+`audit_init` is the graph entry point (genesis block of the tamper-evident audit
+chain). Both `assemble` and `reason` route to `error_handler` on failure via
+conditional edges; `generate` and `error_handler` terminate at END.
+
+**Verified in**: `graph.py` (`build_explainer_graph`)
 
 ---
 
@@ -261,7 +267,7 @@ The `get_handoff()` method generates orchestrator handoffs with:
 | requires_further_analysis | Based on status | COMPLIANT |
 | suggested_next_agent | "feedback_learner" if completed | COMPLIANT |
 
-**Location**: `agent.py:216-252`
+**Location**: `agent.py` (`get_handoff()`)
 
 ---
 
@@ -299,7 +305,7 @@ The `get_handoff()` method generates orchestrator handoffs with:
 | Item | Specification | Implementation | Impact |
 |------|---------------|----------------|--------|
 | OpenTelemetry | Span tracing | Latency tracking only | LOW - Observability enhancement |
-| DSPy integration | Module definitions | LLM mode available | LOW - Future optimization |
+| DSPy integration | Module definitions | Implemented and wired (§17) | None — resolved |
 
 ### 14.2 Rationale
 
@@ -329,11 +335,10 @@ The agent is fully compliant with all core contracts including tri-memory archit
 ### 15.3 Future Enhancements
 
 1. **OpenTelemetry**: Add span tracing for distributed observability
-2. **DSPy Optimization**: Implement signature optimization for LLM mode
 
 ---
 
-## 17. DSPy Integration Contract (PENDING)
+## 17. DSPy Integration Contract (IMPLEMENTED — wired 2026; doc corrected 2026-07-29, #1344)
 
 **Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
 
@@ -341,10 +346,13 @@ The agent is fully compliant with all core contracts including tri-memory archit
 
 | Requirement | Contract | Implementation | Status | Notes |
 |-------------|----------|----------------|--------|-------|
-| DSPy Type | Recipient | Not implemented | PENDING | Consumes optimized prompts |
-| Signal Type | QueryRewriteSignature | Not implemented | PENDING | For explanation optimization |
-| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
-| Optimized Prompt Retrieval | Required | Not implemented | PENDING | See below |
+| DSPy Type | Recipient | `src/agents/explainer/dspy_integration.py` (v4.2) | ✅ IMPLEMENTED | Consumes optimized prompt templates |
+| `dspy_integration.py` | Required file | Exists | ✅ IMPLEMENTED | `ExplanationPrompts` templates + `get_explainer_dspy_integration()` |
+| Optimized Prompt Retrieval | Required | Wired into the live path | ✅ WIRED | `nodes/narrative_generator.py` renders the executive summary through `get_executive_summary_prompt(...)` (content-template pattern, non-fatal fallback to the inline body) and emits recipient training signals via `_emit_recipient_signals` |
+
+> The interface sketch below predates the implementation and is retained for
+> historical context; the implemented module uses `ExplanationPrompts`
+> dataclass templates rather than this exact shape.
 
 **DSPy Recipient Interface**:
 ```python
@@ -394,16 +402,17 @@ class ExplainerDSPyIntegration:
 
 ## Appendix A: File Inventory
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `__init__.py` | 31 | Module exports |
-| `agent.py` | 337 | Main agent class, I/O contracts, memory integration |
-| `graph.py` | 156 | LangGraph workflow assembly with checkpointer |
-| `state.py` | 91 | State TypedDicts with memory fields |
-| `memory_hooks.py` | 450 | **NEW** - Tri-memory integration hooks |
-| `CLAUDE.md` | 145 | Agent instructions |
-| `nodes/__init__.py` | 14 | Node exports |
-| `nodes/context_assembler.py` | 238 | Context assembly with memory retrieval |
-| `nodes/deep_reasoner.py` | 330 | Deep reasoning node |
-| `nodes/narrative_generator.py` | 520 | Narrative generation with memory storage |
-| **Total** | **~4,574** | |
+Line counts are indicative only and drift with edits; verify against the files.
+
+| File | Lines (approx) | Purpose |
+|------|----------------|---------|
+| `__init__.py` | 69 | Module exports |
+| `agent.py` | 481 | Main agent class, I/O contracts, memory integration |
+| `graph.py` | 175 | LangGraph workflow assembly with checkpointer |
+| `state.py` | 119 | State TypedDicts with memory fields |
+| `memory_hooks.py` | 677 | Tri-memory integration hooks |
+| `nodes/__init__.py` | 13 | Node exports |
+| `nodes/context_assembler.py` | 237 | Context assembly with memory retrieval |
+| `nodes/deep_reasoner.py` | 588 | Deep reasoning node |
+| `nodes/narrative_generator.py` | 1139 | Narrative generation with memory storage |
+| **Total** | **~3,498** | |
