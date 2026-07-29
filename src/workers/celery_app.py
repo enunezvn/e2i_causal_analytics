@@ -11,6 +11,7 @@ Version: 4.1.0
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from kombu import Exchange, Queue
 
 # Initialize Celery app
@@ -376,6 +377,20 @@ celery_app.conf.beat_schedule = {
     "dspy-prompt-optimization-daily": {
         "task": "src.tasks.run_dspy_prompt_optimization",
         "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # Routing-label loop (#1341 Phase 1) — nightly labeler for
+    # classification_logs. Populates was_correct/correct_pattern from
+    # live-traffic outcome signals (explicit feedback > implicit outcome >
+    # capped LLM judge) so v_classification_accuracy aggregates real data.
+    # Fixed wall-clock slot (crontab, 04:30 UTC) rather than a relative
+    # interval: the droplet also runs a 02:00 backup and a Mon-03:00 reseed,
+    # and this task must stay off those windows. Gated on
+    # ROUTING_LABEL_MIN_NEW_ROWS unlabeled rows; judge calls capped per run
+    # via ROUTING_LABEL_JUDGE_CAP (token spend + droplet capacity).
+    "routing-label-nightly": {
+        "task": "src.tasks.run_routing_label_cycle",
+        "schedule": crontab(hour=4, minute=30),
         "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------

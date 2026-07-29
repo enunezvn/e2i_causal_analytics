@@ -106,6 +106,12 @@ from src.tasks.nppes_tasks import refresh_npi_taxonomy_cache
 # Risk-score prediction DB write task (issue #173)
 from src.tasks.risk_score_prediction_tasks import write_risk_score_predictions
 
+# Routing-label loop (#1341 Phase 1): importing the module fires the
+# @celery_app.task decorator so the nightly labeler is discoverable by the
+# Celery worker + beat. Without this line the "routing-label-nightly" beat
+# entry would dead-letter.
+from src.tasks.routing_label_tasks import run_routing_label_cycle
+
 __all__ = [
     # Feature Store
     "materialize_features",
@@ -141,6 +147,8 @@ __all__ = [
     # run_feedback_learning_cycle GENERATES signals; run_dspy_prompt_optimization CONSUMES them.
     "run_feedback_learning_cycle",
     "run_dspy_prompt_optimization",
+    # Routing-label loop (#1341 Phase 1)
+    "run_routing_label_cycle",
     # NPPES NPI taxonomy cache (issue #154)
     "refresh_npi_taxonomy_cache",
     # Risk-score prediction DB writes (issue #173)
