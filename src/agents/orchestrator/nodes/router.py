@@ -88,7 +88,15 @@ class RouterNode:
                 agent_name="experiment_designer",
                 priority="critical",
                 parameters={"preregistration_formality": "medium"},
-                timeout_ms=60000,
+                # 2026-07-29 (#1337 Step 0 empirical pass, #1351): the old 60s
+                # budget cut COMPLETING designs — both forced-route attempts
+                # timed out at exactly the budget while the live AG-UI surface
+                # answered the same asks in a measured 88-90s (LLM-dominated
+                # design phases: power analysis, validity audit, DoWhy codegen).
+                # 150s = measured + ~67% headroom for LLM-latency variance — a
+                # workload-appropriate SLA in line with the other heavy
+                # analytical agents above, not a latency target.
+                timeout_ms=150000,
                 fallback_agent=None,
             )
         ],

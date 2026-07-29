@@ -90,7 +90,8 @@ class TestRouterNode:
         result = await router.execute(state)
 
         assert result["dispatch_plan"][0]["agent_name"] == "experiment_designer"
-        assert result["dispatch_plan"][0]["timeout_ms"] == 60000
+        # 150s workload-appropriate SLA (measured 88-90s live, #1351)
+        assert result["dispatch_plan"][0]["timeout_ms"] == 150000
         assert result["dispatch_plan"][0]["parameters"] == {"preregistration_formality": "medium"}
 
     @pytest.mark.asyncio
@@ -539,9 +540,14 @@ class TestIntentToAgentMapping:
         # the full 37,378-row gold conversion frame's CausalForestDML +
         # per-segment effect_interval + hierarchical uplift MEASURED 269.7s
         # serialized (gate 11, clean substrate); 420s = measured + ~55% headroom.
+        # experiment_design is 150s as of 2026-07-29 (#1351) — both forced-route
+        # attempts in the #1337 Step 0 pass timed out at the old 60s budget while
+        # the live surface completed the same asks in a measured 88-90s;
+        # 150s = measured + ~67% headroom for LLM-latency variance.
         max_timeout_ms = {
             "multi_faceted": 180_000,
             "segment_analysis": 420_000,
+            "experiment_design": 150_000,
         }
         for intent, dispatches in router.INTENT_TO_AGENTS.items():
             for dispatch in dispatches:

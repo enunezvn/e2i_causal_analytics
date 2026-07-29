@@ -117,8 +117,8 @@ All 11 intents mapped correctly in `nodes/router.py:21-112`
 |--------|--------------|----------|---------|----------|--------|
 | causal_effect | causal_impact | 1 | 30000ms | explainer | ✅ |
 | performance_gap | gap_analyzer | 1 | 20000ms | None | ✅ |
-| segment_analysis | heterogeneous_optimizer | 1 | 120000ms | gap_analyzer | ✅ |
-| experiment_design | experiment_designer | 1 | 60000ms | None | ✅ |
+| segment_analysis | heterogeneous_optimizer | 1 | 420000ms | gap_analyzer | ✅ |
+| experiment_design | experiment_designer | 1 | 150000ms | None | ✅ |
 | prediction | prediction_synthesizer | 1 | 15000ms | None | ✅ |
 | resource_allocation | resource_optimizer | 1 | 20000ms | None | ✅ |
 | explanation | explainer | 1 | 45000ms | None | ✅ |
@@ -131,8 +131,8 @@ All 11 intents mapped correctly in `nodes/router.py:21-112`
 Validated against contract (lines 368-377):
 - ✅ Tier 0: Not applicable (orchestrator is Tier 1)
 - ✅ Tier 1: N/A (can't call self)
-- ✅ Tier 2: 20-120s (causal_impact:30s, gap_analyzer:20s, heterogeneous_optimizer:120s — real CausalForestDML + CausalML hierarchical needs a workload-appropriate SLA)
-- ✅ Tier 3: 5-60s (health_score:5s, drift_monitor:10s, experiment_monitor:15s, experiment_designer:60s)
+- ✅ Tier 2: 20-420s (causal_impact:30s, gap_analyzer:20s, heterogeneous_optimizer:420s — real CausalForestDML + CausalML hierarchical needs a workload-appropriate SLA; 2026-06-11 measured 269.7s)
+- ✅ Tier 3: 5-150s (health_score:5s, drift_monitor:10s, experiment_monitor:15s, experiment_designer:150s — measured 88-90s live 2026-07-29 + headroom, #1351)
 - ✅ Tier 4: 15-20s (prediction_synthesizer:15s, resource_optimizer:20s)
 - ✅ Tier 5: 30-45s (explainer:45s, feedback_learner:30s)
 
