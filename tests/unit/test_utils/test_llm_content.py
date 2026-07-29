@@ -113,6 +113,23 @@ class TestParseLlmJson:
         ]
         assert parse_llm_json(content) == {"a": 1}
 
+    def test_bare_json_with_backticks_in_value(self):
+        # codex iter-1 MEDIUM: fence stripping must not corrupt bare JSON
+        # whose string values legitimately contain triple backticks.
+        payload = '{"answer": "wrap code in ``` fences ``` like this"}'
+        assert parse_llm_json(payload) == {"answer": "wrap code in ``` fences ``` like this"}
+
+    def test_earlier_non_json_fence_skipped(self):
+        # codex iter-1 MEDIUM: a non-JSON fence before the payload fence must
+        # not shadow it — every fenced block is tried until one parses.
+        text = 'Plan:\n```\npseudo code\n```\nResult:\n```\n{"a": 1}\n```'
+        assert parse_llm_json(text) == {"a": 1}
+
+    def test_json_fence_preferred_over_earlier_plain_fence(self):
+        # ```json blocks are tried before bare ``` blocks regardless of order.
+        text = '```\nnot the payload\n```\n```json\n{"a": 1}\n```'
+        assert parse_llm_json(text) == {"a": 1}
+
     def test_non_json_raises_jsondecodeerror(self):
         with pytest.raises(json.JSONDecodeError):
             parse_llm_json("I cannot classify this query.")

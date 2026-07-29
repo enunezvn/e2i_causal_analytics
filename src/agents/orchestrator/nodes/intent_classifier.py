@@ -574,9 +574,17 @@ Respond with ONLY a JSON object:
             try:
                 result = parse_llm_json(response.content)
             except json.JSONDecodeError as e:
+                # Expected degraded mode: log ONCE with the raw payload and
+                # fall back directly — re-raising would double-log via the
+                # outer handler (codex iter-1).
                 raw = normalize_llm_content(response.content)
                 logger.warning(f"LLM classification failed to parse: {e}; raw={raw[:200]!r}")
-                raise
+                return IntentClassification(
+                    primary_intent="general",
+                    confidence=0.3,
+                    secondary_intents=[],
+                    requires_multi_agent=False,
+                )
             return IntentClassification(
                 primary_intent=result.get("primary_intent", "general"),
                 confidence=result.get("confidence", 0.5),

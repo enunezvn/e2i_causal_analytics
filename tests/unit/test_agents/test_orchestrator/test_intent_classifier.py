@@ -1,5 +1,7 @@
 """Tests for intent_classifier node."""
 
+import logging
+
 import pytest
 
 from src.agents.orchestrator.nodes.intent_classifier import (
@@ -304,3 +306,39 @@ class TestLLMClassifyFencedCompletion:
         assert classification["primary_intent"] == "system_health"
         assert classification["confidence"] == 0.95
         assert classification["requires_multi_agent"] is False
+
+
+class _NonJsonLLM:
+    """Stub returning prose that cannot be parsed as JSON."""
+
+    async def ainvoke(self, prompt):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content="I cannot classify this query.",
+            response_metadata={},
+        )
+
+
+class TestLLMClassifyParseFailure:
+    """codex iter-1 LOW: a parse failure must fall back to general@0.3 with
+    exactly ONE warning that carries the raw payload — the inner handler used
+    to log then re-raise into the outer handler, which logged again."""
+
+    @pytest.mark.asyncio
+    async def test_parse_failure_falls_back_and_logs_once(self, caplog):
+        node = IntentClassifierNode()
+        node.llm = _NonJsonLLM()
+
+        logger_name = "src.agents.orchestrator.nodes.intent_classifier"
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            classification = await node._llm_classify("gibberish")
+
+        assert classification["primary_intent"] == "general"
+        assert classification["confidence"] == 0.3
+        assert classification["requires_multi_agent"] is False
+
+        warnings = [r for r in caplog.records if "LLM classification failed" in r.getMessage()]
+        assert len(warnings) == 1
+        # the single log line must carry the raw payload for diagnosis
+        assert "I cannot classify this query." in warnings[0].getMessage()
