@@ -44,7 +44,10 @@ from dotenv import load_dotenv  # noqa: E402
 
 from scripts.benchmarks.routing.step0_scoring import (  # noqa: E402
     aggregate,
+    assert_unique_query_ids,
+    decision_verdict,
     disagreement_rows,
+    load_checkpoint,
     score_row,
 )
 
@@ -55,16 +58,8 @@ ALL_CANDIDATES = ["legacy", "pipeline_rules", "pipeline_llm", "single_llm"]
 
 def load_rows(limit: int | None) -> List[Dict[str, Any]]:
     rows = [json.loads(line) for line in DATA.open()]
+    assert_unique_query_ids(rows)  # duplicates would race run_candidate appends
     return rows[:limit] if limit else rows
-
-
-def load_checkpoint(path: Path) -> Dict[str, Dict[str, Any]]:
-    done: Dict[str, Dict[str, Any]] = {}
-    if path.exists():
-        for line in path.open():
-            rec = json.loads(line)
-            done[rec["query_id"]] = rec
-    return done
 
 
 def percentile(values: List[float], q: float) -> float:
@@ -205,16 +200,11 @@ def render_md(summaries: Dict[str, Dict[str, Any]], n_rows: int, elapsed_s: floa
         lines.append(f"Confusion: `{json.dumps(s['confusion'])}`")
         lines.append("")
 
-    # Decision readout (#1337 Step 0)
+    # Decision readout (#1337 Step 0) — accuracy AND the comparable
+    # latency/cost gate (see decision_verdict / COMPARABLE_* constants).
     if "pipeline_llm" in summaries and "single_llm" in summaries:
         a, b = summaries["pipeline_llm"], summaries["single_llm"]
-        verdict = (
-            "single_llm >= pipeline_llm → the 4-stage design does NOT merit the "
-            "async-LLM-stage investment (replace rather than extend)."
-            if b["pattern_accuracy"] >= a["pattern_accuracy"]
-            else "pipeline_llm > single_llm → the staged design earns its keep "
-            "(extend with the async LLM stage)."
-        )
+        verdict = decision_verdict(a, b)
         lines += [
             "## Decision readout",
             "",

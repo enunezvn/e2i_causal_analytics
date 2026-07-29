@@ -27,6 +27,7 @@ routing layer's real latency/cost point.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 import time
@@ -93,6 +94,39 @@ def _context_block(row: Dict[str, Any]) -> str:
 # Candidate: legacy (incumbent)
 # =============================================================================
 
+# Per-asyncio-task flag: did the wrapped _llm_classify run during this
+# predict? ContextVar (not an instance attribute) because run_candidate
+# executes predicts concurrently on ONE LegacyCandidate instance; each
+# gather task copies the context, so tasks cannot race each other's flag.
+_LLM_CALL_SEEN: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "step0_legacy_llm_call_seen", default=False
+)
+
+
+def reset_llm_call_tracking() -> None:
+    _LLM_CALL_SEEN.set(False)
+
+
+def llm_call_seen() -> bool:
+    return _LLM_CALL_SEEN.get()
+
+
+def install_llm_call_tracker(classifier: Any) -> None:
+    """Wrap ``classifier._llm_classify`` so llm_used detection is exact.
+
+    The previous heuristic (``confidence < 0.8 or method == "llm"``)
+    undercounted: _llm_classify can return confidence >= 0.8 (its
+    parse-degradation default is 0.85) and IntentResult never carries a
+    ``method`` field, so real haiku fallbacks were booked as rule hits.
+    """
+    real = classifier._llm_classify
+
+    async def _tracked(*args: Any, **kwargs: Any) -> Any:
+        _LLM_CALL_SEEN.set(True)
+        return await real(*args, **kwargs)
+
+    classifier._llm_classify = _tracked
+
 
 class LegacyCandidate:
     """The real incumbent chain: IntentClassifierNode -> RouterNode."""
@@ -108,6 +142,7 @@ class LegacyCandidate:
 
         self._classifier = IntentClassifierNode()
         self._router = RouterNode()
+        install_llm_call_tracker(self._classifier)
 
     async def predict(self, row: Dict[str, Any]) -> Prediction:
         state: Dict[str, Any] = {"query": row["text"]}
@@ -115,6 +150,7 @@ class LegacyCandidate:
         if history:
             state["conversation_history"] = history
 
+        reset_llm_call_tracking()
         t0 = time.perf_counter()
         classified = await self._classifier.execute(state)  # type: ignore[arg-type]
         routed = await self._router.execute(classified)
@@ -123,9 +159,7 @@ class LegacyCandidate:
         intent = classified.get("intent") or {}
         agents = [d["agent_name"] for d in routed.get("dispatch_plan") or []]
         pattern = derive_legacy_pattern(intent.get("primary_intent", "general"), agents)
-        # Pattern confidence >= 0.8 short-circuits the LLM inside execute; a
-        # lower value means the real haiku fallback ran.
-        llm_used = float(intent.get("confidence", 0.0)) < 0.8 or intent.get("method") == "llm"
+        llm_used = llm_call_seen()
         return Prediction(
             routing_pattern=pattern,
             target_agents=sorted(set(agents)),

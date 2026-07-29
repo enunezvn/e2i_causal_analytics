@@ -16,6 +16,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Tuple
 
 VALID_PATTERNS = (
@@ -271,3 +272,102 @@ def contract_cards_from_registry(registry: Dict[str, Any]) -> str:
             line += f" | NOT: {not_covers}"
         lines.append(line)
     return "\n".join(lines)
+
+
+# =============================================================================
+# Runner support (checkpoint IO, gold sanity, decision gate)
+#
+# These live here rather than in score_candidates.py so they stay unit-testable
+# without importing the CLI module (which mutates ORCHESTRATOR_CLASSIFIER_MODE
+# at import time).
+# =============================================================================
+
+
+def assert_unique_query_ids(rows: List[Dict[str, Any]]) -> None:
+    """Fail fast on duplicate query_ids in the gold slice.
+
+    Duplicates would let run_candidate schedule the same id twice (both
+    appending to the checkpoint) and make the last-write-wins reload pick one
+    arbitrarily — measurement-unsafe.
+    """
+    counts: Dict[str, int] = {}
+    for r in rows:
+        counts[r["query_id"]] = counts.get(r["query_id"], 0) + 1
+    dups = sorted(q for q, n in counts.items() if n > 1)
+    if dups:
+        raise ValueError(
+            f"gold slice contains {len(dups)} duplicate query_id(s): {dups[:10]}"
+        )
+
+
+def load_checkpoint(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Read a predictions checkpoint, keyed by query_id (last write wins,
+    deterministic in file order).
+
+    An interrupted append can leave exactly one truncated FINAL line; that is
+    tolerated and physically truncated from the file so later appends don't
+    bury it mid-file. A malformed NON-final line is real corruption and
+    raises rather than silently dropping measurements.
+    """
+    done: Dict[str, Dict[str, Any]] = {}
+    if not path.exists():
+        return done
+    lines = path.read_text().splitlines()
+    good_lines: List[str] = []
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError as e:
+            if i == len(lines) - 1:
+                print(
+                    f"WARNING: dropping truncated final checkpoint line in "
+                    f"{path.name}; that query will re-run on resume"
+                )
+                path.write_text("".join(gl + "\n" for gl in good_lines))
+                continue
+            raise ValueError(
+                f"corrupt checkpoint line {i + 1}/{len(lines)} in {path} — "
+                "not a truncated tail; refusing to guess"
+            ) from e
+        good_lines.append(line)
+        done[rec["query_id"]] = rec
+    return done
+
+
+# Operationalization of the #1337 clause "single_llm >= pipeline_llm on routing
+# accuracy AT COMPARABLE LATENCY/COST". The replace verdict additionally
+# requires single_llm to stay within these envelopes vs pipeline_llm; outside
+# them the readout abstains to human review instead of issuing an
+# accuracy-only verdict.
+COMPARABLE_P95_RATIO_MAX = 1.5  # single_llm p95 <= 1.5x pipeline_llm p95
+COMPARABLE_LLM_SHARE_DELTA_MAX = 0.25  # LLM call share (cost proxy) delta
+
+
+def decision_verdict(a: Dict[str, Any], b: Dict[str, Any]) -> str:
+    """Step 0 decision readout. ``a`` = pipeline_llm summary, ``b`` = single_llm.
+
+    Requires keys pattern_accuracy, latency_ms_p95, llm_share.
+    """
+    if b["pattern_accuracy"] < a["pattern_accuracy"]:
+        return (
+            "pipeline_llm > single_llm → the staged design earns its keep "
+            "(extend with the async LLM stage)."
+        )
+    comparable = (
+        b["latency_ms_p95"] <= COMPARABLE_P95_RATIO_MAX * a["latency_ms_p95"]
+        and b["llm_share"] <= a["llm_share"] + COMPARABLE_LLM_SHARE_DELTA_MAX
+    )
+    if comparable:
+        return (
+            "single_llm >= pipeline_llm at comparable latency/cost → the "
+            "4-stage design does NOT merit the async-LLM-stage investment "
+            "(replace rather than extend)."
+        )
+    return (
+        "single_llm >= pipeline_llm on accuracy BUT latency/cost are NOT "
+        f"comparable (gate: p95 <= {COMPARABLE_P95_RATIO_MAX}x and LLM share "
+        f"delta <= {COMPARABLE_LLM_SHARE_DELTA_MAX}) → no automatic verdict; "
+        "human review required."
+    )
