@@ -148,6 +148,18 @@ def test_tracker_detects_high_confidence_llm_call():
     assert stub.calls == 1
 
 
+def test_tracker_target_exists_on_real_node():
+    """Integration sentinel (codex iter-2 LOW): install_llm_call_tracker
+    patches the node's private ``_llm_classify``. If the node renames or
+    de-asyncs it, fail HERE loudly instead of silently measuring llm_share=0.
+    """
+    import inspect
+
+    from src.agents.orchestrator.nodes.intent_classifier import IntentClassifierNode
+
+    assert inspect.iscoroutinefunction(IntentClassifierNode._llm_classify)
+
+
 def test_tracker_is_isolated_across_concurrent_tasks():
     stub = _StubClassifier()
     install_llm_call_tracker(stub)
