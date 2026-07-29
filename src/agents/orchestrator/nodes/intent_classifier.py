@@ -37,7 +37,7 @@ from src.agents.multi_faceted import (
     MULTI_FACETED_PATTERNS,
     has_sequential_composition,
 )
-from src.utils.llm_content import normalize_llm_content
+from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
@@ -568,8 +568,15 @@ Respond with ONLY a JSON object:
 
             import json
 
-            # AIMessage.content is str | list of content blocks (#1350)
-            result = json.loads(normalize_llm_content(response.content))
+            # Fence-tolerant: haiku-4.5 wraps the JSON in ```json fences on
+            # every call despite the bare-JSON instruction (#1333); also
+            # normalizes content-block lists (#1350).
+            try:
+                result = parse_llm_json(response.content)
+            except json.JSONDecodeError as e:
+                raw = normalize_llm_content(response.content)
+                logger.warning(f"LLM classification failed to parse: {e}; raw={raw[:200]!r}")
+                raise
             return IntentClassification(
                 primary_intent=result.get("primary_intent", "general"),
                 confidence=result.get("confidence", 0.5),

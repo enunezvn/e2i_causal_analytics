@@ -271,3 +271,36 @@ class TestPatternMatching:
 
         assert result["primary_intent"] == "general"
         assert result["confidence"] < 0.8
+
+
+class _FencedStrLLM:
+    """Stub returning the verbatim 2026-07-29 live capture: claude-haiku-4-5
+    wraps its JSON in markdown fences on every call (#1333)."""
+
+    async def ainvoke(self, prompt):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content=(
+                '```json\n{"primary_intent": "system_health", "confidence": 0.95, '
+                '"requires_multi_agent": false}\n```'
+            ),
+            response_metadata={},
+        )
+
+
+class TestLLMClassifyFencedCompletion:
+    """Regression for #1333: a fenced completion must classify, not silently
+    degrade to the general@0.3 fallback (which killed the LLM intent layer
+    on every /chat/stream turn of the 2026-07-29 recorded run)."""
+
+    @pytest.mark.asyncio
+    async def test_fenced_completion_classifies(self):
+        node = IntentClassifierNode()
+        node.llm = _FencedStrLLM()
+
+        classification = await node._llm_classify("What is the current system health score?")
+
+        assert classification["primary_intent"] == "system_health"
+        assert classification["confidence"] == 0.95
+        assert classification["requires_multi_agent"] is False
