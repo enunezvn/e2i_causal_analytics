@@ -1,0 +1,29 @@
+{
+  "qid": "q13",
+  "query_text": "How can I optimize resource allocation for Remibrutinib in the northeast region?",
+  "proposed": "single_agent:resource_optimizer",
+  "forced_intent": "resource_allocation",
+  "candidate_agent": "resource_optimizer",
+  "ts": "2026-07-29T15:04:58+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "resource_optimizer",
+      "priority": "critical",
+      "timeout_ms": 20000,
+      "fallback_agent": null
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "resource_optimizer",
+      "success": false,
+      "result": null,
+      "error": "resource_optimizer needs structured inputs that could not be grounded in real data (a real allocation problem (entities with response coefficients AND a budget constraint) must be supplied; no per-entity allocation/response substrate exists in the data (rep-activity allocation rows are absent) to build one without inventing entities, response coefficients and budgets); missing: allocation_targets, constraints (with a budget constraint). Supply them via POST /resources/optimize. Failing closed \u2014 no values were fabricated.",
+      "latency_ms": 0
+    }
+  ],
+  "synthesized_response": "I was unable to complete the analysis due to the following errors:\n- resource_optimizer: resource_optimizer needs structured inputs that could not be grounded in real data (a real allocation problem (entities with response coefficients AND a budget constraint) must be supplied; no per-entity allocation/response substrate exists in the data (rep-activity allocation rows are absent) to build one without inventing entities, response coefficients and budgets); missing: allocation_targets, constraints (with a budget constraint). Supply them via POST /resources/optimize. Failing closed \u2014 no values were fabricated.\n\nPlease try again or rephrase your question.",
+  "response_confidence": 0.0,
+  "status": "failed",
+  "total_ms": 0.5
+}

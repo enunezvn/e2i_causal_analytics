@@ -1,0 +1,186 @@
+{
+  "total_rows": 337,
+  "overall_label_distribution": {
+    "SINGLE_AGENT": 269,
+    "TOOL_COMPOSER": 29,
+    "CLARIFICATION_NEEDED": 36,
+    "PARALLEL_DELEGATION": 3
+  },
+  "by_source": {
+    "demo": {
+      "SINGLE_AGENT": 38,
+      "TOOL_COMPOSER": 7,
+      "CLARIFICATION_NEEDED": 3
+    },
+    "historical": {
+      "CLARIFICATION_NEEDED": 7,
+      "SINGLE_AGENT": 107,
+      "PARALLEL_DELEGATION": 1
+    },
+    "perturbation": {
+      "SINGLE_AGENT": 70,
+      "PARALLEL_DELEGATION": 2,
+      "TOOL_COMPOSER": 14,
+      "CLARIFICATION_NEEDED": 12
+    },
+    "authored": {
+      "SINGLE_AGENT": 54,
+      "CLARIFICATION_NEEDED": 14,
+      "TOOL_COMPOSER": 8
+    }
+  },
+  "source_counts": {
+    "demo": 48,
+    "historical": 115,
+    "perturbation": 98,
+    "authored": 76
+  },
+  "gold_source_counts": {
+    "llm-judge": 242,
+    "human-ratified": 19,
+    "authored-ground-truth": 76
+  },
+  "low_confidence_count": 52,
+  "human_anchor_matches": 19,
+  "authored_ground_truth": 76,
+  "llm_judged_gold": 242,
+  "unjudged": 0,
+  "nightly_disagreements": [
+    {
+      "query_id": "bench-0003",
+      "qid": "q01",
+      "text": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0004",
+      "qid": "q05",
+      "text": "What is the causal impact of rep visits on TRx for Kisqali?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0007",
+      "qid": "q11",
+      "text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0010",
+      "qid": "q12",
+      "text": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0012",
+      "qid": "q13",
+      "text": "How can I optimize resource allocation for Remibrutinib in the northeast region?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "resource_optimizer"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0016",
+      "qid": "q14",
+      "text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "prediction_synthesizer"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0017",
+      "qid": "q03",
+      "text": "Design an experiment to measure whether speaker programs increase Fabhalta NRx",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "experiment_designer"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0019",
+      "qid": "q06",
+      "text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "experiment_designer"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0021",
+      "qid": "q15",
+      "text": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0023",
+      "qid": "q16",
+      "text": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0026",
+      "qid": "q17",
+      "text": "Did rep actions driven by triggers actually lift prescriptions?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0031",
+      "qid": "q18",
+      "text": "Why did the model flag this HCP segment - what features drove the prediction?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    },
+    {
+      "query_id": "bench-0033",
+      "qid": "q07",
+      "text": "How confident are we in the rep-visit effect - did it pass refutation tests?",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "nightly_pattern": "TOOL_COMPOSER"
+    }
+  ],
+  "authored_vs_judge_disagreements": [],
+  "judge_calls": 318,
+  "judge_input_tokens": 3003872,
+  "judge_output_tokens": 71361,
+  "judge_est_cost_usd": 10.08,
+  "judge_model": "claude-sonnet-5"
+}

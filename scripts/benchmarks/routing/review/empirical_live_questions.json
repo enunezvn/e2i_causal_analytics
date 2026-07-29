@@ -1,0 +1,136 @@
+{
+  "questions": [
+    {
+      "question_id": "q01",
+      "session": "q01",
+      "text": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+      "intent_expected": "causal_effect"
+    },
+    {
+      "question_id": "q02",
+      "session": "q02",
+      "text": "Where are the biggest untapped opportunities to grow Remibrutinib market share?",
+      "intent_expected": "performance_gap"
+    },
+    {
+      "question_id": "q03",
+      "session": "q03",
+      "text": "Design an experiment to measure whether speaker programs increase Fabhalta NRx",
+      "intent_expected": "experiment_design"
+    },
+    {
+      "question_id": "q04",
+      "session": "q04",
+      "text": "What drove the change in new patient starts for Fabhalta?",
+      "intent_expected": "causal_effect"
+    },
+    {
+      "question_id": "q05",
+      "session": "q05",
+      "text": "What is the causal impact of rep visits on TRx for Kisqali?",
+      "intent_expected": "causal_effect"
+    },
+    {
+      "question_id": "q06",
+      "session": "q06",
+      "text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption",
+      "intent_expected": "experiment_design"
+    },
+    {
+      "question_id": "q07",
+      "session": "q07",
+      "text": "How confident are we in the rep-visit effect - did it pass refutation tests?",
+      "intent_expected": "causal_effect"
+    },
+    {
+      "question_id": "q08",
+      "session": "q08",
+      "text": "Compare TRx market share for Kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "q09",
+      "session": "q09",
+      "text": "Give me a launch-readiness snapshot for Fabhalta: % PNH tested, NRx trend, top adoption barriers, and one experiment we should run next",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "q10",
+      "session": "q10",
+      "text": "Show me the KPI summary for Kisqali",
+      "intent_expected": "explanation"
+    },
+    {
+      "question_id": "q11",
+      "session": "q11",
+      "text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+      "intent_expected": "cohort_definition"
+    },
+    {
+      "question_id": "q12",
+      "session": "q12",
+      "text": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?",
+      "intent_expected": "causal_effect"
+    },
+    {
+      "question_id": "q13",
+      "session": "q13",
+      "text": "How can I optimize resource allocation for Remibrutinib in the northeast region?",
+      "intent_expected": "resource_allocation"
+    },
+    {
+      "question_id": "q14",
+      "session": "q14",
+      "text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+      "intent_expected": "prediction"
+    },
+    {
+      "question_id": "q15",
+      "session": "q15",
+      "text": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter",
+      "intent_expected": "cohort_definition"
+    },
+    {
+      "question_id": "q16",
+      "session": "q16",
+      "text": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+      "intent_expected": "segment_analysis"
+    },
+    {
+      "question_id": "q17",
+      "session": "q17",
+      "text": "Did rep actions driven by triggers actually lift prescriptions?",
+      "intent_expected": "causal_effect"
+    },
+    {
+      "question_id": "q18",
+      "session": "q18",
+      "text": "Why did the model flag this HCP segment - what features drove the prediction?",
+      "intent_expected": "explanation"
+    },
+    {
+      "question_id": "q19",
+      "session": "q19",
+      "text": "If conversion rate in the west is below 15%, which patient segments should we prioritize?",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "q20",
+      "session": "q20",
+      "text": "Forecast Kisqali TRx volume for the next two quarters and tell me the biggest risk to that forecast",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "q21",
+      "session": "q21",
+      "text": "Our Kisqali TRx dropped in the northeast last quarter while conversion rates for Remibrutinib stayed flat, and I need to understand several things: what actually caused the Kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "q22",
+      "session": "q22",
+      "text": "Optimize resource allocation for Remibrutinib in the Northeast region \u2014 where should reps, detailing effort, and access/support investment be prioritized to grow TRx/NRx share?",
+      "intent_expected": "resource_allocation"
+    }
+  ]
+}

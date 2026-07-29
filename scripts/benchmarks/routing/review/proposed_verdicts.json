@@ -1,0 +1,142 @@
+{
+  "_meta": {
+    "authored": "2026-07-29",
+    "author": "claude (contract-based analysis against data/agent_contracts.json)",
+    "status": "EMPIRICALLY EVALUATED 2026-07-29 — both passes complete (forced-route dispatch through production RouterNode/DispatcherNode with real registry+DB+LLMs, 22/22; live AG-UI pass on the production UI surface, 22/22, 0 errors). Per-proposal outcome in each 'empirical' field: 2 confirmed (q11, q15) / 20 qualified / 0 REFUTED. No proposal's domain analysis was contradicted; the qualifications are operational (fail-closed input resolvers, causal_impact having no resolver at all, experiment_designer 60s timeouts, and the tool_composer content-list crash filed as #1350). Gold labels remain normative; awaiting user accept/override per row.",
+    "keying": "normalized query text: casefold + whitespace-collapse, same as gen_judge_review.normalize()"
+  },
+  "proposals": {
+    "why did kisqali trx drop in q1 in the northeast region?": {
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "'Why did X drop' is a causal-driver ask — one domain (CAUSAL_ANALYSIS). The judge's rationale (retrieve data -> analyze -> investigate) counts causal_impact's own internal pipeline steps as composition. Note: the pipeline actually dispatched explainer, i.e. the classifier under-detected the causal domain — a classifier miss, not a composition case.",
+      "empirical": "qualified — domain confirmed (live surface answered with KPI + causal drivers) but the forced route FAILS CLOSED: causal_impact has no input resolver and hard-requires treatment_var/outcome_var/confounders/data_source no chat query supplies",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:causal_impact"
+    },
+    "where are the biggest untapped opportunities to grow remibrutinib market share?": {
+      "proposed": "single_agent:gap_analyzer",
+      "reasoning": "Verbatim in gap_analyzer's covers list ('Where are the biggest ROI opportunities for <brand>'). One domain (GAP_ANALYSIS); opportunity detection + ROI + prioritization is its single-dispatch pipeline.",
+      "empirical": "qualified — right owner but fails closed on bare chat: the resolver reads parameters/parsed_query (never populated), not query text, so even the in-text brand 'Remibrutinib' is invisible; live answered via kpi_calculate_tool",
+      "final": "reject proposal (user, 2026-07-29 interactive review): ROI opportunity assessment is affected by clinical/regulatory and competitive-landscape factors -> judge's TOOL_COMPOSER stands; note: registry has no competitive-intelligence/clinical-context agent owner (unmapped-capability finding for #1337; clinical context exists only as the UI brain's clinical_context_tool)"
+    },
+    "design an experiment to measure whether speaker programs increase fabhalta nrx": {
+      "proposed": "single_agent:experiment_designer",
+      "reasoning": "End-to-end experiment design (metrics, controls, power, validity audit) is experiment_designer's single-dispatch contract. One domain (EXPERIMENTATION); the judge decomposed the agent's own internal phases.",
+      "empirical": "qualified — experiment_designer ACCEPTS the chat query (no fail-closed) but blew its 60s dispatch budget; the live surface took 88s — route right, timeout budget unrealistic",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:experiment_designer (+ user directive: fix the 60s dispatch budget)"
+    },
+    "what drove the change in new patient starts for fabhalta?": {
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Causal-driver question on a business KPI. drift_monitor (the pipeline's other parallel target) is inapplicable — nothing here is about model/data drift vs baseline. One domain.",
+      "empirical": "qualified — same causal_impact fail-closed as q01; live causal_analysis_tool answer corroborates the causal-driver domain",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:causal_impact"
+    },
+    "what is the causal impact of rep visits on trx for kisqali?": {
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Textbook ATE ask — the literal first entry in causal_impact's covers list. The judge's 'sales + clinical domains' framing mistakes data sources for agent-capability domains.",
+      "empirical": "qualified — textbook-ATE domain corroborated (live surface chose causal_analysis_tool); forced route fails closed (no input resolver)",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:causal_impact"
+    },
+    "design an experiment to test whether increasing rep visits improves fabhalta adoption": {
+      "proposed": "single_agent:experiment_designer",
+      "reasoning": "Same as the speaker-programs design ask: single-domain EXPERIMENTATION, covered end-to-end by experiment_designer under one dispatch. Pipeline's SINGLE_AGENT decision was correct.",
+      "empirical": "qualified — same as q03: real work, 60s timeout; live took 90s",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:experiment_designer"
+    },
+    "how confident are we in the rep-visit effect - did it pass refutation tests?": {
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Refutation + sensitivity (E-value) reporting are stages INSIDE causal_impact's contract, not a second domain. Caveat: as a session follow-up on an already-computed effect, narrating the stored result via explainer is defensible — but that is still SINGLE_AGENT, never TOOL_COMPOSER.",
+      "empirical": "qualified — forced fails closed; live causal_analysis_tool answered; caveat: ran standalone, without the session context this follow-up assumes",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:causal_impact (follow-up-context caveat noted)"
+    },
+    "compare trx market share for kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter": {
+      "proposed": "agree",
+      "reasoning": "Genuinely spans >=2 distinct domains (KPI/gap compare -> causal drivers -> resource allocation) AND the recommendation depends on the drivers — both gate conditions hold. Matches the demo doc's authored multi_faceted (6.1). Not the defined 2-intent parallel-pair case: three linked facets.",
+      "empirical": "qualified — composition domain stands (live answered all three facets, 4.1k chars) but tool_composer CRASHES in planning: AIMessage.content list-vs-str (#1350) — the multi_faceted route is operationally broken",
+      "final": "accept/agree (user, 2026-07-29 interactive review) -> judge's TOOL_COMPOSER stands (authored multi_faceted 6.1; >=2 domains + dependency-linked)"
+    },
+    "give me a launch-readiness snapshot for fabhalta: % pnh tested, nrx trend, top adoption barriers, and one experiment we should run next": {
+      "proposed": "agree",
+      "reasoning": "Cross-domain (KPI + gap/causal barriers + experiment design) and the 'experiment we should run next' facet depends on the barriers facet. Demo doc authored it as 4-facet TOOL_COMPOSER (6.4). Weakest link: the first three facets alone would be PARALLEL — the dependent final facet is what makes composition.",
+      "empirical": "qualified — same #1350 crash; live kpi_calculate_tool answered the snapshot (3.5k chars)",
+      "final": "accept/agree (user, 2026-07-29 interactive review) -> judge's TOOL_COMPOSER stands (authored multi_faceted 6.4; >=2 domains + dependency-linked final experiment facet)"
+    },
+    "show me the kpi summary for kisqali": {
+      "proposed": "single_agent:explainer",
+      "reasoning": "A KPI lookup/summary — no second domain, no dependency; the judge's 'clinical/safety/market/regulatory domains' rationale invents facets not in the query. In prod this is really the chatbot KPI fast path (kpi_query), outside the 14-agent registry; within the orchestrator taxonomy the catch-all narration owner is explainer.",
+      "empirical": "qualified — explainer fails closed with no upstream agent results, confirming the proposal's own note that prod serves this via the KPI fast path; live: e2i_data_query_tool",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:explainer"
+    },
+    "build a patient cohort for remibrutinib csu with inclusion criteria for adults over 18 diagnosed in 2024": {
+      "proposed": "single_agent:cohort_profiler",
+      "reasoning": "One domain (COHORT_DEFINITION). cohort_constructor can never serve chat (resolver fails closed to NeedsStructuredInput by design); cohort_profiler owns the chat cohort ask. If the user truly wants materialization with criteria, the correct platform behavior is the fail-closed guidance to the ML pipeline — still not composition.",
+      "empirical": "confirmed — the ONLY operational single-agent route in the pass (real data, 3.6s); caveat: response is query-insensitive (canned all-brands profile; brand filter and inclusion criteria ignored)",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:cohort_profiler"
+    },
+    "what is driving the drop in remibrutinib nrx in the northeast region this quarter?": {
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Same shape as the Kisqali Q1 driver ask: single-domain causal attribution; region/quarter are filters, not domains.",
+      "empirical": "qualified — same causal_impact fail-closed pattern; live kpi_calculate_tool answered",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:causal_impact"
+    },
+    "how can i optimize resource allocation for remibrutinib in the northeast region?": {
+      "proposed": "single_agent:resource_optimizer",
+      "reasoning": "Verbatim resource_optimizer territory (allocate reps/budget across a region). One domain. Note: resource_optimizer is classifier-unmapped (legacy INTENT_TO_AGENTS only) — the pipeline dispatching explainer reflects that coverage gap, not a composition need.",
+      "empirical": "qualified — right owner; the resolver demands a structured allocation problem (entities+coefficients+budget) no chat query supplies; live answered via e2i_data_query_tool",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:resource_optimizer"
+    },
+    "predict which hcp segments are most likely to increase fabhalta prescriptions next quarter": {
+      "proposed": "single_agent:prediction_synthesizer",
+      "reasoning": "A forecast-and-rank ask — PREDICTION domain, covered by prediction_synthesizer (ensemble + intervals). Not heterogeneous_optimizer: no treatment/intervention whose effect varies; it's an outcome forecast by segment.",
+      "empirical": "qualified — right domain owner but the ask is unservable on BOTH surfaces: forced fails closed (no champion model / no entity); live explicitly says no per-HCP-segment likelihood prediction exists",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:prediction_synthesizer; user directive: file issue for the missing per-HCP-segment likelihood-prediction capability"
+    },
+    "build a cohort of high-value hcps who prescribed more than 50 trx last quarter": {
+      "proposed": "extend:cohort_profiler — HCP-entity cohorts with quantitative KPI thresholds (current contract profiles patient prescribing populations by brand/severity/LoT only)",
+      "reasoning": "Still single-domain (COHORT_DEFINITION) — TOOL_COMPOSER is wrong either way. But cohort_profiler's verified contract covers patient populations per brand, not HCP-level cohorts by TRx threshold; no agent today cleanly owns this. Product call: extend profiler's contract, or fail closed with guidance. This is the one genuine contract-gap row in the batch.",
+      "empirical": "confirmed — the contract gap is real on both surfaces: forced returns the canned patient profile ignoring the HCP ask entirely; live explicitly states its tools cannot build HCP-level cohorts (extend remains the user's product call)",
+      "final": "accept (user, 2026-07-29 interactive review) -> extend:cohort_profiler — HCP-entity cohorts with quantitative KPI thresholds; user note: may demand a propensity score model (investigated same day)"
+    },
+    "which hcp segments show the strongest treatment effect for remibrutinib?": {
+      "proposed": "single_agent:heterogeneous_optimizer",
+      "reasoning": "CATE-by-segment is verbatim in heterogeneous_optimizer's covers list ('Which HCP segments respond best'). The judge's 'first effects, then segmentation' sequence is the agent's own estimate_cate -> analyze_segments pipeline — internal steps, one dispatch.",
+      "empirical": "qualified — covers-verbatim domain stands; forced fails closed (no KPI substrate/treatment/rows groundable from chat) and even the live surface's heterogeneous_optimizer call returned no records for Remibrutinib",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:heterogeneous_optimizer; user directive: investigate why heterogeneous_optimizer returned no Remibrutinib records — treatment effect should exist in the gold-standard dataset"
+    },
+    "did rep actions driven by triggers actually lift prescriptions?": {
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "'Did X actually lift Y' is a causal-uplift ask (treatment = trigger-driven rep actions, outcome = prescriptions). One domain; CRM-vs-prescription data sources are not separate agent-capability domains.",
+      "empirical": "qualified — same causal_impact fail-closed; live causal_analysis_tool answered",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:causal_impact"
+    },
+    "why did the model flag this hcp segment - what features drove the prediction?": {
+      "proposed": "single_agent:explainer",
+      "reasoning": "Explaining an existing prediction's drivers is explainer's contract (demo doc: SHAP interpretability path). (prediction, explanation) is also a defined PARALLEL pair — so even read as two domains it can never be TOOL_COMPOSER under the ruling.",
+      "empirical": "qualified — explainer fails closed without upstream artifacts to narrate (standalone chat supplies none); live answered via e2i_data_query_tool; same standalone-context caveat as q07",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:explainer"
+    },
+    "if conversion rate in the west is below 15%, which patient segments should we prioritize?": {
+      "proposed": "agree",
+      "reasoning": "Conditional composition: a KPI/gap check gates a segment-prioritization step — two domains with a hard dependency (the demo doc authored exactly this as the CONDITIONAL-dependency showcase, 6.3). Both gate conditions hold.",
+      "empirical": "qualified — #1350 crash on forced; live PREMISE-CHECKED instead of composing: West conversion is 62.8%, not <15%, so the composite's condition is false in data",
+      "final": "accept/agree (user, 2026-07-29 interactive review) -> judge's TOOL_COMPOSER stands (authored multi_faceted 6.3 CONDITIONAL showcase; KPI gate + segment prioritization = >=2 domains, hard dependency; live premise-check = facet 1 early-exit, not a counter-signal)"
+    },
+    "forecast kisqali trx volume for the next two quarters and tell me the biggest risk to that forecast": {
+      "proposed": "agree",
+      "reasoning": "Prediction + risk-to-that-forecast (drift/causal context) with an explicit dependency on the forecast output — demo doc authored as multi_faceted (6.5). Defensible alternative: extend:prediction_synthesizer to narrate forecast risk from its own uncertainty/enrichment outputs, which would make this single-agent; empirical responses should decide.",
+      "empirical": "qualified — #1350 crash; live answered forecast+risk via e2i_data_query_tool (3.0k chars)",
+      "final": "accept/agree (user, 2026-07-29 interactive review) -> judge's TOOL_COMPOSER stands (authored multi_faceted 6.5; forecast + risk-to-that-forecast = prediction + drift/causal domains, dependency-linked; extend:prediction_synthesizer alternative considered and declined)"
+    },
+    "our kisqali trx dropped in the northeast last quarter while conversion rates for remibrutinib stayed flat, and i need to understand several things: what actually caused the kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.": {
+      "proposed": "agree",
+      "reasoning": "Five explicit facets across >=4 domains (causal, heterogeneity/cohort, prediction, drift, experiment design) with stated dependencies (drift confounds the reads; the experiment depends on the causal finding). The clearest genuine TOOL_COMPOSER in the batch (authored A.10).",
+      "empirical": "qualified — #1350 crash; live causal_analysis_tool produced the richest answer of the pass (4.6k chars, 6 causal paths) — the composite ask is genuinely answerable",
+      "final": "accept/agree (user, 2026-07-29 interactive review) -> judge's TOOL_COMPOSER stands (authored A.10 complexity stress-test; 5 facets across >=4 domains with in-query stated dependencies — clearest genuine TOOL_COMPOSER in the batch; pipeline's PARALLEL_DELEGATION missed the dependency links)"
+    },
+    "optimize resource allocation for remibrutinib in the northeast region — where should reps, detailing effort, and access/support investment be prioritized to grow trx/nrx share?": {
+      "proposed": "single_agent:resource_optimizer",
+      "reasoning": "Elaborated variant of the same allocation ask: multiple LEVERS (reps, detailing, access) are allocation targets within resource_optimizer's one domain, not multiple agent-capability domains.",
+      "empirical": "qualified — same as q13: resolver needs a structured allocation problem; live kpi_calculate_tool answered (3.6k chars)",
+      "final": "accept (user, 2026-07-29 interactive review) -> single_agent:resource_optimizer"
+    }
+  }
+}

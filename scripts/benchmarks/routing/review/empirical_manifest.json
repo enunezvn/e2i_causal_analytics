@@ -1,0 +1,202 @@
+{
+  "entries": [
+    {
+      "qid": "q01",
+      "query_text": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "'Why did X drop' is a causal-driver ask \u2014 one domain (CAUSAL_ANALYSIS). The judge's rationale (retrieve data -> analyze -> investigate) counts causal_impact's own internal pipeline steps as composition. Note: the pipeline actually dispatched explainer, i.e. the classifier under-detected the causal domain \u2014 a classifier miss, not a composition case.",
+      "forced_intent": "causal_effect",
+      "candidate_agent": "causal_impact",
+      "n_rows": 4
+    },
+    {
+      "qid": "q02",
+      "query_text": "Where are the biggest untapped opportunities to grow Remibrutinib market share?",
+      "proposed": "single_agent:gap_analyzer",
+      "reasoning": "Verbatim in gap_analyzer's covers list ('Where are the biggest ROI opportunities for <brand>'). One domain (GAP_ANALYSIS); opportunity detection + ROI + prioritization is its single-dispatch pipeline.",
+      "forced_intent": "performance_gap",
+      "candidate_agent": "gap_analyzer",
+      "n_rows": 3
+    },
+    {
+      "qid": "q03",
+      "query_text": "Design an experiment to measure whether speaker programs increase Fabhalta NRx",
+      "proposed": "single_agent:experiment_designer",
+      "reasoning": "End-to-end experiment design (metrics, controls, power, validity audit) is experiment_designer's single-dispatch contract. One domain (EXPERIMENTATION); the judge decomposed the agent's own internal phases.",
+      "forced_intent": "experiment_design",
+      "candidate_agent": "experiment_designer",
+      "n_rows": 3
+    },
+    {
+      "qid": "q04",
+      "query_text": "What drove the change in new patient starts for Fabhalta?",
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Causal-driver question on a business KPI. drift_monitor (the pipeline's other parallel target) is inapplicable \u2014 nothing here is about model/data drift vs baseline. One domain.",
+      "forced_intent": "causal_effect",
+      "candidate_agent": "causal_impact",
+      "n_rows": 2
+    },
+    {
+      "qid": "q05",
+      "query_text": "What is the causal impact of rep visits on TRx for Kisqali?",
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Textbook ATE ask \u2014 the literal first entry in causal_impact's covers list. The judge's 'sales + clinical domains' framing mistakes data sources for agent-capability domains.",
+      "forced_intent": "causal_effect",
+      "candidate_agent": "causal_impact",
+      "n_rows": 2
+    },
+    {
+      "qid": "q06",
+      "query_text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption",
+      "proposed": "single_agent:experiment_designer",
+      "reasoning": "Same as the speaker-programs design ask: single-domain EXPERIMENTATION, covered end-to-end by experiment_designer under one dispatch. Pipeline's SINGLE_AGENT decision was correct.",
+      "forced_intent": "experiment_design",
+      "candidate_agent": "experiment_designer",
+      "n_rows": 2
+    },
+    {
+      "qid": "q07",
+      "query_text": "How confident are we in the rep-visit effect - did it pass refutation tests?",
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Refutation + sensitivity (E-value) reporting are stages INSIDE causal_impact's contract, not a second domain. Caveat: as a session follow-up on an already-computed effect, narrating the stored result via explainer is defensible \u2014 but that is still SINGLE_AGENT, never TOOL_COMPOSER.",
+      "forced_intent": "causal_effect",
+      "candidate_agent": "causal_impact",
+      "n_rows": 2
+    },
+    {
+      "qid": "q08",
+      "query_text": "Compare TRx market share for Kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter",
+      "proposed": "agree",
+      "reasoning": "Genuinely spans >=2 distinct domains (KPI/gap compare -> causal drivers -> resource allocation) AND the recommendation depends on the drivers \u2014 both gate conditions hold. Matches the demo doc's authored multi_faceted (6.1). Not the defined 2-intent parallel-pair case: three linked facets.",
+      "forced_intent": "multi_faceted",
+      "candidate_agent": "tool_composer",
+      "n_rows": 2
+    },
+    {
+      "qid": "q09",
+      "query_text": "Give me a launch-readiness snapshot for Fabhalta: % PNH tested, NRx trend, top adoption barriers, and one experiment we should run next",
+      "proposed": "agree",
+      "reasoning": "Cross-domain (KPI + gap/causal barriers + experiment design) and the 'experiment we should run next' facet depends on the barriers facet. Demo doc authored it as 4-facet TOOL_COMPOSER (6.4). Weakest link: the first three facets alone would be PARALLEL \u2014 the dependent final facet is what makes composition.",
+      "forced_intent": "multi_faceted",
+      "candidate_agent": "tool_composer",
+      "n_rows": 2
+    },
+    {
+      "qid": "q10",
+      "query_text": "Show me the KPI summary for Kisqali",
+      "proposed": "single_agent:explainer",
+      "reasoning": "A KPI lookup/summary \u2014 no second domain, no dependency; the judge's 'clinical/safety/market/regulatory domains' rationale invents facets not in the query. In prod this is really the chatbot KPI fast path (kpi_query), outside the 14-agent registry; within the orchestrator taxonomy the catch-all narration owner is explainer.",
+      "forced_intent": "explanation",
+      "candidate_agent": "explainer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q11",
+      "query_text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+      "proposed": "single_agent:cohort_profiler",
+      "reasoning": "One domain (COHORT_DEFINITION). cohort_constructor can never serve chat (resolver fails closed to NeedsStructuredInput by design); cohort_profiler owns the chat cohort ask. If the user truly wants materialization with criteria, the correct platform behavior is the fail-closed guidance to the ML pipeline \u2014 still not composition.",
+      "forced_intent": "cohort_definition",
+      "candidate_agent": "cohort_profiler",
+      "n_rows": 1
+    },
+    {
+      "qid": "q12",
+      "query_text": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?",
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "Same shape as the Kisqali Q1 driver ask: single-domain causal attribution; region/quarter are filters, not domains.",
+      "forced_intent": "causal_effect",
+      "candidate_agent": "causal_impact",
+      "n_rows": 1
+    },
+    {
+      "qid": "q13",
+      "query_text": "How can I optimize resource allocation for Remibrutinib in the northeast region?",
+      "proposed": "single_agent:resource_optimizer",
+      "reasoning": "Verbatim resource_optimizer territory (allocate reps/budget across a region). One domain. Note: resource_optimizer is classifier-unmapped (legacy INTENT_TO_AGENTS only) \u2014 the pipeline dispatching explainer reflects that coverage gap, not a composition need.",
+      "forced_intent": "resource_allocation",
+      "candidate_agent": "resource_optimizer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q14",
+      "query_text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+      "proposed": "single_agent:prediction_synthesizer",
+      "reasoning": "A forecast-and-rank ask \u2014 PREDICTION domain, covered by prediction_synthesizer (ensemble + intervals). Not heterogeneous_optimizer: no treatment/intervention whose effect varies; it's an outcome forecast by segment.",
+      "forced_intent": "prediction",
+      "candidate_agent": "prediction_synthesizer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q15",
+      "query_text": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter",
+      "proposed": "extend:cohort_profiler \u2014 HCP-entity cohorts with quantitative KPI thresholds (current contract profiles patient prescribing populations by brand/severity/LoT only)",
+      "reasoning": "Still single-domain (COHORT_DEFINITION) \u2014 TOOL_COMPOSER is wrong either way. But cohort_profiler's verified contract covers patient populations per brand, not HCP-level cohorts by TRx threshold; no agent today cleanly owns this. Product call: extend profiler's contract, or fail closed with guidance. This is the one genuine contract-gap row in the batch.",
+      "forced_intent": "cohort_definition",
+      "candidate_agent": "cohort_profiler",
+      "n_rows": 1
+    },
+    {
+      "qid": "q16",
+      "query_text": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+      "proposed": "single_agent:heterogeneous_optimizer",
+      "reasoning": "CATE-by-segment is verbatim in heterogeneous_optimizer's covers list ('Which HCP segments respond best'). The judge's 'first effects, then segmentation' sequence is the agent's own estimate_cate -> analyze_segments pipeline \u2014 internal steps, one dispatch.",
+      "forced_intent": "segment_analysis",
+      "candidate_agent": "heterogeneous_optimizer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q17",
+      "query_text": "Did rep actions driven by triggers actually lift prescriptions?",
+      "proposed": "single_agent:causal_impact",
+      "reasoning": "'Did X actually lift Y' is a causal-uplift ask (treatment = trigger-driven rep actions, outcome = prescriptions). One domain; CRM-vs-prescription data sources are not separate agent-capability domains.",
+      "forced_intent": "causal_effect",
+      "candidate_agent": "causal_impact",
+      "n_rows": 1
+    },
+    {
+      "qid": "q18",
+      "query_text": "Why did the model flag this HCP segment - what features drove the prediction?",
+      "proposed": "single_agent:explainer",
+      "reasoning": "Explaining an existing prediction's drivers is explainer's contract (demo doc: SHAP interpretability path). (prediction, explanation) is also a defined PARALLEL pair \u2014 so even read as two domains it can never be TOOL_COMPOSER under the ruling.",
+      "forced_intent": "explanation",
+      "candidate_agent": "explainer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q19",
+      "query_text": "If conversion rate in the west is below 15%, which patient segments should we prioritize?",
+      "proposed": "agree",
+      "reasoning": "Conditional composition: a KPI/gap check gates a segment-prioritization step \u2014 two domains with a hard dependency (the demo doc authored exactly this as the CONDITIONAL-dependency showcase, 6.3). Both gate conditions hold.",
+      "forced_intent": "multi_faceted",
+      "candidate_agent": "tool_composer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q20",
+      "query_text": "Forecast Kisqali TRx volume for the next two quarters and tell me the biggest risk to that forecast",
+      "proposed": "agree",
+      "reasoning": "Prediction + risk-to-that-forecast (drift/causal context) with an explicit dependency on the forecast output \u2014 demo doc authored as multi_faceted (6.5). Defensible alternative: extend:prediction_synthesizer to narrate forecast risk from its own uncertainty/enrichment outputs, which would make this single-agent; empirical responses should decide.",
+      "forced_intent": "multi_faceted",
+      "candidate_agent": "tool_composer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q21",
+      "query_text": "Our Kisqali TRx dropped in the northeast last quarter while conversion rates for Remibrutinib stayed flat, and I need to understand several things: what actually caused the Kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.",
+      "proposed": "agree",
+      "reasoning": "Five explicit facets across >=4 domains (causal, heterogeneity/cohort, prediction, drift, experiment design) with stated dependencies (drift confounds the reads; the experiment depends on the causal finding). The clearest genuine TOOL_COMPOSER in the batch (authored A.10).",
+      "forced_intent": "multi_faceted",
+      "candidate_agent": "tool_composer",
+      "n_rows": 1
+    },
+    {
+      "qid": "q22",
+      "query_text": "Optimize resource allocation for Remibrutinib in the Northeast region \u2014 where should reps, detailing effort, and access/support investment be prioritized to grow TRx/NRx share?",
+      "proposed": "single_agent:resource_optimizer",
+      "reasoning": "Elaborated variant of the same allocation ask: multiple LEVERS (reps, detailing, access) are allocation targets within resource_optimizer's one domain, not multiple agent-capability domains.",
+      "forced_intent": "resource_allocation",
+      "candidate_agent": "resource_optimizer",
+      "n_rows": 1
+    }
+  ]
+}

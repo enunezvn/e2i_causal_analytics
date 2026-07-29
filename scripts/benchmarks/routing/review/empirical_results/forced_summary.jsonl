@@ -1,0 +1,22 @@
+{"qid": "q01", "candidate_agent": "causal_impact", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 7.2, "response_chars": 586}
+{"qid": "q02", "candidate_agent": "gap_analyzer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 0.5, "response_chars": 486}
+{"qid": "q03", "candidate_agent": "experiment_designer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 60057.5, "response_chars": 164}
+{"qid": "q04", "candidate_agent": "causal_impact", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 6.9, "response_chars": 586}
+{"qid": "q05", "candidate_agent": "causal_impact", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 0.5, "response_chars": 586}
+{"qid": "q06", "candidate_agent": "experiment_designer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 60035.7, "response_chars": 164}
+{"qid": "q07", "candidate_agent": "causal_impact", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 0.7, "response_chars": 586}
+{"qid": "q08", "candidate_agent": "tool_composer", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 30112.3, "response_chars": 136}
+{"qid": "q09", "candidate_agent": "tool_composer", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 7987.1, "response_chars": 135}
+{"qid": "q10", "candidate_agent": "explainer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 0.3, "response_chars": 489}
+{"qid": "q11", "candidate_agent": "cohort_profiler", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 3575.8, "response_chars": 1624}
+{"qid": "q12", "candidate_agent": "causal_impact", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 0.4, "response_chars": 586}
+{"qid": "q13", "candidate_agent": "resource_optimizer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 0.5, "response_chars": 660}
+{"qid": "q14", "candidate_agent": "prediction_synthesizer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 0.2, "response_chars": 563}
+{"qid": "q15", "candidate_agent": "cohort_profiler", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 26.4, "response_chars": 1624}
+{"qid": "q16", "candidate_agent": "heterogeneous_optimizer", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 0.6, "response_chars": 918}
+{"qid": "q17", "candidate_agent": "causal_impact", "n_results": 2, "success": [false, false], "status": "failed", "error": null, "total_ms": 0.4, "response_chars": 586}
+{"qid": "q18", "candidate_agent": "explainer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 0.2, "response_chars": 489}
+{"qid": "q19", "candidate_agent": "tool_composer", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 28244.5, "response_chars": 135}
+{"qid": "q20", "candidate_agent": "tool_composer", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 7860.0, "response_chars": 135}
+{"qid": "q21", "candidate_agent": "tool_composer", "n_results": 1, "success": [true], "status": "completed", "error": null, "total_ms": 22227.1, "response_chars": 135}
+{"qid": "q22", "candidate_agent": "resource_optimizer", "n_results": 1, "success": [false], "status": "failed", "error": null, "total_ms": 0.3, "response_chars": 660}

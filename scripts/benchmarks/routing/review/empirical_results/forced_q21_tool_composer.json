@@ -1,0 +1,50 @@
+{
+  "qid": "q21",
+  "query_text": "Our Kisqali TRx dropped in the northeast last quarter while conversion rates for Remibrutinib stayed flat, and I need to understand several things: what actually caused the Kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.",
+  "proposed": "agree",
+  "forced_intent": "multi_faceted",
+  "candidate_agent": "tool_composer",
+  "ts": "2026-07-29T15:05:34+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "tool_composer",
+      "priority": "critical",
+      "timeout_ms": 180000,
+      "fallback_agent": "explainer"
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "tool_composer",
+      "success": true,
+      "result": {
+        "success": false,
+        "response": "Unable to complete analysis: Decomposition failed: Failed to decompose query: the JSON object must be str, bytes or bytearray, not list",
+        "confidence": 0.0,
+        "composition_id": "comp_d736bc25",
+        "sub_questions_count": 0,
+        "tools_executed": 0,
+        "tools_succeeded": 0,
+        "total_duration_ms": 15917,
+        "supporting_data": {},
+        "citations": [],
+        "caveats": [
+          "Decomposition failed: Failed to decompose query: the JSON object must be str, bytes or bytearray, not list"
+        ],
+        "error": null,
+        "metadata": {
+          "phase_durations": {}
+        },
+        "timestamp": "2026-07-29T15:05:56.651269+00:00",
+        "status": "FAILED",
+        "errors": []
+      },
+      "error": null,
+      "latency_ms": 22216
+    }
+  ],
+  "synthesized_response": "Unable to complete analysis: Decomposition failed: Failed to decompose query: the JSON object must be str, bytes or bytearray, not list",
+  "response_confidence": 0.0,
+  "status": "completed",
+  "total_ms": 22227.1
+}

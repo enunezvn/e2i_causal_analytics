@@ -1,0 +1,36 @@
+{
+  "qid": "q16",
+  "query_text": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+  "proposed": "single_agent:heterogeneous_optimizer",
+  "forced_intent": "segment_analysis",
+  "candidate_agent": "heterogeneous_optimizer",
+  "ts": "2026-07-29T15:04:58+0000",
+  "dispatch_plan": [
+    {
+      "agent_name": "heterogeneous_optimizer",
+      "priority": "critical",
+      "timeout_ms": 420000,
+      "fallback_agent": "gap_analyzer"
+    }
+  ],
+  "agent_results": [
+    {
+      "agent_name": "heterogeneous_optimizer",
+      "success": false,
+      "result": null,
+      "error": "heterogeneous_optimizer needs structured inputs that could not be grounded in real data (no recognized KPI substrate with a defined treatment and >=100 real rows to bind the causal spec; a chat query alone cannot name the treatment/outcome/effect-modifier columns); missing: treatment_var, outcome_var, effect_modifiers. Supply them via POST /segments/analyze. Failing closed \u2014 no values were fabricated.",
+      "latency_ms": 0
+    },
+    {
+      "agent_name": "gap_analyzer",
+      "success": false,
+      "result": null,
+      "error": "gap_analyzer needs structured inputs that could not be grounded in real data (the dispatch names no brand (parameters / parsed_query entities / user_context), so there is no real business_metrics substrate to derive metrics/segments from); missing: metrics, segments, brand. Supply them via POST /api/gaps/analyze. Failing closed \u2014 no values were fabricated.",
+      "latency_ms": 0
+    }
+  ],
+  "synthesized_response": "I was unable to complete the analysis due to the following errors:\n- heterogeneous_optimizer: heterogeneous_optimizer needs structured inputs that could not be grounded in real data (no recognized KPI substrate with a defined treatment and >=100 real rows to bind the causal spec; a chat query alone cannot name the treatment/outcome/effect-modifier columns); missing: treatment_var, outcome_var, effect_modifiers. Supply them via POST /segments/analyze. Failing closed \u2014 no values were fabricated.\n- gap_analyzer: gap_analyzer needs structured inputs that could not be grounded in real data (the dispatch names no brand (parameters / parsed_query entities / user_context), so there is no real business_metrics substrate to derive metrics/segments from); missing: metrics, segments, brand. Supply them via POST /api/gaps/analyze. Failing closed \u2014 no values were fabricated.\n\nPlease try again or rephrase your question.",
+  "response_confidence": 0.0,
+  "status": "failed",
+  "total_ms": 0.6
+}
