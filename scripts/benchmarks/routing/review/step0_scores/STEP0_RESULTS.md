@@ -1,0 +1,63 @@
+# Step 0 candidate scores (#1337)
+
+n = 337 gold-labeled queries; run wall-clock 30s.
+
+| candidate | pattern acc (95% CI) | agents exact | jaccard | p50 ms | p95 ms | LLM share | parse fails | errors |
+|---|---|---|---|---|---|---|---|---|
+| legacy | 0.757 (0.708–0.799) | 0.478 | 0.514 | 640.7 | 1347.3 | 0.56 | 0 | 0 |
+| pipeline_rules | 0.211 (0.171–0.257) | 0.136 | 0.166 | 0.3 | 0.6 | 0.00 | 0 | 0 |
+| pipeline_llm | 0.626 (0.573–0.676) | 0.424 | 0.432 | 3704.8 | 4822.1 | 0.77 | 0 | 0 |
+| single_llm | 0.623 (0.570–0.673) | 0.451 | 0.455 | 3412.8 | 4932.1 | 1.00 | 0 | 0 |
+
+## legacy — per-pattern
+
+| pattern | gold n | recall | precision | f1 |
+|---|---|---|---|---|
+| SINGLE_AGENT | 276 | 0.913 | 0.843 | 0.877 |
+| PARALLEL_DELEGATION | 5 | 0.200 | 0.028 | 0.049 |
+| TOOL_COMPOSER | 28 | 0.071 | 1.000 | 0.133 |
+| CLARIFICATION_NEEDED | 28 | 0.000 | 0.000 | 0.000 |
+
+Confusion: `{"CLARIFICATION_NEEDED->SINGLE_AGENT": 28, "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1, "PARALLEL_DELEGATION->SINGLE_AGENT": 4, "SINGLE_AGENT->PARALLEL_DELEGATION": 24, "SINGLE_AGENT->SINGLE_AGENT": 252, "TOOL_COMPOSER->PARALLEL_DELEGATION": 11, "TOOL_COMPOSER->SINGLE_AGENT": 15, "TOOL_COMPOSER->TOOL_COMPOSER": 2}`
+
+## pipeline_rules — per-pattern
+
+| pattern | gold n | recall | precision | f1 |
+|---|---|---|---|---|
+| SINGLE_AGENT | 276 | 0.174 | 0.814 | 0.287 |
+| PARALLEL_DELEGATION | 5 | 0.200 | 0.020 | 0.037 |
+| TOOL_COMPOSER | 28 | 0.036 | 1.000 | 0.069 |
+| CLARIFICATION_NEEDED | 28 | 0.750 | 0.092 | 0.164 |
+
+Confusion: `{"CLARIFICATION_NEEDED->CLARIFICATION_NEEDED": 21, "CLARIFICATION_NEEDED->SINGLE_AGENT": 7, "PARALLEL_DELEGATION->CLARIFICATION_NEEDED": 2, "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1, "PARALLEL_DELEGATION->SINGLE_AGENT": 2, "SINGLE_AGENT->CLARIFICATION_NEEDED": 191, "SINGLE_AGENT->PARALLEL_DELEGATION": 37, "SINGLE_AGENT->SINGLE_AGENT": 48, "TOOL_COMPOSER->CLARIFICATION_NEEDED": 14, "TOOL_COMPOSER->PARALLEL_DELEGATION": 11, "TOOL_COMPOSER->SINGLE_AGENT": 2, "TOOL_COMPOSER->TOOL_COMPOSER": 1}`
+
+## pipeline_llm — per-pattern
+
+| pattern | gold n | recall | precision | f1 |
+|---|---|---|---|---|
+| SINGLE_AGENT | 276 | 0.630 | 0.930 | 0.752 |
+| PARALLEL_DELEGATION | 5 | 0.200 | 0.053 | 0.083 |
+| TOOL_COMPOSER | 28 | 0.607 | 0.378 | 0.466 |
+| CLARIFICATION_NEEDED | 28 | 0.679 | 0.221 | 0.333 |
+
+Confusion: `{"CLARIFICATION_NEEDED->CLARIFICATION_NEEDED": 19, "CLARIFICATION_NEEDED->SINGLE_AGENT": 9, "PARALLEL_DELEGATION->CLARIFICATION_NEEDED": 1, "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1, "PARALLEL_DELEGATION->SINGLE_AGENT": 2, "PARALLEL_DELEGATION->TOOL_COMPOSER": 1, "SINGLE_AGENT->CLARIFICATION_NEEDED": 66, "SINGLE_AGENT->PARALLEL_DELEGATION": 9, "SINGLE_AGENT->SINGLE_AGENT": 174, "SINGLE_AGENT->TOOL_COMPOSER": 27, "TOOL_COMPOSER->PARALLEL_DELEGATION": 9, "TOOL_COMPOSER->SINGLE_AGENT": 2, "TOOL_COMPOSER->TOOL_COMPOSER": 17}`
+
+## single_llm — per-pattern
+
+| pattern | gold n | recall | precision | f1 |
+|---|---|---|---|---|
+| SINGLE_AGENT | 276 | 0.565 | 0.981 | 0.717 |
+| PARALLEL_DELEGATION | 5 | 0.200 | 0.250 | 0.222 |
+| TOOL_COMPOSER | 28 | 0.964 | 0.365 | 0.529 |
+| CLARIFICATION_NEEDED | 28 | 0.929 | 0.260 | 0.406 |
+
+Confusion: `{"CLARIFICATION_NEEDED->CLARIFICATION_NEEDED": 26, "CLARIFICATION_NEEDED->SINGLE_AGENT": 2, "PARALLEL_DELEGATION->CLARIFICATION_NEEDED": 1, "PARALLEL_DELEGATION->PARALLEL_DELEGATION": 1, "PARALLEL_DELEGATION->TOOL_COMPOSER": 3, "SINGLE_AGENT->CLARIFICATION_NEEDED": 73, "SINGLE_AGENT->PARALLEL_DELEGATION": 3, "SINGLE_AGENT->SINGLE_AGENT": 156, "SINGLE_AGENT->TOOL_COMPOSER": 44, "TOOL_COMPOSER->SINGLE_AGENT": 1, "TOOL_COMPOSER->TOOL_COMPOSER": 27}`
+
+## Decision readout
+
+- (a) pipeline_llm accuracy: 0.626 (p95 4822.1 ms, LLM share 0.77)
+- (b) single_llm accuracy:   0.623 (p95 4932.1 ms, LLM share 1.00)
+- pipeline_llm > single_llm → the staged design earns its keep (extend with the async LLM stage).
+
+CI overlap and per-pattern cells above qualify this readout — a
+difference inside the 95% CIs is not decision-grade on its own.
