@@ -13,7 +13,7 @@
 The Experiment Monitor agent is a Tier 3 Monitoring agent that monitors active A/B experiments for health issues, Sample Ratio Mismatch (SRM), interim analysis triggers, and Digital Twin fidelity. This validation confirms the implementation aligns with tier3-contracts.md specifications.
 
 **Test Status**: ✅ COMPLETE (262 tests across 9 test files, 98% coverage)
-**Implementation**: Complete with 4-node LangGraph workflow
+**Implementation**: Complete with 5-node LangGraph workflow (+ `audit_init` genesis)
 
 ---
 
@@ -23,7 +23,7 @@ The Experiment Monitor agent is a Tier 3 Monitoring agent that monitors active A
 
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
-| Sequential workflow execution | COMPLIANT | 4 nodes in series |
+| Sequential workflow execution | COMPLIANT | 5 business nodes in series (+ `audit_init` genesis) |
 | Performance target (<5s per check) | COMPLIANT | Latency tracking implemented |
 | No LLM calls required | COMPLIANT | Deterministic detection logic |
 | Database integration | COMPLIANT | Supabase client with lazy loading |
@@ -41,10 +41,13 @@ The Experiment Monitor agent is a Tier 3 Monitoring agent that monitors active A
 ### 1.3 Graph Flow
 
 ```
-health_checker → srm_detector → interim_analyzer → fidelity_checker → alert_generator → END
+audit_init (genesis) → health_checker → srm_detector → interim_analyzer → fidelity_checker → alert_generator → END
 ```
 
-**Verified in**: `graph.py:22-62`
+`audit_init` is the graph entry point (genesis block of the tamper-evident audit
+chain); the five business nodes follow in series.
+
+**Verified in**: `graph.py` (`create_experiment_monitor_graph`)
 
 ---
 

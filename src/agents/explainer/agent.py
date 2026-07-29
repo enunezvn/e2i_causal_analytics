@@ -3,6 +3,11 @@ E2I Explainer Agent - Main Agent Class
 Version: 4.3
 Purpose: Natural language explanations for complex analyses
 
+Role: Although organizationally labeled Tier 5 (Self-Improvement), the explainer is
+also the platform's general-narration agent and universal default/fallback (handles
+the EXPLANATION domain, is the orchestrator's default dispatch for unclassified
+intents, and is the named fallback for the causal_effect and tool_composer routes).
+
 Memory Integration:
 - Working Memory (Redis): Session caching, conversation context
 - Episodic Memory (Supabase): Historical explanations with embeddings

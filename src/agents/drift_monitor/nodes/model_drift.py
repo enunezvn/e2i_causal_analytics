@@ -47,6 +47,11 @@ class ModelDriftNode:
     async def execute(self, state: DriftMonitorState) -> DriftMonitorState:
         """Execute model drift detection.
 
+        A ``model_id`` is required to fetch predictions for the baseline and
+        current periods. If ``model_id`` is absent, model-drift detection is
+        skipped: the node returns an empty ``model_drift_results`` list (with a
+        warning) rather than raising an error.
+
         Args:
             state: Current agent state with model_id
 

@@ -9,7 +9,7 @@ Performance Target: <10s for 50 features
 Key Features:
 - Data drift detection (PSI + KS test)
 - Model drift detection (prediction distribution)
-- Concept drift detection (placeholder)
+- Concept drift detection (feature-target correlation + performance degradation)
 - Alert generation with severity levels
 - Composite drift score calculation
 

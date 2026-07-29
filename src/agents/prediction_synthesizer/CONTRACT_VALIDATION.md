@@ -167,7 +167,15 @@ class PredictionContext(TypedDict):
 | Timeout handling | 5s per model | Line 177 | ✅ |
 | Failure tracking | Count succeeded/failed | Lines 105-118 | ✅ |
 | Model registry lookup | When no models specified | Lines 75-79 | ✅ |
-| Mock predictions | For testing | Lines 195-208 | ✅ |
+| Mock predictions | Opt-in dev/test only | `_create_mock_prediction()`, labeled `model_type="mock"`; gated by `ALLOW_MOCK_MODEL=1`; default fail-closed (#430) | ✅ |
+
+> **Real-model wiring**: Predictions are only as real as the wired
+> `ModelClient`/`ModelRegistry`. When a planner names a model id with no
+> registered client, the node **fails closed** (raises `ValueError`, #430) unless
+> `ALLOW_MOCK_MODEL=1` is set — in which case it returns a clearly-labeled mock
+> (`model_type="mock"`, `random.uniform`). End-to-end **real** inference therefore
+> requires registered clients (e.g. `config/model_endpoints.yaml`); absent that
+> wiring it is not guaranteed. Real-model wiring is tracked separately.
 
 **Protocol Classes**:
 - `ModelRegistry` (line 19-24): `get_models_for_target(target, entity_type)`
@@ -424,7 +432,7 @@ pending → predicting → combining → enriching → completed
 | Memory Type | Access | Usage |
 |-------------|--------|-------|
 | Working Memory (Redis) | Yes | Prediction caching |
-| Episodic Memory | No | - |
+| Episodic Memory | Yes (Read/Write) | `store_prediction()` → Supabase episodic (historical predictions / calibration); see §15 |
 | Semantic Memory | No | - |
 | Procedural Memory | No | - |
 
@@ -690,11 +698,17 @@ class PredictionSynthesisTrainingSignal:
 
 ---
 
-## 17. Opik Distributed Tracing Contract (COMPLETE)
+## 17. Opik Distributed Tracing Contract (IMPLEMENTED — INTENTIONALLY DISABLED)
 
 **Reference**: `resource_optimizer/opik_tracer.py`, Opik documentation
 
 **Purpose**: Distributed tracing for observability parity with Resource Optimizer
+
+> **STATUS (as of 2026-05-29)**: The tracer code below (`opik_tracer.py`) is
+> implemented, but platform-wide OPIK is **intentionally STOPPED** and tracing is
+> inert in practice. The "✅ COMPLETE" rows below describe code presence, not
+> active tracing. **Do NOT re-enable** without an explicit platform decision to
+> restart OPIK.
 
 | Requirement | Contract | Implementation | Status | Notes |
 |-------------|----------|----------------|--------|-------|
