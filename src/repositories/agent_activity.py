@@ -33,10 +33,58 @@ class AgentActivityRepository(BaseRepository):
     model_class = None  # Set to AgentActivity model when available
     id_column = "activity_id"  # live PK (#894: .eq("id") was a latent 42703)
     # Provenance (#894): agent_activities carries is_synthetic (migration 063).
-    # The synthetic loader emits no agent_activities today (0 live rows), but a
-    # future load must never surface planted "agent analyses" through the chat
-    # tool (_query_agent_analysis reads via get_many) or the custom reads below.
+    # Since #1355 the synthetic loader DOES seed agent_activities
+    # (AgentActivitiesGenerator, is_synthetic=true) — the default-exclude
+    # predicate keeps planted "agent analyses" out of real-mode reads
+    # (_query_agent_analysis reads via query_activities); synthetic-gold
+    # showcase instances surface them via the E2I_INCLUDE_SYNTHETIC gate.
     HAS_PROVENANCE = True
+
+    async def query_activities(
+        self,
+        agent_name: Optional[str] = None,
+        brand: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+        include_synthetic: bool = False,
+    ) -> List:
+        """Chat agent-analysis read path (#1355): windowed, brand-resolvable.
+
+        The table has NO brand column; brand-scoped analyses carry the brand
+        INSIDE the ``analysis_results`` JSONB — writers (the DGP seed
+        generator and the runtime activity writer,
+        ``src/agents/activity_writer.py``) stamp ``analysis_results.brand``,
+        and this method filters on ``analysis_results->>'brand'``.
+
+        Args:
+            agent_name: Optional agent filter (e.g. 'heterogeneous_optimizer')
+            brand: Optional brand filter via ``analysis_results->>'brand'``
+            since: Optional window start applied to ``activity_timestamp``
+            limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows
+                (the deployment gate ``E2I_INCLUDE_SYNTHETIC`` also lifts the
+                exclusion on synthetic-gold showcase instances).
+
+        Returns:
+            Activities ordered by activity_timestamp descending.
+        """
+        if not self.client:
+            return []
+
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*")
+        if agent_name:
+            query = query.eq("agent_name", agent_name)
+        if brand:
+            query = query.eq("analysis_results->>brand", brand)
+        if since:
+            query = query.gte("activity_timestamp", since.isoformat())
+
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await query.order("activity_timestamp", desc=True).limit(limit).execute()
+
+        return [self._to_model(row) for row in result.data]
 
     async def get_by_agent(
         self,

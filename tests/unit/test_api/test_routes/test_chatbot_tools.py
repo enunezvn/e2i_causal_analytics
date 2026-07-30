@@ -661,7 +661,8 @@ class TestQueryCausalChains:
 
 
 class TestQueryAgentAnalysis:
-    """Tests for _query_agent_analysis helper."""
+    """Tests for _query_agent_analysis helper (#1355: since applied, brand
+    resolvable via analysis_results->>'brand')."""
 
     @pytest.mark.asyncio
     async def test_query_agent_analysis_success(self):
@@ -672,7 +673,7 @@ class TestQueryAgentAnalysis:
 
         with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
-            mock_repo.get_many.return_value = mock_activities
+            mock_repo.query_activities.return_value = mock_activities
             mock_client.return_value = MagicMock()
 
             with patch(
@@ -689,6 +690,39 @@ class TestQueryAgentAnalysis:
         assert result["success"] is True
         assert result["query_type"] == "agent_analysis"
         assert result["agent_filter"] == "causal_impact"
+        assert result["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_since_and_brand_are_forwarded(self):
+        """The accepted-but-previously-ignored ``since`` parameter and the
+        brand filter (analysis_results JSONB) must reach the repository."""
+        since = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.query_activities.return_value = []
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.AgentActivityRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_agent_analysis(
+                    agent_name="heterogeneous_optimizer",
+                    brand="Remibrutinib",
+                    since=since,
+                    limit=25,
+                )
+
+        mock_repo.query_activities.assert_awaited_once_with(
+            agent_name="heterogeneous_optimizer",
+            brand="Remibrutinib",
+            since=since,
+            limit=25,
+        )
+        assert result["success"] is True
+        assert result["brand_filter"] == "Remibrutinib"
+        assert result["window_start"] == since.isoformat()
 
 
 # =============================================================================
