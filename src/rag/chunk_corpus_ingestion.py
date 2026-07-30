@@ -77,9 +77,7 @@ def _chunk_document_id(metric_name: Any, brand: Any, region: Any) -> str:
     chunk_index)`` overwrites a combo's row when its latest snapshot changes,
     rather than accumulating duplicates.
     """
-    return (
-        f"kpi::{(brand or '').lower()}::{(metric_name or '').lower()}::{(region or '').lower()}"
-    )
+    return f"kpi::{(brand or '').lower()}::{(metric_name or '').lower()}::{(region or '').lower()}"
 
 
 def _existing_chunk_hashes(sb: Any, *, agent_name: str, document_type: str) -> set[str]:
@@ -173,7 +171,11 @@ async def index_business_metric_chunks(
     if brands is None:
         brands = _discover_brands(sb)
 
-    already = _existing_chunk_hashes(sb, agent_name=agent_name, document_type=document_type) if dedup else set()
+    already = (
+        _existing_chunk_hashes(sb, agent_name=agent_name, document_type=document_type)
+        if dedup
+        else set()
+    )
 
     # Build the pending set (dedup BEFORE embedding).
     pending: list[dict[str, Any]] = []
@@ -215,7 +217,9 @@ async def index_business_metric_chunks(
             )
 
     if skipped:
-        logger.info("index_business_metric_chunks: skipped %d already-indexed/duplicate rows", skipped)
+        logger.info(
+            "index_business_metric_chunks: skipped %d already-indexed/duplicate rows", skipped
+        )
     if not pending:
         logger.info("index_business_metric_chunks: nothing new to index (chunk corpus up to date)")
         return []
