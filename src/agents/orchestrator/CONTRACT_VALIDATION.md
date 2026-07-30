@@ -9,7 +9,7 @@
 
 ## Overview
 
-This document validates that the orchestrator agent implementation conforms to all contracts defined in `.claude/contracts/tier1-contracts.md`.
+This document validates that the orchestrator agent implementation conforms to all contracts defined in `.claude/contracts/tier1-orchestrator-contracts.md` (promoted from the legacy `Tier-Specific Contracts/tier1-contracts.md` in the #1348 dedup).
 
 ---
 
@@ -17,7 +17,7 @@ This document validates that the orchestrator agent implementation conforms to a
 
 ### OrchestratorInput
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 42-104)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Input Contract)
 
 | Field | Type | Required | Status | Implementation |
 |-------|------|----------|--------|----------------|
@@ -39,7 +39,7 @@ This document validates that the orchestrator agent implementation conforms to a
 
 ### OrchestratorOutput
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 106-192)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Output Contract)
 
 | Field | Type | Required | Status | Implementation |
 |-------|------|----------|--------|----------------|
@@ -67,7 +67,7 @@ This document validates that the orchestrator agent implementation conforms to a
 
 ### IntentClassification
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 194-231)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Input Contract — `ParsedQuery.intent`; § DSPy Hub Role — `IntentClassificationSignature`)
 
 | Field | Type | Required | Status | Implementation |
 |-------|------|----------|--------|----------------|
@@ -100,7 +100,7 @@ This document validates that the orchestrator agent implementation conforms to a
 
 ### AgentDispatch
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 233-286)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Dispatch Contract)
 
 | Field | Type | Required | Status | Implementation |
 |-------|------|----------|--------|----------------|
@@ -147,7 +147,7 @@ Validated against contract (lines 368-377):
 
 ### AgentResult
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 288-326)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Output Contract — `AgentResult`)
 
 | Field | Type | Required | Status | Implementation |
 |-------|------|----------|--------|----------------|
@@ -166,7 +166,7 @@ Validated against contract (lines 368-377):
 
 ## 6. Multi-Agent Coordination
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 328-403)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Multi-Agent Coordination)
 
 ### Tier 0 Pipeline (Sequential Execution)
 **Status**: ✅ Validated
@@ -193,7 +193,7 @@ Contract requirement: Sequential execution with dependencies
 
 ## 7. Performance Requirements
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 405-440)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Routing Rules — Timeout Configuration)
 
 | Requirement | Target | Status | Implementation |
 |-------------|--------|--------|----------------|
@@ -211,7 +211,7 @@ Contract requirement: Sequential execution with dependencies
 
 ## 8. Integration Points
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 442-518)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§§ Input Contract, Dispatch Contract, Handoff Contract)
 
 ### With NLP Layer (Tier 0)
 **Status**: ⚠️ TODO (Tier 0 not yet implemented)
@@ -246,7 +246,7 @@ Contract requirement: Sequential execution with dependencies
 
 ## 9. Error Handling
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (lines 520-582)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ Error Handling)
 
 | Error Scenario | Handling | Status | Implementation |
 |----------------|----------|--------|----------------|
@@ -517,7 +517,7 @@ class OrchestratorDSPyHub(DSPyHubInterface):
 
 **Status**: ✅ **All contracts validated and implementation complete**
 
-The orchestrator agent fully conforms to all contracts defined in `.claude/contracts/tier1-contracts.md`. The implementation is production-ready from a contract compliance perspective, pending integration with:
+The orchestrator agent fully conforms to all contracts defined in `.claude/contracts/tier1-orchestrator-contracts.md`. The implementation is production-ready from a contract compliance perspective, pending integration with:
 1. NLP layer (Tier 0)
 2. Specialized agents (Tiers 2-5)
 3. API layer

@@ -298,7 +298,7 @@ class ToolComposerMemoryHooks(MemoryHooksInterface):
 
 ## 13. DSPy Hybrid Integration Contract
 
-**Contract Reference**: `.claude/contracts/tier1-contracts.md` (DSPy Hybrid Role)
+**Contract Reference**: `.claude/contracts/tier1-orchestrator-contracts.md` (§ DSPy Hub Role — the hub that coordinates Hybrids; the Hybrid mixin contract itself is defined in `.claude/contracts/tier5-contracts.md` § 10 DSPy Signal Contracts)
 
 ### 13.1 DSPy Role
 

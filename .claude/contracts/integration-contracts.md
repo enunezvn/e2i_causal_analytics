@@ -2608,13 +2608,21 @@ All integration points must have:
 > `scripts/validate_kpi_coverage.py` exists today; the `make validate-contracts` /
 > `make validate-specialists` targets and the `tests/integration/test_*` contract suites
 > are **proposed, not implemented**. Treat the contract *expectations* as authoritative
-> intent and the test harness as aspirational.
+> intent and the test harness as aspirational. Producer/consumer path anchors were
+> re-verified against the tree on 2026-07-30: paths shown without qualification exist;
+> the legacy draft's dead paths are explicitly marked "(draft path)" with the live
+> equivalent named alongside.
 
 Before completing any cross-domain task, validate that changes comply with these contracts.
 
 ### Contract 1: NLP → Agent Routing
 
-**Producer**: `src/nlp/query_processor.py` — **Consumer**: `src/agents/registry.py`
+**Producer** (`src/nlp/query_processor.py` is a draft path — it does not exist):
+the live producers are `src/agents/orchestrator/nodes/intent_classifier.py`
+(intent classification; `ParsedQuery` lives in `src/agents/orchestrator/state.py`)
+and the 4-stage chat classifier in `src/agents/orchestrator/classifier/`.
+**Consumer** (`src/agents/registry.py` is a draft path — it does not exist):
+the live consumer is `src/agents/orchestrator/nodes/router.py` (`INTENT_TO_AGENTS`).
 
 ```python
 class ParsedQueryContract:
@@ -2640,7 +2648,7 @@ class ParsedQueryContract:
 
 ### Contract 2: Agent → Orchestrator Response
 
-**Producer**: All agents in `src/agents/*/agent.py` — **Consumer**: `src/agents/orchestrator/synthesizer.py`
+**Producer**: All agents in `src/agents/*/agent.py` — **Consumer**: `src/agents/orchestrator/nodes/synthesizer.py`
 
 ```python
 class AgentResponseContract:
@@ -2705,7 +2713,13 @@ class RAGContextContract:
 
 ### Contract 4: API → Frontend Response
 
-**Producer**: `src/api/routes/*.py` — **Consumer**: `frontend/src/services/api.ts`
+**Producer**: `src/api/routes/*.py` — **Consumer**
+(`frontend/src/services/api.ts` is a draft path — it does not exist): the live
+consumers are the per-domain clients in `frontend/src/api/*.ts` with generated
+response types in `frontend/src/types/generated/api.ts`. The specific
+`ChatResponseContract` interface below is **draft shape**: the live chat surface
+is the CopilotKit AG-UI protocol (`src/api/routes/copilotkit.py`), which is
+where `agents_used` is actually produced.
 
 ```typescript
 interface ChatResponseContract {
@@ -2754,7 +2768,12 @@ class SplitEnforcementContract:
 
 ### Contract 6: Causal Engine → Effect Estimates
 
-**Producer**: `src/causal_engine/effect_estimator.py` — **Consumer**: Tier 2 agents
+**Producer** (`src/causal_engine/effect_estimator.py` is a draft path — it does
+not exist): the live producer is the Causal Impact estimation node
+`src/agents/causal_impact/nodes/estimation.py` (result shape: `EstimationResult`
+in `src/agents/causal_impact/state.py`; multi-estimator selection in
+`src/causal_engine/energy_score/estimator_selector.py`).
+**Consumer**: Tier 2 agents
 
 ```python
 class EffectEstimateContract:
@@ -2814,13 +2833,15 @@ class TierPriorityContract:
         pass
 ```
 
-> Note: the current 14-agent registry (`data/agent_contracts.json`) is the SSOT for
-> the live agent roster (it additionally includes `tool_composer` at Tier 1); this
+> Note: the current 14-agent registry
+> (`scripts/benchmarks/routing/data/agent_contracts.json`) is the SSOT for the
+> live agent roster (it additionally includes `tool_composer` at Tier 1); this
 > table records the tier-priority *rule*, not the roster.
 
 ### Contract 8: KPI Calculation Accuracy
 
-**Producer**: `v_kpi_*` views in database — **Consumer**: `src/api/routes/kpis.py`
+**Producer**: `v_kpi_*` views in database — **Consumer**: `src/api/routes/kpi.py`
+(KPI registry: `src/kpi/registry.py`; definitions: `config/kpi_definitions.yaml`)
 
 ```python
 class KPIAccuracyContract:

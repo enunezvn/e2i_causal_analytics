@@ -37,7 +37,7 @@ This document provides the validation matrix for all 18 E2I agents across:
 | **DSPy Integration** | ✅ COMPLIANT | `src/agents/orchestrator/dspy_integration.py` |
 | DSPy Type | Hub | Central optimization coordinator |
 | DSPy Signatures | AgentRoutingSignature, IntentClassificationSignature | Routes queries to appropriate agents |
-| **Contract** | ✅ VALIDATED | tier1-contracts.md (lines 467-605) |
+| **Contract** | ✅ VALIDATED | tier1-orchestrator-contracts.md (§ DSPy Hub Role) |
 
 **Blocking Items**: None
 
@@ -52,7 +52,7 @@ This document provides the validation matrix for all 18 E2I agents across:
 | **DSPy Integration** | ✅ COMPLIANT | `src/agents/tool_composer/dspy_integration.py` |
 | DSPy Type | Hybrid | Generates signals AND receives optimized prompts |
 | DSPy Signatures | VisualizationConfigSignature, ToolSelectionSignature | Multi-faceted query decomposition |
-| **Contract** | ✅ VALIDATED | tier1-contracts.md (extended) |
+| **Contract** | ✅ VALIDATED | tier1-orchestrator-contracts.md (extended by tier1-tool-composer-contracts.md) |
 
 **Blocking Items**: None
 
@@ -584,7 +584,7 @@ Tier 0 agents operate within the ML pipeline and do not require 4-Memory Archite
 
 | Aspect | Status | Location |
 |--------|--------|----------|
-| Hub Agent | ✅ orchestrator | tier1-contracts.md |
+| Hub Agent | ✅ orchestrator | tier1-orchestrator-contracts.md |
 | Sender Agents (6) | ✅ All defined | tier2-4-contracts.md |
 | Recipient Agents (3) | ✅ All defined | tier3-5-contracts.md |
 | Hybrid Agents (2) | ✅ All defined | tier1,5-contracts.md |
@@ -607,8 +607,8 @@ Tier 0 agents operate within the ML pipeline and do not require 4-Memory Archite
 
 ### DSPy Integration Validation
 
-- [x] Orchestrator Hub role (tier1-contracts.md)
-- [x] Tool Composer Hybrid role (tier1-contracts.md extended)
+- [x] Orchestrator Hub role (tier1-orchestrator-contracts.md)
+- [x] Tool Composer Hybrid role (tier1-orchestrator-contracts.md extended by tier1-tool-composer-contracts.md)
 - [x] Tier 2 Sender roles (tier2-contracts.md)
 - [x] Tier 3 Sender/Recipient roles (tier3-contracts.md)
 - [x] Tier 4 Sender/Recipient roles (tier4-contracts.md)
