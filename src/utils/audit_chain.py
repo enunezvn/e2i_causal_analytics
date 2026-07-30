@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import UUID, uuid4
 
 from supabase import Client
@@ -26,6 +26,34 @@ from supabase import Client
 from src.utils.type_helpers import parse_supabase_row, parse_supabase_rows
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_session_uuid(value: Optional[Union[UUID, str]]) -> Optional[UUID]:
+    """Coerce a chat session identifier to a plain ``UUID`` for the uuid-typed
+    ``audit_chain_entries.session_id`` column.
+
+    The ``/chat/stream`` surface (and the chatbot repositories'
+    ``generate_session_id``) use a composite ``{user_id}~{session_uuid}`` session
+    id -- the DB even derives ``chatbot_messages.computed_user_id`` from
+    ``split_part(session_id, '~', 1)``. The trailing segment is the session's own
+    uuid; AG-UI threadIds are already plain uuids. Passing the composite string
+    straight into the ``uuid`` column fails with "invalid input syntax for type
+    uuid" and silently aborts audit-chain genesis (#1335), so this normalizes at
+    the single ingestion point (``start_workflow``).
+
+    Returns the recovered session uuid, or ``None`` (honest null) when none can be
+    parsed -- never a fabricated id. User attribution is unaffected: the audit
+    entry carries ``user_id`` in its own separate column.
+    """
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    candidate = str(value).rsplit("~", 1)[-1]
+    try:
+        return UUID(candidate)
+    except (ValueError, AttributeError):
+        return None
 
 
 class AgentTier(Enum):
@@ -273,7 +301,7 @@ class AuditChainService:
         action_type: str,
         input_data: Optional[Any] = None,
         user_id: Optional[str] = None,
-        session_id: Optional[UUID] = None,
+        session_id: Optional[Union[UUID, str]] = None,
         query_text: Optional[str] = None,
         brand: Optional[str] = None,
         auto_commit: bool = True,
@@ -308,7 +336,11 @@ class AuditChainService:
             previous_entry_id=None,  # Genesis has no previous
             previous_hash=None,  # Genesis has no previous hash
             user_id=user_id,
-            session_id=session_id,
+            # Chat surfaces pass a composite ``{user_id}~{session_uuid}`` id;
+            # the audit column is uuid-typed, so normalize at this single
+            # ingestion point (add_entry inherits from the genesis, _row_to_entry
+            # reads already-uuid DB values). See #1335.
+            session_id=_coerce_session_uuid(session_id),
             query_text=query_text,
             brand=brand,
         )
