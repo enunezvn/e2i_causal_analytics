@@ -101,6 +101,37 @@ class TestKpiValueLookupPattern:
             "hijack causal/forecast asks that merely mention a metric"
         )
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # codex iter-1 MEDIUM: value-lookup opener + forecast noun must NOT
+            # co-score explanation — (prediction, explanation) is a deliberate
+            # MULTI_AGENT_PATTERNS pair, so a spurious explanation match makes
+            # a pure forecast ask double-dispatch [prediction_synthesizer,
+            # explainer].
+            "show me the TRx forecast for Kisqali",
+            "What is the predicted TRx for Kisqali next quarter?",
+            "What is the expected TRx next quarter?",
+            "what is the trx projection for fabhalta?",
+        ],
+    )
+    def test_forecast_hybrids_stay_single_prediction(self, query: str) -> None:
+        result = _pattern(query)
+        assert result["primary_intent"] == "prediction", (
+            f"{query!r} classified as {result['primary_intent']!r}; forecast "
+            "asks that name a metric must stay prediction"
+        )
+        assert result["requires_multi_agent"] is False, (
+            f"{query!r} set requires_multi_agent — the KPI pattern must not "
+            "co-score explanation on forecast asks, or the router emits the "
+            "(prediction, explanation) parallel pair for a single-intent query"
+        )
+        assert "explanation" not in result["secondary_intents"], (
+            f"{query!r} has explanation in secondary_intents "
+            f"{result['secondary_intents']!r}; the KPI lookup pattern matched "
+            "a forecast ask"
+        )
+
     def test_llm_prompt_menu_teaches_kpi_lookup(self) -> None:
         """The ``_llm_classify`` intent menu must name KPI/metric value
         lookups under ``explanation`` so ambiguous fragments the pattern
