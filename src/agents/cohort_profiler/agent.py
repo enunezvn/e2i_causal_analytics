@@ -150,6 +150,29 @@ class CohortProfilerAgent:
         servable = [c for c in ask.criteria if c.servable]
         unserved = [c for c in ask.criteria if not c.servable]
 
+        # A KPI threshold on a PATIENT-entity ask is recognized but NOT
+        # servable on this path today (no allowlisted per-patient KPI
+        # aggregation exists) — it flows through the same honest per-criterion
+        # accounting as any other unservable criterion, never silently dropped
+        # (#1356 codex iter-1 finding 1: 'size the <brand> cohort' and the same
+        # ask + '>50 TRx' are materially different questions).
+        if ask.threshold is not None:
+            unserved.append(
+                Criterion(
+                    kind="kpi_threshold",
+                    label=ask.threshold.label,
+                    servable=False,
+                    value=ask.threshold.min_exclusive,
+                    guidance=(
+                        "quantitative prescribing thresholds are served on "
+                        "HCP-entity cohorts only today (TRx metric) — re-ask as "
+                        "e.g. 'HCPs who prescribed more than 50 TRx last "
+                        "quarter', or materialize per-patient criteria via the "
+                        "ML cohort pipeline (scope_definer → cohort_constructor)"
+                    ),
+                )
+            )
+
         # The ask pinned down ONLY things the data model cannot serve (and no
         # brand): a canned profile would answer a different question than was
         # asked. Fail closed with guidance instead (#1356 part 1).
@@ -347,6 +370,17 @@ class CohortProfilerAgent:
                 f"cannot serve the '{ask.threshold.label}' threshold: {ask.threshold.guidance}"
             )
 
+        # Recognized criteria (age / diagnosis-year) are patient-journey
+        # attributes — none bind to an HCP cohort today. They must surface in
+        # the per-criterion accounting, never vanish (#1356 codex iter-1
+        # finding 2); and if they are the ONLY specifics in the ask (no brand,
+        # no threshold, no explicit window), profiling all prescribing HCPs
+        # would answer a different question — fail closed with guidance.
+        unserved = [self._hcp_unservable(c) for c in ask.criteria]
+        if unserved and not (ask.brand or ask.threshold or (ask.window and ask.window.explicit)):
+            details = "; ".join(f"'{c.label}' — {c.guidance}" for c in unserved)
+            return self._failed("no requested criterion can be served on an HCP cohort: " + details)
+
         window = ask.window or self._default_hcp_window()
         thr = ask.threshold.min_exclusive if ask.threshold else 0
         params: List[Any] = [ask.brand, window.start.isoformat(), window.end.isoformat(), thr]
@@ -391,6 +425,17 @@ class CohortProfilerAgent:
         narrative = self._render_hcp(
             ask, window, thr, cohort_size, total_trx, max_trx, specialty, tiers, base_size
         )
+        if unserved:
+            applied = []
+            if ask.brand:
+                applied.append(f"brand = {ask.brand}")
+            if ask.threshold:
+                applied.append(f"TRx threshold ({ask.threshold.label})")
+            applied.append(
+                f"window = {window.label} ({window.start.isoformat()} → "
+                f"{(window.end - timedelta(days=1)).isoformat()})"
+            )
+            narrative += self._render_criteria_accounting(applied, unserved)
 
         return {
             "status": "completed",
@@ -415,6 +460,9 @@ class CohortProfilerAgent:
                 "priority_tier": tiers,
                 "trx_total": total_trx,
                 "trx_max": max_trx,
+                "criteria_not_applied": [
+                    {"label": c.label, "guidance": c.guidance} for c in unserved
+                ],
             },
             "confidence": 0.9,
             "recommendations": [
@@ -424,11 +472,32 @@ class CohortProfilerAgent:
             ],
         }
 
+    @staticmethod
+    def _hcp_unservable(c: Criterion) -> Criterion:
+        """Re-tag a recognized criterion with HCP-path guidance.
+
+        All recognized criteria (age bounds, diagnosis-year) are
+        patient-journey attributes; none bind to an HCP cohort today, so on
+        this path each is unservable — with guidance saying why.
+        """
+        if c.kind in ("age_min", "age_max"):
+            guidance = (
+                "age criteria bind to patient_journeys.age_at_diagnosis (a "
+                "patient attribute); HCP cohorts have no age axis today — "
+                "re-ask as a patient cohort, or drop the age bound"
+            )
+        else:
+            guidance = c.guidance or "not servable on an HCP cohort"
+        return Criterion(
+            kind=c.kind, label=c.label, servable=False, value=c.value, guidance=guidance
+        )
+
     def _default_hcp_window(self) -> Window:
+        # Inclusive-today semantics: exactly 90 dates in [today-89, today+1).
         today = self._today()
         return Window(
             label="most recent 90 days (no time window was named in the ask)",
-            start=today - timedelta(days=90),
+            start=today - timedelta(days=89),
             end=today + timedelta(days=1),
             explicit=False,
         )

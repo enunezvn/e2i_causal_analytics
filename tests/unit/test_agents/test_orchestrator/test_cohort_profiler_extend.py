@@ -295,11 +295,11 @@ async def test_hcp_without_window_disclosed_default():
     out = await agent.analyze({"query": "cohort of HCPs with more than 10 TRx"})
     assert out["status"] == "completed"
     _fn, args = db.calls[0]
-    # trailing 90 days ending today, explicitly disclosed
-    assert args["params"][1] == "2026-05-01"
+    # Trailing 90 days INCLUDING today (exactly 90 dates in [start, end)).
+    assert args["params"][1] == "2026-05-02"
     assert args["params"][2] == "2026-07-31"
     assert args["params"][3] == 10
-    assert "90" in out["narrative"] or "2026-05-01" in out["narrative"]
+    assert "90" in out["narrative"] or "2026-05-02" in out["narrative"]
 
 
 # -------------------------------------------------------- cache-keying identity
@@ -335,3 +335,90 @@ def test_kpi_cache_key_distinguishes_bound_parameters():
     k_remi = cache._make_key("WS3-BI-006", brand="Remibrutinib")
     k_remi_seg = cache._make_key("WS3-BI-006", brand="Remibrutinib", segment="low_severity")
     assert len({k_all, k_remi, k_remi_seg}) == 3
+
+
+# ------------------------------------------- codex iter-1 findings (red-first)
+
+
+@pytest.mark.asyncio
+async def test_patient_threshold_is_disclosed_not_silently_dropped():
+    """Finding 1 (HIGH): a KPI threshold on a PATIENT-entity ask must never be
+    silently ignored — 'size the Remibrutinib cohort' and the same ask + '>50
+    TRx' are materially different questions and must not share a payload. The
+    threshold is unservable on the patient path today, so it must appear in the
+    NOT-applied accounting (narrative + structured)."""
+    calc = _RecordingCalc(_REMI_NRX)
+    agent, _db = _agent(calc=calc)
+    out = await agent.analyze(
+        {"query": "Size the Remibrutinib cohort of patients with more than 50 TRx"}
+    )
+    assert out["status"] == "completed"  # brand still binds and is servable
+    labels = " ".join(c["label"] for c in out["cohort_profile"]["criteria_not_applied"])
+    assert "50" in labels and "trx" in labels.lower()
+    narrative = out["narrative"].lower()
+    assert "not applied" in narrative or "could not" in narrative
+    assert "hcp" in narrative  # guidance points at the HCP-cohort form
+
+
+@pytest.mark.asyncio
+async def test_patient_threshold_only_ask_fails_closed():
+    """Finding 1 (HIGH), fail-closed leg: when the threshold is the ONLY thing
+    the patient ask pinned down, answering the unthresholded question would be
+    answering a different question — fail closed with guidance."""
+    agent, db = _agent(calc=_RecordingCalc(_REMI_NRX))
+    out = await agent.analyze({"query": "Build a cohort of patients with more than 50 TRx"})
+    assert out["status"] == "failed"
+    joined = " ".join(e.get("error", "") for e in out["errors"]).lower()
+    assert "trx" in joined and "hcp" in joined
+    assert not db.calls
+
+
+@pytest.mark.asyncio
+async def test_hcp_recognized_criteria_disclosed_not_dropped():
+    """Finding 2 (HIGH): recognized criteria on an HCP ask (age /
+    diagnosis-year — patient-journey attributes, unservable on the HCP path)
+    must surface in the NOT-applied accounting, not vanish."""
+    agent, _db = _agent(db_rows=[_HCP_ROWS], today=date(2026, 7, 30))
+    out = await agent.analyze(
+        {
+            "query": (
+                "Build a cohort of HCPs who prescribed more than 50 TRx last "
+                "quarter treating adults over 18 diagnosed in 2024"
+            )
+        }
+    )
+    assert out["status"] == "completed"  # threshold + window still bind
+    not_applied = out["cohort_profile"]["criteria_not_applied"]
+    labels = " ".join(c["label"] for c in not_applied).lower()
+    assert "over 18" in labels
+    assert "diagnosed in 2024" in labels
+    narrative = out["narrative"].lower()
+    assert "not applied" in narrative or "could not" in narrative
+    assert "diagnosed in 2024" in narrative
+
+
+@pytest.mark.asyncio
+async def test_hcp_unservable_only_criteria_fail_closed():
+    """Finding 2 (HIGH), fail-closed leg: an HCP ask whose ONLY specifics are
+    unservable criteria (no threshold, no explicit window, no brand) must fail
+    closed with guidance, not profile all prescribing HCPs."""
+    agent, db = _agent(db_rows=[_HCP_ROWS], today=date(2026, 7, 30))
+    out = await agent.analyze({"query": "Build a cohort of HCPs diagnosed in 2024"})
+    assert out["status"] == "failed"
+    joined = " ".join(e.get("error", "") for e in out["errors"]).lower()
+    assert "diagnos" in joined
+    assert not db.calls
+
+
+def test_last_n_days_window_spans_exactly_n_days():
+    """Finding 3 (MEDIUM): 'last N days' must cover exactly N inclusive dates
+    (inclusive-today semantics: [today-(N-1), today+1))."""
+    ask = parse_cohort_ask(
+        "cohort of HCPs with more than 10 TRx in the last 90 days",
+        brand_hint=None,
+        today=date(2026, 7, 30),
+    )
+    assert ask.window is not None
+    assert (ask.window.end - ask.window.start).days == 90
+    assert ask.window.start == date(2026, 5, 2)
+    assert ask.window.end == date(2026, 7, 31)  # exclusive; today included

@@ -271,8 +271,11 @@ def _parse_window(query: str, today: date) -> Optional[Window]:
     m = _LAST_N_DAYS_RE.search(query)
     if m:
         n = int(m.group(1))
+        # Inclusive-today semantics: exactly n dates in [today-(n-1), today+1).
         return Window(
-            label=f"last {n} days", start=today - timedelta(days=n), end=today + timedelta(days=1)
+            label=f"last {n} days",
+            start=today - timedelta(days=n - 1),
+            end=today + timedelta(days=1),
         )
     return None
 

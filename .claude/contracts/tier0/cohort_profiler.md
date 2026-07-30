@@ -45,8 +45,10 @@ profile.
   priority-tier breakdowns, mirroring the patient-profile shape. A zero-match
   cohort over a NONZERO prescribing base (verified by a threshold-free probe)
   is an honest completed answer, not a failure. No named window ⇒ trailing
-  90 days, explicitly disclosed. No threshold ⇒ all prescribing HCPs,
-  explicitly disclosed.
+  90 days (inclusive-today: exactly 90 dates in `[today-89, today+1)`),
+  explicitly disclosed. No threshold ⇒ all prescribing HCPs, explicitly
+  disclosed. All named windows use inclusive-today semantics ("last N days"
+  = exactly N dates).
 
 ## Does NOT cover
 
@@ -63,6 +65,14 @@ profile.
   CLOSED with guidance rather than answer a different question.
 - NRx thresholds on the HCP path (recognized, honestly refused with guidance;
   TRx only today).
+- KPI thresholds on the PATIENT path ("patients with >50 TRx") — recognized
+  and NEVER silently dropped: disclosed as NOT applied (with re-ask-as-HCP
+  guidance), or fail-closed when the threshold is the only thing the ask
+  pinned down.
+- Patient-attribute criteria on the HCP path (age bounds, diagnosis-year) —
+  recognized, re-tagged unservable, disclosed in `criteria_not_applied` + the
+  narrative accounting; an HCP ask whose ONLY specifics are such criteria
+  (no brand, no threshold, no explicit window) fails closed with guidance.
 - Adoption-propensity ("model-scored high-value") HCP ranking — #1356 part 3,
   blocked on #1354 promotion of `hcp_adoption_{kisqali,fabhalta,remibrutinib}`.
 
@@ -110,7 +120,7 @@ criteria_applied[], criteria_not_applied[]}, confidence, recommendations}`.
 HCP: `{status, narrative, cohort_profile{entity:"hcp", segment_axis,
 brand, window{start,end_exclusive,label,explicit}, threshold{metric,
 min_exclusive,stated}, cohort_size, specialty{}, priority_tier{}, trx_total,
-trx_max}, confidence, recommendations}`.
+trx_max, criteria_not_applied[]}, confidence, recommendations}`.
 Fail-closed: `{status:"failed", errors:[{error}], narrative:""}`.
 
 ## Sources
