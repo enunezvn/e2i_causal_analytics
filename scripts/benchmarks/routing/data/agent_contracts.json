@@ -41,32 +41,40 @@
       ]
     },
     "cohort_profiler": {
-      "purpose": "Tier-0 chat companion to cohort_constructor that answers the free-text 'size / define a cohort of ... patients' question with REAL DB-backed per-segment prescribing counts (new-Rx headline + severity tier + line-of-therapy breakdown) for one brand or all brands, never fabricating.",
+      "purpose": "Tier-0 chat companion to cohort_constructor that answers the free-text 'size / define a cohort' question with REAL DB-backed counts, never fabricating. Patient path: new-Rx headline + severity tier + line-of-therapy breakdown for one brand or all brands. Since the ratified extend ruling (2026-07-29, implemented in #1356 parts 1+2): the ask's parameters BIND into the profile query — brand (named directly or via indication, e.g. 'CSU' -> Remibrutinib) and servable inclusion criteria (age-at-diagnosis bounds), with an HONEST accounting naming exactly which criteria were applied and which could not be (e.g. 'diagnosed in 2024' — no true diagnosis dates exist — fails closed with guidance, never answers a different question). HCP path: HCP-entity cohorts with quantitative KPI thresholds ('HCPs who prescribed >50 TRx last quarter') via per-HCP TRx aggregation over an explicit half-open time window with a threshold filter, returning cohort size + specialty / priority-tier breakdowns mirroring the patient-profile shape.",
       "covers": [
         "How many patients are eligible / in the Remibrutinib (or Fabhalta / Kisqali) prescribing population?",
-        "Size / define the cohort for <brand>",
+        "Size / define the cohort for <brand> (brand binds from the query text or indication mention when no structured entity was grounded)",
         "Break down the <brand> population by disease-severity tier (low/medium/high)",
         "Break down the <brand> population by line of therapy (0/1/2/3+ prior lines)",
-        "Same across all supported brands when no brand is named in the query"
+        "Same across all supported brands when no brand is named in the query",
+        "Patient cohorts with servable inclusion criteria bound into the query: brand + age-at-diagnosis bounds ('adults over 18'), with per-criterion applied / not-applied accounting (#1356 part 1)",
+        "HCP-entity cohorts with quantitative KPI thresholds over an explicit time window: 'HCPs who prescribed more than 50 TRx last quarter' -> per-HCP TRx aggregation (same treatment_events prescription substrate as the platform TRx KPI), threshold filter, cohort size + specialty / priority-tier breakdowns; honest zero when the threshold filters everyone out of a nonzero prescribing base (#1356 part 2)"
       ],
       "does_not_cover": [
         "Materializing the actual eligible patient rows / IDs with FDA-EMA criteria + audit trail for an ML pipeline -> owned by cohort_constructor",
         "Explaining an upstream analysis in narrative form -> owned by explainer",
-        "Arbitrary KPI/metric questions beyond cohort sizing -> the domain KPI agents (e.g. gap_analyzer) / chat KPI tool"
+        "Arbitrary KPI/metric questions beyond cohort sizing -> the domain KPI agents (e.g. gap_analyzer) / chat KPI tool",
+        "Criteria the data model cannot serve (e.g. diagnosis-year filters: zero 'diagnosis' events, no diagnosis-date column) -> named honestly as NOT applied with guidance; if nothing in the ask can be served it fails closed rather than return a canned profile",
+        "Adoption-propensity ('model-scored high-value') HCP ranking -> #1356 part 3, blocked on #1354 promotion of the hcp_adoption_* models; today 'high-value' is threshold-filtered TRx volume only"
       ],
-      "internal_pipeline": "Single dispatch, pure async computation over the shared KPI calculator, NO graph/LLM: analyze() -> _canonical_brand -> per brand _profile_brand [headline NRx (WS3-BI-006) + 3 severity-tier calls + 4 therapy-line calls, each via _value -> asyncio.to_thread(calculator.calculate)] -> _render markdown narrative; <=8 sequential DB-backed KPI calls per brand; fails closed only on genuine empty (no prescribing population / calculator unavailable).",
+      "internal_pipeline": "Single dispatch, pure async computation, NO graph/LLM: analyze() -> parse_cohort_ask (ask.py: entity patient|hcp, brand via hint -> query text -> indication, age criteria, diagnosis-year [recognized, unservable], TRx threshold, window with explicit dates) -> three paths: (a) criteria-less patient ask keeps the mig-105 KPI-calculator path [headline NRx WS3-BI-006 + 3 severity + 4 line calls via asyncio.to_thread, <=8 per brand — numbers stay in lock-step with the live chat UI, and the bound brand keys the Redis KPI cache context]; (b) criteria-bound patient ask runs the allowlisted cohort_profiler_patient_criteria_profile statement (migration 117, kpi_query RPC — params brand/min-age/max-age) grouped by (segment_assignment, prior_therapy_lines); (c) HCP ask runs cohort_profiler_hcp_trx_cohort (params brand/window-start/window-end/exclusive-TRx-floor) grouped by (specialty, priority_tier), with a threshold-free probe distinguishing an honest zero-match from a genuine empty. Fails closed only on genuine empty / unservable-only asks; every path binds the ask parameters so two different asks can never share a cached payload (the q11/q15 byte-identical 26ms defect).",
       "dispatch": "INTENT_TO_AGENTS['cohort_definition'] -> cohort_profiler, criticality 'critical', timeout_ms=30000, fallback_agent=None (router.py:176-184). 4-stage active classifier: pattern_selector Domain.COHORT_DEFINITION -> cohort_profiler. Resolver _resolve_cohort_profiler_input grounds an optional brand and NEVER fails closed at resolve time; it IS in _FAIL_CLOSED_ON_FAILED_STATUS so an honest empty (status='failed') fails the dispatch rather than laundering a blank profile. Dispatches via default 'analyze' method (intentionally NOT in AGENT_METHOD_MAP -> Tier-0 fall-through); narrative field via AGENT_RESPONSE_FIELDS.",
       "sources": [
-        "src/agents/cohort_profiler/agent.py:1-197",
-        "src/agents/cohort_profiler/__init__.py:1-13",
+        "src/agents/cohort_profiler/agent.py",
+        "src/agents/cohort_profiler/ask.py",
+        "src/agents/cohort_profiler/__init__.py",
+        "database/migrations/117_cohort_profiler_ask_bound_queries.sql",
         "src/agents/orchestrator/nodes/router.py:169-184",
         "src/agents/orchestrator/nodes/dispatcher.py:1216-1234,1251,1285-1299",
         "src/agents/orchestrator/classifier/pattern_selector.py:34-38",
-        "src/agents/orchestrator/_agent_method_map.py:64-69,209"
+        "src/agents/orchestrator/_agent_method_map.py:64-69,209",
+        ".claude/contracts/tier0/cohort_profiler.md"
       ],
-      "distilled_line_verdict": "correct: accurate but add specificity -- the segment axes are exactly two (disease-severity tier AND line-of-therapy), it reports population SIZES not a patient list, reuses the mig-105 KPI-calculator path (WS3-BI-006 NRx) so numbers match live chat, and it fails closed (not zero-narrates) when a brand has no prescribing population.",
+      "distilled_line_verdict": "correct: accurate but add specificity -- it reports population SIZES not a patient list, reuses the mig-105 KPI-calculator path (WS3-BI-006 NRx) so numbers match live chat, and it fails closed (not zero-narrates) when a brand has no prescribing population. Patient segment axes are severity tier AND line-of-therapy; since #1356 the HCP path adds specialty AND priority-tier axes, and asks bind brand / criteria / threshold / window parameters.",
       "mismatches": [
-        "No CONTRACT_VALIDATION.md and no tier-doc entry exists for cohort_profiler (newer agent); contract intent lives only in the agent + __init__ docstrings and the router/pattern_selector/dispatcher comments. Implementation is the sole source of truth."
+        "Resolved 2026-07-30 (#1356): the prior 'no tier-doc / no CONTRACT_VALIDATION.md' gap is closed — .claude/contracts/tier0/cohort_profiler.md is the runtime contract doc (kept in sync with this registry entry) and src/agents/cohort_profiler/CONTRACT_VALIDATION.md carries the validation report.",
+        "Part 3 of the extend ruling (adoption-propensity ranking) is NOT implemented — blocked on #1354 model promotion."
       ]
     },
     "tool_composer": {

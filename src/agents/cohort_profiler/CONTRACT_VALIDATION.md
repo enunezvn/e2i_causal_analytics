@@ -3,11 +3,11 @@
 **Agent**: Cohort Profiler
 **Tier**: 0 (population profiling for chat)
 **Agent Type**: Standard fast-path (pure async compute, **no graph / no LLM**)
-**Contract**: *No tier-doc exists.* Implementation is the sole source of truth (agent + `__init__` docstrings, router/pattern_selector/dispatcher comments).
+**Contract**: `.claude/contracts/tier0/cohort_profiler.md` (created 2026-07-30, #1356 — kept in sync with the benchmark registry `scripts/benchmarks/routing/data/agent_contracts.json`).
 
-**Date**: 2026-07-29
-**Version**: 1.0
-**Status**: ✅ Chat-routable · Reuses live KPI path · Fails closed on genuine empty
+**Date**: 2026-07-29 (extension addendum 2026-07-30)
+**Version**: 1.1
+**Status**: ✅ Chat-routable · Reuses live KPI path · Fails closed on genuine empty · #1356 ask-binding + HCP cohorts
 
 > Produced from the 2026-07-29 contract-review findings (GitHub issue #1344). `cohort_profiler` is a newer agent with no `.claude/contracts` entry — every claim below is grounded directly in code at the cited `file:line`.
 
@@ -152,3 +152,20 @@ The two segment axes are **exactly two** (disease-severity tier AND line-of-ther
 ## Conclusion
 
 `cohort_profiler` is the **Tier-0 chat companion** to `cohort_constructor`: a pure async, no-graph, no-LLM fast-path agent that answers free-text cohort-sizing questions with REAL DB-backed per-segment prescribing counts (new-Rx headline + disease-severity tier + line-of-therapy breakdowns), for one brand or all supported brands, via ≤8 sequential KPI-calculator calls per brand over the mig-105 WS3-BI-006 path — so its numbers match the live chat UI. It is fully chat-routable (`INTENT_TO_AGENTS['cohort_definition']`, `Domain.COHORT_DEFINITION`), grounds an optional brand at resolve time without ever failing closed there, and fails closed only on a genuine empty (no prescribing population / calculator unavailable), never laundering an empty profile into a success.
+
+---
+
+## #1356 Extension Addendum (2026-07-30)
+
+Implements parts 1 + 2 of the user-ratified 2026-07-29 `extend:cohort_profiler` ruling (#1337 verdict review; part 3 — adoption-propensity ranking — remains **blocked on #1354** and is NOT implemented). Empirical basis: benchmark q11 returned a canned all-brands profile ignoring brand + criteria; q15 returned the byte-identical payload in 26.4ms (the context-keyed Redis KPI cache serving two asks that had collapsed to the same parameterless call set).
+
+**What changed** (evidence: `src/agents/cohort_profiler/ask.py`, `agent.py`, `database/migrations/117_cohort_profiler_ask_bound_queries.sql`):
+
+1. **Ask parsing** (`ask.py::parse_cohort_ask`): entity type (patient vs HCP), brand (resolver hint → query text → indication mention; exactly-one rule), age criteria (servable — `patient_journeys.age_at_diagnosis` populated on all rows, verified READ-ONLY 2026-07-30), diagnosis-year (recognized, UNSERVABLE — zero `diagnosis` events, no diagnosis-date column), TRx threshold, explicit time window ("last quarter" → calendar dates).
+2. **Criteria-bound patient path**: brand + age bounds bind into the allowlisted `cohort_profiler_patient_criteria_profile` statement (mig-117, `kpi_query` RPC, params `[brand, min_age_exclusive, max_age_exclusive]`), grouped by `(segment_assignment, prior_therapy_lines)`. The narrative carries a per-criterion **Criteria accounting** (Applied / NOT applied with guidance / "No other criteria were applied"). Criteria-less asks keep the mig-105 KPI-calculator path untouched. An ask whose recognized parameters are ALL unservable (and no brand) fails closed with guidance.
+3. **HCP-entity path**: `cohort_profiler_hcp_trx_cohort` (mig-117, params `[brand, window_start, window_end_exclusive, trx_floor_exclusive]`) aggregates per-HCP TRx on the platform TRx-KPI substrate (`treatment_events` prescription rows, `hcp_id IS NOT NULL`) joined to `hcp_profiles` for specialty / priority-tier axes. Zero matches over a nonzero base (threshold-free probe) = honest completed zero; empty base = fail-closed. Undeclared window → trailing 90 days, disclosed; undeclared threshold → all prescribing HCPs, disclosed; NRx thresholds honestly refused.
+4. **Cache identity**: every ask parameter now reaches the data layer (KPI-cache context on the calculator path; positional RPC params on the mig-117 path), so two different asks can never share a cached payload.
+
+**Tests**: `tests/unit/test_agents/test_orchestrator/test_cohort_profiler_extend.py` (14 tests: brand/criteria binding, honest fail-closed, HCP aggregation + threshold + window, zero-vs-empty, cache identity), `tests/unit/test_kpi/test_mig117_registry_presence.py` (migration drift-lock). Prior tests unchanged and green.
+
+**Verification discrepancy resolved**: the runtime contract now lives at `.claude/contracts/tier0/cohort_profiler.md`, kept in sync with the benchmark registry (`scripts/benchmarks/routing/data/agent_contracts.json`).
