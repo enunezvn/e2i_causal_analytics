@@ -305,6 +305,18 @@ celery_app.conf.beat_schedule = {
         "schedule": 86400.0,  # 24 hours
         "options": {"queue": "analytics"},
     },
+    # Chat-RAG chunk corpus sync every 24 hours (#1373). Re-indexes the latest
+    # snapshot of every (brand, metric_name, region) combo from business_metrics
+    # into rag_document_chunks -- the OTHER RAG substrate, embedded in the
+    # text-embedding-3-small space the chat HybridRetriever queries in (the
+    # episodic corpus above is in the memory-path ada-002 space, invisible to
+    # chat). Scheduled AFTER the business_metrics ETL rollups; idempotent
+    # content-hash dedup means only new/changed snapshots are embedded.
+    "sync-chunk-corpus": {
+        "task": "src.tasks.sync_chunk_corpus",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------

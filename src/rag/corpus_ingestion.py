@@ -179,6 +179,23 @@ def _fetch_brand_rows(
     return _latest_per_combo(all_rows)
 
 
+def _discover_brands(sb: Any) -> list[str]:
+    """Return the sorted set of brands present in ``business_metrics``.
+
+    Shared by the episodic corpus (:func:`index_business_metrics`) and the
+    chat-RAG chunk corpus (``src/rag/chunk_corpus_ingestion.py``). Real-mode
+    discovery excludes synthetic-only brands via ``apply_provenance_filter``; a
+    synthetic-gold showcase instance (``E2I_INCLUDE_SYNTHETIC``) includes them so
+    every synthetic-gold brand is discovered for indexing. (WS-SYNTH)
+    """
+    from src.repositories.provenance import apply_provenance_filter
+
+    brand_q = sb.table("business_metrics").select("brand").not_.is_("brand", "null")
+    brand_q = apply_provenance_filter(brand_q)
+    r = brand_q.execute()
+    return sorted({row["brand"] for row in (r.data or []) if row.get("brand")})
+
+
 def _existing_corpus_descriptions(sb: Any, agent_name: str) -> set[str]:
     """Return the set of already-indexed corpus descriptions for idempotency.
 
@@ -248,15 +265,7 @@ async def index_business_metrics(
     """
     sb = supabase_client or get_supabase_client()
     if brands is None:
-        from src.repositories.provenance import apply_provenance_filter
-
-        brand_q = sb.table("business_metrics").select("brand").not_.is_("brand", "null")
-        # Provenance (Shard 07 R12): real-mode brand discovery excludes synthetic-only
-        # brands; the showcase instance (E2I_INCLUDE_SYNTHETIC) includes them so every
-        # synthetic-gold brand is discovered for indexing. (WS-SYNTH)
-        brand_q = apply_provenance_filter(brand_q)
-        r = brand_q.execute()
-        brands = sorted({row["brand"] for row in (r.data or []) if row.get("brand")})
+        brands = _discover_brands(sb)
 
     already = _existing_corpus_descriptions(sb, agent_name) if dedup else set()
 
