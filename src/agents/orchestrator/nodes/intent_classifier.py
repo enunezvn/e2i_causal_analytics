@@ -243,17 +243,20 @@ class IntentClassifierNode:
             # merely MENTION a metric ("what is the causal impact of rep
             # visits on TRx") outside the match; "teh" is a recurring
             # real-traffic typo (bench-0083/0100/0114/0117/0126).
-            # Forecast-lexeme exclusions (codex iter-1 MEDIUM): a gap word or
-            # trailing noun with a predict/expect/forecast/project stem
-            # ("show me the trx forecast", "what is the predicted TRx") must
+            # Forecast-lexeme exclusions (codex iter-1 MEDIUM, iter-2 MEDIUM):
+            # a gap word or the word after the metric with a predict/expect/
+            # forecast/project stem ("show me the trx forecast", "what is the
+            # predicted TRx", "what is the trx expected next quarter") must
             # NOT co-score explanation — (prediction, explanation) is a
             # deliberate MULTI_AGENT_PATTERNS pair, so a spurious match here
-            # double-dispatches pure forecast asks.
+            # double-dispatches pure forecast asks. Both guards use the same
+            # stem set (prefix match, no \b: covers predicted/prediction/
+            # predictive/expected/forecasts/projection/projected).
             r"(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
             r"(?:teh\s+|the\s+)?"
             r"(?:(?!(?:predict|expect|forecast|project))[\w'-]+\s+){0,3}?"
             r"(?:trx|nrx|nbrx|market share|conversion rate)\b"
-            r"(?!\s+(?:forecast|prediction|projection))",
+            r"(?!\s+(?:predict|expect|forecast|project))",
         ],
         "system_health": [
             r"system.*(health|status)",

@@ -113,6 +113,12 @@ class TestKpiValueLookupPattern:
             "What is the predicted TRx for Kisqali next quarter?",
             "What is the expected TRx next quarter?",
             "what is the trx projection for fabhalta?",
+            # codex iter-2 MEDIUM: forecast lexeme AFTER the metric as a
+            # participle/adjective — the post-metric guard must cover the
+            # same stems as the gap-word guard, not just the noun forms.
+            "what is the trx expected next quarter",
+            "What is the TRx projected for next quarter?",
+            "what is the trx predictive outlook",
         ],
     )
     def test_forecast_hybrids_stay_single_prediction(self, query: str) -> None:
