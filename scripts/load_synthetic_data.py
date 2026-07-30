@@ -36,6 +36,7 @@ load_dotenv(project_root / ".env")
 
 from src.ml.synthetic.config import Brand, DGPType
 from src.ml.synthetic.generators import (
+    AgentActivitiesGenerator,
     BusinessMetricsGenerator,
     FeatureStoreSeeder,
     FeatureValueGenerator,
@@ -344,6 +345,23 @@ def generate_datasets(
     datasets["causal_paths"] = CausalPathsGenerator(
         GeneratorConfig(
             id_prefix=id_prefix, seed=seed + 7, n_records=max(12, sizes.get("patient", 2500) // 100)
+        )
+    ).generate()
+
+    # agent_activities (#1355): chat agent-analysis / business_impact_roi KPI /
+    # RAG-index substrate, dropped in the v3->DGP migration. Curated blocks
+    # mirror the COMM-ARMS ground truth (brand-scaled CATE maps + the
+    # causal_paths commercial-arm display effects); the generic block covers
+    # the rest of the legacy v3 roster. seed+11 is the next free stamp offset
+    # (+10 claims arrival is taken). anchor_to_now keeps activity_timestamp
+    # inside the NOW()-30d window the migration-044 ROI KPI reads.
+    datasets["agent_activities"] = AgentActivitiesGenerator(
+        GeneratorConfig(
+            id_prefix=id_prefix,
+            seed=seed + 11,
+            n_records=max(60, sizes.get("trigger", 1200) // 20),
+            anchor_to_now=anchor_to_now,
+            anchor_reference=anchor_reference,
         )
     ).generate()
 

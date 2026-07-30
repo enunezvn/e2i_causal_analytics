@@ -14,6 +14,7 @@ Entity generators for synthetic data:
 - FeatureValueGenerator: Generate feature values time-series
 """
 
+from .agent_activities_generator import AgentActivitiesGenerator
 from .base import BaseGenerator, GenerationResult, GeneratorConfig
 from .business_metrics_generator import BusinessMetricsGenerator
 from .causal_paths_generator import CausalPathsGenerator
@@ -60,6 +61,7 @@ __all__ = [
     "FeedbackGenerator",
     "CoverageTablesGenerator",
     "CausalPathsGenerator",
+    "AgentActivitiesGenerator",
     "stamp_data_lag_hours",
     "stamp_sequence_number",
     "stamp_model_metrics",

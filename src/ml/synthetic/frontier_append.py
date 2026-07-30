@@ -69,6 +69,7 @@ import pandas as pd
 
 from src.ml.synthetic.config import DGPType
 from src.ml.synthetic.generators import (
+    AgentActivitiesGenerator,
     BusinessMetricsGenerator,
     FeatureStoreSeeder,
     FeatureValueGenerator,
@@ -117,6 +118,10 @@ WEEKLY_SIZES = {
     "prediction": 128,
     "trigger": 77,
     "feature_values": 321,
+    # #1355: generic agent_activities rows per week (the curated CATE/causal/
+    # gap blocks are fixed additive, ~54 rows). Keeps the NOW()-30d
+    # business_impact_roi_agent_activities KPI window populated week over week.
+    "agent_activities": 24,
 }
 MONTHLY_SIZES = {
     # BusinessMetricsGenerator emits n // (combos_per_date + 1) MONTHS forward
@@ -136,6 +141,7 @@ OCCURRENCE_COLUMNS = {
     "triggers": "trigger_timestamp",
     "business_metrics": "metric_date",
     "feature_values": "event_timestamp",
+    "agent_activities": "activity_timestamp",  # #1355
 }
 
 
@@ -279,6 +285,14 @@ def generate_week_cohort(week_start: date, hcp_df: pd.DataFrame) -> Dict[str, pd
     predictions = stamp_model_metrics(predictions, seed=seed + 8)
     triggers = stamp_change_tracking(triggers, seed=seed + 9)
 
+    # #1355: weekly agent_activities cohort (seed offset +11, mirroring
+    # generate_datasets). Content-addressed ids under the week prefix keep
+    # re-runs idempotent and cohorts disjoint from base 'scv' rows; the
+    # frontier filter keys on activity_timestamp (OCCURRENCE_COLUMNS).
+    agent_activities = AgentActivitiesGenerator(
+        cfg(WEEKLY_SIZES["agent_activities"], seed_offset=11)
+    ).generate()
+
     return {
         "patient_journeys": patients,
         "treatment_events": treatments,
@@ -287,6 +301,7 @@ def generate_week_cohort(week_start: date, hcp_df: pd.DataFrame) -> Dict[str, pd
         "feature_groups": feature_groups,
         "features": features,
         "feature_values": feature_values,
+        "agent_activities": agent_activities,
     }
 
 

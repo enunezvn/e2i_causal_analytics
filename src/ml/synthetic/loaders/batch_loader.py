@@ -96,6 +96,7 @@ LOADING_ORDER = [
     "ab_experiment_results",
     "ml_observability_spans",
     "causal_paths",  # CM-003/CM-005 substrate (Task 5c)
+    "agent_activities",  # #1355 chat agent-analysis / ROI-KPI / RAG substrate
     "learning_signals",
     "user_sessions",
     "hcp_intent_surveys",
@@ -539,6 +540,37 @@ TABLE_COLUMNS = {
         "brand",
         "region",
         "confirmation_count",
+        "created_at",
+        "is_synthetic",
+    ],
+    # #1355: chat agent-analysis / business_impact_roi_agent_activities KPI /
+    # RAG-index substrate. EVERY column the AgentActivitiesGenerator emits MUST
+    # be listed here — this whitelist silently drops unregistered columns at
+    # load (line ~919). Locked both ways by
+    # tests/unit/test_synthetic/test_agent_activities_generator.py.
+    # search_vector is GENERATED (never written); split_config_id stays NULL.
+    "agent_activities": [
+        "activity_id",
+        "agent_name",
+        "agent_tier",
+        "activity_timestamp",
+        "activity_type",
+        "workstream",
+        "processing_duration_ms",
+        "input_data",
+        "records_processed",
+        "time_window",
+        "analysis_results",
+        "causal_paths_analyzed",
+        "confidence_level",
+        "recommendations",
+        "actions_initiated",
+        "impact_estimate",
+        "roi_estimate",
+        "status",
+        "error_message",
+        "resource_usage",
+        "data_split",
         "created_at",
         "is_synthetic",
     ],
