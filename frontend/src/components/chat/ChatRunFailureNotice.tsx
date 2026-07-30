@@ -184,12 +184,20 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
       return;
     }
     const timer = setTimeout(() => {
-      // Capture from the LIVE store at fire time; only mark a dead turn if
-      // the dangling tail this timer was armed for is still the tail.
-      const captured = captureFailedTurn(messagesRef.current);
-      if (!captured || captured.userId !== danglingUserId) return;
+      // Fire-time gate against the LIVE store: the TAIL message must
+      // literally still be the dangling user turn this timer was armed for.
+      // A dead turn by definition has nothing after the user message — ANY
+      // trailing message (e.g. a reply that arrived in-place during the
+      // grace window, with no re-render to clear this timer) is proof the
+      // turn is answered, and must not be captured as "owned" fragment.
+      // Anchoring at the last USER message alone would wrongly own such a
+      // reply and let retry delete it (codex iter-3). Fails closed in the
+      // non-destructive direction.
+      const live = messagesRef.current;
+      const tail = live.length > 0 ? live[live.length - 1] : undefined;
+      if (!tail || tail.role !== 'user' || tail.id !== danglingUserId) return;
       setDeadTurn(true);
-      setFailedTurn(captured);
+      setFailedTurn(captureFailedTurn(live));
     }, DEAD_TURN_GRACE_MS);
     return () => clearTimeout(timer);
   }, [danglingUserId, isLoading]);

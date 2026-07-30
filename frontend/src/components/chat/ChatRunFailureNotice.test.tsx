@@ -116,6 +116,56 @@ describe('ChatRunFailureNotice (UI-D1, #1340)', () => {
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
+  it('does not arm a dead turn when a reply arrives in-place during the grace window', () => {
+    const messages: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: 'Compare TRx by quarter' },
+    ];
+    setChat(messages);
+    render(<ChatRunFailureNotice />);
+
+    // The reply lands via in-place store mutation (no re-render, so the
+    // timer effect never re-runs/clears) before the grace period elapses.
+    // A dead turn by definition has nothing after the user message — any
+    // trailing message is proof the turn is answered, and capturing it as
+    // "owned" would let retry delete a completed reply.
+    messages.push({
+      id: 'a1',
+      role: 'assistant',
+      content: 'Here is the comparison.',
+    });
+
+    // The notice must never appear, EVEN TRANSIENTLY: without a fire-time
+    // tail gate the timer arms deadTurn with a wrongly-owned capture
+    // ({u1, a1}); the corrective re-render then hides the alert again, but
+    // in a real browser that transient commit paints for a frame in which
+    // Retry is clickable — and would delete the completed reply. act()
+    // flushes the whole cycle, so an end-state query alone cannot see it;
+    // a MutationObserver catches the transient insertion.
+    const observer = new MutationObserver(() => {});
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    act(() => {
+      vi.advanceTimersByTime(DEAD_TURN_GRACE_MS + 100);
+    });
+
+    const alertEverAppeared = observer
+      .takeRecords()
+      .some((record) =>
+        Array.from(record.addedNodes).some(
+          (node) =>
+            node instanceof HTMLElement &&
+            (node.matches('[role="alert"]') ||
+              node.querySelector('[role="alert"]') !== null)
+        )
+      );
+    observer.disconnect();
+
+    expect(alertEverAppeared).toBe(false);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('shows nothing while a run is in flight', () => {
     setChat(
       [{ id: 'u1', role: 'user', content: 'Compare TRx by quarter' }],
