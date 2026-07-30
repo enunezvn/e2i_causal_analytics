@@ -36,8 +36,9 @@ from src.tasks.ab_testing_tasks import (
 )
 
 # Operational KPI corpus sync (audit F3b): importing the module registers the
-# Celery task so the worker discovers it for the beat schedule.
-from src.tasks.corpus_ingestion_tasks import sync_operational_corpus
+# Celery task so the worker discovers it for the beat schedule. sync_chunk_corpus
+# (#1373) syncs the chat-RAG chunk substrate (text-embedding-3-small).
+from src.tasks.corpus_ingestion_tasks import sync_chunk_corpus, sync_operational_corpus
 
 # Crystallization subsystem (#376 Phase 4): importing the module fires the
 # @celery_app.task decorator so the portfolio task is discoverable by the
@@ -155,6 +156,8 @@ __all__ = [
     "write_risk_score_predictions",
     # Operational KPI corpus sync (audit F3b)
     "sync_operational_corpus",
+    # Chat-RAG chunk corpus sync (#1373)
+    "sync_chunk_corpus",
     # Insight lifecycle subsystem
     "consolidate_insights",
     "sentinel_dispatcher",
