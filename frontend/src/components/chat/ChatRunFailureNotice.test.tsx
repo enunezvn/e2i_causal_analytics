@@ -224,6 +224,85 @@ describe('ChatRunFailureNotice (UI-D1, #1340)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('double-clicking Retry sends exactly one re-send with a deterministic delete set', async () => {
+    setChat([
+      { id: 'u1', role: 'user', content: 'hello' },
+      { id: 'a1', role: 'assistant', content: 'hi' },
+      { id: 'u2', role: 'user', content: 'Compare TRx by quarter' },
+    ]);
+    render(<ChatRunFailureNotice />);
+
+    act(() => {
+      agent.emit('onRunFailed', { error: new Error('net::ERR_ABORTED') });
+    });
+
+    const retryButton = screen.getByRole('button', { name: /retry/i });
+    await act(async () => {
+      // Two clicks land before the first retry's async send resolves.
+      fireEvent.click(retryButton);
+      fireEvent.click(retryButton);
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(deleteMessage).toHaveBeenCalledTimes(1);
+    expect(deleteMessage).toHaveBeenCalledWith('u2');
+  });
+
+  it('hides the notice when the recorded failure no longer matches the transcript tail', () => {
+    // Failure captured while the dangling turn was u1...
+    setChat([{ id: 'u1', role: 'user', content: 'first question' }]);
+    const { rerender } = render(<ChatRunFailureNotice />);
+    act(() => {
+      agent.emit('onRunFailed', { error: new Error('net::ERR_ABORTED') });
+    });
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    // ...but the transcript has since moved on to completed exchanges the
+    // notice's run events never saw (state resync). Offering retry here
+    // would delete a valid completed exchange — the stale notice must go.
+    setChat([
+      { id: 'u1', role: 'user', content: 'first question' },
+      { id: 'a1', role: 'assistant', content: 'answer one' },
+      { id: 'u2', role: 'user', content: 'second question' },
+      { id: 'a2', role: 'assistant', content: 'answer two' },
+    ]);
+    rerender(<ChatRunFailureNotice />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('retry aborts cleanly when the failed turn no longer matches the current transcript', async () => {
+    const messages: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: 'hello' },
+      { id: 'a1', role: 'assistant', content: 'hi' },
+      { id: 'u2', role: 'user', content: 'Compare TRx by quarter' },
+    ];
+    setChat(messages);
+    render(<ChatRunFailureNotice />);
+
+    act(() => {
+      agent.emit('onRunFailed', { error: new Error('net::ERR_ABORTED') });
+    });
+    const retryButton = screen.getByRole('button', { name: /retry/i });
+
+    // The message store mutates in place (no re-render) before the click
+    // lands: the failed turn u2 is gone, replaced by a different exchange.
+    messages.splice(
+      2,
+      1,
+      { id: 'u9', role: 'user', content: 'different question' },
+      { id: 'a9', role: 'assistant', content: 'completed answer' }
+    );
+
+    await act(async () => {
+      fireEvent.click(retryButton);
+    });
+
+    // Clean abort: never delete or re-send turns the failure does not own.
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('unsubscribes from the agent on unmount', () => {
     setChat([{ id: 'u1', role: 'user', content: 'hello' }]);
     const { unmount } = render(<ChatRunFailureNotice />);

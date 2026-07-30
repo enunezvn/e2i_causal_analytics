@@ -95,6 +95,18 @@ function ProgressDisplay({ state, nodeName, status }: ProgressDisplayProps) {
   // complete" vs "Processing Query"). Pin the finished card to a single
   // terminal header instead. Either signal ends the run: the render status
   // (agent.isRunning gone) or the agent's own terminal agent_status.
+  //
+  // Why state terminality wins even while status === 'inProgress': in
+  // @copilotkit/react-core 1.51.2 the render status is GLOBAL agent
+  // liveness (`agent.isRunning ? 'inProgress' : 'complete'`), not per-card —
+  // during any new run, every historical card re-renders with
+  // status 'inProgress' while its own (locked, per-message) state snapshot
+  // stays 'complete'. If status took priority, all completed cards in the
+  // transcript would revert to a spinning "Working..." for the entire
+  // duration of every subsequent run — UI-D2 again, sustained. The converse
+  // risk (run N+1 briefly inheriting run N's final agent.state before its
+  // first snapshot arrives) self-corrects on the next state event because
+  // the pin is derived purely from props — no latch (see the un-pin test).
   const isError = status === 'error' || state.agent_status === 'error';
   const isTerminal = isError || status === 'complete' || state.agent_status === 'complete';
   const NodeIcon = isError ? AlertCircle : isTerminal ? CheckCircle2 : getNodeIcon(nodeName);

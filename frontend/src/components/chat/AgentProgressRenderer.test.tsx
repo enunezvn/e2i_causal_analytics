@@ -99,6 +99,39 @@ describe('AgentProgressRenderer terminal-state pinning (UI-D2, #1340)', () => {
     expect(screen.queryByText('Processing Query')).not.toBeInTheDocument();
   });
 
+  it('un-pins a stale terminal state as soon as the new run\'s live state arrives', () => {
+    // At the start of run N+1, before its first STATE_SNAPSHOT lands, the
+    // library falls back to agent.state — still run N's final state
+    // (agent_status 'complete'). The pin must be derived purely from props
+    // (no permanent latch) so the card self-corrects the moment the new
+    // run's real state arrives.
+    render(<AgentProgressRenderer />);
+    if (!harness.capturedRender) throw new Error('no state render registered');
+    const view = render(
+      harness.capturedRender({
+        state: completedState,
+        status: 'inProgress',
+        nodeName: 'chat',
+      })
+    );
+    expect(screen.getByText('Complete')).toBeInTheDocument();
+
+    view.rerender(
+      harness.capturedRender({
+        state: {
+          agent_status: 'processing',
+          progress_percent: 5,
+          progress_steps: ['Processing your query...'],
+          tools_executing: [],
+        },
+        status: 'inProgress',
+        nodeName: 'chat',
+      })
+    );
+    expect(screen.getByText('Processing Query')).toBeInTheDocument();
+    expect(screen.queryByText('Complete')).not.toBeInTheDocument();
+  });
+
   it('pins an errored card to an Error header', () => {
     renderProgressCard({
       state: {

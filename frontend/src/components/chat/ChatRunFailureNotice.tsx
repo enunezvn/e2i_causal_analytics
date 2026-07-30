@@ -25,6 +25,17 @@
  * follow-up run resends the full, by-then-settled history, consistent with
  * the by-design full-history-resend model. Completed turns are never touched.
  *
+ * Safety invariants:
+ * - The failed turn is identified by id AT FAILURE-DETECTION TIME
+ *   (failedUserId). The notice only shows — and retry only acts — while
+ *   that exact id is still the transcript's last user message; if the
+ *   transcript has moved on, the stale notice hides rather than offering a
+ *   retry that could delete turns the failure does not own.
+ * - Retry is single-flight: a ref guard rejects re-entrant clicks, the
+ *   button is disabled while a retry is in progress, and the transcript is
+ *   revalidated against the live message store immediately before any
+ *   delete/send.
+ *
  * Must be mounted inside the CopilotKit provider (useCopilotChatInternal
  * throws outside it) — same constraint and same mount point as
  * ConversationSuggestions in E2IChatSidebar.
@@ -63,6 +74,21 @@ export interface ChatRunFailureNoticeProps {
   className?: string;
 }
 
+type MessageLike = { id: string; role: string; content?: unknown };
+
+/** Index of the last user message, or -1. */
+function lastUserIndexOf(list: readonly MessageLike[]): number {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === 'user') return i;
+  }
+  return -1;
+}
+
+function lastUserIdOf(list: readonly MessageLike[]): string | null {
+  const index = lastUserIndexOf(list);
+  return index === -1 ? null : list[index].id;
+}
+
 export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
   const { messages, isLoading, sendMessage, deleteMessage, agent } =
     useCopilotChatInternal();
@@ -70,6 +96,17 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
   const [runError, setRunError] = React.useState<string | null>(null);
   const [deadTurn, setDeadTurn] = React.useState(false);
   const [dismissedKey, setDismissedKey] = React.useState<string | null>(null);
+  // Id of the user message that anchored the failed turn, captured at
+  // failure-detection time — the ONLY turn retry is allowed to touch.
+  const [failedUserId, setFailedUserId] = React.useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = React.useState(false);
+  const retryingRef = React.useRef(false);
+
+  const list = React.useMemo(() => messages ?? [], [messages]);
+  // Live view of the transcript for event callbacks and for revalidation
+  // inside retry (the store can move between render and click).
+  const messagesRef = React.useRef<readonly MessageLike[]>(list);
+  messagesRef.current = list;
 
   // Signal 1: run lifecycle events from the AG-UI agent.
   React.useEffect(() => {
@@ -82,12 +119,15 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
         setRunError(null);
         setDeadTurn(false);
         setDismissedKey(null);
+        setFailedUserId(null);
       },
       onRunFailed: ({ error }) => {
         setRunError(error?.message || 'The request was interrupted.');
+        setFailedUserId(lastUserIdOf(messagesRef.current));
       },
       onRunErrorEvent: ({ event }) => {
         setRunError(event?.message || 'The agent reported an error.');
+        setFailedUserId(lastUserIdOf(messagesRef.current));
       },
     });
     return () => subscription.unsubscribe();
@@ -95,7 +135,6 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
 
   // Signal 2: dead-turn heuristic — the transcript ends with a user message
   // while nothing is running, sustained past the grace period.
-  const list = React.useMemo(() => messages ?? [], [messages]);
   const last = list.length > 0 ? list[list.length - 1] : undefined;
   const danglingUserId = last && last.role === 'user' ? last.id : null;
 
@@ -104,40 +143,65 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
       setDeadTurn(false);
       return;
     }
-    const timer = setTimeout(() => setDeadTurn(true), DEAD_TURN_GRACE_MS);
+    const timer = setTimeout(() => {
+      setDeadTurn(true);
+      setFailedUserId(danglingUserId);
+    }, DEAD_TURN_GRACE_MS);
     return () => clearTimeout(timer);
   }, [danglingUserId, isLoading]);
 
   const retry = React.useCallback(async () => {
-    // Locate the dangling user turn: the last user message plus anything the
-    // failed run left after it (partial assistant text, tool fragments).
-    let lastUserIndex = -1;
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].role === 'user') {
-        lastUserIndex = i;
-        break;
+    // Single-flight: reject re-entrant clicks (double-click lands before the
+    // first retry's async send resolves).
+    if (retryingRef.current) return;
+    retryingRef.current = true;
+    setIsRetrying(true);
+    try {
+      // Revalidate against the LIVE store, not the render snapshot: the
+      // failed turn must still be the transcript's last user message,
+      // otherwise abort without touching anything — turns the failure does
+      // not own are never deleted.
+      const current = messagesRef.current;
+      const lastUserIndex = lastUserIndexOf(current);
+      if (lastUserIndex === -1) return;
+      const failed = current[lastUserIndex];
+      if (failedUserId === null || failed.id !== failedUserId) return;
+      const content = typeof failed.content === 'string' ? failed.content : '';
+      if (!content) return;
+
+      // Deterministic delete set, snapshotted before mutating: the failed
+      // user message plus anything the failed run left after it (partial
+      // assistant text, tool fragments). Completed prior turns untouched.
+      const toDelete = current.slice(lastUserIndex).map((m) => m.id);
+      for (let i = toDelete.length - 1; i >= 0; i--) {
+        deleteMessage(toDelete[i]);
       }
+      setRunError(null);
+      setDeadTurn(false);
+      setDismissedKey(null);
+      setFailedUserId(null);
+      // Re-send re-appends the one user bubble and triggers a run that
+      // resends the full remaining (settled) history.
+      await sendMessage({ id: failed.id, role: 'user', content });
+    } finally {
+      retryingRef.current = false;
+      setIsRetrying(false);
     }
-    if (lastUserIndex === -1) return;
-    const failed = list[lastUserIndex];
-    const content = typeof failed.content === 'string' ? failed.content : '';
-    if (!content) return;
+  }, [failedUserId, deleteMessage, sendMessage]);
 
-    // Remove the failed turn before re-sending so the user bubble is not
-    // duplicated; sendMessage then re-appends it and triggers a run that
-    // resends the full remaining (settled) history.
-    for (let i = list.length - 1; i >= lastUserIndex; i--) {
-      deleteMessage(list[i].id);
-    }
-    setRunError(null);
-    setDeadTurn(false);
-    setDismissedKey(null);
-    await sendMessage({ id: failed.id, role: 'user', content });
-  }, [list, deleteMessage, sendMessage]);
-
-  const noticeKey = `${danglingUserId ?? 'none'}|${runError ?? ''}`;
+  // The notice is only actionable — and only shown — while the recorded
+  // failed turn is still the transcript's dangling tail. If the transcript
+  // moved on (normally onRunInitialized already cleared us), the stale
+  // notice hides instead of offering a retry against someone else's turns.
+  const currentLastUserId = lastUserIdOf(list);
+  const failureMatchesTail =
+    failedUserId !== null && failedUserId === currentLastUserId;
+  const noticeKey = `${failedUserId ?? 'none'}|${runError ?? ''}`;
   const visible =
-    !isLoading && (runError !== null || deadTurn) && dismissedKey !== noticeKey;
+    !isLoading &&
+    (runError !== null || deadTurn) &&
+    failureMatchesTail &&
+    dismissedKey !== noticeKey;
 
   if (!visible) {
     return null;
@@ -164,7 +228,13 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
         </div>
       </div>
       <div className="flex items-center gap-2 pl-6">
-        <Button size="sm" variant="outline" onClick={retry} className="h-7 px-2 text-xs">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={retry}
+          disabled={isRetrying}
+          className="h-7 px-2 text-xs"
+        >
           <RotateCcw className="h-3 w-3 mr-1" />
           Retry
         </Button>
