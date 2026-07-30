@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
+from src.agents.activity_writer import persist_agent_activity
+
 logger = logging.getLogger(__name__)
 
 
@@ -697,6 +699,7 @@ async def contribute_to_memory(
         "episodic_stored": 0,
         "semantic_stored": 0,
         "working_cached": 0,
+        "activity_stored": 0,
     }
 
     # Skip storage if analysis failed
@@ -734,11 +737,43 @@ async def contribute_to_memory(
         )
         counts["semantic_stored"] = stored
 
+    # 4. Persist a real agent_activities row (#1355) so the chat
+    # agent-analysis tool, the ROI KPI and the RAG index see completed CATE
+    # analyses (experiment_designer memory-hooks pattern, #883 §5). Brand
+    # lives INSIDE analysis_results — the ``analysis_results->>'brand'`` field
+    # the chat read path filters on. Log-and-continue: a failed activity
+    # write must NEVER fail the analysis (the helper never raises; the
+    # try/except is belt-and-braces against a patched writer).
+    try:
+        activity_id = persist_agent_activity(
+            agent_name="heterogeneous_optimizer",
+            agent_tier="causal_analytics",
+            activity_type="cate_analysis",
+            analysis_results={
+                "brand": brand,
+                "region": region,
+                "treatment_var": treatment_var,
+                "outcome_var": outcome_var,
+                "overall_ate": result.get("overall_ate"),
+                "heterogeneity_score": result.get("heterogeneity_score"),
+                "high_responders_count": len(high_responders),
+                "low_responders_count": len(low_responders),
+            },
+            input_data={"session_id": session_id, "query": state.get("query", "")},
+            processing_duration_ms=result.get("total_latency_ms"),
+            confidence_level=result.get("confidence"),
+        )
+        if activity_id:
+            counts["activity_stored"] = 1
+    except Exception as e:
+        logger.warning(f"Failed to persist heterogeneous_optimizer activity: {e}")
+
     logger.info(
         f"Memory contribution complete: "
         f"episodic={counts['episodic_stored']}, "
         f"semantic={counts['semantic_stored']}, "
-        f"working_cached={counts['working_cached']}"
+        f"working_cached={counts['working_cached']}, "
+        f"activity={counts['activity_stored']}"
     )
 
     return counts

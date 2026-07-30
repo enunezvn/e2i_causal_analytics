@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
+from src.agents.activity_writer import persist_agent_activity
+
 logger = logging.getLogger(__name__)
 
 
@@ -584,6 +586,7 @@ async def contribute_to_memory(
     counts = {
         "episodic_stored": 0,
         "working_cached": 0,
+        "activity_stored": 0,
     }
 
     # Skip storage if analysis failed
@@ -606,10 +609,43 @@ async def contribute_to_memory(
     if memory_id:
         counts["episodic_stored"] = 1
 
+    # 3. Persist a real agent_activities row (#1355) so the chat
+    # agent-analysis tool, the business_impact_roi_agent_activities KPI and
+    # the RAG index see completed gap analyses (experiment_designer
+    # memory-hooks pattern, #883 §5). Brand lives INSIDE analysis_results —
+    # the ``analysis_results->>'brand'`` field the chat read path filters on.
+    # Log-and-continue: a failed activity write must NEVER fail the analysis.
+    try:
+        total_value = result.get("total_addressable_value")
+        activity_id = persist_agent_activity(
+            agent_name="gap_analyzer",
+            agent_tier="causal_analytics",
+            activity_type="gap_analysis",
+            analysis_results={
+                "brand": state.get("brand"),
+                "region": region,
+                "metrics": list(state.get("metrics", []))[:5],
+                "segments": list(state.get("segments", []))[:5],
+                "gaps_count": len(result.get("prioritized_opportunities", [])),
+                "total_addressable_value": total_value,
+                "quick_wins_count": len(result.get("quick_wins", [])),
+                "strategic_bets_count": len(result.get("strategic_bets", [])),
+                "confidence": result.get("confidence"),
+            },
+            input_data={"session_id": session_id, "query": state.get("query", "")},
+            confidence_level=result.get("confidence"),
+            impact_estimate=total_value,
+        )
+        if activity_id:
+            counts["activity_stored"] = 1
+    except Exception as e:
+        logger.warning(f"Failed to persist gap_analyzer activity: {e}")
+
     logger.info(
         f"Memory contribution complete: "
         f"episodic={counts['episodic_stored']}, "
-        f"working_cached={counts['working_cached']}"
+        f"working_cached={counts['working_cached']}, "
+        f"activity={counts['activity_stored']}"
     )
 
     return counts

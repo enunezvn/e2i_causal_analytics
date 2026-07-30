@@ -516,18 +516,36 @@ async def _query_agent_analysis(
     since: datetime,
     limit: int,
 ) -> Dict[str, Any]:
-    """Query agent analysis outputs from agent_activities table."""
+    """Query agent analysis outputs from the agent_activities table.
+
+    #1355 rewire: ``since`` was accepted but never applied and ``brand`` was
+    silently dropped ("brand isn't a column"), so an empty-window answer was
+    indistinguishable from a brand gap (the q16 misreading). Both now apply:
+
+    * ``since`` filters ``activity_timestamp`` (the time_range window every
+      sibling query already honors);
+    * ``brand`` resolves through the ``analysis_results->>'brand'`` JSONB
+      field — the documented writer contract (the DGP seed generator and the
+      runtime activity writer ``src/agents/activity_writer.py`` both stamp
+      ``analysis_results.brand`` on brand-scoped analyses).
+
+    Provenance rides the repository's default-exclude predicate; on a
+    synthetic-gold showcase instance the ``E2I_INCLUDE_SYNTHETIC`` deployment
+    gate surfaces seeded rows, and ``data_source`` labels the answer honestly
+    (the KPI/causal-chain convention).
+    """
     try:
+        from src.repositories.provenance import deployment_includes_synthetic
+
         client = await get_async_supabase_client()
         repo = AgentActivityRepository(client)
 
-        # Note: agent_activities table does not have 'brand' column
-        # Brand parameter kept for API compatibility but not used in direct queries
-        filters = {}
-        if agent_name:
-            filters["agent_name"] = agent_name
-
-        activities = await repo.get_many(filters=filters, limit=limit)
+        activities = await repo.query_activities(
+            agent_name=agent_name,
+            brand=brand,
+            since=since,
+            limit=limit,
+        )
 
         return {
             "success": True,
@@ -535,6 +553,9 @@ async def _query_agent_analysis(
             "count": len(activities),
             "data": activities,
             "agent_filter": agent_name,
+            "brand_filter": brand,
+            "window_start": since.isoformat() if since else None,
+            "data_source": "synthetic" if deployment_includes_synthetic() else "database",
         }
     except Exception as e:
         logger.error(f"Agent analysis query failed: {e}")
@@ -645,7 +666,9 @@ async def e2i_data_query_tool(
         brand: Optional brand filter, resolved case-insensitively against the actual data values
         region: Optional region filter, resolved case-insensitively against the actual data values
         kpi_name: Specific KPI name for KPI/causal queries
-        agent_name: Agent name filter for agent_analysis queries
+        agent_name: Agent name filter for agent_analysis queries (brand and
+            time_range also apply there — brand resolves through the
+            ``analysis_results->>'brand'`` JSONB field, #1355)
         time_range: Time range for the query (last_7_days, last_30_days, etc.)
         limit: Maximum results (1-100)
         filters: Additional key-value filters

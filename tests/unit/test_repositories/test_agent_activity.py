@@ -491,3 +491,60 @@ class TestGetActivitiesInRange(TestAgentActivityRepository):
         end_time = datetime(2025, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
         result = await repo.get_activities_in_range(start_time, end_time)
         assert result == []
+
+
+@pytest.mark.unit
+class TestQueryActivities(TestAgentActivityRepository):
+    """#1355: the chat agent-analysis read path — ``since`` applied, brand
+    resolvable via the ``analysis_results->>'brand'`` JSONB field."""
+
+    @pytest.mark.asyncio
+    async def test_applies_since_and_agent_filters(self, sample_activities, monkeypatch):
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+        repo, client = self._repo(sample_activities)
+        since = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+        result = await repo.query_activities(
+            agent_name="heterogeneous_optimizer", since=since, limit=25
+        )
+
+        assert len(result) == 2
+        client.assert_table("agent_activities")
+        client.query.assert_called("eq", "agent_name", "heterogeneous_optimizer")
+        client.query.assert_called("gte", "activity_timestamp", since.isoformat())
+        client.query.assert_called("order", "activity_timestamp", desc=True)
+        client.query.assert_called("limit", 25)
+        client.query.assert_excludes_synthetic()
+
+    @pytest.mark.asyncio
+    async def test_brand_filter_uses_analysis_results_jsonb(self, sample_activities):
+        repo, client = self._repo(sample_activities)
+
+        await repo.query_activities(brand="Remibrutinib", limit=10)
+
+        client.query.assert_called("eq", "analysis_results->>brand", "Remibrutinib")
+
+    @pytest.mark.asyncio
+    async def test_no_filters_is_bare_windowless_query(self, sample_activities, monkeypatch):
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+        repo, client = self._repo(sample_activities)
+
+        await repo.query_activities(limit=5)
+
+        assert client.query.named("gte") == []
+        # only the provenance predicate — no agent/brand filters
+        assert client.query.named("eq") == [("is_synthetic", False)]
+
+    @pytest.mark.asyncio
+    async def test_include_synthetic_opt_in_skips_provenance(self, sample_activities):
+        repo, client = self._repo(sample_activities)
+
+        await repo.query_activities(limit=5, include_synthetic=True)
+
+        assert ("is_synthetic", False) not in client.query.named("eq")
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_without_client(self):
+        repo = AgentActivityRepository(supabase_client=None)
+        result = await repo.query_activities(limit=5)
+        assert result == []

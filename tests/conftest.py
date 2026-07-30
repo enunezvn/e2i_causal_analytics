@@ -1109,6 +1109,19 @@ def async_timeout():
 # TEST ISOLATION FIXTURES
 # =============================================================================
 
+# AGENT-ACTIVITY WRITER KILL SWITCH (#1355, incident 2026-07-30). The runtime
+# agent_activities writer (src/agents/activity_writer.py) lazily creates the
+# REAL service-role Supabase client, and this conftest's load_dotenv
+# (override=True) hands it real creds — so pre-existing agent unit suites that
+# invoke contribute_to_memory wrote 16 real rows into the LIVE table (same bug
+# family as the #1371 CHATBOT_MLFLOW_METRICS unit-test HTTP calls). Arm the
+# kill switch at IMPORT time (before any test, before any fixture ordering
+# question) so no test can implicitly write the live table; tests that WANT the
+# writer inject an explicit fake client, which the switch does not block.
+# Locked by tests/unit/test_agents/test_agent_activity_writer.py::
+# TestPersistAgentActivity::test_pytest_session_arms_kill_switch.
+os.environ["E2I_DISABLE_AGENT_ACTIVITY_WRITER"] = "1"
+
 
 @pytest.fixture(autouse=True)
 def reset_environment():

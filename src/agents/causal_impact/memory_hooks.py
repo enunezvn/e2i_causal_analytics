@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
+from src.agents.activity_writer import persist_agent_activity
+
 logger = logging.getLogger(__name__)
 
 
@@ -735,6 +737,7 @@ async def contribute_to_memory(
         "episodic_stored": 0,
         "semantic_stored": 0,
         "working_cached": 0,
+        "activity_stored": 0,
     }
 
     # Skip storage if analysis failed
@@ -783,11 +786,44 @@ async def contribute_to_memory(
         if stored:
             counts["semantic_stored"] = 1
 
+    # 4. Persist a real agent_activities row (#1355) so the chat
+    # agent-analysis tool, the ROI KPI and the RAG index see completed causal
+    # analyses (experiment_designer memory-hooks pattern, #883 §5). Brand
+    # lives INSIDE analysis_results — the ``analysis_results->>'brand'`` field
+    # the chat read path filters on. Log-and-continue: a failed activity
+    # write must NEVER fail the analysis.
+    try:
+        activity_id = persist_agent_activity(
+            agent_name="causal_impact",
+            agent_tier="causal_analytics",
+            activity_type="causal_analysis",
+            analysis_results={
+                "brand": brand or state.get("brand"),
+                "region": region,
+                "treatment_var": treatment_var,
+                "outcome_var": outcome_var,
+                "ate_estimate": result.get("ate_estimate"),
+                "confidence": result.get("confidence"),
+                "refutation_passed": result.get("refutation_passed"),
+                "gate_decision": gate_decision,
+                "effect_size": result.get("effect_size"),
+                "confounders_controlled": list(confounders or []),
+            },
+            input_data={"session_id": session_id, "query": state.get("query", "")},
+            processing_duration_ms=result.get("total_latency_ms"),
+            confidence_level=result.get("confidence"),
+        )
+        if activity_id:
+            counts["activity_stored"] = 1
+    except Exception as e:
+        logger.warning(f"Failed to persist causal_impact activity: {e}")
+
     logger.info(
         f"Memory contribution complete: "
         f"episodic={counts['episodic_stored']}, "
         f"semantic={counts['semantic_stored']}, "
-        f"working_cached={counts['working_cached']}"
+        f"working_cached={counts['working_cached']}, "
+        f"activity={counts['activity_stored']}"
     )
 
     return counts
