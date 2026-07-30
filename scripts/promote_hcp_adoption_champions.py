@@ -383,9 +383,8 @@ async def run(client: Any, *, execute: bool, only_brand: str | None) -> int:
             # Idempotency: promoted_at records the FIRST promotion instant —
             # an already-promoted row keeps its original timestamp, so a rerun
             # re-issues a byte-identical payload (semantic no-op).
-            promoted_at = (
-                row.get("promoted_at") if (already and row.get("promoted_at")) else now_iso
-            )
+            prior_ts = row.get("promoted_at")
+            promoted_at: str = str(prior_ts) if (already and prior_ts) else now_iso
             action, reasons, update = decide(stored, m, prev, promoted_at)
             # Null-safe rendering: an unfittable slope may be an ABSENT key
             # (scorer contract) or an explicit None — neither may crash the
@@ -403,6 +402,9 @@ async def run(client: Any, *, execute: bool, only_brand: str | None) -> int:
                 print(f"       {evidence}")
                 held += 1
                 continue
+            # decide() always returns a payload for "promote"; narrow for mypy
+            # and fail loudly if that contract is ever broken.
+            assert update is not None
             note = " [already promoted — idempotent rewrite]" if already else ""
             if not execute:
                 print(f"  OK(dry) {model_name}:{note} would UPDATE ml_model_registry")
