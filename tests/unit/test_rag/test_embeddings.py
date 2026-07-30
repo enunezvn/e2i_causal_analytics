@@ -12,6 +12,7 @@ Part of Phase 1, Checkpoint 1.2 validation.
 """
 
 import importlib
+import inspect
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -588,6 +589,64 @@ class TestEmbeddingDimensions:
 # =============================================================================
 # Edge Cases
 # =============================================================================
+
+
+class TestEmbedInterface:
+    """Interface-drift guard for the canonical ``embed(text) -> List[float]`` contract (#1334).
+
+    ``OpenAIEmbeddingClient`` is wired as the ``embedding_service`` for the chat
+    RAG path (``src/api/dependencies/rag.py``, ``src/api/routes/rag.py``) whose
+    consumers -- ``HybridRetriever.search`` and the orchestrator RAG-context node
+    -- call ``embedding_service.embed(query)``. That is the canonical interface
+    declared by ``src.memory.services.factories.EmbeddingService`` and consumed
+    across the codebase. The client historically exposed only ``encode`` /
+    ``encode_async``, so every chat turn raised
+    ``'OpenAIEmbeddingClient' object has no attribute 'embed'`` and the dense leg
+    was silently skipped (0 results). These tests fail loudly if the interface
+    ever drifts again.
+    """
+
+    def test_client_exposes_embed_method(self):
+        """The client must expose ``embed`` (attribute-level, no network)."""
+        assert hasattr(OpenAIEmbeddingClient, "embed"), (
+            "OpenAIEmbeddingClient must expose embed() to satisfy the canonical "
+            "EmbeddingService interface used by the chat RAG retriever (#1334)"
+        )
+
+    def test_embed_is_async(self):
+        """``embed`` must be a coroutine function -- consumers ``await`` it."""
+        assert inspect.iscoroutinefunction(OpenAIEmbeddingClient.embed)
+
+    def test_embed_signature_is_single_text(self):
+        """``embed`` takes a single ``text`` positional, matching the ABC contract."""
+        params = list(inspect.signature(OpenAIEmbeddingClient.embed).parameters)
+        assert params == ["self", "text"]
+
+    def test_embed_matches_canonical_embedding_service(self):
+        """``embed`` parameter names match ``EmbeddingService.embed`` (drift guard)."""
+        from src.memory.services.factories import EmbeddingService
+
+        canonical = list(inspect.signature(EmbeddingService.embed).parameters)
+        actual = list(inspect.signature(OpenAIEmbeddingClient.embed).parameters)
+        assert actual == canonical
+
+    @pytest.mark.asyncio
+    async def test_embed_returns_single_vector(self, embedding_config, mock_embedding_response):
+        """``embed`` returns one ``List[float]`` (not a list-of-lists) with network stubbed."""
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
+            mock_client = AsyncMock()
+            mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
+            mock_async_openai.return_value = mock_client
+
+            client = OpenAIEmbeddingClient(embedding_config)
+            result = await client.embed("Why is TRx declining for Remibrutinib?")
+
+            assert isinstance(result, list)
+            assert len(result) == 1536
+            assert all(isinstance(x, float) for x in result)
 
 
 class TestEdgeCases:
