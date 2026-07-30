@@ -1224,7 +1224,7 @@ if should_deploy:
 
 Before deploying Tier 0 pipeline:
 
-- [ ] All 7 agents implemented
+- [ ] All 8 agents implemented (incl. cohort_constructor — see `tier0/cohort_constructor.md`)
 - [ ] Sequential execution enforced
 - [ ] QC gate correctly blocks training
 - [ ] All input/output contracts validated
@@ -1238,6 +1238,112 @@ Before deploying Tier 0 pipeline:
 - [ ] Integration tests for full pipeline
 - [ ] QC gate failure test passes
 - [ ] Success criteria validation works
+
+---
+
+## Appendix A: Draft QA Scaffolding (from legacy Tier-Specific draft — largely NOT implemented)
+
+> **Provenance (2026-07-30, #1348 dedup)**: promoted from the legacy Tier-Specific
+> tier0 draft (change log: V4 initial 2025-12-08, V4.4 discovery 2025-12-31,
+> V4.5 cohort_constructor 2026-01-16) before that directory was removed. The
+> per-agent contract bodies of that draft were pre-implementation YAML designs
+> superseded by the implementation-faithful Pydantic contracts above (verified:
+> draft fields like `fairness_constraints`/`heuristic_baseline` exist nowhere in
+> `src/`, while this file's `problem_type_hint`/`candidate_features` match
+> `src/agents/ml_foundation/scope_definer/state.py`). What follows is the draft's
+> *unique* QA design content, preserved as intent. ⚠️ Except where noted, none of
+> it is implemented — `tests/integration/test_tier0_contracts.py` does not exist.
+
+### A.1 Draft Error-Code Taxonomy
+
+Proposed per-agent error codes with recovery semantics. **Only the
+cohort_constructor codes are implemented** — and the implemented meanings
+DIFFER from this draft: the live `CC_001`-`CC_007` definitions are in
+`src/agents/cohort_constructor/constants.py` and documented in
+`tier0/cohort_constructor.md` (which is authoritative for CC codes; the
+draft's CC table is intentionally omitted here).
+
+| Agent | Code | Description | Recovery |
+|-------|------|-------------|----------|
+| scope_definer | `SD_001` | Invalid problem type | Suggest valid types |
+| scope_definer | `SD_002` | Missing target definition | Request clarification |
+| scope_definer | `SD_003` | Constraint conflict | Flag incompatible constraints |
+| data_preparer | `DP_001` | QC validation failed | Return blocking issues, stop pipeline |
+| data_preparer | `DP_002` | Leakage detected | Flag features, recommend removal |
+| data_preparer | `DP_003` | Insufficient data | Report minimum required |
+| data_preparer | `DP_004` | Split imbalance | Recommend stratification |
+| model_selector | `MS_001` | No models meet constraints | Relax constraints with warning |
+| model_selector | `MS_002` | Unknown algorithm | Default to safe choice |
+| model_selector | `MS_003` | Registry unavailable | Use local fallback |
+| model_trainer | `MT_001` | QC gate not passed | Block training, return error |
+| model_trainer | `MT_002` | Training timeout | Return partial model |
+| model_trainer | `MT_003` | Criteria not met | Return model with warning |
+| model_trainer | `MT_004` | Memory exceeded | Reduce batch size, retry |
+| feature_analyzer | `FA_001` | SHAP computation timeout | Use subset sampling |
+| feature_analyzer | `FA_002` | Interpretation failed | Return computation only |
+| feature_analyzer | `FA_003` | Segment analysis empty | Skip segment, warn |
+| model_deployer | `MD_001` | Invalid stage transition | Reject with valid path |
+| model_deployer | `MD_002` | Health check failed | Rollback to previous |
+| model_deployer | `MD_003` | Shadow period insufficient | Block promotion |
+| observability_connector | `OC_001` | Span emission failed | Log locally, continue |
+| observability_connector | `OC_002` | Context lost | Generate new trace |
+
+### A.2 Draft Quality Contract
+
+Contract-level invariants beyond the QC gate (the QC-gate and stage-progression
+invariants ARE enforced by the contracts above; the split-isolation and
+test-single-use checks state intent the pipeline must uphold):
+
+```python
+class Tier0QualityContract:
+    """Quality checks for ML Foundation agents (draft)."""
+
+    @staticmethod
+    def validate_qc_gate(qc_report: QCReport, action: str) -> bool:
+        """Ensure QC gate is properly enforced."""
+        if action == "train" and qc_report.status == "FAILED":
+            return False  # Must block
+        return True
+
+    @staticmethod
+    def validate_split_isolation(preprocessor: Preprocessor, splits: dict) -> bool:
+        """Ensure preprocessing only fit on train."""
+        return preprocessor.is_fitted_on == "train"
+
+    @staticmethod
+    def validate_test_single_use(metrics_log: list) -> bool:
+        """Ensure test set evaluated exactly once."""
+        test_evaluations = [m for m in metrics_log if m.split == "test"]
+        return len(test_evaluations) == 1
+
+    @staticmethod
+    def validate_stage_progression(from_stage: str, to_stage: str) -> bool:
+        """Ensure valid stage transition."""
+        valid_transitions = {
+            "development": ["staging"],
+            "staging": ["shadow"],
+            "shadow": ["production"],
+            "production": ["archived"]
+        }
+        return to_stage in valid_transitions.get(from_stage, [])
+```
+
+The draft also proposed a `tests/integration/test_tier0_contracts.py` suite
+(per-agent input/output tests plus `test_qc_gate_blocking`,
+`test_split_enforcement`, `test_preprocessing_isolation`,
+`test_stage_progression`, `test_full_pipeline`, `test_tier0_to_tier1_handoff`)
+— **not implemented**.
+
+---
+
+## Revision History
+
+| Date | Change |
+|------|--------|
+| 2026-07-30 | #1348 dedup: absorbed legacy Tier-Specific tier0 draft — promoted Appendix A (draft error-code taxonomy + quality contract), fixed compliance checklist 7→8 agents, imported the draft's change log below; draft's per-agent YAML contract bodies confirmed superseded by the implementation-faithful contracts in this file, its cohort_constructor section by `tier0/cohort_constructor.md` |
+| 2026-01-16 | (legacy draft) V4.5: Added Cohort Constructor agent to Tier 0 pipeline (between scope_definer and data_preparer), including input/output contracts, error codes (CC_001-CC_007), and eligibility gate |
+| 2025-12-31 | (legacy draft) V4.4: Added causal discovery integration to Feature Analyzer (discovery_config input, causal_rankings output, causal_interpretation in interpretation) |
+| 2025-12-08 | (legacy draft) Initial creation for V4 architecture |
 
 ---
 
