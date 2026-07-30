@@ -23,6 +23,7 @@ from tenacity import (
 )
 
 from src.rag.models.insight_models import EnrichedInsight
+from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ class InsightEnricher:
         # Check cache first
         cache_key = self._build_cache_key(query_text, retrieved)
         if self.cache_enabled and cache_key in _RESPONSE_CACHE:
-            logger.debug(f"Cache hit for query: {query_text[:50]}...")
+            logger.debug(f"Cache hit for query: {redact_query(query_text)}")
             return _RESPONSE_CACHE[cache_key]
 
         # Build context from retrieved results

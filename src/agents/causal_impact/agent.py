@@ -14,6 +14,7 @@ from src.agents.causal_impact.state import (
     CausalImpactOutput,
     CausalImpactState,
 )
+from src.utils.redaction import redact_query
 
 if TYPE_CHECKING:
     from src.agents.causal_impact.mlflow_tracker import CausalImpactMLflowTracker
@@ -766,7 +767,7 @@ class CausalImpactAgent(SkillsMixin):
                     if any(r.get("type") == relationship_type for r in c.get("relationships", []))
                 ]
 
-            logger.debug(f"Semantic memory query for '{query}': found {len(chains)} chains")
+            logger.debug(f"Semantic memory query for '{redact_query(query)}': found {len(chains)} chains")
             return chains  # type: ignore[no-any-return]
 
         except Exception as e:
@@ -841,7 +842,7 @@ class CausalImpactAgent(SkillsMixin):
             )
 
             logger.debug(
-                f"Episodic memory query for '{query[:50]}...': found {len(memories)} memories"
+                f"Episodic memory query for '{redact_query(query)}': found {len(memories)} memories"
             )
             return memories
 

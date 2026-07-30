@@ -14,6 +14,7 @@ from typing import Any, Dict, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.utils.llm_content import normalize_llm_content
+from src.utils.redaction import redact_query
 
 from .models.composition_models import (
     ComposedResponse,
@@ -110,7 +111,7 @@ class ResponseSynthesizer:
         Returns:
             ComposedResponse with the synthesized answer
         """
-        logger.info(f"Synthesizing response for query: {synthesis_input.original_query[:50]}...")
+        logger.info(f"Synthesizing response for query: {redact_query(synthesis_input.original_query)}")
 
         try:
             # Format results for the prompt

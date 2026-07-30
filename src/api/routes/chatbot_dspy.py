@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from src.agents.multi_faceted import is_multi_faceted_facet_score
+from src.utils.redaction import redact_query
 
 from .chatbot_state import IntentType
 
@@ -617,7 +618,7 @@ async def classify_intent_dspy(
             reasoning = str(getattr(result, "reasoning", "DSPy classification"))
 
             logger.debug(
-                f"DSPy classified '{query[:50]}...' as {intent} (confidence={confidence:.2f})"
+                f"DSPy classified '{redact_query(query)}' as {intent} (confidence={confidence:.2f})"
             )
         else:
             use_fallback = True
@@ -628,7 +629,7 @@ async def classify_intent_dspy(
     if use_fallback:
         intent, confidence, reasoning = classify_intent_hardcoded(query)
         classification_method = "hardcoded"
-        logger.debug(f"Hardcoded classified '{query[:50]}...' as {intent}")
+        logger.debug(f"Hardcoded classified '{redact_query(query)}' as {intent}")
 
     # Collect training signal
     if collect_signal:
@@ -974,7 +975,7 @@ async def route_agent_dspy(
             rationale = str(getattr(result, "rationale", "DSPy routing"))
 
             logger.debug(
-                f"DSPy routed '{query[:50]}...' to {primary_agent} (confidence={confidence:.2f})"
+                f"DSPy routed '{redact_query(query)}' to {primary_agent} (confidence={confidence:.2f})"
             )
         else:
             use_fallback = True
@@ -987,7 +988,7 @@ async def route_agent_dspy(
             query, intent
         )
         routing_method = "hardcoded"
-        logger.debug(f"Hardcoded routed '{query[:50]}...' to {primary_agent}")
+        logger.debug(f"Hardcoded routed '{redact_query(query)}' to {primary_agent}")
 
     # Collect training signal
     if collect_signal:
@@ -1436,7 +1437,7 @@ async def rewrite_query_dspy(
                 graph_entities = [e.strip() for e in entities_str.split(",") if e.strip()]
 
             logger.debug(
-                f"DSPy rewrote '{query[:30]}...' to '{rewritten_query[:50]}...' "
+                f"DSPy rewrote '{redact_query(query, max_len=30)}' to '{redact_query(rewritten_query)}' "
                 f"(keywords: {len(search_keywords)}, entities: {len(graph_entities)})"
             )
 

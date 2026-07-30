@@ -14,6 +14,7 @@ from typing import Any, Dict, List, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.utils.llm_content import normalize_llm_content
+from src.utils.redaction import redact_query
 
 from .models.composition_models import (
     DecompositionResult,
@@ -110,7 +111,7 @@ class QueryDecomposer:
         Returns:
             DecompositionResult with sub-questions and reasoning
         """
-        logger.info(f"Decomposing query: {query[:100]}...")
+        logger.info(f"Decomposing query: {redact_query(query, max_len=100)}")
 
         try:
             # Call LLM for decomposition
