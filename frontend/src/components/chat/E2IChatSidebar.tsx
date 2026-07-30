@@ -40,6 +40,7 @@ import { useResizablePanel } from '@/hooks/use-resizable-panel';
 import { useUIStore } from '@/stores/ui-store';
 import { AgentStatusPanel } from './AgentStatusPanel';
 import { AgentProgressRenderer } from './AgentProgressRenderer';
+import { ChatRunFailureNotice } from './ChatRunFailureNotice';
 import { useChatFeedback, FeedbackRating } from '@/hooks/use-chat-feedback';
 import { CustomAssistantMessage } from './CustomAssistantMessage';
 
@@ -627,6 +628,14 @@ Visual answers: whenever the answer involves a KPI's evolution over time, a tren
                 suggestions={chatSuggestions}
                 className="min-h-0 flex-1"
               />
+
+              {/* Failed/aborted run notice (#1340 UI-D1): a run that dies
+                  client-side (net::ERR_ABORTED) is swallowed by CopilotKit —
+                  without this the user's message just sits there with no
+                  answer and no error. Sits directly under the input, next to
+                  the turn it refers to. Needs the CopilotKit provider (chat
+                  hooks throw outside it), same as ConversationSuggestions. */}
+              <ChatRunFailureNotice className="shrink-0 mx-3 mb-2" />
             </div>
 
             {/* Footer with Trace ID for Support */}

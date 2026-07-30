@@ -88,9 +88,34 @@ interface ProgressDisplayProps {
 }
 
 function ProgressDisplay({ state, nodeName, status }: ProgressDisplayProps) {
-  const NodeIcon = getNodeIcon(nodeName);
-  const nodeLabel = getNodeLabel(nodeName);
-  const statusColor = getStatusColor(state.agent_status);
+  // Terminal-state pinning (#1340 UI-D2): once the run has terminally ended,
+  // the header must not depend on nodeName — after completion the library
+  // recomputes nodeName from live agent state, so it flips between '' and the
+  // last LangGraph node across re-renders ("Working... 100% Response
+  // complete" vs "Processing Query"). Pin the finished card to a single
+  // terminal header instead. Either signal ends the run: the render status
+  // (agent.isRunning gone) or the agent's own terminal agent_status.
+  //
+  // Why state terminality wins even while status === 'inProgress': in
+  // @copilotkit/react-core 1.51.2 the render status is GLOBAL agent
+  // liveness (`agent.isRunning ? 'inProgress' : 'complete'`), not per-card —
+  // during any new run, every historical card re-renders with
+  // status 'inProgress' while its own (locked, per-message) state snapshot
+  // stays 'complete'. If status took priority, all completed cards in the
+  // transcript would revert to a spinning "Working..." for the entire
+  // duration of every subsequent run — UI-D2 again, sustained. The converse
+  // risk (run N+1 briefly inheriting run N's final agent.state before its
+  // first snapshot arrives) self-corrects on the next state event because
+  // the pin is derived purely from props — no latch (see the un-pin test).
+  const isError = status === 'error' || state.agent_status === 'error';
+  const isTerminal = isError || status === 'complete' || state.agent_status === 'complete';
+  const NodeIcon = isError ? AlertCircle : isTerminal ? CheckCircle2 : getNodeIcon(nodeName);
+  const nodeLabel = isError ? 'Error' : isTerminal ? 'Complete' : getNodeLabel(nodeName);
+  const statusColor = isError
+    ? 'text-rose-500'
+    : isTerminal
+      ? 'text-emerald-500'
+      : getStatusColor(state.agent_status);
 
   // Don't render if complete and no progress to show
   if (status === 'complete' && (!state.progress_steps || state.progress_steps.length === 0)) {
@@ -111,7 +136,7 @@ function ProgressDisplay({ state, nodeName, status }: ProgressDisplayProps) {
             className={cn(
               'h-4 w-4',
               statusColor,
-              status === 'inProgress' && state.agent_status === 'processing' && 'animate-spin'
+              !isTerminal && state.agent_status === 'processing' && 'animate-spin'
             )}
           />
           <span className="font-medium text-sm">{nodeLabel}</span>
@@ -138,12 +163,12 @@ function ProgressDisplay({ state, nodeName, status }: ProgressDisplayProps) {
               key={i}
               className={cn(
                 'flex items-center gap-1.5',
-                i === state.progress_steps.length - 1 && status === 'inProgress'
+                i === state.progress_steps.length - 1 && !isTerminal
                   ? 'text-foreground font-medium'
                   : 'text-muted-foreground'
               )}
             >
-              {i === state.progress_steps.length - 1 && status === 'inProgress' ? (
+              {i === state.progress_steps.length - 1 && !isTerminal ? (
                 <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
               ) : (
                 <CheckCircle2 className="h-3 w-3 text-emerald-500" />
