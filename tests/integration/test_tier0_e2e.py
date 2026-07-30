@@ -893,14 +893,15 @@ class TestTier0EndToEnd:
         # Step 5: Model Training
         trainer_agent = ModelTrainerAgent()
 
-        # Prepare data for training using E2I ratios: 60%/20%/15%/5%
+        # Prepare data for training using E2I ratios: 60%/20%/10%/10%
+        # (#1311: was 15%/5% — re-split per the #44 holdout enlargement aed06cb7)
         X = eligible_df[["days_on_therapy", "hcp_visits", "prior_treatments"]]
         y = eligible_df[TEST_CONFIG["target_outcome"]]
 
         n = len(X)
         train_end = int(0.60 * n)
         val_end = train_end + int(0.20 * n)
-        test_end = val_end + int(0.15 * n)
+        test_end = val_end + int(0.10 * n)
 
         try:
             trainer_result = await trainer_agent.run(

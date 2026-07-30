@@ -105,7 +105,12 @@ BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
     # local/CI until the local hpo>5 sweep confirms landing locally too.
     "auc_band_calibrated": (0.82, 0.88),
     "auc_band_empirical_hpo5_local": (0.8087, 0.8587),  # observed 0.8337 ± 0.025 LOCAL (#1311)
-    "auc_band_empirical_hpo5_ci": (0.82, 0.86),  # observed 0.8408 ± 0.025 CI (in calibrated band)
+    # CI value NOT re-measured post-aed06cb7 (the test passed in CI, so the
+    # nightly logs never printed it — pre-aed06cb7 CI measured 0.8408). Band
+    # preserves the previous EFFECTIVE gate width (the pre-#1311 double
+    # expansion, see _assert_scenario_metrics note); tighten to
+    # observed ± 0.025 once a post-aed06cb7 CI value is logged.
+    "auc_band_empirical_hpo5_ci": (0.795, 0.885),
     "tolerance_auc_empirical": 0.025,
     "min_perm_p_significant": 0.05,
     "max_train_val_delta": 0.10,  # observed 0.022 local
@@ -125,7 +130,11 @@ BASELINE_LOCAL_SCENARIO_A_BALANCED: Dict[str, Any] = {
     "regime": "scenario_a_balanced",
     # No calibrated_band — empirical only.
     "auc_band_empirical_hpo5_local": (0.7402, 0.7802),  # observed 0.7602 ± 0.02 LOCAL (#1311)
-    "auc_band_empirical_hpo5_ci": (0.78, 0.82),  # placeholder; widen post-CI measurement
+    # Placeholder — NEVER measured on CI (the test passes there, so the value
+    # is not printed). Band preserves the previous EFFECTIVE gate width (the
+    # pre-#1311 double expansion); tighten to observed ± 0.02 once a CI value
+    # is logged.
+    "auc_band_empirical_hpo5_ci": (0.76, 0.84),
     "tolerance_auc_empirical": 0.02,
     "min_perm_p_significant": 0.05,
     "max_train_val_delta": 0.10,  # observed 0.011
@@ -236,8 +245,11 @@ def _assert_scenario_metrics(
     ``auc_band_calibrated`` would silently land without test signal.
 
     The default mode is "empirical" — we assert the val_AUC lands within
-    ``empirical_band ± tolerance_empirical`` (a tight band around the
-    measured hpo=5 value). When ``enforce_calibrated_band=True``, we also
+    ``empirical_band`` directly. The stored band already embeds
+    ``± tolerance_empirical`` around the measured hpo=5 value (the parameter
+    is retained for failure-message provenance only; #1311 codex iter-1
+    finding 2 removed the second expansion that doubled the effective
+    width). When ``enforce_calibrated_band=True``, we also
     assert the val_AUC lands within ``calibrated_band`` exactly (no
     tolerance) — for cases where the calibrated regression must pass.
 
@@ -255,16 +267,16 @@ def _assert_scenario_metrics(
     val_auc = val.get("roc_auc")
     assert val_auc is not None, f"{regime}: validation_metrics.roc_auc missing"
 
-    # Empirical band is the primary regression gate — pinned tight around
-    # the measured value so drift is detected at the precision the test
-    # was designed for.
+    # Empirical band is the primary regression gate. The stored band IS the
+    # gate — it already embeds the ± tolerance around the measured value
+    # (codex-rescue H1 convention), so it is asserted directly. #1311 codex
+    # iter-1 finding 2: the helper previously expanded the band by
+    # ± tolerance AGAIN, doubling the effective width and weakening the gate.
     emp_low, emp_high = empirical_band
-    expanded_low = emp_low - tolerance_empirical
-    expanded_high = emp_high + tolerance_empirical
-    assert expanded_low <= val_auc <= expanded_high, (
+    assert emp_low <= val_auc <= emp_high, (
         f"{regime}: val_AUC {val_auc:.4f} outside empirical hpo=5 band "
-        f"[{expanded_low:.4f}, {expanded_high:.4f}] "
-        f"(measured band [{emp_low}, {emp_high}], tolerance ±{tolerance_empirical})"
+        f"[{emp_low:.4f}, {emp_high:.4f}] "
+        f"(band embeds ±{tolerance_empirical} around the measured value)"
     )
 
     # Calibrated band (optional) — strict no-tolerance check for biology-
@@ -340,8 +352,9 @@ def test_scenario_c_default_n_lands_in_empirical_band(tmp_path: Path) -> None:
     """scenario_c (CSU treatment response, prev=0.40) hits empirical hpo=5 band.
 
     Calibrated band per src/ml/synthetic_v2/scenarios/scenario_c.py:7 is
-    [0.82, 0.88]. At hpo=5 the envelope lands ~0.037 below band-low;
-    same calibrated-vs-empirical split as scenario_b.
+    [0.82, 0.88]. Pre-aed06cb7 the local hpo=5 envelope landed ~0.037 below
+    band-low; since the #1311 re-measurement it lands IN the band locally
+    (0.8337). Same calibrated-vs-empirical split as scenario_b.
     """
     artifact = _run_tier0_e2e("scenario_c", tmp_path=tmp_path)
     _assert_scenario_metrics(
