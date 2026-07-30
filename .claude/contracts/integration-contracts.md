@@ -2796,7 +2796,10 @@ class EffectEstimateContract:
 
 ### Contract 7: Agent Tier Priority
 
-**Enforced By**: `src/agents/registry.py` — Routing priority based on tier
+**Enforced By** (`src/agents/registry.py` is a draft path — it does not exist):
+tier-aware routing lives in `src/agents/orchestrator/nodes/router.py`
+(`INTENT_TO_AGENTS`); the agent/tier registry SSOT is
+`scripts/benchmarks/routing/data/agent_contracts.json`
 
 ```python
 class TierPriorityContract:
