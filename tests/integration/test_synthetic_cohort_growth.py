@@ -72,8 +72,15 @@ BASELINE_LOCAL_SCENARIO_B: Dict[str, Any] = {
     # is supplied but not enforced. Flip enforce_calibrated_band=True after
     # an hpo>5 sweep confirms the calibrated envelope is reachable.
     "auc_band_calibrated": (0.72, 0.78),
-    "auc_band_empirical_hpo5_local": (0.69, 0.74),  # observed 0.7144 ± 0.025
-    "auc_band_empirical_hpo5_ci": (0.69, 0.74),  # placeholder; widen post-CI measurement
+    # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1) holdout enlargement
+    # (test 15%→10%, holdout 5%→10%) reshuffled the keyed-draw split
+    # assignment; CI val_AUC moved 0.7144→0.6269, bit-identical across nightly
+    # runs 30433515459 (07-29) and 30524268029 (07-30). LOCAL (AVX2) re-measured
+    # 2026-07-30, bit-identical across two seeded runs at 0.62687 — coinciding
+    # with CI at 4dp for this regime. Band = observed ±0.025 per the
+    # codex-rescue H1 convention above.
+    "auc_band_empirical_hpo5_local": (0.6019, 0.6519),  # observed 0.6269 ± 0.025 LOCAL (#1311)
+    "auc_band_empirical_hpo5_ci": (0.6019, 0.6519),  # observed 0.6269 ± 0.025 CI (#1311)
     "tolerance_auc_empirical": 0.025,
     "min_perm_p_significant": 0.05,
     "max_train_val_delta": 0.10,  # observed 0.013 — pin tight for regression
@@ -82,11 +89,14 @@ BASELINE_LOCAL_SCENARIO_B: Dict[str, Any] = {
 
 # scenario_c: prev=0.40, n=6000. Calibrated band [0.82, 0.88] from
 # scenarios/scenario_c.py:7.
-# - Local AVX2 hpo=5 measured 0.7829 (0.037 below calibrated band-low).
+# - Local AVX2 hpo=5 measured 0.7829 (0.037 below calibrated band-low) pre-aed06cb7.
 # - CI AVX512 hpo=5 measured 0.8408 (IN calibrated band — landed naturally on CI).
-# Wide local-vs-CI delta (0.058) reflects ISA-level FP divergence at the
-# scenario_c configuration (60 features, prev=0.40, larger discriminator
-# surface area than scenario_b).
+# Re-pinned LOCAL 2026-07-30 (#1311): post-aed06cb7 (#44 plan B1 holdout
+# enlargement, keyed-draw split reshuffle) local re-measured 0.8337,
+# metric-bit-identical across two seeded runs — now IN the calibrated band
+# locally too, and the local-vs-CI ISA delta narrowed 0.058 → 0.007.
+# (enforce_calibrated_band could now flip True symmetrically — owner's call,
+# out of #1311 repair scope.)
 BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
     "regime": "scenario_c",
     # NOT ENFORCED — enforce_calibrated_band=False (codex pass-2 L3). Same
@@ -94,7 +104,7 @@ BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
     # CI 0.8408 is in calibrated band, but keeping False symmetric across
     # local/CI until the local hpo>5 sweep confirms landing locally too.
     "auc_band_calibrated": (0.82, 0.88),
-    "auc_band_empirical_hpo5_local": (0.76, 0.81),  # observed 0.7829 ± 0.025 LOCAL
+    "auc_band_empirical_hpo5_local": (0.8087, 0.8587),  # observed 0.8337 ± 0.025 LOCAL (#1311)
     "auc_band_empirical_hpo5_ci": (0.82, 0.86),  # observed 0.8408 ± 0.025 CI (in calibrated band)
     "tolerance_auc_empirical": 0.025,
     "min_perm_p_significant": 0.05,
@@ -105,13 +115,16 @@ BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
 # scenario_a_balanced: prev=0.50, n=6000.
 # Inherits scenario_a's DGP at 0.50 prevalence. There is NO calibrated band
 # (no biology-derived 9/10-seed sweep) — only an empirical hpo=5 measurement:
-# val_AUC=0.7973, train-val Δ=0.0106, MCC=0.4767 (significantly higher than
-# scenario_a's 0.3355 — balancing lifts MCC by removing the prior-imbalance
-# penalty), perm_p=0.0.
+# pre-aed06cb7 val_AUC=0.7973, train-val Δ=0.0106, MCC=0.4767 (significantly
+# higher than scenario_a's — balancing lifts MCC by removing the
+# prior-imbalance penalty), perm_p=0.0.
+# Re-pinned LOCAL 2026-07-30 (#1311): post-aed06cb7 (#44 plan B1 holdout
+# enlargement, keyed-draw split reshuffle) local re-measured 0.7602,
+# metric-bit-identical across two seeded runs.
 BASELINE_LOCAL_SCENARIO_A_BALANCED: Dict[str, Any] = {
     "regime": "scenario_a_balanced",
     # No calibrated_band — empirical only.
-    "auc_band_empirical_hpo5_local": (0.78, 0.82),  # observed 0.7973 ± 0.02 LOCAL
+    "auc_band_empirical_hpo5_local": (0.7402, 0.7802),  # observed 0.7602 ± 0.02 LOCAL (#1311)
     "auc_band_empirical_hpo5_ci": (0.78, 0.82),  # placeholder; widen post-CI measurement
     "tolerance_auc_empirical": 0.02,
     "min_perm_p_significant": 0.05,

@@ -69,19 +69,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ── LOCAL baseline (Ubuntu local machine, AVX2 CPU, Python 3.12.3) ──────────
-# Re-measured 2026-05-06 with --regime scenario_a (synthetic_v2 β-prime swap).
-# Bit-identical across two local runs (≥6 decimal match, all metrics).
-# ⚠️ business_utility is STALE pre-#761/#760 (measured 2026-05-06): the
-# 2026-06-06 merges shifted the CI value 99.20 → 84.85 (see BASELINE_CI note)
-# and the AVX2-local twin has not been re-measured since. Re-measure locally
-# (two seeded runs) and update in the same commit as the next local run —
+# Re-measured 2026-07-30 (#1311) after aed06cb7 (#44 plan B1) enlarged the
+# goldstd holdout (test 15%→10%, holdout 5%→10%), reshuffling the keyed-draw
+# split assignment. Two seeded local runs (--regime scenario_a --split auto
+# --hpo-trials 5) were bit-identical on every metric (only the run-ID nonce
+# differed). This re-measurement also clears the previously documented STALE
+# pre-#761/#760 business_utility (99.20, measured 2026-05-06).
 # CI (the nightly arbiter) uses BASELINE_CI, not this dict.
 BASELINE_LOCAL = {
-    "roc_auc": 0.7689,  # ±0.01 — val side; calibrated band [0.78, 0.83] is on test
-    "pr_auc": 0.4734,  # ±0.02
-    "brier_score": 0.1811,  # ±0.01
-    "mcc": 0.3355,  # ±0.03
-    "business_utility": 99.20,  # ±0.5 — sign flipped from default regime (real signal)
+    "roc_auc": 0.7838,  # ±0.01 — was 0.7689, re-pinned #1311; val side
+    "pr_auc": 0.5230,  # ±0.02 — was 0.4734, re-pinned #1311
+    "brier_score": 0.1564,  # ±0.01 — was 0.1811, re-pinned #1311
+    "mcc": 0.3633,  # ±0.03 — was 0.3355, re-pinned #1311
+    "business_utility": 104.30,  # ±0.5 — was stale 99.20; re-pinned #1311
 }
 
 # ── CI baseline (GitHub Actions ubuntu-latest, AVX512 CPU, Python 3.12.13) ──
@@ -92,10 +92,17 @@ BASELINE_LOCAL = {
 # still expect ≥6-decimal CI determinism per the same mechanism that pinned
 # the default-regime CI baseline (see memory/pr69_e2e_environment_delta_diag_20260506.md).
 BASELINE_CI = {
-    "roc_auc": 0.7689,  # ±0.01 — placeholder, replace with CI-measured value
-    "pr_auc": 0.4734,  # ±0.02 — placeholder
-    "brier_score": 0.1811,  # ±0.01 — placeholder
-    "mcc": 0.3355,  # ±0.03 — placeholder
+    # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1, merged 2026-07-21)
+    # enlarged the goldstd holdout at the seed quota (test 15%→10%, holdout
+    # 5%→10%), reshuffling the keyed-draw split assignment and deliberately
+    # shifting the whole metric surface. New values reproduced bit-identically
+    # across independent nightly runs 30433515459 (2026-07-29) and
+    # 30524268029 (2026-07-30). brier_score stayed within its ±0.01 band in
+    # both runs (pin unchanged). Tolerance widths unchanged.
+    "roc_auc": 0.8021,  # ±0.01 — was 0.7689, re-pinned #1311
+    "pr_auc": 0.5247,  # ±0.02 — was 0.4734, re-pinned #1311
+    "brier_score": 0.1811,  # ±0.01 — passed both post-aed06cb7 nightlies, unchanged
+    "mcc": 0.3918,  # ±0.03 — was 0.3355, re-pinned #1311
     # Re-pinned 2026-06-12 (#773 W1): PR #761 (67be1cbf) re-routed the LR
     # solver (l2/None saga→lbfgs) + re-tuned severe/extreme non_tree
     # resampling to class_weight, and PR #760 (5a9e3e5b) fixed param-less QC
@@ -107,7 +114,7 @@ BASELINE_CI = {
     # 84.8500 reproduced bit-identically across independent nightly runs
     # 27087062518 (2026-06-07, first red) and 27404434136 (2026-06-12).
     # Tolerance width unchanged (±0.5).
-    "business_utility": 84.85,  # ±0.5 — re-pinned post-#761/#760, see above
+    "business_utility": 90.95,  # ±0.5 — was 84.85; re-pinned #1311 (aed06cb7), see above
 }
 
 # Select the baseline for this environment.

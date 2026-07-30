@@ -148,6 +148,17 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     the follow-up green dispatch on the same branch is the second seeded
     run confirming determinism. Tolerance widths unchanged.
 
+    Rebaselined 2026-07-30 (#1311): aed06cb7 (#44 plan B1, merged
+    2026-07-21) enlarged the goldstd holdout at the seed quota (test
+    15%→10%, holdout 5%→10%). The keyed-draw split assignment reshuffles
+    the whole cohort composition — train/val membership changes too, not
+    just the eval tails — so every metric and the validation-frozen
+    threshold moved (e.g. val recall 0.378 → 0.977 at chosen_threshold
+    0.602 → 0.367). First red nightly 2026-07-22 (run 29901647383).
+    Values below are the FULL faithful surfaces from the _diag output of
+    nightly runs 30433515459 (2026-07-29) and 30524268029 (2026-07-30),
+    bit-identical across both. Tolerance widths unchanged.
+
     Tolerances (S3 fix):
       - AUC and PR-AUC: ±0.005 (deterministic at seed=42 modulo
         sklearn-version drift).
@@ -182,23 +193,23 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
         f"validation_metrics={val} | test_metrics={test} | "
         f"model_usefulness={out.get('model_usefulness')}"
     )
-    # Re-pinned 2026-06-12 (#773 W1): #761/#760 training-path changes + the
-    # W2 fix restoring Step-5b XGBoost alternates (which now WIN the champion
-    # comparison). See the "Rebaselined 2026-06-12" docstring section.
-    # Values measured on slow-tests dispatch run 27443822891.
-    assert val["roc_auc"] == pytest.approx(0.6366, abs=0.005), _diag
-    assert val["pr_auc"] == pytest.approx(0.2735, abs=0.005), _diag
-    assert val["accuracy"] == pytest.approx(0.8000, abs=0.02), _diag
-    assert val["precision"] == pytest.approx(0.3469, abs=0.02), _diag
-    assert val["recall"] == pytest.approx(0.3778, abs=0.02), _diag
-    assert val["f1_score"] == pytest.approx(0.3617, abs=0.02), _diag
+    # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1) holdout
+    # enlargement reshuffled the keyed-draw split assignment. See the
+    # "Rebaselined 2026-07-30" docstring section. Values from the _diag
+    # surfaces of nightly runs 30433515459 + 30524268029 (bit-identical).
+    assert val["roc_auc"] == pytest.approx(0.7347, abs=0.005), _diag
+    assert val["pr_auc"] == pytest.approx(0.3347, abs=0.005), _diag
+    assert val["accuracy"] == pytest.approx(0.5033, abs=0.02), _diag
+    assert val["precision"] == pytest.approx(0.2251, abs=0.02), _diag
+    assert val["recall"] == pytest.approx(0.9773, abs=0.02), _diag
+    assert val["f1_score"] == pytest.approx(0.3660, abs=0.02), _diag
 
-    # Test metrics — re-pinned 2026-06-12 (#773 W1, same dispatch run).
-    assert test["roc_auc"] == pytest.approx(0.7044, abs=0.005), _diag
-    assert test["accuracy"] == pytest.approx(0.7733, abs=0.02), _diag
-    assert test["precision"] == pytest.approx(0.3043, abs=0.02), _diag
-    assert test["recall"] == pytest.approx(0.4242, abs=0.02), _diag
-    assert test["f1_score"] == pytest.approx(0.3544, abs=0.02), _diag
+    # Test metrics — re-pinned 2026-07-30 (#1311, same nightly runs).
+    assert test["roc_auc"] == pytest.approx(0.6577, abs=0.005), _diag
+    assert test["accuracy"] == pytest.approx(0.4667, abs=0.02), _diag
+    assert test["precision"] == pytest.approx(0.1915, abs=0.02), _diag
+    assert test["recall"] == pytest.approx(0.8182, abs=0.02), _diag
+    assert test["f1_score"] == pytest.approx(0.3103, abs=0.02), _diag
 
     # Apr-26 verdict line 18: Step 7 BLOCKED, success_criteria_met False.
     assert out["success_criteria_met"] is False
