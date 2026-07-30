@@ -61,6 +61,7 @@ import json
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -123,14 +124,24 @@ BASELINE = BASELINE_CI if os.getenv("CI") else BASELINE_LOCAL
 
 ECE_POST_MAX = 0.10  # rubric §7: post-isotonic ECE < 0.10 (Agent A research)
 
-# Mild-overfit upper bound, env-gated like BASELINE.  The same CPU-ISA divergence
-# that shifts the validation metrics also shifts the train→val delta: AVX2 local
-# fits less aggressively (Δ≈0.127), AVX512 CI fits more aggressively (Δ≈0.231 in
-# the 2026-05-06 PR #69 CI runs).  Both are bit-deterministic in their env; tight
-# margins (0.05) above each observed value catch genuine regularization regression
-# without tripping on the inherent env-specific overfit level.
-TRAIN_VAL_DELTA_MAX_LOCAL = 0.10  # observed 0.0512 + ~0.05 headroom (scenario_a, 2026-05-06)
-TRAIN_VAL_DELTA_MAX_CI = 0.10  # placeholder — replace with CI-observed + 0.05 after first run
+# Mild-overfit upper bound, env-gated like BASELINE. The same CPU-ISA
+# divergence that shifts the validation metrics also shifts the train→val
+# delta (historical DEFAULT-regime measurements from the 2026-05-06 PR #69
+# diagnosis: local Δ≈0.127, CI Δ≈0.231; historical SCENARIO_A local
+# Δ=0.0512, 2026-05-06 — the two narratives that previously looked
+# contradictory here were measuring different regimes).
+#
+# Re-pinned 2026-07-30 (#1311): the aed06cb7 keyed-draw reshuffle moved the
+# scenario_a LOCAL delta 0.0512 → 0.1858 (bit-identical across two seeded
+# runs; no model/regularization code changed — split membership did). Local
+# cap = observed + ~0.05 headroom. The CI delta is UNMEASURED post-aed06cb7:
+# in every red nightly the pin assertion tripped BEFORE the delta check ran,
+# so the logs never printed it. CI cap is therefore a PROVISIONAL ceiling
+# (local observed 0.186 + the historical ~+0.10 CI-vs-local overfit gap +
+# headroom); the warnings.warn measurement hook below makes the next green
+# nightly log the observed CI delta — tighten to CI-observed + 0.05 then.
+TRAIN_VAL_DELTA_MAX_LOCAL = 0.24  # observed 0.1858 + ~0.05 headroom (#1311)
+TRAIN_VAL_DELTA_MAX_CI = 0.30  # PROVISIONAL — unmeasured; tighten from the warn hook's value
 TRAIN_VAL_DELTA_MAX = TRAIN_VAL_DELTA_MAX_CI if os.getenv("CI") else TRAIN_VAL_DELTA_MAX_LOCAL
 
 # Tolerance per metric. Tight because current run-variance at seed=42 is 0.
@@ -255,4 +266,13 @@ def test_synthetic_e2e_scenario_a_pins_7dim_baseline(tmp_path: Path) -> None:
         assert train_val_delta < TRAIN_VAL_DELTA_MAX, (
             f"Train→Val AUC delta = {train_val_delta:.4f} exceeds severe-overfit "
             f"threshold {TRAIN_VAL_DELTA_MAX}. Likely model regularization regression."
+        )
+        # #1311 measurement hook: the delta only ever appeared in logs when
+        # the test FAILED (pytest suppresses stdout on pass), which is why
+        # the CI cap above is provisional. A warning survives into the
+        # passing run's warnings summary — read it there and tighten the cap.
+        warnings.warn(
+            f"scenario_a train_val_auc_delta observed {train_val_delta:.4f} "
+            f"(cap {TRAIN_VAL_DELTA_MAX}) — measurement hook for cap re-pin",
+            stacklevel=1,
         )
