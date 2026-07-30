@@ -245,11 +245,14 @@ def _assert_scenario_metrics(
     ``auc_band_calibrated`` would silently land without test signal.
 
     The default mode is "empirical" — we assert the val_AUC lands within
-    ``empirical_band`` directly. The stored band already embeds
-    ``± tolerance_empirical`` around the measured hpo=5 value (the parameter
-    is retained for failure-message provenance only; #1311 codex iter-1
+    ``empirical_band`` directly. MEASURED bands embed
+    ``± tolerance_empirical`` around the observed hpo=5 value; the two
+    UNMEASURED CI bands (scenario_c, a_balanced — their tests pass in CI so
+    no value is ever logged) instead preserve the prior effective gate
+    width, per their own comments. The ``tolerance_empirical`` parameter is
+    retained for failure-message provenance only; #1311 codex iter-1
     finding 2 removed the second expansion that doubled the effective
-    width). When ``enforce_calibrated_band=True``, we also
+    width. When ``enforce_calibrated_band=True``, we also
     assert the val_AUC lands within ``calibrated_band`` exactly (no
     tolerance) — for cases where the calibrated regression must pass.
 
@@ -268,15 +271,18 @@ def _assert_scenario_metrics(
     assert val_auc is not None, f"{regime}: validation_metrics.roc_auc missing"
 
     # Empirical band is the primary regression gate. The stored band IS the
-    # gate — it already embeds the ± tolerance around the measured value
-    # (codex-rescue H1 convention), so it is asserted directly. #1311 codex
-    # iter-1 finding 2: the helper previously expanded the band by
+    # gate, asserted directly: measured bands embed ± tolerance around the
+    # observed value (codex-rescue H1 convention); the two unmeasured CI
+    # bands preserve the prior effective width (see their comments). #1311
+    # codex iter-1 finding 2: the helper previously expanded the band by
     # ± tolerance AGAIN, doubling the effective width and weakening the gate.
     emp_low, emp_high = empirical_band
     assert emp_low <= val_auc <= emp_high, (
         f"{regime}: val_AUC {val_auc:.4f} outside empirical hpo=5 band "
         f"[{emp_low:.4f}, {emp_high:.4f}] "
-        f"(band embeds ±{tolerance_empirical} around the measured value)"
+        f"(measured bands embed ±{tolerance_empirical} around the observed "
+        f"value; unmeasured CI bands preserve the prior effective width — "
+        f"see the band's own comment)"
     )
 
     # Calibrated band (optional) — strict no-tolerance check for biology-

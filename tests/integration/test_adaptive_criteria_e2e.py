@@ -176,12 +176,15 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     assert out["regime"] == "default"
     assert out["criteria_source"] == "fixed"
 
-    # Validation metrics — rebaselined 2026-06-06: Tier-0 leakage over-drop
-    # remediation (RC1 732059a2 / Fix4 5f7c589e / RC3a 8f0eb68b, PRs
-    # #729/#731/#733) now RETAINS the genuine sparse pre-index predictors
-    # (days_on_therapy / prior_treatments / hcp_visits) on the rare-event
-    # synthetic cohort. See the "Rebaselined 2026-06-06" docstring section.
-    # Values are the bit-identical two-seeded-run measurement (seed=42).
+    # Validation metrics provenance: first rebaselined 2026-06-06 (Tier-0
+    # leakage over-drop remediation, RC1 732059a2 / Fix4 5f7c589e / RC3a
+    # 8f0eb68b, PRs #729/#731/#733 — RETAINS the genuine sparse pre-index
+    # predictors days_on_therapy / prior_treatments / hcp_visits on the
+    # rare-event synthetic cohort). Re-pinned 2026-07-30 (#1311) after
+    # aed06cb7 (#44 plan B1) enlarged the goldstd holdout and reshuffled the
+    # keyed-draw split: the pins below are the CI nightly values
+    # (bit-identical across runs 30433515459 and 30524268029) —
+    # CI-authoritative; this box cannot run the flag-off test faithfully.
     val = out["validation_metrics"]
     test = out["test_metrics"]
     # #773: emit the FULL realized metric surface in every assertion message

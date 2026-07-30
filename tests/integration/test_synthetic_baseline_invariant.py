@@ -85,12 +85,12 @@ BASELINE_LOCAL = {
 }
 
 # ── CI baseline (GitHub Actions ubuntu-latest, AVX512 CPU, Python 3.12.13) ──
-# Pre-measurement placeholder — initialized to LOCAL values. Will be replaced
-# with CI-bit-deterministic measurements from the first slow-tests run on
-# feat/tier0-scenario-a-fixture (PR #TBD). The CPU-ISA divergence (AVX2 local
-# vs AVX512 CI) shifts metrics at the floating-point instruction level; we
-# still expect ≥6-decimal CI determinism per the same mechanism that pinned
-# the default-regime CI baseline (see memory/pr69_e2e_environment_delta_diag_20260506.md).
+# MEASURED from CI nightly logs (no longer the pre-measurement placeholder
+# this block once was — #1311 codex iter-2). The CPU-ISA divergence (AVX2
+# local vs AVX512 CI) shifts metrics at the floating-point instruction level;
+# CI values reproduce with ≥6-decimal determinism per the same mechanism that
+# pinned the default-regime CI baseline
+# (see memory/pr69_e2e_environment_delta_diag_20260506.md).
 BASELINE_CI = {
     # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1, merged 2026-07-21)
     # enlarged the goldstd holdout at the seed quota (test 15%→10%, holdout
