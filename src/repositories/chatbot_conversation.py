@@ -98,15 +98,24 @@ class ChatbotConversationRepository(BaseRepository):
         if not self.client:
             return None
 
+        # Use ``.limit(1)`` rather than ``.single()``: PostgREST's ``single()``
+        # raises ``APIError`` PGRST116 ("Cannot coerce the result to a single
+        # JSON object") on zero rows, which broke this method's documented
+        # "or None" contract. That raise made ``chatbot_graph.init_node``'s
+        # bootstrap abort before creating the parent ``chatbot_conversations``
+        # row, so ``/chat/stream`` turns FK-violated on ``chatbot_messages``
+        # (#1335). ``.limit(1)`` returns ``data == []`` on no match. Matches the
+        # AG-UI surface's ``_ensure_conversation_exists`` pattern.
         result = await (
             self.client.table(self.table_name)
             .select("*")
             .eq("session_id", session_id)
-            .single()
+            .limit(1)
             .execute()
         )
 
-        return self._to_model(result.data) if result.data else None
+        rows = result.data or []
+        return self._to_model(rows[0]) if rows else None
 
     async def get_user_conversations(
         self,
