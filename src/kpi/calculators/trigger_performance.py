@@ -10,6 +10,13 @@ Implements calculators for trigger performance metrics:
 - Override Rate
 - Lead Time
 - Change-Fail Rate (CFR)
+- Trigger Funnel Conversion (#1360)
+
+#1360 (2026-07-30 ruling): the four trigger-effectiveness KPIs — precision
+(WS2-TR-001), acceptance rate (WS2-TR-004), override rate (WS2-TR-006) and
+funnel conversion (WS2-TR-009) — are chat-KPI-path KPIs and additionally bind
+``trigger_type`` and explicit ``window`` axes through the migration-118
+``trigger_effectiveness_*`` statement families (see :meth:`_effectiveness_scoped`).
 """
 
 from typing import Any
@@ -26,6 +33,7 @@ from src.kpi.synthetic_mode import (
     brand_scoped_query_id,
     region_query_id,
     resolve_kpi_query_id,
+    trigger_effectiveness_query_id,
 )
 
 
@@ -74,6 +82,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
             "WS2-TR-006": self._calc_override_rate,
             "WS2-TR-007": self._calc_lead_time,
             "WS2-TR-008": self._calc_change_fail_rate,
+            "WS2-TR-009": self._calc_funnel_conversion,
         }
 
         calc_func = calculator_map.get(kpi.id)
@@ -144,13 +153,78 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
             return region_query_id(base_query_id), [region]
         return base_query_id, []
 
+    @staticmethod
+    def _effectiveness_scoped(metric: str, context: dict[str, Any]) -> tuple[str, list[Any]]:
+        """Route a trigger-effectiveness ask to the migration-118 family (#1360).
+
+        Only called when the ask carries a NEW axis (``trigger_type`` and/or
+        ``window``) that the legacy 044/078/113 variants cannot bind — the
+        certified legacy routing in :meth:`_scoped` stays byte-identical
+        otherwise. Param order is the migration's declared contract:
+
+        * no window  -> ``trigger_effectiveness_{metric}``,
+          ``[brand, region, trigger_type]`` — all nullable (NULL = no filter).
+        * window     -> ``trigger_effectiveness_{metric}_windowed``,
+          ``[brand, trigger_type, start, end]`` (half-open ``[start, end)`` on
+          ``trigger_timestamp``). Region can NOT also bind — the kpi_query RPC
+          caps at 4 positional params — so region+window FAILS CLOSED here
+          rather than silently dropping the region (the dead-'territory'-key
+          lesson: a filter the response echoes but the SQL never applied).
+        """
+        brand = context.get("brand")
+        region = context.get("region")
+        trigger_type = context.get("trigger_type")
+        window = context.get("window")
+        if window is not None:
+            if region:
+                raise RuntimeError(
+                    "trigger-effectiveness KPIs cannot combine a region filter "
+                    "with an explicit time window (the kpi_query RPC binds at "
+                    "most 4 positional params — migration 118); drop the window "
+                    "or the region filter"
+                )
+            return (
+                trigger_effectiveness_query_id(metric, windowed=True),
+                [brand, trigger_type, window["start"], window["end"]],
+            )
+        return (
+            trigger_effectiveness_query_id(metric, windowed=False),
+            [brand, region, trigger_type],
+        )
+
+    @staticmethod
+    def _stash_data_through(context: dict[str, Any], result: list[dict[str, Any]] | None) -> None:
+        """Surface the row's ``data_through`` provenance into the per-call context.
+
+        Mirrors ``BusinessImpactCalculator._stash_data_through``: the
+        frontier-anchored migration-118 rows report the as-of date their window
+        ends at; ``calculate()`` embeds the context in ``KPIResult.metadata`` so
+        the chatbot cites the real period instead of implying wall-clock
+        recency. Rows without the column (``*_windowed*`` forms — the window is
+        explicit) leave the key absent: honest absence, never a fabricated date.
+        """
+        if result and isinstance(result[0], dict) and result[0].get("data_through") is not None:
+            context["data_through"] = result[0]["data_through"]
+
+    @staticmethod
+    def _wants_effectiveness(context: dict[str, Any]) -> bool:
+        """True when the ask carries an axis only the 118 family can bind."""
+        return bool(context.get("trigger_type") or context.get("window"))
+
     def _calc_trigger_precision(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-001: Trigger Precision.
 
-        Percentage of fired triggers resulting in positive outcome.
+        Percentage of fired triggers resulting in positive outcome. With a
+        ``trigger_type`` or explicit ``window`` in the ask, routes to the
+        migration-118 effectiveness family (#1360); otherwise the certified
+        legacy routing is untouched.
         """
-        query_id, params = self._scoped("trigger_performance_precision", context)
+        if self._wants_effectiveness(context):
+            query_id, params = self._effectiveness_scoped("precision", context)
+        else:
+            query_id, params = self._scoped("trigger_performance_precision", context)
         result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
         if result and result[0].get("precision") is not None:
             return float(result[0]["precision"])
         raise RuntimeError("KPI WS2-TR-001 unavailable: no data for trigger precision")
@@ -201,10 +275,16 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
     def _calc_acceptance_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-004: Acceptance Rate.
 
-        Percentage of delivered triggers accepted by reps.
+        Percentage of delivered triggers accepted by reps. With a
+        ``trigger_type`` or explicit ``window``, routes to the migration-118
+        effectiveness family (#1360).
         """
-        query_id, params = self._scoped("trigger_performance_acceptance_rate", context)
+        if self._wants_effectiveness(context):
+            query_id, params = self._effectiveness_scoped("acceptance_rate", context)
+        else:
+            query_id, params = self._scoped("trigger_performance_acceptance_rate", context)
         result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
         if result and result[0].get("acceptance_rate") is not None:
             return float(result[0]["acceptance_rate"])
         raise RuntimeError("KPI WS2-TR-004 unavailable: no data for acceptance rate")
@@ -224,11 +304,16 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
     def _calc_override_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-006: Override Rate.
 
-        Percentage of triggers overridden by users.
-        Lower is better.
+        Percentage of triggers overridden by users. Lower is better. With a
+        ``trigger_type`` or explicit ``window``, routes to the migration-118
+        effectiveness family (#1360).
         """
-        query_id, params = self._scoped("trigger_performance_override_rate", context)
+        if self._wants_effectiveness(context):
+            query_id, params = self._effectiveness_scoped("override_rate", context)
+        else:
+            query_id, params = self._scoped("trigger_performance_override_rate", context)
         result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
         if result and result[0].get("override_rate") is not None:
             return float(result[0]["override_rate"])
         raise RuntimeError("KPI WS2-TR-006 unavailable: no data for override rate")
@@ -256,6 +341,36 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         if result and result[0].get("cfr") is not None:
             return float(result[0]["cfr"])
         raise RuntimeError("KPI WS2-TR-008 unavailable: no data for change-fail rate")
+
+    def _calc_funnel_conversion(self, context: dict[str, Any]) -> float:
+        """Calculate WS2-TR-009: Trigger Funnel Conversion (#1360, migration 118).
+
+        Headline = actioned share of DELIVERED triggers (delivery_status IN
+        ('delivered','viewed') -> accepted -> action_taken). The full stage
+        counts (delivered -> viewed -> accepted -> actioned -> outcome) are
+        stashed into ``context["funnel_stages"]`` so the chat layer can surface
+        the whole funnel alongside the headline. The headline deliberately
+        STOPS at actioned — extending it to outcome would conflate
+        outcome-TRACKING coverage with effectiveness (the v1 precision trap,
+        migration 113). ``n_viewed`` is informational: delivery_status is a
+        progression state, so viewed is not monotone with accepted.
+        """
+        query_id, params = self._effectiveness_scoped("funnel_conversion", context)
+        result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
+        if result and result[0].get("funnel_conversion") is not None:
+            row = result[0]
+            context["funnel_stages"] = {
+                "delivered": row.get("n_delivered"),
+                "viewed": row.get("n_viewed"),
+                "accepted": row.get("n_accepted"),
+                "actioned": row.get("n_actioned"),
+                "outcome": row.get("n_outcome"),
+            }
+            return float(row["funnel_conversion"])
+        raise RuntimeError(
+            "KPI WS2-TR-009 unavailable: no delivered triggers in the window for funnel conversion"
+        )
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a vetted KPI query via the kpi_query allowlist RPC.

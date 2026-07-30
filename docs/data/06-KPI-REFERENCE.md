@@ -1,12 +1,12 @@
 # KPI Reference
 
-**Version**: 3.1.0 | **Last Updated**: 2026-07-18 | **Calculable KPIs**: 44 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
+**Version**: 3.2.0 | **Last Updated**: 2026-07-30 | **Calculable KPIs**: 45 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
 
 ---
 
 **Navigation**: [Architecture](../ARCHITECTURE.md) | [Onboarding](../ONBOARDING.md) | [Data Templates](templates/README.md)
 
-**Jump to workstream**: [WS1 Data Quality](#ws1-data-coverage--quality-9-kpis) | [WS1 Model Performance](#ws1-model-performance-9-kpis) | [WS2 Triggers](#ws2-trigger-performance-8-kpis) | [WS3 Business](#ws3-business-impact-10-kpis) | [Brand-Specific](#brand-specific-5-kpis) | [Causal Metrics](#causal-metrics-5-kpis)
+**Jump to workstream**: [WS1 Data Quality](#ws1-data-coverage--quality-9-kpis) | [WS1 Model Performance](#ws1-model-performance-9-kpis) | [WS2 Triggers](#ws2-trigger-performance-9-kpis) | [WS3 Business](#ws3-business-impact-10-kpis) | [Brand-Specific](#brand-specific-5-kpis) | [Causal Metrics](#causal-metrics-5-kpis)
 
 **Reference sections**: [Time Windows & Dimension Axes](#time-windows--dimension-axes-july-2026-engine) | [Threshold Interpretation](#threshold-interpretation-guide) | [Helper Views](#helper-views) | [KPI Data Flow](#kpi-data-flow)
 
@@ -16,7 +16,7 @@
 
 ## Summary Table
 
-All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row 8) retained as **decommissioned** (#1068, T8 — see their sections below). See the detailed sections for full definitions, source tables, and calculation logic.
+All 45 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row 8) retained as **decommissioned** (#1068, T8 — see their sections below). See the detailed sections for full definitions, source tables, and calculation logic.
 
 | # | ID | Name | Workstream | Formula | Target | Warning | Critical | Freq |
 |---|-----|------|-----------|---------|--------|---------|----------|------|
@@ -46,26 +46,27 @@ All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row
 | 24 | WS2-TR-006 | Override Rate | WS2 TR | `overridden / delivered` | 0.15 | 0.25 | 0.40 | Daily |
 | 25 | WS2-TR-007 | Lead Time | WS2 TR | `median(outcome - trigger)` | 14 days | 21 days | 30 days | Weekly |
 | 26 | WS2-TR-008 | Change-Fail Rate (CFR) | WS2 TR | `change_failed / changed` | 0.10 | 0.20 | 0.30 | Weekly |
-| 27 | WS3-BI-001 | Monthly Active Users (MAU) | WS3 BI | `count(distinct user_id) 30d` | 2000 | 1500 | 1000 | Daily |
-| 28 | WS3-BI-002 | Weekly Active Users (WAU) | WS3 BI | `count(distinct user_id) 7d` | 1200 | 900 | 600 | Daily |
-| 29 | WS3-BI-003 | Patient Touch Rate | WS3 BI | `touched / eligible` | 0.40 | 0.30 | 0.20 | Weekly |
-| 30 | WS3-BI-004 | HCP Coverage | WS3 BI | `covered / priority_hcps` | 0.75 | 0.60 | 0.45 | Weekly |
-| 31 | WS3-BI-005 | Total Prescriptions (TRx) | WS3 BI | `count(rx)` | -- | -- | -- | Daily |
-| 32 | WS3-BI-006 | New Prescriptions (NRx) | WS3 BI | `count(first_rx)` | -- | -- | -- | Daily |
-| 33 | WS3-BI-007 | New-to-Brand Rx (NBRx) | WS3 BI | `count(first_brand_rx)` | -- | -- | -- | Daily |
-| 34 | WS3-BI-008 | TRx Share | WS3 BI | `brand_trx / category_trx` | 0.30 | 0.20 | 0.10 | Weekly |
-| 35 | WS3-BI-009 | Conversion Rate | WS3 BI | `rx_after_trigger / triggers` | 0.08 | 0.05 | 0.02 | Weekly |
-| 36 | WS3-BI-010 | Return on Investment | WS3 BI | `value / cost` | 3.0x | 2.0x | 1.0x | Monthly |
-| 37 | BR-001 | Remi - AH Uncontrolled % | Brand | `uncontrolled / ah_patients` | 0.40 | 0.50 | 0.60 | Weekly |
-| 38 | BR-002 | Remi - Intent-to-Prescribe d | Brand | `post_intent - pre_intent` | 0.5 | 0.3 | 0.0 | Monthly |
-| 39 | BR-003 | Fabhalta - % PNH Tested | Brand | `pnh_tested / eligible` | 0.60 | 0.45 | 0.30 | Weekly |
-| 40 | BR-004 | Kisqali - Dx Adoption | Brand | `median(first_rx - dx)` | 30 days | 45 days | 60 days | Weekly |
-| 41 | BR-005 | Kisqali - Oncologist Reach | Brand | `engaged / total_onc` | 0.70 | 0.55 | 0.40 | Weekly |
-| 42 | CM-001 | Average Treatment Effect (ATE) | Causal | `E[Y(1) - Y(0)]` | -- | -- | -- | Weekly |
-| 43 | CM-002 | Conditional ATE (CATE) | Causal | `E[Y(1) - Y(0) \| X=x]` | -- | -- | -- | Weekly |
-| 44 | CM-003 | Causal Impact | Causal | `causal_effect_size` | -- | -- | -- | On demand |
-| 45 | CM-004 | Counterfactual Outcome | Causal | `E[Y(a') \| do(A=a), X]` | -- | -- | -- | On demand |
-| 46 | CM-005 | Mediation Effect | Causal | `indirect / total` | -- | -- | -- | On demand |
+| 27 | WS2-TR-009 | Trigger Funnel Conversion | WS2 TR | `actioned / delivered` | -- | -- | -- | Daily |
+| 28 | WS3-BI-001 | Monthly Active Users (MAU) | WS3 BI | `count(distinct user_id) 30d` | 2000 | 1500 | 1000 | Daily |
+| 29 | WS3-BI-002 | Weekly Active Users (WAU) | WS3 BI | `count(distinct user_id) 7d` | 1200 | 900 | 600 | Daily |
+| 30 | WS3-BI-003 | Patient Touch Rate | WS3 BI | `touched / eligible` | 0.40 | 0.30 | 0.20 | Weekly |
+| 31 | WS3-BI-004 | HCP Coverage | WS3 BI | `covered / priority_hcps` | 0.75 | 0.60 | 0.45 | Weekly |
+| 32 | WS3-BI-005 | Total Prescriptions (TRx) | WS3 BI | `count(rx)` | -- | -- | -- | Daily |
+| 33 | WS3-BI-006 | New Prescriptions (NRx) | WS3 BI | `count(first_rx)` | -- | -- | -- | Daily |
+| 34 | WS3-BI-007 | New-to-Brand Rx (NBRx) | WS3 BI | `count(first_brand_rx)` | -- | -- | -- | Daily |
+| 35 | WS3-BI-008 | TRx Share | WS3 BI | `brand_trx / category_trx` | 0.30 | 0.20 | 0.10 | Weekly |
+| 36 | WS3-BI-009 | Conversion Rate | WS3 BI | `rx_after_trigger / triggers` | 0.08 | 0.05 | 0.02 | Weekly |
+| 37 | WS3-BI-010 | Return on Investment | WS3 BI | `value / cost` | 3.0x | 2.0x | 1.0x | Monthly |
+| 38 | BR-001 | Remi - AH Uncontrolled % | Brand | `uncontrolled / ah_patients` | 0.40 | 0.50 | 0.60 | Weekly |
+| 39 | BR-002 | Remi - Intent-to-Prescribe d | Brand | `post_intent - pre_intent` | 0.5 | 0.3 | 0.0 | Monthly |
+| 40 | BR-003 | Fabhalta - % PNH Tested | Brand | `pnh_tested / eligible` | 0.60 | 0.45 | 0.30 | Weekly |
+| 41 | BR-004 | Kisqali - Dx Adoption | Brand | `median(first_rx - dx)` | 30 days | 45 days | 60 days | Weekly |
+| 42 | BR-005 | Kisqali - Oncologist Reach | Brand | `engaged / total_onc` | 0.70 | 0.55 | 0.40 | Weekly |
+| 43 | CM-001 | Average Treatment Effect (ATE) | Causal | `E[Y(1) - Y(0)]` | -- | -- | -- | Weekly |
+| 44 | CM-002 | Conditional ATE (CATE) | Causal | `E[Y(1) - Y(0) \| X=x]` | -- | -- | -- | Weekly |
+| 45 | CM-003 | Causal Impact | Causal | `causal_effect_size` | -- | -- | -- | On demand |
+| 46 | CM-004 | Counterfactual Outcome | Causal | `E[Y(a') \| do(A=a), X]` | -- | -- | -- | On demand |
+| 47 | CM-005 | Mediation Effect | Causal | `indirect / total` | -- | -- | -- | On demand |
 
 "--" indicates volume or effect-size metrics without fixed thresholds.
 
@@ -737,7 +738,7 @@ The `calculate_psi` utility in `src/kpi/calculators/model_performance.py` bins d
 
 ---
 
-## WS2: Trigger Performance (8 KPIs)
+## WS2: Trigger Performance (9 KPIs)
 
 These KPIs evaluate the quality and effectiveness of engagement triggers sent to sales representatives. They track precision, recall, uplift, acceptance, and failure rates.
 
@@ -936,6 +937,29 @@ High override rates indicate triggers that do not align with rep judgment and ma
 **Note**: V3 schema addition. Uses new change tracking fields in the `triggers` table to identify when a modified trigger performed worse than its predecessor.
 
 **Calculator**: `TriggerPerformanceCalculator._calc_change_fail_rate`
+
+---
+
+### WS2-TR-009: Trigger Funnel Conversion
+
+| Field | Value |
+|-------|-------|
+| **ID** | `WS2-TR-009` |
+| **Name** | Trigger Funnel Conversion |
+| **Definition** | Share of delivered triggers that were accepted and actioned by the field (full funnel stage counts surfaced alongside) |
+| **Formula** | `count(delivered AND accepted AND actioned) / count(delivered)` |
+| **Calculation Type** | Derived |
+| **Direction** | Higher is better |
+| **Unit** | Ratio (0.0 - 1.0) |
+| **Frequency** | Daily |
+| **Source Tables** | `triggers` |
+| **Source Columns** | `triggers.delivery_status`, `triggers.acceptance_status`, `triggers.action_taken`, `triggers.outcome_tracked`, `triggers.outcome_value` |
+| **Helper View** | None |
+| **Target** | — (informational until a target is ratified) |
+
+**Note**: Added by the #1360 ruling (2026-07-30) — trigger-effectiveness KPIs are chat-KPI-path, served by `kpi_calculate_tool` over the migration-118 `trigger_effectiveness_funnel_conversion` statements. The response carries the full stage counts (`funnel_stages`: delivered → viewed → accepted → actioned → outcome). The headline deliberately stops at **actioned** — the outcome stage reflects outcome-*tracking* coverage, not effectiveness (the v1 trigger-precision trap; see WS2-TR-001) — and `viewed` is a `delivery_status` progression state, not a funnel prerequisite for acceptance. "Delivered" follows the migration-090/092 convention: `delivery_status IN ('delivered', 'viewed')`. Accepts `brand` / `region` / `trigger_type` filters and an explicit time window (region and window are mutually exclusive — the RPC binds at most 4 positional params).
+
+**Calculator**: `TriggerPerformanceCalculator._calc_funnel_conversion`
 
 ---
 
@@ -1523,6 +1547,7 @@ The following KPIs do not have thresholds. They are tracked for trend analysis, 
 
 - **Volume metrics**: WS3-BI-005 (TRx), WS3-BI-006 (NRx), WS3-BI-007 (NBRx)
 - **Causal metrics**: CM-001 (ATE), CM-002 (CATE), CM-003 (Causal Impact), CM-004 (Counterfactual), CM-005 (Mediation)
+- **New KPIs pending a ratified target**: WS2-TR-009 (Trigger Funnel Conversion, #1360)
 
 These KPIs report status `informational` when a value is available: "no target
 by design" is a deliberate product decision, distinct from `unknown` (which is

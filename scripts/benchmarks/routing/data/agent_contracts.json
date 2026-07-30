@@ -6,7 +6,8 @@
     "boundary_notes": [
       "health_score vs drift_monitor: the prior 'health_score = NOT ML-model quality' premise is WRONG. health_score HAS a model-health dimension (model_health.py + ModelMetrics accuracy/precision/recall/f1/auc) - it scores whether deployed models are performing acceptably RIGHT NOW against fixed thresholds (point-in-time operational snapshot). drift_monitor owns TEMPORAL/DISTRIBUTIONAL SHIFT vs a baseline (PSI/KS/chi-square on prediction distributions, concept drift, causal-DAG structural drift). Router keyword split proves it: 'model.*perform'->system_health(health_score), 'model.*degrad'->drift_check(drift_monitor). Practical reviewer rule: 'is model X healthy / what's its accuracy' = health_score; 'has model X drifted/degraded/PSI/distribution-shift over time' = drift_monitor.",
       "All FOUR agents ARE wired into INTENT_TO_AGENTS and reachable from intent_classifier keyword patterns - the 'believed UNMAPPED' premise is FALSE for every one of them. drift_check->drift_monitor (critical/10s), system_health->health_score (critical/5s), resource_allocation->resource_optimizer (critical/20s, plus 'high' in the performance_gap+resource_allocation multi-agent pattern), feedback->feedback_learner (critical/30s). CONTRACT_VALIDATION.md exists for all four.",
-      "'Unmapped agents' in #1337 means unmapped in the 4-stage classifier's DOMAIN_TO_AGENT (8 domains only, pattern_selector.py:26-38): resource_optimizer, health_score, feedback_learner, experiment_monitor have no classifier Domain. ALL 14 chat agents ARE reachable via the legacy router INTENT_TO_AGENTS - the gap is classifier coverage, not prod reachability."
+      "'Unmapped agents' in #1337 means unmapped in the 4-stage classifier's DOMAIN_TO_AGENT (8 domains only, pattern_selector.py:26-38): resource_optimizer, health_score, feedback_learner, experiment_monitor have no classifier Domain. ALL 14 chat agents ARE reachable via the legacy router INTENT_TO_AGENTS - the gap is classifier coverage, not prod reachability.",
+      "#1360 RULING (2026-07-30, owner-decided): trigger-effectiveness KPIs — trigger precision (WS2-TR-001), acceptance rate (WS2-TR-004), override rate (WS2-TR-006), trigger funnel conversion (WS2-TR-009) — live in the CHAT KPI PATH: registered in kpi_query_registry (migration 118) and served by kpi_calculate_tool (src/api/routes/chatbot_tools.py), resolvable by name via the KPI-vocabulary aliases. At the routing level the owning single-agent route is EXPLAINER (the KPI catch-all serving the chat KPI path) — NOT health_score (its model_health is deployed-model telemetry; a business-program funnel metric would stretch its snapshot identity) and NOT experiment_monitor (its 'triggers' are interim-ANALYSIS triggers of a running experiment, a different concept). The five gold rows bench-0024/0211/0212/0213/0214 carry this ruling."
     ]
   },
   "agents": {
@@ -251,7 +252,8 @@
         "DESIGNING a new experiment, sample-size / power calc, validity audit → experiment_designer",
         "Forecasting / ML predictions → prediction_synthesizer",
         "Broad system/model health (not experiment-specific) → health_score",
-        "Data/model drift outside an experiment context → drift_monitor"
+        "Data/model drift outside an experiment context → drift_monitor",
+        "NBA/field trigger-effectiveness KPIs (precision, acceptance rate, override rate, funnel over the triggers table) -> chat KPI path / explainer (#1360 ruling; this agent's 'triggers' are interim-ANALYSIS triggers of a running experiment, not field NBA triggers)"
       ],
       "internal_pipeline": "audit_init → health_checker (health + enrollment + stale-data) → srm_detector (chi-squared SRM) → interim_analyzer → fidelity_checker (twin fidelity) → alert_generator → END; deterministic, no LLM; one SINGLE_AGENT dispatch",
       "dispatch": "IS WIRED — intent key 'experiment_monitor' → experiment_monitor, priority=critical, timeout=15000ms, fallback=None (router.py:149-158); classifier ranks it as the MOST-SPECIFIC experiment intent above experiment_design (intent_classifier.py:143,252-258). NOT unmapped. Not discovery-aware.",
@@ -313,7 +315,8 @@
       "does_not_cover": [
         "Has anything DRIFTED / shifted / degraded relative to a baseline over time (PSI, KS, prediction-distribution shift, concept/structural drift) -> drift_monitor",
         "Experiment/trial health (SRM, interim, enrollment) -> experiment_monitor",
-        "Why a specific model/metric is bad (root-cause) -> drift_monitor / explainer"
+        "Why a specific model/metric is bad (root-cause) -> drift_monitor / explainer",
+        "Trigger-effectiveness BUSINESS KPIs (trigger precision / acceptance / override / funnel over the NBA triggers program) -> chat KPI path via kpi_calculate_tool, explainer route (#1360 ruling; model_health 'precision' is deployed-model telemetry — a different thing)"
       ],
       "internal_pipeline": "Full: audit_init -> component -> model -> pipeline -> agent -> compose -> END. Quick variant: audit_init -> component -> compose -> END. No LLM; each dimension fail-CLOSED (unmeasured -> excluded, never fabricated 1.0).",
       "dispatch": "INTENT_TO_AGENTS['system_health'] -> health_score, priority=critical, timeout 5s, no fallback (router.py:122-129). Reachable: intent_classifier 'system_health' patterns 'system.*(health|status)|model.*perform|pipeline.*status' (intent_classifier.py:238-241).",
@@ -403,7 +406,8 @@
         "Explain / summarize / interpret these analysis results in plain language (narrative | structured | presentation | brief)",
         "Tailor an explanation to an audience (executive / analyst / data_scientist)",
         "Extract findings/recommendations/warnings/opportunities + suggest visuals + follow-up questions from provided results",
-        "Catch-all narration for general/unclassified queries (default dispatch)"
+        "Catch-all narration for general/unclassified queries (default dispatch)",
+        "Trigger-effectiveness KPI asks — trigger precision, acceptance rate, override rate, trigger funnel conversion (#1360 ruling: chat-KPI-path via kpi_calculate_tool + migration-118 kpi_query_registry statements; explainer is the owning single-agent route as the KPI catch-all)"
       ],
       "does_not_cover": [
         "Producing the underlying causal effect estimate -> owned by causal_impact (explainer only narrates its output)",

@@ -6,11 +6,13 @@ PR #1068 removed WS1-MP-008 ("Fairness Gap (ΔRecall)") from the registry and th
 gold-standard scorer — it needs protected-group ``fairness_metrics`` the synthetic
 substrate does not populate. T8 then removed WS1-DQ-008 ("Label Quality (IAA)") by
 product decision — a *working* metric (corpus Fleiss κ ≈ 0.76) that the user chose
-to drop from the live KPI set. The framework therefore defines **44** calculable
-KPIs, not 45 (and not the original 46). Each removal left a tail of stale count
-prose ("46 KPIs", "45 KPIs", "45/45 MAPPED") across unrelated subsystems (and the
-source-of-truth config summary block) which this test locks down so the documented
-count can never silently drift from the live registry again.
+to drop from the live KPI set. The #1360 ruling (2026-07-30) then ADDED WS2-TR-009
+("Trigger Funnel Conversion") — the trigger-effectiveness chat-KPI-path family,
+migration 118. The framework therefore defines **45** calculable KPIs (46 → 45 →
+44 → 45). Each count move left a tail of stale count prose ("46 KPIs",
+"44/44 MAPPED") across unrelated subsystems (and the source-of-truth config
+summary block) which this test locks down so the documented count can never
+silently drift from the live registry again.
 
 These assertions are deliberately *count-agnostic*: they bind the documented
 summary to whatever the registry actually loads, so adding/removing a future KPI
@@ -153,30 +155,33 @@ def test_yaml_by_workstream_matches_actual_sections() -> None:
 
 
 # Surfaces that asserted a stale calculable count. #1068 removed WS1-MP-008 (46→45);
-# T8 removed WS1-DQ-008 (45→44). These guards ensure NEITHER stale number ("46" or
-# "45") can reappear in any CURRENT-STATE reference (code, config, coverage tooling,
-# and the live framework/reference docs). Dated historical records (completed-issue
+# T8 removed WS1-DQ-008 (45→44); #1360 ADDED WS2-TR-009 "Trigger Funnel Conversion"
+# (44→45 — the ruled trigger-effectiveness chat-KPI-path family, migration 118).
+# These guards ensure the RETIRED counts ("46" and "44"; "45" was stale during the
+# T8 era but is the LIVE count again since #1360) cannot reappear in any
+# CURRENT-STATE reference (code, config, coverage tooling, and the live
+# framework/reference docs). Dated historical records (completed-issue
 # plans/reports, design specs) are intentionally NOT scanned — the older counts were
 # true when they were written. The framework reference (06-KPI-REFERENCE.md) keeps the
 # two decommissioned KPIs documented as DECOMMISSIONED, so it may still say
 # "WS1-MP-008"/"WS1-DQ-008"/"9 KPIs" (designed-count section headers), just not a stale
-# *calculable*-count of 45 or 46. The patterns require KPI/calculable/defined adjacency
+# *calculable*-count of 44 or 46. The patterns require KPI/calculable/defined adjacency
 # (or the "N/N MAPPED" / "TOTAL N" coverage-probe forms) so bare numbers — row indices
-# like "| 45 | CM-004", thresholds, dates — never false-match.
+# like "| 44 | CM-004", thresholds, dates — never false-match.
 _FORBIDDEN_PATTERNS = [
     re.compile(r"\b46\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE),
     re.compile(r"Total\s+KPIs\D{0,6}46\b", re.IGNORECASE),  # "Total KPIs: 46"
     re.compile(r"\b46/46\b"),  # coverage map "46/46 MAPPED"
     re.compile(r"\bTOTAL\s+46\b"),  # coverage probe "TOTAL 46 MAPPED 46"
-    # T8: 44 is now the live calculable count; "45" is the new stale tail.
-    re.compile(r"\b45\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE),
-    re.compile(r"Total\s+KPIs\D{0,6}45\b", re.IGNORECASE),  # "Total KPIs: 45"
-    re.compile(r"\b45/45\b"),  # coverage map "45/45 MAPPED"
-    re.compile(r"\bTOTAL\s+45\b"),  # coverage probe "TOTAL 45 MAPPED 45"
-    # Header form where the count trails the label: "Calculable KPIs: 45/46".
-    re.compile(r"Calculable\s+KPIs\D{0,6}4[56]\b", re.IGNORECASE),
-    # JSON/object key form in API fixtures/mocks: `total_kpis: 45`, `"total_kpis":46`.
-    re.compile(r"total_kpis[\"'\s:=]+4[56]\b"),
+    # #1360: 45 is now the live calculable count; "44" is the new stale tail.
+    re.compile(r"\b44\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE),
+    re.compile(r"Total\s+KPIs\D{0,6}44\b", re.IGNORECASE),  # "Total KPIs: 44"
+    re.compile(r"\b44/44\b"),  # coverage map "44/44 MAPPED"
+    re.compile(r"\bTOTAL\s+44\b"),  # coverage probe "TOTAL 44 MAPPED 44"
+    # Header form where the count trails the label: "Calculable KPIs: 44/46".
+    re.compile(r"Calculable\s+KPIs\D{0,6}4[46]\b", re.IGNORECASE),
+    # JSON/object key form in API fixtures/mocks: `total_kpis: 44`, `"total_kpis":46`.
+    re.compile(r"total_kpis[\"'\s:=]+4[46]\b"),
 ]
 _SCANNED_FILES = [
     "config/kpi_definitions.yaml",
