@@ -1,5 +1,7 @@
 """Tests for intent_classifier node."""
 
+import logging
+
 import pytest
 
 from src.agents.orchestrator.nodes.intent_classifier import (
@@ -271,3 +273,72 @@ class TestPatternMatching:
 
         assert result["primary_intent"] == "general"
         assert result["confidence"] < 0.8
+
+
+class _FencedStrLLM:
+    """Stub returning the verbatim 2026-07-29 live capture: claude-haiku-4-5
+    wraps its JSON in markdown fences on every call (#1333)."""
+
+    async def ainvoke(self, prompt):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content=(
+                '```json\n{"primary_intent": "system_health", "confidence": 0.95, '
+                '"requires_multi_agent": false}\n```'
+            ),
+            response_metadata={},
+        )
+
+
+class TestLLMClassifyFencedCompletion:
+    """Regression for #1333: a fenced completion must classify, not silently
+    degrade to the general@0.3 fallback (which killed the LLM intent layer
+    on every /chat/stream turn of the 2026-07-29 recorded run)."""
+
+    @pytest.mark.asyncio
+    async def test_fenced_completion_classifies(self):
+        node = IntentClassifierNode()
+        node.llm = _FencedStrLLM()
+
+        classification = await node._llm_classify("What is the current system health score?")
+
+        assert classification["primary_intent"] == "system_health"
+        assert classification["confidence"] == 0.95
+        assert classification["requires_multi_agent"] is False
+
+
+class _NonJsonLLM:
+    """Stub returning prose that cannot be parsed as JSON."""
+
+    async def ainvoke(self, prompt):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content="I cannot classify this query.",
+            response_metadata={},
+        )
+
+
+class TestLLMClassifyParseFailure:
+    """codex iter-1 LOW: a parse failure must fall back to general@0.3 with
+    exactly ONE warning that carries the raw payload — the inner handler used
+    to log then re-raise into the outer handler, which logged again."""
+
+    @pytest.mark.asyncio
+    async def test_parse_failure_falls_back_and_logs_once(self, caplog):
+        node = IntentClassifierNode()
+        node.llm = _NonJsonLLM()
+
+        logger_name = "src.agents.orchestrator.nodes.intent_classifier"
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            classification = await node._llm_classify("gibberish")
+
+        assert classification["primary_intent"] == "general"
+        assert classification["confidence"] == 0.3
+        assert classification["requires_multi_agent"] is False
+
+        warnings = [r for r in caplog.records if "LLM classification failed" in r.getMessage()]
+        assert len(warnings) == 1
+        # the single log line must carry the raw payload for diagnosis
+        assert "I cannot classify this query." in warnings[0].getMessage()

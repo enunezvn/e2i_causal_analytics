@@ -257,6 +257,19 @@ Use tools proactively:
 """
 
 
+def _render_system_prompt(context_str: str) -> str:
+    """Substitute ``{context}`` into the system prompt.
+
+    ``.replace``, NOT ``.format``: the template is prose that legitimately
+    contains literal brace sets (the breakdown-axis buckets like
+    ``{low_severity, medium_severity, high_severity}``, added 06538176).
+    ``.format()`` parsed those as replacement fields and raised KeyError on
+    every direct-answer turn — greeting/help/agent_status crashed /chat/stream
+    from 2026-07-12 until #1332. Only ``{context}`` is a substitution slot.
+    """
+    return E2I_CHATBOT_SYSTEM_PROMPT.replace("{context}", context_str)
+
+
 # =============================================================================
 # INTENT CLASSIFICATION
 # =============================================================================
@@ -1239,7 +1252,7 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
         context_str = "\n".join(context_parts) if context_parts else ""
 
         # Create system message
-        system_prompt = E2I_CHATBOT_SYSTEM_PROMPT.format(context=context_str)
+        system_prompt = _render_system_prompt(context_str)
         system_msg = SystemMessage(content=system_prompt)
 
         # Prepare messages for LLM

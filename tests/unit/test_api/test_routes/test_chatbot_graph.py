@@ -37,6 +37,7 @@ from src.api.routes.chatbot_graph import (
     _is_multi_faceted_query,
     # Helper functions
     _matches_pattern,
+    _render_system_prompt,
     # Episodic memory
     _save_to_episodic_memory,
     after_tools,
@@ -1266,3 +1267,29 @@ class TestIntegration:
             assert result == expected_intent, (
                 f"Query '{query}' expected {expected_intent}, got {result}"
             )
+
+
+# =============================================================================
+# System prompt template rendering (#1332 / D1)
+# =============================================================================
+
+
+class TestSystemPromptRender:
+    """The template is prose with literal brace sets (breakdown axes like
+    ``{low_severity, medium_severity, high_severity}``, added 06538176); only
+    ``{context}`` is a substitution slot. ``.format()`` treats the prose braces
+    as replacement fields and raised KeyError on every direct-answer turn
+    (greeting/help/agent_status) since 2026-07-12."""
+
+    def test_render_substitutes_context_and_keeps_prose_braces(self):
+        rendered = _render_system_prompt("Current Brand Filter: Kisqali")
+        assert "Current Brand Filter: Kisqali" in rendered
+        assert "{context}" not in rendered
+        # the prose braces that killed .format() must survive verbatim
+        assert "{low_severity, medium_severity, high_severity}" in rendered
+        assert "{naive, experienced}" in rendered
+
+    def test_render_with_empty_context(self):
+        rendered = _render_system_prompt("")
+        assert "{context}" not in rendered
+        assert "E2I Analytics Assistant" in rendered
