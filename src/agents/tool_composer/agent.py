@@ -321,8 +321,9 @@ class ToolComposerAgent:
 
                 if not mock_llm_allowed():
                     raise RuntimeError(
-                        "ToolComposerAgent requires an LLM client. "
-                        "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
+                        "ToolComposerAgent requires an LLM client. Provide "
+                        "llm_client in __init__ or set the configured provider's "
+                        "API key (ANTHROPIC_API_KEY / OPENAI_API_KEY)."
                     )
                 logger.warning(
                     "tool_composer: no LLM key — using MARKED mock "

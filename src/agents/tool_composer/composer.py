@@ -200,6 +200,14 @@ class ToolComposer:
           per-phase ``config["phases"][phase]`` (``max_tokens`` /
           ``reasoning_effort``) overrides them — honoring the per-phase knobs
           the LangChain migration (55a7f749) had severed from the actual call.
+
+        Note: the per-phase ``model`` config string is DELIBERATELY not passed
+        through here. Model selection is the factory's tier authority
+        (``model_tier`` -> ``MODEL_MAPPINGS``, all ids verified callable). The
+        phase-config ``model`` still defaults to the pre-migration
+        ``claude-sonnet-4-6``; forwarding that literal would bypass the curated
+        mapping and resurrect the retired dead-model-id 404 class that commit
+        b144b6a5 fixed. So the budget/effort knobs are honored; model is not.
         """
         if self.llm_client is not None:
             return self.llm_client
