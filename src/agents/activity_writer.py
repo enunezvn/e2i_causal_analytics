@@ -149,8 +149,11 @@ def persist_agent_activity(
         if recommendations is not None:
             payload["recommendations"] = recommendations
         if impact_estimate is not None:
-            # numeric(15,2)
-            clamped_impact = _clamp(impact_estimate, -1e13, 1e13)
+            # numeric(15,2) tops out at ±9,999,999,999,999.99 (13 integer
+            # digits) — clamping to ±1e13 would produce a value the column
+            # rejects, and the never-raises wrapper would silently swallow
+            # the failed insert (codex iter-1 HIGH).
+            clamped_impact = _clamp(impact_estimate, -9_999_999_999_999.99, 9_999_999_999_999.99)
             if clamped_impact is not None:
                 payload["impact_estimate"] = round(clamped_impact, 2)
         if roi_estimate is not None:

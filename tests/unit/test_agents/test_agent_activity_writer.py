@@ -147,6 +147,31 @@ class TestPersistAgentActivity:
         )
         assert activity_id is None  # log-and-continue, never raises
 
+    def test_impact_estimate_clamp_respects_numeric_15_2(self):
+        """numeric(15,2) tops out at ±9,999,999,999,999.99 (13 integer
+        digits). A clamp bound of ±1e13 (14 integer digits) produces a value
+        the column REJECTS — and the never-raises wrapper would then silently
+        swallow the failed insert, dropping a valid analysis (codex iter-1)."""
+        for raw, bound_check in (
+            (1e15, lambda v: v <= 9_999_999_999_999.99),
+            (
+                -1e15,
+                lambda v: v >= -9_999_999_999_999.99,
+            ),
+        ):
+            client = _FakeSupabase()
+            persist_agent_activity(
+                agent_name="causal_impact",
+                agent_tier="causal_analytics",
+                activity_type="causal_analysis",
+                analysis_results={},
+                impact_estimate=raw,
+                supabase_client=client,
+            )
+            assert bound_check(client.rows[0]["impact_estimate"]), (
+                f"impact_estimate {client.rows[0]['impact_estimate']} exceeds numeric(15,2)"
+            )
+
     def test_no_client_available_returns_none(self):
         # supabase_client=None + factory unavailable must not raise
         activity_id = persist_agent_activity(
