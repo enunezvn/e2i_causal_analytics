@@ -235,6 +235,33 @@ class IntentClassifierNode:
             r"explain|clarify|what does.*mean",
             r"help.*understand",
             r"break down",
+            # KPI value lookups → explainer (#1337 gold: kpi_query is the
+            # largest gold class, 111/337 rows). Without this pattern these
+            # queries fall to the LLM layer, which classifies them
+            # prediction@0.85 → prediction_synthesizer fails closed on chat.
+            # The {0,3} word-bounded gap keeps causal/forecast asks that
+            # merely MENTION a metric ("what is the causal impact of rep
+            # visits on TRx") outside the match; "teh" is a recurring
+            # real-traffic typo (bench-0083/0100/0114/0117/0126).
+            # Whole-query forecast guard (codex iter-1/2/3 MEDIUMs): a query
+            # containing ANY prediction lexeme anywhere ("show me the trx
+            # forecast", "what is the trx for next quarter expected to be?",
+            # "what is the likelihood of TRx growth?") must NOT co-score
+            # explanation — (prediction, explanation) is a deliberate
+            # MULTI_AGENT_PATTERNS pair, so a spurious match here
+            # double-dispatches pure forecast asks. Token-local lookaheads
+            # (iter 1/2) could not close the family (punctuation/intervening
+            # tokens); the \A-anchored guard scans the whole query instead.
+            # Its stem set mirrors the "prediction" INTENT_PATTERNS lexemes
+            # (predict|forecast|project, what will|expected,
+            # likelihood|probability) — prefix match, no \b, so inflections
+            # (predicted/predictive/projections/probabilities) are covered.
+            # Excluded queries either match "prediction" directly or fall to
+            # the LLM layer, whose menu teaches KPI lookups → explanation.
+            r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
+            r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
+            r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
+            r"(?:trx|nrx|nbrx|market share|conversion rate)\b",
         ],
         "system_health": [
             r"system.*(health|status)",
@@ -528,7 +555,7 @@ Intents:
 - experiment_monitor: Monitor running A/B experiments for SRM, interim, enrollment health
 - prediction: Forecasting, projections, likelihood estimates
 - resource_allocation: Budget/resource optimization, prioritization
-- explanation: Clarifying results, interpreting findings
+- explanation: Clarifying results, interpreting findings, KPI/metric value lookups (TRx, NRx, NBRx, market share)
 - system_health: Model/pipeline status, system performance
 - drift_check: Data/model drift, distribution changes
 - feedback: Learning from outcomes, improvement suggestions
@@ -585,12 +612,23 @@ Respond with ONLY a JSON object:
                     secondary_intents=[],
                     requires_multi_agent=False,
                 )
-            return IntentClassification(
+            classification = IntentClassification(
                 primary_intent=result.get("primary_intent", "general"),
                 confidence=result.get("confidence", 0.5),
                 secondary_intents=[],
                 requires_multi_agent=result.get("requires_multi_agent", False),
             )
+            # Success path must be observable: only the failure paths warn, so
+            # without this a log grep cannot distinguish "layer works" from
+            # "layer never engaged" (2026-07-30 live-verify needed an
+            # in-container probe for exactly that reason).
+            logger.info(
+                f"LLM classification: intent={classification['primary_intent']} "
+                f"confidence={classification['confidence']} "
+                f"multi_agent={classification['requires_multi_agent']} "
+                f"query={query[:80]!r}"
+            )
+            return classification
         except Exception as e:
             logger.warning(f"LLM classification failed: {e}")
             return IntentClassification(
