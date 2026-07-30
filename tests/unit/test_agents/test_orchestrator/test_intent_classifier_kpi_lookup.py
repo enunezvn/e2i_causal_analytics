@@ -119,6 +119,15 @@ class TestKpiValueLookupPattern:
             "what is the trx expected next quarter",
             "What is the TRx projected for next quarter?",
             "what is the trx predictive outlook",
+            # codex iter-3 MEDIUM: forecast lexeme separated from the metric
+            # by punctuation or intervening tokens — token-local guards can't
+            # close this family; the pattern must reject any query containing
+            # a prediction lexeme ANYWHERE (the whole-query leading guard).
+            "what is the trx, expected next quarter?",
+            "what is the trx for next quarter expected to be?",
+            "what is the market share for next quarter expected to be?",
+            "what is the conversion rate for q4 projected to be?",
+            "What is the likelihood of TRx growth for Kisqali next quarter?",
         ],
     )
     def test_forecast_hybrids_stay_single_prediction(self, query: str) -> None:
