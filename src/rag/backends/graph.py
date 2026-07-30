@@ -170,7 +170,7 @@ class GraphBackend:
         returned g:0.
         """
         terms = [
-            t.lower().replace("'", "\\'")
+            t.lower().replace("\\", "\\\\").replace("'", "\\'")
             for t in (*entities.brands, *entities.regions, *entities.kpis, *entities.agents)
         ]
 
@@ -272,9 +272,15 @@ class GraphBackend:
                 if isinstance(item, int):
                     result["path_length"] = item
                 elif isinstance(item, list):
-                    # Could be nodes or relationships
+                    # Could be nodes or relationships. falkordb Edge exposes
+                    # BOTH .id and .relation (never .type), so relationships
+                    # must be classified BEFORE the generic .id node check or
+                    # they are miscounted as neighbors and rel_types stays
+                    # empty (#1376 codex finding).
                     for sub_item in item:
-                        if hasattr(sub_item, "id"):
+                        if hasattr(sub_item, "relation"):
+                            result["rel_types"].append(sub_item.relation)
+                        elif hasattr(sub_item, "id"):
                             result["neighbors"].append(str(sub_item.id))
                         elif hasattr(sub_item, "type"):
                             result["rel_types"].append(sub_item.type)

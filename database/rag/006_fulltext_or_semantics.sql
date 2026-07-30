@@ -43,11 +43,19 @@ BEGIN
 
     -- #1376: OR-form of the same lexemes. Match-any with ts_rank_cd ordering
     -- is the BM25-style contract; the AND form made NL questions match 0 rows.
-    BEGIN
-        tsquery_any := replace(tsquery_val::text, ' & ', ' | ')::tsquery;
-    EXCEPTION WHEN OTHERS THEN
+    -- Negated queries (websearch '-term' -> '!term') keep strict AND
+    -- semantics: OR-ifying '!foo & bar' into '!foo | bar' would admit rows
+    -- CONTAINING foo whenever bar matches, inverting the user's exclusion
+    -- (codex iter-1 MEDIUM).
+    IF position('!' in tsquery_val::text) > 0 THEN
         tsquery_any := tsquery_val;
-    END;
+    ELSE
+        BEGIN
+            tsquery_any := replace(tsquery_val::text, ' & ', ' | ')::tsquery;
+        EXCEPTION WHEN OTHERS THEN
+            tsquery_any := tsquery_val;
+        END;
+    END IF;
 
     RETURN QUERY
 
