@@ -490,3 +490,27 @@ def test_run_execute_never_writes_a_held_brand(monkeypatch):
     assert written == {"id-fabhalta", "id-remibrutinib"}
     assert fake.rows["id-kisqali"]["stage"] == "staging"
     assert fake.rows["id-kisqali"]["is_champion"] is False
+
+
+def test_run_holds_not_fails_when_slope_is_present_but_none(monkeypatch, capsys):
+    # A metrics dict carrying calibration_slope=None (unfittable) must produce
+    # a HOLD, not crash evidence rendering into a FAIL.
+    async def fake_score(client, brand, artifact_path):
+        return {
+            "metrics": {**_COMPUTED_OK, "calibration_slope": None},
+            "intercept": None,
+            "n": 1000,
+            "prevalence": 0.407,
+        }
+
+    async def fake_stored(client, model_id):
+        return dict(_STORED)
+
+    monkeypatch.setattr(promo, "_score_artifact", fake_score)
+    monkeypatch.setattr(promo, "_stored_holdout", fake_stored)
+    fake = _RegistryFake(_registry_rows())
+    rc = asyncio.run(promo.run(fake, execute=True, only_brand="fabhalta"))
+    assert rc == 0
+    assert fake.updates == []
+    out = capsys.readouterr().out
+    assert "HOLD" in out and "FAIL" not in out

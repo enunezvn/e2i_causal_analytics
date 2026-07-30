@@ -387,10 +387,15 @@ async def run(client: Any, *, execute: bool, only_brand: str | None) -> int:
                 row.get("promoted_at") if (already and row.get("promoted_at")) else now_iso
             )
             action, reasons, update = decide(stored, m, prev, promoted_at)
+            # Null-safe rendering: an unfittable slope may be an ABSENT key
+            # (scorer contract) or an explicit None — neither may crash the
+            # evidence line, or a HOLD would surface as FAIL.
+            slope = m.get("calibration_slope")
+            slope_txt = "None" if slope is None else f"{float(slope):.6f}"
             evidence = (
                 f"n={n} prevalence={prev:.4f} auc={m['auc_roc']:.6f} "
                 f"pr_auc={m['pr_auc']:.6f} brier={m['brier_score']:.6f} "
-                f"slope={m.get('calibration_slope', float('nan')):.6f} "
+                f"slope={slope_txt} "
                 f"citl_intercept={icpt if icpt is None else round(icpt, 6)} (report-only)"
             )
             if action == "hold":
