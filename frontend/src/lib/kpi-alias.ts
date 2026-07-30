@@ -12,21 +12,54 @@
  * Per-brand coverage (as seeded): TRx/NRx/ROI have global ('' brand) and
  * per-brand series; NBRx and TRx Share are per-brand ONLY, so those charts
  * need a brand or they come back honest-empty.
+ *
+ * The alias table is derived from the generated KPI catalog so that ALL 44
+ * registry KPIs resolve, not just the Rx-volume handful the chat action
+ * originally advertised.
  */
 
-/** Friendly id → KPI registry code. Keys are normalized: lowercase, [ -]→_ */
-const KPI_ALIASES: Record<string, string> = {
-  trx: 'WS3-BI-005',
-  nrx: 'WS3-BI-006',
-  nbrx: 'WS3-BI-007',
-  trx_share: 'WS3-BI-008',
-  market_share: 'WS3-BI-008',
-  conversion_rate: 'WS3-BI-009',
-  roi: 'WS3-BI-010',
+import { KPI_CATALOG } from './kpi-catalog.generated';
+
+/**
+ * Colloquial aliases the registry itself cannot yield — spoken names with no
+ * counterpart in a KPI's id, yaml key, or display name. Everything derivable
+ * from the registry comes from KPI_CATALOG instead (see kpi-catalog.generated),
+ * so this map stays small and each entry is a deliberate vocabulary decision.
+ */
+const MANUAL_ALIASES: Record<string, string> = {
+  market_share: 'WS3-BI-008', // "TRx Share" is never said out loud
+  scripts: 'WS3-BI-005',
+  prescriptions: 'WS3-BI-005',
+  ate: 'CM-001',
+  cate: 'CM-002',
+  mau: 'WS3-BI-001',
+  wau: 'WS3-BI-002',
+  psi: 'WS1-MP-009',
+  auc: 'WS1-MP-001',
 };
 
-/** Registry codes (WS3-BI-005, WS2-TR-004, BR-001, …) pass through as-is. */
-const REGISTRY_CODE = /^(ws\d+-[a-z]+-\d+|br-\d+)$/i;
+/**
+ * Every alias the registry yields (id, yaml key, display name, parenthesised
+ * abbreviation) folded into one lookup, with the colloquial map layered on top.
+ * Built once at module load from the generated catalog — all 44 KPIs, not the
+ * 6 the hand-written table used to cover.
+ */
+const KPI_ALIASES: Record<string, string> = (() => {
+  const table: Record<string, string> = {};
+  for (const entry of KPI_CATALOG) {
+    for (const alias of entry.aliases) table[alias] = entry.id;
+  }
+  return { ...table, ...MANUAL_ALIASES };
+})();
+
+/**
+ * Registry codes pass through as-is. Covers every family in the registry:
+ * workstream-scoped (WS3-BI-005, WS1-MP-009, WS2-TR-004) and bare-prefix
+ * (BR-001, CM-003). The previous pattern hardcoded `br-` as the only
+ * bare-prefix family, so the whole CM-* causal-metric family failed to
+ * normalize — 'cm-001' reached the API lowercased and missed.
+ */
+const REGISTRY_CODE = /^([a-z]+\d+-[a-z]+-\d+|[a-z]+-\d+)$/i;
 
 /** Brand values are stored canonical-cased and matched exactly by the API. */
 const BRAND_ALIASES: Record<string, string> = {
@@ -44,8 +77,24 @@ const BRAND_ALIASES: Record<string, string> = {
 export function resolveKpiId(kpiId: string): string {
   const trimmed = kpiId.trim();
   if (REGISTRY_CODE.test(trimmed)) return trimmed.toUpperCase();
-  const normalized = trimmed.toLowerCase().replace(/[\s-]+/g, '_');
-  return KPI_ALIASES[normalized] ?? trimmed;
+  return KPI_ALIASES[normalizeAlias(trimmed)] ?? trimmed;
+}
+
+/**
+ * Normalize a free-text KPI reference to the alias key form: lowercase, with
+ * runs of space / hyphen / underscore / slash collapsed to a single underscore.
+ *
+ * MUST stay in lockstep with `alias_forms` in scripts/gen_kpi_catalog.py —
+ * the generator normalizes the catalog's alias keys with the same rule, so a
+ * divergence here silently stops those keys from ever matching.
+ * `kpi-catalog.test.ts` asserts the parity.
+ */
+export function normalizeAlias(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-_/]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 /**

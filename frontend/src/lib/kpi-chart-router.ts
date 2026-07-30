@@ -1,0 +1,374 @@
+/**
+ * KPI chart routing
+ * =================
+ *
+ * Decides HOW any registry KPI becomes a chart, and fetches the real figures to
+ * back it. The chat model names a KPI; this module picks the endpoint that can
+ * actually serve it and the chart shape that suits what comes back.
+ *
+ * Why routing is needed at all: only a minority of the 44 registry KPIs have a
+ * materialized monthly series in `kpi_history`, and only the three Rx-volume
+ * KPIs accept a patient axis. The rest are point-in-time — real values, no
+ * trend. The original chat action charted a line or nothing, so asking to plot
+ * ROC-AUC or Cross-source Match Rate produced an empty frame even though the
+ * value was one API call away. Routing turns "no history" into a current-value
+ * chart instead of a dead end.
+ *
+ *   compareBy + axis-capable KPI  -> segmented history   -> multi-series lines
+ *   materialized history          -> monthly history     -> line / area / bar
+ *   several KPIs named            -> batch calculate     -> comparison bars
+ *   otherwise                     -> single calculate    -> KPI card / bar
+ *
+ * Every branch reads real API responses. Nothing here synthesises a value, and
+ * a KPI that genuinely has no data returns an empty result the UI states
+ * plainly rather than a chart of zeros.
+ *
+ * @module lib/kpi-chart-router
+ */
+
+import {
+  batchCalculateKPIs,
+  getKPIHistory,
+  getKPIHistorySegmented,
+  getKPIValue,
+} from '@/api/kpi';
+import { KPI_CATALOG } from './kpi-catalog.generated';
+import type { KpiCatalogEntry } from './kpi-catalog.generated';
+import { resolveBrand, resolveCompareAxis, resolveKpiId, resolveSegment, resolveTherapyLine } from './kpi-alias';
+// Type-only import: erased at build time, so this module does NOT pull
+// flint-chart into the eager bundle. Compilation happens inside FlintChart,
+// which loads lib/flint-chart lazily — see the bundling note there.
+import type { ChartRow, LogicalEncoding, SupportedChartType } from './flint-chart-types';
+
+/**
+ * Semantic type for a KPI's month axis. Registry history is monthly, so Flint
+ * picks month-grained tick labels. Inlined rather than imported to keep this
+ * module free of any flint-chart reference.
+ */
+const MONTH_SEMANTIC = 'Date';
+
+/**
+ * KPIs whose history can be split by patient severity tier / line of therapy.
+ * The segmented endpoint 422s for anything else (it is computed live from the
+ * vetted kpi_query registry, which only carries the axis for Rx volumes).
+ */
+const AXIS_CAPABLE_KPI_IDS: ReadonlySet<string> = new Set([
+  'WS3-BI-005', // TRx
+  'WS3-BI-006', // NRx
+  'WS3-BI-007', // NBRx
+]);
+
+/**
+ * KPIs tracked per brand only. Charting them without a brand yields an
+ * honest-empty series, so the router says so rather than drawing nothing.
+ */
+const BRAND_ONLY_KPI_IDS: ReadonlySet<string> = new Set([
+  'WS3-BI-007', // NBRx
+  'WS3-BI-008', // TRx Share
+]);
+
+const CATALOG_BY_ID: ReadonlyMap<string, KpiCatalogEntry> = new Map(
+  KPI_CATALOG.map((entry) => [entry.id, entry])
+);
+
+/** Look up catalog metadata for a resolved registry code. */
+export function lookupKpi(kpiId: string): KpiCatalogEntry | undefined {
+  return CATALOG_BY_ID.get(kpiId);
+}
+
+/** What the chart layer needs to draw, plus the provenance to caption it. */
+export interface KpiChartData {
+  /** Real rows, ready for Flint. Empty when the KPI genuinely has no data. */
+  rows: ChartRow[];
+  semanticTypes: Record<string, string>;
+  /**
+   * The chart shape in DATA terms. FlintChart maps it onto whichever channels
+   * the chosen template declares (they differ: KPI Card takes metric/value,
+   * Histogram takes only x). Keeping it logical here is what lets this module
+   * stay free of any flint-chart import.
+   */
+  encoding: LogicalEncoding;
+  /** Chart type chosen for this data shape; a caller override wins over it. */
+  chartType: SupportedChartType;
+  title: string;
+  /** Scope line: brand / axis / span. Rendered under the title. */
+  subtitle: string;
+  /** Set when there is nothing to draw — shown verbatim instead of a chart. */
+  emptyReason?: string;
+}
+
+export interface KpiChartQuery {
+  /** One or more KPI references as the model typed them. */
+  kpis: string[];
+  brand?: string;
+  compareBy?: string;
+  segment?: string;
+  therapyLine?: string;
+  /** Explicit chart type from the model; overrides the routed default. */
+  chartType?: SupportedChartType;
+  title?: string;
+}
+
+/** Default chart type per data shape, used when the model does not choose. */
+const DEFAULT_TIME_SERIES_CHART: SupportedChartType = 'Line Chart';
+const DEFAULT_COMPARISON_CHART: SupportedChartType = 'Bar Chart';
+
+function displayName(kpiId: string): string {
+  return lookupKpi(kpiId)?.name ?? kpiId;
+}
+
+function valueSemantic(kpiId: string): string {
+  // The catalog's semanticType union is already Flint's vocabulary;
+  // validateChartRequest re-checks it against the runtime list at compile time.
+  return lookupKpi(kpiId)?.semanticType ?? 'Number';
+}
+
+function scopeLabel(brand: string | undefined): string {
+  return brand && brand.length > 0 ? brand : 'All brands';
+}
+
+/**
+ * Fetch and shape whatever the named KPI(s) can actually provide.
+ *
+ * Never throws for "no data" — that is an `emptyReason`. Transport failures do
+ * propagate, so the caller can distinguish a broken request from an empty one.
+ */
+export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData> {
+  const resolvedIds = query.kpis.map(resolveKpiId).filter((id) => id.length > 0);
+  const brand = resolveBrand(query.brand);
+
+  if (resolvedIds.length === 0) {
+    return emptyResult('No KPI was named.', query.title ?? 'Chart');
+  }
+
+  // --- Several KPIs named: compare their current values side by side. -------
+  if (resolvedIds.length > 1) {
+    return await routeComparison(resolvedIds, brand, query);
+  }
+
+  const kpiId = resolvedIds[0];
+  const compareAxis = resolveCompareAxis(query.compareBy);
+  const segmentValue = resolveSegment(query.segment);
+  const lineValue = resolveTherapyLine(query.therapyLine);
+  const axis =
+    compareAxis ?? (segmentValue ? 'segment' : lineValue ? 'therapy_line' : undefined);
+
+  // --- Patient-axis split (TRx/NRx/NBRx only). ------------------------------
+  if (axis) {
+    if (!AXIS_CAPABLE_KPI_IDS.has(kpiId)) {
+      return emptyResult(
+        `${displayName(kpiId)} is not tracked by severity tier or line of therapy — ` +
+          'only TRx, NRx and NBRx carry a patient axis.',
+        query.title ?? `${displayName(kpiId)} trend`
+      );
+    }
+    return await routeSegmented(kpiId, axis, brand, compareAxis, segmentValue, lineValue, query);
+  }
+
+  // --- Materialized monthly history, when this KPI has one. ----------------
+  const history = await getKPIHistory(kpiId, brand);
+  const points = history.points ?? [];
+  if (points.length > 0) {
+    const rows: ChartRow[] = points.map((point) => ({
+      month: point.metric_date,
+      value: point.value,
+    }));
+    const chartType = query.chartType ?? DEFAULT_TIME_SERIES_CHART;
+    return {
+      rows,
+      semanticTypes: { month: MONTH_SEMANTIC, value: valueSemantic(kpiId) },
+      encoding: { axis: 'month', value: 'value' },
+      chartType,
+      title: query.title ?? `${displayName(kpiId)} trend`,
+      subtitle: `${scopeLabel(history.brand || brand)} · ${points.length} month${
+        points.length === 1 ? '' : 's'
+      }`,
+    };
+  }
+
+  // --- No series: chart the current value instead of drawing nothing. -------
+  return await routeCurrentValue(kpiId, brand, query);
+}
+
+async function routeSegmented(
+  kpiId: string,
+  axis: 'segment' | 'therapy_line',
+  brand: string | undefined,
+  compareAxis: 'segment' | 'therapy_line' | undefined,
+  segmentValue: string | undefined,
+  lineValue: string | undefined,
+  query: KpiChartQuery
+): Promise<KpiChartData> {
+  const value = compareAxis ? undefined : axis === 'segment' ? segmentValue : lineValue;
+  const response = await getKPIHistorySegmented(kpiId, axis, brand, value);
+  const series = response.series ?? [];
+  const title = query.title ?? `${displayName(kpiId)} trend`;
+
+  if (series.length === 0 || (series[0]?.points ?? []).length === 0) {
+    return emptyResult(
+      `No ${axis === 'segment' ? 'severity-tier' : 'line-of-therapy'} series available for ` +
+        `${displayName(kpiId)}${brand ? ` (${brand})` : ''}.`,
+      title
+    );
+  }
+
+  // Long format — one row per (month, bucket) — so Flint can colour by bucket.
+  // Wide format would need a trace per bucket declared up front.
+  const rows: ChartRow[] = [];
+  for (const bucket of series) {
+    for (const point of bucket.points ?? []) {
+      rows.push({ month: point.metric_date, bucket: bucket.label, value: point.value });
+    }
+  }
+
+  const months = series[0]?.points?.length ?? 0;
+  const axisLabel = response.axis === 'segment' ? 'by severity tier' : 'by line of therapy';
+  const chartType = query.chartType ?? DEFAULT_TIME_SERIES_CHART;
+  return {
+    rows,
+    semanticTypes: {
+      month: MONTH_SEMANTIC,
+      bucket: 'Category',
+      value: valueSemantic(kpiId),
+    },
+    encoding: { axis: 'month', value: 'value', series: 'bucket' },
+    chartType,
+    title,
+    subtitle:
+      `${scopeLabel(response.brand || brand)} · ${axisLabel} · ${months} month` +
+      `${months === 1 ? '' : 's'}` +
+      (response.data_through ? ` · data through ${response.data_through}` : ''),
+  };
+}
+
+async function routeCurrentValue(
+  kpiId: string,
+  brand: string | undefined,
+  query: KpiChartQuery
+): Promise<KpiChartData> {
+  const result = await getKPIValue(kpiId, brand);
+  const title = query.title ?? displayName(kpiId);
+
+  if (result.value === undefined || result.value === null) {
+    return emptyResult(
+      result.error
+        ? `${displayName(kpiId)} could not be calculated: ${result.error}`
+        : `${displayName(kpiId)} has no historical series and no current value.`,
+      title
+    );
+  }
+
+  // A confidence interval turns a single number into a range worth stating —
+  // the causal metrics (CM-*) carry one, and whether it crosses zero is the
+  // point of reading it. Flint has no error-bar template, so the interval goes
+  // in the subtitle rather than being silently dropped.
+  const interval = result.confidence_interval;
+  const entry = lookupKpi(kpiId);
+  const target = entry?.target;
+
+  const rows: ChartRow[] = [
+    {
+      kpi: displayName(kpiId),
+      value: result.value,
+      // Only present when the registry declares a target; never invented.
+      ...(target !== undefined ? { target } : {}),
+    },
+  ];
+
+  const semantic = valueSemantic(kpiId);
+  const scope = scopeLabel(brand);
+  const ciNote = interval
+    ? ` · 95% CI ${formatBound(interval[0])} to ${formatBound(interval[1])}`
+    : '';
+
+  // A one-row bar is a poor chart; a KPI card states the figure plainly, with
+  // the registry's threshold target as the goal marker when there is one.
+  const chartType = query.chartType ?? 'KPI Card';
+
+  return {
+    rows,
+    semanticTypes: {
+      kpi: 'Category',
+      value: semantic,
+      ...(target !== undefined ? { target: semantic } : {}),
+    },
+    encoding: {
+      axis: 'kpi',
+      value: 'value',
+      ...(target !== undefined ? { goal: 'target' } : {}),
+    },
+    chartType,
+    title,
+    subtitle:
+      `${scope} · point-in-time value${ciNote}` +
+      (target !== undefined ? ` · target ${formatBound(target)}` : '') +
+      (result.calculated_at ? ` · as of ${result.calculated_at.slice(0, 10)}` : ''),
+  };
+}
+
+async function routeComparison(
+  kpiIds: string[],
+  brand: string | undefined,
+  query: KpiChartQuery
+): Promise<KpiChartData> {
+  const response = await batchCalculateKPIs({
+    kpi_ids: kpiIds,
+    context: brand ? { brand } : undefined,
+  });
+  const results = (response.results ?? []).filter(
+    (r) => r.value !== undefined && r.value !== null
+  );
+  const title = query.title ?? 'KPI comparison';
+
+  if (results.length === 0) {
+    return emptyResult(
+      `None of ${kpiIds.map(displayName).join(', ')} returned a value.`,
+      title
+    );
+  }
+
+  // Mixed semantic types on one axis would mislabel the ticks (a percentage and
+  // a raw count cannot share a formatted axis). Fall back to an unformatted
+  // numeric axis and say so, rather than formatting everything as the first.
+  const semantics = new Set(results.map((r) => valueSemantic(r.kpi_id)));
+  const shared = semantics.size === 1 ? [...semantics][0] : 'Number';
+  const mixedNote = semantics.size > 1 ? ' · mixed units, axis unformatted' : '';
+
+  const rows: ChartRow[] = results.map((result) => ({
+    kpi: displayName(result.kpi_id),
+    value: result.value as number,
+  }));
+
+  const skipped = kpiIds.length - results.length;
+  const chartType = query.chartType ?? DEFAULT_COMPARISON_CHART;
+  return {
+    rows,
+    semanticTypes: { kpi: 'Category', value: shared },
+    encoding: { axis: 'kpi', value: 'value' },
+    chartType,
+    title,
+    subtitle:
+      `${scopeLabel(brand)} · ${results.length} KPI${results.length === 1 ? '' : 's'}` +
+      (skipped > 0 ? ` · ${skipped} returned no value` : '') +
+      mixedNote,
+  };
+}
+
+function formatBound(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(3).replace(/\.?0+$/, '') : String(value);
+}
+
+function emptyResult(reason: string, title: string): KpiChartData {
+  return {
+    rows: [],
+    semanticTypes: {},
+    encoding: { axis: '', value: '' },
+    chartType: DEFAULT_COMPARISON_CHART,
+    title,
+    subtitle: '',
+    emptyReason: reason,
+  };
+}
+
+/** Exposed for tests and for the action description's KPI vocabulary. */
+export { AXIS_CAPABLE_KPI_IDS, BRAND_ONLY_KPI_IDS };

@@ -25,12 +25,18 @@ vi.mock('react-router-dom', () => ({
   useLocation: () => mockLocation,
 }));
 
-// Mock the KPI api so renderKpiTrend handler tests can assert what it fetches
+// Mock the KPI api so renderKpiTrend handler tests can assert what it fetches.
+// getKPIValue/batchCalculateKPIs back the renderChart action's routing to
+// point-in-time KPIs and multi-KPI comparisons.
 const mockGetKPIHistory = vi.fn();
 const mockGetKPIHistorySegmented = vi.fn();
+const mockGetKPIValue = vi.fn();
+const mockBatchCalculateKPIs = vi.fn();
 vi.mock('@/api/kpi', () => ({
   getKPIHistory: (...args: unknown[]) => mockGetKPIHistory(...args),
   getKPIHistorySegmented: (...args: unknown[]) => mockGetKPIHistorySegmented(...args),
+  getKPIValue: (...args: unknown[]) => mockGetKPIValue(...args),
+  batchCalculateKPIs: (...args: unknown[]) => mockBatchCalculateKPIs(...args),
 }));
 
 // Override the global CopilotKit mock for this test file
@@ -448,8 +454,8 @@ describe('CopilotHooksConnector', () => {
       </CopilotKitWrapper>
     );
 
-    // Should register 7 actions
-    expect(mockUseCopilotAction).toHaveBeenCalledTimes(7);
+    // Should register 8 actions
+    expect(mockUseCopilotAction).toHaveBeenCalledTimes(8);
 
     // Check action names
     const actionNames = mockUseCopilotAction.mock.calls.map((call) => call[0]?.name);
@@ -460,6 +466,8 @@ describe('CopilotHooksConnector', () => {
     expect(actionNames).toContain('setDetailLevel');
     expect(actionNames).toContain('toggleChat');
     expect(actionNames).toContain('renderKpiTrend');
+    // Flint-compiled charts for the rest of the KPI registry.
+    expect(actionNames).toContain('renderChart');
   });
 
   it('does not register hooks when CopilotKit is disabled', () => {
@@ -785,6 +793,106 @@ describe('Action Handlers', () => {
 
       expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali');
       expect(mockGetKPIHistorySegmented).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('renderChart', () => {
+    // Why: renderKpiTrend only ever drew a line off kpi_history, so the 38
+    // registry KPIs without a materialized series were unreachable from the
+    // chat — asking to plot ROC-AUC produced an empty frame despite the value
+    // being one call away. renderChart routes each KPI to an endpoint that can
+    // serve it and compiles the result with flint-chart.
+    beforeEach(() => {
+      mockGetKPIHistory.mockClear();
+      mockGetKPIValue.mockClear();
+      mockBatchCalculateKPIs.mockClear();
+      mockGetKPIHistory.mockResolvedValue({
+        kpi_id: '',
+        brand: '',
+        region: '',
+        count: 0,
+        points: [],
+      });
+      mockGetKPIValue.mockResolvedValue({
+        kpi_id: 'WS1-MP-001',
+        value: 0.87,
+        status: 'good',
+        calculated_at: '2026-07-30T00:00:00Z',
+        cached: false,
+        metadata: {},
+      });
+    });
+
+    it('falls back to the current value for a KPI with no series', async () => {
+      const handler = getActionHandler('renderChart') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<{ rows: unknown[]; chartType: string; emptyReason?: string }>;
+      let result!: Awaited<ReturnType<typeof handler>>;
+      await act(async () => {
+        result = await handler({ kpis: ['roc_auc'] });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined);
+      expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined);
+      expect(result.emptyReason).toBeUndefined();
+      expect(result.chartType).toBe('KPI Card');
+    });
+
+    it('resolves a causal-metric code the old alias regex could not', async () => {
+      const handler = getActionHandler('renderChart') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpis: ['cm-001'] });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('CM-001', undefined);
+    });
+
+    it('compares several KPIs through the batch endpoint', async () => {
+      mockBatchCalculateKPIs.mockResolvedValue({
+        results: [
+          { kpi_id: 'WS1-MP-001', value: 0.87, status: 'good', calculated_at: '', cached: false, metadata: {} },
+          { kpi_id: 'WS1-MP-002', value: 0.64, status: 'good', calculated_at: '', cached: false, metadata: {} },
+        ],
+        calculated_at: '',
+        total_kpis: 2,
+      });
+      const handler = getActionHandler('renderChart') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<{ rows: unknown[]; chartType: string }>;
+      let result!: Awaited<ReturnType<typeof handler>>;
+      await act(async () => {
+        result = await handler({ kpis: ['roc_auc', 'pr_auc'] });
+      });
+
+      expect(mockBatchCalculateKPIs).toHaveBeenCalled();
+      expect(result.chartType).toBe('Bar Chart');
+      expect(result.rows).toHaveLength(2);
+    });
+
+    it('ignores a chart type this build does not support', async () => {
+      // A model typo must not fail the turn; the routed default applies.
+      const handler = getActionHandler('renderChart') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<{ chartType: string }>;
+      let result!: Awaited<ReturnType<typeof handler>>;
+      await act(async () => {
+        result = await handler({ kpis: ['roc_auc'], chartType: 'Forest Plot' });
+      });
+
+      expect(result.chartType).toBe('KPI Card');
+    });
+
+    it('declares kpis and chartType so the model can pass them', () => {
+      getActionHandler('renderChart');
+      const actionCall = mockUseCopilotAction.mock.calls.find(
+        (call) => call[0]?.name === 'renderChart'
+      );
+      const paramNames = (
+        actionCall![0].parameters as Array<{ name: string }>
+      ).map((p) => p.name);
+      expect(paramNames).toEqual(['kpis', 'chartType', 'brand', 'compareBy', 'title']);
     });
   });
 });
