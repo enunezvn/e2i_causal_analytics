@@ -26,15 +26,21 @@
  * the by-design full-history-resend model. Completed turns are never touched.
  *
  * Safety invariants:
- * - The failed turn is identified by id AT FAILURE-DETECTION TIME
- *   (failedUserId). The notice only shows — and retry only acts — while
- *   that exact id is still the transcript's last user message; if the
- *   transcript has moved on, the stale notice hides rather than offering a
- *   retry that could delete turns the failure does not own.
+ * - OWNERSHIP PREDICATE (visibility AND retry): the failure owns the
+ *   transcript tail iff (1) the last user message is still the user turn
+ *   recorded at failure-detection time, AND (2) every message at/after it
+ *   was already present when the failure was recorded — i.e. it is a
+ *   fragment the failed run itself left behind. Anything that arrived
+ *   after detection (e.g. a completed reply landing via event-less
+ *   recovery/resync, with no run-initialized event to clear us) breaks
+ *   ownership: the notice hides and retry aborts without mutating. This
+ *   makes the partial-fragment carve-out explicit — a trailing fragment is
+ *   retryable only because it was captured as part of the failed turn,
+ *   never by slice arithmetic. Completed turns are never touched.
  * - Retry is single-flight: a ref guard rejects re-entrant clicks, the
- *   button is disabled while a retry is in progress, and the transcript is
- *   revalidated against the live message store immediately before any
- *   delete/send.
+ *   button is disabled while a retry is in progress, and the ownership
+ *   predicate is revalidated against the live message store immediately
+ *   before any delete/send.
  *
  * Must be mounted inside the CopilotKit provider (useCopilotChatInternal
  * throws outside it) — same constraint and same mount point as
@@ -84,9 +90,43 @@ function lastUserIndexOf(list: readonly MessageLike[]): number {
   return -1;
 }
 
-function lastUserIdOf(list: readonly MessageLike[]): string | null {
+/**
+ * Snapshot of the failed turn, captured at failure-detection time: the
+ * anchoring user message plus the ids of everything the failed run had left
+ * after it at that moment. Only these ids may ever be deleted by retry.
+ */
+interface FailedTurn {
+  userId: string;
+  ownedIds: ReadonlySet<string>;
+}
+
+function captureFailedTurn(list: readonly MessageLike[]): FailedTurn | null {
   const index = lastUserIndexOf(list);
-  return index === -1 ? null : list[index].id;
+  if (index === -1) return null;
+  return {
+    userId: list[index].id,
+    ownedIds: new Set(list.slice(index).map((m) => m.id)),
+  };
+}
+
+/**
+ * The ownership predicate (see module docstring): the last user message is
+ * still the recorded failed user turn, and every message at/after it was
+ * already present when the failure was recorded. A reply that arrived after
+ * detection is not owned — it answers the turn, so there is nothing to
+ * retry and nothing we are allowed to delete.
+ */
+function failedTurnOwnsTail(
+  list: readonly MessageLike[],
+  turn: FailedTurn | null
+): boolean {
+  if (!turn) return false;
+  const index = lastUserIndexOf(list);
+  if (index === -1 || list[index].id !== turn.userId) return false;
+  for (let i = index; i < list.length; i++) {
+    if (!turn.ownedIds.has(list[i].id)) return false;
+  }
+  return true;
 }
 
 export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
@@ -96,9 +136,9 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
   const [runError, setRunError] = React.useState<string | null>(null);
   const [deadTurn, setDeadTurn] = React.useState(false);
   const [dismissedKey, setDismissedKey] = React.useState<string | null>(null);
-  // Id of the user message that anchored the failed turn, captured at
-  // failure-detection time — the ONLY turn retry is allowed to touch.
-  const [failedUserId, setFailedUserId] = React.useState<string | null>(null);
+  // The failed turn (anchoring user message + owned tail ids), captured at
+  // failure-detection time — the ONLY messages retry is allowed to touch.
+  const [failedTurn, setFailedTurn] = React.useState<FailedTurn | null>(null);
   const [isRetrying, setIsRetrying] = React.useState(false);
   const retryingRef = React.useRef(false);
 
@@ -119,15 +159,15 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
         setRunError(null);
         setDeadTurn(false);
         setDismissedKey(null);
-        setFailedUserId(null);
+        setFailedTurn(null);
       },
       onRunFailed: ({ error }) => {
         setRunError(error?.message || 'The request was interrupted.');
-        setFailedUserId(lastUserIdOf(messagesRef.current));
+        setFailedTurn(captureFailedTurn(messagesRef.current));
       },
       onRunErrorEvent: ({ event }) => {
         setRunError(event?.message || 'The agent reported an error.');
-        setFailedUserId(lastUserIdOf(messagesRef.current));
+        setFailedTurn(captureFailedTurn(messagesRef.current));
       },
     });
     return () => subscription.unsubscribe();
@@ -144,8 +184,12 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
       return;
     }
     const timer = setTimeout(() => {
+      // Capture from the LIVE store at fire time; only mark a dead turn if
+      // the dangling tail this timer was armed for is still the tail.
+      const captured = captureFailedTurn(messagesRef.current);
+      if (!captured || captured.userId !== danglingUserId) return;
       setDeadTurn(true);
-      setFailedUserId(danglingUserId);
+      setFailedTurn(captured);
     }, DEAD_TURN_GRACE_MS);
     return () => clearTimeout(timer);
   }, [danglingUserId, isLoading]);
@@ -157,21 +201,20 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
     retryingRef.current = true;
     setIsRetrying(true);
     try {
-      // Revalidate against the LIVE store, not the render snapshot: the
-      // failed turn must still be the transcript's last user message,
-      // otherwise abort without touching anything — turns the failure does
-      // not own are never deleted.
+      // Revalidate the OWNERSHIP PREDICATE against the LIVE store, not the
+      // render snapshot: the failed turn must still own the transcript tail
+      // (same anchoring user message, nothing after it that arrived post-
+      // detection), otherwise abort without touching anything.
       const current = messagesRef.current;
+      if (!failedTurnOwnsTail(current, failedTurn)) return;
       const lastUserIndex = lastUserIndexOf(current);
-      if (lastUserIndex === -1) return;
       const failed = current[lastUserIndex];
-      if (failedUserId === null || failed.id !== failedUserId) return;
       const content = typeof failed.content === 'string' ? failed.content : '';
       if (!content) return;
 
       // Deterministic delete set, snapshotted before mutating: the failed
-      // user message plus anything the failed run left after it (partial
-      // assistant text, tool fragments). Completed prior turns untouched.
+      // user message plus the fragments the failed run left after it — all
+      // ownership-checked above. Completed prior turns untouched.
       const toDelete = current.slice(lastUserIndex).map((m) => m.id);
       for (let i = toDelete.length - 1; i >= 0; i--) {
         deleteMessage(toDelete[i]);
@@ -179,7 +222,7 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
       setRunError(null);
       setDeadTurn(false);
       setDismissedKey(null);
-      setFailedUserId(null);
+      setFailedTurn(null);
       // Re-send re-appends the one user bubble and triggers a run that
       // resends the full remaining (settled) history.
       await sendMessage({ id: failed.id, role: 'user', content });
@@ -187,16 +230,16 @@ export function ChatRunFailureNotice({ className }: ChatRunFailureNoticeProps) {
       retryingRef.current = false;
       setIsRetrying(false);
     }
-  }, [failedUserId, deleteMessage, sendMessage]);
+  }, [failedTurn, deleteMessage, sendMessage]);
 
   // The notice is only actionable — and only shown — while the recorded
-  // failed turn is still the transcript's dangling tail. If the transcript
-  // moved on (normally onRunInitialized already cleared us), the stale
-  // notice hides instead of offering a retry against someone else's turns.
-  const currentLastUserId = lastUserIdOf(list);
-  const failureMatchesTail =
-    failedUserId !== null && failedUserId === currentLastUserId;
-  const noticeKey = `${failedUserId ?? 'none'}|${runError ?? ''}`;
+  // failed turn still OWNS the transcript tail (ownership predicate above).
+  // If the transcript moved on, or a reply to the failed turn arrived after
+  // detection (event-less recovery — normally onRunInitialized already
+  // cleared us), the stale notice hides instead of offering a retry against
+  // messages the failure does not own.
+  const failureMatchesTail = failedTurnOwnsTail(list, failedTurn);
+  const noticeKey = `${failedTurn?.userId ?? 'none'}|${runError ?? ''}`;
   const visible =
     !isLoading &&
     (runError !== null || deadTurn) &&

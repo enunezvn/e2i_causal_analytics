@@ -271,6 +271,57 @@ describe('ChatRunFailureNotice (UI-D1, #1340)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('hides the notice when a completed reply to the failed turn arrives without run events', () => {
+    // Failure recorded for user turn u1 while it was dangling...
+    setChat([{ id: 'u1', role: 'user', content: 'Compare TRx by quarter' }]);
+    const { rerender } = render(<ChatRunFailureNotice />);
+    act(() => {
+      agent.emit('onRunFailed', { error: new Error('net::ERR_ABORTED') });
+    });
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    // ...then an assistant reply to that SAME turn arrives via event-less
+    // recovery (resync) — no onRunInitialized ever fires. u1 is still the
+    // last user message, but the turn is now answered: the notice must hide
+    // rather than offer a retry that would delete the completed reply.
+    setChat([
+      { id: 'u1', role: 'user', content: 'Compare TRx by quarter' },
+      { id: 'a1', role: 'assistant', content: 'Here is the full comparison.' },
+    ]);
+    rerender(<ChatRunFailureNotice />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('retry aborts with zero mutations when a reply to the failed turn arrived in the store', async () => {
+    // Same scenario, but the reply lands via in-place store mutation with no
+    // re-render, so the stale notice is still on screen when the click hits:
+    // the pre-mutation revalidation must abort — completed turns are never
+    // deleted, even when they answer the failed turn itself.
+    const messages: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: 'Compare TRx by quarter' },
+    ];
+    setChat(messages);
+    render(<ChatRunFailureNotice />);
+    act(() => {
+      agent.emit('onRunFailed', { error: new Error('net::ERR_ABORTED') });
+    });
+    const retryButton = screen.getByRole('button', { name: /retry/i });
+
+    messages.push({
+      id: 'a1',
+      role: 'assistant',
+      content: 'Here is the full comparison.',
+    });
+
+    await act(async () => {
+      fireEvent.click(retryButton);
+    });
+
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('retry aborts cleanly when the failed turn no longer matches the current transcript', async () => {
     const messages: ChatMessage[] = [
       { id: 'u1', role: 'user', content: 'hello' },
