@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.tool_registry.registry import ToolRegistry
-from src.utils.llm_content import normalize_llm_content
+from src.utils.llm_content import normalize_llm_content, parse_llm_json
 
 from .cache import get_cache_manager
 from .memory_hooks import ToolComposerMemoryHooks, get_tool_composer_memory_hooks
@@ -561,21 +561,28 @@ class ToolPlanner:
         return "\n".join(lines)
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
-        """Parse JSON from LLM response"""
-        if "```json" in response:
-            start = response.find("```json") + 7
-            end = response.find("```", start)
-            response = response[start:end].strip()
-        elif "```" in response:
-            start = response.find("```") + 3
-            end = response.find("```", start)
-            response = response[start:end].strip()
+        """Parse the planning JSON from the LLM response.
 
+        Uses ``parse_llm_json`` (#1364): try the whole payload as bare JSON
+        first — so a value legitimately containing ``` is never mangled by
+        fence logic — then fall back to each markdown fence, tolerating an
+        UNTERMINATED closing fence (models truncate it when they run low on
+        tokens). A genuinely truncated payload (the #1365 defect: cut
+        mid-first-value) is still unrecoverable and surfaces as a clear
+        ``PlanningError`` — the real fix for that is generation-side (a real
+        planning token budget with thinking disabled), not parsing.
+        """
         try:
-            return cast(Dict[str, Any], json.loads(response))
+            parsed = parse_llm_json(response)
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"Failed to parse planning JSON: {str(response)[:200]}...")
             raise PlanningError(f"Invalid JSON in LLM response: {e}") from e
+
+        if not isinstance(parsed, dict):
+            raise PlanningError(
+                f"Invalid JSON in LLM response: expected a JSON object, got {type(parsed).__name__}"
+            )
+        return cast(Dict[str, Any], parsed)
 
     def _build_tool_mappings(self, parsed: Dict[str, Any]) -> List[ToolMapping]:
         """Build ToolMapping objects from parsed response"""

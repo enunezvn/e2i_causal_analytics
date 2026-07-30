@@ -287,6 +287,22 @@ class ToolComposerAgent:
 
         logger.info("ToolComposerAgent initialized")
 
+    @staticmethod
+    def _provider_key_present() -> bool:
+        """Whether the configured provider's API key is available.
+
+        Side-effect-free key probe (no client construction / no background
+        threads): the factory can build a real client iff the configured
+        provider's key env var is set. Used to decide between per-phase factory
+        clients (key present, #1365) and the keyless MARKED mock (#606).
+        """
+        import os
+
+        from src.utils.llm_factory import get_llm_provider
+
+        key_var = "ANTHROPIC_API_KEY" if get_llm_provider() == "anthropic" else "OPENAI_API_KEY"
+        return bool(os.environ.get(key_var))
+
     def _ensure_composer(self) -> ToolComposer:
         """Ensure composer is initialized (lazy initialization).
 
@@ -297,46 +313,47 @@ class ToolComposerAgent:
             RuntimeError: If LLM client not provided and cannot be initialized
         """
         if self._composer is None:
-            if self.llm_client is None:
-                # Try to get default client from factory
-                try:
-                    from src.utils.llm_factory import get_standard_llm
+            if self.llm_client is None and not self._provider_key_present():
+                # Keyless contexts (Tier 1-5 harness, #606): fall back to an
+                # opt-in MARKED mock only when E2I_ALLOW_MOCK_LLM is set;
+                # otherwise stay fail-loud (prod never gets a silent mock).
+                from src.utils.mock_llm import MarkedMockChatLLM, mock_llm_allowed
 
-                    self.llm_client = get_standard_llm()
-                    logger.info("Initialized default LLM client from factory")
-                except Exception as e:
-                    # Keyless contexts (Tier 1-5 harness, #606): fall back to an
-                    # opt-in MARKED mock only when E2I_ALLOW_MOCK_LLM is set;
-                    # otherwise stay fail-loud (prod never gets a silent mock).
-                    from src.utils.mock_llm import MarkedMockChatLLM, mock_llm_allowed
-
-                    if not mock_llm_allowed():
-                        raise RuntimeError(
-                            "ToolComposerAgent requires an LLM client. "
-                            "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
-                        ) from e
-                    logger.warning(
-                        "tool_composer: no LLM key — using MARKED mock "
-                        "(E2I_ALLOW_MOCK_LLM); output carries "
-                        "mock_response_for_dev_only=True (#606)."
+                if not mock_llm_allowed():
+                    raise RuntimeError(
+                        "ToolComposerAgent requires an LLM client. "
+                        "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
                     )
-                    # Phase-aware: decompose -> plan -> synthesize each parse a
-                    # different JSON shape; return the right canned payload per
-                    # phase. Key on each node's ROLE-UNIQUE system-prompt phrase
-                    # ("...decomposition specialist" / "tool planning specialist"
-                    # / "...response synthesizer"). Loose keywords like "synth" /
-                    # "tool" collide because the planner embeds the tool registry,
-                    # which contains tools whose source_agent is
-                    # "prediction_synthesizer" -> "synth" hijacked the planning
-                    # call and fed it the synthesis JSON (#606).
-                    self.llm_client = MarkedMockChatLLM(
-                        _MOCK_SYNTHESIS_JSON,
-                        phase_responses=[
-                            ("decomposition specialist", _MOCK_DECOMPOSITION_JSON),
-                            ("planning specialist", _MOCK_PLANNING_JSON),
-                            ("response synthesizer", _MOCK_SYNTHESIS_JSON),
-                        ],
-                    )
+                logger.warning(
+                    "tool_composer: no LLM key — using MARKED mock "
+                    "(E2I_ALLOW_MOCK_LLM); output carries "
+                    "mock_response_for_dev_only=True (#606)."
+                )
+                # Phase-aware: decompose -> plan -> synthesize each parse a
+                # different JSON shape; return the right canned payload per
+                # phase. Key on each node's ROLE-UNIQUE system-prompt phrase
+                # ("...decomposition specialist" / "tool planning specialist"
+                # / "...response synthesizer"). Loose keywords like "synth" /
+                # "tool" collide because the planner embeds the tool registry,
+                # which contains tools whose source_agent is
+                # "prediction_synthesizer" -> "synth" hijacked the planning
+                # call and fed it the synthesis JSON (#606).
+                self.llm_client = MarkedMockChatLLM(
+                    _MOCK_SYNTHESIS_JSON,
+                    phase_responses=[
+                        ("decomposition specialist", _MOCK_DECOMPOSITION_JSON),
+                        ("planning specialist", _MOCK_PLANNING_JSON),
+                        ("response synthesizer", _MOCK_SYNTHESIS_JSON),
+                    ],
+                )
+            elif self.llm_client is None:
+                # A provider key is present: do NOT pre-build one shared client.
+                # Leaving llm_client=None lets ToolComposer build a correctly
+                # SIZED client per phase (planning gets a real token budget with
+                # thinking disabled — #1365), instead of the old shared
+                # get_standard_llm() whose 2048/adaptive cap truncated the
+                # planning JSON.
+                logger.info("tool_composer: provider key present — using per-phase factory clients")
 
             self._composer = ToolComposer(
                 llm_client=self.llm_client,
