@@ -65,6 +65,34 @@ from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initia
 # =============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _isolate_mlflow_metrics(monkeypatch):
+    """Keep every test in this module off the real MLflow HTTP path.
+
+    ``run_chatbot``'s finally-block logs session metrics to MLflow whenever
+    ``CHATBOT_MLFLOW_METRICS_ENABLED`` (default true) — in CI no MLflow server
+    listens on ``MLFLOW_TRACKING_URI``, and the MLflow client's retry backoff
+    outlives the 30s per-test timeout. pytest-timeout's ``thread`` method then
+    kills the whole xdist worker mid-module (``node down: Not properly
+    terminated``), the replacement worker never inherits the dead worker's
+    queued tests under ``--dist=loadscope``, and the Unit Tests job idles to
+    its 20-minute cap. Whether the unpatched call died fast (pass) or retried
+    past the timeout (worker kill) depended on circuit-breaker state leaked by
+    whichever modules happened to precede this one on the worker — so any PR
+    that added a test module could reshuffle the distribution and trip it.
+
+    Also resets the module-level connector/experiment singletons so no test
+    observes state leaked by a previous one. Tests that exercise the MLflow
+    helpers directly re-patch the flag inside their own ``with patch(...)``
+    blocks, which override this default.
+    """
+    import src.api.routes.chatbot_graph as module
+
+    monkeypatch.setattr(module, "CHATBOT_MLFLOW_METRICS_ENABLED", False)
+    monkeypatch.setattr(module, "_mlflow_experiment_id", None)
+    monkeypatch.setattr(module, "_mlflow_connector", None)
+
+
 @pytest.fixture
 def basic_state() -> ChatbotState:
     """Create a basic ChatbotState for testing."""
