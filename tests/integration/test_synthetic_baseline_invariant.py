@@ -104,17 +104,14 @@ BASELINE_CI = {
     "pr_auc": 0.5247,  # ±0.02 — was 0.4734, re-pinned #1311
     "brier_score": 0.1811,  # ±0.01 — passed both post-aed06cb7 nightlies, unchanged
     "mcc": 0.3918,  # ±0.03 — was 0.3355, re-pinned #1311
-    # Re-pinned 2026-06-12 (#773 W1): PR #761 (67be1cbf) re-routed the LR
-    # solver (l2/None saga→lbfgs) + re-tuned severe/extreme non_tree
-    # resampling to class_weight, and PR #760 (5a9e3e5b) fixed param-less QC
-    # remediation drops — both merged 2026-06-06 and deliberately changed the
-    # trained-model path, shifting the dollar-utility at the headline
-    # threshold from the 2026-05-06 pin 99.20 to 84.85. Faithfulness:
-    # scenario_a is ALL-NUMERIC (no one-hot, so the #773 W2 XGBoost
-    # feature-name crash never degraded this run's Step-5b alternates) and
-    # 84.8500 reproduced bit-identically across independent nightly runs
-    # 27087062518 (2026-06-07, first red) and 27404434136 (2026-06-12).
-    # Tolerance width unchanged (±0.5).
+    # Re-pinned 2026-07-30 (#1311): the aed06cb7 holdout enlargement shifted
+    # the dollar-utility at the headline threshold 84.85 → 90.95, reproduced
+    # bit-identically across nightly runs 30433515459 (2026-07-29) and
+    # 30524268029 (2026-07-30). Historical context: the 84.85 value was
+    # itself a 2026-06-12 re-pin (#773 W1 — PR #761 solver re-route +
+    # PR #760 QC-remediation fix moved it from the original 99.20; scenario_a
+    # is ALL-NUMERIC so the #773 W2 XGBoost one-hot crash never touched this
+    # run). Tolerance width unchanged (±0.5).
     "business_utility": 90.95,  # ±0.5 — was 84.85; re-pinned #1311 (aed06cb7), see above
 }
 

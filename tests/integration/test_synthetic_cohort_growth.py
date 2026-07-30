@@ -54,8 +54,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # memory/pr69_e2e_environment_delta_diag_20260506.md precedent (same
 # dual-band pattern test_synthetic_baseline_invariant.py uses for scenario_a).
 # CI ISA shifts metrics at the floating-point instruction level; both are
-# bit-deterministic in their respective env. CI bands measured 2026-05-09
-# from PR #111 first CI run.
+# bit-deterministic in their respective env. CI-band measurement status is
+# per-scenario post-aed06cb7 (#1311): scenario_b CI re-measured 2026-07-30
+# from the red nightly logs; scenario_c and a_balanced CI bands are
+# UNMEASURED post-reshuffle and preserve the prior effective gate width
+# (see each band's comment). The original 2026-05-09 PR #111 first-CI-run
+# measurements are historical — superseded by the reshuffle.
 
 # scenario_b: prev=0.05, n=6000.
 # Calibrated band [0.72, 0.78] from scenarios/scenario_b.py:7 was measured at
@@ -91,10 +95,14 @@ BASELINE_LOCAL_SCENARIO_B: Dict[str, Any] = {
     # (bit-identical two seeded runs; split membership, not regularization).
     # The CI delta is UNMEASURED post-aed06cb7 (the red nightlies failed at
     # the band assert before the delta check) and this knob is shared
-    # local/CI, so the cap is a PROVISIONAL ceiling: local 0.125 + headroom
-    # for the historical CI-vs-local overfit gap. The helper's measurement
-    # hook warns the observed delta on passing runs — tighten from there.
-    "max_train_val_delta": 0.20,
+    # local/CI, so the cap is a PROVISIONAL ceiling sized against the worst
+    # documented CI-vs-local overfit gap: local 0.1248 + the PR #69
+    # default-regime divergence (+0.104, 0.127 local → 0.231 CI) projects a
+    # CI worst case ≈ 0.229, so the cap sits above that projection. The
+    # scenario_b val_AUC coinciding local↔CI at 4dp suggests the actual CI
+    # delta is far closer to 0.1248 — the helper's measurement hook warns
+    # the observed delta on passing runs; tighten to observed + ~0.05 there.
+    "max_train_val_delta": 0.25,
     "enforce_calibrated_band": False,
 }
 
