@@ -9,6 +9,7 @@ Database: causal_validations table (010_causal_validation_tables.sql)
 
 import json
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
 from src.causal_engine.refutation_runner import (
@@ -19,6 +20,27 @@ from src.causal_engine.refutation_runner import (
 from src.repositories.base import BaseRepository
 
 logger = logging.getLogger(__name__)
+
+#: Canonical namespace prefix for the causal_paths -> causal_validations
+#: linkage (#1352, migration 119). ``causal_validations.estimate_id`` is a
+#: uuid while ``causal_paths.path_id`` is a varchar(20); the canonical mapping
+#: is ``uuid5(NAMESPACE_URL, "e2i:causal_paths:" + path_id)`` — byte-identical
+#: to migration 119's SQL ``public.causal_path_estimate_id(path_id)``
+#: (``extensions.uuid_generate_v5(extensions.uuid_ns_url(), ...)``). The
+#: cross-language pin is locked by known-answer vectors in
+#: tests/unit/test_repositories/test_causal_validation_estimate_id.py.
+CAUSAL_PATH_ESTIMATE_NAMESPACE = "e2i:causal_paths:"
+
+
+def derive_causal_path_estimate_id(path_id: str) -> str:
+    """Derive the canonical ``causal_validations.estimate_id`` for a causal path.
+
+    Content-addressed and deterministic: any producer (migration 119 seeding,
+    the future RefutationNode promoter — #1352 item 3) and any consumer (chat
+    refutation-evidence surfacing) MUST use this same derivation so evidence
+    written by one side is findable by the other.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{CAUSAL_PATH_ESTIMATE_NAMESPACE}{path_id}"))
 
 
 class CausalValidationRepository(BaseRepository):
@@ -188,6 +210,42 @@ class CausalValidationRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to fetch validations by ids: {e}")
             return []
+
+    async def get_rows_for_paths(self, path_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """Batch-fetch causal_validations rows keyed by causal path id.
+
+        Maps each ``path_id`` through :func:`derive_causal_path_estimate_id`
+        (the migration-119 canonical linkage) and returns only paths that have
+        evidence rows.
+
+        Error contract — deliberately NOT the log-and-return-empty sibling
+        convention: a query failure RAISES. The chat caller must distinguish
+        "no evidence on record" (honest ``None`` per path) from "lookup
+        failed" (must never be presented as absence of evidence), and a
+        swallowed error here would collapse those two states.
+        """
+        wanted = [p for p in path_ids if p]
+        if not wanted:
+            return {}
+        if not self.client:
+            raise RuntimeError(
+                "No Supabase client for causal_validations lookup — cannot "
+                "distinguish 'no evidence' from 'lookup unavailable'"
+            )
+        estimate_to_path = {derive_causal_path_estimate_id(p): p for p in wanted}
+        result = await (
+            self.client.table(self.table_name)
+            .select("*")
+            .in_("estimate_id", list(estimate_to_path))
+            .eq("estimate_source", "causal_paths")
+            .execute()
+        )
+        by_path: Dict[str, List[Dict[str, Any]]] = {}
+        for row in result.data or []:
+            pid = estimate_to_path.get(str(row.get("estimate_id")))
+            if pid is not None:
+                by_path.setdefault(pid, []).append(row)
+        return by_path
 
     async def get_validations_for_estimate(
         self,

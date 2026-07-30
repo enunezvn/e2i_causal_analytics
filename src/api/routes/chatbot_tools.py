@@ -14,6 +14,7 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -38,6 +39,7 @@ from src.repositories import (
     AgentActivityRepository,
     BusinessMetricRepository,
     CausalPathRepository,
+    CausalValidationRepository,
     TriggerRepository,
 )
 from src.repositories.chatbot_conversation import (
@@ -425,11 +427,20 @@ async def _query_kpis(
         return {"success": False, "error": str(e), "query_type": "kpi"}
 
 
-def _format_causal_path(row: Dict[str, Any]) -> Dict[str, Any]:
+def _format_causal_path(
+    row: Dict[str, Any], refutation_evidence: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Map a ``causal_paths`` registry row onto the chat-facing chain shape.
 
     ``confidence`` here is the registry's method-attributed ``confidence_level``
     (a real 0-1 causal confidence) — never a retrieval similarity score.
+
+    #1352: ``validation_status`` carries the migration-119 pinned semantics
+    ('validated' == "RefutationSuite evidence exists and passed"), and
+    ``refutation_evidence`` is the per-path summary from
+    :func:`_summarize_refutation_rows` — ``None`` means the evidence lookup
+    succeeded and found nothing on record (see
+    :func:`_refutation_evidence_entry` for the lookup-failed state).
     """
     return {
         "path_id": row.get("path_id"),
@@ -442,7 +453,113 @@ def _format_causal_path(row: Dict[str, Any]) -> Dict[str, Any]:
         "time_lag_days": row.get("time_lag_days"),
         "business_impact_estimate": row.get("business_impact_estimate"),
         "brand": row.get("brand"),
+        "validation_status": row.get("validation_status"),
+        "refutation_evidence": refutation_evidence,
     }
+
+
+def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Aggregate one path's ``causal_validations`` rows into a chat summary.
+
+    Gate priority mirrors ``CausalValidationRepository.get_gate_decision``
+    (block > review > proceed), extended over the full ``gate_decision`` enum
+    (reject counts as blocking, augment as review-band, accept as proceed).
+    ``evidence_is_synthetic`` reads the migration-119 provenance label
+    (``details_json.is_synthetic``) so seeded synthetic evidence can never
+    masquerade as real RefutationSuite output in an answer.
+    """
+    if not rows:
+        return None
+
+    def _status_count(status: str) -> int:
+        return sum(1 for r in rows if r.get("status") == status)
+
+    gates = {r.get("gate_decision") for r in rows}
+    if gates & {"block", "reject"}:
+        gate = "block"
+    elif gates & {"review", "augment"}:
+        gate = "review"
+    else:
+        gate = "proceed"
+
+    confidences = [
+        float(r["confidence_score"]) for r in rows if r.get("confidence_score") is not None
+    ]
+
+    def _details(r: Dict[str, Any]) -> Dict[str, Any]:
+        raw = r.get("details_json")
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError):
+                return {}
+        return {}
+
+    timestamps = [str(r["created_at"]) for r in rows if r.get("created_at")]
+    return {
+        "tests_total": len(rows),
+        "tests_passed": _status_count("passed"),
+        "tests_failed": _status_count("failed"),
+        "tests_warning": _status_count("warning"),
+        "gate_decision": gate,
+        "confidence_score": (sum(confidences) / len(confidences)) if confidences else None,
+        "evidence_is_synthetic": any(bool(_details(r).get("is_synthetic")) for r in rows),
+        "latest_test_at": max(timestamps) if timestamps else None,
+    }
+
+
+def _refutation_evidence_entry(
+    path_id: Optional[str], summaries: Optional[Dict[str, Dict[str, Any]]]
+) -> Optional[Dict[str, Any]]:
+    """Resolve one path's refutation-evidence entry, keeping three states
+    honestly distinct:
+
+    * summary dict — evidence rows exist for this path;
+    * ``None`` — the lookup succeeded and there is genuinely no refutation
+      evidence on record;
+    * lookup-failed marker — the evidence query errored (``summaries is
+      None``); this must never be presented as absence of evidence.
+    """
+    if summaries is None:
+        return {
+            "lookup_failed": True,
+            "note": (
+                "refutation-evidence lookup unavailable for this answer — "
+                "do not read this as 'no evidence exists'"
+            ),
+        }
+    if not path_id:
+        return None
+    return summaries.get(path_id)
+
+
+async def _fetch_refutation_summaries(
+    client: Any, paths: List[Dict[str, Any]]
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Batch-fetch and summarize refutation evidence for a list of path rows.
+
+    Returns ``None`` on lookup failure (the caller degrades via
+    :func:`_refutation_evidence_entry`'s lookup-failed marker — evidence is
+    enrichment, never a gate on answering).
+    """
+    path_ids = [str(p.get("path_id")) for p in paths if p.get("path_id")]
+    if not path_ids:
+        return {}
+    try:
+        repo = CausalValidationRepository(client)
+        rows_by_path = await repo.get_rows_for_paths(path_ids)
+    except Exception as e:
+        logger.warning(f"Refutation-evidence lookup failed (degrading honestly): {e}")
+        return None
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for pid, rows in rows_by_path.items():
+        summary = _summarize_refutation_rows(rows)
+        if summary is not None:
+            summaries[pid] = summary
+    return summaries
 
 
 async def _query_causal_chains(
@@ -485,11 +602,20 @@ async def _query_causal_chains(
                 limit=limit,
                 include_synthetic=include_synthetic,
             )
+            # #1352: surface validation provenance (status + refutation
+            # evidence summary) so answers can cite it (the q07 gap).
+            summaries = await _fetch_refutation_summaries(client, paths)
             return {
                 "success": True,
                 "query_type": "causal_chain",
                 "count": len(paths),
-                "data": [_format_causal_path(p) for p in paths],
+                "data": [
+                    _format_causal_path(
+                        p,
+                        refutation_evidence=_refutation_evidence_entry(p.get("path_id"), summaries),
+                    )
+                    for p in paths
+                ],
                 "kpi_analyzed": kpi_name,
                 "data_source": data_source,
             }
@@ -498,6 +624,11 @@ async def _query_causal_chains(
         paths = await repo.get_many(
             filters=filters, limit=limit, include_synthetic=include_synthetic
         )
+        # Raw-row branch: rows already carry validation_status; attach the
+        # same per-path refutation-evidence entry for parity (#1352).
+        summaries = await _fetch_refutation_summaries(client, paths)
+        for p in paths:
+            p["refutation_evidence"] = _refutation_evidence_entry(p.get("path_id"), summaries)
         return {
             "success": True,
             "query_type": "causal_chain",
@@ -764,6 +895,11 @@ async def causal_analysis_tool(
             include_synthetic=include_synthetic,
         )
 
+        # #1352: attach validation provenance (pinned validation_status +
+        # refutation-evidence summary) so the answer can cite whether each
+        # chain actually passed refutation testing (the q07 gap).
+        summaries = await _fetch_refutation_summaries(client, paths)
+
         response: Dict[str, Any] = {
             "success": True,
             "kpi_analyzed": kpi_name,
@@ -771,7 +907,12 @@ async def causal_analysis_tool(
             "region": region,
             "causal_chains_found": len(paths),
             "min_confidence_applied": min_confidence,
-            "results": [_format_causal_path(p) for p in paths],
+            "results": [
+                _format_causal_path(
+                    p, refutation_evidence=_refutation_evidence_entry(p.get("path_id"), summaries)
+                )
+                for p in paths
+            ],
             "analysis_type": "causal_paths_registry",
             "data_source": data_source,
         }

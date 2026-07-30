@@ -881,6 +881,18 @@ class RefutationNode:
             refutation_results = cast(RefutationResults, suite.to_legacy_format())
 
             # Persist validation results to database
+            #
+            # TODO(#1352 item 3, resolver lane — do NOT implement here): this
+            # node is the SOLE promoter of causal_paths.validation_status.
+            # When a run is tied to a causal_paths row, the promoter must
+            # (1) persist the passed suite under
+            #     derive_causal_path_estimate_id(path_id)
+            #     (src.repositories.causal_validation) — migration 119's
+            #     evidence gate looks that estimate_id up — and only then
+            # (2) flip the path row 'pending' -> 'validated' (gate PROCEED).
+            # Today's estimate_id below is the chat query_id, which is NOT
+            # path-linked; the schema trigger rejects any 'validated' claim on
+            # a real path without passed evidence under the derived id.
             validation_ids = []
             if self.validation_repo and query_id:
                 try:
