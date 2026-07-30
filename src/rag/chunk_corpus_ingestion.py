@@ -102,6 +102,11 @@ def _existing_chunk_hashes(sb: Any, *, agent_name: str, document_type: str) -> s
             .select("content_hash")
             .eq("agent_name", agent_name)
             .eq("document_type", document_type)
+            # Deterministic order over the PK so offset pagination can neither
+            # skip nor revisit a row across page boundaries (codex iter-1 LOW);
+            # a missed existing hash would only cost a redundant re-embed, but
+            # ordering is free at this corpus scale.
+            .order("chunk_id")
         )
         q = apply_provenance_filter(q)
         resp = q.range(page * page_size, page * page_size + page_size - 1).execute()
@@ -172,22 +177,35 @@ async def index_business_metric_chunks(
 
     # Build the pending set (dedup BEFORE embedding).
     pending: list[dict[str, Any]] = []
-    batch_hashes: set[str] = set()
+    seen_doc_ids: set[str] = set()
     skipped = 0
     for brand in brands:
         for row in _fetch_brand_rows(sb, brand, limit_per_brand, latest_per_combo):
-            content = render_business_metric(row)
-            chash = _content_hash(content)
-            if chash in already or chash in batch_hashes:
-                skipped += 1
-                continue
-            batch_hashes.add(chash)
             metric_name = row.get("metric_name")
             row_brand = row.get("brand")
             row_region = row.get("region")
+            document_id = _chunk_document_id(metric_name, row_brand, row_region)
+            # Collapse to ONE chunk per (brand, metric, region) combo = its LATEST
+            # snapshot. _fetch_brand_rows returns rows date-DESC, so the FIRST time
+            # a document_id appears is its latest; later (older) snapshots are
+            # dropped. Without this, latest_per_combo=False (the default + --limit
+            # smoke path) can emit two rows with different content_hash but the
+            # SAME document_id -> a single upsert batch with duplicate conflict
+            # keys, which Postgres rejects ("cannot affect row a second time").
+            # (codex iter-1 MED.)
+            if document_id in seen_doc_ids:
+                skipped += 1
+                continue
+            seen_doc_ids.add(document_id)
+            content = render_business_metric(row)
+            chash = _content_hash(content)
+            # Unchanged prose already indexed -> skip BEFORE embedding (real spend).
+            if chash in already:
+                skipped += 1
+                continue
             pending.append(
                 {
-                    "document_id": _chunk_document_id(metric_name, row_brand, row_region),
+                    "document_id": document_id,
                     "content": content,
                     "content_hash": chash,
                     "brand": (row_brand or "").lower() or None,
@@ -206,30 +224,36 @@ async def index_business_metric_chunks(
 
     records: list[dict[str, Any]] = []
     for p, embedding in zip(pending, embeddings, strict=True):
-        record = {
-            "document_id": p["document_id"],
-            "document_type": document_type,
-            "chunk_index": 0,
-            "content": p["content"],
-            "content_hash": p["content_hash"],
-            "embedding": embedding,
-            "agent_name": agent_name,
-            "kpi_name": p["kpi_name"],
-            # embedding_model = the ACTUAL model used (honest; not the column
-            # default) so a deployment overriding EMBEDDING_MODEL is recorded.
-            "embedding_model": client.model,
-            # cheap word-count token estimate (matches upsert_rag_chunk's semantics).
-            "token_count": len(p["content"].split()),
-            "metadata": {"source": "business_metrics", "ingested_via": "chunk_corpus_ingestion"},
-        }
-        # brand/region omitted when null (keep the column NULL, not empty string).
-        if p["brand"]:
-            record["brand"] = p["brand"]
-        if p["region"]:
-            record["region"] = p["region"]
-        # NOTE: is_synthetic intentionally NOT set -> DB default false -> the
-        # chunk is retrievable by the live chat path (see module docstring).
-        records.append(record)
+        # Uniform (rectangular) records so PostgREST's per-batch `columns` union
+        # is deterministic. brand/region are always present (value or None ->
+        # JSON null -> the nullable column stays NULL). is_synthetic is present
+        # in NO record, so it is absent from the `columns` list and the DB
+        # DEFAULT (false, migration database/rag/005) applies -- NOT NULL is
+        # honored, and the chunk is retrievable by the live chat path (which
+        # never opts into synthetic; see module docstring).
+        records.append(
+            {
+                "document_id": p["document_id"],
+                "document_type": document_type,
+                "chunk_index": 0,
+                "content": p["content"],
+                "content_hash": p["content_hash"],
+                "embedding": embedding,
+                "brand": p["brand"],
+                "region": p["region"],
+                "agent_name": agent_name,
+                "kpi_name": p["kpi_name"],
+                # embedding_model = the ACTUAL model used (honest; not the column
+                # default) so a deployment overriding EMBEDDING_MODEL is recorded.
+                "embedding_model": client.model,
+                # cheap word-count token estimate (matches upsert_rag_chunk semantics).
+                "token_count": len(p["content"].split()),
+                "metadata": {
+                    "source": "business_metrics",
+                    "ingested_via": "chunk_corpus_ingestion",
+                },
+            }
+        )
 
     sb.table("rag_document_chunks").upsert(records, on_conflict="document_id,chunk_index").execute()
     logger.info(

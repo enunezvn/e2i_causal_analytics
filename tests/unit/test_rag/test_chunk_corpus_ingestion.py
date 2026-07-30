@@ -70,7 +70,8 @@ class _FakeQuery:
     def is_(self, *_a: Any) -> "_FakeQuery":
         return self
 
-    def order(self, *_a: Any, **_k: Any) -> "_FakeQuery":
+    def order(self, *a: Any, **_k: Any) -> "_FakeQuery":
+        self.store.setdefault("order_calls", {}).setdefault(self.table, []).append(a)
         return self
 
     def limit(self, *_a: Any) -> "_FakeQuery":
@@ -201,6 +202,36 @@ def test_new_prose_is_embedded_once() -> None:
     assert len(out) == 1
     assert len(emb.calls) == 1
     assert emb.calls[0] == [ci.render_business_metric(_ROW)]
+
+
+def test_collapses_multiple_snapshots_of_same_combo_to_latest() -> None:
+    """latest_per_combo=False (default + --limit smoke path): when the fetch
+    returns several date snapshots of the SAME (brand, metric, region) combo,
+    exactly ONE chunk (the latest, date-DESC first) is embedded + upserted. Two
+    rows sharing a document_id in one upsert batch would trip Postgres's
+    'cannot affect row a second time' (codex iter-1 MED)."""
+    latest = dict(_ROW, metric_date="2025-10-29", value=9.0)
+    older = dict(_ROW, metric_date="2025-01-01", value=4.0)  # same combo, older
+    store: dict[str, Any] = {"metric_rows": [latest, older], "existing_hash_rows": []}
+    emb = _FakeEmbedder()
+    out = _run_index(store, emb)
+    assert out == [cci._chunk_document_id("TRx", "Kisqali", "Northeast")]
+    assert len(store["upserts"]) == 1
+    recs = store["upserts"][0]["records"]
+    assert len(recs) == 1  # collapsed -> no duplicate document_id in the batch
+    assert recs[0]["content"] == ci.render_business_metric(latest)  # latest kept
+    assert len(emb.calls) == 1 and emb.calls[0] == [ci.render_business_metric(latest)]
+
+
+def test_existing_chunk_hashes_orders_for_deterministic_pagination() -> None:
+    """The dedup read must order by the PK so offset pagination is stable across
+    page boundaries (codex iter-1 LOW)."""
+    store: dict[str, Any] = {}
+    cci._existing_chunk_hashes(
+        _FakeClient(store), agent_name="corpus_ingestion", document_type="kpi_snapshot"
+    )
+    orders = store.get("order_calls", {}).get("rag_document_chunks", [])
+    assert ("chunk_id",) in orders
 
 
 def test_existing_chunk_hashes_applies_provenance_and_agent_filter(monkeypatch: Any) -> None:
