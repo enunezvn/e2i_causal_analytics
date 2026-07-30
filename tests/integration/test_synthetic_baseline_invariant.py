@@ -61,6 +61,7 @@ import json
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -69,45 +70,49 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ── LOCAL baseline (Ubuntu local machine, AVX2 CPU, Python 3.12.3) ──────────
-# Re-measured 2026-05-06 with --regime scenario_a (synthetic_v2 β-prime swap).
-# Bit-identical across two local runs (≥6 decimal match, all metrics).
-# ⚠️ business_utility is STALE pre-#761/#760 (measured 2026-05-06): the
-# 2026-06-06 merges shifted the CI value 99.20 → 84.85 (see BASELINE_CI note)
-# and the AVX2-local twin has not been re-measured since. Re-measure locally
-# (two seeded runs) and update in the same commit as the next local run —
+# Re-measured 2026-07-30 (#1311) after aed06cb7 (#44 plan B1) enlarged the
+# goldstd holdout (test 15%→10%, holdout 5%→10%), reshuffling the keyed-draw
+# split assignment. Two seeded local runs (--regime scenario_a --split auto
+# --hpo-trials 5) were bit-identical on every metric (only the run-ID nonce
+# differed). This re-measurement also clears the previously documented STALE
+# pre-#761/#760 business_utility (99.20, measured 2026-05-06).
 # CI (the nightly arbiter) uses BASELINE_CI, not this dict.
 BASELINE_LOCAL = {
-    "roc_auc": 0.7689,  # ±0.01 — val side; calibrated band [0.78, 0.83] is on test
-    "pr_auc": 0.4734,  # ±0.02
-    "brier_score": 0.1811,  # ±0.01
-    "mcc": 0.3355,  # ±0.03
-    "business_utility": 99.20,  # ±0.5 — sign flipped from default regime (real signal)
+    "roc_auc": 0.7838,  # ±0.01 — was 0.7689, re-pinned #1311; val side
+    "pr_auc": 0.5230,  # ±0.02 — was 0.4734, re-pinned #1311
+    "brier_score": 0.1564,  # ±0.01 — was 0.1811, re-pinned #1311
+    "mcc": 0.3633,  # ±0.03 — was 0.3355, re-pinned #1311
+    "business_utility": 104.30,  # ±0.5 — was stale 99.20; re-pinned #1311
 }
 
 # ── CI baseline (GitHub Actions ubuntu-latest, AVX512 CPU, Python 3.12.13) ──
-# Pre-measurement placeholder — initialized to LOCAL values. Will be replaced
-# with CI-bit-deterministic measurements from the first slow-tests run on
-# feat/tier0-scenario-a-fixture (PR #TBD). The CPU-ISA divergence (AVX2 local
-# vs AVX512 CI) shifts metrics at the floating-point instruction level; we
-# still expect ≥6-decimal CI determinism per the same mechanism that pinned
-# the default-regime CI baseline (see memory/pr69_e2e_environment_delta_diag_20260506.md).
+# MEASURED from CI nightly logs (no longer the pre-measurement placeholder
+# this block once was — #1311 codex iter-2). The CPU-ISA divergence (AVX2
+# local vs AVX512 CI) shifts metrics at the floating-point instruction level;
+# CI values reproduce with ≥6-decimal determinism per the same mechanism that
+# pinned the default-regime CI baseline
+# (see memory/pr69_e2e_environment_delta_diag_20260506.md).
 BASELINE_CI = {
-    "roc_auc": 0.7689,  # ±0.01 — placeholder, replace with CI-measured value
-    "pr_auc": 0.4734,  # ±0.02 — placeholder
-    "brier_score": 0.1811,  # ±0.01 — placeholder
-    "mcc": 0.3355,  # ±0.03 — placeholder
-    # Re-pinned 2026-06-12 (#773 W1): PR #761 (67be1cbf) re-routed the LR
-    # solver (l2/None saga→lbfgs) + re-tuned severe/extreme non_tree
-    # resampling to class_weight, and PR #760 (5a9e3e5b) fixed param-less QC
-    # remediation drops — both merged 2026-06-06 and deliberately changed the
-    # trained-model path, shifting the dollar-utility at the headline
-    # threshold from the 2026-05-06 pin 99.20 to 84.85. Faithfulness:
-    # scenario_a is ALL-NUMERIC (no one-hot, so the #773 W2 XGBoost
-    # feature-name crash never degraded this run's Step-5b alternates) and
-    # 84.8500 reproduced bit-identically across independent nightly runs
-    # 27087062518 (2026-06-07, first red) and 27404434136 (2026-06-12).
-    # Tolerance width unchanged (±0.5).
-    "business_utility": 84.85,  # ±0.5 — re-pinned post-#761/#760, see above
+    # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1, merged 2026-07-21)
+    # enlarged the goldstd holdout at the seed quota (test 15%→10%, holdout
+    # 5%→10%), reshuffling the keyed-draw split assignment and deliberately
+    # shifting the whole metric surface. New values reproduced bit-identically
+    # across independent nightly runs 30433515459 (2026-07-29) and
+    # 30524268029 (2026-07-30). brier_score stayed within its ±0.01 band in
+    # both runs (pin unchanged). Tolerance widths unchanged.
+    "roc_auc": 0.8021,  # ±0.01 — was 0.7689, re-pinned #1311
+    "pr_auc": 0.5247,  # ±0.02 — was 0.4734, re-pinned #1311
+    "brier_score": 0.1811,  # ±0.01 — passed both post-aed06cb7 nightlies, unchanged
+    "mcc": 0.3918,  # ±0.03 — was 0.3355, re-pinned #1311
+    # Re-pinned 2026-07-30 (#1311): the aed06cb7 holdout enlargement shifted
+    # the dollar-utility at the headline threshold 84.85 → 90.95, reproduced
+    # bit-identically across nightly runs 30433515459 (2026-07-29) and
+    # 30524268029 (2026-07-30). Historical context: the 84.85 value was
+    # itself a 2026-06-12 re-pin (#773 W1 — PR #761 solver re-route +
+    # PR #760 QC-remediation fix moved it from the original 99.20; scenario_a
+    # is ALL-NUMERIC so the #773 W2 XGBoost one-hot crash never touched this
+    # run). Tolerance width unchanged (±0.5).
+    "business_utility": 90.95,  # ±0.5 — was 84.85; re-pinned #1311 (aed06cb7), see above
 }
 
 # Select the baseline for this environment.
@@ -116,14 +121,24 @@ BASELINE = BASELINE_CI if os.getenv("CI") else BASELINE_LOCAL
 
 ECE_POST_MAX = 0.10  # rubric §7: post-isotonic ECE < 0.10 (Agent A research)
 
-# Mild-overfit upper bound, env-gated like BASELINE.  The same CPU-ISA divergence
-# that shifts the validation metrics also shifts the train→val delta: AVX2 local
-# fits less aggressively (Δ≈0.127), AVX512 CI fits more aggressively (Δ≈0.231 in
-# the 2026-05-06 PR #69 CI runs).  Both are bit-deterministic in their env; tight
-# margins (0.05) above each observed value catch genuine regularization regression
-# without tripping on the inherent env-specific overfit level.
-TRAIN_VAL_DELTA_MAX_LOCAL = 0.10  # observed 0.0512 + ~0.05 headroom (scenario_a, 2026-05-06)
-TRAIN_VAL_DELTA_MAX_CI = 0.10  # placeholder — replace with CI-observed + 0.05 after first run
+# Mild-overfit upper bound, env-gated like BASELINE. The same CPU-ISA
+# divergence that shifts the validation metrics also shifts the train→val
+# delta (historical DEFAULT-regime measurements from the 2026-05-06 PR #69
+# diagnosis: local Δ≈0.127, CI Δ≈0.231; historical SCENARIO_A local
+# Δ=0.0512, 2026-05-06 — the two narratives that previously looked
+# contradictory here were measuring different regimes).
+#
+# Re-pinned 2026-07-30 (#1311): the aed06cb7 keyed-draw reshuffle moved the
+# scenario_a LOCAL delta 0.0512 → 0.1858 (bit-identical across two seeded
+# runs; no model/regularization code changed — split membership did). Local
+# cap = observed + ~0.05 headroom. The CI delta is UNMEASURED post-aed06cb7:
+# in every red nightly the pin assertion tripped BEFORE the delta check ran,
+# so the logs never printed it. CI cap is therefore a PROVISIONAL ceiling
+# (local observed 0.186 + the historical ~+0.10 CI-vs-local overfit gap +
+# headroom); the warnings.warn measurement hook below makes the next green
+# nightly log the observed CI delta — tighten to CI-observed + 0.05 then.
+TRAIN_VAL_DELTA_MAX_LOCAL = 0.24  # observed 0.1858 + ~0.05 headroom (#1311)
+TRAIN_VAL_DELTA_MAX_CI = 0.30  # PROVISIONAL — unmeasured; tighten from the warn hook's value
 TRAIN_VAL_DELTA_MAX = TRAIN_VAL_DELTA_MAX_CI if os.getenv("CI") else TRAIN_VAL_DELTA_MAX_LOCAL
 
 # Tolerance per metric. Tight because current run-variance at seed=42 is 0.
@@ -248,4 +263,13 @@ def test_synthetic_e2e_scenario_a_pins_7dim_baseline(tmp_path: Path) -> None:
         assert train_val_delta < TRAIN_VAL_DELTA_MAX, (
             f"Train→Val AUC delta = {train_val_delta:.4f} exceeds severe-overfit "
             f"threshold {TRAIN_VAL_DELTA_MAX}. Likely model regularization regression."
+        )
+        # #1311 measurement hook: the delta only ever appeared in logs when
+        # the test FAILED (pytest suppresses stdout on pass), which is why
+        # the CI cap above is provisional. A warning survives into the
+        # passing run's warnings summary — read it there and tighten the cap.
+        warnings.warn(
+            f"scenario_a train_val_auc_delta observed {train_val_delta:.4f} "
+            f"(cap {TRAIN_VAL_DELTA_MAX}) — measurement hook for cap re-pin",
+            stacklevel=1,
         )

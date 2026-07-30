@@ -18,9 +18,12 @@ CI wall-clock budget: 4 forks × ~3-4 min ≈ 12-16 min. Routes through
 the slow-tests Job D per ``memory/pr74_slow_tests_fixes_state.md``.
 
 Dual-band local/CI per ISA-divergence precedent
-(``memory/pr69_e2e_environment_delta_diag_20260506.md``). LOCAL bands
-are measured 2026-05-09 on Ubuntu AVX2, hpo-trials=5; CI bands TBD —
-initialised to LOCAL values and updated in-PR after the first CI run.
+(``memory/pr69_e2e_environment_delta_diag_20260506.md``). Provenance
+(re-pinned 2026-07-30, #1311): LOCAL bands are measured on Ubuntu AVX2 at
+hpo-trials=5 (two bit-identical seeded runs each); scenario_b's CI band is
+measured from the red-nightly logs; scenario_c and a_balanced CI bands are
+UNMEASURED (their tests pass in CI so no value is ever logged) and preserve
+the prior effective gate width — see each band's own comment.
 """
 
 from __future__ import annotations
@@ -39,8 +42,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ── Per-scenario LOCAL baselines ────────────────────────────────────────────
 # Each entry pins the metrics measured on Ubuntu local AVX2 with
-# --hpo-trials=5 at the scenario's default n_total. CI placeholders mirror
-# LOCAL until the first CI run lands; replace then.
+# --hpo-trials=5 at the scenario's default n_total. CI bands: measured where
+# a nightly log printed a value (scenario_b); otherwise unmeasured and
+# preserving the prior effective gate width (see each band's comment).
 #
 # Tolerances follow the same philosophy as
 # tests/integration/test_synthetic_baseline_invariant.py:113-120 — tight
@@ -50,8 +54,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # memory/pr69_e2e_environment_delta_diag_20260506.md precedent (same
 # dual-band pattern test_synthetic_baseline_invariant.py uses for scenario_a).
 # CI ISA shifts metrics at the floating-point instruction level; both are
-# bit-deterministic in their respective env. CI bands measured 2026-05-09
-# from PR #111 first CI run.
+# bit-deterministic in their respective env. CI-band measurement status is
+# per-scenario post-aed06cb7 (#1311): scenario_b CI re-measured 2026-07-30
+# from the red nightly logs; scenario_c and a_balanced CI bands are
+# UNMEASURED post-reshuffle and preserve the prior effective gate width
+# (see each band's comment). The original 2026-05-09 PR #111 first-CI-run
+# measurements are historical — superseded by the reshuffle.
 
 # scenario_b: prev=0.05, n=6000.
 # Calibrated band [0.72, 0.78] from scenarios/scenario_b.py:7 was measured at
@@ -72,21 +80,42 @@ BASELINE_LOCAL_SCENARIO_B: Dict[str, Any] = {
     # is supplied but not enforced. Flip enforce_calibrated_band=True after
     # an hpo>5 sweep confirms the calibrated envelope is reachable.
     "auc_band_calibrated": (0.72, 0.78),
-    "auc_band_empirical_hpo5_local": (0.69, 0.74),  # observed 0.7144 ± 0.025
-    "auc_band_empirical_hpo5_ci": (0.69, 0.74),  # placeholder; widen post-CI measurement
+    # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1) holdout enlargement
+    # (test 15%→10%, holdout 5%→10%) reshuffled the keyed-draw split
+    # assignment; CI val_AUC moved 0.7144→0.6269, bit-identical across nightly
+    # runs 30433515459 (07-29) and 30524268029 (07-30). LOCAL (AVX2) re-measured
+    # 2026-07-30, bit-identical across two seeded runs at 0.62687 — coinciding
+    # with CI at 4dp for this regime. Band = observed ±0.025 per the
+    # codex-rescue H1 convention above.
+    "auc_band_empirical_hpo5_local": (0.6019, 0.6519),  # observed 0.6269 ± 0.025 LOCAL (#1311)
+    "auc_band_empirical_hpo5_ci": (0.6019, 0.6519),  # observed 0.6269 ± 0.025 CI (#1311)
     "tolerance_auc_empirical": 0.025,
     "min_perm_p_significant": 0.05,
-    "max_train_val_delta": 0.10,  # observed 0.013 — pin tight for regression
+    # #1311: the aed06cb7 reshuffle moved the LOCAL delta 0.013 → 0.1248
+    # (bit-identical two seeded runs; split membership, not regularization).
+    # The CI delta is UNMEASURED post-aed06cb7 (the red nightlies failed at
+    # the band assert before the delta check) and this knob is shared
+    # local/CI, so the cap is a PROVISIONAL ceiling sized against the worst
+    # documented CI-vs-local overfit gap: local 0.1248 + the PR #69
+    # default-regime divergence (+0.104, 0.127 local → 0.231 CI) projects a
+    # CI worst case ≈ 0.229, so the cap sits above that projection. The
+    # scenario_b val_AUC coinciding local↔CI at 4dp suggests the actual CI
+    # delta is far closer to 0.1248 — the helper's measurement hook warns
+    # the observed delta on passing runs; tighten to observed + ~0.05 there.
+    "max_train_val_delta": 0.25,
     "enforce_calibrated_band": False,
 }
 
 # scenario_c: prev=0.40, n=6000. Calibrated band [0.82, 0.88] from
 # scenarios/scenario_c.py:7.
-# - Local AVX2 hpo=5 measured 0.7829 (0.037 below calibrated band-low).
+# - Local AVX2 hpo=5 measured 0.7829 (0.037 below calibrated band-low) pre-aed06cb7.
 # - CI AVX512 hpo=5 measured 0.8408 (IN calibrated band — landed naturally on CI).
-# Wide local-vs-CI delta (0.058) reflects ISA-level FP divergence at the
-# scenario_c configuration (60 features, prev=0.40, larger discriminator
-# surface area than scenario_b).
+# Re-pinned LOCAL 2026-07-30 (#1311): post-aed06cb7 (#44 plan B1 holdout
+# enlargement, keyed-draw split reshuffle) local re-measured 0.8337,
+# metric-bit-identical across two seeded runs — now IN the calibrated band
+# locally too, and the local-vs-CI ISA delta narrowed 0.058 → 0.007.
+# (enforce_calibrated_band could now flip True symmetrically — owner's call,
+# out of #1311 repair scope.)
 BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
     "regime": "scenario_c",
     # NOT ENFORCED — enforce_calibrated_band=False (codex pass-2 L3). Same
@@ -94,8 +123,13 @@ BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
     # CI 0.8408 is in calibrated band, but keeping False symmetric across
     # local/CI until the local hpo>5 sweep confirms landing locally too.
     "auc_band_calibrated": (0.82, 0.88),
-    "auc_band_empirical_hpo5_local": (0.76, 0.81),  # observed 0.7829 ± 0.025 LOCAL
-    "auc_band_empirical_hpo5_ci": (0.82, 0.86),  # observed 0.8408 ± 0.025 CI (in calibrated band)
+    "auc_band_empirical_hpo5_local": (0.8087, 0.8587),  # observed 0.8337 ± 0.025 LOCAL (#1311)
+    # CI value NOT re-measured post-aed06cb7 (the test passed in CI, so the
+    # nightly logs never printed it — pre-aed06cb7 CI measured 0.8408). Band
+    # preserves the previous EFFECTIVE gate width (the pre-#1311 double
+    # expansion, see _assert_scenario_metrics note); tighten to
+    # observed ± 0.025 once a post-aed06cb7 CI value is logged.
+    "auc_band_empirical_hpo5_ci": (0.795, 0.885),
     "tolerance_auc_empirical": 0.025,
     "min_perm_p_significant": 0.05,
     "max_train_val_delta": 0.10,  # observed 0.022 local
@@ -105,14 +139,21 @@ BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
 # scenario_a_balanced: prev=0.50, n=6000.
 # Inherits scenario_a's DGP at 0.50 prevalence. There is NO calibrated band
 # (no biology-derived 9/10-seed sweep) — only an empirical hpo=5 measurement:
-# val_AUC=0.7973, train-val Δ=0.0106, MCC=0.4767 (significantly higher than
-# scenario_a's 0.3355 — balancing lifts MCC by removing the prior-imbalance
-# penalty), perm_p=0.0.
+# pre-aed06cb7 val_AUC=0.7973, train-val Δ=0.0106, MCC=0.4767 (significantly
+# higher than scenario_a's — balancing lifts MCC by removing the
+# prior-imbalance penalty), perm_p=0.0.
+# Re-pinned LOCAL 2026-07-30 (#1311): post-aed06cb7 (#44 plan B1 holdout
+# enlargement, keyed-draw split reshuffle) local re-measured 0.7602,
+# metric-bit-identical across two seeded runs.
 BASELINE_LOCAL_SCENARIO_A_BALANCED: Dict[str, Any] = {
     "regime": "scenario_a_balanced",
     # No calibrated_band — empirical only.
-    "auc_band_empirical_hpo5_local": (0.78, 0.82),  # observed 0.7973 ± 0.02 LOCAL
-    "auc_band_empirical_hpo5_ci": (0.78, 0.82),  # placeholder; widen post-CI measurement
+    "auc_band_empirical_hpo5_local": (0.7402, 0.7802),  # observed 0.7602 ± 0.02 LOCAL (#1311)
+    # Placeholder — NEVER measured on CI (the test passes there, so the value
+    # is not printed). Band preserves the previous EFFECTIVE gate width (the
+    # pre-#1311 double expansion); tighten to observed ± 0.02 once a CI value
+    # is logged.
+    "auc_band_empirical_hpo5_ci": (0.76, 0.84),
     "tolerance_auc_empirical": 0.02,
     "min_perm_p_significant": 0.05,
     "max_train_val_delta": 0.10,  # observed 0.011
@@ -223,8 +264,14 @@ def _assert_scenario_metrics(
     ``auc_band_calibrated`` would silently land without test signal.
 
     The default mode is "empirical" — we assert the val_AUC lands within
-    ``empirical_band ± tolerance_empirical`` (a tight band around the
-    measured hpo=5 value). When ``enforce_calibrated_band=True``, we also
+    ``empirical_band`` directly. MEASURED bands embed
+    ``± tolerance_empirical`` around the observed hpo=5 value; the two
+    UNMEASURED CI bands (scenario_c, a_balanced — their tests pass in CI so
+    no value is ever logged) instead preserve the prior effective gate
+    width, per their own comments. The ``tolerance_empirical`` parameter is
+    retained for failure-message provenance only; #1311 codex iter-1
+    finding 2 removed the second expansion that doubled the effective
+    width. When ``enforce_calibrated_band=True``, we also
     assert the val_AUC lands within ``calibrated_band`` exactly (no
     tolerance) — for cases where the calibrated regression must pass.
 
@@ -242,16 +289,19 @@ def _assert_scenario_metrics(
     val_auc = val.get("roc_auc")
     assert val_auc is not None, f"{regime}: validation_metrics.roc_auc missing"
 
-    # Empirical band is the primary regression gate — pinned tight around
-    # the measured value so drift is detected at the precision the test
-    # was designed for.
+    # Empirical band is the primary regression gate. The stored band IS the
+    # gate, asserted directly: measured bands embed ± tolerance around the
+    # observed value (codex-rescue H1 convention); the two unmeasured CI
+    # bands preserve the prior effective width (see their comments). #1311
+    # codex iter-1 finding 2: the helper previously expanded the band by
+    # ± tolerance AGAIN, doubling the effective width and weakening the gate.
     emp_low, emp_high = empirical_band
-    expanded_low = emp_low - tolerance_empirical
-    expanded_high = emp_high + tolerance_empirical
-    assert expanded_low <= val_auc <= expanded_high, (
+    assert emp_low <= val_auc <= emp_high, (
         f"{regime}: val_AUC {val_auc:.4f} outside empirical hpo=5 band "
-        f"[{expanded_low:.4f}, {expanded_high:.4f}] "
-        f"(measured band [{emp_low}, {emp_high}], tolerance ±{tolerance_empirical})"
+        f"[{emp_low:.4f}, {emp_high:.4f}] "
+        f"(measured bands embed ±{tolerance_empirical} around the observed "
+        f"value; unmeasured CI bands preserve the prior effective width — "
+        f"see the band's own comment)"
     )
 
     # Calibrated band (optional) — strict no-tolerance check for biology-
@@ -290,6 +340,15 @@ def _assert_scenario_metrics(
             f"{regime}: train-val Δ={train_val_delta:.4f} > {max_train_val_delta} — "
             "severe overfit signal."
         )
+        # #1311 measurement hook: on a PASSING run pytest suppresses stdout,
+        # so the observed delta never reaches the nightly logs — which is why
+        # scenario_b's cap is provisional. A warning survives into the
+        # warnings summary; read it there and tighten provisional caps.
+        warnings.warn(
+            f"{regime}: train_val_auc_delta observed {train_val_delta:.4f} "
+            f"(cap {max_train_val_delta}) — measurement hook for cap re-pin",
+            stacklevel=2,
+        )
 
 
 # ── Tests ────────────────────────────────────────────────────────────────
@@ -327,8 +386,9 @@ def test_scenario_c_default_n_lands_in_empirical_band(tmp_path: Path) -> None:
     """scenario_c (CSU treatment response, prev=0.40) hits empirical hpo=5 band.
 
     Calibrated band per src/ml/synthetic_v2/scenarios/scenario_c.py:7 is
-    [0.82, 0.88]. At hpo=5 the envelope lands ~0.037 below band-low;
-    same calibrated-vs-empirical split as scenario_b.
+    [0.82, 0.88]. Pre-aed06cb7 the local hpo=5 envelope landed ~0.037 below
+    band-low; since the #1311 re-measurement it lands IN the band locally
+    (0.8337). Same calibrated-vs-empirical split as scenario_b.
     """
     artifact = _run_tier0_e2e("scenario_c", tmp_path=tmp_path)
     _assert_scenario_metrics(
@@ -350,8 +410,9 @@ def test_scenario_a_balanced_default_n_lands_in_empirical_band(tmp_path: Path) -
     """scenario_a_balanced (scenario_a DGP, prev=0.50) lands in empirical band.
 
     The band is empirical (not biology-derived) because shifting prev=0.20→0.50
-    on scenario_a's locked DGP changes the AUC envelope. The band here is
-    pre-measurement; tighten after the first run lands.
+    on scenario_a's locked DGP changes the AUC envelope. LOCAL band measured
+    2026-07-30 (#1311, observed 0.7602); the CI band is still unmeasured and
+    preserves the prior effective gate width (see the band's comment).
     """
     artifact = _run_tier0_e2e("scenario_a_balanced", tmp_path=tmp_path)
     _assert_scenario_metrics(
@@ -384,8 +445,12 @@ def test_scenario_a_extended_n_20000_envelope_shift(tmp_path: Path) -> None:
         regime="scenario_a@n=20000",
         # At n=20000 we expect the envelope to widen slightly above
         # the calibrated band-low; pin a slightly wider empirical band
-        # until the Phase 1.3 sweep produces a measured value.
-        empirical_band=(0.78, 0.85),
+        # until the Phase 1.3 sweep produces a measured value. #1311: this
+        # band was never measured either locally or in CI (the test passes
+        # in CI, so no value is logged) — it preserves the pre-#1311
+        # EFFECTIVE gate width (the old band ± tolerance double expansion);
+        # tighten once a measured value lands.
+        empirical_band=(0.75, 0.88),
         tolerance_empirical=0.03,
         min_perm_p_significant=0.05,
         max_train_val_delta=0.10,  # densest tier per criteria_validator

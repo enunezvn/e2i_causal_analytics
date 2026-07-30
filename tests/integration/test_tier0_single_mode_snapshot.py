@@ -547,18 +547,20 @@ async def test_orchestrator_single_mode_real_graph_output_surface() -> None:
         name="y",
     )
 
-    # E2I-required split ratios: 60% / 20% / 15% / 5%.
-    # Cycle-18 IMPORTANT-2: the 5-row holdout (rows 95-99) is not consumed by
-    # the active evaluator node — confirmed by absence of holdout_data
-    # references in src/agents/ml_foundation/model_trainer/nodes/evaluator.py.
+    # E2I-required split ratios: 60% / 20% / 10% / 10% (#1311, was 15%/5%).
+    # Cycle-18 IMPORTANT-2: the holdout (now rows 90-99; was rows 95-99
+    # pre-#1311) is not consumed by the active evaluator node — confirmed by
+    # absence of holdout_data references in
+    # src/agents/ml_foundation/model_trainer/nodes/evaluator.py.
     # The holdout is loaded by split_loader and stored in state for downstream
-    # consumers but the primary AUC computation uses the 15-row test_data,
-    # giving ~99.99% margin against an all-one-class accident at this seed.
-    # Future evaluator changes that consume holdout MUST revisit this size
-    # (5 rows is too small for AUC if both classes are required).
+    # consumers but the primary AUC computation uses the 10-row test_data
+    # (#1311: re-split 60/20/10/10 per #44 holdout enlargement aed06cb7,
+    # lockstep with split_enforcer's single-mode expectation; was 15/5).
+    # Future evaluator changes that consume holdout MUST revisit these sizes
+    # (10 rows is small for AUC if both classes are required).
     train_end = int(0.60 * n)
     val_end = train_end + int(0.20 * n)
-    test_end = val_end + int(0.15 * n)
+    test_end = val_end + int(0.10 * n)
 
     input_data: Dict[str, Any] = {
         "experiment_id": "test_cycle17_real_graph",
