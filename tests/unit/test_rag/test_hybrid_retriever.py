@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.rag.config import FalkorDBConfig, HybridSearchConfig, RAGConfig
+from src.rag.config import EmbeddingConfig, FalkorDBConfig, HybridSearchConfig, RAGConfig
+from src.rag.embeddings import OpenAIEmbeddingClient
 from src.rag.hybrid_retriever import HybridRetriever
 from src.rag.types import (
     BackendStatus,
@@ -134,6 +135,76 @@ class TestHybridRetrieverInit:
         """Test string representation."""
         repr_str = repr(hybrid_retriever)
         assert "HybridRetriever" in repr_str
+
+
+# ============================================================================
+# Embedding-service Integration (interface-drift regression for #1334)
+# ============================================================================
+
+
+class TestEmbeddingServiceIntegration:
+    """The real ``OpenAIEmbeddingClient`` must satisfy the retriever's embed call.
+
+    Regression for #1334: ``dependencies/rag.py`` / ``routes/rag.py`` wire a real
+    ``OpenAIEmbeddingClient`` as the ``embedding_service``. ``HybridRetriever.search``
+    calls ``await self.embedding_service.embed(query)`` (line ~156) inside a broad
+    ``except Exception`` that degrades to ``embedding = None`` -> the dense leg is
+    silently skipped and every chat turn retrieves 0 vector results. This test
+    uses the REAL client class (network boundary stubbed only) and asserts the
+    embedding actually reaches the search dispatch. Pre-fix it fails because the
+    swallowed ``AttributeError`` leaves ``embedding`` None.
+    """
+
+    def _make_real_client(self):
+        """Build a real OpenAIEmbeddingClient with the OpenAI network boundary stubbed."""
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
+            mock_data = MagicMock()
+            mock_data.embedding = [0.1] * 1536
+            mock_response = MagicMock()
+            mock_response.data = [mock_data]
+            mock_response.usage = MagicMock(total_tokens=10)
+            mock_client = AsyncMock()
+            mock_client.embeddings.create.return_value = mock_response
+            mock_async_openai.return_value = mock_client
+            return OpenAIEmbeddingClient(
+                EmbeddingConfig(model_name="text-embedding-3-small", api_key="test-key")
+            )
+
+    @pytest.mark.asyncio
+    async def test_search_embeds_query_via_openai_client(
+        self, mock_supabase_client, mock_falkordb_client, rag_config, monkeypatch
+    ):
+        """A real OpenAIEmbeddingClient must produce a non-None embedding for the dense leg."""
+        embedding_service = self._make_real_client()
+        retriever = HybridRetriever(
+            supabase_client=mock_supabase_client,
+            falkordb_client=mock_falkordb_client,
+            config=rag_config,
+            embedding_service=embedding_service,
+        )
+
+        captured: Dict[str, object] = {}
+
+        async def fake_dispatch(query, embedding, entities, filters):
+            captured["embedding"] = embedding
+            return {
+                RetrievalSource.VECTOR: [],
+                RetrievalSource.FULLTEXT: [],
+                RetrievalSource.GRAPH: [],
+            }
+
+        monkeypatch.setattr(retriever, "_dispatch_parallel_searches", fake_dispatch)
+
+        await retriever.search("Why is TRx declining for Remibrutinib in the West?")
+
+        assert captured["embedding"] is not None, (
+            "embedding_service.embed() must succeed so the dense leg runs; a None "
+            "embedding means the AttributeError was swallowed again (#1334)"
+        )
+        assert len(captured["embedding"]) == 1536
 
 
 # ============================================================================

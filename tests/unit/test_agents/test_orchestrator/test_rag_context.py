@@ -15,6 +15,48 @@ from src.agents.orchestrator.nodes.rag_context import (
 from src.agents.orchestrator.state import OrchestratorState
 
 
+class TestEmbeddingServiceInterface:
+    """The node's embedding leg must work with the REAL wired client (#1334).
+
+    ``get_rag_dependencies`` wires a real ``OpenAIEmbeddingClient`` as the node's
+    ``embedding_service``. ``_generate_embedding`` calls ``embedding_service.embed``
+    inside a broad ``except Exception`` that returns None -- so before the fix the
+    client's missing ``embed`` raised ``AttributeError`` here too, was swallowed,
+    and the dense RAG leg was skipped. This exercises that path with the real
+    client class (only the OpenAI network boundary stubbed).
+    """
+
+    @pytest.mark.asyncio
+    async def test_generate_embedding_via_real_openai_client(self):
+        from src.rag.config import EmbeddingConfig
+        from src.rag.embeddings import OpenAIEmbeddingClient
+
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
+            mock_data = MagicMock()
+            mock_data.embedding = [0.1] * 1536
+            mock_response = MagicMock()
+            mock_response.data = [mock_data]
+            mock_response.usage = MagicMock(total_tokens=10)
+            mock_client = AsyncMock()
+            mock_client.embeddings.create.return_value = mock_response
+            mock_async_openai.return_value = mock_client
+            embedding_service = OpenAIEmbeddingClient(
+                EmbeddingConfig(model_name="text-embedding-3-small", api_key="test-key")
+            )
+
+        node = RAGContextNode(embedding_service=embedding_service)
+        result = await node._generate_embedding("Why is TRx declining for Remibrutinib?")
+
+        assert result is not None, (
+            "embedding_service.embed() must succeed; None means the AttributeError "
+            "was swallowed again and the dense RAG leg is skipped (#1334)"
+        )
+        assert len(result) == 1536
+
+
 class TestRAGContextNode:
     """Test RAGContextNode class."""
 

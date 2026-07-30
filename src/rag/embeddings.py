@@ -338,6 +338,33 @@ class OpenAIEmbeddingClient:
             embeddings = await self._embed_with_retry_async(text, dimensions)
             return embeddings
 
+    async def embed(self, text: str) -> List[float]:
+        """Generate a single embedding, conforming to the canonical interface.
+
+        This is the ``embed(text) -> List[float]`` contract declared by
+        ``src.memory.services.factories.EmbeddingService`` and consumed across
+        the platform -- including the chat RAG path
+        (``HybridRetriever.search`` and the orchestrator RAG-context node),
+        which call ``embedding_service.embed(query)``. Without it, that call
+        raised ``AttributeError`` on every chat turn, was swallowed by the
+        retriever's graceful-degradation handler, and the dense leg was
+        silently skipped (0 vector results). See #1334.
+
+        Delegates to :meth:`encode_async`, which for a single string returns a
+        single ``List[float]``.
+
+        Args:
+            text: Text to embed.
+
+        Returns:
+            The embedding vector for ``text``.
+
+        Raises:
+            EmbeddingError: If embedding generation fails after retries.
+        """
+        result = await self.encode_async(text)
+        return cast(List[float], result)
+
     async def encode_batch_async(
         self,
         texts: List[str],
