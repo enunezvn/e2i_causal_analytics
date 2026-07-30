@@ -160,38 +160,22 @@ class GraphBackend:
         Build Cypher query from extracted entities.
 
         If no specific entities found, returns a general causal path query.
+
+        Entity matching is case-insensitive and OR-ed across entity labels
+        (#1376): the extractor emits normalized lowercase canonicals ('west',
+        'trx') while the knowledge graph stores display-cased node names
+        ('West', 'TRx'), and the previous ``MATCH (b:Brand), (r:Region),
+        (k:KPI)`` cross-product meant one unmatched entity type (or one casing
+        miss) zeroed the entire result set — every entity-bearing query
+        returned g:0.
         """
-        match_clauses = []
-        where_clauses = []
-        return_items = []
-
-        # Build entity-specific matches
-        if entities.brands:
-            brand_list = ", ".join(f"'{b}'" for b in entities.brands)
-            match_clauses.append("(b:Brand)")
-            where_clauses.append(f"b.name IN [{brand_list}]")
-            return_items.append("b")
-
-        if entities.regions:
-            region_list = ", ".join(f"'{r}'" for r in entities.regions)
-            match_clauses.append("(r:Region)")
-            where_clauses.append(f"r.name IN [{region_list}]")
-            return_items.append("r")
-
-        if entities.kpis:
-            kpi_list = ", ".join(f"'{k}'" for k in entities.kpis)
-            match_clauses.append("(k:KPI)")
-            where_clauses.append(f"k.name IN [{kpi_list}]")
-            return_items.append("k")
-
-        if entities.agents:
-            agent_list = ", ".join(f"'{a}'" for a in entities.agents)
-            match_clauses.append("(a:Agent)")
-            where_clauses.append(f"a.name IN [{agent_list}]")
-            return_items.append("a")
+        terms = [
+            t.lower().replace("'", "\\'")
+            for t in (*entities.brands, *entities.regions, *entities.kpis, *entities.agents)
+        ]
 
         # Default: find recent causal paths
-        if not match_clauses:
+        if not terms:
             return f"""
                 MATCH path = (n)-[rel:CAUSES|AFFECTS|CORRELATES*1..{self.falkordb_config.max_path_length}]->(m)
                 RETURN n, rel, m, length(path) as path_length
@@ -199,21 +183,24 @@ class GraphBackend:
                 LIMIT {limit}
             """
 
-        # Build query with entity matches and causal path traversal
-        match_str = "MATCH " + ", ".join(match_clauses)
-        where_str = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+        term_list = ", ".join(f"'{t}'" for t in terms)
 
-        # Find causal paths from matched entities
+        # Single node pattern over all entity labels: each extracted entity that
+        # exists in the graph contributes its own rows (with any outgoing causal
+        # paths); entities missing from the graph simply contribute nothing.
+        # coalesce() orders path-bearing rows (shortest first) ahead of
+        # entity-only rows so the LIMIT prefers causal context.
         return f"""
-            {match_str}
-            {where_str}
-            OPTIONAL MATCH path = ({return_items[0]})-[rel:CAUSES|AFFECTS*1..{self.falkordb_config.max_path_length}]->(target)
-            RETURN {", ".join(return_items)},
+            MATCH (e)
+            WHERE (e:Brand OR e:Region OR e:KPI OR e:Agent)
+              AND toLower(e.name) IN [{term_list}]
+            OPTIONAL MATCH path = (e)-[rel:CAUSES|AFFECTS*1..{self.falkordb_config.max_path_length}]->(target)
+            RETURN e,
                    path,
                    nodes(path) as path_nodes,
                    relationships(path) as path_rels,
                    length(path) as path_length
-            ORDER BY path_length ASC
+            ORDER BY coalesce(length(path), 999) ASC
             LIMIT {limit}
         """
 
