@@ -128,6 +128,9 @@ class TestKpiValueLookupPattern:
             "what is the market share for next quarter expected to be?",
             "what is the conversion rate for q4 projected to be?",
             "What is the likelihood of TRx growth for Kisqali next quarter?",
+            # codex iter-4 LOW: pin the probability phrasing explicitly (the
+            # guard's probabilit stem), not just the likelihood form.
+            "what is the probability of NRx growth for Fabhalta next month?",
         ],
     )
     def test_forecast_hybrids_stay_single_prediction(self, query: str) -> None:
