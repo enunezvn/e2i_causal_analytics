@@ -91,14 +91,14 @@ class TestGetBySessionId(TestChatbotConversationRepository):
     async def test_returns_conversation_when_found(self, repo, mock_client, sample_conversation):
         """Test that conversation is returned when found."""
         mock_result = MagicMock()
-        # .single() returns data directly, not as a list
-        mock_result.data = sample_conversation
+        # .limit(1) returns a LIST of rows (#1335: was .single()).
+        mock_result.data = [sample_conversation]
 
-        # Mock the chain: table().select().eq().single().execute()
-        mock_single = MagicMock()
-        mock_single.execute = AsyncMock(return_value=mock_result)
+        # Mock the chain: table().select().eq().limit().execute()
+        mock_limit = MagicMock()
+        mock_limit.execute = AsyncMock(return_value=mock_result)
         mock_eq = MagicMock()
-        mock_eq.single.return_value = mock_single
+        mock_eq.limit.return_value = mock_limit
         mock_select = MagicMock()
         mock_select.eq.return_value = mock_eq
         mock_table = MagicMock()
@@ -112,16 +112,21 @@ class TestGetBySessionId(TestChatbotConversationRepository):
 
     @pytest.mark.asyncio
     async def test_returns_none_when_not_found(self, repo, mock_client):
-        """Test that None is returned when not found."""
-        mock_result = MagicMock()
-        # .single() returns None when not found
-        mock_result.data = None
+        """Test that None is returned when not found.
 
-        # Mock the chain: table().select().eq().single().execute()
-        mock_single = MagicMock()
-        mock_single.execute = AsyncMock(return_value=mock_result)
+        #1335: models the REAL PostgREST 0-row contract -- ``.limit(1)`` returns
+        an EMPTY LIST (the prior ``.single()`` mock returned ``data=None``, a
+        shape that never occurs in prod because ``.single()`` *raises* PGRST116
+        on 0 rows; that mock-vs-reality gap hid the FK-violation bug).
+        """
+        mock_result = MagicMock()
+        mock_result.data = []
+
+        # Mock the chain: table().select().eq().limit().execute()
+        mock_limit = MagicMock()
+        mock_limit.execute = AsyncMock(return_value=mock_result)
         mock_eq = MagicMock()
-        mock_eq.single.return_value = mock_single
+        mock_eq.limit.return_value = mock_limit
         mock_select = MagicMock()
         mock_select.eq.return_value = mock_eq
         mock_table = MagicMock()
