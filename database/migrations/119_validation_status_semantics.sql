@@ -169,12 +169,33 @@ BEGIN
         WHERE cv.estimate_id     = v_estimate
           AND cv.estimate_source = 'causal_paths'
           AND cv.test_type       = d.test_type::refutation_test_type
-    );
+    )
+    -- Concurrency belt on top of the NOT EXISTS: two overlapping reseeds
+    -- cannot see each other's uncommitted rows, so the partial unique index
+    -- (section 2b) arbitrates and the loser no-ops instead of duplicating.
+    ON CONFLICT (estimate_id, estimate_source, test_type)
+        WHERE details_json->>'provenance' = 'dgp_backfill_migration_119'
+        DO NOTHING;
 
     GET DIAGNOSTICS v_inserted = ROW_COUNT;
     RETURN v_inserted;
 END;
 $fn$;
+
+-- ----------------------------------------------------------------------------
+-- 2b) SEED-UNIQUENESS GUARD — one synthetic-seed row per (estimate, test).
+--    Deliberately a PARTIAL unique index scoped to the migration-119 seed
+--    provenance: causal_validations is a HISTORY log for the real writer
+--    (RefutationNode persists one row per test per RUN — repeated runs are
+--    legitimate history, see CausalValidationRepository docstrings), so a
+--    table-wide unique constraint would break that data model. Synthetic
+--    seeds, by contrast, are content-addressed and must be singletons.
+--    Live table measured at 0 rows pre-migration; created before the
+--    backfill, inside the same transaction.
+-- ----------------------------------------------------------------------------
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cv_synthetic_seed_estimate_test
+    ON public.causal_validations (estimate_id, estimate_source, test_type)
+    WHERE details_json->>'provenance' = 'dgp_backfill_migration_119';
 
 COMMENT ON FUNCTION public.seed_synthetic_refutation_evidence(public.causal_paths) IS
     'Seeds the 5-test content-addressed SYNTHETIC refutation-evidence suite behind a synthetic causal path (#1352, migration 119). Fully deterministic from the path row — hash-derived, never sampled; every row labeled synthetic in details_json/analysis_context. Used by the migration-119 backfill AND the validated-requires-evidence trigger auto-seed branch.';
@@ -280,23 +301,47 @@ CREATE OR REPLACE FUNCTION public.enforce_validated_requires_refutation_evidence
 RETURNS trigger
 LANGUAGE plpgsql
 AS $fn$
+DECLARE
+    v_estimate uuid;
 BEGIN
-    IF NEW.validation_status = 'validated' AND NOT EXISTS (
-        SELECT 1 FROM public.causal_validations cv
-        WHERE cv.estimate_id     = public.causal_path_estimate_id(NEW.path_id)
-          AND cv.estimate_source = 'causal_paths'
-          AND cv.status          = 'passed'
-    ) THEN
-        IF NEW.is_synthetic THEN
-            PERFORM public.seed_synthetic_refutation_evidence(NEW);
-        ELSE
-            RAISE EXCEPTION USING
-                ERRCODE = 'check_violation',
-                MESSAGE = format(
-                    'causal_paths.%s: validation_status=''validated'' asserts "RefutationSuite evidence exists and passed" (#1352, migration 119), but no passed causal_validations rows exist under estimate_id %s.',
-                    NEW.path_id, public.causal_path_estimate_id(NEW.path_id)
-                ),
-                HINT = 'Real paths enter as ''pending''. Only the causal_impact RefutationNode may promote them: persist a passed RefutationSuite under causal_path_estimate_id(path_id) FIRST, then set validation_status=''validated''.';
+    IF NEW.validation_status = 'validated' THEN
+        v_estimate := public.causal_path_estimate_id(NEW.path_id);
+        IF NOT EXISTS (
+            SELECT 1 FROM public.causal_validations cv
+            WHERE cv.estimate_id     = v_estimate
+              AND cv.estimate_source = 'causal_paths'
+              AND cv.status          = 'passed'
+        ) THEN
+            IF NEW.is_synthetic THEN
+                PERFORM public.seed_synthetic_refutation_evidence(NEW);
+                -- Re-verify: seeding skips (estimate, test) pairs that already
+                -- hold evidence, so pre-existing NON-passed rows (e.g. a real
+                -- refutation run that FAILED this path) can leave the invariant
+                -- unmet. Never mark validated over contradicting evidence, and
+                -- never overwrite recorded refutation output to force a pass.
+                IF NOT EXISTS (
+                    SELECT 1 FROM public.causal_validations cv
+                    WHERE cv.estimate_id     = v_estimate
+                      AND cv.estimate_source = 'causal_paths'
+                      AND cv.status          = 'passed'
+                ) THEN
+                    RAISE EXCEPTION USING
+                        ERRCODE = 'check_violation',
+                        MESSAGE = format(
+                            'causal_paths.%s: synthetic path claims validation_status=''validated'' but existing non-passed refutation evidence under estimate_id %s blocks it (#1352, migration 119). Refusing to validate over contradicting evidence.',
+                            NEW.path_id, v_estimate
+                        ),
+                        HINT = 'Recorded evidence for this path contains no ''passed'' rows and auto-seeding will not overwrite it. Resolve the conflict explicitly: set the path to ''refuted''/''needs_review'', or adjudicate and remove the stale evidence.';
+                END IF;
+            ELSE
+                RAISE EXCEPTION USING
+                    ERRCODE = 'check_violation',
+                    MESSAGE = format(
+                        'causal_paths.%s: validation_status=''validated'' asserts "RefutationSuite evidence exists and passed" (#1352, migration 119), but no passed causal_validations rows exist under estimate_id %s.',
+                        NEW.path_id, v_estimate
+                    ),
+                    HINT = 'Real paths enter as ''pending''. Only the causal_impact RefutationNode may promote them: persist a passed RefutationSuite under causal_path_estimate_id(path_id) FIRST, then set validation_status=''validated''.';
+            END IF;
         END IF;
     END IF;
     RETURN NEW;

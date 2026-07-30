@@ -137,6 +137,43 @@ def test_trigger_autoseeds_synthetic_and_rejects_real():
     assert "RefutationNode" in fn_body
 
 
+def test_trigger_reverifies_after_autoseed():
+    """Codex iter-1 HIGH: seeding skips (estimate, test) pairs that already
+    hold evidence, so pre-existing NON-passed rows (a failed real refutation
+    of a synthetic path) could otherwise let 'validated' through unbacked.
+    The trigger must re-check passed-evidence AFTER seeding and reject —
+    never overwrite recorded refutation output to force a pass."""
+    content = _content()
+    fn_at = content.find("enforce_validated_requires_refutation_evidence()")
+    fn_body = content[fn_at : content.find("DROP TRIGGER")]
+    # Two passed-existence checks: the entry check and the post-seed re-check.
+    assert fn_body.count("cv.status          = 'passed'") == 2, (
+        "trigger must re-verify passed evidence after auto-seeding"
+    )
+    assert "Refusing to validate over contradicting evidence" in fn_body
+    # The conflict hint must offer explicit resolution, not silent overwrite.
+    assert "refuted" in fn_body
+
+
+def test_seed_uniqueness_guard_is_scoped_to_synthetic_provenance():
+    """Codex iter-1 MEDIUM, scoped fix: causal_validations is a HISTORY log
+    for the real writer (one row per test per RefutationNode RUN), so a
+    table-wide unique constraint would break that model. Uniqueness is pinned
+    only for the content-addressed synthetic seeds: a PARTIAL unique index on
+    the seed provenance plus ON CONFLICT DO NOTHING in the seed insert."""
+    content = _content()
+    idx_at = content.find("CREATE UNIQUE INDEX IF NOT EXISTS uq_cv_synthetic_seed_estimate_test")
+    assert idx_at != -1, "partial unique index for synthetic seeds missing"
+    idx_stmt = content[idx_at : content.find(";", idx_at)]
+    assert "(estimate_id, estimate_source, test_type)" in idx_stmt
+    assert "WHERE details_json->>'provenance' = 'dgp_backfill_migration_119'" in idx_stmt
+    # Seed insert must use the index as arbiter.
+    assert "ON CONFLICT (estimate_id, estimate_source, test_type)" in content
+    assert "DO NOTHING" in content
+    # Index must exist before the backfill executes (same transaction).
+    assert idx_at < content.find("-- 3) BACKFILL")
+
+
 def test_seeded_evidence_is_content_addressed_and_labeled_synthetic():
     """No invented random numbers: every metric must derive from the path row
     (md5 content hash -> deterministic unit fraction), and every seeded row
