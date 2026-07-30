@@ -52,6 +52,29 @@ from .synthesizer import ResponseSynthesizer
 logger = logging.getLogger(__name__)
 
 
+# Per-phase LLM client sizing (#1365). Prod runs claude-sonnet-5 (adaptive
+# thinking), whose thinking tokens count against max_tokens — at the old shared
+# 2048 default an eager thinking pass truncated the planning JSON mid-first-value
+# and the whole composition failed (0 tools). Measured against the real API
+# (2026-07-30): the natural (thinking + JSON) planning generation reaches ~2058
+# output tokens, and with thinking DISABLED it collapses to a deterministic
+# ~900-1000. So:
+#   - plan: disable thinking ("none") — the planning call emits structured
+#     tool-mapping JSON (its reasoning is a JSON FIELD); hidden thinking is
+#     wasted AND is what overran the budget. This makes truncation impossible.
+#   - decompose / synthesize: keep adaptive thinking (they benefit from
+#     reasoning) but raise the budget to 4096 for comfortable headroom over the
+#     observed ~2058 — a strict improvement over the old 2048/2000 caps.
+# These are DEFAULTS: an explicit per-phase config (config["phases"][<phase>])
+# overrides them, honoring the per-phase knobs the LangChain migration had left
+# severed from the actual call.
+_PHASE_LLM_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "decompose": {"max_tokens": 4096, "reasoning_effort": None},
+    "plan": {"max_tokens": 4096, "reasoning_effort": "none"},
+    "synthesize": {"max_tokens": 4096, "reasoning_effort": None},
+}
+
+
 def _ensure_tools_registered():
     """Ensure composable tools are registered in the registry."""
     try:
@@ -90,7 +113,7 @@ class ToolComposer:
 
     def __init__(
         self,
-        llm_client: Any,
+        llm_client: Optional[Any] = None,
         tool_registry: Optional[ToolRegistry] = None,
         config: Optional[Dict[str, Any]] = None,
         memory_hooks: Optional[ToolComposerMemoryHooks] = None,
@@ -100,7 +123,12 @@ class ToolComposer:
         Initialize the Tool Composer.
 
         Args:
-            llm_client: Anthropic client or compatible LLM client
+            llm_client: Anthropic/OpenAI-compatible LLM client shared across
+                phases (dependency-injection mode — used by tests and the
+                chatbot_tools entry point). When ``None`` the composer builds a
+                correctly-SIZED client PER PHASE from the factory (#1365): the
+                planning phase gets a real token budget with thinking disabled,
+                so the planning JSON can no longer truncate.
             tool_registry: Optional custom tool registry (uses global if not provided)
             config: Optional configuration overrides
             memory_hooks: Optional memory hooks instance (G1, G2 integration)
@@ -125,7 +153,7 @@ class ToolComposer:
         synthesize_config = self.config.get("phases", {}).get("synthesize", {})
 
         self.decomposer = QueryDecomposer(
-            llm_client=self.llm_client,
+            llm_client=self._resolve_phase_client("decompose", decompose_config),
             model=decompose_config.get("model", "claude-sonnet-4-6"),
             temperature=decompose_config.get("temperature", 0.3),
             max_sub_questions=decompose_config.get("max_sub_questions", 6),
@@ -133,7 +161,7 @@ class ToolComposer:
         )
 
         self.planner = ToolPlanner(
-            llm_client=self.llm_client,
+            llm_client=self._resolve_phase_client("plan", plan_config),
             tool_registry=self.registry,
             model=plan_config.get("model", "claude-sonnet-4-6"),
             temperature=plan_config.get("temperature", 0.2),
@@ -150,10 +178,47 @@ class ToolComposer:
         )
 
         self.synthesizer = ResponseSynthesizer(
-            llm_client=self.llm_client,
+            llm_client=self._resolve_phase_client("synthesize", synthesize_config),
             model=synthesize_config.get("model", "claude-sonnet-4-6"),
             temperature=synthesize_config.get("temperature", 0.4),
             max_tokens=synthesize_config.get("max_tokens", 2000),
+        )
+
+    def _resolve_phase_client(self, phase: str, phase_config: Dict[str, Any]) -> Any:
+        """Return the LLM client for a phase (#1365).
+
+        Two modes:
+
+        - **Dependency-injection.** When a client was injected
+          (``self.llm_client`` is not ``None``) — tests, or the chatbot_tools
+          entry point — every phase SHARES it unchanged. This preserves the
+          mock-injection contract the whole test suite relies on.
+        - **Factory.** When no client was injected, build a client sized for
+          THIS phase from the factory (``get_chat_llm``), which encapsulates
+          provider switching (anthropic vs openai) and the sonnet-5 thinking
+          semantics. Defaults come from ``_PHASE_LLM_DEFAULTS``; an explicit
+          per-phase ``config["phases"][phase]`` (``max_tokens`` /
+          ``reasoning_effort``) overrides them — honoring the per-phase knobs
+          the LangChain migration (55a7f749) had severed from the actual call.
+
+        Note: the per-phase ``model`` config string is DELIBERATELY not passed
+        through here. Model selection is the factory's tier authority
+        (``model_tier`` -> ``MODEL_MAPPINGS``, all ids verified callable). The
+        phase-config ``model`` still defaults to the pre-migration
+        ``claude-sonnet-4-6``; forwarding that literal would bypass the curated
+        mapping and resurrect the retired dead-model-id 404 class that commit
+        b144b6a5 fixed. So the budget/effort knobs are honored; model is not.
+        """
+        if self.llm_client is not None:
+            return self.llm_client
+
+        from src.utils.llm_factory import get_chat_llm
+
+        defaults = _PHASE_LLM_DEFAULTS[phase]
+        return get_chat_llm(
+            model_tier="standard",
+            max_tokens=phase_config.get("max_tokens", defaults["max_tokens"]),
+            reasoning_effort=phase_config.get("reasoning_effort", defaults["reasoning_effort"]),
         )
 
     async def compose(

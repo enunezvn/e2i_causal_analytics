@@ -144,10 +144,15 @@ def test_orchestrator_synthesizer_keyless(monkeypatch):
 
 
 def test_tool_composer_keyless_ensure_composer(monkeypatch):
-    import src.utils.llm_factory as factory
+    # #1365: tool_composer no longer PRE-BUILDS one shared get_standard_llm()
+    # client — when a key is present it leaves llm_client=None so ToolComposer
+    # builds a correctly-sized client PER PHASE. So "no key" is now detected
+    # directly from the provider key env var (ToolComposerAgent._provider_key_
+    # present), simulated here by removing it, not by patching get_standard_llm.
     from src.agents.tool_composer.agent import ToolComposerAgent
 
-    monkeypatch.setattr(factory, "get_standard_llm", _raise_no_key)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     monkeypatch.delenv("E2I_ALLOW_MOCK_LLM", raising=False)
     with pytest.raises(RuntimeError, match="requires an LLM client"):
