@@ -111,7 +111,9 @@ class ResponseSynthesizer:
         Returns:
             ComposedResponse with the synthesized answer
         """
-        logger.info(f"Synthesizing response for query: {redact_query(synthesis_input.original_query)}")
+        logger.info(
+            f"Synthesizing response for query: {redact_query(synthesis_input.original_query)}"
+        )
 
         try:
             # Format results for the prompt

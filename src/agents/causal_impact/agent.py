@@ -767,7 +767,9 @@ class CausalImpactAgent(SkillsMixin):
                     if any(r.get("type") == relationship_type for r in c.get("relationships", []))
                 ]
 
-            logger.debug(f"Semantic memory query for '{redact_query(query)}': found {len(chains)} chains")
+            logger.debug(
+                f"Semantic memory query for '{redact_query(query)}': found {len(chains)} chains"
+            )
             return chains  # type: ignore[no-any-return]
 
         except Exception as e:

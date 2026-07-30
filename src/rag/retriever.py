@@ -84,7 +84,9 @@ class DenseRetriever:
                 min_similarity=0.5,
                 max_staleness=max_staleness,
             )
-            logger.debug(f"Dense retrieval returned {len(results)} results for: {redact_query(query)}")
+            logger.debug(
+                f"Dense retrieval returned {len(results)} results for: {redact_query(query)}"
+            )
             return results
 
         except Exception as e:
@@ -142,7 +144,9 @@ class BM25Retriever:
             results = await connector.fulltext_search(
                 query_text=query, k=k, filters=filters, max_staleness=max_staleness
             )
-            logger.debug(f"Sparse retrieval returned {len(results)} results for: {redact_query(query)}")
+            logger.debug(
+                f"Sparse retrieval returned {len(results)} results for: {redact_query(query)}"
+            )
             return results
 
         except Exception as e:

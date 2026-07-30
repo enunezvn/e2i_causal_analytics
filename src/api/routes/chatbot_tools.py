@@ -811,7 +811,10 @@ async def agent_routing_tool(
             opik = OpikConnector()
             opik_span = opik.start_span(  # type: ignore[attr-defined]
                 name="agent_routing",
-                metadata={"query_preview": redact_query(query, max_len=100), "target_agent": target_agent},
+                metadata={
+                    "query_preview": redact_query(query, max_len=100),
+                    "target_agent": target_agent,
+                },
             )
         except Exception as e:
             logger.debug(f"Failed to start Opik span: {e}")
