@@ -405,6 +405,81 @@ def test_run_execute_rerun_is_semantic_noop(monkeypatch):
     assert second == first
 
 
+# ---------------------------------------------------------------------------
+# _fetch_registry_row / _stored_holdout — query-chain semantics against a
+# canned-response fake (id-scoped lookup, cardinality, newest-per-metric fold).
+# ---------------------------------------------------------------------------
+
+
+class _CannedQuery:
+    def __init__(self, rows, calls):
+        self._rows = rows
+        self.calls = calls
+
+    def select(self, cols):
+        self.calls.append(("select", cols))
+        return self
+
+    def eq(self, col, val):
+        self.calls.append(("eq", col, val))
+        return self
+
+    def order(self, col, desc=False):
+        self.calls.append(("order", col, desc))
+        return self
+
+    async def execute(self):
+        return type("R", (), {"data": self._rows})()
+
+
+class _CannedClient:
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls = []
+
+    def table(self, name):
+        self.calls.append(("table", name))
+        return _CannedQuery(self._rows, self.calls)
+
+
+def test_fetch_registry_row_returns_none_when_missing():
+    client = _CannedClient([])
+    assert (
+        asyncio.run(promo._fetch_registry_row(client, "hcp_adoption_fabhalta_goldstd_lr_v1"))
+        is None
+    )
+
+
+def test_fetch_registry_row_refuses_ambiguous_duplicates():
+    client = _CannedClient([{"id": "a"}, {"id": "b"}])
+    with pytest.raises(RuntimeError, match="2 registry rows"):
+        asyncio.run(promo._fetch_registry_row(client, "hcp_adoption_fabhalta_goldstd_lr_v1"))
+
+
+def test_stored_holdout_scopes_by_model_id_and_folds_newest_per_metric():
+    # Rows arrive DB-ordered (measured_at DESC, id DESC): the first occurrence
+    # per metric_name must win.
+    rows = [
+        {"metric_name": "auc_roc", "metric_value": "0.79", "measured_at": "2026-06-01"},
+        {"metric_name": "auc_roc", "metric_value": "0.70", "measured_at": "2026-05-01"},
+        {"metric_name": "accuracy", "metric_value": "0.715", "measured_at": "2026-06-01"},
+    ]
+    client = _CannedClient(rows)
+    out = asyncio.run(promo._stored_holdout(client, "model-uuid-1"))
+    assert out == {"auc_roc": 0.79, "accuracy": 0.715}
+    assert ("table", "ml_performance_metrics") in client.calls
+    assert ("eq", "model_id", "model-uuid-1") in client.calls
+    assert ("eq", "source", "holdout") in client.calls
+    # Deterministic ordering incl. the same-timestamp tie-breaker.
+    orders = [c for c in client.calls if c[0] == "order"]
+    assert orders == [("order", "measured_at", True), ("order", "id", True)]
+
+
+def test_stored_holdout_returns_none_when_no_rows():
+    client = _CannedClient([])
+    assert asyncio.run(promo._stored_holdout(client, "model-uuid-1")) is None
+
+
 def test_run_execute_never_writes_a_held_brand(monkeypatch):
     fake = _RegistryFake(_registry_rows())
     _patch_scoring(monkeypatch, pathological_brands=("kisqali",))

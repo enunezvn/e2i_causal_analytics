@@ -244,6 +244,13 @@ async def _fetch_registry_row(client: Any, model_name: str) -> dict | None:
         .execute()
     )
     rows = res.data or []
+    if len(rows) > 1:
+        # (model_name, model_version) is unique but model_name alone is not —
+        # a hypothetical v2.0 would make "the row to promote" ambiguous. Refuse
+        # loudly rather than promote an arbitrary one.
+        raise RuntimeError(
+            f"{len(rows)} registry rows for {model_name!r}; refusing ambiguous promotion"
+        )
     return rows[0] if rows else None
 
 
@@ -251,9 +258,10 @@ async def _stored_holdout(client: Any, model_id: str) -> dict | None:
     """Latest stored holdout metric per name, keyed by the registry row's OWN id.
 
     Uses the already-fetched registry ``id`` directly (no name re-resolution)
-    and orders ``measured_at`` DESC keeping the FIRST occurrence per metric
-    name, so the faithfulness reference is deterministically the newest
-    snapshot even if historical duplicates ever exist.
+    and orders ``measured_at`` DESC (``id`` DESC as a stable same-timestamp
+    tie-breaker) keeping the FIRST occurrence per metric name, so the
+    faithfulness reference is deterministically the newest snapshot even if
+    historical duplicates ever exist.
     """
     res = await (
         client.table("ml_performance_metrics")
@@ -261,6 +269,7 @@ async def _stored_holdout(client: Any, model_id: str) -> dict | None:
         .eq("model_id", model_id)
         .eq("source", "holdout")
         .order("measured_at", desc=True)
+        .order("id", desc=True)
         .execute()
     )
     out: dict[str, float] = {}
