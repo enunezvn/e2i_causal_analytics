@@ -456,6 +456,150 @@ class TestGraphBackendSearch:
         assert "CAUSES" in query_arg or "AFFECTS" in query_arg
 
 
+class TestGraphBackendEntityQueryContract:
+    """#1376: the entity Cypher must be case-insensitive and must not
+    cross-product entity labels.
+
+    The extractor emits normalized lowercase canonicals ('west', 'trx') while
+    the knowledge graph stores display-cased node names ('West', 'TRx'); a
+    case-sensitive ``IN`` plus a comma cross-product over Brand×Region×KPI
+    meant ANY entity-bearing query silently returned 0 graph rows (live g:0).
+    """
+
+    def _backend(self, mock_falkordb_client, falkordb_config, search_config):
+        return GraphBackend(
+            falkordb_client=mock_falkordb_client,
+            falkordb_config=falkordb_config,
+            search_config=search_config,
+        )
+
+    def test_entity_names_compared_case_insensitively(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        """Node-name comparison must lowercase BOTH sides."""
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        entities = ExtractedEntities(brands=["Kisqali"], regions=["west"], kpis=["trx"])
+        cypher = backend._build_entity_query(entities, 10)
+        assert "toLower" in cypher
+        for term in ("'kisqali'", "'west'", "'trx'"):
+            assert term in cypher
+        # A raw cased literal would reintroduce the case-sensitive miss.
+        assert "'Kisqali'" not in cypher
+
+    def test_no_cross_product_between_entity_labels(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        """One unmatched entity type must not zero the whole result set.
+
+        The old shape ``MATCH (b:Brand), (r:Region), (k:KPI)`` AND-ed the
+        labels together, so a query mentioning a KPI absent from the graph got
+        0 rows even when its brand and region both matched.
+        """
+        import re
+
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        entities = ExtractedEntities(brands=["Kisqali"], regions=["west"], kpis=["trx"])
+        cypher = backend._build_entity_query(entities, 10)
+        assert re.search(r"MATCH\s*\([^)]*\)\s*,\s*\(", cypher) is None
+
+    def test_all_entity_labels_reachable_in_single_pattern(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        entities = ExtractedEntities(
+            brands=["Kisqali"], regions=["west"], kpis=["trx"], agents=["causal_impact"]
+        )
+        cypher = backend._build_entity_query(entities, 10)
+        for label in ("Brand", "Region", "KPI", "Agent"):
+            assert label in cypher
+
+    def test_empty_entities_generic_fallback_unchanged(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        cypher = backend._build_entity_query(ExtractedEntities(), 10)
+        assert "CORRELATES" in cypher
+        assert "toLower" not in cypher
+
+    def test_single_quote_in_entity_name_is_escaped(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        entities = ExtractedEntities(brands=["O'Brien"])
+        cypher = backend._build_entity_query(entities, 10)
+        assert "\\'" in cypher
+        assert "'o'brien'" not in cypher  # unescaped literal would break the Cypher
+
+    def test_backslash_in_entity_name_is_escaped(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        entities = ExtractedEntities(brands=["a\\b"])
+        cypher = backend._build_entity_query(entities, 10)
+        assert "'a\\\\b'" in cypher
+
+    @pytest.mark.asyncio
+    async def test_search_parses_entity_row_shape(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        """The parser must handle the entity-query row shape
+        ``[entity, path, path_nodes, path_rels, path_length]``."""
+        mock_node = MagicMock()
+        mock_node.id = 7
+        mock_node.labels = ["Region"]
+        mock_node.properties = {"name": "West"}
+
+        mock_graph = MagicMock()
+        mock_graph.query.return_value = MagicMock(result_set=[[mock_node, None, [], [], 0]])
+        mock_falkordb_client.select_graph.return_value = mock_graph
+
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        results = await backend.search(entities=ExtractedEntities(regions=["west"]))
+        assert len(results) == 1
+        assert results[0].source == RetrievalSource.GRAPH
+        assert results[0].score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_search_extracts_relationship_types_from_path_rels(
+        self, mock_falkordb_client, falkordb_config, search_config
+    ):
+        """falkordb Edge exposes BOTH .id and .relation (never .type); the
+        parser must classify edges as relationships, not neighbors.
+
+        Uses plain stand-in classes (not MagicMock, which answers hasattr()
+        True for everything) so attribute-based classification is tested
+        honestly.
+        """
+
+        class FakeNode:
+            def __init__(self, node_id, name):
+                self.id = node_id
+                self.labels = ["KPI"]
+                self.properties = {"name": name}
+
+        class FakeEdge:
+            def __init__(self, edge_id, relation):
+                self.id = edge_id
+                self.relation = relation
+
+        entity = FakeNode(1, "TRx")
+        target = FakeNode(2, "Market_Share")
+        edge = FakeEdge(10, "CAUSES")
+
+        mock_graph = MagicMock()
+        mock_graph.query.return_value = MagicMock(
+            result_set=[[entity, None, [entity, target], [edge], 1]]
+        )
+        mock_falkordb_client.select_graph.return_value = mock_graph
+
+        backend = self._backend(mock_falkordb_client, falkordb_config, search_config)
+        results = await backend.search(entities=ExtractedEntities(kpis=["trx"]))
+        assert len(results) == 1
+        ctx = results[0].graph_context
+        assert ctx["relationship_types"] == ["CAUSES"]
+        assert set(ctx["connected_nodes"]) == {"1", "2"}
+
+
 class TestGraphBackendCausalSubgraph:
     """Tests for GraphBackend causal subgraph retrieval."""
 
