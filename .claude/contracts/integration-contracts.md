@@ -2598,6 +2598,360 @@ All integration points must have:
 
 ---
 
+## Cross-Domain Producer/Consumer Contracts
+
+> **Provenance (2026-07-30, #1348 dedup)**: this section was promoted from the legacy
+> `Master Contract Document/integration-contracts.md` draft (last updated 2026-01-16,
+> maintained through the cohort_constructor rollout) before that directory was removed.
+> It defines cross-domain contracts as concrete producer→consumer pairs with validation
+> hooks. ⚠️ **Enforcement status**: of the validation commands referenced below, only
+> `scripts/validate_kpi_coverage.py` exists today; the `make validate-contracts` /
+> `make validate-specialists` targets and the `tests/integration/test_*` contract suites
+> are **proposed, not implemented**. Treat the contract *expectations* as authoritative
+> intent and the test harness as aspirational. Producer/consumer path anchors were
+> re-verified against the tree on 2026-07-30: paths shown without qualification exist;
+> the legacy draft's dead paths are explicitly marked "(draft path)" with the live
+> equivalent named alongside.
+
+Before completing any cross-domain task, validate that changes comply with these contracts.
+
+### Contract 1: NLP → Agent Routing
+
+**Producer** (`src/nlp/query_processor.py` is a draft path — it does not exist):
+the live producers are `src/agents/orchestrator/nodes/intent_classifier.py`
+(intent classification; `ParsedQuery` lives in `src/agents/orchestrator/state.py`)
+and the 4-stage chat classifier in `src/agents/orchestrator/classifier/`.
+**Consumer** (`src/agents/registry.py` is a draft path — it does not exist):
+the live consumer is `src/agents/orchestrator/nodes/router.py` (`INTENT_TO_AGENTS`).
+
+```python
+class ParsedQueryContract:
+    """
+    NLP must produce ParsedQuery with:
+    - intent: Valid IntentType enum
+    - entities: E2IEntities with at least one populated field
+    - confidence: float 0.0-1.0
+    """
+
+    @staticmethod
+    def validate(query: ParsedQuery) -> bool:
+        assert query.intent in IntentType
+        assert query.confidence >= 0.0 and query.confidence <= 1.0
+        assert any([
+            query.entities.brands,
+            query.entities.regions,
+            query.entities.kpis,
+            query.entities.time_periods
+        ]), "At least one entity type required"
+        return True
+```
+
+### Contract 2: Agent → Orchestrator Response
+
+**Producer**: All agents in `src/agents/*/agent.py` — **Consumer**: `src/agents/orchestrator/nodes/synthesizer.py`
+
+```python
+class AgentResponseContract:
+    """
+    All agents must return AgentState with:
+    - analysis_results: Dict with agent-specific keys
+    - narrative: Non-empty string
+    - confidence: float 0.0-1.0
+    - processing_time_ms: int > 0
+    """
+
+    REQUIRED_KEYS_BY_AGENT = {
+        "causal_impact": ["causal_chains", "effects"],
+        "gap_analyzer": ["gaps", "roi_estimates"],
+        "heterogeneous_optimizer": ["cate_by_segment"],
+        "drift_monitor": ["drift_detected", "drift_metrics"],
+        "experiment_designer": ["experiment_design"],
+        "health_score": ["health_metrics"],
+        "prediction_synthesizer": ["predictions", "model_metrics"],
+        "resource_optimizer": ["resource_allocation"],
+        "explainer": ["explanation"],
+        "feedback_learner": ["learned_patterns"],
+        # Tier 0: ML Foundation agents
+        "cohort_constructor": ["cohort_spec", "eligible_patients", "eligibility_stats"],
+    }
+
+    @staticmethod
+    def validate(agent_name: str, state: AgentState) -> bool:
+        required_keys = AgentResponseContract.REQUIRED_KEYS_BY_AGENT[agent_name]
+        for key in required_keys:
+            assert key in state.analysis_results, f"Missing {key} in {agent_name} response"
+        assert len(state.narrative) > 0, "Narrative required"
+        return True
+```
+
+### Contract 3: RAG → Agent Context
+
+**Producer**: `src/rag/causal_rag.py` — **Consumer**: All agents
+
+```python
+class RAGContextContract:
+    """
+    RAG must provide RetrievalContext with:
+    - results: List of at least 1 result if query is valid
+    - Each result must have source attribution
+    - No medical/clinical content
+    """
+
+    FORBIDDEN_SOURCES = [
+        "pubmed", "clinical_trials", "fda", "ema",
+        "drug_labels", "adverse_events"
+    ]
+
+    @staticmethod
+    def validate(context: RetrievalContext) -> bool:
+        for result in context.results:
+            assert result.source not in RAGContextContract.FORBIDDEN_SOURCES, \
+                f"Forbidden source: {result.source}"
+            assert result.source_id is not None, "Source ID required"
+        return True
+```
+
+### Contract 4: API → Frontend Response
+
+**Producer**: `src/api/routes/*.py` — **Consumer**
+(`frontend/src/services/api.ts` is a draft path — it does not exist): the live
+consumers are the per-domain clients in `frontend/src/api/*.ts` with generated
+response types in `frontend/src/types/generated/api.ts`. The specific
+`ChatResponseContract` interface below is **draft shape**: the live chat surface
+is the CopilotKit AG-UI protocol (`src/api/routes/copilotkit.py`), which is
+where `agents_used` is actually produced.
+
+```typescript
+interface ChatResponseContract {
+  // Required fields
+  conversation_id: string;      // UUID format
+  message_id: string;           // UUID format
+  response_text: string;        // Non-empty
+  agents_used: string[];        // At least ["orchestrator"]
+  confidence: number;           // 0.0-1.0
+  processing_time_ms: number;   // > 0
+
+  // Optional fields
+  visualizations?: VisualizationData[];
+}
+
+interface VisualizationData {
+  type: 'line' | 'bar' | 'pie' | 'causal_graph' | 'waterfall';
+  title: string;
+  data: any[];
+  config: Record<string, any>;
+}
+```
+
+### Contract 5: ML Split Enforcement
+
+**Enforced By**: `src/repositories/base.py` — **Consumers**: All data access
+
+```python
+class SplitEnforcementContract:
+    """
+    CRITICAL: Prevents ML data leakage.
+
+    Rules:
+    1. Training queries MUST filter to split='train'
+    2. Test/holdout data NEVER exposed in production
+    3. Cross-split access logged and audited
+    """
+
+    @staticmethod
+    def validate_query(query: str, intended_split: str, env: str) -> bool:
+        if env == "production":
+            assert "test" not in query.lower() or intended_split == "test_explicit"
+            assert "holdout" not in query.lower()
+        return True
+```
+
+### Contract 6: Causal Engine → Effect Estimates
+
+**Producer** (`src/causal_engine/effect_estimator.py` is a draft path — it does
+not exist): the live producer is the Causal Impact estimation node
+`src/agents/causal_impact/nodes/estimation.py` (result shape: `EstimationResult`
+in `src/agents/causal_impact/state.py`; multi-estimator selection in
+`src/causal_engine/energy_score/estimator_selector.py`).
+**Consumer**: Tier 2 agents
+
+```python
+class EffectEstimateContract:
+    """
+    All causal effect estimates must include:
+    - Point estimate with confidence interval
+    - P-value or equivalent uncertainty measure
+    - Refutation test results
+    - Sample size
+    """
+
+    @staticmethod
+    def validate(estimate: EffectEstimate) -> bool:
+        assert estimate.ate_ci_lower < estimate.ate < estimate.ate_ci_upper
+        assert 0.0 <= estimate.p_value <= 1.0
+        assert estimate.sample_size > 0
+        assert estimate.refutation_passed is not None
+        return True
+```
+
+### Contract 7: Agent Tier Priority
+
+**Enforced By** (`src/agents/registry.py` is a draft path — it does not exist):
+tier-aware routing lives in `src/agents/orchestrator/nodes/router.py`
+(`INTENT_TO_AGENTS`); the agent/tier registry SSOT is
+`scripts/benchmarks/routing/data/agent_contracts.json`
+
+```python
+class TierPriorityContract:
+    """
+    Agent selection follows tier priority:
+    Tier 1 > Tier 2 > Tier 3 > Tier 4 > Tier 5
+
+    Within same tier, select by intent specificity.
+    """
+
+    TIER_ORDER = {
+        0: ["scope_definer", "cohort_constructor", "data_preparer", "model_selector",
+            "model_trainer", "feature_analyzer", "model_deployer", "observability_connector"],
+        1: ["orchestrator"],
+        2: ["causal_impact", "gap_analyzer", "heterogeneous_optimizer"],
+        3: ["experiment_designer", "drift_monitor", "health_score"],
+        4: ["prediction_synthesizer", "resource_optimizer"],
+        5: ["explainer", "feedback_learner"],
+    }
+
+    AGENT_TYPES = {
+        "standard": [
+            "orchestrator", "gap_analyzer", "heterogeneous_optimizer",
+            "drift_monitor", "health_score", "prediction_synthesizer",
+            "resource_optimizer", "cohort_constructor", "data_preparer"
+        ],
+        "hybrid": ["causal_impact", "experiment_designer", "feature_analyzer"],
+        "deep": ["explainer", "feedback_learner"],
+    }
+
+    @staticmethod
+    def get_routing_priority(intent: IntentType) -> List[str]:
+        # Return agents in priority order for this intent
+        pass
+```
+
+> Note: the current 14-agent registry
+> (`scripts/benchmarks/routing/data/agent_contracts.json`) is the SSOT for the
+> live agent roster (it additionally includes `tool_composer` at Tier 1); this
+> table records the tier-priority *rule*, not the roster.
+
+### Contract 8: KPI Calculation Accuracy
+
+**Producer**: `v_kpi_*` views in database — **Consumer**: `src/api/routes/kpi.py`
+(KPI registry: `src/kpi/registry.py`; definitions: `config/kpi_definitions.yaml`)
+
+```python
+class KPIAccuracyContract:
+    """
+    All 46 KPIs must be:
+    1. Calculable from existing tables
+    2. Documented in kpi_definitions.yaml
+    3. Tested for edge cases (nulls, zeros)
+    """
+
+    REQUIRED_KPIS = 46  # V3 count
+
+    @staticmethod
+    def validate_coverage() -> bool:
+        calculated = len(get_calculable_kpis())
+        assert calculated >= KPIAccuracyContract.REQUIRED_KPIS, \
+            f"Only {calculated}/46 KPIs calculable"
+        return True
+```
+
+**Validation** (implemented): `python scripts/validate_kpi_coverage.py`
+
+### Contract 9: Agent Specialist File Compliance
+
+**Enforced By**: `make validate-specialists` (proposed) — Ensures agents have compliant specialist documentation
+
+```python
+class AgentSpecialistContract:
+    """
+    The 11 Tier 1-5 agents must have specialist files containing:
+    1. State TypedDict definition
+    2. Node implementations with async execute methods
+    3. Error handling with fallback chains
+    4. Performance budget compliance
+    5. Integration contract references
+    """
+
+    REQUIRED_AGENTS = [
+        "orchestrator",
+        "causal_impact",
+        "gap_analyzer",
+        "heterogeneous_optimizer",
+        "experiment_designer",
+        "drift_monitor",
+        "health_score",
+        "prediction_synthesizer",
+        "resource_optimizer",
+        "explainer",
+        "feedback_learner",
+    ]
+
+    REQUIRED_SECTIONS = [
+        "## State Definition",
+        "## Node Implementations",
+        "## Graph Assembly",
+        "## Error Handling",
+        "## Performance Budget",
+    ]
+
+    LATENCY_BUDGETS = {
+        "orchestrator": 2000,           # 2s strict
+        "causal_impact": 30000,         # 30s
+        "gap_analyzer": 20000,          # 20s
+        "heterogeneous_optimizer": 25000,  # 25s
+        "experiment_designer": 60000,   # 60s
+        "drift_monitor": 10000,         # 10s
+        "health_score": 5000,           # 5s
+        "prediction_synthesizer": 15000, # 15s
+        "resource_optimizer": 20000,    # 20s
+        "explainer": 45000,             # 45s
+        "feedback_learner": None,       # Async, no limit
+    }
+```
+
+### Contract Violation Handling
+
+When a contract violation is detected:
+
+1. **STOP** - Do not proceed with the change
+2. **IDENTIFY** - Which contract is violated
+3. **TRACE** - Find the root cause (producer or consumer)
+4. **FIX** - Update the violating component
+5. **VERIFY** - Re-run contract tests
+6. **DOCUMENT** - If contract needs updating, propose change
+
+### Adding New Cross-Domain Contracts
+
+When adding cross-domain functionality:
+
+1. Define contract in this section
+2. Add validation function
+3. Add integration test
+4. Document in relevant specialist files
+
+### Cross-Domain Contract Change Log
+
+| Date | Contract | Change |
+|------|----------|--------|
+| 2026-01-16 | Contract 2 | Added cohort_constructor to REQUIRED_KEYS_BY_AGENT |
+| 2026-01-16 | Contract 7 | Added Tier 0 agents including cohort_constructor to TIER_ORDER |
+| 2026-01-16 | Contract 7 | Added cohort_constructor, data_preparer, feature_analyzer to AGENT_TYPES |
+| 2025-12-04 | Contract 7 | Confirmed Experiment Designer in Tier 3 |
+| 2025-12-04 | Contract 7 | Added AGENT_TYPES classification |
+| 2025-12-04 | Contract 9 | Added Agent Specialist File Compliance contract |
+
+---
+
 ## Revision History
 
 | Version | Date | Author | Changes |
@@ -2605,6 +2959,7 @@ All integration points must have:
 | 1.0 | 2025-12-18 | E2I Team | Initial integration contracts |
 | 1.1 | 2025-12-30 | E2I Team | V4.4: Added discovery params to CausalAnalysisRequest/Response |
 | 1.2 | 2025-12-31 | E2I Team | V4.4: Added Causal Engine Discovery Contract section (DiscoveryRunner, DriverRanker, DiscoveryGate, StructuralDrift interfaces) |
+| 1.3 | 2026-07-30 | E2I Team | #1348 dedup: promoted Cross-Domain Producer/Consumer Contracts (Contracts 1-9, violation handling, change log) from the legacy `Master Contract Document/` draft (last updated 2026-01-16) |
 
 ---
 

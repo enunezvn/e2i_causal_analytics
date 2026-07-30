@@ -3,6 +3,23 @@
 > Integration contracts for the Orchestrator agent (Tier 1).
 > Defines input/output schemas, dispatch protocols, and handoff formats.
 
+> **Provenance & scope (2026-07-30, #1348 dedup)**: promoted from the legacy
+> `Tier-Specific Contracts/tier1-contracts.md` (the only tier-1 Orchestrator
+> contract doc in the corpus — the flat layout previously covered only the Tool
+> Composer via `tier1-tool-composer-contracts.md`). Read it together with:
+>
+> - `orchestrator-contracts.md` — the **primary** dispatch/response/aggregation
+>   spec (AgentDispatchRequest/Response, selection, aggregation, parallel
+>   execution, DSPy hub interface). Where the two disagree, that file wins.
+> - Live code anchors: the intent enum and routing table below are draft-era —
+>   the live routing map is `INTENT_TO_AGENTS` in
+>   `src/agents/orchestrator/nodes/router.py`, and the live `ParsedQuery` is in
+>   `src/agents/orchestrator/state.py`.
+> - The **DSPy Hub Role** section below IS implementation-backed:
+>   `RoutingTrainingSignal`, `AgentRoutingSignature`,
+>   `IntentClassificationSignature`, and `OrchestratorSignalCollector` all exist
+>   in `src/agents/orchestrator/dspy_integration.py`.
+
 ## Overview
 
 The Orchestrator is the sole Tier 1 agent responsible for:
@@ -609,6 +626,7 @@ class OrchestratorSignalCollector:
 
 | Date | Change |
 |------|--------|
+| 2026-07-30 | #1348 dedup: promoted into the flat canon as `tier1-orchestrator-contracts.md` (from `Tier-Specific Contracts/tier1-contracts.md`); added provenance/scope callout with live code anchors |
 | 2025-12-23 | V5: Added DSPy Hub role specification |
 | 2025-12-08 | V4: Added Tier 0 dispatch patterns |
 | 2025-12-08 | V4: Added QC gate blocking status |

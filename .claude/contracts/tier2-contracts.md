@@ -1312,6 +1312,7 @@ async def test_tier2_orchestration_flow():
 | Version | Date | Changes | Author |
 |---------|------|---------|--------|
 | 1.0 | 2025-12-18 | Initial Tier 2 contracts | Claude |
+| 1.1 | 2026-07-30 | #1348 dedup: promoted V4.2 Energy Score Estimator Selection contracts (section 13) from the legacy Tier-Specific draft; verified against `src/causal_engine/energy_score/` and `src/agents/causal_impact/state.py` | Claude |
 
 ---
 
@@ -1524,3 +1525,109 @@ TIER2_SIGNAL_QUALITY_THRESHOLDS = {
     }
 }
 ```
+
+---
+
+## 13. V4.2: Energy Score Estimator Selection (Causal Impact)
+
+> **Provenance (2026-07-30, #1348 dedup)**: promoted from the legacy Tier-Specific
+> draft (V4.2 contracts added 2025-12-26) before that directory was removed.
+> Implementation-verified against `src/causal_engine/energy_score/`
+> (`estimator_selector.py`, `score_calculator.py`) and
+> `src/agents/causal_impact/state.py` (`EstimationResult`, `EnergyScoreData`).
+
+Instead of using the first estimator that succeeds, the Causal Impact agent can
+evaluate multiple estimators and select the one with the **lowest energy score**
+(0-1 scale, lower is better). The energy score combines three components:
+
+| Component | Weight | Meaning |
+|-----------|--------|---------|
+| `treatment_balance_score` | 35% | IPW-weighted covariate balance |
+| `outcome_fit_score` | 45% | Doubly-robust residual fit quality |
+| `propensity_calibration` | 20% | Propensity score calibration |
+
+### 13.1 Selection Strategies
+
+```python
+# src/causal_engine/energy_score/estimator_selector.py
+FIRST_SUCCESS = "first_success"    # Legacy: use first estimator that doesn't fail
+BEST_ENERGY_SCORE = "best_energy"  # Default: use lowest energy score
+ENSEMBLE = "ensemble"              # Future: combine multiple estimators
+```
+
+### 13.2 Supported Estimators
+
+`causal_forest`, `linear_dml`, `dml_learner`, `drlearner`, `ortho_forest`
+(EconML), `s_learner`, `t_learner`, `x_learner` (CausalML), `ols` (fallback) —
+see `EstimatorType` in `estimator_selector.py`.
+
+### 13.3 Quality Tiers
+
+| Tier | Max Score | Description |
+|------|-----------|-------------|
+| excellent | 0.25 | High confidence in causal estimate |
+| good | 0.45 | Reasonable confidence |
+| acceptable | 0.65 | Use with caution |
+| poor | 0.80 | Low confidence, consider alternatives |
+| unreliable | 1.00 | Results likely unreliable |
+
+An energy-score breach sets `requires_review=True` in `EstimationResult`
+(M-est3: route to review, never present as a clean ATE).
+
+### 13.4 State / Output Fields
+
+The V4.2 fields live in `EstimationResult` (state) and flow through the agent
+output and training signal (`CausalAnalysisTrainingSignal` in
+`src/agents/causal_impact/dspy_integration.py`):
+
+```python
+# EstimationResult (src/agents/causal_impact/state.py) — V4.2 additions
+selection_strategy: NotRequired[Literal["first_success", "best_energy", "ensemble"]]
+selected_estimator: NotRequired[str]          # Name of selected estimator
+energy_score: NotRequired[float]              # Selected estimator's energy score (0-1)
+energy_score_data: NotRequired[Dict[str, Any]]  # Full EnergyScoreData
+all_estimators_evaluated: NotRequired[List[Dict[str, Any]]]
+selection_reason: NotRequired[str]
+energy_score_gap: NotRequired[float]          # Gap between best and second-best
+n_estimators_evaluated: NotRequired[int]
+n_estimators_succeeded: NotRequired[int]
+requires_review: NotRequired[bool]            # M-est3 energy-score breach
+
+# EnergyScoreData (src/agents/causal_impact/state.py)
+score: float                       # Composite (0-1, lower is better)
+treatment_balance_score: float     # 35% weight
+outcome_fit_score: float           # 45% weight
+propensity_calibration: float      # 20% weight
+ci_lower / ci_upper / bootstrap_std: NotRequired[float]
+computation_time_ms: float
+quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
+```
+
+### 13.5 Handoff Block
+
+```yaml
+# Added to causal_impact_handoff when energy-score selection ran
+estimator_selection:
+  selected_estimator: <causal_forest|linear_dml|drlearner|ols|...>
+  selection_strategy: <first_success|best_energy|ensemble>
+  energy_score: <0.0-1.0>
+  energy_quality_tier: <excellent|good|acceptable|poor|unreliable>
+  energy_components:
+    treatment_balance: <score>
+    outcome_fit: <score>
+    propensity_calibration: <score>
+  alternatives_evaluated:
+    - estimator: <name>
+      energy_score: <score>
+      ate: <estimate>
+  energy_score_gap: <gap between best and second-best>
+```
+
+### 13.6 Draft-Only Material (NOT implemented)
+
+The legacy draft also proposed an `EstimatorSelectionSignature` DSPy signature
+(inputs: selection_strategy, selected_estimator, estimator_evaluations,
+energy_score, energy_components; outputs: quality_tier, selection_rationale,
+energy_interpretation, confidence_assessment, recommendations). **No such
+signature exists in `src/`** — recorded here as design intent only; do not cite
+it as a live contract.
