@@ -422,3 +422,83 @@ def test_last_n_days_window_spans_exactly_n_days():
     assert (ask.window.end - ask.window.start).days == 90
     assert ask.window.start == date(2026, 5, 2)
     assert ask.window.end == date(2026, 7, 31)  # exclusive; today included
+
+
+# ------------------------------------------- codex iter-2 finding (red-first)
+
+
+@pytest.mark.asyncio
+async def test_patient_window_binds_on_legacy_path():
+    """Iter-2 (HIGH): a recognized window on a patient ask must BIND — the
+    platform already serves windowed NRx (mig-084/105 `_windowed` variants,
+    routed via calculator context['window'], cache-keyed) — never be silently
+    dropped."""
+    calc = _RecordingCalc(_REMI_NRX)
+    agent, db = _agent(calc=calc, today=date(2026, 7, 30))
+    out = await agent.analyze({"query": "Build a patient cohort for Remibrutinib last quarter"})
+
+    assert out["status"] == "completed"
+    assert calc.contexts
+    expected_window = {"start": "2026-04-01", "end": "2026-07-01"}
+    assert all(c.get("window") == expected_window for c in calc.contexts)
+    narrative = out["narrative"]
+    assert "2026-04-01" in narrative and "2026-06-30" in narrative
+    assert "most recent 30 days" not in narrative
+    assert out["cohort_profile"]["window"]["start"] == "2026-04-01"
+    assert not db.calls  # criteria-less windowed ask stays on the KPI path
+
+
+@pytest.mark.asyncio
+async def test_two_asks_differing_only_by_window_do_not_collapse():
+    """Iter-2 (HIGH), the collapse property itself: 'X cohort' vs 'X cohort
+    last quarter' must not execute identical data-layer call sets nor return
+    identical payloads."""
+    calc_plain = _RecordingCalc(_REMI_NRX)
+    agent_plain, _ = _agent(calc=calc_plain, today=date(2026, 7, 30))
+    out_plain = await agent_plain.analyze({"query": "Build a patient cohort for Remibrutinib"})
+
+    calc_windowed = _RecordingCalc(_REMI_NRX)
+    agent_windowed, _ = _agent(calc=calc_windowed, today=date(2026, 7, 30))
+    out_windowed = await agent_windowed.analyze(
+        {"query": "Build a patient cohort for Remibrutinib last quarter"}
+    )
+
+    assert calc_plain.contexts != calc_windowed.contexts
+    assert out_plain["narrative"] != out_windowed["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_patient_window_plus_criteria_binds_windowed_statement():
+    """Iter-2 (HIGH): window + servable age criterion bind TOGETHER via the
+    mig-117 windowed criteria statement (params [brand, start, end, min_age])."""
+    rows = [[{"severity": "low_severity", "therapy_line": 0, "nrx": 42}]]
+    agent, db = _agent(calc=_RecordingCalc(_REMI_NRX), db_rows=rows, today=date(2026, 7, 30))
+    out = await agent.analyze(
+        {"query": "Build a Remibrutinib cohort of adult patients over 18 last quarter"}
+    )
+    assert out["status"] == "completed"
+    _fn, args = db.calls[0]
+    # startswith: the synthetic-visibility flag may legitimately append the
+    # _include_synthetic suffix — the semantic pinned here is that the WINDOWED
+    # statement family was chosen.
+    assert args["query_id"].startswith("cohort_profiler_patient_criteria_profile_windowed")
+    assert args["params"] == ["Remibrutinib", "2026-04-01", "2026-07-01", 18]
+    assert "2026-04-01" in out["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_patient_window_with_max_age_only_disclosed():
+    """Iter-2 (HIGH), the one genuinely unservable combo: max-age + window
+    cannot bind together (the mig-044 RPC caps at 4 positional params) — the
+    window binds on the legacy path and the max-age bound is DISCLOSED as not
+    applied, never silently dropped."""
+    calc = _RecordingCalc(_REMI_NRX)
+    agent, db = _agent(calc=calc, today=date(2026, 7, 30))
+    out = await agent.analyze({"query": "Remibrutinib cohort of patients under 65 last quarter"})
+
+    assert out["status"] == "completed"
+    labels = " ".join(c["label"] for c in out["cohort_profile"]["criteria_not_applied"]).lower()
+    assert "under 65" in labels
+    expected_window = {"start": "2026-04-01", "end": "2026-07-01"}
+    assert calc.contexts and all(c.get("window") == expected_window for c in calc.contexts)
+    assert not db.calls

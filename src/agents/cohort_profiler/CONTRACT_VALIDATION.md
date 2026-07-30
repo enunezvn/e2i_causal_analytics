@@ -84,12 +84,18 @@ analyze(agent_input)
 
 _analyze_patients(ask)
   → threshold on a patient ask ⇒ unservable pseudo-criterion (never silently dropped)
-  → unservable-only ask (no brand, no servable criterion) ⇒ fail closed with guidance
-  → servable criteria (age bounds) ⇒ _profile_patients_with_criteria (mig-117 RPC,
-      params [brand, min_age_exclusive, max_age_exclusive], grouped both axes)
+  → window BINDS (codex iter-2): it bounds the NRx counting window; max-age + window
+      is the one unservable combo (4-param RPC cap) ⇒ max-age disclosed, window binds
+  → unservable-only ask (no brand, no servable criterion, no window) ⇒ fail closed
+  → servable criteria (age bounds) ⇒ _profile_patients_with_criteria (mig-117 RPC:
+      windowless [brand, min_age_exclusive, max_age_exclusive]; windowed sibling
+      [brand, start, end, min_age_exclusive])
   → else ⇒ _profile_patients_legacy: brands = [brand] or all SUPPORTED_BRANDS,
-      get_kpi_calculator(), per brand _profile_brand(...), no profiles ⇒ fail closed
-  → narrative + per-criterion "Criteria accounting" (Applied / NOT applied / no other)
+      get_kpi_calculator(), per brand _profile_brand(..., window) — a bound window
+      rides in every context and routes to the mig-084/105 _windowed variants
+      (window is part of the KPI cache key); no profiles ⇒ fail closed
+  → narrative names the counting window explicitly + per-criterion "Criteria
+      accounting" (Applied / NOT applied / no other)
 
 _analyze_hcp(ask)
   → unservable threshold metric (e.g. NRx) ⇒ fail closed with guidance
@@ -203,3 +209,7 @@ Implements parts 1 + 2 of the user-ratified 2026-07-29 `extend:cohort_profiler` 
 2. **HCP-path criteria** (HIGH): recognized age / diagnosis-year criteria on an HCP ask are re-tagged unservable (`_hcp_unservable`) and surface in `criteria_not_applied` + the narrative accounting; a criteria-only HCP ask (no brand/threshold/explicit window) fails closed with guidance.
 3. **Window off-by-one** (MEDIUM): "last N days" and the disclosed 90-day default now use inclusive-today semantics — exactly N dates in `[today-(N-1), today+1)` — so the math matches the words.
 4. **This document** (MEDIUM): consolidated to a single current-version report; superseded 2026-07-29 claims removed, evidence refs converted to stable symbol references.
+
+### Codex iter-2 hardening (2026-07-30, red-first)
+
+**Patient-window binding** (HIGH): the parser recognized windows on every ask but the patient path never bound them — "X cohort" vs "X cohort last quarter" collapsed to identical data-layer call sets (the original #1356 defect class). Fixed by BINDING (data-model evidence: `business_impact_nrx_windowed` / `_segment_windowed` / `_line_windowed` registry variants exist with twins; `BusinessImpactCalculator._resolve_windowed_call` routes `context['window']`; the KPI cache already keys on the window): criteria-less asks pass the window through every calculator context; window + min-age asks use the new mig-117 `cohort_profiler_patient_criteria_profile_windowed` statement (validated READ-ONLY against live data). The one genuinely unservable combo — max-age + window (mig-044 RPC 4-param cap) — is disclosed as NOT applied while the window binds. Windowed narratives name explicit dates and `cohort_profile.window` carries the bound window; window-only asks now answer the windowed question instead of failing or collapsing.

@@ -35,6 +35,18 @@ profile.
   (migration 117). Every recognized criterion is accounted for in the answer:
   **Applied** (named with its bound value) or **NOT applied** (named with
   guidance on why the data model cannot serve it).
+- **Window binding on the patient path** (codex iter-2): a recognized time
+  window BINDS — it bounds the NRx counting window ("patients with new
+  prescriptions in [start, end)"), the platform's established windowed-KPI
+  semantic. Criteria-less asks ride the mig-084/105 `_windowed` /
+  `_segment_windowed` / `_line_windowed` calculator variants (window is part
+  of the KPI cache key); window + min-age asks use the mig-117
+  `cohort_profiler_patient_criteria_profile_windowed` statement
+  (params `[brand, start, end, min_age_exclusive]`). The ONE unservable
+  combo — max-age + window (the mig-044 RPC caps at 4 positional params) —
+  is disclosed as NOT applied while the window still binds. The bound window
+  is always named with explicit dates in the narrative and in
+  `cohort_profile.window`.
 - **HCP-entity cohorts with quantitative KPI thresholds** (#1356 part 2):
   "HCPs who prescribed more than 50 TRx last quarter" → per-HCP TRx
   aggregation over an explicit half-open window with a strict threshold
@@ -116,7 +128,8 @@ asks can never share a cached payload.
 ## Output shape
 
 Patient: `{status, narrative, cohort_profile{segment_axis, brands[],
-criteria_applied[], criteria_not_applied[]}, confidence, recommendations}`.
+window{start,end_exclusive,label,explicit}|null, criteria_applied[],
+criteria_not_applied[]}, confidence, recommendations}`.
 HCP: `{status, narrative, cohort_profile{entity:"hcp", segment_axis,
 brand, window{start,end_exclusive,label,explicit}, threshold{metric,
 min_exclusive,stated}, cohort_size, specialty{}, priority_tier{}, trx_total,

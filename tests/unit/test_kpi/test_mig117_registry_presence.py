@@ -13,6 +13,7 @@ from pathlib import Path
 from src.agents.cohort_profiler.agent import (
     _HCP_COHORT_QUERY_ID,
     _PATIENT_CRITERIA_QUERY_ID,
+    _PATIENT_CRITERIA_WINDOWED_QUERY_ID,
     _profiler_query_id,
 )
 
@@ -21,17 +22,21 @@ MIG = (
     / "database/migrations/117_cohort_profiler_ask_bound_queries.sql"
 )
 
-_FAMILIES = (_HCP_COHORT_QUERY_ID, _PATIENT_CRITERIA_QUERY_ID)
+_FAMILIES = (
+    _HCP_COHORT_QUERY_ID,
+    _PATIENT_CRITERIA_QUERY_ID,
+    _PATIENT_CRITERIA_WINDOWED_QUERY_ID,
+)
 
 
 def _expected_ids():
     return [f"{family}{syn}" for family in _FAMILIES for syn in ("", "_include_synthetic")]
 
 
-def test_all_4_query_ids_registered():
+def test_all_6_query_ids_registered():
     sql = MIG.read_text()
     expected = _expected_ids()
-    assert len(expected) == 4
+    assert len(expected) == 6
     for qid in expected:
         assert f"('{qid}'," in sql, f"migration 117 missing query_id {qid}"
 
@@ -40,7 +45,7 @@ def test_plain_variants_are_synthetic_excluding_twins_are_not():
     sql = MIG.read_text()
     bodies = re.findall(r"\$kpi\$(.*?)\$kpi\$", sql, re.S)
     ids = re.findall(r"\('([a-z0-9_]+)',\s*\$kpi\$", sql)
-    assert len(ids) == 4 and len(bodies) == 4
+    assert len(ids) == 6 and len(bodies) == 6
     for qid, body in zip(ids, bodies, strict=True):
         if qid.endswith("_include_synthetic"):
             assert "is_synthetic = false" not in body, qid
@@ -68,17 +73,29 @@ def test_hcp_cohort_uses_trx_kpi_substrate_and_binds_all_params():
 def test_patient_criteria_binds_age_at_diagnosis_and_joins_on_patient_id():
     """Age bounds bind to patient_journeys.age_at_diagnosis (populated on all
     rows — verified READ-ONLY 2026-07-30) and the join is on patient_id, never
-    patient_journey_id (the #1208 gotcha: NULL on ~17% of prescriptions)."""
+    patient_journey_id (the #1208 gotcha: NULL on ~17% of prescriptions).
+    The windowed sibling (codex iter-2) binds the explicit [$2,$3) window with
+    $4 = exclusive min age (no max age — the RPC's 4-param cap)."""
     sql = MIG.read_text()
     bodies = re.findall(r"\$kpi\$(.*?)\$kpi\$", sql, re.S)
-    patient_bodies = bodies[2:]
-    assert len(patient_bodies) == 2
-    for body in patient_bodies:
-        assert "age_at_diagnosis > $2::int" in body
-        assert "age_at_diagnosis < $3::int" in body
-        assert "pj.patient_id = te.patient_id" in body
-        assert "patient_journey_id" not in body
-        assert "sequence_number = 1" in body  # NRx, mirroring mig-105
+    ids = re.findall(r"\('([a-z0-9_]+)',\s*\$kpi\$", sql)
+    patient = [
+        (qid, body)
+        for qid, body in zip(ids, bodies, strict=True)
+        if qid.startswith(_PATIENT_CRITERIA_QUERY_ID)
+    ]
+    assert len(patient) == 4
+    for qid, body in patient:
+        assert "pj.patient_id = te.patient_id" in body, qid
+        assert "patient_journey_id" not in body, qid
+        assert "sequence_number = 1" in body, qid  # NRx, mirroring mig-105
+        if "_windowed" in qid:
+            assert "event_date >= $2::date" in body and "event_date < $3::date" in body, qid
+            assert "age_at_diagnosis > $4::int" in body, qid
+            assert "age_at_diagnosis <" not in body, qid  # max-age cannot bind here
+        else:
+            assert "age_at_diagnosis > $2::int" in body, qid
+            assert "age_at_diagnosis < $3::int" in body, qid
 
 
 def test_no_ddl_and_no_transaction_wrappers():

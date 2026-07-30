@@ -77,6 +77,10 @@ _NRX_KPI_ID = "WS3-BI-006"
 # SYNTHETIC_TWINNED_QUERY_IDS, which is locked to migrations 066/085/095).
 _HCP_COHORT_QUERY_ID = "cohort_profiler_hcp_trx_cohort"
 _PATIENT_CRITERIA_QUERY_ID = "cohort_profiler_patient_criteria_profile"
+# Windowed sibling (codex iter-2): [brand, start, end, min_age_exclusive] — the
+# mig-044 RPC caps at 4 positional params, so max-age cannot ALSO bind in a
+# windowed ask (it gets NOT-applied disclosure instead; see _analyze_patients).
+_PATIENT_CRITERIA_WINDOWED_QUERY_ID = "cohort_profiler_patient_criteria_profile_windowed"
 
 # (context value, human label) for each severity tier and line-of-therapy bucket.
 _SEVERITY_TIERS: Tuple[Tuple[str, str], ...] = (
@@ -173,10 +177,44 @@ class CohortProfilerAgent:
                 )
             )
 
+        # A recognized WINDOW on a patient ask BINDS (#1356 codex iter-2): it
+        # bounds the NRx counting window — 'patients with new prescriptions in
+        # [start, end)' — the platform's established windowed-KPI semantic
+        # (mig-084/105 `_windowed` variants, calculator context['window'],
+        # already part of the KPI cache key). The ONE unservable combo is
+        # max-age + window: the mig-044 kpi_query RPC caps at 4 positional
+        # params (brand, window start/end, minimum age), so a max-age bound in
+        # a windowed ask is DISCLOSED as not applied rather than silently
+        # dropped, and the window binds on the legacy path.
+        if ask.window is not None:
+            still_servable: List[Criterion] = []
+            for c in servable:
+                if c.kind == "age_max":
+                    unserved.append(
+                        Criterion(
+                            kind=c.kind,
+                            label=c.label,
+                            servable=False,
+                            value=c.value,
+                            guidance=(
+                                "a maximum-age bound cannot bind together with "
+                                "a time window today (the allowlisted windowed "
+                                "criteria statement caps at 4 parameters: "
+                                "brand, window start/end, minimum age) — drop "
+                                "the window or the max-age bound, or use the "
+                                "ML cohort pipeline (scope_definer → "
+                                "cohort_constructor)"
+                            ),
+                        )
+                    )
+                else:
+                    still_servable.append(c)
+            servable = still_servable
+
         # The ask pinned down ONLY things the data model cannot serve (and no
-        # brand): a canned profile would answer a different question than was
-        # asked. Fail closed with guidance instead (#1356 part 1).
-        if unserved and not servable and not ask.brand:
+        # brand, no window): a canned profile would answer a different question
+        # than was asked. Fail closed with guidance instead (#1356 part 1).
+        if unserved and not servable and not ask.brand and ask.window is None:
             details = "; ".join(f"'{c.label}' — {c.guidance}" for c in unserved)
             return self._failed(
                 "no requested criterion can be served by the data model: " + details
@@ -200,9 +238,10 @@ class CohortProfilerAgent:
         except Exception as e:  # pragma: no cover - defensive (import/init)
             return self._failed(f"KPI calculator unavailable: {e}")
 
+        window = ask.window
         profiles: List[Dict[str, Any]] = []
         for b in brands:
-            profile = await self._profile_brand(calculator, b)
+            profile = await self._profile_brand(calculator, b, window=window)
             if profile is not None:
                 profiles.append(profile)
 
@@ -212,11 +251,14 @@ class CohortProfilerAgent:
             return self._failed(
                 "no prescribing population found for "
                 + (brand or "any supported brand")
+                + (f" in {window.label}" if window else "")
                 + " — nothing to profile (no values were fabricated)"
             )
 
         applied = [f"brand = {brand}"] if brand else []
-        narrative = self._render(profiles, brand_requested=brand)
+        if window:
+            applied.append(self._window_applied_text(window))
+        narrative = self._render(profiles, brand_requested=brand, window=window)
         if applied or unserved:
             narrative += self._render_criteria_accounting(applied, unserved)
         return {
@@ -225,6 +267,7 @@ class CohortProfilerAgent:
             "cohort_profile": {
                 "segment_axis": "severity+line_of_therapy",
                 "brands": profiles,
+                "window": self._window_profile(window),
                 "criteria_applied": applied,
                 "criteria_not_applied": [
                     {"label": c.label, "guidance": c.guidance} for c in unserved
@@ -245,18 +288,34 @@ class CohortProfilerAgent:
 
         Binds brand + age bounds into ONE grouped statement over the same
         NRx substrate as the mig-105 path (prescription events, sequence 1,
-        most recent 30 days of data) joined to ``patient_journeys`` for
-        ``age_at_diagnosis`` / ``segment_assignment`` / ``prior_therapy_lines``
-        (all fully populated — verified READ-ONLY 2026-07-30).
+        most recent 30 days of data — or the ask's explicit window via the
+        `_windowed` sibling, params [brand, start, end, min_age]) joined to
+        ``patient_journeys`` for ``age_at_diagnosis`` / ``segment_assignment``
+        / ``prior_therapy_lines`` (all fully populated — verified READ-ONLY
+        2026-07-30).
         """
         age_min = next((c.value for c in servable if c.kind == "age_min"), None)
         age_max = next((c.value for c in servable if c.kind == "age_max"), None)
+        window = ask.window
 
         try:
-            rows = await self._rpc_rows(
-                _profiler_query_id(_PATIENT_CRITERIA_QUERY_ID),
-                [ask.brand, age_min, age_max],
-            )
+            if window is not None:
+                # max-age was already moved to `unserved` by _analyze_patients
+                # for windowed asks (4-param cap), so only min-age binds here.
+                rows = await self._rpc_rows(
+                    _profiler_query_id(_PATIENT_CRITERIA_WINDOWED_QUERY_ID),
+                    [
+                        ask.brand,
+                        window.start.isoformat(),
+                        window.end.isoformat(),
+                        age_min,
+                    ],
+                )
+            else:
+                rows = await self._rpc_rows(
+                    _profiler_query_id(_PATIENT_CRITERIA_QUERY_ID),
+                    [ask.brand, age_min, age_max],
+                )
         except Exception as e:
             return self._failed(f"criteria-bound cohort query unavailable: {e}")
 
@@ -288,11 +347,13 @@ class CohortProfilerAgent:
             "line": line,
         }
         applied = self._applied_criteria_list(ask, servable)
+        if window:
+            applied.append(self._window_applied_text(window))
 
         parts: List[str] = [f"**Patient cohort profile — {scope} (criteria-bound)**"]
         parts.append(
             "Eligible prescribing population matching the servable criteria "
-            "(new prescriptions, most recent 30 days of data):"
+            f"(new prescriptions, {self._window_phrase(window)}):"
         )
         parts.append(f"\n### {scope} — {self._fmt(headline)} new-Rx patients matching criteria")
         parts.append("\n_By disease-severity tier:_\n")
@@ -314,6 +375,7 @@ class CohortProfilerAgent:
                 "segment_axis": "severity+line_of_therapy",
                 "entity": "patient",
                 "brands": [profile],
+                "window": self._window_profile(window),
                 "criteria_applied": applied,
                 "criteria_not_applied": [
                     {"label": c.label, "guidance": c.guidance} for c in unserved
@@ -341,6 +403,32 @@ class CohortProfilerAgent:
 
     def _applied_criteria_text(self, ask: CohortAsk, servable: List[Criterion]) -> str:
         return "; ".join(self._applied_criteria_list(ask, servable)) or "none"
+
+    # ------------------------------------------------- window helpers (iter-2)
+    @staticmethod
+    def _window_phrase(window: Optional[Window]) -> str:
+        """Narrative phrase for the NRx counting window — explicit dates when a
+        window is bound, the mig-105 default wording otherwise."""
+        if window is None:
+            return "most recent 30 days of data"
+        end_inclusive = (window.end - timedelta(days=1)).isoformat()
+        return f"{window.label}: {window.start.isoformat()} → {end_inclusive}"
+
+    @staticmethod
+    def _window_applied_text(window: Window) -> str:
+        end_inclusive = (window.end - timedelta(days=1)).isoformat()
+        return f"window = {window.label} ({window.start.isoformat()} → {end_inclusive})"
+
+    @staticmethod
+    def _window_profile(window: Optional[Window]) -> Optional[Dict[str, Any]]:
+        if window is None:
+            return None
+        return {
+            "label": window.label,
+            "start": window.start.isoformat(),
+            "end_exclusive": window.end.isoformat(),
+            "explicit": window.explicit,
+        }
 
     @staticmethod
     def _render_criteria_accounting(applied: List[str], unserved: List[Criterion]) -> str:
@@ -610,29 +698,56 @@ class CohortProfilerAgent:
         value = result.get("value") if isinstance(result, dict) else getattr(result, "value", None)
         return value if isinstance(value, (int, float)) else None
 
-    async def _profile_brand(self, calculator: Any, brand: str) -> Optional[Dict[str, Any]]:
-        """Real NRx headline + severity + line breakdown for one brand."""
-        headline = await self._value(calculator, {"brand": brand})
+    async def _profile_brand(
+        self, calculator: Any, brand: str, window: Optional[Window] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Real NRx headline + severity + line breakdown for one brand.
+
+        A bound ``window`` rides in each calculator context: the business_impact
+        calculator routes it to the mig-084/105 ``_windowed`` /
+        ``_segment_windowed`` / ``_line_windowed`` registry variants, and the
+        KPI cache keys on it — so a windowed and a windowless ask can never
+        share cached values (#1356 codex iter-2).
+        """
+
+        def _ctx(base: Dict[str, Any]) -> Dict[str, Any]:
+            if window is not None:
+                base["window"] = {
+                    "start": window.start.isoformat(),
+                    "end": window.end.isoformat(),
+                }
+            return base
+
+        headline = await self._value(calculator, _ctx({"brand": brand}))
         if not headline:
             return None  # no prescribing population for this brand — skip honestly
 
         severity = {}
         for value, _label in _SEVERITY_TIERS:
-            severity[value] = await self._value(calculator, {"brand": brand, "segment": value})
+            severity[value] = await self._value(
+                calculator, _ctx({"brand": brand, "segment": value})
+            )
         line = {}
         for value, _label in _THERAPY_LINES:
-            line[value] = await self._value(calculator, {"brand": brand, "therapy_line": value})
+            line[value] = await self._value(
+                calculator, _ctx({"brand": brand, "therapy_line": value})
+            )
 
         return {"brand": brand, "headline_nrx": headline, "severity": severity, "line": line}
 
-    def _render(self, profiles: List[Dict[str, Any]], brand_requested: Optional[str]) -> str:
+    def _render(
+        self,
+        profiles: List[Dict[str, Any]],
+        brand_requested: Optional[str],
+        window: Optional[Window] = None,
+    ) -> str:
         """Markdown narrative with the real per-segment counts."""
         parts: List[str] = []
         scope = brand_requested or "all brands"
         parts.append(f"**Patient cohort profile — {scope}**")
         parts.append(
             "Eligible prescribing population sized by the clinical segment axes "
-            "that exist in the data today (new prescriptions, most recent 30 days):"
+            f"that exist in the data today (new prescriptions, {self._window_phrase(window)}):"
         )
         for p in profiles:
             parts.append(f"\n### {p['brand']} — {self._fmt(p['headline_nrx'])} new-Rx patients")
