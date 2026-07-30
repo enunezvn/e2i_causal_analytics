@@ -63,6 +63,7 @@ from src.repositories.chatbot_message import (
 from src.utils.llm_attribution import drain_run_usage
 from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_chat_llm, get_llm_provider
+from src.utils.redaction import redact_query
 
 # MLflow metrics feature flag
 CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").lower() == "true"
@@ -397,7 +398,7 @@ async def init_node(state: ChatbotState) -> Dict[str, Any]:
     brand = state.get("brand_context")
     region = state.get("region_context")
 
-    logger.info(f"Init node: session={session_id}, query={query[:50]}...")
+    logger.info(f"Init node: session={session_id}, query={redact_query(query)}")
 
     # Get active trace context for observability
     trace_ctx = _active_trace_context.get()
@@ -562,7 +563,7 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     messages = state.get("messages", [])
 
     logger.debug(
-        f"RAG retrieval: query={query[:50]}..., intent={intent}, cognitive_enabled={CHATBOT_COGNITIVE_RAG_ENABLED}"
+        f"RAG retrieval: query={redact_query(query)}, intent={intent}, cognitive_enabled={CHATBOT_COGNITIVE_RAG_ENABLED}"
     )
 
     # Build conversation context from recent messages (last 3)

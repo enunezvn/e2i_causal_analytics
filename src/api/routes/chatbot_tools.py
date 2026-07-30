@@ -48,6 +48,7 @@ from src.repositories.chatbot_message import (
 )
 from src.services import cohort_resolution, kpi_resolution
 from src.utils.llm_factory import get_chat_llm
+from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
 
@@ -801,7 +802,7 @@ async def agent_routing_tool(
     Returns:
         Dict with routing decision, confidence, rationale, and agent recommendation
     """
-    logger.info(f"Agent routing: query={query[:50]}..., target={target_agent}")
+    logger.info(f"Agent routing: query={redact_query(query)}, target={target_agent}")
 
     # Initialize Opik tracing if available
     opik_span = None
@@ -810,7 +811,10 @@ async def agent_routing_tool(
             opik = OpikConnector()
             opik_span = opik.start_span(  # type: ignore[attr-defined]
                 name="agent_routing",
-                metadata={"query_preview": query[:100], "target_agent": target_agent},
+                metadata={
+                    "query_preview": redact_query(query, max_len=100),
+                    "target_agent": target_agent,
+                },
             )
         except Exception as e:
             logger.debug(f"Failed to start Opik span: {e}")
@@ -826,7 +830,7 @@ async def agent_routing_tool(
                     "routing_confidence": 1.0,
                     "rationale": "Explicit agent selection",
                     "routing_method": "explicit",
-                    "query_analyzed": query[:100],
+                    "query_analyzed": redact_query(query, max_len=100),
                 }
                 # Log to Opik
                 if opik_span:
@@ -874,7 +878,7 @@ async def agent_routing_tool(
             "rationale": rationale,
             "routing_method": routing_method,
             "dspy_enabled": CHATBOT_DSPY_ROUTING_ENABLED,
-            "query_analyzed": query[:100],
+            "query_analyzed": redact_query(query, max_len=100),
         }
 
         # Log routing decision to Opik
@@ -907,14 +911,14 @@ async def agent_routing_tool(
                 "rationale": rationale,
                 "routing_method": "hardcoded_fallback",
                 "fallback_reason": str(e),
-                "query_analyzed": query[:100],
+                "query_analyzed": redact_query(query, max_len=100),
             }
         except Exception as fallback_error:
             return {
                 "success": False,
                 "error": str(e),
                 "fallback_error": str(fallback_error),
-                "query_analyzed": query[:100],
+                "query_analyzed": redact_query(query, max_len=100),
             }
     finally:
         # End Opik span
@@ -1030,7 +1034,7 @@ async def document_retrieval_tool(
     Returns:
         Dict with retrieved documents and relevance scores
     """
-    logger.info(f"Document retrieval: query={query[:50]}..., k={k}, brand={brand}")
+    logger.info(f"Document retrieval: query={redact_query(query)}, k={k}, brand={brand}")
 
     try:
         filters = {}
@@ -1111,7 +1115,7 @@ async def orchestrator_tool(
     Returns:
         Dict with orchestrator response, agents dispatched, and confidence
     """
-    logger.info(f"Orchestrator tool: query={query[:50]}..., target_agent={target_agent}")
+    logger.info(f"Orchestrator tool: query={redact_query(query)}, target_agent={target_agent}")
 
     try:
         orchestrator = get_orchestrator()
@@ -1255,7 +1259,7 @@ async def tool_composer_tool(
     Returns:
         Dict with synthesized response from multiple agent outputs
     """
-    logger.info(f"Tool composer: query={query[:50]}..., brand={brand}")
+    logger.info(f"Tool composer: query={redact_query(query)}, brand={brand}")
 
     try:
         # Build context for Tool Composer

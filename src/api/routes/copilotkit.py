@@ -328,6 +328,7 @@ from src.utils.llm_attribution import (
 )
 from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
+from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
 
@@ -2206,7 +2207,7 @@ async def search_insights(query: str, brand: Optional[str] = None) -> Dict[str, 
     Returns:
         Dictionary with search results (or a fail-closed envelope by default)
     """
-    logger.info(f"[CopilotKit] search_insights requested: {query}")
+    logger.info(f"[CopilotKit] search_insights requested: {redact_query(query)}")
 
     if not _placeholder_actions_enabled():
         # Fail closed: do NOT return fabricated insights in production.
@@ -4402,7 +4403,7 @@ async def stream_chat(
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
 
     logger.info(
-        f"[Chatbot] Streaming request: query={chat_request.query[:50]}..., "
+        f"[Chatbot] Streaming request: query={redact_query(chat_request.query)}, "
         f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 
@@ -4471,7 +4472,7 @@ async def chat(
     chat_request.request_id = effective_request_id
 
     logger.info(
-        f"[Chatbot] Chat request: query={chat_request.query[:50]}..., "
+        f"[Chatbot] Chat request: query={redact_query(chat_request.query)}, "
         f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 

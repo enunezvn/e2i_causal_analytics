@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
+from src.utils.redaction import redact_query
+
 logger = logging.getLogger(__name__)
 
 # Check for fasttext installation
@@ -539,7 +541,7 @@ class TypoHandler:
         total_latency = (time.time() - start_time) * 1000
 
         logger.info(
-            f"Query correction: '{query[:50]}...' → '{corrected_query[:50]}...' "
+            f"Query correction: '{redact_query(query)}' → '{redact_query(corrected_query)}' "
             f"({len(corrections)} corrections, {total_latency:.1f}ms)"
         )
 

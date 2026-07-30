@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field
 
+from src.utils.redaction import redact_query
+
 logger = logging.getLogger(__name__)
 
 
@@ -1582,7 +1584,9 @@ class RAGEvaluationPipeline:
                     sample.answer = result.get("answer", "")
                     sample.retrieved_contexts = result.get("contexts", sample.contexts)
                 except Exception as e:
-                    logger.warning(f"Failed to generate answer for: {sample.query}: {e}")
+                    logger.warning(
+                        f"Failed to generate answer for: {redact_query(sample.query)}: {e}"
+                    )
                     sample.answer = ""
 
     def log_to_mlflow(self, report: EvaluationReport) -> None:

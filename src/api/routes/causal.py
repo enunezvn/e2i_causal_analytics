@@ -124,6 +124,7 @@ from src.causal_engine.pipeline.state import (
 from src.memory.episodic_memory import count_memories_by_type, get_recent_memories
 from src.memory.services.factories import get_async_supabase_client
 from src.repositories.provenance import apply_provenance_filter, deployment_includes_synthetic
+from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
 
@@ -690,7 +691,7 @@ async def route_causal_query(
     Returns:
         RouteQueryResponse with recommended library and estimators
     """
-    logger.info(f"Routing query: {(request.query or '')[:50]}...")
+    logger.info(f"Routing query: {redact_query(request.query)}")
 
     # Delegate to the production LibraryRouter — the same weighted
     # regex/keyword classifier the pipeline orchestrator uses — instead of the

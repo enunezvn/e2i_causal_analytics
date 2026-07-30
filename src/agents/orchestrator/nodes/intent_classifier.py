@@ -40,6 +40,7 @@ from src.agents.multi_faceted import (
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
+from src.utils.redaction import redact_query
 
 from ..classifier import ClassificationPipeline
 from ..classifier.schemas import ClassificationResult
@@ -626,7 +627,7 @@ Respond with ONLY a JSON object:
                 f"LLM classification: intent={classification['primary_intent']} "
                 f"confidence={classification['confidence']} "
                 f"multi_agent={classification['requires_multi_agent']} "
-                f"query={query[:80]!r}"
+                f"query={redact_query(query, max_len=80)!r}"
             )
             return classification
         except Exception as e:

@@ -32,6 +32,7 @@ from src.tool_registry.tools.causal_discovery import register_all_discovery_tool
 from src.tool_registry.tools.model_inference import register_model_inference_tool
 from src.tool_registry.tools.structural_drift import register_structural_drift_tool
 from src.utils.audit_chain import AgentTier
+from src.utils.redaction import redact_query
 
 from .decomposer import DecompositionError, QueryDecomposer
 from .executor import ExecutionError, PlanExecutor
@@ -238,7 +239,7 @@ class ToolComposer:
         phase_durations: Dict[str, int] = {}
         context = context or {}
 
-        logger.info(f"Starting composition for query: {query[:100]}...")
+        logger.info(f"Starting composition for query: {redact_query(query, max_len=100)}")
 
         # S14 (Phase 7 prerequisite): extract experiment_id from the
         # existing context-dict carrier. Phase 7.2's auto-population

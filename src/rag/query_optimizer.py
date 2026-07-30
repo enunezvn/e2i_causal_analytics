@@ -27,6 +27,7 @@ from tenacity import (
 )
 
 from src.nlp.typo_handler import CorrectionResult, TypoHandler
+from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
 
@@ -388,7 +389,7 @@ class QueryOptimizer:
             # Cache successful result
             self._cache_result(cache_key, expanded)
 
-            logger.info(f"LLM expanded: '{query_text[:50]}...' → '{expanded[:50]}...'")
+            logger.info(f"LLM expanded: '{redact_query(query_text)}' → '{redact_query(expanded)}'")
             return expanded
 
         except Exception as e:
@@ -428,7 +429,7 @@ class QueryOptimizer:
             # Cache successful result
             self._cache_result(cache_key, expanded)
 
-            logger.info(f"LLM expanded: '{query_text[:50]}...' → '{expanded[:50]}...'")
+            logger.info(f"LLM expanded: '{redact_query(query_text)}' → '{redact_query(expanded)}'")
             return expanded
 
         except Exception as e:
@@ -496,7 +497,7 @@ Expanded query:"""
             # Cache successful result
             self._cache_result(cache_key, hyde_doc)
 
-            logger.info(f"Generated HyDE document for: '{query_text[:50]}...'")
+            logger.info(f"Generated HyDE document for: '{redact_query(query_text)}'")
             return hyde_doc
 
         except Exception as e:
@@ -534,7 +535,7 @@ Expanded query:"""
             # Cache successful result
             self._cache_result(cache_key, hyde_doc)
 
-            logger.info(f"Generated HyDE document for: '{query_text[:50]}...'")
+            logger.info(f"Generated HyDE document for: '{redact_query(query_text)}'")
             return hyde_doc
 
         except Exception as e:
