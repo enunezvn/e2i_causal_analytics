@@ -64,7 +64,9 @@ Run from a checkout with a loaded ``.env`` (reads are safe anywhere;
 
 Idempotent: re-running (with or without ``--execute``) recomputes the same
 deterministic metrics and re-issues the same single-row updates; an
-already-promoted row is reported as such and rewritten with identical values.
+already-promoted row keeps its ORIGINAL ``promoted_at`` (the first promotion
+instant is never re-stamped), so a rerun's payload is byte-identical — a
+semantic no-op.
 """
 
 from __future__ import annotations
@@ -135,6 +137,7 @@ def calibration_intercept(
     p = np.clip(np.asarray(y_score, dtype=float), eps, 1.0 - eps)
     offset = np.log(p / (1.0 - p))
     a = 0.0
+    converged = False
     try:
         for _ in range(max_iter):
             mu = 1.0 / (1.0 + np.exp(-(a + offset)))
@@ -144,8 +147,11 @@ def calibration_intercept(
             step = float(np.sum(y - mu)) / hess
             a += step
             if abs(step) < tol:
+                converged = True
                 break
-        return float(a) if np.isfinite(a) else None
+        # A non-converged final iterate is NOT reported: better to omit the
+        # intercept than to print a number the solver did not actually reach.
+        return float(a) if (converged and np.isfinite(a)) else None
     except (FloatingPointError, OverflowError, ValueError):
         return None
 
@@ -233,7 +239,7 @@ async def _apply_update(client: Any, row_id: str, update: dict) -> None:
 async def _fetch_registry_row(client: Any, model_name: str) -> dict | None:
     res = await (
         client.table("ml_model_registry")
-        .select("id,model_name,auc,stage,is_champion,artifact_path,experiment_id")
+        .select("id,model_name,auc,stage,is_champion,artifact_path,experiment_id,promoted_at")
         .eq("model_name", model_name)
         .execute()
     )
@@ -241,20 +247,28 @@ async def _fetch_registry_row(client: Any, model_name: str) -> dict | None:
     return rows[0] if rows else None
 
 
-async def _stored_holdout(client: Any, model_name: str) -> dict | None:
-    from src.repositories.drift_monitoring import _resolve_model_id
+async def _stored_holdout(client: Any, model_id: str) -> dict | None:
+    """Latest stored holdout metric per name, keyed by the registry row's OWN id.
 
-    mid = await _resolve_model_id(client, model_name)
-    if mid is None:
-        return None
+    Uses the already-fetched registry ``id`` directly (no name re-resolution)
+    and orders ``measured_at`` DESC keeping the FIRST occurrence per metric
+    name, so the faithfulness reference is deterministically the newest
+    snapshot even if historical duplicates ever exist.
+    """
     res = await (
         client.table("ml_performance_metrics")
-        .select("metric_name,metric_value")
-        .eq("model_id", mid)
+        .select("metric_name,metric_value,measured_at")
+        .eq("model_id", model_id)
         .eq("source", "holdout")
+        .order("measured_at", desc=True)
         .execute()
     )
-    return {r["metric_name"]: float(r["metric_value"]) for r in (res.data or [])}
+    out: dict[str, float] = {}
+    for r in res.data or []:
+        name = r["metric_name"]
+        if name not in out:
+            out[name] = float(r["metric_value"])
+    return out or None
 
 
 async def _score_artifact(client: Any, brand: str, artifact_path: str) -> dict:
@@ -327,16 +341,18 @@ async def _verify_written(client: Any, row_id: str, update: dict) -> bool:
     )
 
 
-async def main(execute: bool, only_brand: str | None) -> int:
-    from src.repositories.drift_monitoring import get_drift_monitoring_client
+async def run(client: Any, *, execute: bool, only_brand: str | None) -> int:
+    """Score + gate + (optionally) promote each brand; returns the exit code.
 
-    client = await get_drift_monitoring_client()
+    Split from ``main`` so the whole orchestration is unit-testable against a
+    fake client (dry-run-never-writes / single-PK-write / rerun-no-op).
+    """
     brands = [b for b in BRANDS if only_brand is None or b == only_brand]
     mode = "EXECUTE" if execute else "DRY-RUN"
     print(f"hcp_adoption champion promotion (#1354): {len(brands)} brand(s); mode={mode}")
 
     promoted = held = failed = 0
-    promoted_at = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     for brand in brands:
         model_name = f"hcp_adoption_{brand}_goldstd_lr_v1"
         assert model_name in MODEL_ALLOWLIST  # scope guard — never anything else
@@ -346,7 +362,7 @@ async def main(execute: bool, only_brand: str | None) -> int:
                 print(f"  FAIL {model_name}: no registry row")
                 failed += 1
                 continue
-            stored = await _stored_holdout(client, model_name)
+            stored = await _stored_holdout(client, row["id"])
             if not stored:
                 print(f"  HOLD {model_name}: no stored holdout metrics to verify against")
                 held += 1
@@ -354,6 +370,13 @@ async def main(execute: bool, only_brand: str | None) -> int:
             res = await _score_artifact(client, brand, row["artifact_path"])
             m, n, prev = res["metrics"], res["n"], res["prevalence"]
             icpt = res["intercept"]
+            already = row.get("stage") == "production" and bool(row.get("is_champion"))
+            # Idempotency: promoted_at records the FIRST promotion instant —
+            # an already-promoted row keeps its original timestamp, so a rerun
+            # re-issues a byte-identical payload (semantic no-op).
+            promoted_at = (
+                row.get("promoted_at") if (already and row.get("promoted_at")) else now_iso
+            )
             action, reasons, update = decide(stored, m, prev, promoted_at)
             evidence = (
                 f"n={n} prevalence={prev:.4f} auc={m['auc_roc']:.6f} "
@@ -366,7 +389,6 @@ async def main(execute: bool, only_brand: str | None) -> int:
                 print(f"       {evidence}")
                 held += 1
                 continue
-            already = row.get("stage") == "production" and row.get("is_champion")
             note = " [already promoted — idempotent rewrite]" if already else ""
             if not execute:
                 print(f"  OK(dry) {model_name}:{note} would UPDATE ml_model_registry")
@@ -387,6 +409,13 @@ async def main(execute: bool, only_brand: str | None) -> int:
             failed += 1
     print(f"summary: promoted={promoted} held={held} failed={failed} mode={mode}")
     return 0 if failed == 0 else 1
+
+
+async def main(execute: bool, only_brand: str | None) -> int:
+    from src.repositories.drift_monitoring import get_drift_monitoring_client
+
+    client = await get_drift_monitoring_client()
+    return await run(client, execute=execute, only_brand=only_brand)
 
 
 if __name__ == "__main__":

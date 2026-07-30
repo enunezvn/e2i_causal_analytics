@@ -279,3 +279,139 @@ def test_apply_update_targets_exactly_one_row_by_id():
     update = {"stage": "production", "is_champion": True}
     asyncio.run(promo._apply_update(client, "row-uuid-1", update))
     assert client.log == [("ml_model_registry", update, [("id", "row-uuid-1")])]
+
+
+# ---------------------------------------------------------------------------
+# run() orchestration — dry-run never writes; execute writes once per brand,
+# PK-scoped; rerun is a semantic no-op (promoted_at preserved); a held brand
+# is never written. Scoring + stored-holdout I/O are monkeypatched (fixtures
+# only); the registry is a stateful fake honoring select/update/eq chains.
+# ---------------------------------------------------------------------------
+
+
+class _RegistryQuery:
+    def __init__(self, fake, table):
+        self._fake = fake
+        self._table = table
+        self._update = None
+        self._filters = []
+
+    def select(self, _cols):
+        return self
+
+    def update(self, payload):
+        self._update = dict(payload)
+        return self
+
+    def eq(self, col, val):
+        self._filters.append((col, val))
+        return self
+
+    async def execute(self):
+        assert self._table == "ml_model_registry", f"unexpected table {self._table}"
+        if self._update is not None:
+            assert self._filters == [("id", self._filters[0][1])], (
+                "registry writes must be PK-scoped by id only"
+            )
+            row_id = self._filters[0][1]
+            self._fake.updates.append((row_id, dict(self._update)))
+            self._fake.rows[row_id].update(self._update)
+            return type("R", (), {"data": [dict(self._fake.rows[row_id])]})()
+        matched = [
+            dict(r)
+            for r in self._fake.rows.values()
+            if all(r.get(c) == v for c, v in self._filters)
+        ]
+        return type("R", (), {"data": matched})()
+
+
+class _RegistryFake:
+    def __init__(self, rows):
+        self.rows = rows
+        self.updates = []
+
+    def table(self, name):
+        return _RegistryQuery(self, name)
+
+
+def _registry_rows():
+    return {
+        f"id-{b}": {
+            "id": f"id-{b}",
+            "model_name": f"hcp_adoption_{b}_goldstd_lr_v1",
+            "auc": 0.79,
+            "stage": "staging",
+            "is_champion": False,
+            "artifact_path": f"/fixtures/{b}.pkl",
+            "experiment_id": f"exp-{b}",
+            "promoted_at": None,
+            "pr_auc": None,
+            "brier_score": None,
+            "calibration_slope": None,
+        }
+        for b in promo.BRANDS
+    }
+
+
+def _patch_scoring(monkeypatch, pathological_brands=()):
+    async def fake_score(client, brand, artifact_path):
+        slope = 0.3 if brand in pathological_brands else _COMPUTED_OK["calibration_slope"]
+        return {
+            "metrics": {**_COMPUTED_OK, "calibration_slope": slope},
+            "intercept": -0.1,
+            "n": 1000,
+            "prevalence": 0.407,
+        }
+
+    async def fake_stored(client, model_id):
+        return dict(_STORED)
+
+    monkeypatch.setattr(promo, "_score_artifact", fake_score)
+    monkeypatch.setattr(promo, "_stored_holdout", fake_stored)
+
+
+def test_run_dry_run_never_writes(monkeypatch):
+    fake = _RegistryFake(_registry_rows())
+    _patch_scoring(monkeypatch)
+    rc = asyncio.run(promo.run(fake, execute=False, only_brand=None))
+    assert rc == 0
+    assert fake.updates == []
+    assert all(r["stage"] == "staging" for r in fake.rows.values())
+
+
+def test_run_execute_writes_exactly_one_pk_scoped_update_per_brand(monkeypatch):
+    fake = _RegistryFake(_registry_rows())
+    _patch_scoring(monkeypatch)
+    rc = asyncio.run(promo.run(fake, execute=True, only_brand=None))
+    assert rc == 0
+    assert sorted(rid for rid, _ in fake.updates) == sorted(f"id-{b}" for b in promo.BRANDS)
+    for _, payload in fake.updates:
+        assert payload["stage"] == "production"
+        assert payload["is_champion"] is True
+        assert payload["promoted_at"]
+    assert all(r["stage"] == "production" and r["is_champion"] for r in fake.rows.values())
+
+
+def test_run_execute_rerun_is_semantic_noop(monkeypatch):
+    fake = _RegistryFake(_registry_rows())
+    _patch_scoring(monkeypatch)
+    assert asyncio.run(promo.run(fake, execute=True, only_brand=None)) == 0
+    first = dict(fake.updates)
+    fake.updates = []
+    assert asyncio.run(promo.run(fake, execute=True, only_brand=None)) == 0
+    second = dict(fake.updates)
+    # The rerun re-issues byte-identical payloads — including the ORIGINAL
+    # promoted_at (never re-stamped) — so the rows do not change.
+    assert second == first
+
+
+def test_run_execute_never_writes_a_held_brand(monkeypatch):
+    fake = _RegistryFake(_registry_rows())
+    _patch_scoring(monkeypatch, pathological_brands=("kisqali",))
+    rc = asyncio.run(promo.run(fake, execute=True, only_brand=None))
+    assert rc == 0  # a HOLD is a reported outcome, not a failure
+    written = {rid for rid, _ in fake.updates}
+    assert "id-kisqali" not in written
+    assert written == {"id-fabhalta", "id-remibrutinib"}
+    assert fake.rows["id-kisqali"]["stage"] == "staging"
+    assert fake.rows["id-kisqali"]["is_champion"] is False
