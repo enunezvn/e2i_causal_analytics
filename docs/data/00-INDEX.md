@@ -19,7 +19,7 @@ E2I Causal Analytics is a 22-agent, 6-tier pharmaceutical drug adoption analysis
 | **03** | [ML Pipeline Schema](03-ML-PIPELINE-SCHEMA.md) | ML engineers, MLOps | 60+ ML lifecycle tables — experiments, model registry, training runs, causal validation, digital twins, tool composer, HPO, A/B testing, GEPA, BentoML, Feast, causal discovery, cohort constructor. |
 | **04** | [Knowledge Graph Ontology](04-KNOWLEDGE-GRAPH-ONTOLOGY.md) | Data scientists, graph engineers | FalkorDB schema — 8 node types, 15 edge types (13 direct + 2 inferred), 5 inference rules, pharma domain model, Cypher examples. |
 | **05** | [Feature Store Reference](05-FEATURE-STORE-REFERENCE.md) | ML engineers | Feast configuration — 5 primary + 3 composite entities, 5 data sources, 9 feature views, 48 features, materialization and serving. |
-| **06** | [KPI Reference](06-KPI-REFERENCE.md) | Analysts, product managers | All 44 calculable KPIs across 6 workstreams with formulas, thresholds (target/warning/critical), source tables, and calculator references (plus WS1-MP-008 and WS1-DQ-008, decommissioned). |
+| **06** | [KPI Reference](06-KPI-REFERENCE.md) | Analysts, product managers | All 45 calculable KPIs across 6 workstreams with formulas, thresholds (target/warning/critical), source tables, and calculator references (plus WS1-MP-008 and WS1-DQ-008, decommissioned). |
 | **07** | [Supporting Schemas](07-SUPPORTING-SCHEMAS.md) | Platform engineers | Memory (7 tables), RAG (2 tables + HNSW indexes), Chat (6+ tables with RLS), Admin & LLM Observability (`user_activity_log`, `llm_usage_events`), Audit (SHA-256 hash chain). |
 | **08** | [Leakage Detection Contract](08-LEAKAGE-DETECTION-CONTRACT.md) | ML engineers, MLOps | Tier-0 adaptive temporal-validity leakage ensemble — the sigma-band + issue-#194 joint clamp, the Layer-3 FDR confident set + permutation feasibility floor, declared-safe full manifest immunity (#648), manifest auto-detection, and the cosmetic-console / Feast-advisory caveats. |
 | --- | [CSV Templates](templates/README.md) | Data engineers | 5 ready-to-use CSV templates with example rows: `hcp_profiles`, `patient_journeys`, `treatment_events`, `business_metrics`, `triggers`. |
@@ -168,7 +168,7 @@ docs/data/
 ├── 03-ML-PIPELINE-SCHEMA.md             # 60+ ML tables
 ├── 04-KNOWLEDGE-GRAPH-ONTOLOGY.md       # FalkorDB schema
 ├── 05-FEATURE-STORE-REFERENCE.md        # Feast features
-├── 06-KPI-REFERENCE.md                  # 44 calculable KPIs
+├── 06-KPI-REFERENCE.md                  # 45 calculable KPIs
 ├── 07-SUPPORTING-SCHEMAS.md             # Memory, RAG, Chat, Admin/LLM Observability, Audit
 ├── 08-LEAKAGE-DETECTION-CONTRACT.md     # Tier-0 adaptive temporal-validity leakage contract
 └── templates/

@@ -1,28 +1,31 @@
 # E2I Causal Analytics - KPI Definitions V3.0
-# 44 KPIs - 100% Calculable from V3 Schema
+# 45 KPIs - 100% Calculable from V3 Schema
 # (WS1-MP-008 "Fairness Gap (ΔRecall)" removed in #1068 — needs protected-group
 #  fairness_metrics the synthetic substrate does not populate. WS1-DQ-008
 #  "Label Quality (IAA)" removed in T8 by product decision — a WORKING metric
 #  (corpus Fleiss κ ≈ 0.76) deprioritized from the live KPI set; the DB objects
-#  v_kpi_label_quality + ml_annotations are intentionally retained.)
+#  v_kpi_label_quality + ml_annotations are intentionally retained.
+#  WS2-TR-009 "Trigger Funnel Conversion" ADDED by the #1360 ruling, 2026-07-30
+#  — trigger-effectiveness KPIs are chat-KPI-path, served by kpi_calculate_tool
+#  over the migration-118 trigger_effectiveness_* allowlist statements.)
 
 version: "3.0.0"
-last_updated: "2025-11-28"
+last_updated: "2026-07-30"
 
 # ═══════════════════════════════════════════════════════════════════
 # SUMMARY
 # ═══════════════════════════════════════════════════════════════════
 
 summary:
-  total_kpis: 44
+  total_kpis: 45
   direct_calculable: 21
-  derived_calculable: 23
+  derived_calculable: 24
   gaps: 0
 
   by_workstream:
     ws1_data_quality: 8
     ws1_model_performance: 8
-    ws2_triggers: 8
+    ws2_triggers: 9
     ws3_business: 10
     brand_specific: 5
     causal_metrics: 5
@@ -416,7 +419,7 @@ ws1_model_performance:
     windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
-# WS2: TRIGGER PERFORMANCE (8 KPIs)
+# WS2: TRIGGER PERFORMANCE (9 KPIs; WS2-TR-009 added by the #1360 ruling)
 # ═══════════════════════════════════════════════════════════════════
 
 ws2_triggers:
@@ -459,7 +462,12 @@ ws2_triggers:
       critical: 0.40
     frequency: daily
     workstream: WS2
-    windowable: not_applicable
+    # #1360: windowable via migration 118 (trigger_effectiveness_precision_windowed).
+    # needs_care: an explicit recent window under-counts until the 30-day
+    # conversion window matures (the default cohort is the LAGGED matured one).
+    windowable: needs_care
+    window:
+      column: trigger_timestamp
 
   trigger_recall:
     id: "WS2-TR-002"
@@ -550,7 +558,12 @@ ws2_triggers:
       critical: 0.30
     frequency: daily
     workstream: WS2
-    windowable: not_applicable
+    # #1360: windowable via migration 118 (trigger_effectiveness_acceptance_rate
+    # _windowed). needs_care: acceptance statuses accrue after delivery, so the
+    # most recent windows under-count until the field responds.
+    windowable: needs_care
+    window:
+      column: trigger_timestamp
 
   false_alert_rate:
     id: "WS2-TR-005"
@@ -606,7 +619,11 @@ ws2_triggers:
       critical: 0.40
     frequency: daily
     workstream: WS2
-    windowable: not_applicable
+    # #1360: windowable via migration 118 (trigger_effectiveness_override_rate
+    # _windowed). needs_care: override statuses accrue after delivery.
+    windowable: needs_care
+    window:
+      column: trigger_timestamp
 
   lead_time_days:
     id: "WS2-TR-007"
@@ -666,6 +683,48 @@ ws2_triggers:
     workstream: WS2
     note: "V3: New change tracking fields in triggers"
     windowable: not_applicable
+
+  trigger_funnel_conversion:
+    id: "WS2-TR-009"
+    name: "Trigger Funnel Conversion"
+    # ADDED by the #1360 ruling (2026-07-30): trigger-effectiveness KPIs are
+    # chat-KPI-path — served by kpi_calculate_tool over the migration-118
+    # trigger_effectiveness_funnel_conversion statements. Headline = actioned
+    # share of DELIVERED triggers; the full stage counts (delivered -> viewed
+    # -> accepted -> actioned -> outcome) ride along as funnel_stages metadata.
+    # The headline deliberately STOPS at actioned: extending to outcome would
+    # conflate outcome-TRACKING coverage with effectiveness (the v1
+    # trigger-precision trap — see WS2-TR-001's definition-v2 note). The
+    # viewed stage is informational: delivery_status is a progression state
+    # ('viewed' is not required before acceptance), so viewed is not monotone
+    # with accepted on this substrate.
+    definition: "Share of delivered triggers that were accepted and actioned by the field (full funnel stage counts surfaced alongside)"
+    formula: "count(delivered AND accepted AND actioned) / count(delivered)"
+    data_plane: crm
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "field follow-through on accepted triggers (accept -> act)"
+      - "NBA content actionability and delivery-channel fit"
+    calculation_type: derived
+    tables:
+      - triggers
+    columns:
+      - triggers.delivery_status
+      - triggers.acceptance_status
+      - triggers.action_taken
+      - triggers.outcome_tracked
+      - triggers.outcome_value
+    view: null
+    threshold: null  # New KPI (#1360): informational until a target is ratified
+    value_format: percent
+    frequency: daily
+    workstream: WS2
+    # #1360: windowable via migration 118 (trigger_effectiveness_funnel_conversion
+    # _windowed). needs_care: acceptance/action statuses accrue after delivery.
+    windowable: needs_care
+    window:
+      column: trigger_timestamp
 
 # ═══════════════════════════════════════════════════════════════════
 # WS3: BUSINESS IMPACT (10 KPIs)

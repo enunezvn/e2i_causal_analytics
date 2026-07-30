@@ -133,7 +133,10 @@ def test_reporting_window_covers_frontier_anchored_ws3_family():
     """TRx share and conversion rate were frontier-anchored by 089 alongside
     the volumes, so their windows are now verified and must be disclosed --
     with the DOMAIN the frontier belongs to (share: prescriptions; conversion:
-    triggers)."""
+    triggers). #1360 added the trigger-effectiveness family (089/113/118):
+    acceptance/override/funnel disclose the trigger-data frontier window;
+    precision's is the LAGGED matured cohort (migration 113), so its note must
+    say the window ends BEFORE the frontier, not at it."""
     from src.api.routes.chatbot_tools import KPI_REPORTING_WINDOWS
 
     assert KPI_REPORTING_WINDOWS == {
@@ -142,6 +145,13 @@ def test_reporting_window_covers_frontier_anchored_ws3_family():
         "WS3-BI-007": "most recent 30 days of prescription data",
         "WS3-BI-008": "most recent 30 days of prescription data",
         "WS3-BI-009": "most recent 30 days of trigger data",
+        "WS2-TR-001": (
+            "30-day trigger cohort ending 30 days before the trigger-data "
+            "frontier (the conversion window must mature)"
+        ),
+        "WS2-TR-004": "most recent 30 days of trigger data",
+        "WS2-TR-006": "most recent 30 days of trigger data",
+        "WS2-TR-009": "most recent 30 days of trigger data",
     }
 
 

@@ -60,6 +60,10 @@ CAPTURE_KPI_IDS: tuple = (
     # Windowed / all-time readings that don't recast onto calendar months:
     "WS2-TR-002",
     "WS2-TR-003",
+    # #1360: Trigger Funnel Conversion — frontier-anchored 30d funnel reading
+    # (migration 118); no honest monthly backfill, so history accrues forward
+    # via weekly capture like WS2-TR-002/003.
+    "WS2-TR-009",
 )
 
 

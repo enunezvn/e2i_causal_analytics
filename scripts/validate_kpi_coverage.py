@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 E2I Causal Analytics - KPI Coverage Validator V3.0
-Validates that all 44 KPIs are calculable from the V3 schema.
+Validates that all 45 KPIs are calculable from the V3 schema.
 
 Usage:
     python validate_kpi_coverage.py                    # Validate against Supabase
@@ -211,7 +211,7 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
     ),
 
     # -------------------------------------------------------------------------
-    # WS2: Trigger Performance (8 KPIs)
+    # WS2: Trigger Performance (9 KPIs; WS2-TR-009 added by the #1360 ruling)
     # -------------------------------------------------------------------------
     KPIDefinition(
         id="WS2-TR-001", name="Trigger Precision", workstream="WS2",
@@ -259,10 +259,19 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
         id="WS2-TR-008", name="Change-Fail Rate (CFR)", workstream="WS2",
         category="Trigger Performance", calculation_type=CalculationType.VIEW,
         tables=["triggers"],
-        columns=["triggers.previous_trigger_id", "triggers.change_type", 
+        columns=["triggers.previous_trigger_id", "triggers.change_type",
                  "triggers.change_failed", "triggers.change_outcome_delta"],
         view="v_kpi_change_fail_rate",
         is_v3_new=True, note="V3: NEW change tracking fields"
+    ),
+    KPIDefinition(
+        id="WS2-TR-009", name="Trigger Funnel Conversion", workstream="WS2",
+        category="Trigger Performance", calculation_type=CalculationType.DERIVED,
+        tables=["triggers"],
+        columns=["triggers.delivery_status", "triggers.acceptance_status",
+                 "triggers.action_taken", "triggers.outcome_tracked",
+                 "triggers.outcome_value"],
+        note="#1360: chat-KPI-path trigger-effectiveness family (migration 118)"
     ),
 
     # -------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """KPI coverage probe (Shard 09).
 
-Maps every one of the 44 KPIs in config/kpi_definitions.yaml to the kpi_query
+Maps every one of the 45 KPIs in config/kpi_definitions.yaml to the kpi_query
 registry query_id (the *_include_synthetic / view variant) that exercises the
 synthetic substrate, runs it against the faithful docker Supabase, and reports
 non-NULL / EMPTY per KPI.
@@ -81,6 +81,13 @@ PROBES: dict[str, tuple[str, str, str | None]] = {
     "WS2-TR-006": ("trigger_performance_override_rate_include_synthetic", "[]", "override_rate"),
     "WS2-TR-007": ("trigger_performance_lead_time_include_synthetic", "[]", "median_lead_time"),
     "WS2-TR-008": ("trigger_performance_cfr_include_synthetic", "[]", "cfr"),
+    # #1360 trigger-effectiveness family (migration 118): the base statement
+    # binds $1 brand / $2 region / $3 trigger_type — all nullable.
+    "WS2-TR-009": (
+        "trigger_effectiveness_funnel_conversion_include_synthetic",
+        "[null, null, null]",
+        "funnel_conversion",
+    ),
     # --- WS3 business ---
     "WS3-BI-001": ("business_impact_mau_fallback_include_synthetic", "[]", "mau"),
     "WS3-BI-002": ("business_impact_wau_fallback_include_synthetic", "[]", "wau"),

@@ -1,8 +1,8 @@
 # Synthetic KPI Coverage Map (Shard 09)
 
-**Goal:** map every one of the 44 calculable KPIs in `config/kpi_definitions.yaml` to the
+**Goal:** map every one of the 45 calculable KPIs in `config/kpi_definitions.yaml` to the
 synthetic substrate that makes it return **non-NULL**, and prove it on the faithful
-docker Supabase. **Result: 44/44 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB.)
+docker Supabase. **Result: 45/45 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB. WS2-TR-009 "Trigger Funnel Conversion" was ADDED by the #1360 ruling, 2026-07-30 — its registry statement lands with migration 118; its MAPPED verdict below was measured by executing the migration-118 statement body read-only on the live DB pre-application.)
 
 Reproduce:
 
@@ -10,9 +10,10 @@ Reproduce:
 # load the synthetic substrate (rolling-window anchored):
 PYTHONPATH=$(pwd) LOKY_MAX_CPU_COUNT=1 \
   dotenv -f /path/to/.env run -- python scripts/load_synthetic_data.py --small --anchor-to-now
-# probe all 44 KPIs against the faithful DB:
+# probe all 45 KPIs against the faithful DB:
 E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py
-# -> TOTAL 44  MAPPED 44  EMPTY 0  N/A 0
+# -> TOTAL 45  MAPPED 45  EMPTY 0  N/A 0
+# (WS2-TR-009 requires migration 118 to be applied)
 ```
 
 ## How a KPI is proven
@@ -29,7 +30,7 @@ columns directly; those are proven by a direct COUNT of the populated synthetic 
 Every probe value below is the **measured** output of `kpi_query(<id>_include_synthetic, ...)`
 on the faithful docker DB after a `--small --anchor-to-now` load.
 
-## Coverage table (44 KPIs)
+## Coverage table (45 KPIs)
 
 > WS1-DQ-008 (Label Quality / IAA) was decommissioned in T8 (product decision) and is
 > omitted from this calculable-coverage table — mirroring WS1-MP-008 (#1068).
@@ -60,6 +61,7 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS2-TR-006 | Override Rate | `triggers.acceptance_status='overridden'` → `trigger_performance_override_rate` (#1119: DGP emits `overridden` at P=0.14 of delivered; migration 090 denominator = delivered) | MAPPED | rate≈0.14 of delivered |
 | WS2-TR-007 | Lead Time | `triggers.lead_time_days` → `trigger_performance_lead_time` | MAPPED | median=16 |
 | WS2-TR-008 | Change-Fail Rate (CFR) | `triggers.previous_trigger_id/change_failed` → `trigger_performance_cfr` — **stamped by `stamp_change_tracking`** | MAPPED | cfr=0.222 |
+| WS2-TR-009 | Trigger Funnel Conversion | `triggers.delivery_status/acceptance_status/action_taken` → `trigger_effectiveness_funnel_conversion` (migration 118, #1360) | MAPPED | funnel_conversion=0.2219 (delivered=20376 viewed=5809 accepted=11117 actioned=4522 outcome=1251; measured 2026-07-30 via the 118 statement body read-only) |
 | WS3-BI-001 | Monthly Active Users | `user_sessions.user_id/session_start` → `v_kpi_active_users` / mau fallback (Task 5) | MAPPED | mau=30 |
 | WS3-BI-002 | Weekly Active Users | `user_sessions` → `v_kpi_active_users` / wau fallback (Task 5) | MAPPED | wau=30 |
 | WS3-BI-003 | Patient Touch Rate | `triggers`+`patient_journeys` → `business_impact_patient_touch_rate` (Shard 05/06) | MAPPED | touch_rate=0.916 |
@@ -136,9 +138,9 @@ defect is `BLOCKED-BY-Fn` (not a Shard-09 failure).
   unique violation — the FeatureStoreSeeder emits fixed names (`hcp_demographics`) that
   already exist while the loader UPSERTs on `id` (uuid); (b) `feature_values`
   `valid_event_timestamp` CHECK rejects the FeatureValueGenerator's future-dated
-  anchored timestamps. **No KPI in the 44 depends on `feature_values`** (drift_monitor's
+  anchored timestamps. **No KPI in the 45 depends on `feature_values`** (drift_monitor's
   WS1-MP-009 reads `ml_drift_history`, which loads fine), so this does not affect the
-  44/44 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
+  45/45 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
   deferred to their owning shards.
 - The substrate completions added beyond the plan's Task list (model-quality metrics,
   `sequence_number`, change-tracking) are post-hoc column stamps onto **existing,
