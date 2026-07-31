@@ -214,6 +214,9 @@ class PredictionSynthesizerAgent:
         include_context: bool = True,
         query: str = "",
         session_id: Optional[str] = None,
+        segment_by: Optional[str] = None,
+        brand: Optional[str] = None,
+        top_segments: int = 5,
     ) -> PredictionSynthesizerOutput:
         """
         Synthesize predictions from multiple models.
@@ -229,10 +232,32 @@ class PredictionSynthesizerAgent:
             include_context: Whether to add context enrichment
             query: Original query text
             session_id: Optional session identifier for memory context
+            segment_by: #1354 — when set (a served HCP covariate axis), this call
+                is a per-segment likelihood-to-prescribe RANKING, not a
+                single-entity synthesis. The single-entity ensemble graph is
+                short-circuited and the shared ``hcp_segment_likelihood`` service
+                scores the real HCP cohort and rolls it up per segment. ``brand``
+                is then required; ``entity_id``/``prediction_target`` are ignored.
+            brand: Brand to scope the segment ranking (required when segment_by
+                is set — the platform's fail-closed philosophy: no silent brand).
+            top_segments: How many top segments to name in the narrative.
 
         Returns:
             PredictionSynthesizerOutput with ensemble prediction
         """
+        # #1354 segment-ranking mode: a population-level ask ("which HCP segments
+        # are most likely to increase <brand> prescriptions") has no single
+        # entity to synthesize for. Delegate to the shared service BEFORE any
+        # single-entity memory/graph machinery runs.
+        if segment_by is not None:
+            return await self._build_segment_ranking_output(
+                brand=brand,
+                segment_by=segment_by,
+                time_horizon=time_horizon,
+                query=query,
+                top_segments=top_segments,
+            )
+
         # Generate session ID if not provided
         if session_id is None:
             session_id = str(uuid.uuid4())
@@ -444,6 +469,57 @@ class PredictionSynthesizerAgent:
                 logger.warning(f"Failed to emit DSPy training signal: {e}")
 
         return output
+
+    async def _build_segment_ranking_output(
+        self,
+        *,
+        brand: Optional[str],
+        segment_by: str,
+        time_horizon: str,
+        query: str,
+        top_segments: int,
+    ) -> PredictionSynthesizerOutput:
+        """#1354 — score the brand's promoted HCP-adoption champion over the real
+        cohort and return a per-segment likelihood-to-prescribe ranking as this
+        agent's output. Delegates to the shared ``hcp_segment_likelihood``
+        service (importable by #1356 too); fails closed with status='failed' and
+        an honest summary when no champion is promoted or the substrate is empty —
+        never fabricates a ranking."""
+        from src.services import hcp_segment_likelihood as svc
+
+        now = datetime.now(timezone.utc).isoformat()
+        if not brand:
+            return PredictionSynthesizerOutput(
+                status="failed",
+                prediction_summary=(
+                    "A per-HCP-segment likelihood ranking needs a brand to scope the "
+                    "champion model — none was grounded, so nothing was scored."
+                ),
+                errors=[{"error": "missing brand for segment ranking"}],
+                timestamp=now,
+            )
+        try:
+            result = await svc.score_hcp_segments(brand, segment_by=segment_by)
+        except (svc.ChampionNotPromotedError, svc.SegmentScoringError, ValueError) as exc:
+            logger.info("prediction_synthesizer segment ranking failed closed: %s", exc)
+            return PredictionSynthesizerOutput(
+                status="failed",
+                prediction_summary=(
+                    f"No per-segment likelihood ranking could be produced for {brand}: "
+                    f"{exc}. No champion output was fabricated."
+                ),
+                errors=[{"error": str(exc)}],
+                timestamp=now,
+            )
+        narrative = svc.build_segment_ranking_narrative(
+            result, top_n=top_segments, horizon=time_horizon
+        )
+        return PredictionSynthesizerOutput(
+            prediction_summary=narrative,
+            models_succeeded=1,
+            status="completed",
+            timestamp=now,
+        )
 
     async def quick_predict(
         self,

@@ -46,6 +46,7 @@ from src.api.routes.chatbot_tools import (
     get_e2i_chatbot_tools,
     get_tool_by_name,
     orchestrator_tool,
+    predict_hcp_segment_likelihood_tool,
     tool_composer_tool,
 )
 
@@ -1319,8 +1320,14 @@ class TestToolExports:
     """Tests for tool exports and mappings."""
 
     def test_e2i_chatbot_tools_list(self):
-        """Test E2I_CHATBOT_TOOLS contains all tools."""
-        assert len(E2I_CHATBOT_TOOLS) == 7
+        """Test E2I_CHATBOT_TOOLS contains all tools.
+
+        NOTE (#1354): the pre-existing count here was a stale ``== 7`` — it was
+        never bumped when kpi_calculate_tool + clinical_context_tool landed
+        (actual was 9). Corrected to 10 with this lane's addition; membership
+        below is a non-exhaustive "contains" set.
+        """
+        assert len(E2I_CHATBOT_TOOLS) == 10
         assert e2i_data_query_tool in E2I_CHATBOT_TOOLS
         assert causal_analysis_tool in E2I_CHATBOT_TOOLS
         assert agent_routing_tool in E2I_CHATBOT_TOOLS
@@ -1328,10 +1335,11 @@ class TestToolExports:
         assert document_retrieval_tool in E2I_CHATBOT_TOOLS
         assert orchestrator_tool in E2I_CHATBOT_TOOLS
         assert tool_composer_tool in E2I_CHATBOT_TOOLS
+        assert predict_hcp_segment_likelihood_tool in E2I_CHATBOT_TOOLS
 
     def test_e2i_tool_map(self):
         """Test E2I_TOOL_MAP contains all tools."""
-        assert len(E2I_TOOL_MAP) == 7
+        assert len(E2I_TOOL_MAP) == 10
         assert E2I_TOOL_MAP["e2i_data_query_tool"] == e2i_data_query_tool
         assert E2I_TOOL_MAP["causal_analysis_tool"] == causal_analysis_tool
         assert E2I_TOOL_MAP["agent_routing_tool"] == agent_routing_tool
@@ -1339,12 +1347,16 @@ class TestToolExports:
         assert E2I_TOOL_MAP["document_retrieval_tool"] == document_retrieval_tool
         assert E2I_TOOL_MAP["orchestrator_tool"] == orchestrator_tool
         assert E2I_TOOL_MAP["tool_composer_tool"] == tool_composer_tool
+        assert (
+            E2I_TOOL_MAP["predict_hcp_segment_likelihood_tool"]
+            == predict_hcp_segment_likelihood_tool
+        )
 
     def test_get_e2i_chatbot_tools(self):
         """Test get_e2i_chatbot_tools function."""
         tools = get_e2i_chatbot_tools()
         assert tools == E2I_CHATBOT_TOOLS
-        assert len(tools) == 7
+        assert len(tools) == 10
 
     def test_get_tool_by_name_valid(self):
         """Test get_tool_by_name with valid names."""

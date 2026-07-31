@@ -1067,6 +1067,35 @@ _TIME_HORIZON_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bnext\s+year\b", re.I), "365d"),
 )
 
+# #1354 — a POPULATION/segment ranking ask ("which HCP segments/specialties/
+# regions are most likely to ...", "rank the ... segments") has no single entity
+# to synthesize for. When such an ask grounds a brand + a unique champion, the
+# resolver binds the segment-aggregation path (src.services.hcp_segment_likelihood
+# via the agent's segment mode) instead of dead-ending on the single-entity
+# ``synthesize`` contract. A no-entity ask WITHOUT a segment noun stays
+# under-specified and still fails closed on entity_id.
+_SEGMENT_ASK_RE = re.compile(
+    r"\bsegments?\b|\bspecialt(?:y|ies)\b|\bregions?\b|\barchetypes?\b|\bpersonas?\b",
+    re.I,
+)
+_SEGMENT_REGION_RE = re.compile(r"\bregions?\b|\bgeograph\w*\b", re.I)
+
+
+def _is_segment_ranking_ask(query: Optional[str]) -> bool:
+    """True when the ask ranks a POPULATION by a segment axis (not a single HCP)."""
+    return bool(query) and bool(_SEGMENT_ASK_RE.search(query))
+
+
+def _segment_axis_from_query(query: str) -> str:
+    """Pick the served covariate axis the ask targets. Region-phrased asks ->
+    ``geographic_region``; everything else defaults to ``specialty`` (the primary
+    HCP clinical archetype). The default is documented, not silent: a bare
+    'segments' ask is served by specialty, the canonical HCP segmentation, and
+    ``hcp_segment_likelihood`` validates the axis regardless."""
+    if _SEGMENT_REGION_RE.search(query):
+        return "geographic_region"
+    return "specialty"
+
 
 def _match_prediction_family(query: Optional[str]) -> Optional[str]:
     """Return the prediction-target family the ask vocabulary matches, else None."""
@@ -1293,6 +1322,36 @@ def _resolve_prediction_synthesizer_input(
             resolved_target = brand_targets[0]
             entity_match = _HCP_ENTITY_RE.search(query)
             if entity_match is None:
+                # #1354: a SEGMENT ranking ask (no single entity) now binds the
+                # segment-aggregation path — the champion IS servable, and
+                # scoring the real HCP cohort + rolling up per segment is exactly
+                # what this ask needs. The agent's ``synthesize(segment_by=...)``
+                # mode delegates to src.services.hcp_segment_likelihood.
+                if _is_segment_ranking_ask(query):
+                    axis = _segment_axis_from_query(query)
+                    seg_resolved: Dict[str, Any] = {
+                        "entity_id": f"segment_ranking:{brand}",
+                        "prediction_target": resolved_target,
+                        "entity_type": "hcp",
+                        "segment_by": axis,
+                        "brand": brand,
+                        "query": query,
+                    }
+                    session_id = agent_input.get("session_id")
+                    if session_id is not None:
+                        seg_resolved["session_id"] = session_id
+                    for pattern, horizon in _TIME_HORIZON_PATTERNS:
+                        if pattern.search(query):
+                            seg_resolved["time_horizon"] = horizon
+                            break
+                    logger.info(
+                        "prediction_synthesizer dispatch: bound segment-ranking path "
+                        "(target=%s brand=%s axis=%s).",
+                        resolved_target,
+                        brand,
+                        axis,
+                    )
+                    return seg_resolved
                 return NeedsStructuredInput(
                     agent_name="prediction_synthesizer",
                     missing=("entity_id",),
@@ -1300,8 +1359,9 @@ def _resolve_prediction_synthesizer_input(
                         f"the production champion for {resolved_target} is registered and "
                         "servable, but the single-entity synthesize contract needs a "
                         "specific real HCP entity id (e.g. an hcp_id from the adoption "
-                        "substrate) — a ranking over segments/entities cannot be answered "
-                        "without scoring a population, which this route does not do"
+                        "substrate) — name a specific HCP, or ask for a SEGMENT ranking "
+                        "(e.g. 'which HCP segments/specialties/regions ...') to score the "
+                        "population"
                     ),
                     rest_endpoint="POST /api/models/predict/{model_name}",
                 )
