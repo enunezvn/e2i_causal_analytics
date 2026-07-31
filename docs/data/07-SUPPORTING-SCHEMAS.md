@@ -1,6 +1,6 @@
-# 07 — Supporting Schemas (Memory, RAG, Chat, Admin/LLM Observability, Audit)
+# 07 — Supporting Schemas (Memory, RAG, Chat, Routing Classifier, Admin/LLM Observability, Audit)
 
-> **E2I Causal Analytics** | Last Updated: 2026-07-18
+> **E2I Causal Analytics** | Last Updated: 2026-07-31
 
 | Navigation | |
 |---|---|
@@ -39,6 +39,11 @@ graph TD
         CA[chatbot_analytics<br/>Usage analytics]
     end
 
+    subgraph "Routing Classifier"
+        CL[classification_logs<br/>Per-turn pipeline decisions<br/>+ nightly labels]
+        RM[routing_classifier_metrics<br/>Per-labeler-run telemetry]
+    end
+
     subgraph "Admin & LLM Observability"
         UA[user_activity_log<br/>Per-minute API activity]
         LU[llm_usage_events<br/>Per-call token usage<br/>cost priced at read time]
@@ -52,6 +57,7 @@ graph TD
     LS --> PM
     CT --> CM
     CM --> EM
+    CL --> RM
     AC --> AV
 ```
 
@@ -463,6 +469,114 @@ All chat tables enforce RLS:
 - Uses `current_setting('app.current_user_id')` for user context
 - `authenticated` role gets SELECT/INSERT
 - `service_role` gets full access
+
+---
+
+## Routing Classifier Schema
+
+**Source**: `database/ml/013_tool_composer_tables.sql` (classification_logs +
+`routing_pattern` enum) and `database/ml/032_routing_classifier_metrics.sql`
+(metrics snapshots). Column lists below verified against the live database
+(`\d` on 2026-07-31). API-side context: `docs/api/chat.md` §6–7.
+
+### Enum: routing_pattern
+
+`SINGLE_AGENT` · `PARALLEL_DELEGATION` · `TOOL_COMPOSER` · `CLARIFICATION_NEEDED`
+
+### classification_logs (from ml/013)
+
+One row per 4-stage ClassificationPipeline decision on the `/chat/stream`
+orchestrator path (written fire-and-forget, fail-open, by
+`src/repositories/classification_log.py record_classification()` whenever
+`ORCHESTRATOR_CLASSIFIER_MODE` is `shadow`/`active`; suppressed under
+`E2I_TESTING_MODE`). Write-only until #1341: the nightly labeler
+(`src/tasks/routing_label_tasks.py`, beat `routing-label-nightly` 04:30 UTC)
+now fills the feedback columns.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `classification_id` | UUID (PK) | |
+| `query_text` | TEXT | Raw user query |
+| `query_hash` | VARCHAR(64) | SHA-256 for similar-query dedup analysis |
+| `routing_pattern` | routing_pattern | Pipeline decision |
+| `target_agents` | TEXT[] | Agents the pattern targets |
+| `confidence` | FLOAT (0–1 CHECK) | Pipeline confidence (active-mode floor is 0.5) |
+| `features_extracted` | JSONB | Stage 1 `ExtractedFeatures` dump |
+| `domain_mapping` | JSONB | Stage 2 `DomainMapping` dump (GIN-indexed) |
+| `dependency_analysis` | JSONB | Stage 3 `DependencyAnalysis` dump |
+| `sub_questions` | JSONB | Decomposed sub-questions (multi-part queries) |
+| `dependencies` | JSONB | Sub-question dependency edges (field names `from_id`/`to_id`, not aliases) |
+| `used_llm_layer` | BOOLEAN | Whether the pipeline's LLM stage ran (hard-disabled today — pending async stage-3) |
+| `classification_latency_ms` | FLOAT | Pipeline latency (measured median 0.72 ms) |
+| `session_id` | VARCHAR(100) | Chat session (`user_id~uuid` composite form; truncated to 100) |
+| `user_id` | VARCHAR(100) | Authenticated user id |
+| `is_followup` | BOOLEAN | Conversation history was present |
+| `was_correct` | BOOLEAN | **Labeler**: NULL = awaiting label; true/false once labeled |
+| `correct_pattern` | routing_pattern | **Labeler**: the pattern that should have been chosen (when `was_correct=false`) |
+| `feedback_notes` | TEXT | **Labeler**: JSON note `{source, ...}`; doubles as the judge's *visited marker* (judged/abstained rows are never re-judged) |
+| `created_at` | TIMESTAMPTZ | |
+
+**Indexes**: B-tree on `routing_pattern`, `created_at DESC`, `session_id`,
+`query_hash`; partial on `was_correct WHERE was_correct IS NOT NULL`; GIN on
+`domain_mapping`. Referenced by `composer_episodes.classification_id` (FK).
+
+**The JSONB stage payloads** are `model_dump(mode="json")` of the pipeline's
+stage schemas (`src/agents/orchestrator/classifier/schemas.py`): Stage 1
+feature extraction, Stage 2 domain detection (domains + per-domain
+confidence — drives `DOMAIN_TO_AGENT`), Stage 3 dependency analysis
+(`is_parallelizable`, dependency edges — splits multi-domain queries into
+PARALLEL_DELEGATION vs TOOL_COMPOSER).
+
+**Labeling convention (#1341 Phase 1, PR #1342)** — signals strongest-first:
+
+1. **Explicit feedback** (`chatbot_message_feedback` thumbs, matched on
+   session + query text): `thumbs_up` confirms the dispatch. **A negative
+   signal (thumbs_down, errors, failed tools) is judge CONTEXT only — it must
+   never auto-write `was_correct=false`** (a bad answer does not by itself
+   prove bad routing).
+2. **Implicit outcome** (`chatbot_analytics`, nearest turn within 180 s):
+   `user_satisfied=true` confirms; errors become judge context + priority.
+3. **LLM judge** (capped per run; haiku): abstains below confidence 0.6
+   (`JUDGE_CONFIDENCE_FLOOR`) — abstentions record a `feedback_notes` marker
+   (`source: llm_judge_abstain`) with `was_correct` left NULL.
+
+Routing behavior is never mutated by the labeler — labels and metrics only
+(authority changes stay human-gated).
+
+### routing_classifier_metrics (from ml/032)
+
+Per-labeler-run safety-telemetry time series (#1341 Phase 2) — one small row
+per nightly cycle, written fail-open by `routing_label_tasks.py` (the labeler
+degrades to log-only if the table is absent). This is the standing signal any
+future active-mode promotion is judged against;
+`v_classification_accuracy` aggregates per-day accuracy live from
+`classification_logs`, while this table keeps what the view cannot: whole-run
+telemetry across nights.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `metric_id` | UUID (PK) | |
+| `run_at` | TIMESTAMPTZ | Run timestamp (indexed DESC) |
+| `task_id` | VARCHAR(100) | Celery task id |
+| `window_days` | INTEGER | Lookback window |
+| `total` / `labeled` | INTEGER | Rows seen / rows carrying a label |
+| `overall_accuracy_pct` | NUMERIC | Pipeline-vs-judge agreement over labeled rows |
+| `engagement_rate` | NUMERIC | Share committing to a route at `active_floor` |
+| `active_floor` | NUMERIC | `MIN_ACTIVE_CONFIDENCE` used for the engagement computation |
+| `llm_layer_share` | NUMERIC | Share that engaged the LLM layer |
+| `abstention_total` / `abstention_correct` / `abstention_incorrect` | INTEGER | Abstention correctness (over-abstention is the #1337 finding) |
+| `per_pattern` | JSONB | `{pattern: {total, correct, incorrect, awaiting, accuracy_pct}}` |
+| `label_sources` | JSONB | `{explicit_feedback, implicit_outcome, llm_judge, llm_judge_abstain}` |
+| `created_at` | TIMESTAMPTZ | |
+
+### View: v_classification_accuracy (from ml/013)
+
+Daily classifier accuracy by routing pattern, aggregated live from labeled
+`classification_logs` rows.
+
+**Access**: both tables are written server-side through the service-role
+Supabase client; the ml/013 and ml/032 migrations define no table-specific
+RLS policies or grants (013's grant block is commented guidance only).
 
 ---
 

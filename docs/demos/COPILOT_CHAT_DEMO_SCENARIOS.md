@@ -1,5 +1,15 @@
 # Copilot Chat — Performance Test Questions & Demo Narratives
 
+> **⚠ SUPERSEDED (2026-07-31, #1345)** by
+> [`COPILOT_CHAT_DEMO_SCENARIOS_V2.md`](COPILOT_CHAT_DEMO_SCENARIOS_V2.md).
+> This file predates the recorded baseline
+> (`results/2026-07-29_copilot_chat_perf/`), the two-chat-surfaces finding, and
+> the contract-verified routing gold set — its expected-intent/path annotations
+> are hand-distilled and partly wrong (e.g. 2.1 cohort_constructor, 4.3
+> multi_faceted, the T4 tier description). It is retained unchanged as the
+> point-in-time record the 2026-07-29 measurements were scripted against.
+> Latency-budget re-baselining is owned by #1338.
+
 A cohesive question set for exercising the copilot chat UI end-to-end, grounded in
 the system's actual routing surfaces (chatbot intents, orchestrator 4-stage
 classifier, tool composer) and the 22-agent tier architecture. Each narrative is a
