@@ -182,16 +182,27 @@ class TestParseJudgeResponse:
 
 
 class FakeRepo:
-    def __init__(self, rows: List[Dict[str, Any]]):
+    def __init__(
+        self, rows: List[Dict[str, Any]], metrics_rows: Optional[List[Dict[str, Any]]] = None
+    ):
         self.client = object()
         self.rows = rows
+        self.metrics_rows = metrics_rows if metrics_rows is not None else rows
         self.labels: List[Dict[str, Any]] = []
+        self.snapshots: List[Dict[str, Any]] = []
 
     async def fetch_unlabeled(self, **_kwargs) -> List[Dict[str, Any]]:
         return self.rows
 
     async def apply_label(self, classification_id: str, **kwargs) -> bool:
         self.labels.append({"classification_id": classification_id, **kwargs})
+        return True
+
+    async def fetch_for_metrics(self, **_kwargs) -> List[Dict[str, Any]]:
+        return self.metrics_rows
+
+    async def record_metrics_snapshot(self, metrics, *, task_id, window_days) -> bool:
+        self.snapshots.append({"metrics": metrics, "task_id": task_id, "window_days": window_days})
         return True
 
 
@@ -335,6 +346,61 @@ class TestRunLabelCycle:
         assert result["status"] == "completed"
         assert result["judged"] == 0
         assert repo.labels == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — metrics emission (#1341)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase2MetricsEmission:
+    async def test_summary_carries_metrics_and_snapshot_persisted(self, monkeypatch):
+        monkeypatch.setenv("ROUTING_LABEL_MIN_NEW_ROWS", "1")
+        # Labeled window feeding the aggregation (independent of the unlabeled queue).
+        metrics_rows = [
+            _row(routing_pattern="SINGLE_AGENT", confidence=0.9, was_correct=True),
+            _row(routing_pattern="CLARIFICATION_NEEDED", confidence=0.0, was_correct=False),
+            _row(routing_pattern="TOOL_COMPOSER", confidence=0.8, was_correct=True),
+        ]
+        repo = FakeRepo([_row()], metrics_rows=metrics_rows)
+        result = await _run_label_cycle(
+            "t-metrics",
+            force=True,
+            judge_cap=None,
+            repo=repo,
+            judge=FakeJudge(),
+            fetch_context=_no_context,
+        )
+        assert result["status"] == "completed"
+        metrics = result["metrics"]
+        assert metrics is not None
+        assert metrics["total"] == 3
+        assert metrics["labeled"] == 3
+        assert metrics["overall_accuracy_pct"] == 66.67
+        assert metrics["abstention"]["total"] == 1
+        # A snapshot row was persisted for the time series.
+        assert len(repo.snapshots) == 1
+        assert repo.snapshots[0]["task_id"] == "t-metrics"
+
+    async def test_metrics_failure_does_not_abort_cycle(self, monkeypatch):
+        monkeypatch.setenv("ROUTING_LABEL_MIN_NEW_ROWS", "1")
+
+        class BadMetricsRepo(FakeRepo):
+            async def fetch_for_metrics(self, **_kwargs):
+                raise RuntimeError("view missing")
+
+        repo = BadMetricsRepo([_row()])
+        result = await _run_label_cycle(
+            "t-bad",
+            force=True,
+            judge_cap=None,
+            repo=repo,
+            judge=FakeJudge(),
+            fetch_context=_no_context,
+        )
+        # Labeler still completes; metrics degrade to None (fail-open).
+        assert result["status"] == "completed"
+        assert result["metrics"] is None
 
 
 # ---------------------------------------------------------------------------

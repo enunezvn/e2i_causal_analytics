@@ -112,6 +112,70 @@ class ClassificationLogRepository(BaseRepository):
             logger.warning("Failed to fetch unlabeled classifications (fail-open): %s", e)
             return []
 
+    async def fetch_for_metrics(
+        self, *, lookback_days: int = 30, limit: int = 2000
+    ) -> List[Dict[str, Any]]:
+        """Recent rows (labeled + unlabeled) for Phase-2 telemetry (#1341).
+
+        Returns the columns ``compute_run_metrics`` needs. Unlike
+        ``fetch_unlabeled`` this includes labeled rows — the aggregation reports
+        accuracy over the labeled subset and awaiting-feedback backlog together.
+        """
+        if not self.client:
+            return []
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .select(
+                    "routing_pattern,target_agents,confidence,used_llm_layer,"
+                    "was_correct,correct_pattern,feedback_notes,created_at"
+                )
+                .gte("created_at", cutoff)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return list(result.data or [])
+        except Exception as e:
+            logger.warning("Failed to fetch classifications for metrics (fail-open): %s", e)
+            return []
+
+    async def record_metrics_snapshot(
+        self, metrics: Dict[str, Any], *, task_id: Optional[str], window_days: int
+    ) -> bool:
+        """Persist one Phase-2 telemetry snapshot to routing_classifier_metrics.
+
+        Strictly fail-open: if the table is absent (migration 032 not yet
+        applied) or the insert fails, log a warning and return False — the
+        labeler still logs the metrics in its run summary. Never raises.
+        """
+        if not self.client:
+            return False
+        ab = metrics.get("abstention") or {}
+        data = {
+            "task_id": (task_id or "")[:100] or None,
+            "window_days": window_days,
+            "total": metrics.get("total", 0),
+            "labeled": metrics.get("labeled", 0),
+            "overall_accuracy_pct": metrics.get("overall_accuracy_pct"),
+            "engagement_rate": metrics.get("engagement_rate"),
+            "active_floor": metrics.get("active_floor"),
+            "llm_layer_share": metrics.get("llm_layer_share"),
+            "abstention_total": ab.get("total", 0),
+            "abstention_correct": ab.get("judged_correct", 0),
+            "abstention_incorrect": ab.get("judged_incorrect", 0),
+            "per_pattern": metrics.get("per_pattern") or {},
+            "label_sources": metrics.get("label_sources") or {},
+        }
+        data = {k: v for k, v in data.items() if v is not None}
+        try:
+            result = await self.client.table("routing_classifier_metrics").insert(data).execute()
+            return bool(result.data)
+        except Exception as e:
+            logger.warning("Failed to record routing metrics snapshot (fail-open): %s", e)
+            return False
+
     async def apply_label(
         self,
         classification_id: str,

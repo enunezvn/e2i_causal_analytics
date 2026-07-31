@@ -108,6 +108,82 @@ def has_sequential_composition(query: str) -> bool:
     return bool(_SEQUENTIAL_MARKER_REGEX.search(query))
 
 
+# Anaphoric/conditional back-references that signal a later step consuming an
+# EARLIER step's output WITHOUT an explicit sequence word ("then"/"based on").
+# The #1337 gold exposed dependency-linked TOOL_COMPOSER pipelines that
+# ``has_sequential_composition`` missed because their dependency is carried by a
+# referential phrase, not a sequence connector: "…, and for those regions, what
+# is the ROI…" / "…, and if it has, re-run the segment analysis" / "run
+# attribution on the worst one, and design a test for the top fix" / "explain
+# its root cause, and propose a reallocation to close it".
+#
+# Precision guard (the #1366 lesson — structural over token-local, and the
+# bench-0143 trap): every marker below is ANAPHORIC — it points back at a prior
+# clause's result. A bare content superlative ("which region has *the largest
+# gap opportunity*", bench-0143, gold PARALLEL) is a NEW ask's descriptor, not a
+# back-reference, so the superlative marker is pronoun-anchored ("the worst
+# one/ones") and never fires on "the largest gap". These markers only ever
+# PROMOTE when the classifier's ">=2 distinct MAPPED strong intents +
+# not-a-parallel-pair" gate already holds (intent_classifier.py), so a single
+# ask carrying an incidental phrase cannot reach tool_composer.
+_DEPENDENCY_MARKER_REGEX = re.compile(
+    # "for those regions", "across these segments" — anaphoric object of a step
+    r"\b(for|on|in|of|to|across|among|between) (those|these) \w+"
+    # "given those findings", "given the results"
+    r"|\bgiven (that|those|these|this|the) \w+"
+    # "if it has, …" — conditional back-reference to a prior result
+    r"|\bif it (has|had|does|did|is|was|were|drifted|shows?|showed)\b"
+    # "the worst one", "the top ones" — pronoun-anchored superlative back-ref
+    r"|\bthe (worst|best|largest|biggest|top|main|primary|strongest|weakest|"
+    r"highest|lowest) (one|ones)\b"
+    # "to close it", "to reverse that" — purpose clause acting on a prior result
+    r"|\bto (close|reverse|fix|address|protect|mitigate|recover|retain|solve|"
+    r"improve) (it|that|them|this|those|these)\b",
+    re.IGNORECASE,
+)
+
+
+def has_dependency_composition(query: str) -> bool:
+    """Return ``True`` when the query links a later step to an earlier one via a
+    sequence connector OR an anaphoric/conditional back-reference.
+
+    Superset of ``has_sequential_composition``: adds the referential dependency
+    markers (``_DEPENDENCY_MARKER_REGEX``) the #1337 gold exposed. Kept as a
+    distinct function so ``has_sequential_composition``'s locked semantics (its
+    helper test) are untouched. Consumed only by ``IntentClassifierNode``'s
+    tool_composer promotion, which additionally requires >=2 distinct mapped
+    strong intents — so the broader marker set cannot promote single asks.
+    """
+    return has_sequential_composition(query) or bool(_DEPENDENCY_MARKER_REGEX.search(query))
+
+
+# Coordinating-clause boundaries for counting genuinely-independent asks. Split
+# on conjunctions ("and"/"then"/"plus"/"while"/"whereas"/"also") and clause
+# punctuation (comma, semicolon, question mark, dash). NB: this OVER-splits list
+# joins ("medium, high, and low severity") on purpose — the caller counts only
+# clauses that independently bear a strong intent, so a bare list fragment
+# ("high") contributes nothing. Sentence "." is deliberately NOT a delimiter
+# (decimals, "Q4.", "vs.") — the conjunction/comma set already separates the
+# multi-ask cases in the gold.
+_CLAUSE_DELIM_REGEX = re.compile(
+    r"\s*(?:[,;?]|—|--|\band\b|\bthen\b|\bplus\b|\bwhile\b|\bwhereas\b|\balso\b)\s*",
+    re.IGNORECASE,
+)
+
+
+def split_clauses(query: str) -> list[str]:
+    """Split ``query`` into coordinating clauses on conjunctions + punctuation.
+
+    Structural (not semantic): used by ``IntentClassifierNode`` to require a
+    genuine SECOND clause before promoting a two-strong-intent query to
+    multi-agent — a second intent keyword inside a single clause ("predictive
+    model performance", "break down NRx by segment") is an incidental co-match,
+    not an independent facet (#1337 PARALLEL over-trigger). Lives in the SSOT
+    module so multi-faceted structural analysis has one home (issue #288).
+    """
+    return [c for c in _CLAUSE_DELIM_REGEX.split(query) if c and c.strip()]
+
+
 _FACET_CONJUNCTION_WORDS: tuple[str, ...] = (
     "compare",
     "trends",
