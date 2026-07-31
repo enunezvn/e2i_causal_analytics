@@ -204,7 +204,8 @@ class TestRunConversationalBridge:
         factory.assert_called_once()
         state, config = graph.calls[0]
         assert config["configurable"]["thread_id"] == "bridge~u~s"
-        assert state["session_id"] == "u~s"
+        # Shadow session id — see TestBridgePersistenceIsolation
+        assert state["session_id"] == "u~s~bridge"
 
     async def test_list_content_normalized(self):
         # sonnet-5 AIMessage.content can be a block list (#1350 class)
@@ -272,3 +273,61 @@ class TestPrepareBridgeMessages:
         msgs = _prepare_bridge_messages("q", history)
         assert len(msgs) <= 8
         assert msgs[-1].content == "m19"
+
+
+class TestBridgeNeverRaises:
+    """Codex iter-1 HIGH: pre-try failures must not escape — an escaped
+    exception is swallowed by orchestrator_node's broad except and the turn
+    falls through to generate_node instead of keeping the fail-closed
+    summary (a behavior change, not fail-open-to-status-quo)."""
+
+    async def test_import_surface_failure_returns_none(self):
+        with patch(
+            "src.api.routes.copilotkit.create_e2i_chat_agent",
+            side_effect=ImportError("copilotkit surface shifted"),
+        ):
+            text = await run_conversational_bridge(query="q", session_id="u~s")
+
+        assert text is None
+
+    async def test_bad_timeout_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("E2I_CHAT_BRIDGE_TIMEOUT_S", "not-a-number")
+        graph = _FakeGraph(final_state={"messages": [AIMessage(content="answer")]})
+        with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
+            text = await run_conversational_bridge(query="q", session_id="u~s")
+
+        assert text == "answer"
+
+
+class TestBridgePersistenceIsolation:
+    """chat_node persists messages via _persist_message_sync keyed on the
+    session ctxvar (observed in a REAL local bridge run: '[CopilotKit]
+    Persisted user message'). Without isolation a bridged turn double-writes
+    the real session: chat_node's raw answer + finalize's preambled answer.
+    The bridge must run under a shadow session id — same user prefix (the
+    computed_user_id column splits on the first '~') but distinct from the
+    real session so UI history loads stay clean."""
+
+    async def test_bridge_runs_under_shadow_session(self):
+        from src.api.routes.copilotkit import _session_id_context
+
+        observed = {}
+
+        class _CtxCapturingGraph(_FakeGraph):
+            async def ainvoke(self, state, config=None):
+                observed["ctxvar"] = _session_id_context.get()
+                return await super().ainvoke(state, config)
+
+        graph = _CtxCapturingGraph(final_state={"messages": [AIMessage(content="answer")]})
+        before = _session_id_context.get()
+        with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
+            text = await run_conversational_bridge(query="q", session_id="u~s")
+
+        assert text == "answer"
+        assert observed["ctxvar"] == "u~s~bridge"
+        state, _config = graph.calls[0]
+        assert state["session_id"] == "u~s~bridge"
+        # user prefix preserved for attribution, real session id not reused
+        assert observed["ctxvar"].split("~")[0] == "u"
+        # ctxvar restored after the call
+        assert _session_id_context.get() == before

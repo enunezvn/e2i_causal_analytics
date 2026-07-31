@@ -51,8 +51,20 @@ def _bridge_enabled() -> bool:
     return os.getenv("E2I_CHAT_BRIDGE_ENABLED", "true").lower() == "true"
 
 
+_DEFAULT_BRIDGE_TIMEOUT_S = 90.0
+
+
 def _bridge_timeout_s() -> float:
-    return float(os.getenv("E2I_CHAT_BRIDGE_TIMEOUT_S", "90"))
+    raw = os.getenv("E2I_CHAT_BRIDGE_TIMEOUT_S", "")
+    try:
+        return float(raw) if raw else _DEFAULT_BRIDGE_TIMEOUT_S
+    except ValueError:
+        logger.warning(
+            "Invalid E2I_CHAT_BRIDGE_TIMEOUT_S=%r; using default %.0fs",
+            raw,
+            _DEFAULT_BRIDGE_TIMEOUT_S,
+        )
+        return _DEFAULT_BRIDGE_TIMEOUT_S
 
 
 def _prepare_bridge_messages(query: str, history: Optional[list[Any]]) -> list[BaseMessage]:
@@ -82,46 +94,58 @@ async def run_conversational_bridge(
     assistant text) — the caller must then keep its existing fail-closed
     response. Never raises.
     """
-    if not _bridge_enabled():
-        return None
-
-    # Lazy import: copilotkit.py imports chatbot_graph lazily in the other
-    # direction; importing it at module level here would load the whole
-    # CopilotKit SDK surface on chatbot_graph import.
-    from src.api.routes.copilotkit import _session_id_context, create_e2i_chat_agent
-
-    graph = create_e2i_chat_agent()
-    effective_timeout = timeout_s if timeout_s is not None else _bridge_timeout_s()
-    # chat_node resolves its session from this contextvar first.
-    token = _session_id_context.set(session_id)
+    # The entire body is guarded: an escaped exception would be swallowed by
+    # orchestrator_node's broad except, dropping the orchestrator result and
+    # falling through to generate_node — a behavior change, not the intended
+    # keep-the-fail-closed-summary fallback.
     try:
-        final_state = await asyncio.wait_for(
-            graph.ainvoke(
-                {
-                    "messages": _prepare_bridge_messages(query, history),
-                    "session_id": session_id,
-                },
-                config={"configurable": {"thread_id": f"bridge~{session_id}"}},
-            ),
-            timeout=effective_timeout,
-        )
-    except TimeoutError:
-        logger.warning(
-            "Chat bridge timed out after %.0fs for query=%s",
-            effective_timeout,
-            redact_query(query),
-        )
+        if not _bridge_enabled():
+            return None
+
+        # Lazy import: copilotkit.py imports chatbot_graph lazily in the other
+        # direction; importing it at module level here would load the whole
+        # CopilotKit SDK surface on chatbot_graph import.
+        from src.api.routes.copilotkit import _session_id_context, create_e2i_chat_agent
+
+        graph = create_e2i_chat_agent()
+        effective_timeout = timeout_s if timeout_s is not None else _bridge_timeout_s()
+        # Shadow session: chat_node persists messages keyed on this contextvar
+        # (observed in a real local bridge run). Under the real session id a
+        # bridged turn would double-write it — chat_node's raw answer plus
+        # finalize's preambled answer. The '~bridge' suffix keeps the user
+        # prefix (computed_user_id splits on the first '~') while keeping the
+        # real session's UI-loaded history clean; bridge rows remain audited
+        # under the shadow session.
+        bridge_session_id = f"{session_id}~bridge"
+        token = _session_id_context.set(bridge_session_id)
+        try:
+            final_state = await asyncio.wait_for(
+                graph.ainvoke(
+                    {
+                        "messages": _prepare_bridge_messages(query, history),
+                        "session_id": bridge_session_id,
+                    },
+                    config={"configurable": {"thread_id": f"bridge~{session_id}"}},
+                ),
+                timeout=effective_timeout,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Chat bridge timed out after %.0fs for query=%s",
+                effective_timeout,
+                redact_query(query),
+            )
+            return None
+        finally:
+            _session_id_context.reset(token)
+
+        for msg in reversed(final_state.get("messages") or []):
+            if isinstance(msg, AIMessage):
+                text = normalize_llm_content(msg.content).strip()
+                if text:
+                    return text
+        logger.warning("Chat bridge produced no assistant text for query=%s", redact_query(query))
         return None
     except Exception as e:
         logger.warning("Chat bridge failed (%s) for query=%s", e, redact_query(query))
         return None
-    finally:
-        _session_id_context.reset(token)
-
-    for msg in reversed(final_state.get("messages") or []):
-        if isinstance(msg, AIMessage):
-            text = normalize_llm_content(msg.content).strip()
-            if text:
-                return text
-    logger.warning("Chat bridge produced no assistant text for query=%s", redact_query(query))
-    return None
