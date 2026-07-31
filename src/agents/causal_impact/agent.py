@@ -354,6 +354,17 @@ class CausalImpactAgent(SkillsMixin):
             "retry_count": 0,
         }
 
+        # #1351/#1352 optional channels: the dispatcher's causal_impact input
+        # resolver sets a cooperative ``compute_deadline`` (refutation
+        # self-gates against the dispatch budget instead of orphaning
+        # to_thread compute) and callers may tie the run to a specific
+        # ``causal_paths`` row for the RefutationNode's sole-promoter wiring.
+        # Only set when supplied — NotRequired state keys stay absent otherwise.
+        if input_data.get("compute_deadline") is not None:
+            state["compute_deadline"] = float(input_data["compute_deadline"])
+        if input_data.get("causal_path_id"):
+            state["causal_path_id"] = str(input_data["causal_path_id"])
+
         return state
 
     def _build_output(self, state: CausalImpactState, start_time: float) -> CausalImpactOutput:

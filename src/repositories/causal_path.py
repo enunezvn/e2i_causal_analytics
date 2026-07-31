@@ -258,3 +258,68 @@ class CausalPathRepository(BaseRepository):
                 "confounders": list(r.get("confounders_controlled") or []),
             }
         return list(seen.values())
+
+    # ------------------------------------------------------------------ #1352
+    # RefutationNode promoter support (item 3). causal_paths.validation_status
+    # semantics are pinned by migration 119: real rows enter 'pending' and ONLY
+    # the RefutationNode may move them — after persisting passed refutation
+    # evidence under causal_path_estimate_id(path_id). These helpers are that
+    # promoter's read/write surface.
+
+    async def get_path_row(self, path_id: str) -> Optional[dict]:
+        """Fetch one causal_paths row by id, INCLUDING synthetic rows.
+
+        The promoter must SEE a synthetic row (to refuse to promote it — a DGP
+        fiction is not validated by a real run) rather than treat it as absent,
+        so this read deliberately opts in to synthetic visibility.
+        """
+        rows = await self.get_many(
+            filters={"path_id": path_id}, limit=1, include_synthetic=True
+        )
+        return rows[0] if rows else None
+
+    async def find_real_paths_for_pair(
+        self,
+        treatment: str,
+        outcome: str,
+        brand: Optional[str] = None,
+        limit: int = 5,
+    ) -> List[dict]:
+        """REAL (non-synthetic) path rows for a (treatment, outcome[, brand]).
+
+        The promoter's auto-linkage read: real-mode default-exclude keeps DGP
+        rows out, and the caller promotes only a UNIQUE match (ambiguity binds
+        nothing — a mass promotion from one run would overclaim). ``limit`` is
+        just enough to detect ambiguity.
+        """
+        filters: dict = {"start_node": treatment, "end_node": outcome}
+        if brand:
+            filters["brand"] = brand
+        return await self.get_many(filters=filters, limit=limit, include_synthetic=False)
+
+    async def set_validation_status(
+        self,
+        path_id: str,
+        new_status: str,
+        allowed_current: tuple,
+    ) -> bool:
+        """Conditionally move a path's ``validation_status`` (SOLE-promoter write).
+
+        The transition is guarded server-side: the UPDATE matches only when the
+        row's CURRENT status is in ``allowed_current``, so a concurrent writer
+        (or an operator adjudication) is never silently overwritten. Returns
+        True iff a row was actually updated. Raises on query errors — the
+        caller (RefutationNode) degrades with a logged warning; a silent False
+        on infra failure would be indistinguishable from a legitimate
+        no-transition.
+        """
+        if not self.client:
+            return False
+        result = await (
+            self.client.table(self.table_name)
+            .update({"validation_status": new_status})
+            .eq(self.id_column, path_id)
+            .in_("validation_status", list(allowed_current))
+            .execute()
+        )
+        return bool(result.data)

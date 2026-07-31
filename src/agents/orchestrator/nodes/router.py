@@ -47,7 +47,19 @@ class RouterNode:
                 agent_name="causal_impact",
                 priority="critical",
                 parameters={"interpretation_depth": "standard"},
-                timeout_ms=30000,
+                # #1351: 30s could not hold ANY real causal run — the DoWhy
+                # chain (graph build + estimation + refutation + sensitivity +
+                # LLM interpretation) measures ~15s for the refutation suite
+                # ALONE on linear estimators and ~60s on meta-learners
+                # (refutation.py SLA notes), so the old budget only ever cut
+                # COMPLETING analyses. Before the #1351 resolver this never
+                # surfaced because every chat dispatch crashed in <10ms on
+                # missing inputs. 150s matches the chat surface budget and the
+                # experiment_designer precedent (#1353) — a workload-appropriate
+                # SLA, not a latency target. The resolver also sets a
+                # cooperative compute_deadline INSIDE this budget so refutation
+                # self-gates instead of orphaning to_thread compute.
+                timeout_ms=150000,
                 fallback_agent="explainer",
             )
         ],

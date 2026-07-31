@@ -40,9 +40,30 @@ from src.causal_engine import (
     create_validation_outcome,
     log_validation_outcome_with_status,
 )
-from src.repositories.causal_validation import CausalValidationRepository
+from src.repositories.causal_validation import (
+    CAUSAL_QUERY_ESTIMATE_SOURCE,
+    CausalValidationRepository,
+    derive_causal_path_estimate_id,
+    derive_query_estimate_id,
+)
 
 logger = logging.getLogger(__name__)
+
+# Gate → validation_status transition map (#1352 item 3; demotion mechanics are
+# this lane's documented call — see _persist_suite_and_promote):
+#   PROCEED  : pending/needs_review → validated  (the sole promotion)
+#   REVIEW   : pending → needs_review  (a borderline re-run never DOWNGRADES an
+#              already-validated path — earlier passed evidence stands until a
+#              BLOCK verdict actually contradicts it)
+#   BLOCK    : pending/needs_review/validated → refuted  (a real failed suite
+#              demotes even a validated path; the contradicting evidence rows
+#              are persisted alongside — never deleted, so migration 119's
+#              deliberately-unguarded evidence DELETE surface stays untouched)
+_GATE_STATUS_TRANSITIONS: Dict[GateDecision, Tuple[str, Tuple[str, ...]]] = {
+    GateDecision.PROCEED: ("validated", ("pending", "needs_review")),
+    GateDecision.REVIEW: ("needs_review", ("pending",)),
+    GateDecision.BLOCK: ("refuted", ("pending", "needs_review", "validated")),
+}
 
 
 # Map agent EstimationResult.method values (and selected_estimator type-values)
@@ -520,6 +541,7 @@ class RefutationNode:
         thresholds: Optional[Dict[str, Dict[str, float]]] = None,
         validation_repo: Optional[CausalValidationRepository] = None,
         expert_review_gate: Optional[Any] = None,
+        causal_path_repo: Optional[Any] = None,
     ):
         """Initialize refutation node.
 
@@ -531,11 +553,204 @@ class RefutationNode:
                 (H2). When None, a no-repository gate is constructed lazily and
                 bypasses gracefully (development mode); a real repository-backed
                 gate creates/looks up the DAG approval in production.
+            causal_path_repo: ``CausalPathRepository`` (or protocol-compatible)
+                used by the #1352 sole-promoter wiring — resolving the run's
+                linked ``causal_paths`` row and conditionally moving its
+                ``validation_status`` AFTER passed evidence is persisted under
+                ``derive_causal_path_estimate_id(path_id)``. ``None`` disables
+                promotion (evidence persistence still runs when
+                ``validation_repo`` is wired).
         """
         self.runner = RefutationRunner(config=config, thresholds=thresholds)
         self.validation_repo = validation_repo
         self.expert_review_gate = expert_review_gate
+        self.causal_path_repo = causal_path_repo
         logger.info(f"RefutationNode initialized (DoWhy available: {DOWHY_AVAILABLE})")
+
+    # ------------------------------------------------------------------ #1352
+    async def _resolve_linked_path(self, state: CausalImpactState) -> Optional[Dict[str, Any]]:
+        """Resolve the REAL ``causal_paths`` row this run is tied to, or None.
+
+        Linkage sources, in order:
+
+        1. An explicit ``state['causal_path_id']`` (analyst-supplied dispatch
+           parameter / API caller) — authoritative when it resolves to a REAL
+           row; a synthetic row is REFUSED (a real run cannot validate a DGP
+           fiction) and a missing id logs a warning (never silently re-matched).
+        2. Auto-match: the UNIQUE real row whose (start_node, end_node[, brand])
+           equals this run's (treatment_var, outcome_var[, brand]). Ambiguity
+           (≥2 rows) binds nothing — promoting several paths off one run would
+           overclaim; the candidates are logged for the operator.
+        """
+        repo = self.causal_path_repo
+        if repo is None:
+            return None
+
+        explicit = state.get("causal_path_id")
+        if explicit:
+            row = await repo.get_path_row(str(explicit))
+            if row is None:
+                logger.warning(
+                    "refutation promoter: explicit causal_path_id %r does not exist; "
+                    "run stays unlinked.",
+                    explicit,
+                )
+                return None
+            if row.get("is_synthetic"):
+                logger.warning(
+                    "refutation promoter: explicit causal_path_id %r is a SYNTHETIC "
+                    "path; a real run never promotes DGP rows — run stays unlinked.",
+                    explicit,
+                )
+                return None
+            return cast(Dict[str, Any], row)
+
+        treatment = state.get("treatment_var")
+        outcome = state.get("outcome_var")
+        if not treatment or not outcome:
+            return None
+        rows = await repo.find_real_paths_for_pair(
+            treatment=str(treatment),
+            outcome=str(outcome),
+            brand=cast(Optional[str], state.get("brand")),
+        )
+        if not rows:
+            return None
+        if len(rows) > 1:
+            logger.warning(
+                "refutation promoter: %d real causal_paths rows match (%s -> %s, brand=%s); "
+                "ambiguous linkage binds nothing (candidates: %s).",
+                len(rows),
+                treatment,
+                outcome,
+                state.get("brand"),
+                [r.get("path_id") for r in rows],
+            )
+            return None
+        return cast(Dict[str, Any], rows[0])
+
+    async def _persist_suite_and_promote(
+        self, state: CausalImpactState, suite: "RefutationSuite"
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        """Persist the suite's evidence and — as SOLE promoter — move the linked
+        real path's ``validation_status`` (#1352 item 3).
+
+        Contract (mirrors migration 119's enforcement, but never RELIES on the
+        trigger being installed — the order is enforced here):
+
+        * linked run  → evidence rows land under
+          ``derive_causal_path_estimate_id(path_id)`` with
+          ``estimate_source='causal_paths'`` (the id the mig-119 evidence gate
+          looks up), and ONLY AFTER a successful persist does the gate-mapped
+          status transition fire (see ``_GATE_STATUS_TRANSITIONS``).
+        * unlinked run → evidence rows land under the query-derived uuid
+          (``derive_query_estimate_id``) with
+          ``estimate_source='causal_impact_query'`` — per-run history that can
+          never accidentally bless a path.
+        * a synthetic-FIXTURE run (``data_source='synthetic'``, the dev/test
+          path) persists only unlinked evidence and NEVER promotes: promoting a
+          real path off fixture data would be fabricated validation.
+
+        Returns ``(validation_ids, promotion_info)``; ``promotion_info`` is
+        ``{}`` unless a status transition actually happened. Best-effort
+        throughout: any persistence/promotion failure degrades with a logged
+        warning and never breaks the analysis — but a promotion can NEVER
+        happen without its evidence persisted first.
+        """
+        query_id = str(state.get("query_id") or "")
+        if not self.validation_repo or not query_id:
+            return [], {}
+
+        synthetic_fixture_run = state.get("data_source") == "synthetic"
+
+        linked_row: Optional[Dict[str, Any]] = None
+        if not synthetic_fixture_run:
+            try:
+                linked_row = await self._resolve_linked_path(state)
+            except Exception as link_err:  # noqa: BLE001 - linkage is best-effort
+                logger.warning(
+                    "refutation promoter: path-linkage resolution failed (%s); "
+                    "persisting unlinked evidence only.",
+                    link_err,
+                )
+                linked_row = None
+
+        if linked_row is not None:
+            path_id = str(linked_row.get("path_id"))
+            estimate_id = derive_causal_path_estimate_id(path_id)
+            estimate_source = "causal_paths"
+        else:
+            path_id = ""
+            estimate_id = derive_query_estimate_id(query_id)
+            estimate_source = CAUSAL_QUERY_ESTIMATE_SOURCE
+
+        validation_ids: List[str] = []
+        try:
+            validation_ids = await self.validation_repo.save_suite(
+                suite=suite,
+                estimate_id=estimate_id,
+                estimate_source=estimate_source,
+                agent_activity_id=cast(Optional[str], state.get("agent_activity_id")),
+                data_split=cast(Optional[str], state.get("data_split")),
+            )
+            logger.info(
+                "Persisted %d validation records under estimate %s (%s).",
+                len(validation_ids),
+                estimate_id,
+                estimate_source,
+            )
+        except Exception as persist_error:  # noqa: BLE001 - never break the analysis
+            logger.warning(f"Failed to persist validation results: {persist_error}")
+
+        # Promotion: evidence FIRST (above), status flip second — and only when
+        # the evidence rows actually landed (mig-119's gate would reject a
+        # 'validated' claim without them; we enforce the same order without
+        # depending on the trigger).
+        if linked_row is None or self.causal_path_repo is None or not validation_ids:
+            return validation_ids, {}
+
+        transition = _GATE_STATUS_TRANSITIONS.get(suite.gate_decision)
+        if transition is None:  # pragma: no cover - enum is closed
+            return validation_ids, {}
+        new_status, allowed_current = transition
+        try:
+            moved = await self.causal_path_repo.set_validation_status(
+                path_id, new_status, allowed_current
+            )
+        except Exception as promote_err:  # noqa: BLE001 - never break the analysis
+            logger.warning(
+                "refutation promoter: status transition %s -> %s for path %s failed (%s); "
+                "evidence is persisted, status unchanged.",
+                allowed_current,
+                new_status,
+                path_id,
+                promote_err,
+            )
+            return validation_ids, {}
+        if not moved:
+            logger.info(
+                "refutation promoter: path %s not in %s; no transition to %s "
+                "(concurrent writer or operator adjudication wins).",
+                path_id,
+                allowed_current,
+                new_status,
+            )
+            return validation_ids, {}
+        logger.info(
+            "refutation promoter: causal_paths.%s moved to '%s' (gate=%s) with %d "
+            "evidence rows under %s.",
+            path_id,
+            new_status,
+            suite.gate_decision.value,
+            len(validation_ids),
+            estimate_id,
+        )
+        return validation_ids, {
+            "path_id": path_id,
+            "new_status": new_status,
+            "gate_decision": suite.gate_decision.value,
+            "estimate_id": estimate_id,
+        }
 
     async def _consult_review_gate(
         self,
@@ -880,34 +1095,16 @@ class RefutationNode:
             # Convert to legacy format for backward compatibility
             refutation_results = cast(RefutationResults, suite.to_legacy_format())
 
-            # Persist validation results to database
-            #
-            # TODO(#1352 item 3, resolver lane — do NOT implement here): this
-            # node is the SOLE promoter of causal_paths.validation_status.
-            # When a run is tied to a causal_paths row, the promoter must
-            # (1) persist the passed suite under
-            #     derive_causal_path_estimate_id(path_id)
-            #     (src.repositories.causal_validation) — migration 119's
-            #     evidence gate looks that estimate_id up — and only then
-            # (2) flip the path row 'pending' -> 'validated' (gate PROCEED).
-            # Today's estimate_id below is the chat query_id, which is NOT
-            # path-linked; the schema trigger rejects any 'validated' claim on
-            # a real path without passed evidence under the derived id.
-            validation_ids = []
-            if self.validation_repo and query_id:
-                try:
-                    validation_ids = await self.validation_repo.save_suite(
-                        suite=suite,
-                        estimate_id=query_id,
-                        estimate_source="causal_paths",
-                        agent_activity_id=cast(Optional[str], state.get("agent_activity_id")),
-                        data_split=cast(Optional[str], state.get("data_split")),
-                    )
-                    logger.info(
-                        f"Persisted {len(validation_ids)} validation records for estimate {query_id}"
-                    )
-                except Exception as persist_error:
-                    logger.warning(f"Failed to persist validation results: {persist_error}")
+            # Persist validation results + SOLE-promoter path transition
+            # (#1352 item 3, extracted to _persist_suite_and_promote): linked
+            # runs write path-linked evidence (derive_causal_path_estimate_id)
+            # then move the real row's validation_status per the gate; unlinked
+            # runs write per-run history under the query-derived uuid (the old
+            # ``estimate_id=query_id`` write ALWAYS failed the uuid cast — half
+            # of #1352's "causal_validations never populated").
+            validation_ids, causal_path_promotion = await self._persist_suite_and_promote(
+                state, suite
+            )
 
             # Phase 4: Log ValidationOutcome for Feedback Learner integration
             validation_outcome = create_validation_outcome(
@@ -977,6 +1174,9 @@ class RefutationNode:
                 "needs_review": suite.needs_review,
                 # Persistence tracking
                 "validation_ids": validation_ids,
+                # #1352 item 3: the sole-promoter transition applied to a
+                # linked real causal_paths row ({} when unlinked/no transition)
+                "causal_path_promotion": causal_path_promotion,
                 # Phase 4: Feedback Learner tracking
                 "validation_outcome_id": validation_outcome_id,
                 # REVIEW-band caveat / expert-review decision (empty otherwise)
@@ -1114,9 +1314,60 @@ async def refute_causal_estimate(
     # dev/test (no Supabase) -> the node bypasses to PROCEED-with-warning and
     # still flags needs_review. REVIEW never hard-blocks the agent run.
     expert_review_gate = await _build_expert_review_gate()
+    # #1352 item 3: the production graph adds this function as a bare node, so
+    # ``validation_repo`` was ALWAYS None here and evidence persistence never
+    # even ran on the agent path (the other half of "causal_validations never
+    # populated"). Build the validation + causal-path repositories lazily from
+    # the async client; a missing-config environment degrades to None (no
+    # persistence, no promotion) exactly like the review gate.
+    causal_path_repo = None
+    if validation_repo is None:
+        validation_repo, causal_path_repo = await _build_persistence_repos()
     node = RefutationNode(
         config=refutation_config,
         validation_repo=validation_repo,
         expert_review_gate=expert_review_gate,
+        causal_path_repo=causal_path_repo,
     )
     return await node.execute(state)
+
+
+async def _build_persistence_repos() -> Tuple[
+    Optional[CausalValidationRepository], Optional[Any]
+]:
+    """Lazily build the validation + causal-path repositories, or (None, None).
+
+    Same degrade contract as ``_build_expert_review_gate``: ONLY the
+    missing-config signal (``ServiceConnectionError``) degrades — dev/test
+    without a Supabase runs the node with no persistence and no promotion.
+    Unlike the review gate (whose silent bypass would surface a REVIEW-band
+    estimate as approved), persistence here is already best-effort inside the
+    node (every write failure logs a warning and the analysis proceeds), so a
+    broader failure while BUILDING the clients is also degraded with a warning
+    rather than failing the analysis — evidence loss is observable in logs and
+    can never flip a path's status (no evidence ⇒ no promotion, by order).
+    """
+    from src.memory.services.factories import (
+        ServiceConnectionError,
+        get_async_supabase_client,
+    )
+
+    try:
+        client = await get_async_supabase_client()
+    except ServiceConnectionError as exc:
+        logger.warning(
+            "Validation persistence unavailable (no Supabase config): %s", exc
+        )
+        return None, None
+    except Exception as exc:  # noqa: BLE001 - persistence is best-effort by contract
+        logger.warning(
+            "Validation persistence unavailable (client build failed): %s", exc
+        )
+        return None, None
+
+    from src.repositories.causal_path import CausalPathRepository
+
+    return (
+        CausalValidationRepository(supabase_client=client),
+        CausalPathRepository(supabase_client=client),
+    )

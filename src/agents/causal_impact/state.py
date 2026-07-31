@@ -255,6 +255,13 @@ class CausalImpactState(TypedDict):
     # observational questions where discovery simply found nothing). Declared
     # so LangGraph persists it (undeclared channels are dropped).
     randomized_design: NotRequired[bool]
+    # #1352 item 3: explicit causal_paths linkage for this run. When a caller
+    # (dispatch parameters / API) ties the analysis to a specific causal_paths
+    # row, the RefutationNode — the SOLE promoter of validation_status —
+    # persists the suite under derive_causal_path_estimate_id(path_id) and
+    # moves the REAL row per the gate. Absent ⇒ the node auto-matches a unique
+    # real (start_node, end_node[, brand]) row, else the run stays unlinked.
+    causal_path_id: NotRequired[str]
 
     # Contract: Orchestrator pass-through fields (BaseAgentState)
     session_id: NotRequired[str]  # Contract: Session identifier from working memory
@@ -415,6 +422,11 @@ class CausalImpactState(TypedDict):
     review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/BLOCK
     expert_review_decision: NotRequired[str | None]  # ExpertReviewGate decision value
     expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/BLOCK)
+    # #1352 item 3: the sole-promoter transition the refutation node applied to
+    # a linked REAL causal_paths row this run ({} when unlinked / no
+    # transition). Declared so LangGraph persists it (undeclared channels are
+    # dropped): {path_id, new_status, gate_decision, estimate_id}.
+    causal_path_promotion: NotRequired[Dict[str, Any]]
     # NOTE: refutation_error is already declared earlier in this TypedDict
     # (set when refutation fails-closed, H1) — do not re-declare it here.
 
