@@ -30,6 +30,57 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+# DEAD-SUPABASE PIN (#1420, incident 2026-07-31). The root conftest's
+# load_dotenv(override=True) walks up from nested worktrees into the
+# repo-root .env; on the droplet (PROD == DEV) that hands every unit test
+# the REAL local-Supabase URL + key. Lazy live-writers — e.g.
+# ``refute_causal_estimate`` building a real ``CausalValidationRepository``
+# — then persist fixture output into prod tables: 1,760 test-artifact rows
+# landed in ``causal_validations`` on 2026-07-31 alone, unmasked by the
+# #1352 uuid-cast fix (before it, the writes failed the cast silently).
+# Third recurrence of the live-writer family (#1371 MLflow HTTP, #1355
+# agent_activities kill switch in the root conftest).
+#
+# CI is the faithful baseline: unit jobs run with a dead Supabase endpoint
+# and fake keys (no Supabase service exists on the runner) and are green,
+# so no unit test may depend on a live DB unless it opts in explicitly.
+# The pin must be a per-test fixture, NOT an import-time os.environ write:
+# the root conftest's ``pytest_configure`` re-runs load_dotenv(override=True)
+# AFTER every conftest imports, clobbering import-time values. The sentinel
+# is 127.0.0.1:1 (reserved port, never listening, immediate ECONNREFUSED)
+# — NOT CI's literal localhost:54321, which is dead on runners but is the
+# LIVE prod Supabase on the droplet.
+#
+# Escape hatches (both deliberate):
+# * ``@pytest.mark.real_supabase`` — for the rare reachability-gated,
+#   READ-ONLY faithful checks in the unit tree (e.g.
+#   test_kpi_resolution.py::test_resolve_conversion_frame_real_supabase);
+#   they keep the ambient env and their own skipif gates.
+# * per-test ``monkeypatch.setenv`` — test-requested fixtures apply after
+#   this autouse pin, so a test's own env values win.
+# Integration trees are deliberately untouched (function scope cannot leak
+# past the unit tree in mixed runs).
+# Locked by tests/unit/test_utils/test_unit_tree_dead_supabase_1420.py.
+_DEAD_SUPABASE_ENV = {
+    "SUPABASE_URL": "http://127.0.0.1:1",
+    "SUPABASE_KEY": "test-key",
+    "SUPABASE_ANON_KEY": "test-key",
+    "SUPABASE_SERVICE_KEY": "test-key",
+    "SUPABASE_SERVICE_ROLE_KEY": "test-key",
+}
+
+
+@pytest.fixture(autouse=True)
+def _pin_dead_supabase_env(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Autouse: every unit test runs with dead Supabase credentials."""
+    if request.node.get_closest_marker("real_supabase") is not None:
+        return
+    for var, value in _DEAD_SUPABASE_ENV.items():
+        monkeypatch.setenv(var, value)
+
 
 @pytest.fixture(autouse=True)
 def _silence_lifecycle_monitoring_in_unit_tests(

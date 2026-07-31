@@ -289,6 +289,7 @@ def _supabase_reachable() -> bool:
         return False
 
 
+@pytest.mark.real_supabase  # #1420: read-only faithful check keeps ambient creds
 @pytest.mark.skipif(
     not _supabase_reachable(),
     reason="real Supabase not reachable (triggers table) — faithful KPI-frame test skipped",
