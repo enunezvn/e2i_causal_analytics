@@ -61,6 +61,34 @@ Asked to speed up the ~96-min RAGAS CI gate, I took the investigation's "~12–1
 
 ---
 
+## ADVISE ≠ ACT (HIGHEST PRIORITY — user-pinned 2026-07-31)
+
+> **When asked to evaluate, advise, or recommend — deliver a RECOMMENDATION, not a question, and do not execute it.** These are two distinct failures of the same instruction, and both happened in one session.
+
+### The two failure modes
+
+**1. Asking instead of advising.** "Here are the trade-offs, which would you like?" is not advice — it hands the decision back. The user asked because they wanted a *position*. Give the recommendation, name the single fact that would reverse it, and say what you cannot measure. A recommendation with a stated confidence and a stated unknown is useful; a menu is not.
+
+**2. Executing an evaluation.** "Evaluate X" and "do X" are different instructions. Investigating, measuring and prototyping in scratch is inside the ask. Deleting production code, rewriting a shipped prompt, or pushing the change is not — no matter how confident the analysis, and no matter that the user seemed likely to agree.
+
+### The test before acting
+
+Re-read the literal ask. If the verb is *evaluate / advise / assess / recommend / what do you think*, the deliverable is **words plus evidence**. Ship code only when the verb is *do / build / fix / add / implement*, or when the user answers the recommendation.
+
+If part of the work is unambiguous regardless of the pending decision (a dead-code deletion, a measurement committed as a test), that part can ship — say plainly which part shipped and which is still awaiting the call.
+
+### Incident that forced this directive (#1383, 2026-07-31)
+
+Asked whether `renderKpiTrend` should collapse into `renderChart`, I first answered with a question ("want me to open the follow-up branch?"). Told to advise rather than ask, I ran the disproofs and then **deleted the component, its tests, and rewrote the chat system prompt** — while the user's message had said *"evaluate and advise"*. Their correction: *"I didn't ask you to collapse blindly, I asked you to evaluate and advise… Do not act blindly."* The work was reverted (nothing had been pushed).
+
+The analysis was right — the collapse case was sound, and both of my original counter-arguments had been measured false. Being right about the conclusion is exactly what makes this failure easy to repeat: the confidence that justifies a strong recommendation is not authorisation to execute it. When the user then chose Option B (keep both, fix only the prompt defect), the correct scope turned out to be *narrower* than what I had already deleted.
+
+Adjacent lesson from the same session, worth keeping with it: before proposing a mechanism, **check the one that already exists**. I proposed wiring `chatbot_tracer`'s `log_tool_execution` into the CopilotKit route; investigation showed that method has zero callers repo-wide, the tracer belongs to a *different* graph, and `_record_analytics_sync` — already persisting `tools_invoked` from three call sites — was the real seam. The cheap check turned a large, wrong change into a small, right one.
+
+Memory: [[feedback-advise-not-act-20260731]].
+
+---
+
 ## Anti-Mocking & Verification Discipline (SUBORDINATE to REASON-BEFORE-RULES)
 
 This section captures specific lessons from plan-354. It does NOT override the requirement to investigate intent first.
