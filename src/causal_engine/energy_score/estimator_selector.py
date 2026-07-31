@@ -28,6 +28,7 @@ Architecture:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -118,6 +119,136 @@ _EMPTY_BACKDOOR_SKIP_REASON = (
     "nothing to orthogonalize against here; the unadjusted contrast (OLS) is the "
     "correct estimator."
 )
+
+
+# #1392: row cap for the energy-score TOURNAMENT. Energy-score selection is a
+# RANKING, not the final estimate — yet the 4-way tournament fitted every
+# estimator on the full frame, which on the live 37,371-row conversion
+# substrate cost 116s warm / 144s cold and consumed the entire chat-turn
+# compute budget, so the mandatory refutation gate failed closed and every
+# chat-path causal turn failed honestly. Above this cap the tournament runs on
+# a DETERMINISTIC stratified subsample (treatment × outcome-bin strata, seed
+# derived from the frame content); the WINNER is then refit on the FULL frame
+# and only that full-frame fit is reported — the refutation node reconstructs
+# the estimator from the full estimation_data passthrough and enforces a
+# reconstructed-vs-reported ATE tolerance, so the reported ATE/CI must come
+# from a full-frame fit. 5,000 aligns with
+# ``EnergyScoreConfig.max_samples_for_exact``: beyond that the energy-distance
+# term itself falls back to internal random subsampling, so scoring more rows
+# adds sampling noise, not ranking signal (it is also the bottom of the
+# owner-approved 5-10k range — the largest latency win). Frames at or below
+# the cap keep today's full-frame selection unchanged.
+SELECTION_MAX_ROWS_DEFAULT = 5_000
+
+# Outcome stratification (#1392): a low-cardinality outcome (e.g. the live
+# substrate's rare-binary ``converted``) is stratified on its distinct values
+# so per-arm outcome prevalence is preserved; a continuous outcome falls back
+# to quartile bins.
+_OUTCOME_STRATA_MAX_DISTINCT = 10
+_OUTCOME_QUANTILE_EDGES = (0.25, 0.5, 0.75)
+
+
+def _stratified_subsample_indices(
+    treatment: NDArray[Any],
+    outcome: NDArray[Any],
+    max_rows: int,
+) -> NDArray[np.intp]:
+    """Deterministic stratified subsample of ``max_rows`` row indices (#1392).
+
+    Strata are the cross of treatment value × outcome bin (distinct outcome
+    values when ≤ ``_OUTCOME_STRATA_MAX_DISTINCT`` uniques, else quartile
+    bins; non-finite outcomes get their own bin), with proportional
+    largest-remainder allocation — so arm shares AND per-arm outcome
+    prevalence are preserved within ±1 row per stratum.
+
+    Determinism: the RNG seed is derived from the CONTENT of the treatment and
+    outcome arrays (sha256) plus ``max_rows`` — never wall-clock or global RNG
+    state — so the same frame/spec always draws the same indices and chat
+    turns stay reproducible.
+    """
+    if max_rows < 1:
+        # codex iter-2 LOW (#1392): fail LOUD on a nonsensical cap instead of
+        # crashing later with a cryptic np.concatenate ValueError.
+        raise ValueError(f"max_rows must be >= 1, got {max_rows}")
+    t = np.asarray(treatment)
+    y = np.asarray(outcome, dtype=np.float64)
+    n = int(len(t))
+    if n <= max_rows:
+        return np.arange(n, dtype=np.intp)
+
+    # --- outcome bins ---
+    finite = np.isfinite(y)
+    finite_vals = np.unique(y[finite])
+    if finite_vals.size <= _OUTCOME_STRATA_MAX_DISTINCT:
+        y_bin = np.full(n, finite_vals.size, dtype=np.int64)  # non-finite: own bin
+        y_bin[finite] = np.searchsorted(finite_vals, y[finite])
+    else:
+        edges = np.quantile(y[finite], _OUTCOME_QUANTILE_EDGES)
+        y_bin = np.full(n, len(edges) + 1, dtype=np.int64)  # non-finite: own bin
+        y_bin[finite] = np.digitize(y[finite], edges)
+
+    # --- treatment × outcome-bin strata ---
+    _, t_codes = np.unique(t, return_inverse=True)
+    combo = t_codes.astype(np.int64) * (int(y_bin.max()) + 1) + y_bin
+    strata, strata_inv, strata_counts = np.unique(combo, return_inverse=True, return_counts=True)
+
+    # --- content-derived deterministic seed ---
+    hasher = hashlib.sha256()
+    hasher.update(np.ascontiguousarray(t, dtype=np.float64).tobytes())
+    hasher.update(np.ascontiguousarray(y).tobytes())
+    hasher.update(str(int(max_rows)).encode("ascii"))
+    rng = np.random.default_rng(int.from_bytes(hasher.digest()[:8], "little"))
+
+    # --- proportional allocation, largest remainder, ≥1 per non-empty stratum ---
+    raw = strata_counts * (max_rows / n)
+    take = np.floor(raw).astype(np.int64)
+    if strata.size <= max_rows:
+        take = np.maximum(take, 1)
+    take = np.minimum(take, strata_counts)
+    remainders = raw - np.floor(raw)
+    deficit = max_rows - int(take.sum())
+    if deficit > 0:
+        # Fill remaining slots by largest fractional remainder, cycling while
+        # capacity remains (total capacity is n > max_rows, so this terminates).
+        order = np.argsort(-remainders, kind="stable")
+        while deficit > 0:
+            progressed = False
+            for i in order:
+                if deficit == 0:
+                    break
+                if take[i] < strata_counts[i]:
+                    take[i] += 1
+                    deficit -= 1
+                    progressed = True
+            if not progressed:  # pragma: no cover — capacity math prevents this
+                break
+    elif deficit < 0:
+        # The ≥1 bumps overshot: trim from the smallest remainders, never below 1.
+        order = np.argsort(remainders, kind="stable")
+        while deficit < 0:
+            progressed = False
+            for i in order:
+                if deficit == 0:
+                    break
+                if take[i] > 1:
+                    take[i] -= 1
+                    deficit += 1
+                    progressed = True
+            if not progressed:  # pragma: no cover — strata.size ≤ max_rows guard
+                break
+
+    # --- deterministic per-stratum draw (strata are sorted by np.unique) ---
+    chosen: list[NDArray[np.intp]] = []
+    for s_i in range(strata.size):
+        members = np.flatnonzero(strata_inv == s_i)
+        k = int(take[s_i])
+        if k <= 0:
+            continue
+        if k >= members.size:
+            chosen.append(members)
+        else:
+            chosen.append(rng.choice(members, size=k, replace=False))
+    return np.sort(np.concatenate(chosen)).astype(np.intp)
 
 
 def _honest_ate_ci(
@@ -255,6 +386,17 @@ class SelectionResult:
     # point estimate is unbiased either way); "none" = unadjusted contrast.
     adjustment_type: str = "none"
 
+    # #1392: subsampled-tournament disclosure. When the frame exceeded
+    # ``EstimatorSelectorConfig.selection_max_rows`` the tournament RANKED the
+    # estimators on a deterministic stratified subsample of
+    # ``selection_n_rows`` rows (out of ``selection_n_rows_total``); the
+    # reported ``selected`` result is the winner REFIT on the full frame.
+    # Downstream honesty surfaces must disclose this — the per-estimator
+    # energy scores are ranking artifacts computed on the subsample.
+    selection_subsampled: bool = False
+    selection_n_rows: int = 0
+    selection_n_rows_total: int = 0
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
         return {
@@ -271,6 +413,9 @@ class SelectionResult:
             "exceeded_max_energy_score": self.exceeded_max_energy_score,
             "requires_review": self.requires_review,
             "adjustment_type": self.adjustment_type,
+            "selection_subsampled": self.selection_subsampled,
+            "selection_n_rows": self.selection_n_rows,
+            "selection_n_rows_total": self.selection_n_rows_total,
         }
 
 
@@ -312,6 +457,14 @@ class EstimatorSelectorConfig:
     min_energy_score_gap: float = 0.05  # Minimum gap to prefer one over another
     max_acceptable_energy_score: float = 0.8  # Warn if best score is above this
 
+    # #1392: tournament row cap (see SELECTION_MAX_ROWS_DEFAULT for the full
+    # rationale). Frames larger than this run the multi-estimator tournament on
+    # a deterministic stratified subsample; the winner is refit on the full
+    # frame and only that full-frame fit is reported. Frames at or below the
+    # cap keep full-frame selection unchanged. Must be >= 1 (validated in
+    # ``__post_init__`` — codex iter-2 LOW).
+    selection_max_rows: int = SELECTION_MAX_ROWS_DEFAULT
+
     # Fallback behavior
     fallback_on_all_fail: bool = True
     fallback_estimator: EstimatorType = EstimatorType.OLS
@@ -319,6 +472,11 @@ class EstimatorSelectorConfig:
     # Parallelization (future)
     parallel_evaluation: bool = False
     max_workers: int = 4
+
+    def __post_init__(self) -> None:
+        """Validate configuration (codex iter-2 LOW, #1392)."""
+        if self.selection_max_rows < 1:
+            raise ValueError(f"selection_max_rows must be >= 1, got {self.selection_max_rows}")
 
 
 class BaseEstimatorWrapper(ABC):
@@ -1259,6 +1417,60 @@ class EstimatorSelector:
         else:
             adjustment_type = "none"
 
+        # #1392: subsampled tournament on large frames. Only a genuine
+        # MULTI-estimator ranking benefits — the tournament ranks, the winner
+        # is refit on the full frame, and only the full-frame fit is reported.
+        # No subsampling when:
+        #   * the frame is at or below the cap (today's behavior unchanged);
+        #   * strategy is FIRST_SUCCESS (the first fit IS the final estimate);
+        #   * fewer than 2 estimators will actually fit (the legacy
+        #     explicit-method single-estimator path, or a plain empty backdoor
+        #     where only OLS applies) — subsample-then-refit of a single
+        #     estimator is strictly wasted work.
+        n_rows_total = int(len(treatment))
+        n_fitting = sum(
+            1
+            for w in self.estimators
+            if not (
+                empty_backdoor
+                and not efficiency_mode
+                and w.estimator_type not in _EMPTY_BACKDOOR_CAPABLE
+            )
+        )
+        max_rows = int(self.config.selection_max_rows)
+        subsampled = (
+            self.config.strategy != SelectionStrategy.FIRST_SUCCESS
+            and n_fitting >= 2
+            and n_rows_total > max_rows
+        )
+        if subsampled:
+            sub_idx = _stratified_subsample_indices(treatment, outcome, max_rows)
+            sel_treatment = np.asarray(treatment)[sub_idx]
+            sel_outcome = np.asarray(outcome)[sub_idx]
+            sel_covariates = covariates.iloc[sub_idx].reset_index(drop=True)
+            sel_efficiency = (
+                efficiency_controls.iloc[sub_idx].reset_index(drop=True)
+                if efficiency_mode and efficiency_controls is not None
+                else efficiency_controls
+            )
+            selection_n_rows = int(len(sub_idx))
+            logger.info(
+                "Energy-score tournament on stratified subsample: %d/%d rows "
+                "(cap=%d); winner will be refit on the full frame.",
+                selection_n_rows,
+                n_rows_total,
+                max_rows,
+            )
+        else:
+            sel_treatment, sel_outcome = treatment, outcome
+            sel_covariates, sel_efficiency = covariates, efficiency_controls
+            selection_n_rows = n_rows_total
+
+        # #1392 (codex iter-1 MED): map each tournament result to the wrapper
+        # INSTANCE that produced it, so the winner refit targets that exact
+        # instance (not the first chain entry sharing its estimator_type).
+        result_wrappers: dict[int, BaseEstimatorWrapper] = {}
+
         # Evaluate each estimator
         for wrapper in self.estimators:
             if (
@@ -1287,11 +1499,19 @@ class EstimatorSelector:
             # X=W controls (their mean CATE is the standardized MARGINAL ATE);
             # the empty-backdoor-capable anchor (OLS) keeps the zero-width
             # frame so its estimate stays the raw unadjusted contrast.
-            fit_frame = covariates
+            # #1392: on a subsampled tournament these are the SUBSAMPLE views;
+            # the winner is refit on the full frame after selection.
+            fit_frame = sel_covariates
             if efficiency_mode and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
-                fit_frame = efficiency_controls  # type: ignore[assignment]
+                fit_frame = sel_efficiency  # type: ignore[assignment]
 
-            result = wrapper.fit(treatment, outcome, fit_frame, **kwargs)
+            result = wrapper.fit(sel_treatment, sel_outcome, fit_frame, **kwargs)
+            # #1392 (codex iter-1 MED): the tournament ranks wrapper INSTANCES.
+            # Record which instance produced each result so the full-frame
+            # refit fits the EXACT winner — a first-match-by-type lookup would
+            # pick the wrong instance when a chain holds duplicate estimator
+            # types with different params.
+            result_wrappers[id(result)] = wrapper
 
             # Compute energy score for successful estimations
             if result.success and result.cate is not None:
@@ -1302,8 +1522,8 @@ class EstimatorSelector:
                 sys.setrecursionlimit(max(old_limit, 5000))
                 try:
                     energy_result = self.energy_calculator.compute(
-                        treatment=treatment,
-                        outcome=outcome,
+                        treatment=sel_treatment,
+                        outcome=sel_outcome,
                         # The frame the estimator actually conditioned on
                         # (efficiency mode hands baselines to the covariate
                         # estimators while OLS keeps the zero-width anchor).
@@ -1311,6 +1531,14 @@ class EstimatorSelector:
                         estimated_effects=result.cate,
                         propensity_scores=result.propensity_scores,
                         estimator_name=wrapper.estimator_type.value,
+                        # #1392: on a subsampled tournament, skip the energy
+                        # bootstrap CI — the pre-cap large frame never ran it
+                        # (n > max_samples_for_exact), so running it on a
+                        # subsample that lands exactly at the cap would ADD
+                        # per-estimator latency to the very path this cap
+                        # exists to shrink. Below-cap frames keep today's
+                        # bootstrap behavior unchanged.
+                        _skip_bootstrap=subsampled,
                     )
                     result.energy_score_result = energy_result
                     logger.info(
@@ -1337,6 +1565,25 @@ class EstimatorSelector:
         else:
             selection = self._select_best_energy(results)  # Default
 
+        # #1392: the tournament ranked on a subsample — the REPORTED estimate
+        # must be a FULL-frame fit of the winner (the refutation node
+        # reconstructs the estimator from the full estimation_data passthrough
+        # and enforces a reconstructed-vs-reported ATE tolerance). On refit
+        # failure the failed result propagates so the consumer fail-closes;
+        # the subsample fit is never promoted to the reported estimate.
+        if subsampled and selection.success:
+            selection = self._refit_winner_on_full_frame(
+                selection,
+                results,
+                winner_wrapper=result_wrappers.get(id(selection)),
+                treatment=treatment,
+                outcome=outcome,
+                covariates=covariates,
+                efficiency_mode=efficiency_mode,
+                efficiency_controls=efficiency_controls,
+                **kwargs,
+            )
+
         # Build energy score comparison
         energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
 
@@ -1355,7 +1602,87 @@ class EstimatorSelector:
             energy_scores=energy_scores,
             energy_score_gap=energy_score_gap,
             adjustment_type=adjustment_type,
+            subsampled=subsampled,
+            selection_n_rows=selection_n_rows,
+            n_rows_total=n_rows_total,
         )
+
+    def _refit_winner_on_full_frame(
+        self,
+        selection: EstimatorResult,
+        results: list[EstimatorResult],
+        *,
+        winner_wrapper: Optional[BaseEstimatorWrapper],
+        treatment: NDArray[np.int_],
+        outcome: NDArray[np.float64],
+        covariates: pd.DataFrame,
+        efficiency_mode: bool,
+        efficiency_controls: Optional[pd.DataFrame],
+        **kwargs,
+    ) -> EstimatorResult:
+        """Fit ONLY the tournament winner on the full frame (#1392).
+
+        The subsampled tournament is a ranking; the winner's subsample fit is
+        NEVER reported. On refit success the tournament's energy score is
+        carried over as the ranking artifact — recomputing it on the full
+        frame would (a) mix scoring bases against the losers' subsample
+        scores, making ``energy_score_gap`` meaningless, and (b) route through
+        the energy distance's internal unseeded >5k sampling, making the
+        reported score nondeterministic. ``SelectionResult`` discloses the
+        subsample via ``selection_subsampled`` / ``selection_n_rows``.
+
+        On refit failure the FAILED result replaces the winner's tournament
+        entry and is returned as the selection, so the consumer fail-closes
+        (``estimation.py`` raises ``EstimationError``) rather than silently
+        reporting a subsample-fit ATE that the refutation node's full-frame
+        reconstruction would diverge from.
+        """
+        # codex iter-1 MED (#1392): refit the EXACT wrapper instance that won
+        # the tournament (recorded by result identity in ``select``). A
+        # first-match-by-type fallback would fit the wrong instance when the
+        # chain holds duplicate estimator types with different params.
+        wrapper = winner_wrapper
+        if wrapper is None:  # pragma: no cover — every fitted result is recorded
+            logger.warning(
+                "No wrapper instance recorded for tournament winner %s; "
+                "skipping full-frame refit and failing closed.",
+                selection.estimator_type.value,
+            )
+            return EstimatorResult(
+                estimator_type=selection.estimator_type,
+                success=False,
+                error_message=(
+                    "full-frame winner refit unavailable: no wrapper instance "
+                    "recorded for the tournament winner "
+                    f"({selection.estimator_type.value}); refusing to report "
+                    "the subsample-fit estimate."
+                ),
+                error_type="RefitWrapperMissing",
+            )
+        fit_frame = covariates
+        if efficiency_mode and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
+            fit_frame = efficiency_controls  # type: ignore[assignment]
+        logger.info(
+            "Refitting tournament winner %s on the full frame (%d rows)...",
+            wrapper.estimator_type.value,
+            len(treatment),
+        )
+        full_result = wrapper.fit(treatment, outcome, fit_frame, **kwargs)
+        if full_result.success:
+            full_result.energy_score_result = selection.energy_score_result
+        else:
+            full_result.error_message = (
+                "full-frame winner refit failed after subsampled selection "
+                f"(tournament winner={selection.estimator_type.value}): "
+                f"{full_result.error_message}"
+            )
+        # Preserve the invariant that the selected result is a member of
+        # all_results: replace the winner's tournament (subsample) entry.
+        for i, r in enumerate(results):
+            if r is selection:
+                results[i] = full_result
+                break
+        return full_result
 
     def _build_selection_result(
         self,
@@ -1365,6 +1692,9 @@ class EstimatorSelector:
         energy_scores: Optional[dict[str, float]] = None,
         energy_score_gap: float = 0.0,
         adjustment_type: str = "none",
+        subsampled: bool = False,
+        selection_n_rows: int = 0,
+        n_rows_total: int = 0,
     ) -> SelectionResult:
         """Assemble a SelectionResult and compute the M-est3 reliability gate.
 
@@ -1379,17 +1709,30 @@ class EstimatorSelector:
         exceeded = bool(
             selection.success and selection.energy_score > self.config.max_acceptable_energy_score
         )
+        selection_reason = self._get_selection_reason(selection, results, adjustment_type)
+        if subsampled:
+            # #1392: user-visible disclosure (this reason is surfaced by the
+            # EstimatorComparison UI block) — the ranking ran on a subsample;
+            # the reported estimate is the full-frame winner fit.
+            selection_reason += (
+                f" Tournament ranked on a deterministic stratified subsample of "
+                f"{selection_n_rows:,}/{n_rows_total:,} rows; the reported "
+                f"ATE/CI come from the winner refit on the full frame."
+            )
         return SelectionResult(
             selected=selection,
             selection_strategy=self.config.strategy,
             all_results=results,
-            selection_reason=self._get_selection_reason(selection, results, adjustment_type),
+            selection_reason=selection_reason,
             total_time_ms=total_time_ms,
             energy_scores=energy_scores,
             energy_score_gap=energy_score_gap,
             exceeded_max_energy_score=exceeded,
             requires_review=exceeded,
             adjustment_type=adjustment_type,
+            selection_subsampled=subsampled,
+            selection_n_rows=selection_n_rows,
+            selection_n_rows_total=n_rows_total,
         )
 
     def _select_best_energy(self, results: list[EstimatorResult]) -> EstimatorResult:

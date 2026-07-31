@@ -623,6 +623,16 @@ class EstimationNode:
                 if selected.energy_score_result
                 else 0.0,
                 "quality_tier": quality_tier,
+                # #1392: subsample disclosure. When the frame exceeded the
+                # selector's row cap, the estimator TOURNAMENT ranked on a
+                # deterministic stratified subsample of selection_n_rows rows;
+                # the reported ATE/CI always come from the winner refit on the
+                # full frame (selection_n_rows_total rows). Downstream honesty
+                # surfaces must not present the per-estimator energy scores as
+                # full-frame quantities when selection_subsampled is True.
+                "selection_subsampled": bool(selection_result.selection_subsampled),
+                "selection_n_rows": int(selection_result.selection_n_rows),
+                "selection_n_rows_total": int(selection_result.selection_n_rows_total),
             },
             "selection_reason": selection_result.selection_reason,
             "energy_score_gap": float(selection_result.energy_score_gap),
@@ -663,6 +673,11 @@ class EstimationNode:
             "n_succeeded": sum(1 for r in selection_result.all_results if r.success),
             "energy_scores": {k: float(v) for k, v in selection_result.energy_scores.items()},
             "requires_review": requires_review,
+            # #1392: subsample disclosure (mirrors energy_score_data above) —
+            # lands in state as estimator_selection_result.
+            "selection_subsampled": bool(selection_result.selection_subsampled),
+            "selection_n_rows": int(selection_result.selection_n_rows),
+            "selection_n_rows_total": int(selection_result.selection_n_rows_total),
         }
 
         return result, selection_dict, latency_ms
