@@ -1178,7 +1178,11 @@ class RefutationNode:
             # lets the runner fall back to its data-derived SD.
             outcome_std_full: Optional[float] = None
             try:
-                if hasattr(estimation_data, "columns") and outcome in estimation_data.columns:
+                if (
+                    estimation_data is not None
+                    and hasattr(estimation_data, "columns")
+                    and outcome in estimation_data.columns
+                ):
                     outcome_std_full = float(np.std(estimation_data[outcome].to_numpy(dtype=float)))
             except Exception:  # noqa: BLE001 - non-numeric outcome → runner fallback
                 outcome_std_full = None

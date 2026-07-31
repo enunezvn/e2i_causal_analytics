@@ -28,9 +28,10 @@ class TestRouterNode:
         assert len(result["dispatch_plan"]) == 1
         assert result["dispatch_plan"][0]["agent_name"] == "causal_impact"
         assert result["dispatch_plan"][0]["priority"] == "critical"
-        # 120s as of #1351: the resolver made the route operable, and a real
-        # DoWhy chain cannot finish in the old 30s.
-        assert result["dispatch_plan"][0]["timeout_ms"] == 120000
+        # 300s as of #1419: critical-gates-first refutation on the 5k stratified
+        # subsample measures ~223s on the live 37k conversion frame (#1351's
+        # 120s predates the refutation suite becoming enforceable).
+        assert result["dispatch_plan"][0]["timeout_ms"] == 300000
         assert result["dispatch_plan"][0]["fallback_agent"] == "explainer"
         assert result["current_phase"] == "dispatching"
         assert result["routing_latency_ms"] >= 0
@@ -474,7 +475,7 @@ class TestRouterHelperMethods:
 
         assert dispatch["agent_name"] == "causal_impact"
         assert dispatch["priority"] == "high"  # Override priority
-        assert dispatch["timeout_ms"] == 120000  # #1351 operable-route budget
+        assert dispatch["timeout_ms"] == 300000  # #1419 measured refutation budget
         assert dispatch["fallback_agent"] == "explainer"
         assert dispatch["parameters"] == {"interpretation_depth": "standard"}
 
@@ -546,10 +547,16 @@ class TestIntentToAgentMapping:
         # attempts in the #1337 Step 0 pass timed out at the old 60s budget while
         # the live surface completed the same asks in a measured 88-90s;
         # 150s = measured + ~67% headroom for LLM-latency variance.
+        # causal_effect is 300s as of 2026-07-31 (#1419) — critical-gates-first
+        # refutation on the 5k stratified subsample measures ~223s on the live
+        # 37,371-row conversion frame (recon ~12s + e-value ~2s + 30 placebo
+        # sims x ~2.13s + 20 rcc sims x ~2.59s); 300s = measured + ~35% headroom
+        # and equals the host-nginx proxy_read_timeout ceiling.
         max_timeout_ms = {
             "multi_faceted": 180_000,
             "segment_analysis": 420_000,
             "experiment_design": 150_000,
+            "causal_effect": 300_000,
         }
         for intent, dispatches in router.INTENT_TO_AGENTS.items():
             for dispatch in dispatches:
