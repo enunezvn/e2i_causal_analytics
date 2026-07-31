@@ -114,6 +114,25 @@ def test_which_drivers_explain_ask_is_not_ranking():
     assert "entity_id" in out.missing
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        # codex iter-5 HIGH: attribution/causal phrasings (routine analytics
+        # language) carry a comparative + segment noun but ask for EXPLANATION,
+        # not a ranking. The negative gate must veto the whole attribution class.
+        "which HCP specialties account for Kisqali adoption",
+        "which specialties contribute most to Kisqali adoption",
+        "what are the determinants of Kisqali adoption by specialty",
+        "which specialties are most associated with Kisqali adoption",
+        "what factors drive the highest Kisqali adoption by region",
+    ],
+)
+def test_attribution_asks_are_not_ranking(query):
+    out = _resolve_prediction_synthesizer_input({"query": query}, _dispatch())
+    assert isinstance(out, NeedsStructuredInput)
+    assert "entity_id" in out.missing
+
+
 def test_predict_which_segments_ask_binds_segment_path():
     # "predict which ..." carries ranking intent even without "most likely".
     agent_input = {"query": "predict which HCP specialties will adopt Fabhalta"}

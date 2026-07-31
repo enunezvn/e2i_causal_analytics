@@ -1097,16 +1097,22 @@ _RANKING_INTENT_RE = re.compile(
     r"|\bprioriti[sz]\w+\b",
     re.I,
 )
-# codex iter-4 HIGH: a comparative token is NOT sufficient — an EXPLANATION /
-# causal / driver ask can carry both a segment noun and a comparative ("which
-# specialty drivers explain <brand> adoption", "what are the top reasons <brand>
-# adoption varies by region"). Any explanation/causal marker VETOES the ranking
-# bind, so a driver/why/cause ask never gets a confident ranked answer it did not
-# request. This negative gate closes the whole explanation class independent of
-# which comparative token appears.
+# codex iter-4/5 HIGH: a comparative token is NOT sufficient — an EXPLANATION /
+# causal / ATTRIBUTION ask can carry both a segment noun and a comparative
+# ("which specialty drivers explain <brand> adoption", "which specialties account
+# for <brand> adoption", "which specialties contribute most to adoption"). Any
+# explanation/causal/attribution marker VETOES the ranking bind, so an
+# explain/why/driver/attribution ask never gets a confident ranked answer it did
+# not request. This negative gate closes the whole explanation class in one place
+# (the standard attribution/causal analytics lexicon), independent of which
+# comparative token appears. Deliberately conservative: over-vetoing an ambiguous
+# ask fails CLOSED (honest), the safe direction. 'influence'/'factor'-as-target
+# words are excluded from the veto to avoid rejecting legitimate targeting asks.
 _EXPLANATION_INTENT_RE = re.compile(
-    r"\bexplain\w*\b|\bwhy\b|\bdriver\w*\b|\breason\w*\b|\bcause\w*\b|\bbecause\b"
-    r"|\battribut\w*\b|\bdrove\b|\bdriving\b",
+    r"\bexplain\w*\b|\bwhy\b|\bdriv\w*\b|\bdrove\b|\breason\w*\b|\bcaus\w*\b"
+    r"|\bbecause\b|\battribut\w*\b|\baccounts?\s+for\b|\bcontribut\w*\b"
+    r"|\bdeterminant\w*\b|\bresponsib\w+\s+for\b|\bassociat\w+\s+with\b"
+    r"|\bcorrelat\w*\b",
     re.I,
 )
 
