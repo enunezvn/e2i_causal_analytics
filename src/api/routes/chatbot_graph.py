@@ -29,6 +29,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from src.agents.multi_faceted import is_multi_faceted_facet_score
+from src.api.routes.chat_bridge import BRIDGE_PREAMBLE, run_conversational_bridge
 from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
@@ -999,6 +1000,7 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             failed_agents = orchestrator_result.get("failed_agents", [])
             failure_details = orchestrator_result.get("failure_details", [])
             status = orchestrator_result.get("status", "completed")
+            bridge_used = False
 
             # Determine primary agent from successful agents
             primary_agent = "orchestrator"
@@ -1019,6 +1021,22 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                     response_text = f"{response_text}\n\n{failure_warning}"
             elif status == "failed":
                 logger.error(f"Orchestrator complete failure: all agents failed - {failed_agents}")
+                # #1336 D5 bridge: zero agents produced a real result, so the
+                # user would get the fail-closed error summary. Route the turn
+                # through the AG-UI chat brain (chat_node + tools) for a real
+                # grounded answer; on any bridge failure keep the summary.
+                bridge_text = await run_conversational_bridge(
+                    query=query,
+                    session_id=session_id,
+                    history=state.get("messages"),
+                )
+                if bridge_text:
+                    bridge_used = True
+                    response_text = f"{BRIDGE_PREAMBLE}\n\n{bridge_text}"
+                    logger.info(
+                        "Chat bridge answered after complete orchestrator failure "
+                        f"(failed_agents={failed_agents})"
+                    )
             else:
                 logger.info(
                     f"Orchestrator processed query: agents={agents_dispatched}, "
@@ -1033,7 +1051,10 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                 result = {
                     "messages": [response_msg],
                     "response_text": response_text,
-                    "agent_name": primary_agent,
+                    # When the bridge authored the answer, attribute it — but
+                    # keep routed_agent as the router's choice so the routing
+                    # instrument (dispatch_info, analytics) loses nothing.
+                    "agent_name": "chat_bridge" if bridge_used else primary_agent,
                     "routed_agent": primary_agent,
                     "agents_dispatched": agents_dispatched,
                     "orchestrator_used": True,
@@ -1052,6 +1073,8 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                         "failed_agents": failed_agents,
                         "failure_details": failure_details,
                         "orchestrator_status": status,
+                        # #1336 D5 bridge observability
+                        "bridge_used": bridge_used,
                         # 4-stage classifier observability
                         "routing_pattern": routing_pattern,
                         "classification_latency_ms": classification_latency_ms,
