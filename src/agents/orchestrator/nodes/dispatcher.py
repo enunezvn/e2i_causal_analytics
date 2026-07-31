@@ -1117,6 +1117,7 @@ _EXPLANATION_INTENT_RE = re.compile(
     r"|\bbecause\b|\battribut\w*\b|\baccounts?\s+for\b|\bcontribut\w*\b"
     r"|\bdeterminant\w*\b|\bresponsib\w+\s+for\b|\bassociat\w+\s+with\b"
     r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\bindicat\w*\b|\bsignal\w*\b"
+    r"|\bdetermin\w*\b"
     r"|\blinked\s+(?:to|with)\b|\brelated\s+(?:to|with)\b|\btied\s+(?:to|with)\b"
     # codex iter-8: causal-verb 'influence' and 'factor in/for' attribution,
     # PHRASE-CONSTRAINED so the HCP-attribute uses ('high-influence',
@@ -1126,7 +1127,17 @@ _EXPLANATION_INTENT_RE = re.compile(
     r"|\bmost\s+influenc\w*\b"
     r"|\binfluenc(?:es?|ing|ed)\s+(?:\w+\s+){0,2}?"
     r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b"
-    r"|\bfactors?\s+(?:in|behind|for|of|driving|underlying)\b|\bkey\s+factors?\b",
+    r"|\bfactors?\s+(?:in|behind|for|of|driving|underlying)\b|\bkey\s+factors?\b"
+    # codex iter-9: causal-verb impact/affect/effect/shape, phrase-constrained to
+    # the outcome (or "biggest/most impact"/"impact on") so they read as
+    # attribution, not ranking. These are not model-feature attributes, so the
+    # veto is low-risk; over-veto still fails CLOSED.
+    r"|\b(?:biggest|largest|greatest|most|strongest)\s+(?:impact|effect)\b"
+    r"|\b(?:impact|affect|effect|shape)s?\s+(?:the\s+)?(?:\w+\s+){0,2}?"
+    r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b"
+    r"|\b(?:impact|effect)\s+on\b"
+    r"|\bbehind\s+(?:the\s+)?(?:\w+\s+){0,2}?"
+    r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b",
     re.I,
 )
 

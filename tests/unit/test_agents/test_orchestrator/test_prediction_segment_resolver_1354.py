@@ -140,6 +140,13 @@ def test_which_drivers_explain_ask_is_not_ranking():
         "which specialties most influence Kisqali adoption",
         "which specialties influence Kisqali adoption",
         "which specialties are the top factor in Kisqali adoption",
+        # codex iter-9: impact/affect/effect causal-attribution phrasing
+        "which specialties have the biggest impact on Kisqali adoption",
+        "which regions impact Kisqali uptake most",
+        "which specialties most affect Kisqali adoption",
+        # proactive causal-lexicon closure (determine / behind)
+        "which specialties determine Kisqali adoption",
+        "which specialties are behind Kisqali adoption",
     ],
 )
 def test_attribution_asks_are_not_ranking(query):
