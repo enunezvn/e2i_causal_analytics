@@ -149,11 +149,20 @@ def test_all_kpis_return_nonnull():
     from scripts.check_kpi_coverage import _kpi_ids
 
     expected = len(_kpi_ids())
+    # The probe resolves each KPI id through the deployed synthetic-mode resolver
+    # (#1389); the synthetic-gold instance serves the `_include_synthetic` twins,
+    # so run the subprocess in synthetic-inclusive mode explicitly rather than
+    # relying on ambient env (which may not carry the flag).
     out = subprocess.run(
         [sys.executable, "scripts/check_kpi_coverage.py"],
         capture_output=True,
         text=True,
-        env={**os.environ, "E2I_DB_INTEGRATION": "1", "PYTHONPATH": os.getcwd()},
+        env={
+            **os.environ,
+            "E2I_DB_INTEGRATION": "1",
+            "E2I_INCLUDE_SYNTHETIC": "1",
+            "PYTHONPATH": os.getcwd(),
+        },
     )
     assert out.returncode == 0, f"coverage probe failed:\n{out.stdout}\n{out.stderr}"
     summary = out.stdout.strip().splitlines()[-1]
