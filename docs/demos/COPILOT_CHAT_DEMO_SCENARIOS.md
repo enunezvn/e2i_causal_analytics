@@ -8,7 +8,8 @@
 > are hand-distilled and partly wrong (e.g. 2.1 cohort_constructor, 4.3
 > multi_faceted, the T4 tier description). It is retained unchanged as the
 > point-in-time record the 2026-07-29 measurements were scripted against.
-> Latency-budget re-baselining is owned by #1338.
+> Latency-budget re-baselining is owned by #1338 — **done 2026-07-31 in v2**
+> (p90 basis; T1 merged into T2, 3.4 → T4): this file's budgets are historical.
 
 A cohesive question set for exercising the copilot chat UI end-to-end, grounded in
 the system's actual routing surfaces (chatbot intents, orchestrator 4-stage

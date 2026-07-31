@@ -131,21 +131,54 @@ as the point-in-time record it is.
 
 ## Latency / complexity tiers
 
-> **⚠ Budgets pending re-baseline — #1338.** The 2026-07-29 run measured T1 0/2
-> and T2 4/12 against these budgets (structurally unachievable: every AG-UI
-> turn includes ≥ 1 LLM round-trip). The budget **values below are carried over
-> from v1 UNCHANGED** and are owned by #1338 — do not tune them here.
+Budgets were **re-baselined 2026-07-31 per #1338** from the recorded 2026-07-29
+AG-UI baseline — v1's budgets were structurally unachievable (every AG-UI turn
+includes ≥ 1 LLM round-trip; the run measured T1 0/2, T2 4/12 against them).
+Values and method are in "Latency budgets" directly below the table.
 
 | Tier | Path exercised | What "good" looks like |
 |------|---------------|------------------------|
-| **T1 — Conversational** | AG-UI: model answers directly, no tools | Near-instant first token; correct capability description |
-| **T2 — KPI fast path** | AG-UI: one `kpi_calculate_tool` / `e2i_data_query_tool` call | A real number with period + comparison, chart where applicable |
+| **T2 — Simple** (conversational + KPI fast path; **former T1 is merged into T2** per #1338 — T1's n=2 was too thin to define a distinct faster tier, and its turns measured indistinguishably from T2) | AG-UI: direct answer with no tools, or one `kpi_calculate_tool` / `e2i_data_query_tool` call | Correct capability description; a real number with period + comparison, chart where applicable |
 | **T3 — Single agent** | routing: SINGLE_AGENT; AG-UI: one analytical tool call | Streaming progress visible; structured result |
-| **T4 — Multi-domain composite** | routing: TOOL_COMPOSER (**multi-domain + dependency-linked** — see gate above) or PARALLEL_DELEGATION (multi-domain, independent) | Visible decomposition; each facet resolved; coherent synthesis |
+| **T4 — Multi-domain composite / full orchestration** | routing: TOOL_COMPOSER (**multi-domain + dependency-linked** — see gate above) or PARALLEL_DELEGATION (multi-domain, independent); also AG-UI turns that elect `orchestrator_tool` for a full orchestrated run (3.4) | Visible decomposition; each facet resolved; coherent synthesis |
 | **T5 — Context / memory** | follow-up turns and paraphrase repeats against session memory (AG-UI full-history resend) | Correct referent resolution; paraphrase repeats acknowledge/reuse the earlier analysis with consistent grounded numbers — **measured PASS 5/5, 2026-07-31** (`results/2026-07-31_t5_paraphrase_repeat/RESULTS.md`; #1339 closed measured-not-needed) |
 | **T6 — Robustness** | typos, ambiguity | Typos silently corrected; ambiguous queries produce honest scope-limiting, not hallucination (**routed** clarification is not deliverable today — #1407) |
 
-Record per question: time-to-first-token, time-to-first-progress (T3+), total,
+### Latency budgets (re-baselined 2026-07-31 — #1338)
+
+Budgets are baselined from the recorded 2026-07-29 AG-UI run
+(`results/2026-07-29_copilot_chat_perf/` — `SUMMARY.md` for the tier table,
+`measurements_agui.csv` for per-turn timings; n=51 turns) on the **p90
+principle**: each tier's threshold = median-plus-headroom ≈ p90 of the run's
+`total_ms`, **never** fitted to the observed max. Fitting to the max absorbs
+genuine outliers into "pass" and turns the sheet into a permanently-green
+rubber stamp; under p90-based budgets real outliers stay red and get
+investigated as anomalies, so the sheet stays a regression instrument.
+**Future re-baselines must follow the same method**: recompute per-tier
+median/p90 of `total_ms` from the new run's CSV, set the budget just above
+p90, and leave true outliers red.
+
+Measured (seconds, `total_ms` of `measurements_agui.csv`) → budgets:
+
+| Tier | n | med | p90 | Budget | Result on the 2026-07-29 run |
+|---|---|---|---|---|---|
+| T2 simple (incl. former T1) | 14 | 8.9 | 16.7 | **< 18 s** | 13/14 — 4.6 (52.2 s) stays red |
+| T3 | 16 | 15.8 | 21.0 | **< 25 s** (tightened from v1's 40 s, which was ~2× p90 and hid regressions) | 15/16 — 3.6 (81.4 s) stays red |
+| T4 (incl. 3.4) | 7 | 19.5 | 44.5 | **< 90 s** (v1 value retained, deliberately NOT p90-tightened: n=7 is thin and bimodal — plain composites ≤ 24 s vs. the full-orchestrator turn at 75.2 s — so a p90 budget would flag the legitimate 3.4 orchestration red) | 7/7 |
+| First progress (all turns) | 51 | 7.7 | 14.9 | **< 15 s** (was < 5 s, met on only ~25% of turns) | 46/51 ≈ 90% |
+
+- **3.4 is reclassified T3 → T4** (#1338): it elected `orchestrator_tool` and
+  ran the full experiment-design orchestration — genuinely T4-class work; its
+  75.2 s passes the T4 budget.
+- **4.6 (52.2 s) and 3.6 (81.4 s) remain red under these budgets by design.**
+  They are outlier investigations, not budget failures — a budget that passed
+  them would be fitted to this run's max.
+- T5 and T6 are correctness criteria, not latency tiers (Appendix B). T5's
+  former warm-vs-cold criterion is retired — see the T5 row above and #1339
+  (closed measured-not-needed,
+  `results/2026-07-31_t5_paraphrase_repeat/RESULTS.md`).
+
+Record per question: time-to-first-token, time-to-first-progress, total,
 and — on `/chat/stream` — the `dispatch_info` fields (`routing_pattern`,
 `classification_latency_ms`, `used_llm_layer`, `agents_dispatched`).
 
@@ -212,14 +245,18 @@ showcase.
 | 3.1 | What percentage of PNH patients have been tested? | SINGLE_AGENT → explainer (human-triaged) | cohort_definition → cohort_profiler ✗ | clinical_context_tool · 11.6 s | T2 |
 | 3.2 | What is the current TRx volume for Fabhalta? | SINGLE_AGENT → explainer | explanation → explainer ✓ | kpi_calculate_tool · 5.0 s | T2 |
 | 3.3 | Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter | SINGLE_AGENT → prediction_synthesizer | segment_analysis → heterogeneous_optimizer ✗ | e2i_data_query_tool · 17.3 s | T3 |
-| 3.4 | Design an experiment to measure whether speaker programs increase Fabhalta NRx | SINGLE_AGENT → experiment_designer | experiment_design → experiment_designer ✓ | **orchestrator_tool** · 75.2 s | T3–T4 |
+| 3.4 | Design an experiment to measure whether speaker programs increase Fabhalta NRx | SINGLE_AGENT → experiment_designer | experiment_design → experiment_designer ✓ | **orchestrator_tool** · 75.2 s | T4 |
 | 3.5 | *(follow-up)* What did the digital twin simulation say about expected lift and sample size? | SINGLE_AGENT → experiment_designer | experiment_design + prediction → PARALLEL (experiment_designer, prediction_synthesizer) ✗ | e2i_data_query_tool · 12.7 s | T5 |
 | 3.6 | Design an experiment to test whether increasing rep visits improves Fabhalta adoption | SINGLE_AGENT → experiment_designer | experiment_design → experiment_designer ✓ | causal_analysis_tool · 81.4 s | T3 |
 
 Notes: experiment-design turns are the longest single-agent runs on record
 (75–90 s; the `experiment_design` dispatch SLA was raised to 150 s on these
-measurements — `router.py`). The 3.4 → 3.5 "pre-screen A/B tests with ML
-simulation" beat is unchanged.
+measurements — `router.py`). **3.4 is reclassified T4 per #1338** — it elected
+`orchestrator_tool` and ran the full experiment-design orchestration, so its
+75.2 s passes the T4 < 90 s budget. **3.6 stays T3 and stays red** under the
+re-baselined T3 budget (81.4 s vs. < 25 s) by design — an outlier
+investigation, not a budget failure. The 3.4 → 3.5 "pre-screen A/B tests with
+ML simulation" beat is unchanged.
 
 ---
 
@@ -240,7 +277,9 @@ simulation" beat is unchanged.
 Notes: v1 labeled 4.3 `multi_faceted`/T4 — retired: single-domain tiering is
 SINGLE_AGENT by the composition ruling (no second domain, no dependency link).
 4.6's gold owner (experiment_monitor) is **legacy-only** and currently reached
-only via the LLM fallback, if at all — a known gap, not a demo promise.
+only via the LLM fallback, if at all — a known gap, not a demo promise. 4.6
+also **stays red on latency** under the #1338 simple-tier budget (52.2 s vs.
+< 18 s) by design — an outlier investigation, not a budget failure.
 
 ---
 
@@ -251,11 +290,11 @@ only via the LLM fallback, if at all — a known gap, not a demo promise.
 | # | Question | Gold routing | Legacy routes to (today) | AG-UI baseline (tools · total) | Tier |
 |---|----------|--------------|--------------------------|-------------------------------|------|
 | 5.1 | What is the current system health score? | SINGLE_AGENT → health_score | system_health → health_score ✓ | e2i_data_query_tool · 5.9 s | T2–T3 |
-| 5.2 | What agents are available in the system? | SINGLE_AGENT → health_score | general → explainer **(LLM)** ✗ | agent_routing_tool · 8.1 s | T1 |
+| 5.2 | What agents are available in the system? | SINGLE_AGENT → health_score | general → explainer **(LLM)** ✗ | agent_routing_tool · 8.1 s | T2 |
 | 5.3 | What is the ROC-AUC and calibration of the current Kisqali model? | SINGLE_AGENT → health_score | general → explainer **(LLM)** ✗ | e2i_data_query_tool · 9.9 s | T2 |
 | 5.4 | Is there any feature drift in the Kisqali model? | SINGLE_AGENT → drift_monitor | drift_check → drift_monitor ✓ | e2i_data_query_tool · 10.0 s | T3 |
 | 5.5 | Why did the model flag this HCP segment — what features drove the prediction? | SINGLE_AGENT → explainer (human-ratified) | segment_analysis → heterogeneous_optimizer ✗ | e2i_data_query_tool · 12.8 s | T3 |
-| 5.6 | Explain what heterogeneous treatment effects mean in our analyses | SINGLE_AGENT → explainer | segment_analysis → heterogeneous_optimizer ✗ | document_retrieval_tool · 14.5 s | T1 |
+| 5.6 | Explain what heterogeneous treatment effects mean in our analyses | SINGLE_AGENT → explainer | segment_analysis → heterogeneous_optimizer ✗ | document_retrieval_tool · 14.5 s | T2 |
 | 5.7 | How confident are we in the rep-visit effect — did it pass refutation tests? | SINGLE_AGENT → causal_impact (human-ratified) | general → explainer **(LLM)** | causal_analysis_tool · 15.2 s | T3 |
 
 Notes: 5.1–5.3 exercise the **health_score vs drift_monitor boundary** —
@@ -325,11 +364,27 @@ Per question log: `question_id`, `gold_pattern`, `gold_agents`,
 populated master for the recorded baseline is
 `results/2026-07-29_copilot_chat_perf/measurements.csv`.
 
-Pass criteria by tier — **values carried over from v1 UNCHANGED; budgets
-pending re-baseline — #1338**:
-T1 < 3s total; T2 < 8s total; T3 first progress < 5s, total < 40s;
-T4 first decomposition visible < 8s, total < 90s; T5 paraphrase repeat
-acknowledges/reuses the earlier analysis with consistent grounded numbers at
-acceptable latency (not materially slower than cold — and typically faster,
-since a recap can skip re-running the tool; re-running to re-validate is not a
-failure — #1339); T6 never hallucinates on ambiguity.
+Pass criteria by tier — **re-baselined per #1338** (p90 principle; method and
+measured med/p90 in "Latency budgets" under the tiers section, computed from
+`results/2026-07-29_copilot_chat_perf/measurements_agui.csv`):
+
+- **T2 (simple, incl. former T1)**: total < 18 s.
+- **T3**: total < 25 s.
+- **T4 (incl. 3.4)**: total < 90 s; decomposition visible when the
+  composer/orchestrator path streams one.
+- **First progress**: < 15 s, every turn.
+- **T5 (paraphrase repeat)**: a correctness criterion, not a latency budget —
+  the repeat acknowledges/reuses the earlier analysis with consistent grounded
+  numbers at acceptable latency (≤ 1.5× the cold ask; re-running a tool to
+  re-validate or enrich is a pass, not a failure). The v1 warm-faster-than-cold
+  criterion is **retired**: #1339 was closed 2026-07-31 as
+  **measured-not-needed** — 3/3 cued + 2/2 cue-free paraphrase repeats (5/5)
+  acknowledged/reused the earlier analysis with consistent grounded numbers;
+  the 3 cued repeats ran no tool and came in −36…−47% vs. the in-session cold
+  turn, while same-words fresh-session baselines re-ran the tool every time —
+  the benefit is session memory (full-history resend), not wording — and **no
+  response-reuse cache was built** (pre-registered decision;
+  `results/2026-07-31_t5_paraphrase_repeat/RESULTS.md`).
+- **T6**: never hallucinates on ambiguity (correctness criterion, unchanged).
+- **Known reds on the baseline run, by design**: 4.6 (52.2 s) and 3.6
+  (81.4 s) — outlier investigations, not budget failures.
