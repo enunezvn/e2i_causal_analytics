@@ -50,6 +50,26 @@ def test_bridge_suffixed_composite_returns_session_uuid() -> None:
     assert coerce_session_uuid(bridged) == session_uuid
 
 
+def test_bridge_suffixed_plain_uuid_returns_that_uuid() -> None:
+    """A bare ``{plain_uuid}~bridge`` (AG-UI threadId + bridge marker) -> the uuid.
+
+    Guards that stripping the marker recovers the session even when there is no
+    user segment, so the coercion is not mis-tuned to only the composite shape.
+    """
+    session_uuid = uuid.uuid4()
+    assert coerce_session_uuid(f"{session_uuid}~bridge") == session_uuid
+
+
+def test_malformed_composite_returns_none_not_user_uuid() -> None:
+    """``{user_uuid}~garbage`` -> None, NOT the user uuid (codex #1393 iter-1 LOW).
+
+    A corrupt session segment must yield an honest null rather than silently
+    mis-associating the episodic row to the user's uuid.
+    """
+    user_uuid = uuid.uuid4()
+    assert coerce_session_uuid(f"{user_uuid}~garbage") is None
+
+
 def test_none_is_none() -> None:
     assert coerce_session_uuid(None) is None
 

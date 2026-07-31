@@ -65,6 +65,7 @@ from src.utils.llm_attribution import drain_run_usage
 from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_chat_llm, get_llm_provider
 from src.utils.redaction import redact_query
+from src.utils.session_ids import coerce_session_uuid
 
 # MLflow metrics feature flag
 CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").lower() == "true"
@@ -1619,11 +1620,20 @@ async def _save_to_episodic_memory(
         # Text to embed combines query and response for semantic search
         text_to_embed = f"Query: {query}\n\nResponse: {response_text[:1000]}"
 
+        # ``session_id`` is composite ({user}~{session}) by default
+        # (chatbot_state.create_initial_state) -- coerce to the plain session uuid
+        # for the uuid-typed ``episodic_memories.session_id`` column so the write
+        # lands instead of 22P02-failing into the ``except`` below, which silently
+        # dropped the chat interaction's episodic record (#1393, same failure
+        # class as the orchestrator hook, different consumer). The composite id is
+        # preserved verbatim in ``raw_content['session_id']`` above for traceability.
+        session_uuid = coerce_session_uuid(session_id)
+
         # Insert into episodic memory
         memory_id = await insert_episodic_memory_with_text(
             memory=memory_input,
             text_to_embed=text_to_embed,
-            session_id=session_id,
+            session_id=str(session_uuid) if session_uuid is not None else None,
         )
 
         logger.info(

@@ -21,6 +21,12 @@ from __future__ import annotations
 from typing import Optional, Union
 from uuid import UUID
 
+# The conversational bridge (PR #1394, ``src/api/routes/chat_bridge.py``) appends
+# this marker to the session id of its shadow session (``{session_id}~bridge``).
+# It is the ONLY documented ``~``-suffix marker, so it is the only trailing
+# non-uuid segment the coercion strips.
+_BRIDGE_MARKER = "bridge"
+
 
 def coerce_session_uuid(value: Optional[Union[UUID, str]]) -> Optional[UUID]:
     """Recover a plain ``UUID`` from a chat session identifier for a uuid column.
@@ -29,27 +35,32 @@ def coerce_session_uuid(value: Optional[Union[UUID, str]]) -> Optional[UUID]:
 
     - a plain uuid (or ``UUID`` object) -> returned unchanged;
     - a composite ``{user_uuid}~{session_uuid}`` -> the trailing session uuid;
-    - a bridge-suffixed ``{user}~{session}~bridge`` (PR #1394) -> the session
-      uuid (the non-uuid ``bridge`` marker is skipped).
+    - a bridge-suffixed ``{...}~bridge`` (PR #1394) -> the session uuid the marker
+      was appended to (works for both ``{user}~{session}~bridge`` and a bare
+      ``{plain_uuid}~bridge``).
 
-    The recovery rule is "the rightmost ``~``-delimited segment that parses as a
-    uuid". This generalizes the historical ``rsplit('~', 1)[-1]``
-    (audit_chain #1335): it still recovers the trailing session uuid of a bare
-    ``{user}~{session}`` id, but also tolerates a trailing non-uuid marker such
-    as ``~bridge``. Real session ids always carry uuid segments for both user and
-    session, so the rule unambiguously lands on the session uuid.
+    The rule is: strip a single trailing ``~bridge`` marker, then take the (now)
+    trailing segment IF it parses as a uuid, else return ``None``. This preserves
+    the historical ``rsplit('~', 1)[-1]`` semantics for the bare
+    ``{user}~{session}`` composite (audit_chain #1335) while hardening genesis
+    against the bridge suffix. Crucially, a MALFORMED id such as
+    ``{user_uuid}~garbage`` yields ``None`` (honest null) rather than silently
+    mis-associating to the ``user_uuid`` -- the trailing-segment check rejects the
+    non-uuid ``garbage`` instead of scanning left into the user segment.
 
-    Returns ``None`` (an honest null for the nullable column) when no segment
-    parses as a uuid -- never a fabricated id. Callers that need user attribution
-    must carry ``user_id`` in its own column; this only recovers the session id.
+    Returns ``None`` (an honest null for the nullable column) when the recovered
+    segment is not a uuid -- never a fabricated id. Callers that need user
+    attribution must carry ``user_id`` in its own column; this only recovers the
+    session id.
     """
     if value is None:
         return None
     if isinstance(value, UUID):
         return value
-    for segment in reversed(str(value).split("~")):
-        try:
-            return UUID(segment)
-        except (ValueError, AttributeError):
-            continue
-    return None
+    segments = str(value).split("~")
+    if len(segments) > 1 and segments[-1] == _BRIDGE_MARKER:
+        segments.pop()
+    try:
+        return UUID(segments[-1])
+    except (ValueError, AttributeError):
+        return None
