@@ -130,6 +130,10 @@ def test_which_drivers_explain_ask_is_not_ranking():
         "which specialties are most predictive of Kisqali adoption",
         "which specialties are linked to Kisqali adoption",
         "which specialties are related to Kisqali adoption",
+        # codex iter-7: indicator/signal + the "with" association variant
+        "which specialties are indicators of Kisqali adoption",
+        "which specialties are the strongest signals of Kisqali adoption",
+        "which specialties are linked with Kisqali adoption",
     ],
 )
 def test_attribution_asks_are_not_ranking(query):

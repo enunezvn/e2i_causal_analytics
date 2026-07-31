@@ -1116,8 +1116,8 @@ _EXPLANATION_INTENT_RE = re.compile(
     r"\bexplain\w*\b|\bwhy\b|\bdriv\w*\b|\bdrove\b|\breason\w*\b|\bcaus\w*\b"
     r"|\bbecause\b|\battribut\w*\b|\baccounts?\s+for\b|\bcontribut\w*\b"
     r"|\bdeterminant\w*\b|\bresponsib\w+\s+for\b|\bassociat\w+\s+with\b"
-    r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\blinked\s+to\b"
-    r"|\brelated\s+to\b|\btied\s+to\b",
+    r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\bindicat\w*\b|\bsignal\w*\b"
+    r"|\blinked\s+(?:to|with)\b|\brelated\s+(?:to|with)\b|\btied\s+(?:to|with)\b",
     re.I,
 )
 
