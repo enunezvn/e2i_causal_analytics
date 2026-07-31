@@ -205,7 +205,13 @@ class TriggerRepository(BaseRepository):
         """
         Calculate trigger acceptance rate.
 
-        Acceptance Rate = (accepted triggers) / (delivered triggers)
+        Acceptance Rate = (accepted triggers) / (delivered triggers), where
+        "delivered" means delivery_status IN ('delivered', 'viewed') — the
+        ruled WS2-TR-004 denominator (migration 092, #1124): 'viewed' is a
+        further progression of 'delivered', not a different population. #1387
+        makes every accepted trigger progress to 'viewed', so a
+        delivered-exclusive filter would denominate on the never-viewed
+        remainder and read ~0.
 
         Args:
             brand: Optional brand filter
@@ -230,7 +236,7 @@ class TriggerRepository(BaseRepository):
             self.client.table(self.table_name)
             .select("delivery_status, acceptance_status")
             .gte("trigger_timestamp", cutoff_date.isoformat())
-            .eq("delivery_status", "delivered")
+            .in_("delivery_status", ["delivered", "viewed"])
         )
 
         if brand:

@@ -172,12 +172,17 @@ hcp_brand_daily AS (
         hcp_id,
         brand,
         metric_date,
-        COUNT(*) FILTER (WHERE delivery_status = 'delivered')                       AS trx_count,
+        -- #1387: "delivered" = delivery_status IN ('delivered','viewed') — the
+        -- ruled denominator (migrations 090/092, #1119/#1124): 'viewed' is a
+        -- further progression of 'delivered', and once accepted implies viewed
+        -- a delivered-exclusive count keeps only the never-viewed remainder
+        -- (conversion_rate could then exceed 1).
+        COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed'))          AS trx_count,
         COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))      AS nrx_count,
         COUNT(*)                                                                    AS total_rx_count,
         COALESCE(
             COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))::NUMERIC
-            / NULLIF(COUNT(*) FILTER (WHERE delivery_status = 'delivered'), 0),
+            / NULLIF(COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed')), 0),
             0
         )                                                                           AS conversion_rate,
         -- Provenance inheritance (issue #895): any synthetic input row in

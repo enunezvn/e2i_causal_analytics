@@ -113,12 +113,18 @@ class TestProvenanceDefaultExclude(TestTriggerRepository):
     ):
         result = MagicMock()
         result.data = []
-        # chain: select().gte().eq(delivery_status).eq(is_synthetic).limit().execute()
-        chain = mock_client.table.return_value.select.return_value.gte.return_value.eq.return_value
+        # chain: select().gte().in_(delivery_status union, #1387).eq(is_synthetic)
+        #        .limit().execute()
+        chain = mock_client.table.return_value.select.return_value.gte.return_value.in_.return_value
         chain.eq.return_value.limit.return_value.execute = AsyncMock(return_value=result)
 
         await repo.get_trigger_acceptance_rate()
 
+        # #1387: denominator must be the ruled union (migration 092) — a
+        # delivered-exclusive filter reads ~0 once accepted implies viewed.
+        mock_client.table.return_value.select.return_value.gte.return_value.in_.assert_called_with(
+            "delivery_status", ["delivered", "viewed"]
+        )
         chain.eq.assert_called_with("is_synthetic", False)
 
     @pytest.mark.asyncio
