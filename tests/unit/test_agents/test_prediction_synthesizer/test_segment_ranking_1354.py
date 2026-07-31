@@ -67,6 +67,28 @@ async def test_synthesize_segment_mode_returns_ranked_narrative(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_segment_mode_no_horizon_does_not_invent_one(monkeypatch):
+    # codex iter-12 MED: with no segment_horizon supplied, the narrative must NOT
+    # claim a "Requested horizon" (the synthesize default time_horizon='30d' must
+    # not leak into the segment answer as an invented request context).
+    async def fake_score(brand, *, segment_by, **kw):
+        return _fake_result()
+
+    monkeypatch.setattr("src.services.hcp_segment_likelihood.score_hcp_segments", fake_score)
+    agent = PredictionSynthesizerAgent(enable_memory=False, enable_dspy=False, enable_opik=False)
+    out = await agent.synthesize(
+        entity_id="segment_ranking:Kisqali",
+        prediction_target="hcp_adoption_kisqali",
+        segment_by="specialty",
+        brand="Kisqali",
+        query="which HCP segments are most likely to adopt Kisqali",
+    )
+    assert out.status == "completed"
+    assert "requested horizon" not in out.prediction_summary.lower()
+    assert "30d" not in out.prediction_summary
+
+
+@pytest.mark.asyncio
 async def test_synthesize_segment_mode_fails_closed_without_champion(monkeypatch):
     async def fake_score(brand, *, segment_by, **kw):
         raise ChampionNotPromotedError("no production champion for Kisqali")

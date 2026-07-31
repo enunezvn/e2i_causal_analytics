@@ -42,7 +42,16 @@ def test_segment_ranking_ask_binds_segment_path_not_fail_closed():
     assert out["segment_by"] == "specialty"
     assert str(out["brand"]).lower() == "kisqali"
     assert out["prediction_target"] == "hcp_adoption_kisqali"
-    assert out["time_horizon"] == "90d"  # "next quarter"
+    assert out["segment_horizon"] == "90d"  # "next quarter"
+
+
+def test_segment_ask_without_horizon_binds_no_horizon():
+    # codex iter-12 MED: an ask with no horizon wording must NOT carry a horizon,
+    # so the narrative never invents a "requested horizon" context.
+    agent_input = {"query": "which HCP segments are most likely to adopt Kisqali"}
+    out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
+    assert not isinstance(out, NeedsStructuredInput)
+    assert "segment_horizon" not in out
 
 
 def test_region_phrased_segment_ask_binds_region_axis():

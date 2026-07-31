@@ -216,6 +216,7 @@ class PredictionSynthesizerAgent:
         session_id: Optional[str] = None,
         segment_by: Optional[str] = None,
         brand: Optional[str] = None,
+        segment_horizon: Optional[str] = None,
         top_segments: int = 5,
     ) -> PredictionSynthesizerOutput:
         """
@@ -240,6 +241,10 @@ class PredictionSynthesizerAgent:
                 is then required; ``entity_id``/``prediction_target`` are ignored.
             brand: Brand to scope the segment ranking (required when segment_by
                 is set — the platform's fail-closed philosophy: no silent brand).
+            segment_horizon: The horizon phrase the ask named (e.g. '90d'), or
+                None when it named none — echoed as context only. Kept separate
+                from ``time_horizon`` (whose '30d' default must NOT leak into the
+                segment answer as an invented "requested horizon").
             top_segments: How many top segments to name in the narrative.
 
         Returns:
@@ -253,7 +258,7 @@ class PredictionSynthesizerAgent:
             return await self._build_segment_ranking_output(
                 brand=brand,
                 segment_by=segment_by,
-                time_horizon=time_horizon,
+                horizon=segment_horizon,
                 query=query,
                 top_segments=top_segments,
             )
@@ -475,7 +480,7 @@ class PredictionSynthesizerAgent:
         *,
         brand: Optional[str],
         segment_by: str,
-        time_horizon: str,
+        horizon: Optional[str],
         query: str,
         top_segments: int,
     ) -> PredictionSynthesizerOutput:
@@ -511,9 +516,7 @@ class PredictionSynthesizerAgent:
                 errors=[{"error": str(exc)}],
                 timestamp=now,
             )
-        narrative = svc.build_segment_ranking_narrative(
-            result, top_n=top_segments, horizon=time_horizon
-        )
+        narrative = svc.build_segment_ranking_narrative(result, top_n=top_segments, horizon=horizon)
         return PredictionSynthesizerOutput(
             prediction_summary=narrative,
             models_succeeded=1,

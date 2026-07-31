@@ -1409,9 +1409,13 @@ def _resolve_prediction_synthesizer_input(
                     session_id = agent_input.get("session_id")
                     if session_id is not None:
                         seg_resolved["session_id"] = session_id
+                    # Bind a horizon ONLY when the ask names one — a dedicated
+                    # ``segment_horizon`` key (NOT the single-entity ``time_horizon``
+                    # default) so the narrative never invents a "requested horizon"
+                    # the user did not state (codex iter-12 MED).
                     for pattern, horizon in _TIME_HORIZON_PATTERNS:
                         if pattern.search(query):
-                            seg_resolved["time_horizon"] = horizon
+                            seg_resolved["segment_horizon"] = horizon
                             break
                     logger.info(
                         "prediction_synthesizer dispatch: bound segment-ranking path "
