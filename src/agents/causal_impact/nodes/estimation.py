@@ -47,6 +47,37 @@ from src.causal_engine.errors import EstimationError
 
 logger = logging.getLogger(__name__)
 
+# A string column with more uniques than this is an identifier that leaked into
+# the adjustment set (e.g. hcp_id), not a confounder — one-hot encoding it would
+# explode the design matrix into near-singular per-row indicators.
+_MAX_CATEGORICAL_CARDINALITY = 50
+
+
+def _encode_categorical_covariates(frame: pd.DataFrame) -> pd.DataFrame:
+    """One-hot encode non-numeric covariate columns for the design matrix.
+
+    The #1351 resolver binds real substrate driver columns (trigger_type,
+    delivery_channel, ...) which are strings; every estimator consumes a
+    numeric matrix, so unencoded categoricals fail all of them at once.
+    ``drop_first`` keeps the matrix full-rank; absurd-cardinality string
+    columns raise (fail-closed upstream as EstimationError) rather than
+    silently exploding or silently dropping a requested confounder.
+    """
+    if frame.shape[1] == 0:
+        return frame
+    cat_cols = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
+    if not cat_cols:
+        return frame
+    absurd = [c for c in cat_cols if frame[c].nunique() > _MAX_CATEGORICAL_CARDINALITY]
+    if absurd:
+        raise ValueError(
+            f"Categorical covariate column(s) {absurd} exceed "
+            f"{_MAX_CATEGORICAL_CARDINALITY} distinct values — this is an "
+            "identifier, not a confounder; refusing to one-hot encode it into "
+            "the design matrix. Remove it from the adjustment set."
+        )
+    return pd.get_dummies(frame, columns=cat_cols, drop_first=True, dtype=float)
+
 
 def _compute_naive_contrast(
     data: pd.DataFrame, treatment: str, outcome: str
@@ -243,6 +274,10 @@ class EstimationNode:
                 else data.drop(columns=_excluded, errors="ignore")
             )
 
+        # #1351 live-unmasked: substrate-bound confounders are frequently
+        # categorical strings; estimators need a numeric design matrix.
+        covariates = _encode_categorical_covariates(covariates)
+
         # Convert treatment to binary if continuous
         if not np.array_equal(treatment_col, treatment_col.astype(int)):
             # Continuous treatment - binarize at median
@@ -280,7 +315,7 @@ class EstimationNode:
                 if c in data.columns and c not in PROVENANCE_DROP_COLS
             ]
             if baseline_cols:
-                efficiency_frame = data[baseline_cols]
+                efficiency_frame = _encode_categorical_covariates(data[baseline_cols])
 
         try:
             selection_result: SelectionResult = selector.select(

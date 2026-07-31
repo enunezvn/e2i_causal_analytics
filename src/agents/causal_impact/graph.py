@@ -496,12 +496,17 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     workflow.add_edge("interpretation", END)
     workflow.add_edge("error_handler", END)
 
-    # Compile
+    # Compile. checkpointer=False (not the bare default None) — this graph
+    # runs as a SUBGRAPH of the chatbot graph on the chat path, and LangGraph
+    # propagates the parent's Redis checkpointer into bare-compiled children.
+    # State carries the estimation DataFrame (data_cache['estimation_data']),
+    # which the checkpoint serde (ormsgpack) cannot serialize: the live #1351
+    # turn died in <1s with "Type is not msgpack serializable: DataFrame".
     if enable_checkpointing:
         # Would add memory/checkpointing here in production
         return workflow.compile()
     else:
-        return workflow.compile()
+        return workflow.compile(checkpointer=False)
 
 
 # MLflow experiment tracking constants
