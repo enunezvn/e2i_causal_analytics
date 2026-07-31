@@ -17,6 +17,7 @@ from src.kpi.synthetic_mode import (
     SYNTHETIC_TWINNED_QUERY_IDS,
     kpi_include_synthetic,
     resolve_kpi_query_id,
+    trigger_effectiveness_query_id,
 )
 
 _FLAG = "E2I_KPI_INCLUDE_SYNTHETIC"
@@ -149,6 +150,41 @@ def test_resolver_is_idempotent_on_a_twin_id(monkeypatch):
 
 
 # --- drift lock: the hard-coded set must equal migration 066's twin family -----
+
+
+# --- trigger_effectiveness_query_id regioned+windowed variant (#1388) ---------
+
+
+def test_trigger_effectiveness_id_windowed_regioned(monkeypatch):
+    """#1388: windowed=True + regioned=True -> the migration-120
+    _windowed_region id (region can co-bind now the RPC binds 6 params)."""
+    monkeypatch.delenv(_FLAG, raising=False)
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+    assert (
+        trigger_effectiveness_query_id("precision", windowed=True, regioned=True)
+        == "trigger_effectiveness_precision_windowed_region"
+    )
+
+
+def test_trigger_effectiveness_id_windowed_regioned_self_suffixes(monkeypatch):
+    """The _windowed_region id is additive (absent from the twinned set), so it
+    self-suffixes _include_synthetic under the showcase flag."""
+    monkeypatch.setenv(_FLAG, "1")
+    assert (
+        trigger_effectiveness_query_id("funnel_conversion", windowed=True, regioned=True)
+        == "trigger_effectiveness_funnel_conversion_windowed_region_include_synthetic"
+    )
+    assert (
+        "trigger_effectiveness_funnel_conversion_windowed_region" not in SYNTHETIC_TWINNED_QUERY_IDS
+    )
+
+
+def test_trigger_effectiveness_id_regioned_requires_windowed(monkeypatch):
+    """regioned=True without windowed=True is a programming error: the
+    non-windowed form already binds region as a nullable param (no id suffix)."""
+    monkeypatch.delenv(_FLAG, raising=False)
+    with pytest.raises(ValueError, match="windowed"):
+        trigger_effectiveness_query_id("precision", windowed=False, regioned=True)
 
 
 def test_twinned_set_matches_migrations():

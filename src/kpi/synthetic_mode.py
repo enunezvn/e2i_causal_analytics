@@ -263,21 +263,36 @@ def windowed_axis_query_id(base_query_id: str, *, axis: str) -> str:
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
 
 
-def trigger_effectiveness_query_id(metric: str, *, windowed: bool) -> str:
-    """Ask-bound trigger-effectiveness statement id (migration 118, #1360).
+def trigger_effectiveness_query_id(metric: str, *, windowed: bool, regioned: bool = False) -> str:
+    """Ask-bound trigger-effectiveness statement id (migrations 118/120, #1360/#1388).
 
-    Canonical order: ``trigger_effectiveness_{metric}[_windowed]
+    Canonical order: ``trigger_effectiveness_{metric}[_windowed][_region]
     [_include_synthetic]``. ``metric`` is ``"precision"`` / ``"acceptance_rate"``
     / ``"override_rate"`` / ``"funnel_conversion"`` — the four KPIs the #1360
-    ruling assigned to the chat KPI path. Same additive/suffixing rules as
-    :func:`windowed_query_id`: these ids are ADDITIVE and absent from
-    :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so the ``_include_synthetic`` suffix is
-    appended HERE under the showcase flag and :func:`resolve_kpi_query_id` is a
-    safe no-op on the result.
+    ruling assigned to the chat KPI path.
+
+    ``regioned=True`` selects the migration-120 ``_windowed_region`` variant that
+    co-binds region with an explicit window ($1 brand, $2 region, $3 trigger_type,
+    $4/$5 window) — only meaningful WITH ``windowed=True``, since the non-windowed
+    form already binds region as a nullable param and needs no id suffix.
+    ``regioned=True`` without ``windowed=True`` is a programming error and raises.
+
+    Same additive/suffixing rules as :func:`windowed_query_id`: these ids are
+    ADDITIVE and absent from :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so the
+    ``_include_synthetic`` suffix is appended HERE under the showcase flag and
+    :func:`resolve_kpi_query_id` is a safe no-op on the result.
     """
+    if regioned and not windowed:
+        raise ValueError(
+            "trigger_effectiveness_query_id: regioned=True is only valid with "
+            "windowed=True (the non-windowed form binds region as a nullable "
+            "param, no id suffix)"
+        )
     qid = f"trigger_effectiveness_{metric}"
     if windowed:
         qid = f"{qid}_windowed"
+        if regioned:
+            qid = f"{qid}_region"
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
 
 
