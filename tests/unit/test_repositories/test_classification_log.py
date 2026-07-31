@@ -193,6 +193,79 @@ class TestFetchUnlabeled:
         assert await repo.fetch_unlabeled() == []
 
 
+def _mock_metrics_select_client(rows=None, raises: bool = False):
+    """Mock for the chained select().gte().order().limit().execute() (no is_)."""
+    client = MagicMock()
+    execute = AsyncMock()
+    if raises:
+        execute.side_effect = RuntimeError("db down")
+    else:
+        execute.return_value = MagicMock(data=rows or [])
+    query = client.table.return_value.select.return_value
+    query.gte.return_value.order.return_value.limit.return_value.execute = execute
+    return client
+
+
+class TestFetchForMetrics:
+    async def test_returns_labeled_and_unlabeled_rows(self):
+        rows = [
+            {"routing_pattern": "SINGLE_AGENT", "was_correct": True},
+            {"routing_pattern": "CLARIFICATION_NEEDED", "was_correct": None},
+        ]
+        client = _mock_metrics_select_client(rows)
+        repo = ClassificationLogRepository(client)
+        assert await repo.fetch_for_metrics(lookback_days=30, limit=2000) == rows
+        # No was_correct filter (unlike fetch_unlabeled) — labeled rows included.
+        query = client.table.return_value.select.return_value
+        query.gte.return_value.order.return_value.limit.assert_called_once_with(2000)
+
+    async def test_no_client_returns_empty(self):
+        assert await ClassificationLogRepository(None).fetch_for_metrics() == []
+
+    async def test_failure_fails_open(self):
+        repo = ClassificationLogRepository(_mock_metrics_select_client(raises=True))
+        assert await repo.fetch_for_metrics() == []
+
+
+class TestRecordMetricsSnapshot:
+    _METRICS = {
+        "total": 12,
+        "labeled": 8,
+        "overall_accuracy_pct": 75.0,
+        "engagement_rate": 0.5,
+        "active_floor": 0.5,
+        "llm_layer_share": 0.25,
+        "abstention": {"total": 3, "judged_correct": 1, "judged_incorrect": 2},
+        "per_pattern": {"SINGLE_AGENT": {"total": 6}},
+        "label_sources": {"llm_judge": 5},
+    }
+
+    async def test_insert_flattens_abstention_and_keeps_window(self):
+        client = _mock_client()  # insert().execute() -> truthy data
+        repo = ClassificationLogRepository(client)
+        ok = await repo.record_metrics_snapshot(self._METRICS, task_id="t-1", window_days=30)
+        assert ok is True
+        client.table.assert_called_with("routing_classifier_metrics")
+        data = client.table.return_value.insert.call_args[0][0]
+        assert data["window_days"] == 30
+        assert data["abstention_total"] == 3
+        assert data["abstention_correct"] == 1
+        assert data["abstention_incorrect"] == 2
+        assert data["overall_accuracy_pct"] == 75.0
+        assert data["per_pattern"] == {"SINGLE_AGENT": {"total": 6}}
+
+    async def test_missing_table_fails_open(self):
+        # migration 032 not applied yet -> insert raises -> False, never raises.
+        repo = ClassificationLogRepository(_mock_client(insert_raises=True))
+        assert (
+            await repo.record_metrics_snapshot(self._METRICS, task_id="t", window_days=30) is False
+        )
+
+    async def test_no_client_returns_false(self):
+        repo = ClassificationLogRepository(None)
+        assert await repo.record_metrics_snapshot({}, task_id="t", window_days=30) is False
+
+
 class TestApplyLabel:
     async def test_sends_label_update_keyed_on_classification_id(self):
         client = _mock_update_client()

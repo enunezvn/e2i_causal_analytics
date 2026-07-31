@@ -35,7 +35,8 @@ from typing import Any, Dict, List, Literal, Optional, cast
 
 from src.agents.multi_faceted import (
     MULTI_FACETED_PATTERNS,
-    has_sequential_composition,
+    has_dependency_composition,
+    split_clauses,
 )
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
@@ -445,33 +446,59 @@ class IntentClassifierNode:
 
         # Secondary intents in the same deterministic order.
         secondary = [k for k, v in ranked[1:] if v > 0]
-        requires_multi_agent = len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8
 
-        # Fix 2 (audit C2/C3) — sequential-pipeline promotion. A dependency
-        # marker ("then", "after that", "based on that", …) joining 2+ DISTINCT
-        # strong intents signals a *dependent pipeline* the Tool Composer should
-        # decompose — not a single intent and not a parallel pair. Guarded to an
-        # explicit sequence marker so additive/parallel compounds (e.g. "what
-        # causes A and what drives B and also explain C") stay single-agent,
-        # preserving the locked near-miss negatives in
-        # test_intent_classifier_multi_faceted.py.
         strong_components = [
             name for name, score in ranked if score >= 0.8 and name != "multi_faceted"
         ]
+        # #1337 PARALLEL over-trigger fix: two strong intents only warrant
+        # multi-agent routing when they live in DISTINCT clauses. A second
+        # intent keyword inside a single clause is an incidental co-match, not
+        # an independent facet — "How well is our predictive model performing?"
+        # (system_health + prediction), "break down NRx by segment"
+        # (cohort_definition + segment_analysis), and the #1366 KPI regex
+        # co-firing on any metric lookup all spuriously split gold-SINGLE rows
+        # into two agents (30 rows; PARALLEL precision 0.028). The clause count
+        # is the structural gate the incidental co-matches cannot pass.
+        n_intent_clauses = self._count_intent_bearing_clauses(query, strong_components)
+        requires_multi_agent = (
+            len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8 and n_intent_clauses >= 2
+        )
+
+        # Fix 2 (audit C2/C3) — sequential-pipeline promotion. A dependency
+        # marker joining 2+ DISTINCT strong intents signals a *dependent
+        # pipeline* the Tool Composer should decompose — not a single intent and
+        # not a parallel pair. #1337 broadened the marker set beyond explicit
+        # sequence words ("then"/"based on that") to the anaphoric/conditional
+        # back-references the gold's dependency-linked TOOL_COMPOSER rows carry
+        # ("for those regions", "if it has", "the worst one", "to close it"),
+        # via ``has_dependency_composition``. A genuine >=3-clause pipeline is
+        # promoted on structure alone even without a marker. The
+        # >=2-mapped-strong-intents + not-a-parallel-pair gate keeps additive/
+        # parallel compounds ("what causes A and what drives B and also explain
+        # C") and single asks with an incidental phrase out of tool_composer,
+        # preserving the locked near-miss negatives in
+        # test_intent_classifier_multi_faceted.py + test_multipart_tool_composer_routing.py.
         # Defer to the deliberate parallel pairs: a dependency marker + EXACTLY 2
         # intents that RouterNode routes as a parallel pair is the pair, not a
-        # tool_composer pipeline. The marker is often an incidental leading
-        # preamble ("Based on the model output, forecast … and explain …"); the
-        # two asks themselves are the defined parallel pair. >=3 intents are
-        # genuinely multi-faceted and still promote.
+        # tool_composer pipeline (the marker is often an incidental leading
+        # preamble). >=3 intents are genuinely multi-faceted and still promote.
         is_parallel_pair = (
             len(strong_components) == 2 and frozenset(strong_components) in PARALLEL_INTENT_PAIRS
         )
+        # Structural promotion (marker-free): a genuine multi-step pipeline has
+        # BOTH >=3 distinct mapped domains AND >=3 clauses that each bear one —
+        # e.g. the 5-ask "what caused the decline, whether segments differ, what
+        # models predict, whether drift confounds, and what experiment to run".
+        # Requiring the clause count too keeps single-clause keyword pileups off
+        # tool_composer ("data distribution shifts or model performance
+        # degradation in our predictive analytics" = drift+health+prediction in
+        # ONE drift ask). The 2-domain dependent pipelines promote on a marker.
+        structural_pipeline = len(strong_components) >= 3 and n_intent_clauses >= 3
         if (
             primary != "multi_faceted"
             and len(strong_components) >= 2
             and not is_parallel_pair
-            and has_sequential_composition(query)
+            and (has_dependency_composition(query) or structural_pipeline)
         ):
             primary = "multi_faceted"
             confidence = max(confidence, scores.get("multi_faceted", 0.0), 0.85)
@@ -484,6 +511,31 @@ class IntentClassifierNode:
             secondary_intents=secondary[:2],
             requires_multi_agent=requires_multi_agent,
         )
+
+    def _count_intent_bearing_clauses(self, query: str, strong_intents: List[str]) -> int:
+        """Count coordinating clauses that INDEPENDENTLY bear a strong intent.
+
+        The multi-agent gate (#1337): a second strong intent only warrants
+        parallel/tool_composer routing when it lives in its own clause. Two
+        intent keywords inside ONE clause ("predictive model performance" =
+        system_health + prediction) are an incidental co-match. We re-match only
+        the already-strong intents against each clause (cheap, deterministic, no
+        LLM); ``split_clauses`` over-splits list joins on purpose — a bare list
+        fragment bears no intent and contributes nothing. Returns 0 for <2
+        strong intents (multi-agent is impossible) so callers can skip the work.
+        """
+        if len(strong_intents) < 2:
+            return 0
+        hit = 0
+        for clause in split_clauses(query):
+            for intent in strong_intents:
+                if any(
+                    re.search(pattern, clause, re.IGNORECASE)
+                    for pattern in self.INTENT_PATTERNS[intent]
+                ):
+                    hit += 1
+                    break
+        return hit
 
     # Conversation-context bounds for the LLM-fallback prompt: last N turns,
     # content truncated — classification needs the referent, not a transcript

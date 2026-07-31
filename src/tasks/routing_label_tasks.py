@@ -406,6 +406,12 @@ async def _run_label_cycle(
             if await repo.apply_label(row["classification_id"], **update):
                 judged += 1
 
+    # Phase 2 (#1341): standing safety telemetry over the whole labeled window,
+    # AFTER this run's labels land. Emitted into the run summary (immediately
+    # visible) and persisted as a per-run snapshot for a queryable time series
+    # (fail-open — the labeler degrades to log-only if migration 032 is absent).
+    metrics = await _emit_metrics(repo, task_id)
+
     summary = {
         "status": "completed",
         "unlabeled_fetched": len(rows),
@@ -415,10 +421,40 @@ async def _run_label_cycle(
         "abstained": abstained,
         "judge_errors": judge_errors,
         "judge_available": judge.available,
+        "metrics": metrics,
         "task_id": task_id,
     }
     logger.info("Routing label cycle complete: %s", summary)
     return summary
+
+
+async def _emit_metrics(repo: Any, task_id: str) -> Optional[Dict[str, Any]]:
+    """Compute + persist Phase-2 telemetry; fail-open, returns the metrics dict.
+
+    Reads the labeled window via ``fetch_for_metrics``, aggregates with the pure
+    ``compute_run_metrics``, and snapshots it to routing_classifier_metrics. Any
+    failure logs a warning and returns None — telemetry must never abort the
+    labeler or mutate routing.
+    """
+    from src.tasks.routing_metrics import compute_run_metrics
+
+    try:
+        window_days = _lookback_days()
+        rows = await repo.fetch_for_metrics(lookback_days=window_days)
+        if not rows:
+            # An empty fetch is either a genuinely-empty window or a fail-open
+            # read error (fetch_for_metrics swallows both as []). Persisting a
+            # total=0 snapshot in either case would plant misleading "zeroed"
+            # points in the time series (codex MED, 2026-07-31), so skip the
+            # snapshot and report no metrics rather than fabricate an empty run.
+            logger.info("Phase-2 metrics: no rows in window — snapshot skipped")
+            return None
+        metrics = compute_run_metrics(rows)
+        await repo.record_metrics_snapshot(metrics, task_id=task_id, window_days=window_days)
+        return metrics
+    except Exception as e:  # noqa: BLE001 — telemetry is best-effort
+        logger.warning("Phase-2 metrics emission failed (fail-open): %s", e)
+        return None
 
 
 @celery_app.task(bind=True, name="src.tasks.run_routing_label_cycle")
