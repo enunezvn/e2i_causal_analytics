@@ -2676,6 +2676,23 @@ def _strip_frontend_calls_when_mixed(
     return tool_calls
 
 
+def _is_frontend_only_turn(
+    call_names: Sequence[Optional[str]], frontend_names: set[str]
+) -> bool:
+    """True when every tool call in the turn is a frontend (generative-UI) action.
+
+    Shared by the two places that must agree about it: ``_route_after_chat``,
+    which ENDs such a turn for client-side execution, and ``chat_node``, which
+    records its analytics before returning — because a turn that ends there has
+    no downstream node left to record it. If these two conditions ever drifted
+    apart we would either record turns that did not end, or (worse) keep the
+    blind spot for turns that did.
+    """
+    if not frontend_names or not call_names:
+        return False
+    return all(name in frontend_names for name in call_names)
+
+
 def _route_after_chat(state: Mapping[str, Any]) -> str:
     """Post-chat routing: backend tool calls → "tools"; everything else ends.
 
@@ -2692,7 +2709,7 @@ def _route_after_chat(state: Mapping[str, Any]) -> str:
         return "end"
     call_names = [tc.get("name") for tc in last_message.tool_calls]
     frontend_names = _frontend_action_names(state)
-    if frontend_names and all(name in frontend_names for name in call_names):
+    if _is_frontend_only_turn(call_names, frontend_names):
         logger.info(
             f"[CopilotKit] Frontend action call(s) {call_names} — ending run for "
             f"client-side execution (generative UI)"
@@ -3127,6 +3144,45 @@ def create_e2i_chat_agent():
                         )
                     except Exception as e:
                         logger.warning(f"[CopilotKit] Failed to persist tool call: {e}")
+
+                # Analytics for a generative-UI turn.
+                #
+                # This node returns early for EVERY tool turn, before the
+                # direct-response _record_analytics_sync below. A backend-tool
+                # turn is still recorded later, by synthesize_node once the
+                # results come back. A turn whose calls are ALL frontend
+                # actions has no such second act: _route_after_chat sends it
+                # straight to END for client-side execution, so nothing
+                # downstream ever records it and the turn is invisible in
+                # chat_analytics — no row, not even an empty one.
+                #
+                # That blind spot is the whole reason "which chart action do
+                # users actually get?" could not be answered from the data.
+                # Recording here closes it, and `tools_invoked` carries the
+                # action name so the split between the chart actions is
+                # readable straight off the existing column.
+                if session_id and _is_frontend_only_turn(
+                    tool_names, _frontend_action_names(state)
+                ):
+                    _record_analytics_sync(
+                        session_id=session_id,
+                        query_type=_classify_query_type(last_human_message or ""),  # type: ignore[arg-type]
+                        response_time_ms=int((time.time() - node_start) * 1000),
+                        tools_invoked=tool_names,
+                        primary_agent="copilotkit",
+                        metadata={
+                            "configured_model": (
+                                f"{provider}:{MODEL_MAPPINGS[provider]['standard']}"
+                            ),
+                            # Distinguishes this from both a direct answer
+                            # (direct_response) and a backend-tool turn
+                            # (tools_used), which are the other two shapes a
+                            # chat_analytics row can take.
+                            "generative_ui": True,
+                            "tool_count": len(tool_names),
+                        },
+                    )
+
                 return {"messages": [response]}
 
             # FIX (v1.24.0): NOW emit buffered content since we confirmed no tool calls

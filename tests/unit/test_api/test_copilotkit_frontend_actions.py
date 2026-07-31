@@ -35,6 +35,7 @@ from src.api.routes.copilotkit import (
     E2IAgentState,
     _frontend_action_names,
     _frontend_action_schemas,
+    _is_frontend_only_turn,
     _route_after_chat,
     _strip_frontend_calls_when_mixed,
 )
@@ -215,3 +216,75 @@ def test_prompt_chart_ids_match_frontend_alias_map():
     assert "ws3-bi-" in low
     # The per-brand-only KPIs return honest-empty without a brand argument.
     assert "per brand only" in low
+
+
+# ---------------------------------------------------------------------------
+# Generative-UI turn analytics (#1383 follow-up)
+# ---------------------------------------------------------------------------
+#
+# Why this exists: chat_node returns early for EVERY tool turn, before the
+# direct-response analytics call. A backend-tool turn is still recorded later,
+# by synthesize_node once results come back. A frontend-action-only turn has no
+# second act — _route_after_chat sends it straight to END for client-side
+# execution — so nothing downstream recorded it and the turn produced NO
+# chat_analytics row at all. That blind spot is why "which chart action do
+# users actually get?" was unanswerable from the data.
+#
+# The recording condition and the routing condition MUST agree: record a turn
+# that does not end and the row is a lie; miss a turn that does and the blind
+# spot survives. Both now call _is_frontend_only_turn, and these tests pin it.
+
+
+def test_frontend_only_turn_is_recognised():
+    assert _is_frontend_only_turn(["renderChart"], {"renderChart", "renderKpiTrend"})
+    assert _is_frontend_only_turn(
+        ["renderChart", "renderKpiTrend"], {"renderChart", "renderKpiTrend"}
+    )
+
+
+def test_backend_turn_is_not_a_generative_ui_turn():
+    # A backend turn routes to the tools node and is recorded by synthesize_node;
+    # recording it here too would double-count it.
+    assert not _is_frontend_only_turn(["kpi_calculate_tool"], {"renderChart"})
+
+
+def test_mixed_turn_is_not_a_generative_ui_turn():
+    # Mixed turns keep their backend calls (see _strip_frontend_calls_when_mixed)
+    # and therefore still reach synthesize_node.
+    assert not _is_frontend_only_turn(
+        ["kpi_calculate_tool", "renderChart"], {"renderChart"}
+    )
+
+
+def test_no_calls_and_no_actions_are_not_generative_ui_turns():
+    # A direct text answer falls through to the existing direct_response row;
+    # an empty action registry means nothing can be a frontend call.
+    assert not _is_frontend_only_turn([], {"renderChart"})
+    assert not _is_frontend_only_turn(["renderChart"], set())
+
+
+def test_routing_and_recording_share_one_condition():
+    # The guard against the two drifting apart: every turn _route_after_chat
+    # ends as frontend-only must be exactly the set _is_frontend_only_turn
+    # accepts, since a recorded-but-not-ended turn would be a false row.
+    state = {
+        "copilotkit": {
+            "actions": [{"name": "renderChart", "description": "d", "parameters": []}]
+        }
+    }
+    frontend_names = _frontend_action_names(state)
+
+    for call_names, expect_end in [
+        (["renderChart"], True),
+        (["kpi_calculate_tool"], False),
+        (["kpi_calculate_tool", "renderChart"], False),
+    ]:
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": n, "args": {}, "id": f"c{i}"} for i, n in enumerate(call_names)
+            ],
+        )
+        routed_end = _route_after_chat({**state, "messages": [msg]}) == "end"
+        assert routed_end is expect_end
+        assert _is_frontend_only_turn(call_names, frontend_names) is expect_end
