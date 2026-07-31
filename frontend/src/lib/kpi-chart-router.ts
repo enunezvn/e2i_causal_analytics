@@ -35,6 +35,10 @@ import {
 import { KPI_CATALOG } from './kpi-catalog.generated';
 import type { KpiCatalogEntry } from './kpi-catalog.generated';
 import { resolveBrand, resolveCompareAxis, resolveKpiId, resolveSegment, resolveTherapyLine } from './kpi-alias';
+// The Rx-volume family is the ONLY family the segmented endpoint serves (it
+// 422s the rest). That set already exists as the gate on useKPIHistoryNowcast
+// — reused here rather than restated, so the two cannot drift apart.
+import { RX_VOLUME_KPI_IDS } from '@/hooks/api/use-kpi';
 // Type-only import: erased at build time, so this module does NOT pull
 // flint-chart into the eager bundle. Compilation happens inside FlintChart,
 // which loads lib/flint-chart lazily — see the bundling note there.
@@ -51,26 +55,6 @@ import type {
  * module free of any flint-chart reference.
  */
 const MONTH_SEMANTIC = 'Date';
-
-/**
- * KPIs whose history can be split by patient severity tier / line of therapy.
- * The segmented endpoint 422s for anything else (it is computed live from the
- * vetted kpi_query registry, which only carries the axis for Rx volumes).
- */
-const AXIS_CAPABLE_KPI_IDS: ReadonlySet<string> = new Set([
-  'WS3-BI-005', // TRx
-  'WS3-BI-006', // NRx
-  'WS3-BI-007', // NBRx
-]);
-
-/**
- * KPIs tracked per brand only. Charting them without a brand yields an
- * honest-empty series, so the router says so rather than drawing nothing.
- */
-const BRAND_ONLY_KPI_IDS: ReadonlySet<string> = new Set([
-  'WS3-BI-007', // NBRx
-  'WS3-BI-008', // TRx Share
-]);
 
 const CATALOG_BY_ID: ReadonlyMap<string, KpiCatalogEntry> = new Map(
   KPI_CATALOG.map((entry) => [entry.id, entry])
@@ -119,7 +103,29 @@ export interface KpiChartQuery {
   title?: string;
 }
 
-/** Default chart type per data shape, used when the model does not choose. */
+/**
+ * Default chart type per data shape, used when the model does not choose.
+ *
+ * These are NOT arbitrary. Flint ships `recommendChartTypes`, which derives a
+ * type from a data profile, and it was measured against every shape this
+ * router produces before these defaults were kept:
+ *
+ *   monthly series     -> Line Chart   (88)  agrees
+ *   segmented series   -> Line Chart   (88)  agrees
+ *   multi-KPI compare  -> Bar Chart    (60)  agrees
+ *   single value       -> Bar Chart    (60)  WRONG: never suggests KPI Card, so
+ *                                            a lone figure becomes a one-bar chart
+ *   value + interval   -> Scatter Plot (84)  WRONG: counts ci_low/ci_high as
+ *                                            "two or more measures (relationship)"
+ *                                            and proposes plotting the bounds
+ *                                            against each other
+ *
+ * The recommender reads a data PROFILE; it cannot see that CI bounds are not
+ * independent measures, or that n=1 wants an indicator rather than one bar.
+ * Those are domain facts, so the defaults encode them. Re-measure against a
+ * newer Flint before changing this — the disagreements are the reason, not
+ * inertia.
+ */
 const DEFAULT_TIME_SERIES_CHART: SupportedChartType = 'Line Chart';
 const DEFAULT_COMPARISON_CHART: SupportedChartType = 'Bar Chart';
 
@@ -165,7 +171,7 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
 
   // --- Patient-axis split (TRx/NRx/NBRx only). ------------------------------
   if (axis) {
-    if (!AXIS_CAPABLE_KPI_IDS.has(kpiId)) {
+    if (!RX_VOLUME_KPI_IDS.has(kpiId)) {
       return emptyResult(
         `${displayName(kpiId)} is not tracked by severity tier or line of therapy — ` +
           'only TRx, NRx and NBRx carry a patient axis.',
@@ -238,7 +244,11 @@ async function routeSegmented(
     rows,
     semanticTypes: {
       month: MONTH_SEMANTIC,
-      bucket: 'Category',
+      // Severity tiers and lines of therapy are ORDINAL, not categorical.
+      // Measured: 'Category' -> tableau10 (#636efa/#EF553B/#00cc96, unordered);
+      // 'Rank' -> a single-hue sequential ramp (#440154/#46327e/#365c8d), which
+      // is how a low->high scale should read.
+      bucket: 'Rank',
       value: valueSemantic(kpiId),
     },
     encoding: { axis: 'month', value: 'value', series: 'bucket' },
@@ -405,6 +415,3 @@ function emptyResult(reason: string, title: string): KpiChartData {
     emptyReason: reason,
   };
 }
-
-/** Exposed for tests and for the action description's KPI vocabulary. */
-export { AXIS_CAPABLE_KPI_IDS, BRAND_ONLY_KPI_IDS };
