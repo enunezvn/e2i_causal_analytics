@@ -609,7 +609,15 @@ def _resolve_causal_impact_input(
     params = dispatch.get("parameters") or {}
 
     # (1) explicit analyst-supplied causal spec passes through verbatim.
-    if all(params.get(k) for k in ("treatment_var", "outcome_var", "confounders")):
+    # ``confounders`` is checked for PRESENCE-as-list, not truthiness (codex
+    # iter-1 HIGH-2): an explicitly EMPTY confounder list is a valid spec — a
+    # randomized/efficiency design has an honestly empty backdoor set (#1188)
+    # — and must not be silently rerouted into substrate inference.
+    if (
+        params.get("treatment_var")
+        and params.get("outcome_var")
+        and isinstance(params.get("confounders"), list)
+    ):
         passthrough = (
             "treatment_var",
             "outcome_var",
@@ -1212,12 +1220,27 @@ def _resolve_prediction_synthesizer_input(
         try:
             champions = _probe_prediction_champions()
         except Exception as exc:  # noqa: BLE001 - probe is best-effort; fail closed
+            # codex iter-1 HIGH-1: a LOOKUP FAILURE must never be reported as
+            # "no production champion" — champions may exist; the two states
+            # are indistinguishable when the query itself failed. Fail closed
+            # naming the failure mode (mirrors get_rows_for_paths' contract:
+            # never present a lookup error as absence of evidence).
             logger.warning(
                 "prediction_synthesizer dispatch: champion registry probe failed (%s); "
                 "failing closed.",
                 exc,
             )
-            champions = []
+            return NeedsStructuredInput(
+                agent_name="prediction_synthesizer",
+                missing=("prediction_target",),
+                reason=(
+                    f"the ask matches the {family} prediction family but the champion "
+                    "registry could not be queried (lookup failed) — cannot distinguish "
+                    "'no champion registered' from 'registry unavailable', so nothing "
+                    "was predicted; retry once the registry is reachable"
+                ),
+                rest_endpoint="POST /api/models/predict/{model_name}",
+            )
         family_champions = [
             (n, t) for n, t in champions if all(ft in _target_tokens(t) for ft in family_tokens)
         ]

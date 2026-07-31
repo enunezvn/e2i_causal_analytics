@@ -155,6 +155,12 @@ class TestChampionBinding:
             _agent_input("will scvhcp_00042 adopt Fabhalta?"), _dispatch()
         )
         assert isinstance(resolved, NeedsStructuredInput)
+        # codex iter-1 HIGH-1: a LOOKUP FAILURE must never be reported as "the
+        # registry has no production champion" — champions may exist; the two
+        # states are not distinguishable when the query itself failed.
+        reason = resolved.reason.lower()
+        assert "no production champion" not in reason
+        assert "could not be queried" in reason or "lookup" in reason
 
 
 class TestExistingContractPreserved:

@@ -132,6 +132,26 @@ class TestExplicitParams:
         assert isinstance(resolved, dict)
         assert resolved["data_source"] == "router_parameters"
 
+    def test_explicit_empty_confounders_pass_through_for_randomized_designs(self) -> None:
+        # codex iter-1 HIGH-2: ``confounders=[]`` is a VALID explicit spec (a
+        # randomized/efficiency design has an honestly empty backdoor set —
+        # the #1188 semantics). A truthiness gate would silently reroute the
+        # analyst's structured request into substrate inference.
+        params = {
+            "treatment_var": "control_group_flag",
+            "outcome_var": "converted",
+            "confounders": [],
+            "data_source": "rct_holdout",
+            "randomized_design": True,
+        }
+        resolved = disp.INPUT_RESOLVERS["causal_impact"](
+            _agent_input("did the trigger arm lift conversion?"), _dispatch(params)
+        )
+        assert isinstance(resolved, dict)
+        assert resolved["confounders"] == []
+        assert resolved["randomized_design"] is True
+        assert resolved["data_source"] == "rct_holdout"
+
     def test_explicit_causal_path_id_passes_through(self) -> None:
         params = {
             "treatment_var": "t",
