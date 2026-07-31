@@ -296,6 +296,43 @@ async def test_score_does_not_mask_programming_error_as_scoring_error(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_score_wraps_malformed_json_response_as_segment_scoring_error(monkeypatch):
+    # codex iter-3 MED: a malformed 2xx body makes the client's response.json()
+    # raise json.JSONDecodeError (a ValueError subclass) — a transport-class
+    # failure that must surface via the typed SegmentScoringError, not a raw
+    # ValueError conflated with input validation.
+    import json
+
+    import src.services.hcp_segment_likelihood as svc
+
+    async def fake_resolve(brand, *, db):
+        return "hcp_adoption_kisqali_goldstd_lr_v1", 0.77
+
+    async def fake_load(spec, splits, db):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "hcp_id": ["h1"],
+                "peer_influence_score": [0.5],
+                "influence_network_size": [5],
+                "years_experience": [10],
+                "specialty": ["oncology"],
+                "geographic_region": ["west"],
+            }
+        )
+
+    class _GarbledClient:
+        async def predict_batch(self, *a, **k):
+            raise json.JSONDecodeError("Expecting value", "", 0)
+
+    monkeypatch.setattr(svc, "resolve_hcp_adoption_champion", fake_resolve)
+    monkeypatch.setattr(svc, "_load_scoring_frame", fake_load)
+    with pytest.raises(svc.SegmentScoringError):
+        await svc.score_hcp_segments("Kisqali", db=object(), model_client=_GarbledClient())
+
+
+@pytest.mark.asyncio
 async def test_score_hcp_segments_propagates_fail_closed_champion(monkeypatch):
     import src.services.hcp_segment_likelihood as svc
 

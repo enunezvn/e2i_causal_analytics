@@ -92,6 +92,17 @@ def test_explain_increase_by_region_is_not_ranking():
     assert "entity_id" in out.missing
 
 
+def test_predict_increase_by_region_forecast_is_not_ranking():
+    # codex iter-3 HIGH: bare "predict"/"forecast" is NOT a comparative ranking
+    # signal. "predict the increase in <brand> prescriptions by region" is a
+    # per-region forecast ask, not "which regions rank highest" — must fail
+    # closed rather than return a confident ranked list.
+    agent_input = {"query": "predict the increase in Kisqali prescriptions by region next quarter"}
+    out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
+    assert isinstance(out, NeedsStructuredInput)
+    assert "entity_id" in out.missing
+
+
 def test_predict_which_segments_ask_binds_segment_path():
     # "predict which ..." carries ranking intent even without "most likely".
     agent_input = {"query": "predict which HCP specialties will adopt Fabhalta"}

@@ -1079,20 +1079,22 @@ _SEGMENT_ASK_RE = re.compile(
     re.I,
 )
 _SEGMENT_REGION_RE = re.compile(r"\bregions?\b|\bgeograph\w*\b", re.I)
-# codex iter-1 HIGH-1 / iter-2 HIGH: a segment NOUN alone is not enough — an
-# explanation/driver ask ("explain <brand> adoption by specialty drivers",
-# "why did <brand> prescriptions increase by region") also carries a segment
-# noun but is NOT a ranking request, and coercing it into a ranked list returns a
-# confident answer the user never asked for. Require a genuine COMPARATIVE/ranking
-# intent (which / rank / top / most / highest / greatest / best / prioritize /
-# predict / forecast). NOTE: 'increase' and 'likely/likelihood' are deliberately
-# EXCLUDED — they are the prediction-FAMILY vocabulary (see _PREDICTION_FAMILIES),
-# so using them as the ranking discriminator would be circular and would re-admit
-# the very explanation asks this gate exists to exclude. Absent a comparative
-# token, the ask stays under-specified and fails closed on entity.
+# codex iter-1/2/3 HIGH: a segment NOUN alone is not enough — an explanation,
+# driver, or plain forecast ask ("explain <brand> adoption by specialty drivers",
+# "why did <brand> prescriptions increase by region", "predict the increase in
+# <brand> prescriptions by region") also carries a segment noun but is NOT a
+# ranking request; coercing it into a ranked list returns a confident answer the
+# user never asked for. Require a genuine COMPARATIVE token (which / rank / top /
+# most / highest / greatest / best / prioritize). Deliberately EXCLUDED: the
+# prediction-FAMILY vocabulary ('increase', 'likely', 'likelihood') AND the plain
+# forecast verbs ('predict', 'forecast') — none of them discriminate a ranking
+# from a per-segment forecast/explanation, so they would re-admit the very asks
+# this gate excludes. A ranking ask that legitimately says "predict which ..." /
+# "forecast the top ..." still carries a comparative token and binds. Absent one,
+# the ask stays under-specified and fails closed on entity.
 _RANKING_INTENT_RE = re.compile(
     r"\bwhich\b|\brank\w*\b|\btop\b|\bmost\b|\bhighest\b|\bgreatest\b|\bbest\b"
-    r"|\bprioriti[sz]\w+\b|\bpredict\w*\b|\bforecast\w*\b",
+    r"|\bprioriti[sz]\w+\b",
     re.I,
 )
 
