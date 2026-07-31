@@ -75,9 +75,10 @@ class TestFamilyMatching:
         assert disp._match_prediction_family("How likely is this HCP to adopt Kisqali?") == (
             "hcp_adoption"
         )
-        assert disp._match_prediction_family(
-            "which prescribers will start prescribing Fabhalta"
-        ) == "hcp_adoption"
+        assert (
+            disp._match_prediction_family("which prescribers will start prescribing Fabhalta")
+            == "hcp_adoption"
+        )
 
     def test_unrelated_forecast_matches_nothing(self) -> None:
         assert disp._match_prediction_family("what's the forecast?") is None
@@ -118,9 +119,7 @@ class TestChampionBinding:
         assert "scvhcp_99999" in resolved.reason
         assert "no such hcp_id" in resolved.reason
 
-    def test_entity_probe_failure_is_not_reported_as_absence(
-        self, champions, monkeypatch
-    ) -> None:
+    def test_entity_probe_failure_is_not_reported_as_absence(self, champions, monkeypatch) -> None:
         # codex iter-2 HIGH: an entity-lookup FAILURE must never be reported
         # as "no such hcp_id exists" — the id may exist; the probe just failed.
         def _boom(_e):
@@ -136,9 +135,7 @@ class TestChampionBinding:
         assert "could not be verified" in reason or "lookup failed" in reason
 
     def test_no_entity_fails_closed_naming_the_real_champion(self, champions) -> None:
-        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](
-            _agent_input(Q14), _dispatch()
-        )
+        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](_agent_input(Q14), _dispatch())
         assert isinstance(resolved, NeedsStructuredInput)
         # The message must be HONEST about registry state: the champion exists;
         # what's missing is the specific entity.

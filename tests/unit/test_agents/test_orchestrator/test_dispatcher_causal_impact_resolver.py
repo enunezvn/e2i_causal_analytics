@@ -126,9 +126,7 @@ class TestExplicitParams:
             "outcome_var": "trx",
             "confounders": ["specialty"],
         }
-        resolved = disp.INPUT_RESOLVERS["causal_impact"](
-            _agent_input("impact"), _dispatch(params)
-        )
+        resolved = disp.INPUT_RESOLVERS["causal_impact"](_agent_input("impact"), _dispatch(params))
         assert isinstance(resolved, dict)
         assert resolved["data_source"] == "router_parameters"
 
@@ -160,9 +158,7 @@ class TestExplicitParams:
             "data_source": "s",
             "causal_path_id": "cp_real_0001",
         }
-        resolved = disp.INPUT_RESOLVERS["causal_impact"](
-            _agent_input("impact"), _dispatch(params)
-        )
+        resolved = disp.INPUT_RESOLVERS["causal_impact"](_agent_input("impact"), _dispatch(params))
         assert isinstance(resolved, dict)
         assert resolved["causal_path_id"] == "cp_real_0001"
 

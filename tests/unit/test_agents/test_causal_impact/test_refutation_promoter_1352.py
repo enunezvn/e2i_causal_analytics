@@ -145,9 +145,7 @@ class TestLinkedPromotion:
         repo = _validation_repo()
         path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
         order: List[str] = []
-        repo.save_suite = AsyncMock(
-            side_effect=lambda **kw: order.append("evidence") or ["v-1"]
-        )
+        repo.save_suite = AsyncMock(side_effect=lambda **kw: order.append("evidence") or ["v-1"])
         original_set = path_repo.set_validation_status
 
         async def _tracking_set(*a: Any, **kw: Any) -> bool:
@@ -260,9 +258,7 @@ class TestPromotionGuards:
     @pytest.mark.asyncio
     async def test_status_write_failure_degrades_without_raising(self) -> None:
         repo = _validation_repo()
-        path_repo = _FakePathRepo(
-            rows_by_id={"cp_real_000000001": _real_row()}, fail_update=True
-        )
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()}, fail_update=True)
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         ids, promotion = await node._persist_suite_and_promote(
             _state(causal_path_id="cp_real_000000001"), _suite(GateDecision.PROCEED)

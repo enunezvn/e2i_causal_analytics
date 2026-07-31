@@ -99,9 +99,7 @@ class TestSetValidationStatus:
     @pytest.mark.asyncio
     async def test_conditional_transition_returns_true_on_update(self, repo, mock_client):
         query = self._install_update(mock_client, [{"path_id": "cp_1"}])
-        moved = await repo.set_validation_status(
-            "cp_1", "validated", ("pending", "needs_review")
-        )
+        moved = await repo.set_validation_status("cp_1", "validated", ("pending", "needs_review"))
         assert moved is True
         mock_client.table.return_value.update.assert_called_once_with(
             {"validation_status": "validated"}
