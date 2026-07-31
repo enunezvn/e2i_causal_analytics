@@ -1446,6 +1446,356 @@ class TestHonestAteCi:
         )
 
 
+# =============================================================================
+# #1392: Subsampled tournament selection on large frames
+#
+# Energy-score selection is a RANKING, not the final estimate. On the live
+# 37,371-row conversion substrate the 4-way full-frame tournament consumed the
+# whole chat-turn compute budget (116s warm / 144s cold), so the mandatory
+# refutation gate failed closed and every chat causal turn failed honestly.
+# Above ``selection_max_rows`` the tournament must run on a DETERMINISTIC
+# stratified subsample; the WINNER is then refit on the FULL frame and only
+# that full-frame fit is reported (refutation reconstructs from the full
+# frame and enforces a reconstructed-vs-reported ATE tolerance).
+# =============================================================================
+
+
+from src.causal_engine.energy_score.estimator_selector import (  # noqa: E402
+    BaseEstimatorWrapper,
+    _stratified_subsample_indices,
+)
+
+
+class _RecordingWrapper(BaseEstimatorWrapper):
+    """Deterministic fake wrapper that records every fit's row count.
+
+    ``cate_value`` controls ranking through the REAL energy calculator:
+    a wrapper whose constant CATE matches the planted effect gets a far
+    better outcome-fit score than one wildly off, so the winner is
+    deterministic without fitting slow econml estimators.
+    """
+
+    def __init__(
+        self,
+        est_type: EstimatorType,
+        cate_value: float,
+        fail_above_rows: int | None = None,
+    ):
+        self._type = est_type
+        self._cate_value = cate_value
+        self._fail_above_rows = fail_above_rows
+        self.fit_row_counts: list[int] = []
+
+    @property
+    def estimator_type(self) -> EstimatorType:
+        return self._type
+
+    def fit(self, treatment, outcome, covariates, **kwargs) -> EstimatorResult:
+        n = len(treatment)
+        self.fit_row_counts.append(n)
+        if self._fail_above_rows is not None and n > self._fail_above_rows:
+            return EstimatorResult(
+                estimator_type=self._type,
+                success=False,
+                error_message=f"synthetic failure at n={n}",
+                error_type="RuntimeError",
+            )
+        ate = self._cate_value
+        return EstimatorResult(
+            estimator_type=self._type,
+            success=True,
+            ate=ate,
+            cate=np.full(n, ate),
+            ate_std=0.05,
+            ate_ci_lower=ate - 0.1,
+            ate_ci_upper=ate + 0.1,
+            propensity_scores=np.full(n, 0.5),
+            estimation_time_ms=1.0,
+            raw_estimate=object(),
+        )
+
+
+def _subsample_frame(n: int = 1000, seed: int = 0, effect: float = 2.0):
+    rng = np.random.default_rng(seed)
+    treatment = rng.integers(0, 2, n)
+    covariates = pd.DataFrame({"x1": rng.normal(0, 1, n), "x2": rng.normal(0, 1, n)})
+    outcome = (effect * treatment + rng.normal(0, 0.3, n)).astype(float)
+    return treatment, outcome, covariates
+
+
+def _two_wrapper_selector(
+    max_rows: int,
+    strategy: SelectionStrategy = SelectionStrategy.BEST_ENERGY_SCORE,
+    winner_fail_above: int | None = None,
+):
+    """Selector whose chain is two recording wrappers: linear_dml (good CATE,
+    the deterministic winner) and causal_forest (bad CATE)."""
+    config = EstimatorSelectorConfig(
+        strategy=strategy,
+        estimators=[
+            EstimatorConfig(EstimatorType.CAUSAL_FOREST, priority=1),
+            EstimatorConfig(EstimatorType.LINEAR_DML, priority=2),
+        ],
+        selection_max_rows=max_rows,
+        energy_score_config=EnergyScoreConfig(enable_bootstrap=False),
+    )
+    selector = EstimatorSelector(config)
+    loser = _RecordingWrapper(EstimatorType.CAUSAL_FOREST, cate_value=50.0)
+    winner = _RecordingWrapper(
+        EstimatorType.LINEAR_DML, cate_value=2.0, fail_above_rows=winner_fail_above
+    )
+    selector.estimators = [loser, winner]
+    return selector, loser, winner
+
+
+class TestStratifiedSubsampleIndices:
+    """#1392: the deterministic stratified subsample draw."""
+
+    def test_size_uniqueness_and_bounds(self):
+        treatment, outcome, _ = _subsample_frame(n=10_000, seed=1)
+        idx = _stratified_subsample_indices(treatment, outcome, 1_000)
+        assert len(idx) == 1_000
+        assert len(np.unique(idx)) == 1_000
+        assert idx.min() >= 0 and idx.max() < 10_000
+
+    def test_deterministic_same_frame_same_indices(self):
+        """Same frame content -> byte-identical subsample indices (chat turns
+        must be reproducible; no wall-clock or global-RNG dependence)."""
+        treatment, outcome, _ = _subsample_frame(n=10_000, seed=2)
+        idx1 = _stratified_subsample_indices(treatment, outcome, 1_000)
+        np.random.seed(999)  # global RNG state must be irrelevant
+        idx2 = _stratified_subsample_indices(treatment.copy(), outcome.copy(), 1_000)
+        assert np.array_equal(idx1, idx2)
+
+    def test_different_content_different_draw(self):
+        treatment, outcome, _ = _subsample_frame(n=10_000, seed=3)
+        idx1 = _stratified_subsample_indices(treatment, outcome, 1_000)
+        idx2 = _stratified_subsample_indices(treatment, outcome + 1.0, 1_000)
+        assert not np.array_equal(idx1, idx2)
+
+    def test_preserves_treatment_proportion(self):
+        """Stratification on treatment keeps arm shares within tolerance."""
+        rng = np.random.default_rng(4)
+        n = 20_000
+        treatment = (rng.random(n) < 0.2).astype(int)
+        outcome = rng.normal(0, 1, n)
+        idx = _stratified_subsample_indices(treatment, outcome, 1_000)
+        full_share = treatment.mean()
+        sub_share = treatment[idx].mean()
+        assert abs(sub_share - full_share) < 0.01
+
+    def test_preserves_rare_outcome_prevalence_within_arm(self):
+        """Joint (treatment x outcome-bin) stratification keeps a rare binary
+        outcome's prevalence per arm (the live substrate: converted ~ rare)."""
+        rng = np.random.default_rng(5)
+        n = 20_000
+        treatment = (rng.random(n) < 0.5).astype(int)
+        outcome = (rng.random(n) < np.where(treatment == 1, 0.08, 0.05)).astype(float)
+        idx = _stratified_subsample_indices(treatment, outcome, 1_000)
+        for arm in (0, 1):
+            full_rate = outcome[treatment == arm].mean()
+            sub_mask = treatment[idx] == arm
+            sub_rate = outcome[idx][sub_mask].mean()
+            assert abs(sub_rate - full_rate) < 0.02, f"arm={arm}"
+
+    def test_continuous_outcome_quantile_strata(self):
+        """A continuous outcome is binned by quartiles; the subsample keeps the
+        outcome distribution's spread (no crash, quartile masses ~preserved)."""
+        rng = np.random.default_rng(6)
+        n = 20_000
+        treatment = (rng.random(n) < 0.5).astype(int)
+        outcome = rng.normal(0, 1, n)
+        idx = _stratified_subsample_indices(treatment, outcome, 1_000)
+        qs = np.quantile(outcome, [0.25, 0.5, 0.75])
+        full_bins = np.bincount(np.digitize(outcome, qs), minlength=4) / n
+        sub_bins = np.bincount(np.digitize(outcome[idx], qs), minlength=4) / len(idx)
+        assert np.all(np.abs(full_bins - sub_bins) < 0.03)
+
+
+class TestSelectionMaxRowsValidation:
+    """codex iter-2 LOW (#1392): a non-positive cap must fail LOUD at config
+    construction (and in the helper), not crash later with a cryptic
+    ``np.concatenate`` ValueError deep inside the draw."""
+
+    def test_config_rejects_zero_cap(self):
+        with pytest.raises(ValueError, match="selection_max_rows"):
+            EstimatorSelectorConfig(selection_max_rows=0)
+
+    def test_config_rejects_negative_cap(self):
+        with pytest.raises(ValueError, match="selection_max_rows"):
+            EstimatorSelectorConfig(selection_max_rows=-5)
+
+    def test_helper_rejects_non_positive_max_rows(self):
+        treatment, outcome, _ = _subsample_frame(n=100)
+        with pytest.raises(ValueError, match="max_rows"):
+            _stratified_subsample_indices(treatment, outcome, 0)
+
+
+class TestSubsampledSelection:
+    """#1392: tournament on the subsample, winner refit on the full frame."""
+
+    def test_tournament_capped_and_winner_refit_full_frame(self):
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200)
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        # Every tournament fit sees exactly the cap; the loser is NEVER refit.
+        assert loser.fit_row_counts == [200]
+        # The winner fits twice: tournament (cap rows) then full-frame refit.
+        assert winner.fit_row_counts == [200, 1_000]
+        # The reported estimate IS the full-frame fit.
+        assert sel.selected.success is True
+        assert sel.selected.estimator_type == EstimatorType.LINEAR_DML
+        assert sel.selected.cate is not None and len(sel.selected.cate) == 1_000
+
+    def test_selection_metadata_recorded(self):
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, _, _ = _two_wrapper_selector(max_rows=200)
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selection_subsampled is True
+        assert sel.selection_n_rows == 200
+        assert sel.selection_n_rows_total == 1_000
+        d = sel.to_dict()
+        assert d["selection_subsampled"] is True
+        assert d["selection_n_rows"] == 200
+        assert d["selection_n_rows_total"] == 1_000
+        assert "subsample" in sel.selection_reason.lower()
+
+    def test_energy_scores_come_from_tournament(self):
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, _, _ = _two_wrapper_selector(max_rows=200)
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert "linear_dml" in sel.energy_scores
+        assert "causal_forest" in sel.energy_scores
+        assert np.isfinite(sel.energy_scores["linear_dml"])
+        assert sel.energy_score_gap > 0.0
+        # The full-frame winner result carries the tournament ranking score
+        # (finite; never inf which would spuriously trip the review gate).
+        assert np.isfinite(sel.selected.energy_score)
+
+    def test_no_subsampling_at_or_below_cap(self):
+        """Frames at or below the cap keep today's full-frame selection —
+        zero behavior change below the threshold."""
+        treatment, outcome, covariates = _subsample_frame(n=200)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200)
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert loser.fit_row_counts == [200]
+        assert winner.fit_row_counts == [200]  # exactly one fit, full frame
+        assert sel.selection_subsampled is False
+        assert sel.selection_n_rows == 200
+        assert sel.selection_n_rows_total == 200
+        assert "subsample" not in sel.selection_reason.lower()
+
+    def test_first_success_strategy_never_subsamples(self):
+        """FIRST_SUCCESS has no tournament: the first fit IS the final
+        estimate, so it must run on the full frame."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, loser, _ = _two_wrapper_selector(
+            max_rows=200, strategy=SelectionStrategy.FIRST_SUCCESS
+        )
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert loser.fit_row_counts == [1_000]
+        assert sel.selection_subsampled is False
+
+    def test_single_estimator_chain_never_subsamples(self):
+        """The legacy explicit-method path (one estimator) has no tournament:
+        subsample-then-refit would be strictly wasted work."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        config = EstimatorSelectorConfig(
+            estimators=[EstimatorConfig(EstimatorType.LINEAR_DML, priority=1)],
+            selection_max_rows=200,
+            energy_score_config=EnergyScoreConfig(enable_bootstrap=False),
+        )
+        selector = EstimatorSelector(config)
+        only = _RecordingWrapper(EstimatorType.LINEAR_DML, cate_value=2.0)
+        selector.estimators = [only]
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert only.fit_row_counts == [1_000]
+        assert sel.selection_subsampled is False
+
+    def test_refit_uses_the_exact_winning_wrapper_instance(self):
+        """codex iter-1 MED (#1392): the tournament ranks wrapper INSTANCES.
+        With two wrappers of the SAME estimator_type but different params, the
+        full-frame refit must go to the instance that actually won — not the
+        first instance of that type in the chain."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        config = EstimatorSelectorConfig(
+            estimators=[
+                EstimatorConfig(EstimatorType.LINEAR_DML, priority=1),
+                EstimatorConfig(EstimatorType.LINEAR_DML, priority=2),
+            ],
+            selection_max_rows=200,
+            energy_score_config=EnergyScoreConfig(enable_bootstrap=False),
+        )
+        selector = EstimatorSelector(config)
+        # SAME type, different "params": the second instance's CATE matches the
+        # planted effect (2.0) so it wins the tournament outright.
+        first_of_type = _RecordingWrapper(EstimatorType.LINEAR_DML, cate_value=50.0)
+        actual_winner = _RecordingWrapper(EstimatorType.LINEAR_DML, cate_value=2.0)
+        selector.estimators = [first_of_type, actual_winner]
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selected.success is True
+        # The instance that won got the full-frame refit...
+        assert actual_winner.fit_row_counts == [200, 1_000]
+        # ...and the first-of-type instance was only ever fit in the tournament.
+        assert first_of_type.fit_row_counts == [200]
+
+    def test_winner_full_frame_refit_failure_fails_closed(self):
+        """If the winner's full-frame refit fails, the selection FAILS CLOSED
+        (estimation.py raises EstimationError) — the subsample tournament fit
+        is NEVER promoted to the reported estimate (refutation reconstructs
+        from the full frame; a subsample-fit ATE would silently diverge)."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, _, winner = _two_wrapper_selector(max_rows=200, winner_fail_above=200)
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert winner.fit_row_counts == [200, 1_000]
+        assert sel.selected.success is False
+        assert "full-frame" in (sel.selected.error_message or "").lower()
+
+    def test_real_wrappers_end_to_end_subsampled(self):
+        """Real OLS + LinearDML wrappers on a >cap frame: the pipeline
+        produces a successful full-frame estimate with ordered finite CI."""
+        rng = np.random.default_rng(7)
+        n = 1_200
+        x1 = rng.normal(0, 1, n)
+        treatment = (rng.random(n) < 1 / (1 + np.exp(-x1))).astype(int)
+        outcome = (0.4 * treatment + 0.8 * x1 + rng.normal(0, 0.3, n)).astype(float)
+        covariates = pd.DataFrame({"x1": x1})
+        config = EstimatorSelectorConfig(
+            estimators=[
+                EstimatorConfig(EstimatorType.LINEAR_DML, priority=1),
+                EstimatorConfig(EstimatorType.OLS, priority=2),
+            ],
+            selection_max_rows=400,
+            energy_score_config=EnergyScoreConfig(enable_bootstrap=False),
+        )
+
+        sel = EstimatorSelector(config).select(treatment, outcome, covariates)
+
+        assert sel.selection_subsampled is True
+        assert sel.selection_n_rows == 400
+        assert sel.selection_n_rows_total == n
+        assert sel.selected.success is True, sel.selected.error_message
+        assert sel.selected.cate is not None and len(sel.selected.cate) == n
+        assert sel.selected.ate_ci_lower is not None and sel.selected.ate_ci_upper is not None
+        assert sel.selected.ate_ci_lower < sel.selected.ate < sel.selected.ate_ci_upper
+
+
 class TestOlsAnchorHonestCi:
     """#1188 codex iter-1 LOW: the anchor-vs-adjusted CI comparison must be
     apples-to-apples and deterministic. Empty-backdoor OLS uses the analytic
