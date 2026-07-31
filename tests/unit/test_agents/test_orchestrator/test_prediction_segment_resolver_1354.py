@@ -147,6 +147,9 @@ def test_which_drivers_explain_ask_is_not_ranking():
         # proactive causal-lexicon closure (determine / behind)
         "which specialties determine Kisqali adoption",
         "which specialties are behind Kisqali adoption",
+        # codex iter-10: connected to / relationship with (association class)
+        "which specialties are most connected to Kisqali adoption",
+        "which specialties show the strongest relationship with Kisqali adoption",
     ],
 )
 def test_attribution_asks_are_not_ranking(query):

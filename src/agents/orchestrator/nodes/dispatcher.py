@@ -1119,6 +1119,7 @@ _EXPLANATION_INTENT_RE = re.compile(
     r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\bindicat\w*\b|\bsignal\w*\b"
     r"|\bdetermin\w*\b"
     r"|\blinked\s+(?:to|with)\b|\brelated\s+(?:to|with)\b|\btied\s+(?:to|with)\b"
+    r"|\bconnected\s+(?:to|with)\b|\brelationships?\s+(?:to|with|between)\b"
     # codex iter-8: causal-verb 'influence' and 'factor in/for' attribution,
     # PHRASE-CONSTRAINED so the HCP-attribute uses ('high-influence',
     # 'influential' — influence is literally a model feature) still bind as
