@@ -14,6 +14,7 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -38,6 +39,7 @@ from src.repositories import (
     AgentActivityRepository,
     BusinessMetricRepository,
     CausalPathRepository,
+    CausalValidationRepository,
     TriggerRepository,
 )
 from src.repositories.chatbot_conversation import (
@@ -425,11 +427,20 @@ async def _query_kpis(
         return {"success": False, "error": str(e), "query_type": "kpi"}
 
 
-def _format_causal_path(row: Dict[str, Any]) -> Dict[str, Any]:
+def _format_causal_path(
+    row: Dict[str, Any], refutation_evidence: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Map a ``causal_paths`` registry row onto the chat-facing chain shape.
 
     ``confidence`` here is the registry's method-attributed ``confidence_level``
     (a real 0-1 causal confidence) — never a retrieval similarity score.
+
+    #1352: ``validation_status`` carries the migration-119 pinned semantics
+    ('validated' == "RefutationSuite evidence exists and passed"), and
+    ``refutation_evidence`` is the per-path summary from
+    :func:`_summarize_refutation_rows` — ``None`` means the evidence lookup
+    succeeded and found nothing on record (see
+    :func:`_refutation_evidence_entry` for the lookup-failed state).
     """
     return {
         "path_id": row.get("path_id"),
@@ -442,7 +453,113 @@ def _format_causal_path(row: Dict[str, Any]) -> Dict[str, Any]:
         "time_lag_days": row.get("time_lag_days"),
         "business_impact_estimate": row.get("business_impact_estimate"),
         "brand": row.get("brand"),
+        "validation_status": row.get("validation_status"),
+        "refutation_evidence": refutation_evidence,
     }
+
+
+def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Aggregate one path's ``causal_validations`` rows into a chat summary.
+
+    Gate priority mirrors ``CausalValidationRepository.get_gate_decision``
+    (block > review > proceed), extended over the full ``gate_decision`` enum
+    (reject counts as blocking, augment as review-band, accept as proceed).
+    ``evidence_is_synthetic`` reads the migration-119 provenance label
+    (``details_json.is_synthetic``) so seeded synthetic evidence can never
+    masquerade as real RefutationSuite output in an answer.
+    """
+    if not rows:
+        return None
+
+    def _status_count(status: str) -> int:
+        return sum(1 for r in rows if r.get("status") == status)
+
+    gates = {r.get("gate_decision") for r in rows}
+    if gates & {"block", "reject"}:
+        gate = "block"
+    elif gates & {"review", "augment"}:
+        gate = "review"
+    else:
+        gate = "proceed"
+
+    confidences = [
+        float(r["confidence_score"]) for r in rows if r.get("confidence_score") is not None
+    ]
+
+    def _details(r: Dict[str, Any]) -> Dict[str, Any]:
+        raw = r.get("details_json")
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError):
+                return {}
+        return {}
+
+    timestamps = [str(r["created_at"]) for r in rows if r.get("created_at")]
+    return {
+        "tests_total": len(rows),
+        "tests_passed": _status_count("passed"),
+        "tests_failed": _status_count("failed"),
+        "tests_warning": _status_count("warning"),
+        "gate_decision": gate,
+        "confidence_score": (sum(confidences) / len(confidences)) if confidences else None,
+        "evidence_is_synthetic": any(bool(_details(r).get("is_synthetic")) for r in rows),
+        "latest_test_at": max(timestamps) if timestamps else None,
+    }
+
+
+def _refutation_evidence_entry(
+    path_id: Optional[str], summaries: Optional[Dict[str, Dict[str, Any]]]
+) -> Optional[Dict[str, Any]]:
+    """Resolve one path's refutation-evidence entry, keeping three states
+    honestly distinct:
+
+    * summary dict — evidence rows exist for this path;
+    * ``None`` — the lookup succeeded and there is genuinely no refutation
+      evidence on record;
+    * lookup-failed marker — the evidence query errored (``summaries is
+      None``); this must never be presented as absence of evidence.
+    """
+    if summaries is None:
+        return {
+            "lookup_failed": True,
+            "note": (
+                "refutation-evidence lookup unavailable for this answer — "
+                "do not read this as 'no evidence exists'"
+            ),
+        }
+    if not path_id:
+        return None
+    return summaries.get(path_id)
+
+
+async def _fetch_refutation_summaries(
+    client: Any, paths: List[Dict[str, Any]]
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Batch-fetch and summarize refutation evidence for a list of path rows.
+
+    Returns ``None`` on lookup failure (the caller degrades via
+    :func:`_refutation_evidence_entry`'s lookup-failed marker — evidence is
+    enrichment, never a gate on answering).
+    """
+    path_ids = [str(p.get("path_id")) for p in paths if p.get("path_id")]
+    if not path_ids:
+        return {}
+    try:
+        repo = CausalValidationRepository(client)
+        rows_by_path = await repo.get_rows_for_paths(path_ids)
+    except Exception as e:
+        logger.warning(f"Refutation-evidence lookup failed (degrading honestly): {e}")
+        return None
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for pid, rows in rows_by_path.items():
+        summary = _summarize_refutation_rows(rows)
+        if summary is not None:
+            summaries[pid] = summary
+    return summaries
 
 
 async def _query_causal_chains(
@@ -485,11 +602,20 @@ async def _query_causal_chains(
                 limit=limit,
                 include_synthetic=include_synthetic,
             )
+            # #1352: surface validation provenance (status + refutation
+            # evidence summary) so answers can cite it (the q07 gap).
+            summaries = await _fetch_refutation_summaries(client, paths)
             return {
                 "success": True,
                 "query_type": "causal_chain",
                 "count": len(paths),
-                "data": [_format_causal_path(p) for p in paths],
+                "data": [
+                    _format_causal_path(
+                        p,
+                        refutation_evidence=_refutation_evidence_entry(p.get("path_id"), summaries),
+                    )
+                    for p in paths
+                ],
                 "kpi_analyzed": kpi_name,
                 "data_source": data_source,
             }
@@ -498,6 +624,11 @@ async def _query_causal_chains(
         paths = await repo.get_many(
             filters=filters, limit=limit, include_synthetic=include_synthetic
         )
+        # Raw-row branch: rows already carry validation_status; attach the
+        # same per-path refutation-evidence entry for parity (#1352).
+        summaries = await _fetch_refutation_summaries(client, paths)
+        for p in paths:
+            p["refutation_evidence"] = _refutation_evidence_entry(p.get("path_id"), summaries)
         return {
             "success": True,
             "query_type": "causal_chain",
@@ -764,6 +895,11 @@ async def causal_analysis_tool(
             include_synthetic=include_synthetic,
         )
 
+        # #1352: attach validation provenance (pinned validation_status +
+        # refutation-evidence summary) so the answer can cite whether each
+        # chain actually passed refutation testing (the q07 gap).
+        summaries = await _fetch_refutation_summaries(client, paths)
+
         response: Dict[str, Any] = {
             "success": True,
             "kpi_analyzed": kpi_name,
@@ -771,7 +907,12 @@ async def causal_analysis_tool(
             "region": region,
             "causal_chains_found": len(paths),
             "min_confidence_applied": min_confidence,
-            "results": [_format_causal_path(p) for p in paths],
+            "results": [
+                _format_causal_path(
+                    p, refutation_evidence=_refutation_evidence_entry(p.get("path_id"), summaries)
+                )
+                for p in paths
+            ],
             "analysis_type": "causal_paths_registry",
             "data_source": data_source,
         }
@@ -1471,15 +1612,29 @@ class KpiCalculateInput(BaseModel):
             "Mutually exclusive with region/segment/therapy_line/biologic."
         ),
     )
+    trigger_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional trigger-type filter for the TRIGGER-EFFECTIVENESS KPIs "
+            "ONLY (trigger precision, acceptance rate, override rate, trigger "
+            "funnel conversion -- #1360). Live values include "
+            "prescription_opportunity, engagement_gap, adherence_risk, "
+            "cross_sell, competitive_threat, churn_prevention, reactivation, "
+            "treatment_switch. Any other KPI returns an error -- the filter "
+            "is never silently dropped."
+        ),
+    )
     window: Optional[str] = Field(
         default=None,
         description=(
             "Time window, e.g. 'last 3 months', 'last year', 'Q1 2025', or "
             "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx, TRx "
-            "share, and conversion rate (alone or combined with segment/"
-            "therapy_line). ALWAYS pass this when the user names a period. "
-            "Omit for the engine's default window (the most recent 30 days "
-            "of available data)."
+            "share, conversion rate (alone or combined with segment/"
+            "therapy_line), and the trigger-effectiveness KPIs (alone or "
+            "combined with brand/trigger_type; NOT combinable with region -- "
+            "the tool errors honestly). ALWAYS pass this when the user names "
+            "a period. Omit for the engine's default window (the most recent "
+            "30 days of available data)."
         ),
     )
 
@@ -1504,6 +1659,16 @@ KPI_REPORTING_WINDOWS = {
     "WS3-BI-007": "most recent 30 days of prescription data",  # NBRx
     "WS3-BI-008": "most recent 30 days of prescription data",  # TRx share
     "WS3-BI-009": "most recent 30 days of trigger data",  # Conversion rate
+    # #1360 trigger-effectiveness family (migrations 089/113/118). Precision's
+    # default cohort is LAGGED so the 30-day conversion window has matured --
+    # describing it as a plain trailing window would misstate the figure.
+    "WS2-TR-001": (
+        "30-day trigger cohort ending 30 days before the trigger-data "
+        "frontier (the conversion window must mature)"
+    ),
+    "WS2-TR-004": "most recent 30 days of trigger data",  # Acceptance rate
+    "WS2-TR-006": "most recent 30 days of trigger data",  # Override rate
+    "WS2-TR-009": "most recent 30 days of trigger data",  # Funnel conversion
 }
 
 # Definition clarifications the synthesizer MUST carry into the answer.
@@ -1521,6 +1686,25 @@ KPI_SEMANTIC_NOTES = {
         "— NOT market share against external competitors. Competitor brands "
         "(e.g. Xolair, Dupixent) are not in the data model; never attribute "
         "the share complement to them."
+    ),
+    # #1360: 'trigger precision' reads like ML-model telemetry — the exact
+    # confusion that routed the bench-0024 ask to health_score. Pin the real
+    # meaning to every answer instead of relying on prompt memory.
+    "WS2-TR-001": (
+        "Trigger Precision is a BUSINESS-program metric over the NBA triggers "
+        "funnel — of accepted triggers with tracked outcomes, the share whose "
+        "patient converted within the 30-day window (definition v2, "
+        "truth-aligned). It is NOT a deployed-ML-model precision metric; "
+        "model telemetry lives with health_score."
+    ),
+    "WS2-TR-009": (
+        "Trigger Funnel Conversion's headline is the ACTIONED share of "
+        "DELIVERED triggers (delivered -> accepted -> actioned); the full "
+        "stage counts ride along as funnel_stages (delivered, viewed, "
+        "accepted, actioned, outcome). The headline stops at actioned by "
+        "design — the outcome stage reflects outcome-TRACKING coverage, not "
+        "effectiveness — and 'viewed' is a delivery-status progression state, "
+        "not a funnel prerequisite for acceptance."
     ),
 }
 
@@ -1577,6 +1761,12 @@ def _kpi_result_to_response(
     data_through = (metadata.get("context") or {}).get("data_through")
     if data_through is not None:
         response["data_through"] = data_through
+    # #1360: WS2-TR-009 surfaces its stage counts (delivered -> viewed ->
+    # accepted -> actioned -> outcome) so the synthesizer can narrate the whole
+    # funnel, not just the headline rate. Absent for every other KPI.
+    funnel_stages = (metadata.get("context") or {}).get("funnel_stages")
+    if funnel_stages is not None:
+        response["funnel_stages"] = funnel_stages
     if window_status == "default":
         window = KPI_REPORTING_WINDOWS.get(kpi.id)
         if window:
@@ -1661,6 +1851,13 @@ async def _window_coverage_probe(
         return None
 
 
+# The four trigger-effectiveness KPIs the #1360 ruling assigned to the chat KPI
+# path -- the ONLY KPIs whose calculator reads context['trigger_type'] (the
+# migration-118 statement families). The guard below keeps the filter from
+# silently dropping on any other KPI.
+_TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"})
+
+
 @tool(args_schema=KpiCalculateInput)
 async def kpi_calculate_tool(
     kpi_name: str,
@@ -1670,6 +1867,7 @@ async def kpi_calculate_tool(
     therapy_line: Optional[str] = None,
     biologic: Optional[str] = None,
     ige_tier: Optional[str] = None,
+    trigger_type: Optional[str] = None,
     window: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute a DEFINED KPI on demand via the KPI engine (the registry's calculable KPIs).
@@ -1681,13 +1879,22 @@ async def kpi_calculate_tool(
     name to its definition and CALCULATES it from the real substrate (e.g. NBRx =
     count of each patient's first-brand prescription over ``treatment_events``).
 
+    TRIGGER-EFFECTIVENESS KPIs (#1360): trigger precision, acceptance rate,
+    override rate, and trigger funnel conversion are chat-KPI-path KPIs served
+    here. They accept ``brand``, ``region``, ``trigger_type`` and ``window``
+    filters — with ONE constraint: ``region`` does NOT compose with an explicit
+    ``window`` (the tool errors honestly rather than silently dropping the
+    region). WS2-TR-009 responses carry ``funnel_stages`` (delivered ->
+    viewed -> accepted -> actioned -> outcome counts) alongside the headline.
+
     TIME WINDOW: pass ``window`` (e.g. "last 3 months", "last year", "Q1 2025",
     "2025-01-01 to 2025-03-31") to compute the volume KPIs (TRx/NRx/NBRx), TRx
-    share, or conversion rate over that period — ALWAYS pass it when the user
-    names one. A window composes with the ``segment`` / ``therapy_line`` axes
-    (e.g. per-tier conversion rate over the last year); it does NOT compose
-    with region/biologic/ige_tier for share or conversion (the tool errors
-    honestly). The engine reports back ``window_status`` ("applied" when the
+    share, conversion rate, or the trigger-effectiveness KPIs over that period
+    — ALWAYS pass it when the user names one. A window composes with the
+    ``segment`` / ``therapy_line`` axes (e.g. per-tier conversion rate over the
+    last year); it does NOT compose with region/biologic/ige_tier for share or
+    conversion, nor with region for the trigger-effectiveness KPIs (the tool
+    errors honestly). The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
     and ``window_applied``. BASELINE COMPARISONS: to compare a recent period
@@ -1719,6 +1926,9 @@ async def kpi_calculate_tool(
         ige_tier: optional IgE-tertile filter ('low'/'medium'/'high',
             data-driven), REMIBRUTINIB ONLY -- returns an error for other
             brands; mutually exclusive with the other axes.
+        trigger_type: optional trigger-type filter, TRIGGER-EFFECTIVENESS KPIs
+            ONLY (#1360) -- returns an error for any other KPI (never a
+            silent drop).
         window: optional time window (rolling or absolute); omit for the
             engine's default window (most recent 30 days of data).
 
@@ -1742,6 +1952,23 @@ async def kpi_calculate_tool(
             "query_type": "kpi_calculate",
             "error": f"'{kpi_name}' did not resolve to a defined KPI.",
             "hint": "Try a defined KPI like NBRx, TRx, NRx, market share, conversion rate, or ROI.",
+        }
+
+    # #1360: only the trigger-effectiveness calculators read
+    # context['trigger_type']; on any other KPI the key would be silently
+    # ignored while the response implied the filter applied (the
+    # dead-'territory'-key incident). Fail fast, before touching the DB.
+    if trigger_type and kpi.id not in _TRIGGER_EFFECTIVENESS_KPI_IDS:
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "kpi_id": kpi.id,
+            "kpi_name": kpi.name,
+            "error": (
+                f"trigger_type only applies to the trigger-effectiveness KPIs "
+                f"(trigger precision, acceptance rate, override rate, trigger "
+                f"funnel conversion), not {kpi.name}."
+            ),
         }
 
     # Parse the requested window BEFORE touching the calculator: an unparseable
@@ -1776,6 +2003,10 @@ async def kpi_calculate_tool(
         context["biologic"] = biologic
     if ige_tier:
         context["ige_tier"] = ige_tier
+    if trigger_type:
+        # TriggerPerformanceCalculator routes the migration-118 effectiveness
+        # family on context['trigger_type'] (#1360).
+        context["trigger_type"] = trigger_type
     if parsed is not None:
         context["window"] = parsed.as_dict()
 

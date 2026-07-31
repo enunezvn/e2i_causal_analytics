@@ -263,6 +263,24 @@ def windowed_axis_query_id(base_query_id: str, *, axis: str) -> str:
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
 
 
+def trigger_effectiveness_query_id(metric: str, *, windowed: bool) -> str:
+    """Ask-bound trigger-effectiveness statement id (migration 118, #1360).
+
+    Canonical order: ``trigger_effectiveness_{metric}[_windowed]
+    [_include_synthetic]``. ``metric`` is ``"precision"`` / ``"acceptance_rate"``
+    / ``"override_rate"`` / ``"funnel_conversion"`` — the four KPIs the #1360
+    ruling assigned to the chat KPI path. Same additive/suffixing rules as
+    :func:`windowed_query_id`: these ids are ADDITIVE and absent from
+    :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so the ``_include_synthetic`` suffix is
+    appended HERE under the showcase flag and :func:`resolve_kpi_query_id` is a
+    safe no-op on the result.
+    """
+    qid = f"trigger_effectiveness_{metric}"
+    if windowed:
+        qid = f"{qid}_windowed"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
 def nowcast_triangle_query_id(base_query_id: str) -> str:
     """Claims-arrival lag-triangle variant id for an Rx-volume base query
     (migration 116, backlog #45).

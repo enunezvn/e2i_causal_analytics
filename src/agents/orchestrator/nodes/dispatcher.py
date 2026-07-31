@@ -196,8 +196,15 @@ def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optio
 
     Order: structured ``parsed_query.entities`` (the NLP layer's typed
     extractions) first, then a ``user_context`` fallback (chat callers may stash
-    ``brand``/``region`` there). Returns ``(None, None)`` when neither source
-    names them — :func:`resolve_cohort_frame` then fails closed honestly.
+    ``brand``/``region`` there), then — #1351 — a deterministic scan of the raw
+    query TEXT via the shared :mod:`src.services.query_entities` service (the
+    proven #1356 ``ask.py`` semantics, lifted): the chat path has NO producer of
+    ``parsed_query`` (state.py declares it only, verified in the 2026-07-29
+    empirical pass), so a brand/region named only in the ask itself was
+    previously invisible to every resolver. The text scan binds only an
+    EXACTLY-ONE match (two brands/regions named → stays ``None``) and never
+    fabricates. Returns ``(None, None)`` when no source names them — the
+    consuming resolvers then fail closed honestly.
     """
     brand = _entity_value(payload, "brand")
     region = _entity_value(payload, "region")
@@ -208,6 +215,15 @@ def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optio
             brand = user_context["brand"] or None
         if region is None and isinstance(user_context.get("region"), str):
             region = user_context["region"] or None
+
+    if brand is None or region is None:
+        from src.services import query_entities
+
+        query = payload.get("query") if isinstance(payload.get("query"), str) else None
+        if brand is None:
+            brand = query_entities.brand_from_text(query)
+        if region is None:
+            region = query_entities.region_from_text(query)
 
     return brand, region
 
@@ -485,6 +501,217 @@ def _resolve_heterogeneous_optimizer_input(
             "alone cannot name the treatment/outcome/effect-modifier columns"
         ),
         rest_endpoint="POST /segments/analyze",
+    )
+
+
+# ---------------------------------------------------------------------------
+# causal_impact chat input resolver (#1351 — owner ruling: resolvers everywhere)
+# ---------------------------------------------------------------------------
+#
+# causal_impact was the ONLY dispatched agent with no input resolver at all:
+# agent.py validates its contract directly, so every bare chat dispatch died in
+# ~0.4-7.2ms with the raw ``ValueError: Missing required field(s):
+# treatment_var, outcome_var, confounders, data_source`` (6 of 22 queries in
+# the 2026-07-29 empirical pass). The resolver mirrors the proven
+# heterogeneous_optimizer template — same substrate, same min-rows guard, same
+# leak exclusion — because both agents bind a causal spec to the SAME KpiFrame
+# columns; where it cannot bind, it fails closed gracefully with candidate
+# variables seeded from the curated causal knowledge graph (the KG
+# variable-selector infrastructure) instead of the hard raise.
+_CAUSAL_MIN_ROWS = _HET_MIN_ROWS  # same substrate-sufficiency rationale
+_CAUSAL_REQUIRED = ("treatment_var", "outcome_var", "confounders", "data_source")
+# The cooperative refutation deadline gets this fraction of the dispatch
+# budget: refutation self-gates against it (refutation.py orphan-fix), and the
+# remaining headroom covers sensitivity + interpretation + synthesis, so a
+# heavy suite degrades to a clean partial result instead of a raw dispatch
+# timeout that discards the whole analysis.
+_CAUSAL_DEADLINE_FRACTION = 0.8
+# KG candidate seeding is a fail-path COURTESY: bounded lists so the message
+# stays readable.
+_KG_CANDIDATE_LIMIT = 5
+
+
+def _kg_causal_variable_candidates(
+    brand: Optional[str],
+) -> Tuple[List[str], List[str]]:
+    """Candidate (treatment, outcome) variable names from the curated causal KG.
+
+    The #1351 ruling names the KG variable-selector infrastructure as the seed
+    for ambiguous causal asks: the curated gold-standard graph (the same
+    brand-scoped view the /knowledge-graph page renders — see
+    ``src.insights.knowledge_graph``) carries real Variable/KPI nodes joined by
+    CAUSES edges, so its top CAUSES *sources* are honest treatment candidates
+    and its top CAUSES *targets* honest outcome candidates. Called ONLY on the
+    fail-closed path (never adds latency to a successful bind); the caller
+    guards it — any KG failure degrades to a candidate-less message.
+    """
+    from src.insights import knowledge_graph as kg
+    from src.memory.semantic_memory import get_semantic_memory
+
+    sm = get_semantic_memory()
+    nodes = sm.list_nodes(
+        entity_types=list(kg.PAGE_ENTITY_TYPES),
+        limit=kg.PAGE_FETCH_LIMIT,
+        curated_only=True,
+    )
+    rels = sm.list_relationships(
+        relationship_types=["CAUSES"],
+        limit=kg.PAGE_FETCH_LIMIT,
+        curated_only=True,
+    )
+    g_nodes, g_rels = kg.causal_gold_standard_graph(nodes, rels, brand or "All")
+    name_by_id = {n.get("id"): str(n.get("name") or n.get("id")) for n in g_nodes}
+    out_degree: Dict[str, int] = {}
+    in_degree: Dict[str, int] = {}
+    for r in g_rels:
+        if r.get("type") != "CAUSES":
+            continue
+        src_name = name_by_id.get(r.get("source_id"))
+        dst_name = name_by_id.get(r.get("target_id"))
+        if src_name:
+            out_degree[src_name] = out_degree.get(src_name, 0) + 1
+        if dst_name:
+            in_degree[dst_name] = in_degree.get(dst_name, 0) + 1
+    treatments = [n for n, _ in sorted(out_degree.items(), key=lambda kv: (-kv[1], kv[0]))][
+        :_KG_CANDIDATE_LIMIT
+    ]
+    outcomes = [n for n, _ in sorted(in_degree.items(), key=lambda kv: (-kv[1], kv[0]))][
+        :_KG_CANDIDATE_LIMIT
+    ]
+    return treatments, outcomes
+
+
+def _resolve_causal_impact_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Build causal_impact's required causal spec from REAL data, or fail closed.
+
+    (1) An explicit analyst-supplied spec in ``dispatch.parameters`` wins — a
+        deliberate, honest choice (the ``POST /causal/agent-analyze`` payload
+        shape). ``data_source`` defaults to the labelled ``router_parameters``
+        marker when omitted; the estimation node then fails closed honestly if
+        no data channel materializes (it never fabricates).
+    (2) Otherwise BUILD from the real KPI substrate exactly like
+        ``_resolve_heterogeneous_optimizer_input``: recognize the KPI, resolve
+        the real ``KpiFrame``, and bind ``treatment_var``/``outcome_var``/
+        ``confounders`` to the frame's REAL columns, attaching the frame as
+        ``data`` (agent._initialize_state seeds
+        ``data_cache['estimation_data']`` — the #606 channel). The treatment's
+        raw source column is excluded from the confounders (deterministic
+        function of the treatment — same leak guard as het). A cooperative
+        ``compute_deadline`` inside the dispatch budget lets the refutation
+        suite self-gate instead of orphaning to_thread compute.
+    (3) When no substrate binds, fail closed GRACEFULLY (#1351 replaced the
+        hard ``Missing required field(s)`` raise): name every missing field
+        and seed candidate variables from the curated causal KG so the user
+        can re-ask precisely. Never a fabricated treatment/outcome/confounder.
+    """
+    params = dispatch.get("parameters") or {}
+
+    # (1) explicit analyst-supplied causal spec passes through verbatim.
+    # ``confounders`` is checked for PRESENCE-as-list, not truthiness (codex
+    # iter-1 HIGH-2): an explicitly EMPTY confounder list is a valid spec — a
+    # randomized/efficiency design has an honestly empty backdoor set (#1188)
+    # — and must not be silently rerouted into substrate inference.
+    if (
+        params.get("treatment_var")
+        and params.get("outcome_var")
+        and isinstance(params.get("confounders"), list)
+    ):
+        passthrough = (
+            "treatment_var",
+            "outcome_var",
+            "confounders",
+            "data_source",
+            "data",
+            "mediators",
+            "effect_modifiers",
+            "instruments",
+            "segment_filters",
+            "interpretation_depth",
+            "time_period",
+            "brand",
+            "causal_path_id",
+            "experiment_name",
+            "query_id",
+            "randomized_design",
+        )
+        out: Dict[str, Any] = {k: params[k] for k in passthrough if params.get(k) is not None}
+        out.setdefault("data_source", "router_parameters")
+        return out
+
+    # (2) build the causal spec from the real KPI substrate.
+    query = agent_input.get("query")
+    brand, region = _extract_brand_region(agent_input)
+    include_synthetic = _resolve_include_synthetic_opt_in(agent_input, params)
+    try:
+        from src.services import kpi_resolution
+
+        kpi = kpi_resolution.recognize_kpi(query)
+        if kpi is not None:
+            kpi_frame = kpi_resolution.resolve_kpi_frame(
+                kpi, brand, region, include_synthetic=include_synthetic
+            )
+            treatment = getattr(kpi_frame, "treatment_column", None)
+            if kpi_frame is not None and treatment and len(kpi_frame.frame) >= _CAUSAL_MIN_ROWS:
+                excluded = {treatment, getattr(kpi_frame, "treatment_source_column", None)}
+                confounders = [c for c in kpi_frame.driver_columns if c not in excluded]
+                if confounders:
+                    logger.info(
+                        "causal_impact dispatch: built causal spec from KPI '%s' substrate "
+                        "(treatment=%s, outcome=%s, confounders=%s, %d real rows).",
+                        kpi_frame.kpi_name,
+                        treatment,
+                        kpi_frame.outcome_column,
+                        confounders,
+                        len(kpi_frame.frame),
+                    )
+                    resolved: Dict[str, Any] = {
+                        "treatment_var": treatment,
+                        "outcome_var": kpi_frame.outcome_column,
+                        "confounders": confounders,
+                        "data_source": f"kpi_substrate:{kpi_frame.kpi_id}",
+                        "data": kpi_frame.frame,
+                    }
+                    if brand:
+                        resolved["brand"] = brand
+                    timeout_ms = dispatch.get("timeout_ms") or 0
+                    if timeout_ms > 0:
+                        resolved["compute_deadline"] = (
+                            time.monotonic() + (timeout_ms / 1000.0) * _CAUSAL_DEADLINE_FRACTION
+                        )
+                    return resolved
+    except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
+        logger.warning(
+            "causal_impact dispatch: KPI substrate build failed (%s); failing closed.",
+            exc,
+        )
+
+    # (3) cannot ground in real data → graceful fail-closed with KG-seeded
+    # candidates (never the raw contract raise, never fabricated variables).
+    candidate_note = ""
+    try:
+        kg_treatments, kg_outcomes = _kg_causal_variable_candidates(brand)
+        if kg_treatments or kg_outcomes:
+            candidate_note = (
+                " Candidate variables from the curated causal knowledge graph"
+                f"{f' for {brand}' if brand else ''} — treatments: "
+                f"{', '.join(kg_treatments) or 'none'}; outcomes: "
+                f"{', '.join(kg_outcomes) or 'none'} — name one of each (plus "
+                "confounders) to run a scoped analysis"
+            )
+    except Exception as kg_exc:  # noqa: BLE001 - candidate seeding is a courtesy
+        logger.debug("causal_impact dispatch: KG candidate seeding unavailable: %s", kg_exc)
+
+    return NeedsStructuredInput(
+        agent_name="causal_impact",
+        missing=_CAUSAL_REQUIRED,
+        reason=(
+            "no recognized KPI substrate with a defined treatment column and "
+            f">={_CAUSAL_MIN_ROWS} real rows to bind the causal spec; a chat query "
+            "alone cannot name the treatment/outcome/confounder columns." + candidate_note
+        ),
+        rest_endpoint="POST /causal/agent-analyze",
     )
 
 
@@ -801,18 +1028,169 @@ def _resolve_resource_optimizer_input(
     )
 
 
+# ---------------------------------------------------------------------------
+# prediction_synthesizer champion-serving resolver (#1351 / #1354)
+# ---------------------------------------------------------------------------
+#
+# Prediction-target FAMILIES the chat resolver can recognize deterministically.
+# Each family maps an ask-vocabulary regex to the token set that must appear in
+# a registry ``prediction_target`` for the family to bind. hcp_adoption is the
+# family the #1354 ruling promoted per-brand champions for
+# (``hcp_adoption_{brand}_goldstd_lr_v1``, PR #1384's calibrate+promote
+# script); the vocabulary mirrors the q14-class asks that produced #1354
+# ("most likely to increase <brand> prescriptions", "start prescribing",
+# "adopt"). Champion lookup itself is ALWAYS a registry query — no model id or
+# target string is hardcoded here.
+_PREDICTION_FAMILIES: Tuple[Tuple[str, re.Pattern[str], Tuple[str, ...]], ...] = (
+    (
+        "hcp_adoption",
+        re.compile(
+            r"\badopt\w*\b|\buptake\b"
+            r"|\b(?:start|begin|initiat\w+)\s+prescrib\w+"
+            r"|\b(?:likely|likelihood|probab\w+)\b[^.?!]{0,60}\bprescri\w+"
+            r"|\bincrease\b[^.?!]{0,40}\bprescri\w+",
+            re.I,
+        ),
+        ("hcp", "adoption"),
+    ),
+)
+
+# Explicit HCP entity id named in the ask (the substrate's id shape, e.g.
+# ``scvhcp_00042`` in ``hcp_brand_adoption.hcp_id``). Deterministic — an ask
+# without a literal id binds NO entity (a ranking ask cannot be served by the
+# single-entity ``synthesize`` contract, and picking an entity would fabricate).
+_HCP_ENTITY_RE = re.compile(r"\b[a-z]{0,10}hcp[_-]\d{3,}\b", re.I)
+
+_TIME_HORIZON_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bnext\s+quarter\b", re.I), "90d"),
+    (re.compile(r"\bnext\s+month\b", re.I), "30d"),
+    (re.compile(r"\bnext\s+year\b", re.I), "365d"),
+)
+
+
+def _match_prediction_family(query: Optional[str]) -> Optional[str]:
+    """Return the prediction-target family the ask vocabulary matches, else None."""
+    if not query:
+        return None
+    for family, pattern, _tokens in _PREDICTION_FAMILIES:
+        if pattern.search(query):
+            return family
+    return None
+
+
+def _probe_prediction_champions() -> List[Tuple[str, str]]:
+    """Live ``(model_name, prediction_target)`` pairs for PRODUCTION champions.
+
+    Registry query, never hardcoded ids (#1354 ruling). Membership mirrors
+    ``MLModelRegistryRepository.get_models_for_target`` (serving stage +
+    loadable artifact + non-synthetic — the #857 FK-embed join and the #894
+    provenance predicate) PLUS ``is_champion=true``: the resolver serves the
+    explicitly-promoted champions, and self-activates the moment the #1384
+    promotion lands (rows measured still staging on 2026-07-31 — the probe is
+    the source of truth, so nothing needs revisiting after promotion).
+    """
+    from src.repositories import get_supabase_client
+
+    client = get_supabase_client()
+    result = (
+        client.table("ml_model_registry")
+        .select(
+            "model_name, stage, is_champion, artifact_path, is_synthetic, "
+            "ml_experiments!inner(prediction_target)"
+        )
+        .eq("is_champion", True)
+        .eq("stage", "production")
+        .not_.is_("artifact_path", "null")
+        .eq("is_synthetic", False)
+        .execute()
+    )
+    champions: List[Tuple[str, str]] = []
+    for row in getattr(result, "data", None) or []:
+        if not isinstance(row, dict):
+            continue
+        # Defense-in-depth re-check of the server-side predicate.
+        if row.get("stage") != "production" or not row.get("is_champion"):
+            continue
+        if not row.get("artifact_path") or row.get("is_synthetic"):
+            continue
+        name = row.get("model_name")
+        exp = row.get("ml_experiments") or {}
+        target = exp.get("prediction_target") if isinstance(exp, dict) else None
+        if isinstance(name, str) and isinstance(target, str) and name and target:
+            champions.append((name, target))
+    return champions
+
+
+def _hcp_entity_exists(entity_id: str) -> bool:
+    """True when ``entity_id`` has a real ``hcp_brand_adoption`` row.
+
+    One bounded presence probe — a prediction for an entity with no substrate
+    row would fail downstream anyway; failing closed here names the unknown id.
+    """
+    from src.repositories import get_supabase_client
+
+    client = get_supabase_client()
+    result = (
+        client.table("hcp_brand_adoption")
+        .select("hcp_id")
+        .eq("hcp_id", entity_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(getattr(result, "data", None))
+
+
+def _target_tokens(target: str) -> Set[str]:
+    return {t for t in re.split(r"[^a-z0-9]+", target.lower()) if t}
+
+
+def _matching_champion_targets(
+    champions: List[Tuple[str, str]], family_tokens: Tuple[str, ...], brand: str
+) -> List[str]:
+    """Registry targets matching the family tokens + the GROUNDED brand.
+
+    Token-driven over what the registry ACTUALLY serves (never a constructed
+    target string): a target matches when its token set contains every family
+    token and the brand token. ``brand`` is REQUIRED (codex iter-3 HIGH-1): a
+    brand-less match against a single-champion registry would bind a brand the
+    user never named — the caller must fail closed on an unscoped ask instead.
+    The caller binds only a UNIQUE match and fails closed on 0 (no champion for
+    that brand) or ≥2 (ambiguous) with reasons naming each state accurately.
+    """
+    matches: List[str] = []
+    brand_token = brand.lower()
+    for _name, target in champions:
+        tokens = _target_tokens(target)
+        if not all(ft in tokens for ft in family_tokens):
+            continue
+        if brand_token not in tokens:
+            continue
+        if target not in matches:
+            matches.append(target)
+    return matches
+
+
 def _resolve_prediction_synthesizer_input(
     agent_input: Dict[str, Any], dispatch: AgentDispatch
 ) -> Union[Dict[str, Any], NeedsStructuredInput]:
-    """Pass through a REAL prediction request from ``dispatch.parameters``, else
+    """Bind a REAL prediction request from params or the champion registry, else
     fail closed.
 
     ``synthesize`` requires a specific ``entity_id`` and ``prediction_target``.
-    There is no registered champion model today and a chat query names no specific
-    entity, so picking "the first entity the user happened to mention" would
-    fabricate a prediction for an arbitrary unit. When an API/router caller
-    supplies a real (entity_id, prediction_target) it passes through (clean kwarg
-    set); otherwise fail closed.
+
+    (1) An explicit analyst-supplied (entity_id, prediction_target) in
+        ``dispatch.parameters`` passes through (clean kwarg set) — unchanged.
+    (2) #1351/#1354: when the ask's vocabulary matches a recognized prediction
+        family (hcp_adoption — the family the owner promoted per-brand
+        champions for), the LIVE registry is queried for production champions
+        (never hardcoded ids). With a grounded brand, a unique champion target,
+        and an explicit real entity id in the ask, the dispatch binds and the
+        agent runs the real model orchestration. Anything less fails closed
+        with a message that is honest about the ACTUAL registry state — naming
+        the champion that exists and exactly what is missing — instead of the
+        pre-#1384 "no registered champion model" claim.
+    (3) Asks matching no family keep the original fail-closed contract (and
+        skip the registry probe entirely — no wasted round-trip).
     """
     params = dispatch.get("parameters") or {}
     entity_id = params.get("entity_id")
@@ -838,14 +1216,171 @@ def _resolve_prediction_synthesizer_input(
                 out[opt] = params[opt]
         return out
 
+    # (2) registry-driven champion binding for recognized ask families.
+    query = str(agent_input.get("query") or "")
+    family = _match_prediction_family(query)
+    if family is not None:
+        family_tokens = next(t for f, _p, t in _PREDICTION_FAMILIES if f == family)
+        try:
+            champions = _probe_prediction_champions()
+        except Exception as exc:  # noqa: BLE001 - probe is best-effort; fail closed
+            # codex iter-1 HIGH-1: a LOOKUP FAILURE must never be reported as
+            # "no production champion" — champions may exist; the two states
+            # are indistinguishable when the query itself failed. Fail closed
+            # naming the failure mode (mirrors get_rows_for_paths' contract:
+            # never present a lookup error as absence of evidence).
+            logger.warning(
+                "prediction_synthesizer dispatch: champion registry probe failed (%s); "
+                "failing closed.",
+                exc,
+            )
+            return NeedsStructuredInput(
+                agent_name="prediction_synthesizer",
+                missing=("prediction_target",),
+                reason=(
+                    f"the ask matches the {family} prediction family but the champion "
+                    "registry could not be queried (lookup failed) — cannot distinguish "
+                    "'no champion registered' from 'registry unavailable', so nothing "
+                    "was predicted; retry once the registry is reachable"
+                ),
+                rest_endpoint="POST /api/models/predict/{model_name}",
+            )
+        family_champions = [
+            (n, t) for n, t in champions if all(ft in _target_tokens(t) for ft in family_tokens)
+        ]
+        if family_champions:
+            brand, _region = _extract_brand_region(agent_input)
+            served = ", ".join(sorted({t for _n, t in family_champions}))
+            if brand is None:
+                # codex iter-3 HIGH-1: an UNSCOPED ask must never bind — even a
+                # single-champion registry would mean predicting for a brand
+                # the user never named (plausible-wrong).
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("prediction_target",),
+                    reason=(
+                        f"production champions exist for {family} ({served}) but the ask "
+                        "names no brand — name the brand to scope the prediction"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            brand_targets = _matching_champion_targets(family_champions, family_tokens, brand)
+            if not brand_targets:
+                # codex iter-3 HIGH-2: the ask DID ground a brand; say
+                # accurately that the registry serves no champion for it.
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("prediction_target",),
+                    reason=(
+                        f"the ask is scoped to {brand} but the registry serves no "
+                        f"production champion for it in the {family} family "
+                        f"(served targets: {served})"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            if len(brand_targets) > 1:
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("prediction_target",),
+                    reason=(
+                        f"multiple production champion targets match {brand} in the "
+                        f"{family} family ({', '.join(sorted(brand_targets))}) — the "
+                        "resolver binds nothing on an ambiguous match; supply "
+                        "prediction_target explicitly"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            resolved_target = brand_targets[0]
+            entity_match = _HCP_ENTITY_RE.search(query)
+            if entity_match is None:
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("entity_id",),
+                    reason=(
+                        f"the production champion for {resolved_target} is registered and "
+                        "servable, but the single-entity synthesize contract needs a "
+                        "specific real HCP entity id (e.g. an hcp_id from the adoption "
+                        "substrate) — a ranking over segments/entities cannot be answered "
+                        "without scoring a population, which this route does not do"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            entity = entity_match.group(0)
+            try:
+                entity_known = _hcp_entity_exists(entity)
+            except Exception as exc:  # noqa: BLE001 - probe is best-effort; fail closed
+                # codex iter-2 HIGH: a lookup FAILURE must not be reported as
+                # absence — the id may exist; the probe just failed (same
+                # failure-class as the champion-probe fix above).
+                logger.warning(
+                    "prediction_synthesizer dispatch: entity presence probe failed (%s); "
+                    "failing closed.",
+                    exc,
+                )
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("entity_id",),
+                    reason=(
+                        f"the ask names entity {entity!r} but its existence could not be "
+                        "verified (adoption-substrate lookup failed) — cannot distinguish "
+                        "'unknown id' from 'substrate unavailable', so nothing was "
+                        "predicted; retry once the substrate is reachable"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            if not entity_known:
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("entity_id",),
+                    reason=(
+                        f"the ask names entity {entity!r} but no such hcp_id exists in the "
+                        "adoption substrate (hcp_brand_adoption) — nothing was predicted "
+                        "for an unknown entity"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            resolved: Dict[str, Any] = {
+                "entity_id": entity,
+                "prediction_target": resolved_target,
+                "entity_type": "hcp",
+                "query": query,
+            }
+            session_id = agent_input.get("session_id")
+            if session_id is not None:
+                resolved["session_id"] = session_id
+            for pattern, horizon in _TIME_HORIZON_PATTERNS:
+                if pattern.search(query):
+                    resolved["time_horizon"] = horizon
+                    break
+            logger.info(
+                "prediction_synthesizer dispatch: bound registry champion target %s for entity %s.",
+                resolved_target,
+                entity,
+            )
+            return resolved
+        # Family matched but the registry serves no production champion for it.
+        return NeedsStructuredInput(
+            agent_name="prediction_synthesizer",
+            missing=("entity_id", "prediction_target"),
+            reason=(
+                f"the ask matches the {family} prediction family but the registry has no "
+                "production champion serving it (stage='production', is_champion, loadable "
+                "artifact, non-synthetic) — no values were invented; promote a champion "
+                "first (#1354)"
+            ),
+            rest_endpoint="POST /api/models/predict/{model_name}",
+        )
+
+    # (3) no recognized family — the original honest fail-closed contract.
     return NeedsStructuredInput(
         agent_name="prediction_synthesizer",
         missing=("entity_id", "prediction_target"),
         reason=(
-            "no registered champion model and no specific real entity to predict for; "
-            "a chat query names neither, so a prediction cannot be synthesized without "
-            "inventing an entity — supply a specific entity_id and prediction_target as "
-            "structured dispatch parameters"
+            "the ask names no prediction target served by a registered production "
+            "champion and no specific real entity to predict for, so a prediction "
+            "cannot be synthesized without inventing an entity (nothing is fabricated) "
+            "— supply a specific entity_id and prediction_target as structured "
+            "dispatch parameters"
         ),
         rest_endpoint=None,
     )
@@ -1238,6 +1773,10 @@ def _resolve_cohort_profiler_input(
 # an ``if`` branch in ``_dispatch_agent`` (#F12/F13/F14).
 INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "tool_composer": _resolve_tool_composer_input,
+    # #1351 — the last resolver-less dispatched agent (its contract validation
+    # hard-raised on every bare chat query): binds the causal spec from the
+    # real KPI substrate or fails closed gracefully with KG-seeded candidates.
+    "causal_impact": _resolve_causal_impact_input,
     "gap_analyzer": _resolve_gap_analyzer_input,
     "heterogeneous_optimizer": _resolve_heterogeneous_optimizer_input,
     "resource_optimizer": _resolve_resource_optimizer_input,
@@ -1284,6 +1823,11 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
 #     closed — the honest no-data outcome must reach the user.
 _FAIL_CLOSED_ON_FAILED_STATUS = frozenset(
     {
+        # #1351 — now resolver-backed: ``_build_output``/``_build_error_output``
+        # set status="failed" on error paths AND on a BLOCK refutation gate; a
+        # blocked/errored causal estimate must never be laundered into a
+        # successful dispatch narrative.
+        "causal_impact",
         "gap_analyzer",
         "heterogeneous_optimizer",
         "resource_optimizer",

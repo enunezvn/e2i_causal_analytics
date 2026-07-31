@@ -390,6 +390,12 @@ def fabhalta_clinical_rows_for_upsert() -> List[dict]:
 
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
+    # validation_status="validated" on the rows below is a deliberate DGP
+    # authorship, NOT a real RefutationSuite verdict. Since migration 119
+    # (#1352) 'validated' is schema-pinned to "refutation evidence exists and
+    # passed": the DB trigger auto-seeds content-addressed SYNTHETIC evidence
+    # into causal_validations for is_synthetic rows on insert/reseed, so this
+    # generator intentionally emits no causal_validations rows itself.
     @property
     def entity_type(self) -> str:
         return "causal_paths"

@@ -110,5 +110,9 @@ def create_gap_analyzer_graph(
     workflow.add_edge("prioritizer", "formatter")
     workflow.add_edge("formatter", END)
 
-    # Compile graph
-    return workflow.compile()
+    # Compile graph. checkpointer=False: state carries a DataFrame passthrough
+    # (tier0_data) and this graph runs as a subgraph of the checkpointed
+    # chatbot graph on the chat path — a bare compile() inherits the parent's
+    # Redis checkpointer whose ormsgpack serde cannot serialize DataFrames
+    # (#1351 live-unmasked, same class as causal_impact).
+    return workflow.compile(checkpointer=False)

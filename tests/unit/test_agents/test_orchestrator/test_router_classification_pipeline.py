@@ -46,7 +46,7 @@ class TestActiveModeDispatch:
         out = await self._route(_state(_clf("SINGLE_AGENT", ["causal_impact"], 0.8)), monkeypatch)
         assert [d["agent_name"] for d in out["dispatch_plan"]] == ["causal_impact"]
         # Canonical per-agent config preserved (timeout from INTENT_TO_AGENTS)
-        assert out["dispatch_plan"][0]["timeout_ms"] == 30000
+        assert out["dispatch_plan"][0]["timeout_ms"] == 120000  # #1351
         assert out["dispatch_plan"][0]["priority"] == "critical"
 
     async def test_parallel_delegation_pattern(self, monkeypatch):

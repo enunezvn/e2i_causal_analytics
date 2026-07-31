@@ -81,8 +81,12 @@ def create_drift_monitor_graph() -> CompiledStateGraph:
     workflow.add_edge("structural_drift", "alert_aggregator")  # V4.4
     workflow.add_edge("alert_aggregator", END)
 
-    # Compile graph
-    return workflow.compile()
+    # Compile graph. checkpointer=False: this graph is chat-dispatchable and
+    # its state allows a tier0_data DataFrame passthrough — a bare compile()
+    # inherits the checkpointed chatbot graph's Redis checkpointer as a
+    # subgraph, whose ormsgpack serde cannot serialize DataFrames (#1351
+    # live-unmasked, same class as causal_impact).
+    return workflow.compile(checkpointer=False)
 
 
 # Export compiled graph

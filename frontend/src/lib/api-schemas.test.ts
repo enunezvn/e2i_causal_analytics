@@ -196,7 +196,7 @@ describe('KPI Schemas', () => {
       const healthyResponse = {
         status: 'healthy',
         registry_loaded: true,
-        total_kpis: 44,
+        total_kpis: 45,
         cache_enabled: true,
         cache_size: 120,
         database_connected: true,
@@ -211,7 +211,7 @@ describe('KPI Schemas', () => {
       const degradedResponse = {
         status: 'degraded',
         registry_loaded: true,
-        total_kpis: 44,
+        total_kpis: 45,
         cache_enabled: false,
         cache_size: 0,
         database_connected: true,
@@ -227,7 +227,7 @@ describe('KPI Schemas', () => {
       const invalidStatus = {
         status: 'unknown', // not in enum
         registry_loaded: true,
-        total_kpis: 44,
+        total_kpis: 45,
         cache_enabled: true,
         cache_size: 0,
         database_connected: true,

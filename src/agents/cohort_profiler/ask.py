@@ -35,16 +35,13 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
 
-# Canonical brand casing (the KPI brand predicate is case-SENSITIVE).
-_SUPPORTED_BRANDS: Tuple[str, ...] = ("Remibrutinib", "Fabhalta", "Kisqali")
+from src.services import query_entities
 
-# Indication → brand: the three commercial brands map 1:1 to indications on
-# this substrate, so an indication mention grounds the brand (q11's "CSU").
-_INDICATION_TO_BRAND: Tuple[Tuple[str, str], ...] = (
-    (r"\bcsu\b|\bchronic\s+spontaneous\s+urticaria\b|\burticaria\b", "Remibrutinib"),
-    (r"\bpnh\b|\bparoxysmal\s+nocturnal\b", "Fabhalta"),
-    (r"\bbreast\s+cancer\b|\bhr\+\b|\bher2\b", "Kisqali"),
-)
+# Canonical brand casing (the KPI brand predicate is case-SENSITIVE) and the
+# indication→brand grounding now live in the SHARED extraction service
+# (src/services/query_entities.py, #1351): this module's proven #1356 semantics
+# were lifted verbatim so every dispatcher resolver grounds the same way.
+_SUPPORTED_BRANDS: Tuple[str, ...] = query_entities.SUPPORTED_BRANDS
 
 _PATIENT_RE = re.compile(r"\bpatients?\b", re.I)
 _HCP_RE = re.compile(
@@ -154,32 +151,11 @@ class CohortAsk:
     window: Optional[Window] = None
 
 
-def _canonical_brand(raw: Optional[str]) -> Optional[str]:
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    low = raw.strip().lower()
-    for b in _SUPPORTED_BRANDS:
-        if b.lower() == low:
-            return b
-    return None
-
-
-def _brand_from_text(query: str) -> Optional[str]:
-    """Ground the brand from the query text (name first, then indication).
-
-    Returns a brand only when the text pins down EXACTLY ONE — two different
-    brands named means the ask is ambiguous and the profiler keeps the honest
-    all-brands scope rather than guess.
-    """
-    found: List[str] = []
-    for b in _SUPPORTED_BRANDS:
-        if re.search(rf"\b{b}\b", query, re.I) and b not in found:
-            found.append(b)
-    if not found:
-        for pattern, b in _INDICATION_TO_BRAND:
-            if re.search(pattern, query, re.I) and b not in found:
-                found.append(b)
-    return found[0] if len(found) == 1 else None
+# Delegations to the shared service (#1351). The names stay module-local so
+# every existing call site and docstring reference in this proven template
+# remains valid; behaviour is pinned identical by the shared service's tests.
+_canonical_brand = query_entities.canonical_brand
+_brand_from_text = query_entities.brand_from_text
 
 
 def _entity_type(query: str) -> str:

@@ -101,6 +101,19 @@ _ALIASES: Dict[str, str] = {
     "roi": "WS3-BI-010",
     "hcp coverage": "WS3-BI-004",
     "patient touch": "WS3-BI-003",
+    # Trigger-effectiveness KPIs (#1360 ruling: chat-KPI-path). Explicit aliases
+    # because the name-token fallback mis-resolved compound asks: any query
+    # containing "trigger" matched Trigger Precision first ("trigger acceptance
+    # rate" -> WS2-TR-001), and funnel phrasings fell through to the shorter
+    # "conversion" alias. Longest-alias-wins keeps "funnel conversion" ahead of
+    # "conversion" and "acceptance rate" ahead of the "trigger" token fallback.
+    "trigger precision": "WS2-TR-001",
+    "acceptance rate": "WS2-TR-004",
+    "override rate": "WS2-TR-006",
+    "trigger funnel conversion": "WS2-TR-009",
+    "funnel conversion": "WS2-TR-009",
+    "conversion funnel": "WS2-TR-009",
+    "trigger funnel": "WS2-TR-009",
 }
 
 
