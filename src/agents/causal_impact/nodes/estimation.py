@@ -67,14 +67,22 @@ def _encode_categorical_covariates(frame: pd.DataFrame) -> pd.DataFrame:
         return frame
     # String/categorical dtypes only: datetime-like columns are legitimate
     # high-cardinality confounders, not identifier leaks, and must pass
-    # through untouched rather than trip the cardinality guard.
-    cat_cols = [
-        c
-        for c in frame.columns
-        if isinstance(frame[c].dtype, pd.CategoricalDtype)
-        or pd.api.types.is_object_dtype(frame[c])
-        or pd.api.types.is_string_dtype(frame[c])
-    ]
+    # through untouched rather than trip the cardinality guard. Object
+    # columns can hold Python datetime/timedelta values (row-dict frames),
+    # so they are classified by inferred value type, not dtype alone.
+    _temporal_inferred = frozenset(
+        {"datetime", "datetime64", "date", "timedelta", "timedelta64", "time", "period"}
+    )
+
+    def _is_encodable_categorical(col: pd.Series) -> bool:
+        dtype = col.dtype
+        if isinstance(dtype, pd.CategoricalDtype):
+            return True
+        if pd.api.types.is_object_dtype(dtype):
+            return pd.api.types.infer_dtype(col, skipna=True) not in _temporal_inferred
+        return pd.api.types.is_string_dtype(dtype)
+
+    cat_cols = [c for c in frame.columns if _is_encodable_categorical(frame[c])]
     if not cat_cols:
         return frame
     absurd = [c for c in cat_cols if frame[c].nunique() > _MAX_CATEGORICAL_CARDINALITY]

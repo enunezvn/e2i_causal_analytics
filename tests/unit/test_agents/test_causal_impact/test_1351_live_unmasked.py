@@ -120,3 +120,18 @@ class TestCategoricalCovariates:
         assert "visit_date" in encoded.columns
         assert encoded["visit_date"].equals(df["visit_date"])
         assert "delivery_channel" not in encoded.columns  # dummied away
+
+    def test_object_dtype_datetimes_not_treated_as_id_leak(self):
+        # Datetimes can arrive object-dtyped (e.g. Python datetime values from
+        # row dicts); they are temporal confounders, not identifier leaks, and
+        # must not be classified as categorical by the object-dtype branch.
+        df = _frame()
+        df["visit_dt_obj"] = pd.Series(
+            pd.date_range("2026-01-01", periods=len(df), freq="h").to_pydatetime(),
+            index=df.index,
+            dtype=object,
+        )
+        encoded = _encode_categorical_covariates(df[["delivery_channel", "visit_dt_obj"]])
+        assert "visit_dt_obj" in encoded.columns
+        assert encoded["visit_dt_obj"].equals(df["visit_dt_obj"])
+        assert "delivery_channel" not in encoded.columns  # dummied away
