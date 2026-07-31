@@ -189,7 +189,13 @@ _STREAM_FIELDS = [
     "lead_time_days",
     "outcome_tracked",
 ]
-_STREAM_DIGEST = "51d2dd36990bdf4478450e5ebb9deb17b418496f1e69dc9902615973f794cc03"
+# Re-pinned for #1387 (view-stage realism): delivery_status now advances to
+# 'viewed' on disposition-bearing rows + a keyed share of no-disposition rows.
+# The per-record RNG stream itself is UNCHANGED (the view stage draws from a
+# dedicated keyed rng — pinned by test_trigger_view_stage.py's
+# test_view_stage_does_not_consume_main_rng_stream) and the trigger count/ids
+# are identical, so an upsert reseed leaves no stale tail rows.
+_STREAM_DIGEST = "cfaeb428e72ec85e0f6f0a0994ce7c9da8f8b2e5164f764521cfb0c68bb62255"
 
 
 def _stable_token(v) -> str:

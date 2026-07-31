@@ -27,3 +27,12 @@ def test_triggers_false_positive_flag_registered():
     assert "false_positive_flag" in TABLE_COLUMNS["triggers"], (
         "false_positive_flag stripped -> TR-005 stays vacuous after reseed"
     )
+
+
+def test_triggers_view_timestamp_registered():
+    # #1387 view-stage realism: if the loader strips view_timestamp, the column
+    # stays 100% NULL after the backfill and the funnel's view stage is
+    # timestamp-less again (the exact silent-drop landmine this file locks).
+    assert "view_timestamp" in TABLE_COLUMNS["triggers"], (
+        "view_timestamp stripped -> #1387 backfill silently no-ops the column"
+    )

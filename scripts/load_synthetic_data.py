@@ -619,6 +619,34 @@ def purge_synthetic_ab_rows(loader) -> None:
             raise RuntimeError(f"Synthetic AB purge failed on {table}: {e}") from e
 
 
+def filter_datasets_to_tables(datasets: dict, only_tables: Optional[str]) -> dict:
+    """#1387 --only-tables: restrict the LOAD to an explicit allowlist.
+
+    The dataset graph is always GENERATED in full (cross-table draws must stay
+    coherent — e.g. trigger acceptance is welded to the injected trxc
+    conversion prescriptions), then everything outside the allowlist is dropped
+    before the sink. Fail-loud on unknown names so a typo cannot silently
+    no-op the backfill. ``None``/empty means load everything (legacy behavior).
+    """
+    if not only_tables:
+        return datasets
+    wanted = {t.strip() for t in only_tables.split(",") if t.strip()}
+    unknown = sorted(wanted - set(datasets))
+    if unknown:
+        raise ValueError(
+            f"--only-tables names not in the generated dataset graph: {unknown}; "
+            f"available: {sorted(datasets)}"
+        )
+    kept = {name: df for name, df in datasets.items() if name in wanted}
+    logger.info(
+        "--only-tables: loading %d of %d generated tables (%s)",
+        len(kept),
+        len(datasets),
+        ", ".join(sorted(kept)),
+    )
+    return kept
+
+
 def load_to_supabase(datasets: dict, dry_run: bool = False, verbose: bool = False):
     """Load datasets to Supabase."""
     logger.info("")
@@ -748,6 +776,17 @@ def main():
         "Rows dated after it are held back and append on later runs.",
     )
     parser.add_argument(
+        "--only-tables",
+        type=str,
+        default=None,
+        help="Comma-separated table allowlist: generate the FULL dataset graph "
+        "(so cross-table draws stay coherent) but LOAD only these tables. "
+        "Built for the #1387 triggers-only view-stage backfill: with the same "
+        "--tag/--dgp/seed and a pinned --anchor-ref, the generators reproduce "
+        "the frozen substrate byte-identically, so upserting one table cannot "
+        "decohere the rest. Errors on unknown table names.",
+    )
+    parser.add_argument(
         "--refresh-ab",
         action="store_true",
         help="Refresh ONLY the Shard-09 A/B substrate (ml_experiments + "
@@ -758,6 +797,16 @@ def main():
         "purge is all-or-nothing, so the reload must be full-size).",
     )
     args = parser.parse_args()
+
+    # #1387 codex finding: --only-tables must not combine with the two modes
+    # whose loads are only coherent as a WHOLE. --refresh-ab purges ALL
+    # synthetic AB rows before reloading — a filtered subset either skips the
+    # purge (stale children survive) or purges and reloads only part of the
+    # substrate (the rest sits empty). --append-frontier appends one coherent
+    # weekly cohort across tables — a partial append strands cross-table
+    # references. Fail loud at the CLI boundary.
+    if args.only_tables and (args.refresh_ab or args.append_frontier):
+        parser.error("--only-tables cannot be combined with --refresh-ab or --append-frontier")
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -815,6 +864,10 @@ def main():
                 anchor_to_now=args.anchor_to_now,
                 anchor_reference=anchor_reference,
             )
+
+        # #1387: optional load allowlist. Generation above stays FULL-GRAPH so
+        # cross-table draws remain coherent; only the sink is restricted.
+        datasets = filter_datasets_to_tables(datasets, args.only_tables)
 
         # Parquet dual-sink (optional). --parquet-only skips the DB load entirely
         # (pollution-free: no writes to shared prod tables, no DB creds needed).

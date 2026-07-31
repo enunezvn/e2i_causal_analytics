@@ -142,8 +142,19 @@ class TestSQLShape:
     def test_conversion_rate_uses_nullif_guard(self) -> None:
         """Division by zero is guarded via NULLIF; default to 0 via COALESCE."""
         sql = etl.INSERT_PER_HCP_ROLLUP_SQL
-        assert "NULLIF(COUNT(*) FILTER (WHERE delivery_status = 'delivered'), 0)" in sql
+        assert (
+            "NULLIF(COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed')), 0)" in sql
+        )
         assert "COALESCE(" in sql
+
+    def test_trx_and_conversion_use_ruled_delivered_union(self) -> None:
+        """#1387: 'viewed' is a further progression of 'delivered' (migrations
+        090/092 denominators). Once accepted implies viewed, a
+        delivered-exclusive filter counts only the never-viewed remainder and
+        conversion_rate (accepted / delivered) could exceed 1."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "delivery_status = 'delivered'" not in sql
+        assert sql.count("delivery_status IN ('delivered', 'viewed')") == 2
 
     def test_engagement_score_and_call_frequency_left_null(self) -> None:
         """Plan calls for these columns; canonical schema lacks the source

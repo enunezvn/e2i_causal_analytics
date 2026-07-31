@@ -61,6 +61,29 @@ _ACTION_AGE_CENTER = 50.0
 _ACTION_P_FLOOR = 0.02
 _ACTION_P_CEIL = 0.95
 
+# #1387 view-stage realism. Pre-#1387 the generator never modeled the "HCP
+# views the trigger" step: view_timestamp was emitted on 0 rows and accepted
+# triggers stayed delivery_status='delivered', so the WS2-TR-009 funnel read
+# viewed < accepted. delivery_status is a PROGRESSION state (pending ->
+# delivered -> viewed; failed terminal), so any explicit disposition
+# (accepted / rejected / overridden) implies the rep opened the trigger ->
+# 'viewed'. No-disposition rows (acceptance pending/expired) get viewed with
+# probability _P_VIEW_NO_DISPOSITION (rep opened it but took no action);
+# the remainder stays 'delivered' so the delivered-never-viewed funnel stage
+# survives. The view delay is uniform 1..72h after trigger_timestamp (the
+# delivery moment on this substrate — delivery/acceptance timestamps are not
+# modeled), capped at the anchor reference (event_timestamp <= NOW()).
+_ACTIVE_DISPOSITIONS = ("accepted", "rejected", "overridden")
+_P_VIEW_NO_DISPOSITION = 0.35
+_VIEW_DELAY_HOURS_MIN = 1
+_VIEW_DELAY_HOURS_MAX = 72
+# Child-stream tag for the DEDICATED view-stage RNG. The stage must never draw
+# from the generator's main self._rng stream: stream preservation is what lets
+# the #1387 triggers-only upsert backfill reproduce every pre-#1387 column
+# byte-identically against the frozen 2026-07-21 substrate (acceptance draws
+# stay welded to the injected trxc conversion prescriptions already loaded).
+_VIEW_STAGE_STREAM_KEY = 1387
+
 
 def _prognostic_action_probability(
     arm_base: float, disease_severity: Any, age_at_diagnosis: Any
@@ -225,6 +248,11 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         if "trigger_timestamp" in df.columns:
             df["data_split"] = self._assign_splits(df["trigger_timestamp"].tolist())
 
+        # #1387: advance the view stage AFTER the per-record stream is complete
+        # (deterministic post-processing on a dedicated keyed RNG — the main
+        # self._rng stream shape/values are untouched, see _apply_view_stage).
+        df = self._apply_view_stage(df)
+
         # Encode the KNOWN trigger->prescription conversion lift: for each trigger,
         # draw "prescription lands in [trigger_ts, trigger_ts+30d]?" with a per-arm
         # probability (accepted > rejected), scaled by priority. The injected rows are
@@ -297,6 +325,55 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                 return
         block[0]["delivery_status"] = "delivered"
         block[0]["acceptance_status"] = "accepted"
+
+    def _apply_view_stage(self, df: pd.DataFrame) -> pd.DataFrame:
+        """#1387: model the "HCP views the trigger" step (monotone with acceptance).
+
+        Rules (see the module-constant block for the realism rationale):
+
+        * disposition-bearing rows (accepted/rejected/overridden — all gated on
+          delivery_status in ('delivered','viewed') upstream) -> 'viewed';
+        * no-disposition union rows get viewed with _P_VIEW_NO_DISPOSITION;
+        * originally-'viewed' rows are never demoted; 'pending'/'failed' rows
+          are never promoted (the KPI denominator set delivery_status IN
+          ('delivered','viewed') only shifts INTERNALLY — migrations 090/092
+          denominators keep exactly the same rows);
+        * view_timestamp = trigger_timestamp + U[1..72]h on viewed rows (None
+          elsewhere), per-element capped at the rolling-window reference via
+          _anchor_cap_timestamp — same event_timestamp <= NOW() discipline as
+          trigger_timestamp itself (a capped row may collapse onto the
+          reference midnight, the #853 idiom).
+
+        Draws come from a DEDICATED rng keyed on (stream-key, config.seed) with
+        FIXED shape (len(df)), never from self._rng: the main per-record stream
+        must reproduce byte-identically under the same seed/anchor so the
+        triggers-only upsert backfill cannot decohere the frozen substrate.
+        """
+        if df is None or len(df) == 0 or "delivery_status" not in df.columns:
+            return df
+
+        rng = np.random.default_rng([_VIEW_STAGE_STREAM_KEY, self.config.seed])
+        view_coin = rng.random(len(df))
+        delay_hours = rng.integers(_VIEW_DELAY_HOURS_MIN, _VIEW_DELAY_HOURS_MAX + 1, size=len(df))
+
+        delivery = df["delivery_status"].astype(str)
+        in_union = delivery.isin(["delivered", "viewed"]).to_numpy()
+        active = df["acceptance_status"].astype(str).isin(_ACTIVE_DISPOSITIONS).to_numpy()
+        viewed = in_union & (
+            (delivery == "viewed").to_numpy() | active | (view_coin < _P_VIEW_NO_DISPOSITION)
+        )
+
+        trigger_ts = pd.to_datetime(df["trigger_timestamp"])
+        view_timestamps: list[Optional[str]] = [
+            self._anchor_cap_timestamp(t + pd.Timedelta(hours=int(h))).strftime("%Y-%m-%d %H:%M:%S")
+            if v
+            else None
+            for v, t, h in zip(viewed, trigger_ts, delay_hours, strict=True)
+        ]
+
+        df["delivery_status"] = np.where(viewed, "viewed", delivery).tolist()
+        df["view_timestamp"] = view_timestamps
+        return df
 
     def _baseline_rx_in_window(self, triggers: pd.DataFrame) -> np.ndarray:
         """Per-trigger flag: a BASELINE treatment_events prescription (the journey
