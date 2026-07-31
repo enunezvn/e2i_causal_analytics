@@ -1108,11 +1108,16 @@ _RANKING_INTENT_RE = re.compile(
 # comparative token appears. Deliberately conservative: over-vetoing an ambiguous
 # ask fails CLOSED (honest), the safe direction. 'influence'/'factor'-as-target
 # words are excluded from the veto to avoid rejecting legitimate targeting asks.
+# NOTE: the attribution NOUNS/ADJ 'predictor(s)'/'predictive' are vetoed, but the
+# ranking VERB 'predict' is NOT — "predict WHICH segments will adopt" is a ranking
+# ask and must still bind. (This gate governs only the deterministic orchestrator
+# route; the AG-UI surface is LLM-judged from the tool docstring, not this regex.)
 _EXPLANATION_INTENT_RE = re.compile(
     r"\bexplain\w*\b|\bwhy\b|\bdriv\w*\b|\bdrove\b|\breason\w*\b|\bcaus\w*\b"
     r"|\bbecause\b|\battribut\w*\b|\baccounts?\s+for\b|\bcontribut\w*\b"
     r"|\bdeterminant\w*\b|\bresponsib\w+\s+for\b|\bassociat\w+\s+with\b"
-    r"|\bcorrelat\w*\b",
+    r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\blinked\s+to\b"
+    r"|\brelated\s+to\b|\btied\s+to\b",
     re.I,
 )
 

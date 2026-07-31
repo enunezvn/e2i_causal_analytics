@@ -125,6 +125,11 @@ def test_which_drivers_explain_ask_is_not_ranking():
         "what are the determinants of Kisqali adoption by specialty",
         "which specialties are most associated with Kisqali adoption",
         "what factors drive the highest Kisqali adoption by region",
+        # codex iter-6: predictor/predictive + linked/related association phrasing
+        "which specialties are predictors of Kisqali adoption",
+        "which specialties are most predictive of Kisqali adoption",
+        "which specialties are linked to Kisqali adoption",
+        "which specialties are related to Kisqali adoption",
     ],
 )
 def test_attribution_asks_are_not_ranking(query):
