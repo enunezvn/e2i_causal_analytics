@@ -17,6 +17,25 @@ from src.repositories.trigger import TriggerRepository
 class TestTriggerRepository:
     """Base fixtures for TriggerRepository tests."""
 
+    @pytest.fixture(autouse=True)
+    def _strict_provenance_env(self, monkeypatch):
+        """Pin the strict provenance gate hermetically (#1414 dispatcher-verify).
+
+        The default-exclude assertions below only hold when the deployment-wide
+        ``E2I_INCLUDE_SYNTHETIC`` opt-out is ABSENT: with it set,
+        ``apply_provenance_filter`` skips the ``.eq('is_synthetic', False)``
+        link and every default-exclude mock chain misses its AsyncMock
+        (``await`` on a bare MagicMock -> TypeError). On the synthetic-gold
+        showcase droplet the flag rides in via tests/conftest's
+        ``load_dotenv(override=True)`` — ``find_dotenv`` walks UP from a nested
+        worktree (which has no ``.env``) into the repo-root ``.env`` — so these
+        tests failed there on ANY branch, including pristine origin/main, while
+        passing in CI (no ``.env`` anywhere up the checkout path). Deleting the
+        flag makes the intended behavior environment-independent; the opt-in
+        tests are unaffected (``include_synthetic=True`` short-circuits before
+        the env check)."""
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+
     @pytest.fixture
     def mock_client(self):
         return MagicMock()
