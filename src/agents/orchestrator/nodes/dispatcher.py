@@ -1117,7 +1117,16 @@ _EXPLANATION_INTENT_RE = re.compile(
     r"|\bbecause\b|\battribut\w*\b|\baccounts?\s+for\b|\bcontribut\w*\b"
     r"|\bdeterminant\w*\b|\bresponsib\w+\s+for\b|\bassociat\w+\s+with\b"
     r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\bindicat\w*\b|\bsignal\w*\b"
-    r"|\blinked\s+(?:to|with)\b|\brelated\s+(?:to|with)\b|\btied\s+(?:to|with)\b",
+    r"|\blinked\s+(?:to|with)\b|\brelated\s+(?:to|with)\b|\btied\s+(?:to|with)\b"
+    # codex iter-8: causal-verb 'influence' and 'factor in/for' attribution,
+    # PHRASE-CONSTRAINED so the HCP-attribute uses ('high-influence',
+    # 'influential' — influence is literally a model feature) still bind as
+    # targeting/ranking asks. Match only "influence(s) [the] <outcome>",
+    # "most influence", and "factor(s) in/behind/for/of/driving/underlying".
+    r"|\bmost\s+influenc\w*\b"
+    r"|\binfluenc(?:es?|ing|ed)\s+(?:\w+\s+){0,2}?"
+    r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b"
+    r"|\bfactors?\s+(?:in|behind|for|of|driving|underlying)\b|\bkey\s+factors?\b",
     re.I,
 )
 

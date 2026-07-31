@@ -134,12 +134,34 @@ def test_which_drivers_explain_ask_is_not_ranking():
         "which specialties are indicators of Kisqali adoption",
         "which specialties are the strongest signals of Kisqali adoption",
         "which specialties are linked with Kisqali adoption",
+        # codex iter-8: causal-verb "influence" and "factor in/for" attribution.
+        # Phrase-constrained — see the positive targeting binds below that MUST
+        # still route (high-influence / influential as TARGET attributes).
+        "which specialties most influence Kisqali adoption",
+        "which specialties influence Kisqali adoption",
+        "which specialties are the top factor in Kisqali adoption",
     ],
 )
 def test_attribution_asks_are_not_ranking(query):
     out = _resolve_prediction_synthesizer_input({"query": query}, _dispatch())
     assert isinstance(out, NeedsStructuredInput)
     assert "entity_id" in out.missing
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # codex iter-8 guard: the phrase-constrained influence/factor veto must NOT
+        # reject legitimate TARGETING/ranking asks that use 'high-influence' /
+        # 'influential' as an HCP ATTRIBUTE (influence is literally a model feature).
+        "which high-influence specialties are most likely to adopt Kisqali",
+        "which influential specialties are most likely to adopt Kisqali",
+    ],
+)
+def test_influence_as_target_attribute_still_binds_ranking(query):
+    out = _resolve_prediction_synthesizer_input({"query": query}, _dispatch())
+    assert not isinstance(out, NeedsStructuredInput)
+    assert out["segment_by"] == "specialty"
 
 
 def test_predict_which_segments_ask_binds_segment_path():
