@@ -156,6 +156,40 @@ class TestChampionBinding:
         assert "kisqali" in resolved.reason.lower()
         assert "remibrutinib" in resolved.reason.lower()
 
+    def test_unscoped_ask_never_binds_a_single_champion_registry(self, monkeypatch) -> None:
+        # codex iter-3 HIGH-1: with exactly ONE champion in the family and NO
+        # brand in the ask, binding it would predict for a brand the user
+        # never named — plausible-wrong. Must fail closed listing the target.
+        monkeypatch.setattr(
+            disp,
+            "_probe_prediction_champions",
+            lambda: [("hcp_adoption_fabhalta_goldstd_lr_v1", "hcp_adoption_fabhalta")],
+        )
+        monkeypatch.setattr(disp, "_hcp_entity_exists", lambda _e: True)
+        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](
+            _agent_input("will scvhcp_00042 adopt the therapy?"), _dispatch()
+        )
+        assert isinstance(resolved, NeedsStructuredInput)
+        assert "hcp_adoption_fabhalta" in resolved.reason
+
+    def test_grounded_brand_without_champion_gets_accurate_reason(self, monkeypatch) -> None:
+        # codex iter-3 HIGH-2: the ask DID ground a brand; the registry just
+        # serves no champion for it. The message must say that — not instruct
+        # the user to "name the brand" they already named.
+        monkeypatch.setattr(
+            disp,
+            "_probe_prediction_champions",
+            lambda: [("hcp_adoption_fabhalta_goldstd_lr_v1", "hcp_adoption_fabhalta")],
+        )
+        monkeypatch.setattr(disp, "_hcp_entity_exists", lambda _e: True)
+        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](
+            _agent_input("will scvhcp_00042 adopt Kisqali?"), _dispatch()
+        )
+        assert isinstance(resolved, NeedsStructuredInput)
+        assert "Kisqali" in resolved.reason
+        assert "name the brand" not in resolved.reason.lower()
+        assert "no production champion" in resolved.reason.lower()
+
     def test_family_match_but_empty_registry_fails_closed_honestly(self, monkeypatch) -> None:
         monkeypatch.setattr(disp, "_probe_prediction_champions", lambda: [])
         resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](

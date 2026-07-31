@@ -1144,26 +1144,30 @@ def _target_tokens(target: str) -> Set[str]:
     return {t for t in re.split(r"[^a-z0-9]+", target.lower()) if t}
 
 
-def _match_champion_target(
-    champions: List[Tuple[str, str]], family_tokens: Tuple[str, ...], brand: Optional[str]
-) -> Optional[str]:
-    """The unique registry target matching the family tokens + brand, else None.
+def _matching_champion_targets(
+    champions: List[Tuple[str, str]], family_tokens: Tuple[str, ...], brand: str
+) -> List[str]:
+    """Registry targets matching the family tokens + the GROUNDED brand.
 
     Token-driven over what the registry ACTUALLY serves (never a constructed
     target string): a target matches when its token set contains every family
-    token and, when a brand is grounded, the brand token. Ambiguity (≥2
-    matches) binds nothing — the caller fails closed listing the options.
+    token and the brand token. ``brand`` is REQUIRED (codex iter-3 HIGH-1): a
+    brand-less match against a single-champion registry would bind a brand the
+    user never named — the caller must fail closed on an unscoped ask instead.
+    The caller binds only a UNIQUE match and fails closed on 0 (no champion for
+    that brand) or ≥2 (ambiguous) with reasons naming each state accurately.
     """
     matches: List[str] = []
+    brand_token = brand.lower()
     for _name, target in champions:
         tokens = _target_tokens(target)
         if not all(ft in tokens for ft in family_tokens):
             continue
-        if brand is not None and brand.lower() not in tokens:
+        if brand_token not in tokens:
             continue
         if target not in matches:
             matches.append(target)
-    return matches[0] if len(matches) == 1 else None
+    return matches
 
 
 def _resolve_prediction_synthesizer_input(
@@ -1246,19 +1250,47 @@ def _resolve_prediction_synthesizer_input(
         ]
         if family_champions:
             brand, _region = _extract_brand_region(agent_input)
-            resolved_target = _match_champion_target(family_champions, family_tokens, brand)
-            if resolved_target is None:
-                served = ", ".join(sorted({t for _n, t in family_champions}))
+            served = ", ".join(sorted({t for _n, t in family_champions}))
+            if brand is None:
+                # codex iter-3 HIGH-1: an UNSCOPED ask must never bind — even a
+                # single-champion registry would mean predicting for a brand
+                # the user never named (plausible-wrong).
                 return NeedsStructuredInput(
                     agent_name="prediction_synthesizer",
                     missing=("prediction_target",),
                     reason=(
                         f"production champions exist for {family} ({served}) but the ask "
-                        "does not pin down exactly one brand-scoped target — name the "
-                        "brand to scope the prediction"
+                        "names no brand — name the brand to scope the prediction"
                     ),
                     rest_endpoint="POST /api/models/predict/{model_name}",
                 )
+            brand_targets = _matching_champion_targets(family_champions, family_tokens, brand)
+            if not brand_targets:
+                # codex iter-3 HIGH-2: the ask DID ground a brand; say
+                # accurately that the registry serves no champion for it.
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("prediction_target",),
+                    reason=(
+                        f"the ask is scoped to {brand} but the registry serves no "
+                        f"production champion for it in the {family} family "
+                        f"(served targets: {served})"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            if len(brand_targets) > 1:
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("prediction_target",),
+                    reason=(
+                        f"multiple production champion targets match {brand} in the "
+                        f"{family} family ({', '.join(sorted(brand_targets))}) — the "
+                        "resolver binds nothing on an ambiguous match; supply "
+                        "prediction_target explicitly"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
+            resolved_target = brand_targets[0]
             entity_match = _HCP_ENTITY_RE.search(query)
             if entity_match is None:
                 return NeedsStructuredInput(
