@@ -221,6 +221,7 @@ markers = [
     "benchmark: Retrieval-quality (Recall@10 / MRR) benchmark — excluded from default unit-test sweep, run via .github/workflows/retrieval-benchmarks.yml (issue #377)",
     "live_llm: Live LLM smoke (real Anthropic SDK call) — skipped unless ANTHROPIC_API_KEY starts with 'sk-ant-' (issue #376 e2e)",
     "live_lm: Plan-239 §5.3 Tier-2 — MIPROv2 byte-identical reproducibility requires a live LM key; CI-skipped without ANTHROPIC_API_KEY",
+    "real_supabase: Opt-out of the unit-tree dead-Supabase pin (#1420) — ONLY for reachability-gated READ-ONLY faithful checks; never for tests that write",
 ]
 # Filter warnings
 filterwarnings = [
