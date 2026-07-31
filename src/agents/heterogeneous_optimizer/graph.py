@@ -236,4 +236,9 @@ def create_heterogeneous_optimizer_graph(
     workflow.add_edge("generate_profiles", END)
     workflow.add_edge("error_handler", END)
 
-    return workflow.compile()
+    # checkpointer=False: state carries a DataFrame passthrough (tier0 data)
+    # and this graph runs as a subgraph of the checkpointed chatbot graph on
+    # the chat path — a bare compile() inherits the parent's Redis
+    # checkpointer whose ormsgpack serde cannot serialize DataFrames (#1351
+    # live-unmasked, same class as causal_impact).
+    return workflow.compile(checkpointer=False)
