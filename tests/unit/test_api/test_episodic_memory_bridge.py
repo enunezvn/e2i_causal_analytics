@@ -306,12 +306,21 @@ class TestSaveToEpisodicMemory:
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.insert_episodic_memory_with_text", new_callable=AsyncMock)
     async def test_session_id_passed_correctly(self, mock_insert):
-        """Test that session ID is passed to insert function."""
+        """Session id reaches the writer as the plain session uuid (#1393).
+
+        The composite ``{user}~{session}`` chat session id is coerced to its
+        trailing session uuid for the uuid-typed ``episodic_memories.session_id``
+        column (previously it was passed through verbatim and 22P02-failed).
+        """
+        import uuid
+
         mock_insert.return_value = "memory-id-session"
 
+        session_uuid = uuid.uuid4()
+        composite = f"{uuid.uuid4()}~{session_uuid}"
         state = {
             "query": "Test query",
-            "session_id": "user123~abc-def-ghi",
+            "session_id": composite,
             "intent": IntentType.KPI_QUERY,
             "brand_context": None,
             "region_context": None,
@@ -327,7 +336,7 @@ class TestSaveToEpisodicMemory:
         )
 
         call_args = mock_insert.call_args
-        assert call_args.kwargs["session_id"] == "user123~abc-def-ghi"
+        assert call_args.kwargs["session_id"] == str(session_uuid)
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.insert_episodic_memory_with_text", new_callable=AsyncMock)

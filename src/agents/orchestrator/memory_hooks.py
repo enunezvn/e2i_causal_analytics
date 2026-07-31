@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
+from src.utils.session_ids import coerce_session_uuid
+
 logger = logging.getLogger(__name__)
 
 
@@ -536,11 +538,23 @@ class OrchestratorMemoryHooks:
                 ),
             )
 
+            # ``session_id`` reaches the uuid-typed ``episodic_memories.session_id``
+            # column. The chat surface passes a composite ``{user}~{session}`` id
+            # (and, post-#1394, a ``~bridge``-suffixed one) that Postgres rejects
+            # with 22P02 ("invalid input syntax for type uuid") -- coerce to the
+            # plain session uuid so the write lands instead of being swallowed by
+            # the ``except`` below, which silently dropped EVERY chat-path
+            # orchestration's episodic record (#1393; ``episodic=0``). A non-uuid
+            # id coerces to None -> honest NULL for the nullable column. The Redis
+            # writes above (cache / conversation / routing) deliberately keep the
+            # full composite id for cross-turn session correlation.
+            session_uuid = coerce_session_uuid(session_id)
+
             # Insert with auto-generated embedding
             memory_id = await insert_episodic_memory_with_text(
                 memory=memory_input,
                 text_to_embed=f"{query} {description}",
-                session_id=session_id,
+                session_id=str(session_uuid) if session_uuid is not None else None,
             )
 
             logger.info(f"Stored orchestration in episodic memory: {memory_id}")

@@ -125,6 +125,19 @@ class TestDefect2AuditSessionUuidCoercion:
 
         assert _coerce_session_uuid(composite) == session_uuid
 
+    def test_coerce_bridge_suffixed_composite_returns_session_uuid(self):
+        """A '~bridge'-suffixed composite (PR #1394) recovers the session uuid.
+
+        The conversational bridge sets ``{session_id}~bridge`` (chat_bridge.py),
+        i.e. ``{user}~{session}~bridge`` on the chat surface. RED before the
+        #1393 hardening: ``rsplit('~', 1)[-1] == 'bridge'`` -> None, so a bridge
+        turn's audit-chain genesis lost its session id (codex #1394 LOW).
+        """
+        session_uuid = uuid.uuid4()
+        bridged = f"{uuid.uuid4()}~{session_uuid}~bridge"
+
+        assert _coerce_session_uuid(bridged) == session_uuid
+
     def test_coerce_plain_uuid_string_is_preserved(self):
         u = uuid.uuid4()
 
