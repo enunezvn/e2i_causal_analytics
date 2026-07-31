@@ -98,8 +98,8 @@ type ChatSuggestion = { title: string; message: string };
  *
  * Keep fallback pill topics inside what the bound backend tools can actually
  * answer (KPIs, causal paths, agents — see E2I_CHATBOT_TOOLS in
- * chatbot_tools.py); the chart pills route through the renderKpiTrend
- * generative-UI action so users discover inline visuals.
+ * chatbot_tools.py); the chart pills route through the renderKpiTrend /
+ * renderChart generative-UI actions so users discover inline visuals.
  */
 const PAGE_SUGGESTIONS: Record<string, ChatSuggestion> = {
   '/': {
@@ -620,7 +620,14 @@ Available actions:
 
 Always fetch real data with the available tools before answering, cite the actual metric values and their source, and deliver rich, evidence-based strategic insight — what the numbers mean for the business and the concrete next action — not just the figure. Focus on pharmaceutical commercial analytics (TRx, NRx, market share, causal drivers).
 
-Visual answers: whenever the answer involves a KPI's evolution over time, a trend, or a period comparison, call renderKpiTrend so the chart renders inline alongside your text (kpiId: trx, nrx, nbrx, trx_share, conversion_rate, roi, or a registry code like WS3-BI-005; nbrx and trx_share need a brand). For trx/nrx/nbrx you can split the trend by patient axis: compareBy 'severity' or 'lot' renders ONE comparison chart with a line per severity tier / line of therapy — for cross-segment comparisons make a single call with compareBy, never one call per tier; segment ('low'/'medium'/'high') or therapyLine ('0'-'3') charts one tier. Other KPIs have no per-tier series. Use markdown tables for multi-row numeric comparisons instead of prose lists of figures.`}
+Visual answers: whenever the answer involves a KPI — its value, its evolution over time, a period comparison, or several KPIs side by side — render a chart inline alongside your text. There are two chart actions and the choice is mechanical:
+
+- renderKpiTrend — ONLY for a trend over time of the Rx-volume and commercial KPIs it names (trx, nrx, nbrx, trx_share, conversion_rate, roi, or their registry codes). Prefer it for those, it renders more cheaply.
+- renderChart — EVERY other case. Any other registry KPI (data-quality, model-performance, trigger, brand, causal), any KPI you want at its current value rather than over time, several KPIs compared side by side, or any chart shape other than a line.
+
+If a request does not clearly fit renderKpiTrend's list, use renderChart — it covers the whole registry and never needs you to know in advance whether a KPI has a monthly series: one with history is charted over time, a point-in-time KPI is charted at its current value, and two or more KPIs are compared side by side. Name KPIs for renderChart however reads best — a registry code (WS1-MP-001, CM-001), a short key (roc_auc, trigger_precision), or a display name ("Cross-source Match Rate"); all resolve. Omit chartType unless the user asks for a specific shape.
+
+Both actions take the same scope arguments: nbrx and trx_share are tracked per brand only, so pass brand for those. For trx/nrx/nbrx the trend can be split by patient axis — compareBy 'severity' or 'lot' renders ONE chart with a line per severity tier / line of therapy, so for cross-segment comparisons make a single call with compareBy, never one call per tier; segment ('low'/'medium'/'high') or therapyLine ('0'-'3') charts one tier. Other KPIs have no per-tier series. Use markdown tables for multi-row numeric comparisons instead of prose lists of figures.`}
                 labels={{
                   initial: 'How can I help you explore E2I analytics?',
                   placeholder: 'Ask about KPIs, agents, or insights...',

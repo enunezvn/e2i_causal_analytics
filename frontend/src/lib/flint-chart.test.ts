@@ -141,61 +141,87 @@ describe('assembleKpiFigure', () => {
     expect(result.reason).toMatch(/nope/);
   });
 
-  it('compiles every advertised chart type against both routed data shapes', () => {
-    // A type in the action description that compiles to zero traces would be a
-    // dead option the model can pick and the user would see fail. This caught
-    // Range Area Chart, which needs a y2 channel no routing branch produces.
-    const shapes: Array<[string, LogicalEncoding, Omit<ChartRequest, 'encodings'>]> = [
-      [
-        'categorical comparison',
-        { axis: 'kpi', value: 'value' },
-        {
-          rows: [
-            { kpi: 'A', value: 3 },
-            { kpi: 'B', value: 5 },
-          ],
-          semanticTypes: { kpi: 'Category', value: 'Number' },
-          chartType: 'Bar Chart',
-        },
-      ],
+  it('compiles every advertised chart type against every routed shape and KPI unit', () => {
+    // The question this answers: can the chat plot ANY registry KPI at ANY of
+    // the chart types it advertises?
+    //
+    // The 45 registry KPIs do not need 45 cases. Flint compiles from the DATA
+    // — a row shape plus a semantic type per field — and never sees a KPI id.
+    // So the registry collapses to (shapes the router emits) x (semantic types
+    // the catalog assigns), and that cross-product is the real surface.
+    //
+    // Both axes are DERIVED, not listed: semantic types come from KPI_CATALOG,
+    // so a registry KPI introducing a new unit widens this test automatically
+    // rather than slipping through untested.
+    //
+    // A combination that compiles to zero traces would be a dead option the
+    // model can pick and the user would watch fail. This is what caught Range
+    // Area Chart, which needs a y2 channel no routing branch produces.
+    const semanticTypes = [...new Set(KPI_CATALOG.map((e) => e.semanticType))].sort();
+
+    // One case per shape `kpi-chart-router` can emit. `value` is the measure in
+    // every one, so the KPI's unit is the only thing that varies per iteration.
+    const shapes: Array<[string, LogicalEncoding, ChartRow[], Record<string, string>]> = [
       [
         'monthly series',
         { axis: 'month', value: 'value' },
-        {
-          rows: ROWS,
-          semanticTypes: { month: 'Date', value: 'Count' },
-          chartType: 'Line Chart',
-        },
+        ROWS,
+        { month: 'Date' },
       ],
       [
         'segmented series',
         { axis: 'month', value: 'value', series: 'bucket' },
-        {
-          rows: [
-            { month: '2026-01-01', bucket: 'high', value: 10 },
-            { month: '2026-01-01', bucket: 'low', value: 40 },
-            { month: '2026-02-01', bucket: 'high', value: 12 },
-            { month: '2026-02-01', bucket: 'low', value: 44 },
-          ],
-          semanticTypes: { month: 'Date', bucket: 'Category', value: 'Count' },
-          chartType: 'Line Chart',
-        },
+        [
+          { month: '2026-01-01', bucket: 'high', value: 10 },
+          { month: '2026-01-01', bucket: 'low', value: 40 },
+          { month: '2026-02-01', bucket: 'high', value: 12 },
+          { month: '2026-02-01', bucket: 'low', value: 44 },
+        ],
+        { month: 'Date', bucket: 'Rank' },
+      ],
+      [
+        'multi-KPI comparison',
+        { axis: 'kpi', value: 'value' },
+        [
+          { kpi: 'A', value: 3 },
+          { kpi: 'B', value: 5 },
+        ],
+        { kpi: 'Category' },
+      ],
+      [
+        'single current value',
+        { axis: 'kpi', value: 'value' },
+        [{ kpi: 'A', value: 3 }],
+        { kpi: 'Category' },
       ],
     ];
 
-    for (const [shapeName, logical, base] of shapes) {
-      for (const chartType of SUPPORTED_CHART_TYPES) {
-        const result = assembleKpiFigure({
-          ...base,
-          chartType,
-          encodings: encodingsFor(chartType, logical),
-        });
-        expect(
-          result.ok,
-          `${chartType} / ${shapeName}: ${result.ok ? '' : result.reason}`
-        ).toBe(true);
+    const failures: string[] = [];
+    let checked = 0;
+
+    for (const [shapeName, logical, rows, baseTypes] of shapes) {
+      for (const semanticType of semanticTypes) {
+        for (const chartType of SUPPORTED_CHART_TYPES) {
+          checked++;
+          const result = assembleKpiFigure({
+            rows,
+            semanticTypes: { ...baseTypes, value: semanticType },
+            chartType,
+            encodings: encodingsFor(chartType, logical),
+          });
+          if (!result.ok) {
+            failures.push(`${chartType} / ${shapeName} / ${semanticType}: ${result.reason}`);
+          }
+        }
       }
     }
+
+    expect(failures).toEqual([]);
+    // Guards the derivation itself: if SUPPORTED_CHART_TYPES or the catalog's
+    // unit set shrinks silently, the matrix would still "pass" while covering
+    // less. 4 shapes x 5 units x 12 types = 240 today.
+    expect(checked).toBe(shapes.length * semanticTypes.length * SUPPORTED_CHART_TYPES.length);
+    expect(checked).toBeGreaterThanOrEqual(240);
   });
 });
 

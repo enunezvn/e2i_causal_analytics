@@ -920,6 +920,21 @@ describe('Action Handlers', () => {
       expect(result.chartType).toBe('KPI Card');
     });
 
+    it('names the other action, in both directions', () => {
+      // The defect this pins: the chat system prompt documented ONLY
+      // renderKpiTrend, and renderChart's description deferred to it while
+      // renderKpiTrend's said nothing back. Two actions with overlapping
+      // capability and a one-way reference steer the model to the narrower
+      // one. Each description must state where the boundary is.
+      getActionHandler('renderChart');
+      const byName = (name: string) =>
+        mockUseCopilotAction.mock.calls.find((c) => c[0]?.name === name)![0]
+          .description as string;
+
+      expect(byName('renderChart')).toContain('renderKpiTrend');
+      expect(byName('renderKpiTrend')).toContain('renderChart');
+    });
+
     it('declares kpis and chartType so the model can pass them', () => {
       getActionHandler('renderChart');
       const actionCall = mockUseCopilotAction.mock.calls.find(

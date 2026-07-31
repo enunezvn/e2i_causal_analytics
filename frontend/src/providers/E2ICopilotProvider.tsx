@@ -892,7 +892,10 @@ const CopilotHooksInner: React.FC = () => {
       'code like WS3-BI-005. nbrx and trx_share are tracked per brand only — pass brand for them. ' +
       'For trx/nrx/nbrx the trend can be split by patient severity tier or line of therapy: pass ' +
       'compareBy to draw ONE chart with one line per tier (never call once per tier), or ' +
-      'segment/therapyLine to chart a single tier.',
+      'segment/therapyLine to chart a single tier. ' +
+      'This action covers ONLY the KPIs listed above, and only as a line over time — for any other ' +
+      'registry KPI, for a current value rather than a trend, for comparing several KPIs, or for any ' +
+      'other chart shape, call renderChart instead.',
     parameters: [
       {
         name: 'kpiId',
@@ -1026,8 +1029,10 @@ const CopilotHooksInner: React.FC = () => {
   useCopilotAction({
     name: 'renderChart',
     description:
-      'Render a chart of any E2I KPI. Use when the user asks to visualize, plot, chart or graph a ' +
-      'metric that is not a simple Rx-volume trend (prefer renderKpiTrend for TRx/NRx/NBRx trends). ' +
+      'Render a chart of any E2I KPI. This is the general charting action: use it for every case ' +
+      'except a line-over-time of the Rx-volume/commercial KPIs renderKpiTrend names (trx, nrx, ' +
+      'nbrx, trx_share, conversion_rate, roi) — prefer renderKpiTrend for those, it renders more ' +
+      'cheaply. If a request does not clearly fit that list, use this action. ' +
       'Handles data-quality, model-performance, trigger, business, brand and causal KPIs. Accepts ' +
       'registry codes (WS1-MP-001, CM-001, BR-003), yaml keys (roc_auc, trigger_precision), or ' +
       'display names ("ROC-AUC", "Cross-source Match Rate", "Average Treatment Effect"). Pass ' +
