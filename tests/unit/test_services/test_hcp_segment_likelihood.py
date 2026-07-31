@@ -229,6 +229,39 @@ async def test_score_hcp_segments_end_to_end_wiring(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_score_wraps_transport_error_as_segment_scoring_error(monkeypatch):
+    # codex iter-1 MED: a model-server transport/circuit-breaker failure must
+    # surface via the typed SegmentScoringError contract, not a raw exception.
+    import src.services.hcp_segment_likelihood as svc
+
+    async def fake_resolve(brand, *, db):
+        return "hcp_adoption_kisqali_goldstd_lr_v1", 0.77
+
+    async def fake_load(spec, splits, db):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "hcp_id": ["h1"],
+                "peer_influence_score": [0.5],
+                "influence_network_size": [5],
+                "years_experience": [10],
+                "specialty": ["oncology"],
+                "geographic_region": ["west"],
+            }
+        )
+
+    class _BoomClient:
+        async def predict_batch(self, *a, **k):
+            raise RuntimeError("Circuit breaker open for model")
+
+    monkeypatch.setattr(svc, "resolve_hcp_adoption_champion", fake_resolve)
+    monkeypatch.setattr(svc, "_load_scoring_frame", fake_load)
+    with pytest.raises(svc.SegmentScoringError):
+        await svc.score_hcp_segments("Kisqali", db=object(), model_client=_BoomClient())
+
+
+@pytest.mark.asyncio
 async def test_score_hcp_segments_propagates_fail_closed_champion(monkeypatch):
     import src.services.hcp_segment_likelihood as svc
 

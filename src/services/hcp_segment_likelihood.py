@@ -263,10 +263,21 @@ async def _score_raw_features(
     probabilities: List[float] = []
     for start in range(0, len(raw_features), chunk_size):
         chunk = raw_features[start : start + chunk_size]
-        result = await model_client.predict_batch(
-            model_name,
-            {"batch_id": str(uuid.uuid4()), "raw_features": chunk, "model_name": model_name},
-        )
+        try:
+            result = await model_client.predict_batch(
+                model_name,
+                {"batch_id": str(uuid.uuid4()), "raw_features": chunk, "model_name": model_name},
+            )
+        except SegmentScoringError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — transport / circuit-breaker / HTTP
+            # A model-server transport failure (httpx error, circuit breaker open,
+            # stale serving schema) must surface via the typed fail-closed
+            # contract so BOTH callers (agent + chat tool) handle it on the
+            # documented path — never leak a raw exception nor fabricate a score.
+            raise SegmentScoringError(
+                f"the model server could not score cohort {model_name!r}: {exc}"
+            ) from exc
         err = result.get("error")
         if err:
             raise SegmentScoringError(f"cohort scoring failed for {model_name!r}: {err}")

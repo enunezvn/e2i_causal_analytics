@@ -1079,11 +1079,27 @@ _SEGMENT_ASK_RE = re.compile(
     re.I,
 )
 _SEGMENT_REGION_RE = re.compile(r"\bregions?\b|\bgeograph\w*\b", re.I)
+# codex iter-1 HIGH-1: a segment NOUN alone is not enough — an explanation/driver
+# ask ("explain <brand> adoption by specialty drivers") also carries a segment
+# noun but is NOT a ranking request, and coercing it into a ranked list returns a
+# confident answer the user never asked for. Require an explicit RANKING intent
+# too (which / rank / top / most / highest / prioritize / predict / likelihood /
+# increase). Absent it, the ask stays under-specified and fails closed on entity.
+_RANKING_INTENT_RE = re.compile(
+    r"\bwhich\b|\brank\w*\b|\btop\b|\bmost\b|\bhighest\b|\bgreatest\b|\bbest\b"
+    r"|\bprioriti[sz]\w+\b|\bpredict\w*\b|\bforecast\w*\b|\blikeli\w*\b|\blikelihood\b"
+    r"|\bincreas\w*\b",
+    re.I,
+)
 
 
 def _is_segment_ranking_ask(query: Optional[str]) -> bool:
-    """True when the ask ranks a POPULATION by a segment axis (not a single HCP)."""
-    return bool(query) and bool(_SEGMENT_ASK_RE.search(query))
+    """True when the ask RANKS a POPULATION by a segment axis (not a single HCP):
+    it names a segment axis AND carries an explicit ranking/prediction intent.
+    A bare segment noun without ranking intent is NOT a ranking ask."""
+    if query is None:
+        return False
+    return bool(_SEGMENT_ASK_RE.search(query)) and bool(_RANKING_INTENT_RE.search(query))
 
 
 def _segment_axis_from_query(query: str) -> str:

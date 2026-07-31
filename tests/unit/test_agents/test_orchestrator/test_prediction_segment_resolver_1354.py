@@ -68,3 +68,32 @@ def test_segment_ask_without_brand_fails_closed():
     agent_input = {"query": "which HCP segments are most likely to increase prescriptions"}
     out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
     assert isinstance(out, NeedsStructuredInput)
+
+
+def test_non_ranking_by_specialty_ask_does_not_coerce_to_ranking():
+    # codex iter-1 HIGH-1: a segment noun WITHOUT ranking intent (an explanation
+    # / driver ask) must NOT be coerced into a ranked segment answer — that would
+    # return a confident ranking the user never asked for. Still fails closed on
+    # entity_id (the pre-#1354 behavior for a non-ranking single-entity ask).
+    agent_input = {"query": "explain Kisqali adoption by specialty drivers"}
+    out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
+    assert isinstance(out, NeedsStructuredInput)
+    assert "entity_id" in out.missing
+
+
+def test_predict_which_segments_ask_binds_segment_path():
+    # "predict which ..." carries ranking intent even without "most likely".
+    agent_input = {"query": "predict which HCP specialties will adopt Fabhalta"}
+    # Fabhalta champion for the family:
+    import src.agents.orchestrator.nodes.dispatcher as disp
+
+    original = disp._probe_prediction_champions
+    disp._probe_prediction_champions = lambda: [
+        ("hcp_adoption_fabhalta_goldstd_lr_v1", "hcp_adoption_fabhalta")
+    ]
+    try:
+        out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
+    finally:
+        disp._probe_prediction_champions = original
+    assert not isinstance(out, NeedsStructuredInput)
+    assert out["segment_by"] == "specialty"
