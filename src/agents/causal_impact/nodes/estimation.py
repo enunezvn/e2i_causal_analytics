@@ -65,7 +65,16 @@ def _encode_categorical_covariates(frame: pd.DataFrame) -> pd.DataFrame:
     """
     if frame.shape[1] == 0:
         return frame
-    cat_cols = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
+    # String/categorical dtypes only: datetime-like columns are legitimate
+    # high-cardinality confounders, not identifier leaks, and must pass
+    # through untouched rather than trip the cardinality guard.
+    cat_cols = [
+        c
+        for c in frame.columns
+        if isinstance(frame[c].dtype, pd.CategoricalDtype)
+        or pd.api.types.is_object_dtype(frame[c])
+        or pd.api.types.is_string_dtype(frame[c])
+    ]
     if not cat_cols:
         return frame
     absurd = [c for c in cat_cols if frame[c].nunique() > _MAX_CATEGORICAL_CARDINALITY]

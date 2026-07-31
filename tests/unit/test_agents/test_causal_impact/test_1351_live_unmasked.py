@@ -24,7 +24,11 @@ import pandas as pd
 import pytest
 
 from src.agents.causal_impact.graph import create_causal_impact_graph
-from src.agents.causal_impact.nodes.estimation import EstimationNode
+from src.agents.causal_impact.nodes.estimation import (
+    EstimationNode,
+    _encode_categorical_covariates,
+)
+from src.agents.drift_monitor.graph import create_drift_monitor_graph
 from src.agents.gap_analyzer.graph import create_gap_analyzer_graph
 from src.agents.heterogeneous_optimizer.graph import create_heterogeneous_optimizer_graph
 
@@ -45,6 +49,12 @@ class TestSubgraphCheckpointDetachment:
 
     def test_gap_analyzer_graph_detached(self):
         graph = create_gap_analyzer_graph()
+        assert graph.checkpointer is False
+
+    def test_drift_monitor_graph_detached(self):
+        # drift_monitor is chat-dispatchable and its state allows a tier0_data
+        # DataFrame passthrough — same failure class as causal_impact.
+        graph = create_drift_monitor_graph()
         assert graph.checkpointer is False
 
 
@@ -99,3 +109,14 @@ class TestCategoricalCovariates:
                 adjustment_set=["delivery_channel", "hcp_id"],
                 explicit_method="ols",
             )
+
+    def test_datetime_column_not_treated_as_id_leak(self):
+        # The cardinality guard targets string/categorical identifier leaks; a
+        # high-cardinality datetime confounder is a legitimate adjustment
+        # variable and must pass through un-rejected (and un-dummied).
+        df = _frame()
+        df["visit_date"] = pd.date_range("2026-01-01", periods=len(df), freq="h")
+        encoded = _encode_categorical_covariates(df[["delivery_channel", "visit_date"]])
+        assert "visit_date" in encoded.columns
+        assert encoded["visit_date"].equals(df["visit_date"])
+        assert "delivery_channel" not in encoded.columns  # dummied away
