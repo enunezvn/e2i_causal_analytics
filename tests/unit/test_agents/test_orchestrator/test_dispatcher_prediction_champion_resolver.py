@@ -116,6 +116,24 @@ class TestChampionBinding:
         )
         assert isinstance(resolved, NeedsStructuredInput)
         assert "scvhcp_99999" in resolved.reason
+        assert "no such hcp_id" in resolved.reason
+
+    def test_entity_probe_failure_is_not_reported_as_absence(
+        self, champions, monkeypatch
+    ) -> None:
+        # codex iter-2 HIGH: an entity-lookup FAILURE must never be reported
+        # as "no such hcp_id exists" — the id may exist; the probe just failed.
+        def _boom(_e):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(disp, "_hcp_entity_exists", _boom)
+        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](
+            _agent_input("will scvhcp_00042 adopt Fabhalta?"), _dispatch()
+        )
+        assert isinstance(resolved, NeedsStructuredInput)
+        reason = resolved.reason.lower()
+        assert "no such hcp_id" not in reason
+        assert "could not be verified" in reason or "lookup failed" in reason
 
     def test_no_entity_fails_closed_naming_the_real_champion(self, champions) -> None:
         resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](

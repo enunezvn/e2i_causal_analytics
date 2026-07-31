@@ -1277,12 +1277,25 @@ def _resolve_prediction_synthesizer_input(
             try:
                 entity_known = _hcp_entity_exists(entity)
             except Exception as exc:  # noqa: BLE001 - probe is best-effort; fail closed
+                # codex iter-2 HIGH: a lookup FAILURE must not be reported as
+                # absence — the id may exist; the probe just failed (same
+                # failure-class as the champion-probe fix above).
                 logger.warning(
                     "prediction_synthesizer dispatch: entity presence probe failed (%s); "
                     "failing closed.",
                     exc,
                 )
-                entity_known = False
+                return NeedsStructuredInput(
+                    agent_name="prediction_synthesizer",
+                    missing=("entity_id",),
+                    reason=(
+                        f"the ask names entity {entity!r} but its existence could not be "
+                        "verified (adoption-substrate lookup failed) — cannot distinguish "
+                        "'unknown id' from 'substrate unavailable', so nothing was "
+                        "predicted; retry once the substrate is reachable"
+                    ),
+                    rest_endpoint="POST /api/models/predict/{model_name}",
+                )
             if not entity_known:
                 return NeedsStructuredInput(
                     agent_name="prediction_synthesizer",
