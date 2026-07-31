@@ -235,6 +235,102 @@ def _reconstruction_nuisance_init_params(
     return {}
 
 
+def _subsample_for_refutation(
+    data: Any, treatment: str, outcome: str
+) -> Tuple[Any, Dict[str, Any]]:
+    """#1419: deterministic stratified subsample of the estimation passthrough.
+
+    Full-frame refutation can never fit any enforceable budget on the live
+    substrate (measured 2026-07-31: ~23 s per refit x ~105 configured sims on
+    the 37,371-row conversion frame). Refutation therefore reconstructs and
+    refutes on the SAME deterministic stratified subsample family as #1392
+    selection — the identical helper (treatment x outcome-bin strata,
+    content-derived seed, cap ``SELECTION_MAX_ROWS_DEFAULT``), so there is a
+    single subsampling source and zero drift. Measured on the live frame the
+    5,000-row subsample preserves the marginals almost exactly (treat share
+    0.4849 -> 0.4848, outcome mean 0.1836 -> 0.1836) and drops per-sim cost to
+    ~2.1-2.6 s. The reported ATE/CI stays the FULL-frame fit (#1392 contract);
+    the reconstructed-vs-reported tolerance guard below covers the
+    subsample-vs-full drift (observed live: 0.0404 vs 0.0352).
+
+    A continuous treatment is binarized at the FULL frame's median BEFORE the
+    draw (same NumPy ops as estimation.py's preprocessing): subsampling first
+    would shift the split to the subsample's median — a different estimand.
+    Reconstruction's integer check then passes the 0/1 column through
+    unchanged.
+
+    Bad passthroughs (None / non-DataFrame / missing columns) return
+    unchanged: reconstruction owns the fail-closed messaging for those.
+    Unexpected coercion failures (e.g. a non-numeric treatment the integer
+    check chokes on) likewise fall back to the full frame — subsampling is an
+    optimization and must never bypass the structured fail-closed paths with a
+    raw dtype error; the downstream budget gates own any resulting skip.
+
+    Returns ``(frame, disclosure)`` where disclosure carries
+    ``refutation_subsampled`` / ``refutation_n_rows`` /
+    ``refutation_n_rows_total`` — stamped onto every suite test's ``details``
+    so each persisted evidence row (``details_json``) records
+    validated-on-subsample.
+    """
+    if (
+        data is None
+        or not hasattr(data, "columns")
+        or treatment not in data.columns
+        or outcome not in data.columns
+    ):
+        n = int(data.shape[0]) if hasattr(data, "shape") else 0
+        return data, {
+            "refutation_subsampled": False,
+            "refutation_n_rows": n,
+            "refutation_n_rows_total": n,
+        }
+
+    from src.causal_engine.energy_score.estimator_selector import (
+        SELECTION_MAX_ROWS_DEFAULT,
+        _stratified_subsample_indices,
+    )
+
+    n_total = int(len(data))
+    if n_total <= SELECTION_MAX_ROWS_DEFAULT:
+        return data, {
+            "refutation_subsampled": False,
+            "refutation_n_rows": n_total,
+            "refutation_n_rows_total": n_total,
+        }
+
+    try:
+        frame = data
+        treatment_arr = frame[treatment].to_numpy()
+        if not np.array_equal(treatment_arr, treatment_arr.astype(int)):
+            frame = frame.copy()
+            frame[treatment] = (treatment_arr > np.median(treatment_arr)).astype(int)
+
+        indices = _stratified_subsample_indices(
+            frame[treatment].to_numpy(),
+            frame[outcome].to_numpy(),
+            SELECTION_MAX_ROWS_DEFAULT,
+        )
+    except Exception as exc:  # noqa: BLE001 - unexpected dtypes/content
+        logger.warning(
+            "Refutation subsample failed (%s: %s) — falling back to the full "
+            "%d-row frame; downstream budget gates own any resulting "
+            "fail-closed skip (#1419).",
+            type(exc).__name__,
+            exc,
+            n_total,
+        )
+        return data, {
+            "refutation_subsampled": False,
+            "refutation_n_rows": n_total,
+            "refutation_n_rows_total": n_total,
+        }
+    return frame.iloc[indices], {
+        "refutation_subsampled": True,
+        "refutation_n_rows": int(len(indices)),
+        "refutation_n_rows_total": n_total,
+    }
+
+
 def _reconstruct_dowhy_artifacts(
     *,
     data: Any,
@@ -1068,6 +1164,31 @@ class RefutationNode:
                     "rather than orphaning refutation compute past the worker's wall-clock cap.",
                     details={"reason": "time_budget_exceeded_pre_refutation"},
                 )
+            # #1419: reconstruct + refute on the deterministic stratified
+            # subsample (same helper as #1392 selection) — full-frame refutation
+            # measures ~23 s/refit x ~105 sims on the live substrate and can
+            # never fit any enforceable budget. See _subsample_for_refutation.
+            refutation_data, data_disclosure = _subsample_for_refutation(
+                estimation_data, treatment, outcome
+            )
+            # The e-value standardizes the FULL-frame reported effect, but the
+            # runner's ``data`` below is the subsample — hand it the full
+            # frame's outcome SD so the scale-sensitive critical gate is
+            # standardized on the same frame as the effect it gates. ``None``
+            # lets the runner fall back to its data-derived SD.
+            outcome_std_full: Optional[float] = None
+            try:
+                if hasattr(estimation_data, "columns") and outcome in estimation_data.columns:
+                    outcome_std_full = float(np.std(estimation_data[outcome].to_numpy(dtype=float)))
+            except Exception:  # noqa: BLE001 - non-numeric outcome → runner fallback
+                outcome_std_full = None
+            if data_disclosure["refutation_subsampled"]:
+                logger.info(
+                    "Refutation subsampled estimation data %s -> %s rows (#1419); "
+                    "reported ATE/CI remain the full-frame fit.",
+                    data_disclosure["refutation_n_rows_total"],
+                    data_disclosure["refutation_n_rows"],
+                )
             # Offload the CPU-bound DoWhy model reconstruction + refutation suite
             # (placebo / random_common_cause / data_subset / bootstrap each
             # re-estimate the effect many times) to threads so the gunicorn worker's
@@ -1084,13 +1205,49 @@ class RefutationNode:
             _recon_t0 = time.monotonic()
             causal_model, identified_estimand, estimate = await asyncio.to_thread(
                 _reconstruct_dowhy_artifacts,
-                data=estimation_data,
+                data=refutation_data,
                 treatment=treatment,
                 outcome=outcome,
                 common_causes=common_causes,
                 estimation_result=cast(Dict[str, Any], estimation_result),
             )
             per_refit_hint = time.monotonic() - _recon_t0
+            # #1419: the reconstruction fit is NOT a faithful per-sim cost for
+            # the POINT-refit refuters — on the live 5k subsample it measures
+            # ~9-11.5 s while a placebo/rcc/subset SIM measures ~1.6-2.6 s
+            # (recon includes model build + identification + the inference
+            # machinery those sims skip). Gating on the ~5x-inflated recon hint
+            # would budget-skip placebo (30 x 11.5 s = 345 s "needed") even
+            # though the real work fits. When a deadline is set, calibrate the
+            # hint with one throwaway 1-sim placebo refute (~one true sim's
+            # cost; result discarded, not evidence). The calibration itself is
+            # gated on the conservative recon hint so it cannot orphan past
+            # the cap; on any failure the recon hint stands (conservative
+            # fallback — never a fabricated cheap hint). The recon wall-time
+            # is preserved as ``per_refit_hint_heavy``: a BOOTSTRAP sim
+            # re-runs the full inference machinery and measures ~11.7 s ≈ the
+            # recon fit, so the runner gates bootstrap on the heavy cost —
+            # gating it on the cheap observed per-refit would start a ~5x
+            # longer run than estimated and orphan the worker thread.
+            per_refit_hint_heavy = per_refit_hint
+            if deadline is not None and time.monotonic() + per_refit_hint <= deadline:
+                try:
+                    _cal_t0 = time.monotonic()
+                    await asyncio.to_thread(
+                        causal_model.refute_estimate,
+                        identified_estimand,
+                        estimate,
+                        method_name="placebo_treatment_refuter",
+                        placebo_type="permute",
+                        num_simulations=1,
+                    )
+                    per_refit_hint = time.monotonic() - _cal_t0
+                except Exception as cal_err:  # noqa: BLE001 - keep conservative hint
+                    logger.debug(
+                        "per-refit calibration failed (%s); keeping the "
+                        "conservative reconstruction-time hint.",
+                        cal_err,
+                    )
 
             # Run all refutation tests
             suite: RefutationSuite = await asyncio.to_thread(
@@ -1102,18 +1259,26 @@ class RefutationNode:
                 brand=brand,
                 estimate_id=query_id,
                 # Data passthrough from estimation node (enables DoWhy-based refutation)
-                data=estimation_data,
+                data=refutation_data,
                 causal_model=causal_model,
                 identified_estimand=identified_estimand,
                 estimate=estimate,
                 deadline=deadline,
                 per_refit_hint=per_refit_hint,
+                per_refit_hint_heavy=per_refit_hint_heavy,
+                outcome_std=outcome_std_full,
                 # DESIGN declaration from the API layer (dataset spec): a
                 # genuinely randomized treatment reports the E-value as
                 # information instead of an unmeasured-confounding BLOCK gate.
                 # Fail-closed: absent/False keeps the full observational gate.
                 randomized_design=bool(state.get("randomized_design")),
             )
+
+            # #1419: stamp subsample provenance onto every test's details so
+            # each persisted evidence row (details_json) records
+            # validated-on-subsample — never presented as a full-frame result.
+            for _suite_test in suite.tests:
+                _suite_test.details.update(data_disclosure)
 
             # Convert to legacy format for backward compatibility
             refutation_results = cast(RefutationResults, suite.to_legacy_format())

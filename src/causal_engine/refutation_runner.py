@@ -512,7 +512,9 @@ class RefutationRunner:
         trace_id: Optional[str] = None,
         deadline: Optional[float] = None,
         per_refit_hint: Optional[float] = None,
+        per_refit_hint_heavy: Optional[float] = None,
         randomized_design: bool = False,
+        outcome_std: Optional[float] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -546,6 +548,17 @@ class RefutationRunner:
                 still straddle the hard cap and orphan one thread. Only used
                 when no refuter has run yet; ignored once a real per-refit time
                 is observed.
+            per_refit_hint_heavy: Optional a-priori cost (seconds) of an
+                INFERENCE-BEARING refit — i.e. the reconstruction fit's
+                wall-time. #1419 measured (live 5k subsample): placebo /
+                random_common_cause / data_subset sims are point refits at
+                ~1.6-2.6 s, but a bootstrap sim re-runs the full inference
+                machinery at ~11.7 s ≈ the reconstruction fit. Gating bootstrap
+                on the cheap observed per-refit would START a run that
+                overshoots the deadline ~5x and orphans the worker thread —
+                so bootstrap gates on ``max(observed, heavy)`` when this hint
+                is provided. ``None`` keeps the observed/hint behavior for
+                every test (non-agent callers unchanged).
             randomized_design: DESIGN declaration that the treatment assignment
                 is genuinely randomized (threaded from the dataset spec by the
                 caller — never inferred from an empty discovered backdoor, which
@@ -556,6 +569,13 @@ class RefutationRunner:
                 E-value kept in details for information. The four
                 data-perturbation refuters (placebo, random_common_cause,
                 data_subset, bootstrap) still run and still gate.
+            outcome_std: Caller-supplied outcome SD for the e-value's effect
+                standardization. #1419: the agent node passes the SUBSAMPLE as
+                ``data`` but the e-value standardizes the FULL-frame reported
+                effect — a scale-sensitive critical gate must be standardized
+                on the same frame as the effect it gates, so the node computes
+                this on the full frame BEFORE subsampling. ``None`` (default)
+                keeps the data-derived SD for existing callers.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -577,8 +597,15 @@ class RefutationRunner:
             except (TypeError, ValueError):
                 return 1
 
-        def _budget_allows(n_sims: int) -> bool:
-            """True if this refuter may run under the deadline."""
+        def _budget_allows(n_sims: int, heavy: bool = False) -> bool:
+            """True if this refuter may run under the deadline.
+
+            ``heavy=True`` marks an inference-bearing refuter (bootstrap): its
+            per-sim cost is ~the reconstruction fit, not the cheap point refit
+            the observed average reflects (#1419 measured ~5x gap) — gate it
+            on ``max(observed, per_refit_hint_heavy)`` so a run that cannot
+            finish is never started.
+            """
             if deadline is None:
                 return True
             now = time.monotonic()
@@ -593,10 +620,14 @@ class RefutationRunner:
                 # FIRST refuter with it so a slow first fit cannot run
                 # unconditionally and orphan past the hard cap.
                 per_refit = per_refit_hint
+            elif heavy and per_refit_hint_heavy is not None and per_refit_hint_heavy > 0:
+                per_refit = per_refit_hint_heavy
             else:
                 # No observation and no hint (non-agent callers that pass a bare
                 # deadline) — allow the first refuter to run and calibrate.
                 return True
+            if heavy and per_refit_hint_heavy is not None and per_refit_hint_heavy > 0:
+                per_refit = max(per_refit, per_refit_hint_heavy)
             return now + per_refit * max(1, n_sims) <= deadline
 
         def _record(n_sims: int, elapsed: float) -> None:
@@ -636,6 +667,45 @@ class RefutationRunner:
         # the cooperative time budget: if its estimated cost would run past the
         # deadline we SKIP it (recording the skip) rather than start work that
         # cannot be cancelled and would orphan the worker thread past the cap.
+        #
+        # #1419 ordering: CRITICAL gates first, cheapest first, so a deadline
+        # that dies mid-suite costs non-critical evidence, not the gate itself.
+        # The analytic e-value leads (no refits, ~ms — the per-refit cost model
+        # does not apply, so it is gated on bare ``now < deadline`` and its
+        # elapsed time is NOT recorded: feeding its ~ms into the observed
+        # per-refit average would collapse the average and disarm the orphan
+        # guard for every refit-based test after it). Then the two refit-based
+        # criticals (placebo, random_common_cause), then the non-critical
+        # data_subset and bootstrap, which the #1419 skip policy degrades to
+        # honest SKIPPED results when the budget runs out.
+        if self.config["sensitivity_e_value"]["enabled"]:
+            if deadline is None or time.monotonic() < deadline:
+                # H3: the E-value needs a STANDARDIZED effect. A caller-supplied
+                # ``outcome_std`` wins (#1419: ``data`` may be the refutation
+                # SUBSAMPLE while the gated effect is the FULL-frame estimate);
+                # otherwise compute the SD from the passthrough data.
+                evalue_outcome_std: Optional[float] = outcome_std
+                if evalue_outcome_std is None and data is not None and outcome is not None:
+                    try:
+                        if outcome in getattr(data, "columns", []):
+                            evalue_outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
+                    except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
+                        evalue_outcome_std = None
+                test_result = self._run_test_with_tracing(
+                    test_name="sensitivity_e_value",
+                    test_func=self._run_sensitivity_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    original_ci=original_ci,
+                    outcome_std=evalue_outcome_std,
+                    randomized_design=randomized_design,
+                )
+                tests.append(test_result)
+            else:
+                skipped_for_budget.append("sensitivity_e_value")
+
         if self.config["placebo_treatment"]["enabled"]:
             _n = _sims_for("placebo_treatment")
             if _budget_allows(_n):
@@ -702,7 +772,7 @@ class RefutationRunner:
 
         if self.config["bootstrap"]["enabled"]:
             _n = _sims_for("bootstrap")
-            if _budget_allows(_n):
+            if _budget_allows(_n, heavy=True):
                 _t0 = time.monotonic()
                 test_result = self._run_test_with_tracing(
                     test_name="bootstrap",
@@ -722,53 +792,66 @@ class RefutationRunner:
             else:
                 skipped_for_budget.append("bootstrap")
 
-        if self.config["sensitivity_e_value"]["enabled"]:
-            _n = _sims_for("sensitivity_e_value")
-            if _budget_allows(_n):
-                # H3: the E-value needs a STANDARDIZED effect, so compute the
-                # outcome SD from the passthrough data and hand it to the test.
-                outcome_std: Optional[float] = None
-                if data is not None and outcome is not None:
-                    try:
-                        if outcome in getattr(data, "columns", []):
-                            outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
-                    except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
-                        outcome_std = None
-                _t0 = time.monotonic()
-                test_result = self._run_test_with_tracing(
-                    test_name="sensitivity_e_value",
-                    test_func=self._run_sensitivity_test,
-                    opik=opik,
-                    trace_id=trace_id,
-                    estimate_id=estimate_id,
-                    original_effect=original_effect,
-                    original_ci=original_ci,
-                    outcome_std=outcome_std,
-                    randomized_design=randomized_design,
-                )
-                tests.append(test_result)
-                _record(_n, time.monotonic() - _t0)
-            else:
-                skipped_for_budget.append("sensitivity_e_value")
-
-        # Fail-closed if the deadline forced us to skip any enabled refuter:
-        # an incomplete suite must not be presented as a validated result, and
-        # the caller (refutation node) maps RefutationError -> status=failed.
+        # #1419 skip policy. A budget-skipped CRITICAL gate still fails the
+        # suite closed — an estimate whose placebo test never ran must not be
+        # presented as validated. Budget-skipped NON-critical tests degrade to
+        # honest SKIPPED results (reason in ``details`` → persisted via
+        # ``details_json``; surfaced via to_legacy_format()['skipped_tests'],
+        # the #1249 channel) and the suite completes on the evidence that ran —
+        # instead of the pre-#1419 behavior where ANY skip raised and the whole
+        # turn failed closed with `ran 0 test(s)`. Criticality reads from the
+        # merged config (custom per-test dicts update DEFAULT_CONFIG, which
+        # carries the ``critical`` flags).
         if skipped_for_budget:
             ran = [
                 t.test_name.value if hasattr(t.test_name, "value") else str(t.test_name)
                 for t in tests
             ]
-            raise RefutationError(
-                "Refutation exceeded its time budget: ran "
-                f"{len(tests)} test(s) {ran}, skipped {skipped_for_budget} to avoid "
-                "orphaning compute past the worker's wall-clock cap. Re-run with "
-                "fewer covariates or lower simulation counts.",
-                details={
-                    "reason": "time_budget_exceeded",
-                    "ran": ran,
-                    "skipped": skipped_for_budget,
-                },
+            critical_skipped = [
+                name
+                for name in skipped_for_budget
+                if self.config.get(name, {}).get(
+                    "critical", self.DEFAULT_CONFIG.get(name, {}).get("critical", False)
+                )
+            ]
+            if critical_skipped:
+                raise RefutationError(
+                    "Refutation exceeded its time budget: ran "
+                    f"{len(tests)} test(s) {ran}, skipped {skipped_for_budget} "
+                    f"(critical: {critical_skipped}) to avoid orphaning compute "
+                    "past the worker's wall-clock cap. A suite whose critical "
+                    "gates never ran cannot validate the estimate.",
+                    details={
+                        "reason": "time_budget_exceeded",
+                        "ran": ran,
+                        "skipped": skipped_for_budget,
+                        "critical_skipped": critical_skipped,
+                    },
+                )
+            for name in skipped_for_budget:
+                tests.append(
+                    RefutationResult(
+                        test_name=RefutationTestType(name),
+                        status=RefutationStatus.SKIPPED,
+                        original_effect=original_effect,
+                        refuted_effect=original_effect,
+                        details={
+                            "reason": (
+                                "time_budget — non-critical test skipped to avoid "
+                                "orphaning compute past the cooperative deadline; "
+                                "the critical gates completed and decide the suite"
+                            ),
+                            "message": (
+                                f"{name} skipped: estimated cost would run past the "
+                                "compute deadline (non-critical, degraded honestly)"
+                            ),
+                        },
+                    )
+                )
+            logger.info(
+                "Refutation budget skipped non-critical test(s) %s after running %s.",
+                skipped_for_budget,
+                ran,
             )
 
         total_time = (time.time() - start_time) * 1000

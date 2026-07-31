@@ -47,23 +47,26 @@ class RouterNode:
                 agent_name="causal_impact",
                 priority="critical",
                 parameters={"interpretation_depth": "standard"},
-                # #1351: 30s could not hold ANY real causal run — the DoWhy
-                # chain (graph build + estimation + refutation + sensitivity +
-                # LLM interpretation) measures ~15s for the refutation suite
-                # ALONE on linear estimators and ~60s on meta-learners
-                # (refutation.py SLA notes), so the old budget only ever cut
-                # COMPLETING analyses. Before the #1351 resolver this never
-                # surfaced because every chat dispatch crashed in <10ms on
-                # missing inputs. 120s is the default per-agent ceiling: a
-                # timeout >= the 150s chat surface budget could never fire
-                # before the chat itself times out, and no completed run has
-                # been measured yet (the route was inoperable) — raise past
-                # 120s only with a measured completion time, per the
-                # experiment_designer/het_optimizer convention. The resolver
-                # also sets a cooperative compute_deadline INSIDE this budget
-                # so refutation self-gates instead of orphaning to_thread
-                # compute.
-                timeout_ms=120000,
+                # #1419: raised 120s -> 300s on a MEASURED completion (the
+                # #1351 convention: raise past 120s only with a measured run).
+                # Measured 2026-07-31 on the live 37,371-row conversion frame:
+                # estimation (tournament + full-frame refit + prep) ~93s, then
+                # refutation on the 5,000-row stratified subsample (#1419) =
+                # reconstruction ~12s + 1-sim calibration ~2s + placebo
+                # 30 x 2.13s ~64s + random_common_cause 20 x 2.59s ~52s +
+                # analytic e-value ~0s -> critical-gates chat turn ~223s.
+                # 300s x _CAUSAL_DEADLINE_FRACTION (0.8) = 240s cooperative
+                # deadline covers that with margin; the non-critical
+                # data_subset (~8s) runs when headroom remains and the
+                # non-critical bootstrap (50 x ~11.7s inference-bearing sims
+                # ~585s) degrades to an honest SKIPPED result under the #1419
+                # skip policy + heavy-cost gate. 300s also aligns with the
+                # host-nginx proxy_read_timeout ceiling, so this dispatch
+                # budget stays the binding constraint end-to-end. The resolver
+                # still sets the cooperative compute_deadline INSIDE this
+                # budget so refutation self-gates instead of orphaning
+                # to_thread compute.
+                timeout_ms=300000,
                 fallback_agent="explainer",
             )
         ],
