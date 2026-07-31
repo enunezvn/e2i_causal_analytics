@@ -31,16 +31,40 @@ logger = logging.getLogger(__name__)
 #: tests/unit/test_repositories/test_causal_validation_estimate_id.py.
 CAUSAL_PATH_ESTIMATE_NAMESPACE = "e2i:causal_paths:"
 
+#: Namespace for UNLINKED causal_impact runs (#1352 item 3). The old writer
+#: passed the raw ``query_id`` (``q-<hex12>``) as ``estimate_id`` — a uuid
+#: column — so every insert failed the cast and was swallowed as a warning;
+#: half of why ``causal_validations`` measured 0 rows. A query-derived uuid5
+#: keeps per-run evidence insertable AND deterministically re-derivable from
+#: the query id, in a namespace that can never collide with the path linkage
+#: (different prefixes under the same uuid5 NAMESPACE_URL).
+CAUSAL_QUERY_ESTIMATE_NAMESPACE = "e2i:causal_query:"
+
+#: ``estimate_source`` for unlinked per-run evidence. Deliberately NOT
+#: 'causal_paths': migration 119's evidence gate and the chat consumer
+#: (``get_rows_for_paths``) both filter estimate_source='causal_paths', so an
+#: unlinked run's history can never accidentally bless a path.
+CAUSAL_QUERY_ESTIMATE_SOURCE = "causal_impact_query"
+
 
 def derive_causal_path_estimate_id(path_id: str) -> str:
     """Derive the canonical ``causal_validations.estimate_id`` for a causal path.
 
     Content-addressed and deterministic: any producer (migration 119 seeding,
-    the future RefutationNode promoter — #1352 item 3) and any consumer (chat
+    the RefutationNode promoter — #1352 item 3) and any consumer (chat
     refutation-evidence surfacing) MUST use this same derivation so evidence
     written by one side is findable by the other.
     """
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{CAUSAL_PATH_ESTIMATE_NAMESPACE}{path_id}"))
+
+
+def derive_query_estimate_id(query_id: str) -> str:
+    """Derive the ``estimate_id`` for an UNLINKED causal_impact run (#1352).
+
+    Used with ``estimate_source='causal_impact_query'`` — see
+    :data:`CAUSAL_QUERY_ESTIMATE_NAMESPACE` for why this exists.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{CAUSAL_QUERY_ESTIMATE_NAMESPACE}{query_id}"))
 
 
 class CausalValidationRepository(BaseRepository):

@@ -326,6 +326,19 @@ class TestOrchestratorHelperMethods:
 class TestOrchestratorWithRealAgents:
     """Test orchestrator with real agent instances."""
 
+    @pytest.fixture(autouse=True)
+    def _passthrough_causal_resolver(self, monkeypatch):
+        # These tests validate registered-agent invocation mechanics, not
+        # input resolution. The #1351 causal_impact resolver would otherwise
+        # attempt a live KPI-substrate build (a real Supabase read) on the
+        # bare query, which fails closed against CI's dead DB. The resolver
+        # has its own dedicated tests (test_dispatcher_causal_impact_resolver).
+        from src.agents.orchestrator.nodes import dispatcher as disp
+
+        monkeypatch.setitem(
+            disp.INPUT_RESOLVERS, "causal_impact", lambda agent_input, dispatch: agent_input
+        )
+
     @pytest.mark.asyncio
     async def test_run_with_registered_agent(self):
         """Test orchestrator dispatching to registered agent."""

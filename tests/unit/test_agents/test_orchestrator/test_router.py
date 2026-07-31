@@ -28,7 +28,9 @@ class TestRouterNode:
         assert len(result["dispatch_plan"]) == 1
         assert result["dispatch_plan"][0]["agent_name"] == "causal_impact"
         assert result["dispatch_plan"][0]["priority"] == "critical"
-        assert result["dispatch_plan"][0]["timeout_ms"] == 30000
+        # 120s as of #1351: the resolver made the route operable, and a real
+        # DoWhy chain cannot finish in the old 30s.
+        assert result["dispatch_plan"][0]["timeout_ms"] == 120000
         assert result["dispatch_plan"][0]["fallback_agent"] == "explainer"
         assert result["current_phase"] == "dispatching"
         assert result["routing_latency_ms"] >= 0
@@ -472,7 +474,7 @@ class TestRouterHelperMethods:
 
         assert dispatch["agent_name"] == "causal_impact"
         assert dispatch["priority"] == "high"  # Override priority
-        assert dispatch["timeout_ms"] == 30000
+        assert dispatch["timeout_ms"] == 120000  # #1351 operable-route budget
         assert dispatch["fallback_agent"] == "explainer"
         assert dispatch["parameters"] == {"interpretation_depth": "standard"}
 

@@ -845,7 +845,14 @@ async def test_explainer_fallback_binds_sibling_group_success() -> None:
             {
                 "agent_name": "causal_impact",
                 "priority": "critical",
-                "parameters": {},
+                # Explicit causal spec -> resolver passthrough; this test is
+                # about fallback grouping, not input resolution, and must not
+                # depend on a live KPI substrate (CI runs against a dead DB).
+                "parameters": {
+                    "treatment_var": "rep_visits",
+                    "outcome_var": "conversion",
+                    "confounders": ["specialty"],
+                },
                 "timeout_ms": 15000,
                 "fallback_agent": None,
                 "execution_mode": "parallel",
@@ -1165,7 +1172,13 @@ async def test_explainer_fallback_is_order_independent_within_group() -> None:
             {
                 "agent_name": "causal_impact",
                 "priority": "critical",
-                "parameters": {},
+                # Explicit spec -> resolver passthrough (no live-DB substrate
+                # build in a unit test; see the sibling-group test above).
+                "parameters": {
+                    "treatment_var": "rep_visits",
+                    "outcome_var": "conversion",
+                    "confounders": ["specialty"],
+                },
                 "timeout_ms": 15000,
                 "fallback_agent": None,
                 "execution_mode": "parallel",

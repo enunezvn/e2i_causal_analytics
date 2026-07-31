@@ -243,9 +243,10 @@ async def test_projection_filters_to_declared_fields_only() -> None:
     sys.modules["__test_minimal_input__"] = fake_module
 
     # Host the synthetic spec on a resolver-LESS agent (#883 added an explainer
-    # resolver that fails closed pre-projection; this test is about projection).
-    original = mm.AGENT_METHOD_MAP.get("causal_impact")
-    mm.AGENT_METHOD_MAP["causal_impact"] = mm.AgentMethodSpec(
+    # resolver that fails closed pre-projection, #1351 added a causal_impact
+    # resolver; this test is about projection — drift_monitor has no resolver).
+    original = mm.AGENT_METHOD_MAP.get("drift_monitor")
+    mm.AGENT_METHOD_MAP["drift_monitor"] = mm.AgentMethodSpec(
         method="explain",
         is_async=True,
         uses_kwargs=False,
@@ -263,8 +264,8 @@ async def test_projection_filters_to_declared_fields_only() -> None:
         agent.explain = fake_explain
         del agent.analyze
 
-        dispatcher = DispatcherNode(agent_registry={"causal_impact": agent})
-        result = await dispatcher.execute(_state_for("causal_impact", query="explain X"))
+        dispatcher = DispatcherNode(agent_registry={"drift_monitor": agent})
+        result = await dispatcher.execute(_state_for("drift_monitor", query="explain X"))
 
         agent_result = result["agent_results"][0]
         assert agent_result["success"] is True, agent_result.get("error")
@@ -272,7 +273,7 @@ async def test_projection_filters_to_declared_fields_only() -> None:
         assert captured["input_obj"].query == "explain X"
     finally:
         if original is not None:
-            mm.AGENT_METHOD_MAP["causal_impact"] = original
+            mm.AGENT_METHOD_MAP["drift_monitor"] = original
 
 
 @pytest.mark.asyncio
@@ -405,10 +406,11 @@ async def test_kwargs_plus_input_model_combo_robust() -> None:
     fake_module.KwargsAndModelInput = KwargsAndModelInput  # type: ignore[attr-defined]
     sys.modules["__test_kwargs_and_model__"] = fake_module
 
-    # Host the synthetic spec on a resolver-LESS agent (#883 added an explainer
-    # resolver whose output would REPLACE the payload before the combo under test).
-    original = mm.AGENT_METHOD_MAP.get("causal_impact")
-    mm.AGENT_METHOD_MAP["causal_impact"] = mm.AgentMethodSpec(
+    # Host the synthetic spec on a resolver-LESS agent (#883/#1351 resolver
+    # output would REPLACE the payload before the combo under test;
+    # drift_monitor has no resolver).
+    original = mm.AGENT_METHOD_MAP.get("drift_monitor")
+    mm.AGENT_METHOD_MAP["drift_monitor"] = mm.AgentMethodSpec(
         method="explain",
         is_async=True,
         uses_kwargs=True,
@@ -426,8 +428,8 @@ async def test_kwargs_plus_input_model_combo_robust() -> None:
         agent.explain = fake_explain
         del agent.analyze
 
-        dispatcher = DispatcherNode(agent_registry={"causal_impact": agent})
-        state = _state_for("causal_impact", query="explain this thing")
+        dispatcher = DispatcherNode(agent_registry={"drift_monitor": agent})
+        state = _state_for("drift_monitor", query="explain this thing")
         state["dispatch_plan"][0]["parameters"] = {"flag": True}
 
         result = await dispatcher.execute(state)
@@ -437,4 +439,4 @@ async def test_kwargs_plus_input_model_combo_robust() -> None:
         assert captured["kwargs"]["flag"] is True
     finally:
         if original is not None:
-            mm.AGENT_METHOD_MAP["causal_impact"] = original
+            mm.AGENT_METHOD_MAP["drift_monitor"] = original
