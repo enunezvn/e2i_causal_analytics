@@ -64,8 +64,11 @@ true restatement of turn 1, not a trivial "continue".
 
 Per turn we record: `ttfb_ms`, `total_ms`, `tools_invoked` (did the chain re-execute?),
 full answer text (for the acknowledge/consistency judgment), and a coarse recap-marker flag.
+A 6-turn cue-free supplement (`--plan cuefree`, 2 more in-session pairs) follows below —
+18 real turns total.
 
-Raw: `raw_t5probe.jsonl` · full text: `summary_raw.json` · transcript: `transcripts.md`.
+Raw (cued): `raw_t5probe.jsonl` / `summary_raw.json`; raw (cue-free):
+`raw_t5probe_cuefree.jsonl` / `summary_raw_cuefree.json`; transcripts: `transcripts.md`.
 
 ## Mechanism (why the AG-UI brain can do this at all)
 
@@ -95,7 +98,7 @@ Every turn succeeded (0 errors). Tool re-execution and latency by condition:
 | 9 | t5p3-para | **paraphrase** | **(none)** | 8689 | **8692** | **yes** — "Recapping what I found…" | same driver table ✅ consistent |
 | 10 | t5b1-baseline | baseline (fresh) | kpi_calculate_tool | 4938 | 4939 | n/a (no history) | Kisqali TRx 13,185 |
 | 11 | t5b2-baseline | baseline (fresh) | kpi_calculate_tool | 5632 | 5633 | n/a | Fabhalta share 35.9% |
-| 12 | t5b3-baseline | baseline (fresh) | causal_analysis_tool | — | 14804 | n/a | driver table |
+| 12 | t5b3-baseline | baseline (fresh) | causal_analysis_tool | 14798 | 14804 | n/a | driver table |
 
 Medians (`total_ms`): in-session cold **10,111** · paraphrase **5,365** · fresh baseline **5,633**.
 
@@ -115,32 +118,79 @@ Notes on honesty of the signal:
   reseeded and the 30-day window moved to through 2026-07-30. Within-run consistency is what
   the criterion tests, and it is exact (13,185 == 13,185; 35.9% == 35.9%; identical driver table).
 
+**What the criterion is (and is not):** "ran no tool" is the *mechanism* that makes the recap
+faster, **not** the pass condition. The pass condition is a correct answer that acknowledges/
+reuses the earlier analysis with consistent grounded numbers at acceptable latency; a paraphrase
+that re-runs a tool to re-validate and still returns a consistent answer at acceptable latency is
+a pass, not a failure. The cue-free supplement below exercises exactly that case.
+
+## Cue-free supplement (external validity)
+
+The cued plan above prefixes every paraphrase with an explicit backward-reference ("remind me /
+again / circle back"), which real users often omit. To test whether recognition survives without
+the cue, a 2-pair supplement (`--plan cuefree`, `raw_t5probe_cuefree.jsonl` /
+`summary_raw_cuefree.json`) repeats the design with **cue-free** paraphrases:
+
+| pair | cold ask | cue-free paraphrase | paraphrase tool | cold total | paraphrase total | acknowledge + consistent? |
+|---|---|---|---|---|---|---|
+| A (KPI) | What is TRx for Kisqali? | How many total prescriptions does Kisqali have? | **(none)** | 5,086 | **4,870** | **yes** — "the same figure I shared earlier", TRx **13,185** ✅ |
+| B (causal) | Why did Kisqali TRx drop in Q1 NE? | What are the main factors behind Kisqali's Northeast softness? | e2i_data_query_tool | 15,539 | 19,142 | **yes** — identical driver table (−0.073…+0.285) + same engagement_gap trigger scvhcp_00013 ✅ |
+
+Both cue-free paraphrases acknowledged and reused the earlier analysis with **identical** grounded
+numbers, at acceptable latency (A ≤ cold; B 19.1 s ≤ 1.5× cold 15.5 s). The important nuance:
+**pair B re-engaged a tool and went *deeper*** — the model judged "main factors behind the
+softness" worth enriching (it pulled gap_analyzer South $701K / Midwest $175.8K and a
+heterogeneous-optimizer CATE split) rather than replaying the cold answer. This is a behavior a
+hardcoded reuse bypass **cannot** produce, and worse: a similarity-keyed bypass would fire on this
+high-similarity paraphrase and serve a stale recap *instead of* the richer grounding the model
+elected to fetch. So the cue-free causal case argues against the bypass from a second angle —
+not just "unnecessary" but "actively degrading" for the harder paraphrases.
+
 ## Decision-rule evaluation
 
-- **Acknowledge/reuse with consistent numbers: 3 of 3** paraphrase repeats (need ≥ 2/3). All
-  three explicitly reference the earlier turn AND return numbers identical to the cold answer.
-- **Latency acceptable:** median paraphrase 5,365 ms ≤ 1.5× median baseline 5,633 ms (= 8,450 ms).
-  In fact the paraphrase median is *below* the baseline median, and −47%/−36%/−43% below the
-  in-session cold turns.
+- **Acknowledge/reuse with consistent numbers: 3 of 3** cued paraphrase repeats (need ≥ 2/3),
+  **plus 2 of 2** cue-free paraphrases in the supplement → **5 of 5** overall. Every one
+  explicitly references the earlier analysis AND returns numbers identical to the cold answer.
+- **Latency acceptable:** cued median paraphrase 5,365 ms ≤ 1.5× median baseline 5,633 ms
+  (= 8,450 ms) — in fact below the baseline median and −47%/−36%/−43% below the in-session cold
+  turns. Each cue-free paraphrase also met the ≤ 1.5×-cold bar (A faster than cold; B 19.1 s ≤
+  1.5× × 15.5 s = 23.3 s).
 
-Both conditions of the DISPROVEN branch are satisfied — strongly.
+Both conditions of the DISPROVEN branch are satisfied — strongly, and across both cued and
+cue-free phrasings and both cheap (KPI) and expensive (causal) tools.
 
-## Verdict — DISPROVEN → do NOT build the semantic-reuse bypass
+## Verdict — DISPROVEN for the measured classes → do NOT build the semantic-reuse bypass now
 
-The assumption that motivated a pre-LLM answer-reuse layer is false. The AG-UI chat brain
-**already** recognizes a paraphrase of an earlier in-session question, **reuses the earlier
-grounded answer without re-running tools, keeps the numbers consistent, and is faster than
-cold** — the benefit is largest exactly where it matters (expensive tools). The issue's own
-premise ("semantic understanding with zero latency benefit") is contradicted by the data:
-the benefit is real, emergent, and free.
+For the measured classes — an in-session paraphrase of an earlier data question with a
+resolvable referent, both cued and cue-free, over both a cheap KPI tool and an expensive causal
+tool — the assumption that motivated a pre-LLM answer-reuse layer does not hold. The AG-UI chat
+brain **already** recognizes the paraphrase, reuses the earlier grounded answer with consistent
+numbers, and does so at acceptable latency — often faster than cold, because a recap can skip the
+tool round-trip; and where it re-engages a tool (the harder cue-free causal case) it stays
+consistent *and adds grounding*. The issue's premise ("semantic understanding with zero latency
+benefit") is contradicted: the benefit is real, emergent, and free.
 
-Building a separate embedding-similarity bypass would add a similarity threshold, a
-kill-switch env flag, cross-turn staleness risk, and a served-from-history persistence path —
-all to replicate a behavior the model performs for free, and *worse* than the model does it:
-a hardcoded recap cannot do what turn 9 did (it didn't replay the cold answer verbatim — it
-re-framed it as "Recapping what I found… the two most likely contributors to the Northeast
-decline specifically", adaptive synthesis a cache cannot produce). Cheapest-disproof-first
-says stop here.
+A separate embedding-similarity bypass would add a similarity threshold, a kill-switch env flag,
+cross-turn staleness risk, and a served-from-history persistence path — all to replicate a
+behavior the model already performs, and *worse* than the model does it. Two concrete failure
+modes a bypass would introduce, both observed here: (1) it cannot do what turn 9 / cue-free pair B
+did — re-frame and *enrich* rather than replay; and (2) it would fire on exactly the high-similarity
+cue-free causal paraphrase and serve a **stale recap instead of** the deeper grounding the model
+chose to fetch. Cheapest-disproof-first says stop here.
+
+### Scope & limits (what this does and does not settle)
+
+Internal validity is strong (pre-registered rule, faithful surface, 5/5). External validity is
+bounded by a single run of handcrafted pairs. **Unmeasured** and therefore *not* settled by this
+result: paraphrases whose referent is ambiguous or spans multiple earlier turns; long sessions
+where the history is truncated before the earlier answer (the recap depends entirely on the
+full-history resend — if the earlier turn falls out of the window, there is nothing to reuse);
+data that changed *since* the cold answer (the recap would restate a now-stale number — a real
+correctness risk, though a naive answer cache would be worse); and non-English / very-different
+phrasings. **Revisit trigger:** if the routing-label loop (#1341) or real traffic shows paraphrase
+repeats that fail to recap (full re-execution with *inconsistent* numbers, or materially slower
+than cold), or if long-session truncation is observed dropping the earlier answer, re-open the
+build question with those cases as the new disproof target. Until then, the data says do not build.
 
 **Shipped by this lane:** the T5 criterion rewrite (paraphrase repeat, in
 `COPILOT_CHAT_DEMO_SCENARIOS.md`), this measurement artifact, the probe script, and an

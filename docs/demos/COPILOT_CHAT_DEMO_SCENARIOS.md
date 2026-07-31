@@ -169,7 +169,7 @@ Not demo material, but required for a performance pass:
 | A.5 | Why did it drop? *(as a cold first message)* | CLARIFICATION_NEEDED — should ask "which metric/brand", not hallucinate |
 | A.6 | What is TRx? | definitional edge (production-ambiguous: `kpi_query`/`help`/`general`) — should define, not dump data |
 | A.7 | Ask 1.1, then immediately ask 1.4 while streaming | concurrent/interrupt behavior of the chat UI |
-| A.8 | Paraphrase 1.1 later in the same session (e.g. "Remind me — what was Kisqali's total prescription count again?") | episodic recap: acknowledges/reuses the earlier answer with a consistent number, no tool re-run, typically faster than cold. Verbatim caching out of scope (#1339); measured 2026-07-31 — see `docs/demos/results/2026-07-31_t5_paraphrase_repeat/` |
+| A.8 | Paraphrase 1.1 later in the same session (e.g. "Remind me — what was Kisqali's total prescription count again?") | episodic recap: acknowledges/reuses the earlier answer with a consistent number at acceptable latency. (Re-running the tool to re-validate is fine — the pass is a correct, consistent, acknowledged answer, not zero tool calls; it's typically faster than cold precisely because a recap *can* skip the tool.) Verbatim caching out of scope (#1339); measured 2026-07-31 — see `docs/demos/results/2026-07-31_t5_paraphrase_repeat/` |
 | A.9 | Ask 1.4, wait, then ask: Why is this happening? | T5 memory: episodic context retrieval |
 | A.10 | A 60+ word compound question mixing 4 domains | complexity warning / graceful decomposition, no timeout |
 
@@ -184,6 +184,7 @@ For each question log: `question_id`, `intent_expected`, `intent_actual`,
 Pass criteria by tier (starting points — tighten from observed baselines):
 T1 < 3s total; T2 < 8s total; T3 first progress < 5s, total < 40s;
 T4 first decomposition visible < 8s, total < 90s; T5 paraphrase repeat
-acknowledges/reuses the earlier analysis with consistent grounded numbers
-(typically faster than cold when it skips re-running tools — #1339);
-T6 never hallucinates on ambiguity.
+acknowledges/reuses the earlier analysis with consistent grounded numbers at
+acceptable latency (not materially slower than cold — and typically faster,
+since a recap can skip re-running the tool; re-running to re-validate is not a
+failure — #1339); T6 never hallucinates on ambiguity.

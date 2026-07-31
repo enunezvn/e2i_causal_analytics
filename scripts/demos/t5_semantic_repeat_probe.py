@@ -83,7 +83,7 @@ def q(question_id: str, session: str, tier: str, text: str, condition: str) -> D
 # The turn plan. Cold data questions reuse the known-grounded 1.1 / 1.4 phrasings so
 # tool-grounding is expected; paraphrases are genuine restatements (different words,
 # same referent), each prefaced with a "remind me / again" cue a real user would use.
-TURN_PLAN: List[Dict[str, Any]] = [
+CUED_PLAN: List[Dict[str, Any]] = [
     # ---- Pair 1: TRx value (Kisqali) ----
     q("t5p1-cold", "s1", "T2", "What is TRx for Kisqali?", "cold"),
     q("t5p1-mid", "s1", "T2", "And what is NRx for Fabhalta?", "intervening"),
@@ -138,6 +138,36 @@ TURN_PLAN: List[Dict[str, Any]] = [
     ),
 ]
 
+# Cue-free supplement (addresses the external-validity gap: the cued plan's paraphrases
+# all carry an explicit "remind me / again / circle back" signal, which real users often
+# don't). These paraphrases are genuine restatements of turn 1 with NO backward-reference
+# cue — testing whether recognition survives without the hint. 2 in-session pairs only
+# (no fresh baselines needed; the cued run already established fresh cold behavior).
+CUEFREE_PLAN: List[Dict[str, Any]] = [
+    # Pair A: TRx value (Kisqali), cheap tool
+    q("t5cf1-cold", "cf1", "T2", "What is TRx for Kisqali?", "cold"),
+    q("t5cf1-mid", "cf1", "T2", "And what is NRx for Fabhalta?", "intervening"),
+    q(
+        "t5cf1-para",
+        "cf1",
+        "T5",
+        "How many total prescriptions does Kisqali have?",
+        "paraphrase_cuefree",
+    ),
+    # Pair B: causal driver (Kisqali NE decline), expensive tool
+    q("t5cf2-cold", "cf2", "T3", "Why did Kisqali TRx drop in Q1 in the northeast region?", "cold"),
+    q("t5cf2-mid", "cf2", "T2", "What is TRx for Remibrutinib?", "intervening"),
+    q(
+        "t5cf2-para",
+        "cf2",
+        "T5",
+        "What are the main factors behind Kisqali's Northeast softness?",
+        "paraphrase_cuefree",
+    ),
+]
+
+PLANS: Dict[str, List[Dict[str, Any]]] = {"cued": CUED_PLAN, "cuefree": CUEFREE_PLAN}
+
 
 def recap_hits(text: str) -> List[str]:
     low = (text or "").lower()
@@ -150,7 +180,13 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--out-dir",
         default="docs/demos/results/2026-07-31_t5_paraphrase_repeat",
-        help="Directory for raw_t5probe.jsonl and the summary",
+        help="Directory for the raw jsonl and summary",
+    )
+    parser.add_argument(
+        "--plan",
+        default="cued",
+        choices=sorted(PLANS),
+        help="Which turn plan to run: 'cued' (3 pairs + 3 baselines) or 'cuefree' (2 pairs)",
     )
     parser.add_argument("--sleep", type=float, default=6.0, help="Seconds between turns")
     parser.add_argument("--timeout", type=int, default=240, help="Per-turn stream timeout (s)")
@@ -166,9 +202,11 @@ def main(argv: List[str] | None = None) -> int:
     if args.auth_check:
         return 0
 
+    plan = PLANS[args.plan]
+    suffix = "" if args.plan == "cued" else f"_{args.plan}"
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = out_dir / "raw_t5probe.jsonl"
+    raw_path = out_dir / f"raw_t5probe{suffix}.jsonl"
 
     # Per-session thread id (clearly-marked probe) + resent history.
     threads: Dict[str, str] = {}
@@ -176,7 +214,7 @@ def main(argv: List[str] | None = None) -> int:
     records: List[Dict[str, Any]] = []
 
     with raw_path.open("w") as raw_f:
-        for i, question in enumerate(TURN_PLAN, 1):
+        for i, question in enumerate(plan, 1):
             skey = question["session"]
             thread_id = threads.setdefault(skey, f"t5probe-{skey}-{uuid.uuid4()}")
             history = histories.setdefault(skey, [])
@@ -196,7 +234,7 @@ def main(argv: List[str] | None = None) -> int:
             raw_f.write(json.dumps(record) + "\n")
             raw_f.flush()
             print(
-                f"[{i}/{len(TURN_PLAN)}] {question['question_id']:15} "
+                f"[{i}/{len(plan)}] {question['question_id']:15} "
                 f"cond={question['condition']:11} "
                 f"tools={','.join(record.get('tools_invoked') or []) or '-':22} "
                 f"ttfb={record.get('ttfb_ms')}ms total={record.get('total_ms')}ms "
@@ -205,11 +243,11 @@ def main(argv: List[str] | None = None) -> int:
                 f"err={record.get('error') or '-'}",
                 flush=True,
             )
-            if i < len(TURN_PLAN):
+            if i < len(plan):
                 time.sleep(args.sleep)
 
     # Compact summary for quick reading; full text lives in the jsonl + the doc.
-    summary_path = out_dir / "summary_raw.json"
+    summary_path = out_dir / f"summary_raw{suffix}.json"
     summary = [
         {
             "question_id": r["question_id"],

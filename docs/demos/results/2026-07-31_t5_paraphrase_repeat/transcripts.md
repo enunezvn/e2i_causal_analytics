@@ -2,7 +2,9 @@
 
 Raw per-turn Q&A from `scripts/demos/t5_semantic_repeat_probe.py` against the real UI brain
 (`POST /api/copilotkit/agent/default`). Tool list, latency, and full answer text per turn.
-See `RESULTS.md` for the analysis and verdict; `raw_t5probe.jsonl` for machine-readable events.
+See `RESULTS.md` for analysis + verdict. Part 1 = cued plan; Part 2 = cue-free supplement.
+
+# Part 1 — cued plan (3 pairs + 3 fresh baselines)
 
 ---
 
@@ -177,3 +179,111 @@ See `RESULTS.md` for the analysis and verdict; `raw_t5probe.jsonl` for machine-r
 > **Bottom line:** The decline looks like a combination of **competitive share-of-voice pressure** plus **underdelivery on the positive-impact levers** (detailing frequency, prescriber coverage, formulary access) — the engagement-gap triggers suggest reps are under-covering Northeast HCPs relative to peers, which is likely the most actionable lever.
 >
 > Want me to pull the specific Northeast HCP list tied to those unactioned engagement-gap triggers for targeting?
+
+# Part 2 — cue-free supplement (2 pairs)
+
+---
+
+### t5cf1-cold  ·  cold
+**Q:** What is TRx for Kisqali?
+*ttfb 5084.9ms · total 5086.1ms · tools: kpi_calculate_tool*
+
+> **Kisqali TRx: 13,185 prescriptions**, based on the engine's most recent reporting window (30 days of data, through 2026-07-30). No specific time period was applied since none was requested — this reflects the default reporting window.
+>
+> *Source: WS3-BI-005 (synthetic data)*
+>
+> Let me know if you'd like this broken down by severity segment, line of therapy, or region, or plotted as a trend over time.
+
+---
+
+### t5cf1-mid  ·  intervening
+**Q:** And what is NRx for Fabhalta?
+*ttfb 5136.0ms · total 5137.7ms · tools: kpi_calculate_tool*
+
+> **Fabhalta NRx: 3,298 new prescriptions**, based on the engine's most recent reporting window (30 days of data, through 2026-07-30). No specific period was requested, so this reflects the default reporting window.
+>
+> *Source: WS3-BI-006 (synthetic data)*
+>
+> Let me know if you'd like a breakdown by severity segment, line of therapy, or region — note that biologic status and IgE tier splits aren't available for Fabhalta.
+
+---
+
+### t5cf1-para  ·  paraphrase_cuefree
+**Q:** How many total prescriptions does Kisqali have?
+*ttfb 4867.7ms · total 4869.8ms · tools: none*
+
+> Kisqali's **total prescriptions (TRx) is 13,185**, covering the engine's most recent reporting window (30 days of data, through **2026-07-30**). This is the same figure I shared earlier — TRx represents *total* prescriptions (new + refill combined), as opposed to NRx (new prescriptions only).
+>
+> *Source: WS3-BI-005 (synthetic data)*
+>
+> Would you like me to also pull NRx or NBRx for Kisqali to see the new-vs-total split?
+
+---
+
+### t5cf2-cold  ·  cold
+**Q:** Why did Kisqali TRx drop in Q1 in the northeast region?
+*ttfb 15534.1ms · total 15538.6ms · tools: causal_analysis_tool*
+
+> **Kisqali TRx – Northeast, Q1 2025 (Jan 1–Apr 1, 2025):** total was **142 TRx**, with the trailing-30-day slice at 52 (≈36.6% of the quarter, vs. a 33.3% uniform expectation — a slight recent skew, not a clear drop signal within the window itself). I don't have a prior, non-overlapping Northeast Q1 baseline (e.g., Q1 2024 or Q4 2024) in these results to confirm a decline — so I can't quantify the size of the "drop" yet, only point to likely drivers.
+>
+> **Likely causal drivers (brand-level, Kisqali, validated causal paths, not Northeast-specific):**
+> | Driver | Effect on TRx | Confidence | Lag |
+> |---|---|---|---|
+> | Competitor activity ↓ share-of-voice | **−0.073** on trx_market_share (negative) | 0.79 | 70 days |
+> | HCP coverage → prescriber base | +0.09 on share | 0.90 | 55 days |
+> | Persistent 180d (refill continuity) | +0.285 on volume | 0.89 | 24 days |
+> | Formulary status → patient access | +0.223 on volume | 0.81 | 78 days |
+> | Rep detailing frequency → HCP engagement | +0.166 on volume | 0.80 | 77 days |
+> | Copay support → adherence | +0.088 on volume | 0.79 | 64 days |
+>
+> The only **negative** validated driver is **competitor activity eroding share-of-voice** (effect −0.073, ~$24K estimated business impact, 70-day lag) — this is the main causal candidate for a share/volume softening if one occurred.
+>
+> **Regional triggers (Northeast, last 90 days):** Of the 10 triggers returned, only one is Kisqali-specific and Northeast-tagged: an **engagement_gap** trigger (HCP scvhcp_00013, confidence 0.80) flagging "below-average engagement vs. similar HCPs," which expired unactioned (delivery viewed but acceptance expired). This aligns with the rep-detailing/HCP-engagement causal path above and could contribute to softer Q1 volume in that HCP's book of business. No Northeast-specific competitor or formulary trigger surfaced in this pull.
+>
+> **Bottom line:** I can't confirm a quarter-over-quarter "drop" numerically without a comparable prior-period Northeast figure, but the strongest causal explanation available is competitor share-of-voice pressure compounded by an unaddressed HCP engagement gap in the region.
+>
+> Would you like me to pull Q4 2024 Northeast TRx as a proper non-overlapping baseline to confirm the size of the change?
+
+---
+
+### t5cf2-mid  ·  intervening
+**Q:** What is TRx for Remibrutinib?
+*ttfb 5496.6ms · total 5498.6ms · tools: kpi_calculate_tool*
+
+> **Remibrutinib TRx: 14,199 prescriptions**
+>
+> - **Source:** kpi_calculate_tool (KPI ID WS3-BI-005), synthetic data source
+> - **Window:** No specific period was requested, so this reflects the engine's default reporting window — the **most recent 30 days** of prescription data, through **2026-07-30**.
+>
+> If you'd like, I can pull a prior 30-day period for a like-for-like trend comparison, or break this down by severity tier, therapy line, biologic status, or IgE tier (all valid axes for Remibrutinib).
+
+---
+
+### t5cf2-para  ·  paraphrase_cuefree
+**Q:** What are the main factors behind Kisqali's Northeast softness?
+*ttfb 19119.4ms · total 19142.4ms · tools: e2i_data_query_tool*
+
+> **Kisqali Northeast softness — main factors (last 90 days, Jul 2026 trigger window; brand-level causal paths, Kisqali)**
+>
+> **1. Only Northeast-tagged trigger found: an engagement gap**
+> Of 20 triggers pulled, just one is both Kisqali- and Northeast-specific:
+> - HCP scvhcp_00013 — **engagement_gap** trigger, confidence 0.80, reason "below-average engagement compared to similar HCPs." It was viewed but the acceptance window **expired unactioned**. No Northeast-specific competitor-activity or formulary trigger surfaced in this pull.
+>
+> **2. Brand-level validated causal drivers of Kisqali TRx** (not Northeast-specific, but the mechanisms most likely operating there):
+>
+> | Driver | Effect | Confidence | Lag | Est. business impact |
+> |---|---|---|---|---|
+> | Competitor activity → share-of-voice | **−0.073** (only negative driver) | 0.79 | 70 days | −$24.2K |
+> | Rep detailing frequency → HCP engagement | +0.166 | 0.80 | 77 days | +$38.2K |
+> | Formulary status → patient access | +0.223 | 0.81 | 78 days | +$100.7K |
+> | Persistent 180d refill continuity | +0.285 | 0.89 | 24 days | +$127.5K |
+> | HCP coverage → prescriber base | +0.09 | 0.90 | 55 days | +$29.5K |
+> | Copay support → adherence | +0.088 | 0.79 | 64 days | +$17.0K |
+>
+> **3. Agent analysis (last 90 days, Kisqali)** adds two relevant, non-regional signals:
+> - A **gap_analyzer** run flagged the **South** region with $701K addressable value and **Midwest** with $175.8K — no Northeast gap-analysis run appears in this set, so I can't confirm whether Northeast has a similarly-sized unaddressed opportunity or whether it's comparatively small.
+> - A **heterogeneous_optimizer** (CATE) analysis shows treatment/PSP effects are **much stronger in high-severity patients** (e.g., trigger_accepted → treatment_initiated CATE: high 0.56 vs. low 0.07; treatment_arm CATE: high 0.98 vs. low 0.14) — if Northeast's patient mix skews toward lower severity, that alone would suppress conversion/TRx uplift from standard interventions.
+>
+> **Bottom line:** The strongest direct evidence tying to Northeast is the unactioned HCP engagement gap, consistent with the brand-wide finding that rep detailing/engagement is a validated positive driver (so its absence is a plausible drag). The only negative brand-level driver overall is competitor share-of-voice erosion, though no Northeast-specific competitive trigger confirms this locally. I don't have a Northeast-specific gap-analysis or prior comparable-period figure in these results, so I can't quantify how much each factor contributed to the regional softness — only rank the candidate causes.
+>
+> Want me to run a Northeast-specific gap_analyzer pass to size the addressable opportunity there, comparable to the South/Midwest figures above?
