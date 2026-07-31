@@ -119,20 +119,25 @@ def has_sequential_composition(query: str) -> bool:
 #
 # Precision guard (the #1366 lesson — structural over token-local, and the
 # bench-0143 trap): every marker below is ANAPHORIC — it points back at a prior
-# clause's result. A bare content superlative ("which region has *the largest
-# gap opportunity*", bench-0143, gold PARALLEL) is a NEW ask's descriptor, not a
-# back-reference, so the superlative marker is pronoun-anchored ("the worst
-# one/ones") and never fires on "the largest gap". These markers only ever
+# clause's result via a demonstrative/pronoun, NOT a bare preamble. A bare
+# content superlative ("which region has *the largest gap opportunity*",
+# bench-0143, gold PARALLEL) is a NEW ask's descriptor, so the superlative
+# marker is pronoun-anchored ("the worst one/ones") and never fires on "the
+# largest gap". Codex HIGH (2026-07-31): the earlier "given the/this <word>" and
+# "if it is/was/does" forms matched generic preambles ("Given the budget
+# constraints, …", "If it is possible, …"), reintroducing over-trigger in a new
+# form — so "given" is restricted to the demonstrative plurals "those/these" and
+# "if it" to the state back-references has/had/drifted. These markers only ever
 # PROMOTE when the classifier's ">=2 distinct MAPPED strong intents +
 # not-a-parallel-pair" gate already holds (intent_classifier.py), so a single
 # ask carrying an incidental phrase cannot reach tool_composer.
 _DEPENDENCY_MARKER_REGEX = re.compile(
     # "for those regions", "across these segments" — anaphoric object of a step
     r"\b(for|on|in|of|to|across|among|between) (those|these) \w+"
-    # "given those findings", "given the results"
-    r"|\bgiven (that|those|these|this|the) \w+"
-    # "if it has, …" — conditional back-reference to a prior result
-    r"|\bif it (has|had|does|did|is|was|were|drifted|shows?|showed)\b"
+    # "given those findings", "given these results" — demonstrative-plural anaphor
+    r"|\bgiven (those|these) \w+"
+    # "if it has, …" — conditional back-reference to a prior result's STATE
+    r"|\bif it (has|had|hasn'?t|drifted)\b"
     # "the worst one", "the top ones" — pronoun-anchored superlative back-ref
     r"|\bthe (worst|best|largest|biggest|top|main|primary|strongest|weakest|"
     r"highest|lowest) (one|ones)\b"
@@ -158,15 +163,16 @@ def has_dependency_composition(query: str) -> bool:
 
 
 # Coordinating-clause boundaries for counting genuinely-independent asks. Split
-# on conjunctions ("and"/"then"/"plus"/"while"/"whereas"/"also") and clause
-# punctuation (comma, semicolon, question mark, dash). NB: this OVER-splits list
-# joins ("medium, high, and low severity") on purpose — the caller counts only
-# clauses that independently bear a strong intent, so a bare list fragment
-# ("high") contributes nothing. Sentence "." is deliberately NOT a delimiter
-# (decimals, "Q4.", "vs.") — the conjunction/comma set already separates the
-# multi-ask cases in the gold.
+# on conjunctions ("and"/"then"/"plus"/"while"/"whereas"/"also"), clause
+# punctuation (comma, semicolon, question mark, dash), and SENTENCE boundaries
+# (a period FOLLOWED BY whitespace — "What caused the drop. Design a test."; the
+# `(?=\s)` lookahead keeps decimals/abbreviations like "0.15"/"Q4." intact since
+# their period has no following space). NB: this OVER-splits list joins
+# ("medium, high, and low severity") on purpose — the caller counts only clauses
+# that independently bear a strong intent, so a bare list fragment ("high")
+# contributes nothing.
 _CLAUSE_DELIM_REGEX = re.compile(
-    r"\s*(?:[,;?]|—|--|\band\b|\bthen\b|\bplus\b|\bwhile\b|\bwhereas\b|\balso\b)\s*",
+    r"\s*(?:[,;?]|\.(?=\s)|—|--|\band\b|\bthen\b|\bplus\b|\bwhile\b|\bwhereas\b|\balso\b)\s*",
     re.IGNORECASE,
 )
 

@@ -382,6 +382,23 @@ class TestPhase2MetricsEmission:
         assert len(repo.snapshots) == 1
         assert repo.snapshots[0]["task_id"] == "t-metrics"
 
+    async def test_empty_window_skips_snapshot(self, monkeypatch):
+        # codex MED: an empty fetch (empty window OR fail-open read error) must
+        # NOT persist a misleading total=0 snapshot into the time series.
+        monkeypatch.setenv("ROUTING_LABEL_MIN_NEW_ROWS", "1")
+        repo = FakeRepo([_row()], metrics_rows=[])
+        result = await _run_label_cycle(
+            "t-empty",
+            force=True,
+            judge_cap=None,
+            repo=repo,
+            judge=FakeJudge(),
+            fetch_context=_no_context,
+        )
+        assert result["status"] == "completed"
+        assert result["metrics"] is None
+        assert repo.snapshots == []
+
     async def test_metrics_failure_does_not_abort_cycle(self, monkeypatch):
         monkeypatch.setenv("ROUTING_LABEL_MIN_NEW_ROWS", "1")
 

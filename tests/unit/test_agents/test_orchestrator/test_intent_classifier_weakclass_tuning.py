@@ -192,3 +192,49 @@ class TestDependencyPromotionNegatives:
     )
     def test_not_tool_composer(self, query):
         assert "tool_composer" not in _classify_and_route(query)
+
+
+# ---------------------------------------------------------------------------
+# Codex HIGH (2026-07-31): the dependency markers must be ANAPHORIC, not generic
+# preambles. "Given the budget constraints, …" / "If it is possible, …" are NOT
+# back-references — they must not promote a 2-intent query to the 180s
+# tool_composer. (Red on the pre-fix broad "given the <word>" / "if it is/was"
+# markers, which matched these and over-promoted.)
+# ---------------------------------------------------------------------------
+class TestDependencyMarkersAreAnaphoricNotPreambles:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Given the budget constraints, design an experiment and explain the result",
+            "If it is possible, run an experiment and explain expected impact",
+            "Given the current quarter, forecast TRx and explain the variance",
+        ],
+    )
+    def test_preamble_does_not_promote_to_tool_composer(self, query):
+        assert "tool_composer" not in _classify_and_route(query)
+
+    def test_genuine_anaphor_still_promotes(self):
+        # "if it has" (state back-ref) + 2 mapped intents still routes tool_composer.
+        assert _classify_and_route(
+            "Check whether the Kisqali adoption model has drifted, and if it has, "
+            "re-run the segment analysis and tell me which HCP targets change"
+        ) == ["tool_composer"]
+
+
+# ---------------------------------------------------------------------------
+# Codex MED (2026-07-31): a SENTENCE boundary ("." + whitespace) is a real clause
+# boundary. Two intent-bearing sentences must not be suppressed to a single agent
+# by the clause gate. (Red on the pre-fix splitter, which excluded "." entirely.)
+# ---------------------------------------------------------------------------
+class TestSentenceBoundarySplitsMultipart:
+    def test_two_sentences_two_intents_not_single(self):
+        agents = _classify_and_route("What caused the drop. Design an experiment to verify.")
+        assert agents == ["causal_impact", "experiment_designer"]
+
+    def test_decimal_not_split(self):
+        # "15.5%" must NOT split — the period has no following whitespace, so this
+        # single cohort ask stays one dispatch.
+        agents = _classify_and_route(
+            "Break down Remibrutinib NRx by patient segment where conversion is 15.5%."
+        )
+        assert len(agents) == 1

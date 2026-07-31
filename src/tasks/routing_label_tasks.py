@@ -441,6 +441,14 @@ async def _emit_metrics(repo: Any, task_id: str) -> Optional[Dict[str, Any]]:
     try:
         window_days = _lookback_days()
         rows = await repo.fetch_for_metrics(lookback_days=window_days)
+        if not rows:
+            # An empty fetch is either a genuinely-empty window or a fail-open
+            # read error (fetch_for_metrics swallows both as []). Persisting a
+            # total=0 snapshot in either case would plant misleading "zeroed"
+            # points in the time series (codex MED, 2026-07-31), so skip the
+            # snapshot and report no metrics rather than fabricate an empty run.
+            logger.info("Phase-2 metrics: no rows in window — snapshot skipped")
+            return None
         metrics = compute_run_metrics(rows)
         await repo.record_metrics_snapshot(metrics, task_id=task_id, window_days=window_days)
         return metrics
