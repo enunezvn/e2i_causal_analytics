@@ -365,6 +365,29 @@ def _reconstruct_dowhy_artifacts(
             data = data.copy()
             data[treatment] = (treatment_arr > np.median(treatment_arr)).astype(int)
 
+        # #1417: the estimation node fits on a one-hot-encoded design matrix
+        # (_encode_categorical_covariates), so the reported ATE conditions on
+        # the ENCODED columns. The passthrough frame reaches this node RAW;
+        # handing DoWhy raw categorical names makes its EconML wrapper select
+        # effect modifiers that no longer exist after DoWhy's own internal
+        # dummification — KeyError "['delivery_channel', ...] not in index"
+        # (live 2026-07-31). Encode ONLY the adjustment-set columns with the
+        # SAME estimation helper (single source, zero transform drift) and
+        # condition on the encoded names; encoding the whole passthrough would
+        # trip the cardinality guard on identifier columns (hcp_id) that are
+        # not confounders. The guard still fires when an identifier IS in the
+        # adjustment set — that stays fail-closed by design.
+        effective_common_causes = common_causes
+        if common_causes:
+            from src.agents.causal_impact.nodes.estimation import (
+                _encode_categorical_covariates,
+            )
+
+            encoded_covariates = _encode_categorical_covariates(data[common_causes])
+            if list(encoded_covariates.columns) != list(common_causes):
+                data = data[[treatment, outcome]].join(encoded_covariates)
+                effective_common_causes = list(encoded_covariates.columns)
+
         # Forest-based CATE estimators (CausalForestDML, DRLearner) REQUIRE
         # effect modifiers X — econml raises "does not support X=None" without
         # them. The estimation path fits these with X=W=features
@@ -376,8 +399,8 @@ def _reconstruct_dowhy_artifacts(
             data=data,
             treatment=treatment,
             outcome=outcome,
-            common_causes=common_causes,
-            effect_modifiers=common_causes if common_causes else None,
+            common_causes=effective_common_causes,
+            effect_modifiers=effective_common_causes if effective_common_causes else None,
         )
         identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
         # Build the estimate using the SAME method that produced the reported
