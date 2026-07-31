@@ -273,9 +273,7 @@ class CausalPathRepository(BaseRepository):
         fiction is not validated by a real run) rather than treat it as absent,
         so this read deliberately opts in to synthetic visibility.
         """
-        rows = await self.get_many(
-            filters={"path_id": path_id}, limit=1, include_synthetic=True
-        )
+        rows = await self.get_many(filters={"path_id": path_id}, limit=1, include_synthetic=True)
         return rows[0] if rows else None
 
     async def find_real_paths_for_pair(

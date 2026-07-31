@@ -572,9 +572,9 @@ def _kg_causal_variable_candidates(
             out_degree[src_name] = out_degree.get(src_name, 0) + 1
         if dst_name:
             in_degree[dst_name] = in_degree.get(dst_name, 0) + 1
-    treatments = [
-        n for n, _ in sorted(out_degree.items(), key=lambda kv: (-kv[1], kv[0]))
-    ][:_KG_CANDIDATE_LIMIT]
+    treatments = [n for n, _ in sorted(out_degree.items(), key=lambda kv: (-kv[1], kv[0]))][
+        :_KG_CANDIDATE_LIMIT
+    ]
     outcomes = [n for n, _ in sorted(in_degree.items(), key=lambda kv: (-kv[1], kv[0]))][
         :_KG_CANDIDATE_LIMIT
     ]
@@ -701,8 +701,7 @@ def _resolve_causal_impact_input(
         reason=(
             "no recognized KPI substrate with a defined treatment column and "
             f">={_CAUSAL_MIN_ROWS} real rows to bind the causal spec; a chat query "
-            "alone cannot name the treatment/outcome/confounder columns."
-            + candidate_note
+            "alone cannot name the treatment/outcome/confounder columns." + candidate_note
         ),
         rest_endpoint="POST /causal/agent-analyze",
     )
@@ -1220,9 +1219,7 @@ def _resolve_prediction_synthesizer_input(
             )
             champions = []
         family_champions = [
-            (n, t)
-            for n, t in champions
-            if all(ft in _target_tokens(t) for ft in family_tokens)
+            (n, t) for n, t in champions if all(ft in _target_tokens(t) for ft in family_tokens)
         ]
         if family_champions:
             brand, _region = _extract_brand_region(agent_input)
@@ -1288,8 +1285,7 @@ def _resolve_prediction_synthesizer_input(
                     resolved["time_horizon"] = horizon
                     break
             logger.info(
-                "prediction_synthesizer dispatch: bound registry champion target %s "
-                "for entity %s.",
+                "prediction_synthesizer dispatch: bound registry champion target %s for entity %s.",
                 resolved_target,
                 entity,
             )

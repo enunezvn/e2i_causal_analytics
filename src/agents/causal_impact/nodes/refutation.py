@@ -1332,9 +1332,7 @@ async def refute_causal_estimate(
     return await node.execute(state)
 
 
-async def _build_persistence_repos() -> Tuple[
-    Optional[CausalValidationRepository], Optional[Any]
-]:
+async def _build_persistence_repos() -> Tuple[Optional[CausalValidationRepository], Optional[Any]]:
     """Lazily build the validation + causal-path repositories, or (None, None).
 
     Same degrade contract as ``_build_expert_review_gate``: ONLY the
@@ -1355,14 +1353,10 @@ async def _build_persistence_repos() -> Tuple[
     try:
         client = await get_async_supabase_client()
     except ServiceConnectionError as exc:
-        logger.warning(
-            "Validation persistence unavailable (no Supabase config): %s", exc
-        )
+        logger.warning("Validation persistence unavailable (no Supabase config): %s", exc)
         return None, None
     except Exception as exc:  # noqa: BLE001 - persistence is best-effort by contract
-        logger.warning(
-            "Validation persistence unavailable (client build failed): %s", exc
-        )
+        logger.warning("Validation persistence unavailable (client build failed): %s", exc)
         return None, None
 
     from src.repositories.causal_path import CausalPathRepository
