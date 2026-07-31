@@ -2676,9 +2676,7 @@ def _strip_frontend_calls_when_mixed(
     return tool_calls
 
 
-def _is_frontend_only_turn(
-    call_names: Sequence[Optional[str]], frontend_names: set[str]
-) -> bool:
+def _is_frontend_only_turn(call_names: Sequence[Optional[str]], frontend_names: set[str]) -> bool:
     """True when every tool call in the turn is a frontend (generative-UI) action.
 
     Shared by the two places that must agree about it: ``_route_after_chat``,
@@ -3161,9 +3159,7 @@ def create_e2i_chat_agent():
                 # Recording here closes it, and `tools_invoked` carries the
                 # action name so the split between the chart actions is
                 # readable straight off the existing column.
-                if session_id and _is_frontend_only_turn(
-                    tool_names, _frontend_action_names(state)
-                ):
+                if session_id and _is_frontend_only_turn(tool_names, _frontend_action_names(state)):
                     _record_analytics_sync(
                         session_id=session_id,
                         query_type=_classify_query_type(last_human_message or ""),  # type: ignore[arg-type]

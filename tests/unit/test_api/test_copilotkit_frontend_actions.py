@@ -251,9 +251,7 @@ def test_backend_turn_is_not_a_generative_ui_turn():
 def test_mixed_turn_is_not_a_generative_ui_turn():
     # Mixed turns keep their backend calls (see _strip_frontend_calls_when_mixed)
     # and therefore still reach synthesize_node.
-    assert not _is_frontend_only_turn(
-        ["kpi_calculate_tool", "renderChart"], {"renderChart"}
-    )
+    assert not _is_frontend_only_turn(["kpi_calculate_tool", "renderChart"], {"renderChart"})
 
 
 def test_no_calls_and_no_actions_are_not_generative_ui_turns():
@@ -268,9 +266,7 @@ def test_routing_and_recording_share_one_condition():
     # ends as frontend-only must be exactly the set _is_frontend_only_turn
     # accepts, since a recorded-but-not-ended turn would be a false row.
     state = {
-        "copilotkit": {
-            "actions": [{"name": "renderChart", "description": "d", "parameters": []}]
-        }
+        "copilotkit": {"actions": [{"name": "renderChart", "description": "d", "parameters": []}]}
     }
     frontend_names = _frontend_action_names(state)
 
@@ -281,9 +277,7 @@ def test_routing_and_recording_share_one_condition():
     ]:
         msg = AIMessage(
             content="",
-            tool_calls=[
-                {"name": n, "args": {}, "id": f"c{i}"} for i, n in enumerate(call_names)
-            ],
+            tool_calls=[{"name": n, "args": {}, "id": f"c{i}"} for i, n in enumerate(call_names)],
         )
         routed_end = _route_after_chat({**state, "messages": [msg]}) == "end"
         assert routed_end is expect_end
