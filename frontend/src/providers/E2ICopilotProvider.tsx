@@ -29,6 +29,14 @@ import {
   resolveTherapyLine,
 } from '@/lib/kpi-alias';
 import { KpiTrendChart } from '@/components/chat/KpiTrendChart';
+import { FlintChart } from '@/components/chat/FlintChart';
+// Value import kept to the chart-type list only (a plain string tuple); the
+// compiler itself is loaded lazily inside FlintChart to keep flint-chart out
+// of the eager bundle.
+import { SUPPORTED_CHART_TYPES } from '@/lib/flint-chart-types';
+import type { SupportedChartType } from '@/lib/flint-chart-types';
+import { routeKpiChart } from '@/lib/kpi-chart-router';
+import type { KpiChartData } from '@/lib/kpi-chart-router';
 import type { KPIHistoryResponse, KPISegmentedHistoryResponse } from '@/types/kpi';
 
 // -----------------------------------------------------------------------------
@@ -884,7 +892,10 @@ const CopilotHooksInner: React.FC = () => {
       'code like WS3-BI-005. nbrx and trx_share are tracked per brand only — pass brand for them. ' +
       'For trx/nrx/nbrx the trend can be split by patient severity tier or line of therapy: pass ' +
       'compareBy to draw ONE chart with one line per tier (never call once per tier), or ' +
-      'segment/therapyLine to chart a single tier.',
+      'segment/therapyLine to chart a single tier. ' +
+      'This action covers ONLY the KPIs listed above, and only as a line over time — for any other ' +
+      'registry KPI, for a current value rather than a trend, for comparing several KPIs, or for any ' +
+      'other chart shape, call renderChart instead.',
     parameters: [
       {
         name: 'kpiId',
@@ -1000,6 +1011,155 @@ const CopilotHooksInner: React.FC = () => {
           data={history}
           segmented={segmented}
           loading={status === 'executing'}
+        />
+      );
+    },
+  });
+
+  // 8. Render a chart for ANY registry KPI (generative UI, Flint-compiled)
+  //
+  // Complements renderKpiTrend, which is the hand-tuned line chart for the
+  // Rx-volume KPIs. This action covers the other 38 registry KPIs and the
+  // chart types beyond a line, by routing each KPI to whichever endpoint can
+  // serve it (materialized history, patient-axis history, current value, or a
+  // batch comparison) and compiling the result with flint-chart.
+  //
+  // The model chooses WHAT to chart; it never supplies the numbers. Rows come
+  // from routeKpiChart's real API responses — see lib/flint-chart's data rule.
+  useCopilotAction({
+    name: 'renderChart',
+    description:
+      'Render a chart of any E2I KPI. This is the general charting action: use it for every case ' +
+      'except a line-over-time of the Rx-volume/commercial KPIs renderKpiTrend names (trx, nrx, ' +
+      'nbrx, trx_share, conversion_rate, roi) — prefer renderKpiTrend for those, it renders more ' +
+      'cheaply. If a request does not clearly fit that list, use this action. ' +
+      'Handles data-quality, model-performance, trigger, business, brand and causal KPIs. Accepts ' +
+      'registry codes (WS1-MP-001, CM-001, BR-003), yaml keys (roc_auc, trigger_precision), or ' +
+      'display names ("ROC-AUC", "Cross-source Match Rate", "Average Treatment Effect"). Pass ' +
+      'several kpis to compare their current values side by side. KPIs with a monthly series are ' +
+      'charted over time; point-in-time KPIs are charted at their current value — you do not need ' +
+      'to know which is which.',
+    parameters: [
+      {
+        name: 'kpis',
+        type: 'string[]',
+        description:
+          'One or more KPIs to chart, as registry codes, yaml keys, or display names. ' +
+          'Two or more produces a side-by-side comparison of current values.',
+        required: true,
+      },
+      {
+        name: 'chartType',
+        type: 'string',
+        description:
+          `Optional chart type. One of: ${SUPPORTED_CHART_TYPES.join(', ')}. ` +
+          'Omit to let the router pick from the data shape (line for a series, bar for a ' +
+          'comparison, KPI card for a single point-in-time value).',
+        required: false,
+      },
+      {
+        name: 'brand',
+        type: 'string',
+        description:
+          'Brand scope (Remibrutinib, Fabhalta, or Kisqali). Required for NBRx and TRx Share, ' +
+          'which are tracked per brand only; omit elsewhere for the global figure.',
+        required: false,
+      },
+      {
+        name: 'compareBy',
+        type: 'string',
+        description:
+          "'severity' or 'lot' to split into one line per patient severity tier or line of " +
+          'therapy. Only TRx, NRx and NBRx carry a patient axis.',
+        required: false,
+      },
+      {
+        name: 'segment',
+        type: 'string',
+        description:
+          "Chart a SINGLE severity tier: 'low', 'medium', or 'high'. Use compareBy instead " +
+          'to see all tiers at once. TRx/NRx/NBRx only.',
+        required: false,
+      },
+      {
+        name: 'therapyLine',
+        type: 'string',
+        description:
+          "Chart a SINGLE line of therapy: '0'-'3' (prior therapy lines). TRx/NRx/NBRx only.",
+        required: false,
+      },
+      {
+        name: 'title',
+        type: 'string',
+        description: 'Optional chart title',
+        required: false,
+      },
+    ],
+    handler: async ({
+      kpis,
+      chartType,
+      brand,
+      compareBy,
+      segment,
+      therapyLine,
+      title,
+    }: {
+      kpis: string[];
+      chartType?: string;
+      brand?: string;
+      compareBy?: string;
+      segment?: string;
+      therapyLine?: string;
+      title?: string;
+    }): Promise<KpiChartData> => {
+      // Only accept a chart type this build actually supports — an unknown one
+      // is dropped so the router's shape-appropriate default applies, rather
+      // than failing the whole turn on a model typo.
+      const requested = SUPPORTED_CHART_TYPES.includes(chartType as SupportedChartType)
+        ? (chartType as SupportedChartType)
+        : undefined;
+      return await routeKpiChart({
+        kpis: Array.isArray(kpis) ? kpis : [kpis],
+        brand,
+        compareBy,
+        segment,
+        therapyLine,
+        chartType: requested,
+        title,
+      });
+    },
+    render: ({ status, args, result }) => {
+      // 'inProgress' = arguments still streaming, so the KPI list may be
+      // partial — render nothing rather than a chart of the wrong metric.
+      if (status === 'inProgress') return <></>;
+
+      const heading =
+        args?.title ?? (Array.isArray(args?.kpis) ? args.kpis.join(', ') : 'Chart');
+
+      if (status === 'executing') {
+        return <FlintChart title={heading} loading />;
+      }
+
+      // The handler returns KpiChartData; CopilotKit types `result` as any, so
+      // only a well-formed payload counts as data. Anything else is an error
+      // state, never an empty one — a failed fetch must not read as "no data".
+      const data =
+        result != null && typeof result === 'object' && 'rows' in result
+          ? (result as KpiChartData)
+          : undefined;
+
+      if (!data) {
+        return <FlintChart title={heading} error="the data request did not complete" />;
+      }
+
+      // FlintChart compiles the figure itself, so flint-chart stays off the
+      // eager bundle — see the bundling note in that module.
+      return (
+        <FlintChart
+          title={data.title}
+          subtitle={data.subtitle}
+          chartData={data}
+          emptyReason={data.emptyReason}
         />
       );
     },
