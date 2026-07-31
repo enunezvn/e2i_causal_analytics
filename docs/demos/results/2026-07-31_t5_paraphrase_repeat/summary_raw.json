@@ -1,0 +1,160 @@
+[
+  {
+    "question_id": "t5p1-cold",
+    "condition": "cold",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 10109.4,
+    "total_ms": 10111.0,
+    "chars": 403,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Kisqali TRx: 13,185 prescriptions**\n\n- Source: WS3-BI-005 (Total Prescriptions), synthetic data source\n- Window: no specific period was requested, so this reflects the engine's default reporting window \u2014 the **most recent 30 days** of prescription data, through **2026-07-30**\n\nLet me know if you'd like this broken down by patient segment, line of therapy, or region, or plotted as a trend over time."
+  },
+  {
+    "question_id": "t5p1-mid",
+    "condition": "intervening",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 7554.9,
+    "total_ms": 7556.5,
+    "chars": 393,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Fabhalta NRx: 3,298 new prescriptions**\n\n- Source: WS3-BI-006 (New Prescriptions), synthetic data source\n- Window: no specific period was requested, so this reflects the engine's default reporting window \u2014 the **most recent 30 days** of prescription data, through **2026-07-30**\n\nLet me know if you'd like this broken down by patient segment/severity, line of therapy, or plotted as a trend."
+  },
+  {
+    "question_id": "t5p1-para",
+    "condition": "paraphrase",
+    "tools_invoked": [],
+    "ttfb_ms": 5362.8,
+    "total_ms": 5364.7,
+    "chars": 311,
+    "recap_marker_hits": [
+      "earlier"
+    ],
+    "error": null,
+    "response_text": "Yes \u2014 **Kisqali TRx (Total Prescriptions): 13,185**, from earlier in our conversation.\n\n- Source: WS3-BI-005 (Total Prescriptions), synthetic data source\n- Window: the engine's default reporting window \u2014 the **most recent 30 days** of prescription data, through **2026-07-30** (no specific period was requested)"
+  },
+  {
+    "question_id": "t5p2-cold",
+    "condition": "cold",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 5453.8,
+    "total_ms": 5454.8,
+    "chars": 473,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Fabhalta TRx Share: 35.9%** (data through 2026-07-30, most recent 30 days of prescription data).\n\nThis represents Fabhalta's share of the tracked portfolio's prescriptions \u2014 i.e., Fabhalta's TRx volume relative to the combined total of Fabhalta + Kisqali + Remibrutinib (cross-indication tracking), not market share against external competitors like Soliris/Empaveli. No comparison period was requested, so this reflects the engine's default 30-day reporting window only."
+  },
+  {
+    "question_id": "t5p2-mid",
+    "condition": "intervening",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 5637.9,
+    "total_ms": 5643.4,
+    "chars": 255,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Remibrutinib NRx: 3,249 new prescriptions** (data through 2026-07-30, most recent 30 days).\n\nNo specific time period was requested, so this reflects the engine's default 30-day reporting window \u2014 same window basis as the Fabhalta TRx share figure above."
+  },
+  {
+    "question_id": "t5p2-para",
+    "condition": "paraphrase",
+    "tools_invoked": [],
+    "ttfb_ms": 3471.7,
+    "total_ms": 3473.6,
+    "chars": 354,
+    "recap_marker_hits": [
+      "earlier"
+    ],
+    "error": null,
+    "response_text": "**Fabhalta's TRx share is 35.9%** of the tracked portfolio's total prescriptions (Fabhalta + Kisqali + Remibrutinib), based on data through 2026-07-30 (most recent 30-day window). This is the same figure I reported earlier \u2014 it reflects Fabhalta's share of scripts *within Novartis's tracked brand set*, not versus external competitors in the PNH market."
+  },
+  {
+    "question_id": "t5p3-cold",
+    "condition": "cold",
+    "tools_invoked": [
+      "causal_analysis_tool"
+    ],
+    "ttfb_ms": 15286.3,
+    "total_ms": 15293.1,
+    "chars": 2089,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Kisqali TRx \u2013 Northeast, Q1 2025 (Jan 1\u2013Apr 1, 2025): 142 total prescriptions.** *(Source: kpi_calculate_tool, WS3-BI-005)*\n\nI don't have a non-overlapping prior-period Northeast figure to compare against, so I can't quantify the size of a \"drop\" from this data alone \u2014 but the causal and trigger data point to the likely drivers behind softening TRx in that region:\n\n**Top validated causal drivers of Kisqali TRx (brand-wide, not Northeast-specific):**\n| Driver | Effect size | Confidence | Est. business impact |\n|---|---|---|---|\n| Persistent 180-day adherence \u2192 refill continuity | +0.285 | 0.892 | $127.5K |\n| Formulary status \u2192 patient access | +0.223 | 0.805 | $100.7K |\n| Rep detailing frequency \u2192 HCP engagement | +0.166 | 0.796 | $38.2K |\n| HCP coverage \u2192 prescriber base | +0.09 (on share) | 0.899 | $29.5K |\n| Copay support \u2192 adherence | +0.088 | 0.794 | $17.0K |\n| **Competitor activity \u2192 share of voice** | **-0.073** | 0.793 | **-$24.2K** |\n\nThe **negative driver** is competitor share-of-voice pressure \u2014 increased competitor activity erodes Kisqali's trx_market_share with ~70-day lag. Combined with any softening in formulary access or rep detailing intensity, this is consistent with a regional dip.\n\n**Northeast-specific signal from triggers:** Kisqali HCPs in the region show recurring **\"engagement_gap\"** triggers (e.g., trigger `scvtrg_08087`, confidence 0.796; `scvtrg_15957`, confidence 0.754) flagging below-average HCP engagement vs. peers \u2014 several were left unactioned or expired, meaning reduced touchpoint frequency likely contributed to the volume softness (aligns with the rep-detailing-frequency causal path above).\n\n**Bottom line:** The drop is most plausibly explained by a combination of (1) reduced rep engagement/detailing in the Northeast (evidenced by unresolved engagement-gap triggers) and (2) competitive share-of-voice pressure, with formulary/access frictions as a secondary factor. I'd need a prior comparable Northeast quarter's TRx to confirm magnitude \u2014 want me to pull Q4 2024 Northeast TRx for a clean quarter-over-quarter comparison?"
+  },
+  {
+    "question_id": "t5p3-mid",
+    "condition": "intervening",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 4842.0,
+    "total_ms": 4844.2,
+    "chars": 421,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Remibrutinib TRx: 14,199 total prescriptions**, covering the engine's default reporting window \u2014 the **most recent 30 days** of data (through 2026-07-30). *(Source: kpi_calculate_tool, WS3-BI-005)*\n\nNo specific period was requested for this query, so this reflects the standard 30-day snapshot rather than a custom window. Let me know if you'd like it broken down by severity tier, biologic status, IgE tier, or region."
+  },
+  {
+    "question_id": "t5p3-para",
+    "condition": "paraphrase",
+    "tools_invoked": [],
+    "ttfb_ms": 8689.0,
+    "total_ms": 8692.1,
+    "chars": 1692,
+    "recap_marker_hits": [
+      "recap"
+    ],
+    "error": null,
+    "response_text": "Recapping what I found for the Kisqali Northeast TRx softness:\n\n**Key drivers identified:**\n\n| Driver | Effect size | Confidence | Est. business impact |\n|---|---|---|---|\n| Persistent 180-day adherence \u2192 refill continuity | +0.285 | 0.892 | $127.5K |\n| Formulary status \u2192 patient access | +0.223 | 0.805 | $100.7K |\n| Rep detailing frequency \u2192 HCP engagement | +0.166 | 0.796 | $38.2K |\n| HCP coverage \u2192 prescriber base | +0.09 (on share) | 0.899 | $29.5K |\n| Copay support \u2192 adherence | +0.088 | 0.794 | $17.0K |\n| **Competitor activity \u2192 share of voice** | **-0.073** | 0.793 | **-$24.2K** |\n\n**The two most likely contributors to the Northeast decline specifically:**\n\n1. **Reduced rep engagement/detailing** \u2014 Northeast Kisqali HCPs showed recurring **\"engagement_gap\"** triggers (e.g., `scvtrg_08087` at 0.796 confidence, `scvtrg_15957` at 0.754), several of which went unactioned or expired. Since rep detailing frequency is a positive causal driver of HCP engagement (+0.166), a gap here directly suppresses TRx.\n2. **Competitor share-of-voice pressure** \u2014 the only *negative* driver in the causal registry (-0.073 effect on trx_market_share, ~70-day lag), meaning increased competitor activity erodes Kisqali's share over time.\n\nSecondary factors (formulary access, adherence/persistence) are important brand-wide levers but I don't have Northeast-specific data confirming they moved \u2014 the trigger evidence is strongest for the engagement gap.\n\n**Caveat still stands:** I haven't been able to quantify the actual size of the \"decline\" since I don't have a prior comparable Northeast TRx figure to compare against. Want me to pull a prior quarter's Northeast TRx now to size the drop?"
+  },
+  {
+    "question_id": "t5b1-baseline",
+    "condition": "baseline",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 4937.5,
+    "total_ms": 4938.8,
+    "chars": 246,
+    "recap_marker_hits": [
+      "earlier"
+    ],
+    "error": null,
+    "response_text": "Kisqali's **Total Prescriptions (TRx)** was **13,185** \u2014 this figure covers the engine's default reporting window (most recent 30 days of data, through 2026-07-30), not a specific period you requested earlier. Source: WS3-BI-005 (synthetic data)."
+  },
+  {
+    "question_id": "t5b2-baseline",
+    "condition": "baseline",
+    "tools_invoked": [
+      "kpi_calculate_tool"
+    ],
+    "ttfb_ms": 5631.7,
+    "total_ms": 5633.2,
+    "chars": 410,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "**Fabhalta's TRx Share is 35.9%**, based on data through the most recent 30-day reporting window (data through **2026-07-30**).\n\nThis means Fabhalta accounts for roughly **36% of scripts across the tracked portfolio** (Fabhalta + Kisqali + Remibrutinib combined) \u2014 it is **not** a measure of market share against external competitors like Uptravi or other PNH treatments, since those aren't in this data model."
+  },
+  {
+    "question_id": "t5b3-baseline",
+    "condition": "baseline",
+    "tools_invoked": [
+      "causal_analysis_tool"
+    ],
+    "ttfb_ms": 14798.3,
+    "total_ms": 14804.4,
+    "chars": 2186,
+    "recap_marker_hits": [],
+    "error": null,
+    "response_text": "Here's what's driving the **Kisqali Northeast** softness, per the causal-path registry (validated chains, min confidence 0.5):\n\n**Top validated causal drivers (TRx, Northeast region):**\n\n| Driver | Effect Size | Confidence | Lag | Est. $ Impact |\n|---|---|---|---|---|\n| Persistent 180d (refill continuity) | +0.285 | 0.892 | 24 days | +$127.5K |\n| Formulary status (patient access) | +0.223 | 0.805 | 78 days | +$100.7K |\n| Rep detailing frequency (HCP engagement) | +0.166 | 0.796 | 77 days | +$38.2K |\n| HCP coverage (prescriber base) | +0.09 | 0.899 | 55 days | +$29.5K |\n| Copay support program (adherence) | +0.088 | 0.794 | 64 days | +$17.0K |\n| **Competitor activity (share of voice)** | **-0.073** | **0.793** | **70 days** | **-$24.2K** |\n\nThe one clearly *negative* lever is **competitor activity eroding share of voice**, which directly pulls down `trx_market_share` (-$24.2K estimated impact). Everything else in the list is a positive lever whose *underperformance* \u2014 not intrinsic negative effect \u2014 is likely compounding the decline: weaker HCP coverage/prescriber base, softer rep detailing cadence, formulary/access friction, and refill continuity gaps all have strong positive effect sizes, meaning if any of these degraded in the Northeast, they'd translate directly into lost TRx.\n\n**Supporting signal from triggers:** Northeast Kisqali HCPs are generating repeated `engagement_gap` triggers (e.g., trigger `scvtrg_08087`, confidence 0.796, \"below-average engagement compared to similar HCPs,\" recommending increased touchpoint frequency) \u2014 consistent with the rep-detailing and HCP-coverage drivers above showing up as real-world flags, several of which expired unactioned or were rejected/overridden.\n\n**Bottom line:** The decline looks like a combination of **competitive share-of-voice pressure** plus **underdelivery on the positive-impact levers** (detailing frequency, prescriber coverage, formulary access) \u2014 the engagement-gap triggers suggest reps are under-covering Northeast HCPs relative to peers, which is likely the most actionable lever.\n\nWant me to pull the specific Northeast HCP list tied to those unactioned engagement-gap triggers for targeting?"
+  }
+]

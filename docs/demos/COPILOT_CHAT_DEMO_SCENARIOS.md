@@ -33,7 +33,7 @@ progress may be fine.
 | **T2 — KPI fast path** | classify → KPI engine lookup (brand/segment/LoT/window routing) | `kpi_query` | Seconds, not tens of seconds; a real number with period + comparison, chart where applicable |
 | **T3 — Single agent** | classify → orchestrator → SINGLE_AGENT dispatch | `causal_analysis`, `recommendation`, `search`, `agent_status` | Streaming progress events visible; structured result (effect estimate + refutations, cohort definition, ranked opportunities) |
 | **T4 — Multi-agent / composer** | classify → orchestrator → PARALLEL_DELEGATION or TOOL_COMPOSER decomposition | `multi_faceted` | Visible decomposition into sub-questions; each facet resolved; coherent synthesis |
-| **T5 — Context / memory** | follow-up turns resolving "that/those/why is this happening" against session memory | any (follow-up) | Correct referent resolution; no re-asking; faster than the original cold query |
+| **T5 — Context / memory** | follow-up turns resolving "that/those/why is this happening", and paraphrase repeats of an earlier question, against session memory | any (follow-up) | Correct referent resolution; no re-asking. On a paraphrase repeat, the answer acknowledges/reuses the earlier analysis (episodic recap) with consistent grounded numbers — typically faster than cold when the recap skips re-running tools. Verbatim answer caching is out of scope (#1339). |
 | **T6 — Robustness** | typo handler, ambiguity → clarification | any | Typos silently corrected; ambiguous queries produce a clarifying question, not a hallucinated answer |
 
 Record per question: time-to-first-token, time-to-first-progress-event (T3+),
@@ -169,7 +169,7 @@ Not demo material, but required for a performance pass:
 | A.5 | Why did it drop? *(as a cold first message)* | CLARIFICATION_NEEDED — should ask "which metric/brand", not hallucinate |
 | A.6 | What is TRx? | definitional edge (production-ambiguous: `kpi_query`/`help`/`general`) — should define, not dump data |
 | A.7 | Ask 1.1, then immediately ask 1.4 while streaming | concurrent/interrupt behavior of the chat UI |
-| A.8 | Repeat 1.1 verbatim in the same session | cache/memory hit — should be faster than cold |
+| A.8 | Paraphrase 1.1 later in the same session (e.g. "Remind me — what was Kisqali's total prescription count again?") | episodic recap: acknowledges/reuses the earlier answer with a consistent number at acceptable latency. (Re-running the tool to re-validate is fine — the pass is a correct, consistent, acknowledged answer, not zero tool calls; it's typically faster than cold precisely because a recap *can* skip the tool.) Verbatim caching out of scope (#1339); measured 2026-07-31 — see `docs/demos/results/2026-07-31_t5_paraphrase_repeat/` |
 | A.9 | Ask 1.4, wait, then ask: Why is this happening? | T5 memory: episodic context retrieval |
 | A.10 | A 60+ word compound question mixing 4 domains | complexity warning / graceful decomposition, no timeout |
 
@@ -183,5 +183,8 @@ For each question log: `question_id`, `intent_expected`, `intent_actual`,
 
 Pass criteria by tier (starting points — tighten from observed baselines):
 T1 < 3s total; T2 < 8s total; T3 first progress < 5s, total < 40s;
-T4 first decomposition visible < 8s, total < 90s; T5 faster than the
-equivalent cold query; T6 never hallucinates on ambiguity.
+T4 first decomposition visible < 8s, total < 90s; T5 paraphrase repeat
+acknowledges/reuses the earlier analysis with consistent grounded numbers at
+acceptable latency (not materially slower than cold — and typically faster,
+since a recap can skip re-running the tool; re-running to re-validate is not a
+failure — #1339); T6 never hallucinates on ambiguity.
