@@ -80,7 +80,7 @@ def _encode_categorical_covariates(frame: pd.DataFrame) -> pd.DataFrame:
             return True
         if pd.api.types.is_object_dtype(dtype):
             return pd.api.types.infer_dtype(col, skipna=True) not in _temporal_inferred
-        return pd.api.types.is_string_dtype(dtype)
+        return bool(pd.api.types.is_string_dtype(dtype))
 
     cat_cols = [c for c in frame.columns if _is_encodable_categorical(frame[c])]
     if not cat_cols:
