@@ -273,22 +273,72 @@ graph TB
 
 The orchestrator uses a linear workflow: `audit_init` -> `classify_intent` -> `retrieve_rag_context` -> `route_to_agents` -> `dispatch_to_agents` -> `synthesize_response`.
 
-**Intent-to-Agent Mapping:**
+**Two routing layers coexist** (2026-07, PR #1330 onward; sources:
+`src/agents/orchestrator/nodes/intent_classifier.py`, `nodes/router.py`,
+`classifier/pattern_selector.py`):
 
-| Intent | Primary Agent | Timeout | Tier |
-|--------|--------------|---------|------|
-| `causal_effect` | causal_impact | 30s | 2 |
-| `performance_gap` | gap_analyzer | 20s | 2 |
-| `segment_analysis` | heterogeneous_optimizer | 25s | 2 |
-| `experiment_design` | experiment_designer | 60s | 3 |
-| `experiment_monitor` | experiment_monitor | 15s | 3 |
-| `prediction` | prediction_synthesizer | 15s | 4 |
-| `resource_allocation` | resource_optimizer | 20s | 4 |
-| `explanation` | explainer | 45s | 5 |
-| `system_health` | health_score | 5s | 3 |
-| `drift_check` | drift_monitor | 10s | 3 |
-| `feedback` | feedback_learner | 30s | 5 |
-| `cohort_definition` | cohort_constructor | 120s | 0 |
+1. **Legacy intent router** (always runs): regex `INTENT_PATTERNS` score the
+   query; below the 0.8 pattern-trust floor a fast-LLM (haiku) fallback
+   classifies instead. The resulting intent drives `INTENT_TO_AGENTS`
+   dispatch (table below), with hard-coded `MULTI_AGENT_PATTERNS` pairs and a
+   `multi_faceted` promotion (dependency-linked multi-intent → tool_composer).
+2. **4-stage ClassificationPipeline** (feature extraction → domain mapping →
+   dependency analysis → pattern selection), gated by
+   `ORCHESTRATOR_CLASSIFIER_MODE`:
+   - `off` — never runs;
+   - `shadow` (default) — runs, surfaced in `dispatch_info` /
+     `ChatResponse` (`routing_pattern`, `classification_latency_ms`,
+     `used_llm_layer`) and logged to `classification_logs`, but routing stays
+     legacy;
+   - `active` — takes routing authority only when confident
+     (`RouterNode.MIN_ACTIVE_CONFIDENCE = 0.5`); on `CLARIFICATION_NEEDED`,
+     low confidence, or an undispatchable result it **abstains** and legacy
+     routing proceeds unchanged. Its LLM stage is currently hard-disabled
+     (pending the async stage-3 implementation), so pipeline decisions are
+     rule-based.
+
+Routing patterns: `SINGLE_AGENT` (one capability domain), `PARALLEL_DELEGATION`
+(multi-domain, independent sub-questions), `TOOL_COMPOSER` (multi-domain AND
+dependency-linked — single-domain multi-step stays SINGLE_AGENT),
+`CLARIFICATION_NEEDED` (pipeline-only; the legacy path cannot produce it and
+active mode abstains on it — issue #1407). The nightly labeler
+(`routing-label-nightly`, #1341) scores logged decisions into
+`classification_logs.was_correct` and snapshots per-run telemetry to
+`routing_classifier_metrics` (see `docs/data/07-SUPPORTING-SCHEMAS.md`).
+
+**Reachability**: the classifier's `DOMAIN_TO_AGENT` maps 8 domains →
+causal_impact, heterogeneous_optimizer, gap_analyzer, experiment_designer,
+prediction_synthesizer, drift_monitor, explainer, cohort_profiler (+
+tool_composer via the TOOL_COMPOSER pattern). **resource_optimizer,
+health_score, feedback_learner and experiment_monitor are legacy-only** — the
+classifier cannot select them. Full per-agent matrix and chat-surface split
+(AG-UI vs `/chat/stream`): `docs/api/chat.md` and
+`docs/demos/COPILOT_CHAT_DEMO_SCENARIOS_V2.md`; contract registry:
+`scripts/benchmarks/routing/data/agent_contracts.json`.
+
+**Legacy Intent-to-Agent Mapping** (`RouterNode.INTENT_TO_AGENTS`; timeouts
+are workload-measured SLAs, not latency targets — see inline comments in
+`router.py`):
+
+| Intent | Primary Agent | Timeout | Fallback | Tier |
+|--------|--------------|---------|----------|------|
+| `causal_effect` | causal_impact | 120s | explainer | 2 |
+| `performance_gap` | gap_analyzer | 20s | — | 2 |
+| `segment_analysis` | heterogeneous_optimizer | 420s | gap_analyzer | 2 |
+| `experiment_design` | experiment_designer | 150s | — | 3 |
+| `experiment_monitor` | experiment_monitor | 15s | — | 3 |
+| `prediction` | prediction_synthesizer | 15s | — | 4 |
+| `resource_allocation` | resource_optimizer | 20s | — | 4 |
+| `explanation` | explainer | 45s | — | 5 |
+| `system_health` | health_score | 5s | — | 3 |
+| `drift_check` | drift_monitor | 10s | — | 3 |
+| `feedback` | feedback_learner | 30s | — | 5 |
+| `multi_faceted` | tool_composer | 180s | explainer | 1 |
+| `cohort_definition` | cohort_profiler | 30s | — | 0 |
+
+Note: chat `cohort_definition` routes to **cohort_profiler**, not
+cohort_constructor — the constructor materializes patient rows for the ML
+pipeline and cannot run from a chat payload (`router.py` inline comment).
 
 ### 3.3 Agent Patterns
 
@@ -312,7 +362,7 @@ All agents share common patterns:
 | audit | `/api/audit/` | Workflow audit chain, verification | AUTH |
 | causal | `/api/causal/` | Hierarchical CATE, pipeline, validation | ANALYST |
 | cognitive | `/api/cognitive/` | 4-phase cognitive workflow, RAG | - |
-| copilotkit | `/api/copilotkit/` | CopilotKit AI chat runtime | Rate-limited |
+| copilotkit | `/api/copilotkit/` | CopilotKit AI chat runtime — AG-UI agent, `/chat/stream` SSE (`dispatch_info`), feedback/analytics; reference: `docs/api/chat.md` | Rate-limited |
 | digital-twin | `/api/digital-twin/` | Simulate, validate, list models | OPERATOR |
 | experiments | `/api/experiments/` | Randomize, enroll, interim analysis | OPERATOR |
 | explain | `/api/explain/` | Real-time SHAP explanations | AUTH |
