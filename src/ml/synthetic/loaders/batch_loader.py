@@ -288,6 +288,10 @@ TABLE_COLUMNS = {
         "expiration_date",
         "delivery_channel",
         "delivery_status",
+        # #1387 view-stage realism: view_timestamp is emitted by
+        # TriggerGenerator._apply_view_stage. Must be registered or the loader
+        # strips it and the column stays 100% NULL after the backfill.
+        "view_timestamp",
         "acceptance_status",
         # #577 WS2-TR-003: persist the arm + action so a fresh synthetic load stays
         # coherent for action_rate_uplift (else the loader strips them and the
