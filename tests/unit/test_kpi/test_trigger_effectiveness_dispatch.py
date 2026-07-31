@@ -8,10 +8,13 @@ axes through the migration-118 statement families:
     _region / _brand / _brand_region ids stay byte-identical — mig 078/113).
   * trigger_type (no window)    -> trigger_effectiveness_<metric>,
                                    [brand, region, trigger_type] (nullables).
-  * window (any)                -> trigger_effectiveness_<metric>_windowed,
+  * window (no region)          -> trigger_effectiveness_<metric>_windowed,
                                    [brand, trigger_type, start, end].
-  * region + window             -> fail closed (RPC 4-param cap; never a
-                                   silent region drop).
+  * region + window             -> trigger_effectiveness_<metric>_windowed_region,
+                                   [brand, region, trigger_type, start, end]
+                                   (#1388: the kpi_query RPC now binds 6 positional
+                                   params — migration 120 — so region no longer has
+                                   to be dropped when a window is asked for).
 
 The funnel KPI (WS2-TR-009) is new — it ALWAYS routes to the effectiveness
 family and surfaces the stage counts via context["funnel_stages"].
@@ -132,14 +135,42 @@ def test_brand_trigger_type_window_bind_in_declared_order(method, key, metric, b
 
 
 @pytest.mark.parametrize("method,key,metric,base", RULED_EXISTING, ids=_IDS)
-def test_region_plus_window_fails_closed(method, key, metric, base):
-    """The RPC binds at most 4 positional params — region+window cannot both
-    ride. The calculator must raise (surfaced as KPIResult.error), never drop
-    the region silently (the dead-'territory'-key lesson)."""
+def test_region_plus_window_routes_to_windowed_regioned(method, key, metric, base):
+    """#1388: region+window now CO-BIND. The kpi_query RPC binds 6 positional
+    params (migration 120), so region no longer has to be dropped when a window
+    is asked for — the ask routes to the ``_windowed_region`` variant that binds
+    brand ($1), region ($2, via the patient_journeys join), trigger_type ($3)
+    and the half-open window ($4/$5), never a silent region drop (the
+    dead-'territory'-key lesson)."""
     calc, client = _calc_and_client(key)
-    with pytest.raises(RuntimeError, match="region"):
-        getattr(calc, method)({"region": "east", "window": dict(WINDOW)})
-    client.rpc.assert_not_called()
+    getattr(calc, method)(
+        {"region": "east", "trigger_type": "adherence_risk", "window": dict(WINDOW)}
+    )
+    payload = _rpc_payload(client)
+    assert payload == {
+        "query_id": f"trigger_effectiveness_{metric}_windowed_region",
+        "params": [None, "east", "adherence_risk", WINDOW["start"], WINDOW["end"]],
+    }
+
+
+@pytest.mark.parametrize("method,key,metric,base", RULED_EXISTING, ids=_IDS)
+def test_brand_region_trigger_type_window_bind_in_declared_order(method, key, metric, base):
+    """#1388: brand + region + trigger_type + window all bind, in the migration
+    120 declared order [brand, region, trigger_type, start, end]."""
+    calc, client = _calc_and_client(key)
+    getattr(calc, method)(
+        {
+            "brand": "Kisqali",
+            "region": "west",
+            "trigger_type": "engagement_gap",
+            "window": dict(WINDOW),
+        }
+    )
+    payload = _rpc_payload(client)
+    assert payload == {
+        "query_id": f"trigger_effectiveness_{metric}_windowed_region",
+        "params": ["Kisqali", "west", "engagement_gap", WINDOW["start"], WINDOW["end"]],
+    }
 
 
 def test_windowed_id_self_suffixes_include_synthetic_under_flag(monkeypatch):
@@ -149,6 +180,21 @@ def test_windowed_id_self_suffixes_include_synthetic_under_flag(monkeypatch):
     payload = _rpc_payload(client)
     assert payload["query_id"] == "trigger_effectiveness_precision_windowed_include_synthetic"
     assert payload["params"] == [None, "reactivation", WINDOW["start"], WINDOW["end"]]
+
+
+def test_windowed_regioned_id_self_suffixes_include_synthetic_under_flag(monkeypatch):
+    """#1388: the regioned+windowed id also self-suffixes _include_synthetic
+    under the showcase flag (same additive idiom as the plain _windowed id)."""
+    monkeypatch.setenv("E2I_KPI_INCLUDE_SYNTHETIC", "1")
+    calc, client = _calc_and_client("precision")
+    calc._calc_trigger_precision(
+        {"region": "north", "trigger_type": "reactivation", "window": dict(WINDOW)}
+    )
+    payload = _rpc_payload(client)
+    assert (
+        payload["query_id"] == "trigger_effectiveness_precision_windowed_region_include_synthetic"
+    )
+    assert payload["params"] == [None, "north", "reactivation", WINDOW["start"], WINDOW["end"]]
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +249,20 @@ def test_funnel_windowed_routing():
     assert payload == {
         "query_id": "trigger_effectiveness_funnel_conversion_windowed",
         "params": ["Kisqali", None, WINDOW["start"], WINDOW["end"]],
+    }
+
+
+def test_funnel_windowed_regioned_routing():
+    """#1388: the funnel KPI also co-binds region+window via the migration 120
+    _windowed_region variant, params [brand, region, trigger_type, start, end]."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=[dict(FUNNEL_ROW)])
+    calc = TriggerPerformanceCalculator(db_client=client)
+    calc._calc_funnel_conversion({"brand": "Kisqali", "region": "west", "window": dict(WINDOW)})
+    payload = _rpc_payload(client)
+    assert payload == {
+        "query_id": "trigger_effectiveness_funnel_conversion_windowed_region",
+        "params": ["Kisqali", "west", None, WINDOW["start"], WINDOW["end"]],
     }
 
 

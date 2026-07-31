@@ -162,13 +162,17 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         certified legacy routing in :meth:`_scoped` stays byte-identical
         otherwise. Param order is the migration's declared contract:
 
-        * no window  -> ``trigger_effectiveness_{metric}``,
+        * no window          -> ``trigger_effectiveness_{metric}``,
           ``[brand, region, trigger_type]`` — all nullable (NULL = no filter).
-        * window     -> ``trigger_effectiveness_{metric}_windowed``,
+        * window, no region  -> ``trigger_effectiveness_{metric}_windowed``,
           ``[brand, trigger_type, start, end]`` (half-open ``[start, end)`` on
-          ``trigger_timestamp``). Region can NOT also bind — the kpi_query RPC
-          caps at 4 positional params — so region+window FAILS CLOSED here
-          rather than silently dropping the region (the dead-'territory'-key
+          ``trigger_timestamp``).
+        * window + region    -> ``trigger_effectiveness_{metric}_windowed_region``,
+          ``[brand, region, trigger_type, start, end]`` (#1388: the kpi_query RPC
+          now binds 6 positional params — migration 120 — so region CO-BINDS with
+          an explicit window instead of being dropped; region binds via the
+          patient_journeys join, the 078/118 idiom). This closes the capability
+          gap without ever silently dropping the region (the dead-'territory'-key
           lesson: a filter the response echoes but the SQL never applied).
         """
         brand = context.get("brand")
@@ -177,11 +181,9 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         window = context.get("window")
         if window is not None:
             if region:
-                raise RuntimeError(
-                    "trigger-effectiveness KPIs cannot combine a region filter "
-                    "with an explicit time window (the kpi_query RPC binds at "
-                    "most 4 positional params — migration 118); drop the window "
-                    "or the region filter"
+                return (
+                    trigger_effectiveness_query_id(metric, windowed=True, regioned=True),
+                    [brand, region, trigger_type, window["start"], window["end"]],
                 )
             return (
                 trigger_effectiveness_query_id(metric, windowed=True),
