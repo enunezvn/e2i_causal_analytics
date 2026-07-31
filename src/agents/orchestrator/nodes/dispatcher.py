@@ -1067,6 +1067,104 @@ _TIME_HORIZON_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bnext\s+year\b", re.I), "365d"),
 )
 
+# #1354 — a POPULATION/segment ranking ask ("which HCP segments/specialties/
+# regions are most likely to ...", "rank the ... segments") has no single entity
+# to synthesize for. When such an ask grounds a brand + a unique champion, the
+# resolver binds the segment-aggregation path (src.services.hcp_segment_likelihood
+# via the agent's segment mode) instead of dead-ending on the single-entity
+# ``synthesize`` contract. A no-entity ask WITHOUT a segment noun stays
+# under-specified and still fails closed on entity_id.
+_SEGMENT_ASK_RE = re.compile(
+    r"\bsegments?\b|\bspecialt(?:y|ies)\b|\bregions?\b|\barchetypes?\b|\bpersonas?\b",
+    re.I,
+)
+_SEGMENT_REGION_RE = re.compile(r"\bregions?\b|\bgeograph\w*\b", re.I)
+# codex iter-1/2/3 HIGH: a segment NOUN alone is not enough — an explanation,
+# driver, or plain forecast ask ("explain <brand> adoption by specialty drivers",
+# "why did <brand> prescriptions increase by region", "predict the increase in
+# <brand> prescriptions by region") also carries a segment noun but is NOT a
+# ranking request; coercing it into a ranked list returns a confident answer the
+# user never asked for. Require a genuine COMPARATIVE token (which / rank / top /
+# most / highest / greatest / best / prioritize). Deliberately EXCLUDED: the
+# prediction-FAMILY vocabulary ('increase', 'likely', 'likelihood') AND the plain
+# forecast verbs ('predict', 'forecast') — none of them discriminate a ranking
+# from a per-segment forecast/explanation, so they would re-admit the very asks
+# this gate excludes. A ranking ask that legitimately says "predict which ..." /
+# "forecast the top ..." still carries a comparative token and binds. Absent one,
+# the ask stays under-specified and fails closed on entity.
+_RANKING_INTENT_RE = re.compile(
+    r"\bwhich\b|\brank\w*\b|\btop\b|\bmost\b|\bhighest\b|\bgreatest\b|\bbest\b"
+    r"|\bprioriti[sz]\w+\b",
+    re.I,
+)
+# codex iter-4/5 HIGH: a comparative token is NOT sufficient — an EXPLANATION /
+# causal / ATTRIBUTION ask can carry both a segment noun and a comparative
+# ("which specialty drivers explain <brand> adoption", "which specialties account
+# for <brand> adoption", "which specialties contribute most to adoption"). Any
+# explanation/causal/attribution marker VETOES the ranking bind, so an
+# explain/why/driver/attribution ask never gets a confident ranked answer it did
+# not request. This negative gate closes the whole explanation class in one place
+# (the standard attribution/causal analytics lexicon), independent of which
+# comparative token appears. Deliberately conservative: over-vetoing an ambiguous
+# ask fails CLOSED (honest), the safe direction. 'influence'/'factor'-as-target
+# words are excluded from the veto to avoid rejecting legitimate targeting asks.
+# NOTE: the attribution NOUNS/ADJ 'predictor(s)'/'predictive' are vetoed, but the
+# ranking VERB 'predict' is NOT — "predict WHICH segments will adopt" is a ranking
+# ask and must still bind. (This gate governs only the deterministic orchestrator
+# route; the AG-UI surface is LLM-judged from the tool docstring, not this regex.)
+_EXPLANATION_INTENT_RE = re.compile(
+    r"\bexplain\w*\b|\bwhy\b|\bdriv\w*\b|\bdrove\b|\breason\w*\b|\bcaus\w*\b"
+    r"|\bbecause\b|\battribut\w*\b|\baccounts?\s+for\b|\bcontribut\w*\b"
+    r"|\bdeterminant\w*\b|\bresponsib\w+\s+for\b|\bassociat\w+\s+with\b"
+    r"|\bcorrelat\w*\b|\bpredictors?\b|\bpredictive\b|\bindicat\w*\b|\bsignal\w*\b"
+    r"|\bdetermin\w*\b"
+    r"|\blinked\s+(?:to|with)\b|\brelated\s+(?:to|with)\b|\btied\s+(?:to|with)\b"
+    r"|\bconnected\s+(?:to|with)\b|\brelationships?\s+(?:to|with|between)\b"
+    # codex iter-8: causal-verb 'influence' and 'factor in/for' attribution,
+    # PHRASE-CONSTRAINED so the HCP-attribute uses ('high-influence',
+    # 'influential' — influence is literally a model feature) still bind as
+    # targeting/ranking asks. Match only "influence(s) [the] <outcome>",
+    # "most influence", and "factor(s) in/behind/for/of/driving/underlying".
+    r"|\bmost\s+influenc\w*\b"
+    r"|\binfluenc(?:es?|ing|ed)\s+(?:\w+\s+){0,2}?"
+    r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b"
+    r"|\bfactors?\s+(?:in|behind|for|of|driving|underlying)\b|\bkey\s+factors?\b"
+    # codex iter-9: causal-verb impact/affect/effect/shape, phrase-constrained to
+    # the outcome (or "biggest/most impact"/"impact on") so they read as
+    # attribution, not ranking. These are not model-feature attributes, so the
+    # veto is low-risk; over-veto still fails CLOSED.
+    r"|\b(?:biggest|largest|greatest|most|strongest)\s+(?:impact|effect)\b"
+    r"|\b(?:impact|affect|effect|shape)s?\s+(?:the\s+)?(?:\w+\s+){0,2}?"
+    r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b"
+    r"|\b(?:impact|effect)\s+on\b"
+    r"|\bbehind\s+(?:the\s+)?(?:\w+\s+){0,2}?"
+    r"(?:adoption|uptake|prescri\w*|kisqali|fabhalta|remibrutinib)\b",
+    re.I,
+)
+
+
+def _is_segment_ranking_ask(query: Optional[str]) -> bool:
+    """True when the ask RANKS a POPULATION by a segment axis (not a single HCP):
+    it names a segment axis AND carries a comparative ranking token AND is NOT an
+    explanation/causal/driver ask. A bare segment noun, a non-comparative
+    forecast, or a 'why/driver' explanation is NOT a ranking ask."""
+    if query is None:
+        return False
+    if _EXPLANATION_INTENT_RE.search(query):
+        return False
+    return bool(_SEGMENT_ASK_RE.search(query)) and bool(_RANKING_INTENT_RE.search(query))
+
+
+def _segment_axis_from_query(query: str) -> str:
+    """Pick the served covariate axis the ask targets. Region-phrased asks ->
+    ``geographic_region``; everything else defaults to ``specialty`` (the primary
+    HCP clinical archetype). The default is documented, not silent: a bare
+    'segments' ask is served by specialty, the canonical HCP segmentation, and
+    ``hcp_segment_likelihood`` validates the axis regardless."""
+    if _SEGMENT_REGION_RE.search(query):
+        return "geographic_region"
+    return "specialty"
+
 
 def _match_prediction_family(query: Optional[str]) -> Optional[str]:
     """Return the prediction-target family the ask vocabulary matches, else None."""
@@ -1293,6 +1391,40 @@ def _resolve_prediction_synthesizer_input(
             resolved_target = brand_targets[0]
             entity_match = _HCP_ENTITY_RE.search(query)
             if entity_match is None:
+                # #1354: a SEGMENT ranking ask (no single entity) now binds the
+                # segment-aggregation path — the champion IS servable, and
+                # scoring the real HCP cohort + rolling up per segment is exactly
+                # what this ask needs. The agent's ``synthesize(segment_by=...)``
+                # mode delegates to src.services.hcp_segment_likelihood.
+                if _is_segment_ranking_ask(query):
+                    axis = _segment_axis_from_query(query)
+                    seg_resolved: Dict[str, Any] = {
+                        "entity_id": f"segment_ranking:{brand}",
+                        "prediction_target": resolved_target,
+                        "entity_type": "hcp",
+                        "segment_by": axis,
+                        "brand": brand,
+                        "query": query,
+                    }
+                    session_id = agent_input.get("session_id")
+                    if session_id is not None:
+                        seg_resolved["session_id"] = session_id
+                    # Bind a horizon ONLY when the ask names one — a dedicated
+                    # ``segment_horizon`` key (NOT the single-entity ``time_horizon``
+                    # default) so the narrative never invents a "requested horizon"
+                    # the user did not state (codex iter-12 MED).
+                    for pattern, horizon in _TIME_HORIZON_PATTERNS:
+                        if pattern.search(query):
+                            seg_resolved["segment_horizon"] = horizon
+                            break
+                    logger.info(
+                        "prediction_synthesizer dispatch: bound segment-ranking path "
+                        "(target=%s brand=%s axis=%s).",
+                        resolved_target,
+                        brand,
+                        axis,
+                    )
+                    return seg_resolved
                 return NeedsStructuredInput(
                     agent_name="prediction_synthesizer",
                     missing=("entity_id",),
@@ -1300,8 +1432,9 @@ def _resolve_prediction_synthesizer_input(
                         f"the production champion for {resolved_target} is registered and "
                         "servable, but the single-entity synthesize contract needs a "
                         "specific real HCP entity id (e.g. an hcp_id from the adoption "
-                        "substrate) — a ranking over segments/entities cannot be answered "
-                        "without scoring a population, which this route does not do"
+                        "substrate) — name a specific HCP, or ask for a SEGMENT ranking "
+                        "(e.g. 'which HCP segments/specialties/regions ...') to score the "
+                        "population"
                     ),
                     rest_endpoint="POST /api/models/predict/{model_name}",
                 )

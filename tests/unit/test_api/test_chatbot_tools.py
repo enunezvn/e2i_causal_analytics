@@ -948,6 +948,7 @@ class TestToolExports:
         assert "document_retrieval_tool" in tool_names
         assert "orchestrator_tool" in tool_names
         assert "tool_composer_tool" in tool_names
+        assert "predict_hcp_segment_likelihood_tool" in tool_names  # #1354
 
     def test_tools_have_descriptions(self):
         """Test that all tools have descriptions."""
@@ -957,4 +958,4 @@ class TestToolExports:
 
     def test_tool_count(self):
         """Test expected number of tools."""
-        assert len(E2I_CHATBOT_TOOLS) == 9
+        assert len(E2I_CHATBOT_TOOLS) == 10  # #1354 added predict_hcp_segment_likelihood_tool

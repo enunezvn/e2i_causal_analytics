@@ -135,7 +135,18 @@ class TestChampionBinding:
         assert "could not be verified" in reason or "lookup failed" in reason
 
     def test_no_entity_fails_closed_naming_the_real_champion(self, champions) -> None:
-        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](_agent_input(Q14), _dispatch())
+        # #1354: Q14's segment-ranking class ("which HCP segments ...") is now
+        # SERVED via the segment-aggregation path (pinned in
+        # test_prediction_segment_resolver_1354.py), so it no longer fails closed.
+        # This test's intent — a genuinely under-specified SINGLE-entity ask (no
+        # segment noun, no entity id) fails closed naming the real champion — is
+        # unchanged; it just needs a non-segment-shaped query.
+        under_specified = (
+            "Predict whether the HCP will increase Fabhalta prescriptions next quarter"
+        )
+        resolved = disp.INPUT_RESOLVERS["prediction_synthesizer"](
+            _agent_input(under_specified), _dispatch()
+        )
         assert isinstance(resolved, NeedsStructuredInput)
         # The message must be HONEST about registry state: the champion exists;
         # what's missing is the specific entity.

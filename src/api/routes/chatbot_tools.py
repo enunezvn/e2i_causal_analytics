@@ -2150,6 +2150,137 @@ async def clinical_context_tool(
     }
 
 
+# =============================================================================
+# HCP SEGMENT LIKELIHOOD TOOL (#1354, demo Q3.3 / benchmark q14)
+# =============================================================================
+
+
+class HcpSegmentLikelihoodInput(BaseModel):
+    """Input schema for predict_hcp_segment_likelihood_tool."""
+
+    brand: str = Field(
+        description=(
+            "Brand to rank HCP segments for (Remibrutinib, Fabhalta, or Kisqali), "
+            "case-insensitive. REQUIRED — there is no default; a missing brand "
+            "fails closed (no silent brand)."
+        )
+    )
+    segment_by: Optional[str] = Field(
+        default="specialty",
+        description=(
+            "HCP segment axis to rank by: 'specialty' (default, the primary "
+            "clinical archetype) or 'geographic_region'. These are the covariates "
+            "the champion model is scored on."
+        ),
+    )
+    time_horizon: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional horizon phrase from the ask (e.g. 'next quarter'). Echoed as "
+            "context only — the model scores CURRENT adoption propensity, not a "
+            "horizon-specific increase."
+        ),
+    )
+
+
+@tool(args_schema=HcpSegmentLikelihoodInput)
+async def predict_hcp_segment_likelihood_tool(
+    brand: str,
+    segment_by: Optional[str] = "specialty",
+    time_horizon: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Rank HCP segments by predicted likelihood-to-prescribe for a brand (#1354).
+
+    Use this for "which HCP segments / specialties / regions are most likely to
+    increase <brand> prescriptions?" (demo question 3.3). It scores the brand's
+    PROMOTED HCP-adoption champion (a calibrated model, out-of-sample AUC ~0.77)
+    over the REAL addressable HCP cohort and rolls the per-HCP adoption
+    propensities up to a per-segment ranking with real n and standard errors —
+    NOT a regional TRx proxy.
+
+    Honesty: the served quantity is adoption propensity (the platform's
+    "likelihood to prescribe"), NOT a horizon-conditioned increase — a stated
+    horizon is context only. Thin segments are flagged ``low_confidence``. Fails
+    closed (``success: False``) with an honest error when no champion is promoted
+    for the brand or the scoring substrate is unavailable — never fabricates.
+
+    Args:
+        brand: Remibrutinib | Fabhalta | Kisqali (case-insensitive, required).
+        segment_by: 'specialty' (default) or 'geographic_region'.
+        time_horizon: optional horizon phrase, echoed as context only.
+    """
+    if not brand or not str(brand).strip():
+        return {
+            "success": False,
+            "query_type": "hcp_segment_likelihood",
+            "error": "A brand is required to rank HCP segments (no default brand).",
+        }
+    axis = segment_by or "specialty"
+    try:
+        # Lazy import keeps the chatbot_tools import graph cheap and avoids any
+        # route<->service import cycle at load.
+        from src.services.hcp_segment_likelihood import (
+            ChampionNotPromotedError,
+            SegmentScoringError,
+            build_segment_ranking_narrative,
+            score_hcp_segments,
+        )
+
+        result = await score_hcp_segments(brand, segment_by=axis)
+    except ValueError as exc:
+        return {
+            "success": False,
+            "query_type": "hcp_segment_likelihood",
+            "error": str(exc),
+            "segments": [],
+        }
+    except (ChampionNotPromotedError, SegmentScoringError) as exc:
+        # Honest fail-closed: no promoted champion / empty substrate.
+        return {
+            "success": False,
+            "query_type": "hcp_segment_likelihood",
+            "brand": brand,
+            "error": str(exc),
+            "segments": [],
+        }
+    except Exception as exc:  # noqa: BLE001 - surface as a tool error, never fabricate
+        logger.error("predict_hcp_segment_likelihood_tool failed for %s: %s", brand, exc)
+        return {
+            "success": False,
+            "query_type": "hcp_segment_likelihood",
+            "brand": brand,
+            "error": str(exc),
+            "segments": [],
+        }
+
+    narrative = build_segment_ranking_narrative(result, top_n=5, horizon=time_horizon)
+    return {
+        "success": True,
+        "query_type": "hcp_segment_likelihood",
+        "brand": result.brand,
+        "model_name": result.model_name,
+        "prediction_target": result.prediction_target,
+        "segment_by": result.segment_by,
+        "n_scored": result.n_scored,
+        "overall_mean_propensity": result.overall_mean_propensity,
+        "holdout_auc": result.holdout_auc,
+        "feature_source": result.feature_source,
+        "segments": [
+            {
+                "segment": s.segment,
+                "n": s.n,
+                "mean_propensity": s.mean_propensity,
+                "se_propensity": s.se_propensity,
+                "min_propensity": s.min_propensity,
+                "max_propensity": s.max_propensity,
+                "low_confidence": s.low_confidence,
+            }
+            for s in result.segments
+        ],
+        "narrative": narrative,
+    }
+
+
 # List of all E2I chatbot tools for use in LangGraph ToolNode
 E2I_CHATBOT_TOOLS = [
     e2i_data_query_tool,
@@ -2161,6 +2292,7 @@ E2I_CHATBOT_TOOLS = [
     document_retrieval_tool,
     orchestrator_tool,
     tool_composer_tool,
+    predict_hcp_segment_likelihood_tool,
 ]
 
 # Tool name to function mapping
@@ -2174,6 +2306,7 @@ E2I_TOOL_MAP = {
     "document_retrieval_tool": document_retrieval_tool,
     "orchestrator_tool": orchestrator_tool,
     "tool_composer_tool": tool_composer_tool,
+    "predict_hcp_segment_likelihood_tool": predict_hcp_segment_likelihood_tool,
 }
 
 
