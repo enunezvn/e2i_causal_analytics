@@ -871,6 +871,42 @@ describe('Action Handlers', () => {
       expect(result.rows).toHaveLength(2);
     });
 
+    it('routes a single severity tier, the gap that kept renderKpiTrend around', async () => {
+      // renderChart could compare all tiers but not chart one, so a
+      // single-tier request had no home here until segment/therapyLine landed.
+      mockGetKPIHistorySegmented.mockResolvedValue({ series: [] });
+      const handler = getActionHandler('renderChart') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpis: ['trx'], segment: 'high' });
+      });
+
+      expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
+        'WS3-BI-005',
+        'segment',
+        undefined,
+        'high_severity'
+      );
+    });
+
+    it('routes a single line of therapy', async () => {
+      mockGetKPIHistorySegmented.mockResolvedValue({ series: [] });
+      const handler = getActionHandler('renderChart') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpis: ['nrx'], therapyLine: 'LOT 2' });
+      });
+
+      expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
+        'WS3-BI-006',
+        'therapy_line',
+        undefined,
+        '2'
+      );
+    });
+
     it('ignores a chart type this build does not support', async () => {
       // A model typo must not fail the turn; the routed default applies.
       const handler = getActionHandler('renderChart') as unknown as (
@@ -892,7 +928,15 @@ describe('Action Handlers', () => {
       const paramNames = (
         actionCall![0].parameters as Array<{ name: string }>
       ).map((p) => p.name);
-      expect(paramNames).toEqual(['kpis', 'chartType', 'brand', 'compareBy', 'title']);
+      expect(paramNames).toEqual([
+        'kpis',
+        'chartType',
+        'brand',
+        'compareBy',
+        'segment',
+        'therapyLine',
+        'title',
+      ]);
     });
   });
 });

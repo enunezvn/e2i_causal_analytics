@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest';
 import { assemblePlotly } from 'flint-chart';
 import {
   assembleKpiFigure,
+  attachErrorBars,
   encodingsFor,
   validateChartRequest,
   SUPPORTED_CHART_TYPES,
@@ -213,5 +214,100 @@ describe('catalog semantic types are in flint’s vocabulary', () => {
       });
       expect(reason, `${semanticType} rejected: ${reason}`).toBeNull();
     }
+  });
+});
+
+describe('confidence intervals as error bars', () => {
+  // Flint ships no error-bar template and no way to register one, but its
+  // output is a plain Plotly figure and Plotly draws error bars natively — so
+  // the interval is attached after assembly rather than captioned away.
+  const ateRows: ChartRow[] = [
+    { kpi: 'High severity, 2L+', value: 0.182, ci_low: 0.121, ci_high: 0.243 },
+    { kpi: 'Medium severity, 1L', value: 0.044, ci_low: -0.012, ci_high: 0.1 },
+    { kpi: 'Low severity, 1L', value: 0.008, ci_low: -0.041, ci_high: 0.057 },
+  ];
+
+  function forestRequest(overrides: Partial<ChartRequest> = {}): ChartRequest {
+    return {
+      rows: ateRows,
+      semanticTypes: {
+        kpi: 'Category',
+        value: 'Number',
+        ci_low: 'Number',
+        ci_high: 'Number',
+      },
+      chartType: 'Bar Chart',
+      encodings: { x: 'kpi', y: 'value' },
+      errorBars: { low: 'ci_low', high: 'ci_high' },
+      ...overrides,
+    };
+  }
+
+  it('draws the interval as offsets from each point', () => {
+    const result = assembleKpiFigure(forestRequest());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const trace = result.figure.data[0] as {
+      error_y?: { array: number[]; arrayminus: number[]; symmetric: boolean };
+    };
+    expect(trace.error_y).toBeDefined();
+    expect(trace.error_y!.symmetric).toBe(false);
+    // Plotly wants deltas, not absolute bounds.
+    expect(trace.error_y!.array[0]).toBeCloseTo(0.243 - 0.182, 6);
+    expect(trace.error_y!.arrayminus[0]).toBeCloseTo(0.182 - 0.121, 6);
+  });
+
+  it('keeps a negative lower bound, so a CI crossing zero stays visible', () => {
+    // The whole reason to draw the interval on a causal metric.
+    const result = assembleKpiFigure(forestRequest());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const trace = result.figure.data[0] as { y: number[]; error_y: { arrayminus: number[] } };
+    // Low severity: 0.008 with a lower bound of -0.041 -> a 0.049 downward whisker
+    // that reaches below zero.
+    expect(trace.y[2] - trace.error_y.arrayminus[2]).toBeLessThan(0);
+  });
+
+  it('draws no error bars when none were requested', () => {
+    const result = assembleKpiFigure(forestRequest({ errorBars: undefined }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.figure.data[0] as { error_y?: unknown }).error_y).toBeUndefined();
+  });
+
+  it('omits the interval entirely rather than pairing it with the wrong point', () => {
+    // Guards the row-order assumption: if a future Flint version sorts or
+    // aggregates, index-keyed bounds would silently attach each interval to
+    // some other row. Simulated here with a figure whose y is reordered.
+    const figure = {
+      data: [{ x: ['a', 'b', 'c'], y: [0.008, 0.044, 0.182] }],
+      layout: {},
+    };
+    attachErrorBars(figure, ateRows, { low: 'ci_low', high: 'ci_high' }, 'value');
+    expect((figure.data[0] as { error_y?: unknown }).error_y).toBeUndefined();
+  });
+
+  it('omits the interval when a bound is missing on any row', () => {
+    // Whiskers on some points and not others reads as "these are certain".
+    const partial: ChartRow[] = [
+      { kpi: 'A', value: 1, ci_low: 0.5, ci_high: 1.5 },
+      { kpi: 'B', value: 2, ci_low: null, ci_high: null },
+    ];
+    const figure = { data: [{ x: ['A', 'B'], y: [1, 2] }], layout: {} };
+    attachErrorBars(figure, partial, { low: 'ci_low', high: 'ci_high' }, 'value');
+    expect((figure.data[0] as { error_y?: unknown }).error_y).toBeUndefined();
+  });
+
+  it('whiskers the value axis whichever side it is on', () => {
+    // Horizontal (categories on y, effect on x) is the forest-plot convention.
+    const figure = {
+      data: [{ y: ['A', 'B', 'C'], x: ateRows.map((r) => r.value) }],
+      layout: {},
+    };
+    attachErrorBars(figure, ateRows, { low: 'ci_low', high: 'ci_high' }, 'value');
+    const trace = figure.data[0] as { error_x?: unknown; error_y?: unknown };
+    expect(trace.error_x).toBeDefined();
+    expect(trace.error_y).toBeUndefined();
   });
 });

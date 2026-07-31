@@ -1069,6 +1069,21 @@ const CopilotHooksInner: React.FC = () => {
         required: false,
       },
       {
+        name: 'segment',
+        type: 'string',
+        description:
+          "Chart a SINGLE severity tier: 'low', 'medium', or 'high'. Use compareBy instead " +
+          'to see all tiers at once. TRx/NRx/NBRx only.',
+        required: false,
+      },
+      {
+        name: 'therapyLine',
+        type: 'string',
+        description:
+          "Chart a SINGLE line of therapy: '0'-'3' (prior therapy lines). TRx/NRx/NBRx only.",
+        required: false,
+      },
+      {
         name: 'title',
         type: 'string',
         description: 'Optional chart title',
@@ -1080,12 +1095,16 @@ const CopilotHooksInner: React.FC = () => {
       chartType,
       brand,
       compareBy,
+      segment,
+      therapyLine,
       title,
     }: {
       kpis: string[];
       chartType?: string;
       brand?: string;
       compareBy?: string;
+      segment?: string;
+      therapyLine?: string;
       title?: string;
     }): Promise<KpiChartData> => {
       // Only accept a chart type this build actually supports — an unknown one
@@ -1098,6 +1117,8 @@ const CopilotHooksInner: React.FC = () => {
         kpis: Array.isArray(kpis) ? kpis : [kpis],
         brand,
         compareBy,
+        segment,
+        therapyLine,
         chartType: requested,
         title,
       });

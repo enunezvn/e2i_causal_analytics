@@ -175,7 +175,7 @@ describe('current-value routing', () => {
     expect(encodingsFor(data.chartType, data.encoding).goal).toBeUndefined();
   });
 
-  it('states a confidence interval rather than dropping it', async () => {
+  it('draws a confidence interval rather than only captioning it', async () => {
     mockGetKPIValue.mockResolvedValue({
       kpi_id: 'CM-001',
       value: 0.12,
@@ -186,9 +186,22 @@ describe('current-value routing', () => {
       metadata: {},
     });
     const data = await routeKpiChart({ kpis: ['CM-001'] });
-    // Flint has no error-bar template, so the interval belongs in the caption.
+
+    // A KPI Card is a Plotly `indicator` and cannot carry whiskers, so a KPI
+    // reporting an interval switches to a bar.
+    expect(data.chartType).toBe('Bar Chart');
+    expect(data.errorBars).toEqual({ low: 'ci_low', high: 'ci_high' });
+    expect(data.rows[0].ci_low).toBe(-0.02);
+    expect(data.rows[0].ci_high).toBe(0.26);
+    // Still stated in the caption too — the chart shows it, the text says it.
     expect(data.subtitle).toContain('95% CI');
     expect(data.subtitle).toContain('-0.02');
+  });
+
+  it('keeps the KPI Card when there is no interval to draw', async () => {
+    const data = await routeKpiChart({ kpis: ['roc_auc'] });
+    expect(data.chartType).toBe('KPI Card');
+    expect(data.errorBars).toBeUndefined();
   });
 
   it('reports a calculation error as an error, not as empty', async () => {
@@ -244,6 +257,41 @@ describe('multi-KPI comparison', () => {
     const data = await routeKpiChart({ kpis: ['roc_auc', 'trx'] });
     expect(data.semanticTypes.value).toBe('Number');
     expect(data.subtitle).toContain('mixed units');
+  });
+
+  it('draws a forest plot when every compared KPI reports an interval', async () => {
+    // Several causal metrics side by side, each with its CI, IS the forest plot.
+    mockBatchCalculateKPIs.mockResolvedValue({
+      results: [
+        { kpi_id: 'CM-001', value: 0.18, confidence_interval: [0.12, 0.24], status: 'informational', calculated_at: '', cached: false, metadata: {} },
+        { kpi_id: 'CM-002', value: 0.04, confidence_interval: [-0.01, 0.09], status: 'informational', calculated_at: '', cached: false, metadata: {} },
+      ],
+      calculated_at: '',
+      total_kpis: 2,
+    });
+    const data = await routeKpiChart({ kpis: ['ate', 'cate'] });
+
+    expect(data.errorBars).toEqual({ low: 'ci_low', high: 'ci_high' });
+    expect(data.rows.map((r) => r.ci_low)).toEqual([0.12, -0.01]);
+    expect(data.subtitle).toContain('95% CI');
+  });
+
+  it('omits intervals when only some compared KPIs report one', async () => {
+    // Whiskers on two bars but not the third would read as "the third is
+    // certain", which is the opposite of what a missing interval means.
+    mockBatchCalculateKPIs.mockResolvedValue({
+      results: [
+        { kpi_id: 'CM-001', value: 0.18, confidence_interval: [0.12, 0.24], status: 'informational', calculated_at: '', cached: false, metadata: {} },
+        { kpi_id: 'WS1-MP-001', value: 0.87, status: 'good', calculated_at: '', cached: false, metadata: {} },
+      ],
+      calculated_at: '',
+      total_kpis: 2,
+    });
+    const data = await routeKpiChart({ kpis: ['ate', 'roc_auc'] });
+
+    expect(data.errorBars).toBeUndefined();
+    expect(data.rows[0].ci_low).toBeUndefined();
+    expect(data.subtitle).toContain('intervals omitted');
   });
 
   it('says how many KPIs returned nothing', async () => {

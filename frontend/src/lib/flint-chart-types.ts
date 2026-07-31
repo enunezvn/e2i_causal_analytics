@@ -71,6 +71,18 @@ export interface LogicalEncoding {
   goal?: string;
 }
 
+/**
+ * Confidence-interval bounds to draw as whiskers around each point. Field
+ * names refer to columns on the rows; the bounds are absolute values, not
+ * deltas. Applied after Flint compiles — see `attachErrorBars`.
+ */
+export interface ErrorBarSpec {
+  /** Row field holding the lower bound. */
+  low: string;
+  /** Row field holding the upper bound. */
+  high: string;
+}
+
 /** A Plotly figure: `data` traces plus `layout`. Rendered by FlintChart. */
 export interface PlotlyFigure {
   data: unknown[];

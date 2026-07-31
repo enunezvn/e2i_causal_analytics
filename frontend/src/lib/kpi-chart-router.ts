@@ -38,7 +38,12 @@ import { resolveBrand, resolveCompareAxis, resolveKpiId, resolveSegment, resolve
 // Type-only import: erased at build time, so this module does NOT pull
 // flint-chart into the eager bundle. Compilation happens inside FlintChart,
 // which loads lib/flint-chart lazily — see the bundling note there.
-import type { ChartRow, LogicalEncoding, SupportedChartType } from './flint-chart-types';
+import type {
+  ChartRow,
+  ErrorBarSpec,
+  LogicalEncoding,
+  SupportedChartType,
+} from './flint-chart-types';
 
 /**
  * Semantic type for a KPI's month axis. Registry history is monthly, so Flint
@@ -90,6 +95,11 @@ export interface KpiChartData {
   encoding: LogicalEncoding;
   /** Chart type chosen for this data shape; a caller override wins over it. */
   chartType: SupportedChartType;
+  /**
+   * Confidence-interval bounds to draw as whiskers. Set only when the KPI
+   * actually returned an interval — never synthesised.
+   */
+  errorBars?: ErrorBarSpec;
   title: string;
   /** Scope line: brand / axis / span. Rendered under the title. */
   subtitle: string;
@@ -258,10 +268,11 @@ async function routeCurrentValue(
     );
   }
 
-  // A confidence interval turns a single number into a range worth stating —
+  // A confidence interval turns a single number into a range worth DRAWING —
   // the causal metrics (CM-*) carry one, and whether it crosses zero is the
-  // point of reading it. Flint has no error-bar template, so the interval goes
-  // in the subtitle rather than being silently dropped.
+  // point of reading it. Flint has no error-bar template, but its output is a
+  // plain Plotly figure and Plotly draws error bars natively, so the interval
+  // is attached after assembly (see attachErrorBars).
   const interval = result.confidence_interval;
   const entry = lookupKpi(kpiId);
   const target = entry?.target;
@@ -272,6 +283,7 @@ async function routeCurrentValue(
       value: result.value,
       // Only present when the registry declares a target; never invented.
       ...(target !== undefined ? { target } : {}),
+      ...(interval ? { ci_low: interval[0], ci_high: interval[1] } : {}),
     },
   ];
 
@@ -281,9 +293,11 @@ async function routeCurrentValue(
     ? ` · 95% CI ${formatBound(interval[0])} to ${formatBound(interval[1])}`
     : '';
 
-  // A one-row bar is a poor chart; a KPI card states the figure plainly, with
-  // the registry's threshold target as the goal marker when there is one.
-  const chartType = query.chartType ?? 'KPI Card';
+  // A KPI Card compiles to a Plotly `indicator`, which has no error bars — so
+  // a KPI that reports an interval is drawn as a bar with whiskers instead.
+  // Without an interval the card is the better read of a lone figure, with the
+  // registry's threshold target as its goal marker.
+  const chartType = query.chartType ?? (interval ? 'Bar Chart' : 'KPI Card');
 
   return {
     rows,
@@ -291,6 +305,7 @@ async function routeCurrentValue(
       kpi: 'Category',
       value: semantic,
       ...(target !== undefined ? { target: semantic } : {}),
+      ...(interval ? { ci_low: semantic, ci_high: semantic } : {}),
     },
     encoding: {
       axis: 'kpi',
@@ -298,6 +313,7 @@ async function routeCurrentValue(
       ...(target !== undefined ? { goal: 'target' } : {}),
     },
     chartType,
+    ...(interval ? { errorBars: { low: 'ci_low', high: 'ci_high' } } : {}),
     title,
     subtitle:
       `${scope} · point-in-time value${ciNote}` +
@@ -334,22 +350,42 @@ async function routeComparison(
   const shared = semantics.size === 1 ? [...semantics][0] : 'Number';
   const mixedNote = semantics.size > 1 ? ' · mixed units, axis unformatted' : '';
 
-  const rows: ChartRow[] = results.map((result) => ({
+  // Several causal metrics side by side, each with its interval, IS the forest
+  // plot. Draw the whiskers only when EVERY plotted KPI reports an interval —
+  // whiskers on some bars and not others reads as "these three are certain",
+  // which is the opposite of what a missing interval means.
+  const intervals = results.map((r) => r.confidence_interval);
+  const allHaveIntervals = intervals.every(
+    (ci): ci is [number, number] => Array.isArray(ci) && ci.length === 2
+  );
+
+  const rows: ChartRow[] = results.map((result, i) => ({
     kpi: displayName(result.kpi_id),
     value: result.value as number,
+    ...(allHaveIntervals
+      ? { ci_low: intervals[i]![0], ci_high: intervals[i]![1] }
+      : {}),
   }));
 
+  const someMissing = !allHaveIntervals && intervals.some((ci) => Array.isArray(ci));
   const skipped = kpiIds.length - results.length;
   const chartType = query.chartType ?? DEFAULT_COMPARISON_CHART;
   return {
     rows,
-    semanticTypes: { kpi: 'Category', value: shared },
+    semanticTypes: {
+      kpi: 'Category',
+      value: shared,
+      ...(allHaveIntervals ? { ci_low: shared, ci_high: shared } : {}),
+    },
     encoding: { axis: 'kpi', value: 'value' },
     chartType,
+    ...(allHaveIntervals ? { errorBars: { low: 'ci_low', high: 'ci_high' } } : {}),
     title,
     subtitle:
       `${scopeLabel(brand)} · ${results.length} KPI${results.length === 1 ? '' : 's'}` +
       (skipped > 0 ? ` · ${skipped} returned no value` : '') +
+      (allHaveIntervals ? ' · 95% CI' : '') +
+      (someMissing ? ' · intervals omitted (not reported for every KPI)' : '') +
       mixedNote,
   };
 }

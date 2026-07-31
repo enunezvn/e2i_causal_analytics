@@ -132,6 +132,7 @@ export function FlintChart({
           semanticTypes: chartData.semanticTypes,
           chartType: chartData.chartType,
           encodings: flint.encodingsFor(chartData.chartType, chartData.encoding),
+          errorBars: chartData.errorBars,
         });
         if (!compiled.ok) {
           setRenderError(compiled.reason);

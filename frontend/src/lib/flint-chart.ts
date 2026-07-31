@@ -35,6 +35,7 @@ import { SUPPORTED_CHART_TYPES } from './flint-chart-types';
 import type {
   ChartEncodings,
   ChartRow,
+  ErrorBarSpec,
   LogicalEncoding,
   PlotlyFigure,
   SupportedChartType,
@@ -47,6 +48,7 @@ export { SUPPORTED_CHART_TYPES };
 export type {
   ChartEncodings,
   ChartRow,
+  ErrorBarSpec,
   LogicalEncoding,
   PlotlyFigure,
   SupportedChartType,
@@ -59,7 +61,15 @@ export interface ChartRequest {
   encodings: ChartEncodings;
   width?: number;
   height?: number;
+  /**
+   * Draw confidence intervals as Plotly error bars. Field names refer to
+   * columns on `rows`; see {@link attachErrorBars} for why this is applied
+   * after Flint rather than expressed as a Flint encoding.
+   */
+  errorBars?: ErrorBarSpec;
 }
+
+
 
 export type ChartResult =
   | { ok: true; figure: PlotlyFigure }
@@ -84,6 +94,75 @@ const TEMPLATE_CHANNELS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
     new Set(d.channels),
   ])
 );
+
+/**
+ * Attach confidence intervals as Plotly error bars, in place, on `figure`.
+ *
+ * WHY THIS IS A POST-STEP
+ * Flint ships no error-bar or forest-plot template, and exposes no API for
+ * registering one (there is no `registerTemplate`; the only lever would be
+ * mutating the exported `plAllTemplateDefs` array, which is monkey-patching a
+ * pre-1.0 package's internals). But Flint's output is a plain Plotly figure,
+ * and Plotly has had native `error_x`/`error_y` all along — so the interval is
+ * drawn by adding a property to the compiled object, keeping every bit of
+ * Flint's scale, tick and format work.
+ *
+ * Measured against flint-chart@0.4.1: `assemblePlotly` emits the primary
+ * trace's `x` and `y` as arrays in the SAME order as the input rows, so the
+ * bounds key by row index with no join. Verified for Scatter Plot, Bar Chart
+ * and Lollipop Chart, in both orientations. The row-order assumption is
+ * re-checked at runtime below rather than trusted, because a future Flint
+ * version could sort or aggregate and would otherwise pair each point with
+ * some other row's interval — a wrong CI is worse than no CI.
+ *
+ * Orientation follows the value axis: a horizontal chart (categories on y)
+ * gets `error_x`, which is the forest-plot convention.
+ */
+export function attachErrorBars(
+  figure: PlotlyFigure,
+  rows: ChartRow[],
+  spec: ErrorBarSpec,
+  valueField: string
+): void {
+  const trace = (figure.data ?? [])[0] as
+    | { x?: unknown; y?: unknown; error_x?: unknown; error_y?: unknown }
+    | undefined;
+  if (!trace) return;
+
+  const values = rows.map((row) => row[valueField]);
+  const matches = (axis: unknown) =>
+    Array.isArray(axis) &&
+    axis.length === rows.length &&
+    axis.every((v, i) => v === values[i]);
+
+  // Whichever axis carries the measure, in row order, is the one to whisker.
+  const orientation = matches(trace.y) ? 'y' : matches(trace.x) ? 'x' : null;
+  if (!orientation) return; // Flint reordered or aggregated — draw no CI at all.
+
+  const plus: number[] = [];
+  const minus: number[] = [];
+  for (const row of rows) {
+    const value = row[valueField];
+    const low = row[spec.low];
+    const high = row[spec.high];
+    if (typeof value !== 'number' || typeof low !== 'number' || typeof high !== 'number') {
+      return; // A partial interval would understate uncertainty on some points.
+    }
+    plus.push(high - value);
+    minus.push(value - low);
+  }
+
+  const bars = {
+    type: 'data',
+    symmetric: false,
+    array: plus,
+    arrayminus: minus,
+    thickness: 1.5,
+    width: 4,
+  };
+  if (orientation === 'y') trace.error_y = bars;
+  else trace.error_x = bars;
+}
 
 /**
  * Map a logical shape onto the channels a given chart type declares.
@@ -197,6 +276,11 @@ export function assembleKpiFigure(request: ChartRequest): ChartResult {
 
     if (!figure || !Array.isArray(figure.data)) {
       return { ok: false, reason: 'Chart compiler returned no traces.' };
+    }
+
+    if (request.errorBars) {
+      const valueField = request.encodings.y ?? request.encodings.x ?? '';
+      attachErrorBars(figure, request.rows, request.errorBars, valueField);
     }
     return { ok: true, figure };
   } catch (error) {
