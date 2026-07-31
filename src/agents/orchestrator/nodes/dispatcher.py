@@ -1097,13 +1097,28 @@ _RANKING_INTENT_RE = re.compile(
     r"|\bprioriti[sz]\w+\b",
     re.I,
 )
+# codex iter-4 HIGH: a comparative token is NOT sufficient — an EXPLANATION /
+# causal / driver ask can carry both a segment noun and a comparative ("which
+# specialty drivers explain <brand> adoption", "what are the top reasons <brand>
+# adoption varies by region"). Any explanation/causal marker VETOES the ranking
+# bind, so a driver/why/cause ask never gets a confident ranked answer it did not
+# request. This negative gate closes the whole explanation class independent of
+# which comparative token appears.
+_EXPLANATION_INTENT_RE = re.compile(
+    r"\bexplain\w*\b|\bwhy\b|\bdriver\w*\b|\breason\w*\b|\bcause\w*\b|\bbecause\b"
+    r"|\battribut\w*\b|\bdrove\b|\bdriving\b",
+    re.I,
+)
 
 
 def _is_segment_ranking_ask(query: Optional[str]) -> bool:
     """True when the ask RANKS a POPULATION by a segment axis (not a single HCP):
-    it names a segment axis AND carries an explicit ranking/prediction intent.
-    A bare segment noun without ranking intent is NOT a ranking ask."""
+    it names a segment axis AND carries a comparative ranking token AND is NOT an
+    explanation/causal/driver ask. A bare segment noun, a non-comparative
+    forecast, or a 'why/driver' explanation is NOT a ranking ask."""
     if query is None:
+        return False
+    if _EXPLANATION_INTENT_RE.search(query):
         return False
     return bool(_SEGMENT_ASK_RE.search(query)) and bool(_RANKING_INTENT_RE.search(query))
 

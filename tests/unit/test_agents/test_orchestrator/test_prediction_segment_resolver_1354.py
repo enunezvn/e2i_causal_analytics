@@ -103,6 +103,17 @@ def test_predict_increase_by_region_forecast_is_not_ranking():
     assert "entity_id" in out.missing
 
 
+def test_which_drivers_explain_ask_is_not_ranking():
+    # codex iter-4 HIGH: an explanation ask can carry a comparative token AND a
+    # segment noun ("which specialty drivers explain Kisqali adoption"). An
+    # explicit explanation/driver/causal marker must veto the ranking bind —
+    # returning a confident ranking to an explanation ask violates honesty.
+    agent_input = {"query": "which specialty drivers explain Kisqali adoption"}
+    out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
+    assert isinstance(out, NeedsStructuredInput)
+    assert "entity_id" in out.missing
+
+
 def test_predict_which_segments_ask_binds_segment_path():
     # "predict which ..." carries ranking intent even without "most likely".
     agent_input = {"query": "predict which HCP specialties will adopt Fabhalta"}
