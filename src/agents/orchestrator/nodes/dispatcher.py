@@ -1079,16 +1079,20 @@ _SEGMENT_ASK_RE = re.compile(
     re.I,
 )
 _SEGMENT_REGION_RE = re.compile(r"\bregions?\b|\bgeograph\w*\b", re.I)
-# codex iter-1 HIGH-1: a segment NOUN alone is not enough — an explanation/driver
-# ask ("explain <brand> adoption by specialty drivers") also carries a segment
+# codex iter-1 HIGH-1 / iter-2 HIGH: a segment NOUN alone is not enough — an
+# explanation/driver ask ("explain <brand> adoption by specialty drivers",
+# "why did <brand> prescriptions increase by region") also carries a segment
 # noun but is NOT a ranking request, and coercing it into a ranked list returns a
-# confident answer the user never asked for. Require an explicit RANKING intent
-# too (which / rank / top / most / highest / prioritize / predict / likelihood /
-# increase). Absent it, the ask stays under-specified and fails closed on entity.
+# confident answer the user never asked for. Require a genuine COMPARATIVE/ranking
+# intent (which / rank / top / most / highest / greatest / best / prioritize /
+# predict / forecast). NOTE: 'increase' and 'likely/likelihood' are deliberately
+# EXCLUDED — they are the prediction-FAMILY vocabulary (see _PREDICTION_FAMILIES),
+# so using them as the ranking discriminator would be circular and would re-admit
+# the very explanation asks this gate exists to exclude. Absent a comparative
+# token, the ask stays under-specified and fails closed on entity.
 _RANKING_INTENT_RE = re.compile(
     r"\bwhich\b|\brank\w*\b|\btop\b|\bmost\b|\bhighest\b|\bgreatest\b|\bbest\b"
-    r"|\bprioriti[sz]\w+\b|\bpredict\w*\b|\bforecast\w*\b|\blikeli\w*\b|\blikelihood\b"
-    r"|\bincreas\w*\b",
+    r"|\bprioriti[sz]\w+\b|\bpredict\w*\b|\bforecast\w*\b",
     re.I,
 )
 

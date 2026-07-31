@@ -48,6 +48,7 @@ import math
 import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
+import httpx
 from pydantic import BaseModel, Field
 
 from src.mlops.gold_standard_eval.cohort_spec import (
@@ -268,13 +269,13 @@ async def _score_raw_features(
                 model_name,
                 {"batch_id": str(uuid.uuid4()), "raw_features": chunk, "model_name": model_name},
             )
-        except SegmentScoringError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — transport / circuit-breaker / HTTP
-            # A model-server transport failure (httpx error, circuit breaker open,
-            # stale serving schema) must surface via the typed fail-closed
-            # contract so BOTH callers (agent + chat tool) handle it on the
-            # documented path — never leak a raw exception nor fabricate a score.
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # ONLY transport-layer failures surface via the typed fail-closed
+            # contract: httpx.HTTPError (the BentoML client's HTTPStatusError /
+            # RequestError base) and RuntimeError (its "Circuit breaker open"
+            # signal). A programming defect (TypeError, KeyError, ...) is NOT
+            # caught — it must propagate so bugs stay debuggable rather than being
+            # laundered into an expected scoring failure (codex iter-2 MED).
             raise SegmentScoringError(
                 f"the model server could not score cohort {model_name!r}: {exc}"
             ) from exc

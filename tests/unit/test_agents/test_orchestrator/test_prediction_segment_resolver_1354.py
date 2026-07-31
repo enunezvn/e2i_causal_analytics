@@ -81,6 +81,17 @@ def test_non_ranking_by_specialty_ask_does_not_coerce_to_ranking():
     assert "entity_id" in out.missing
 
 
+def test_explain_increase_by_region_is_not_ranking():
+    # codex iter-2 HIGH: "increase" is family vocabulary, NOT a ranking signal.
+    # "explain the increase in Kisqali prescriptions by region" matches the
+    # family + has a segment noun, but is an EXPLANATION ask — it must NOT be
+    # coerced into a ranked segment answer.
+    agent_input = {"query": "explain the increase in Kisqali prescriptions by region"}
+    out = _resolve_prediction_synthesizer_input(agent_input, _dispatch())
+    assert isinstance(out, NeedsStructuredInput)
+    assert "entity_id" in out.missing
+
+
 def test_predict_which_segments_ask_binds_segment_path():
     # "predict which ..." carries ranking intent even without "most likely".
     agent_input = {"query": "predict which HCP specialties will adopt Fabhalta"}
