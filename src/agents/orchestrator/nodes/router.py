@@ -54,12 +54,16 @@ class RouterNode:
                 # (refutation.py SLA notes), so the old budget only ever cut
                 # COMPLETING analyses. Before the #1351 resolver this never
                 # surfaced because every chat dispatch crashed in <10ms on
-                # missing inputs. 150s matches the chat surface budget and the
-                # experiment_designer precedent (#1353) — a workload-appropriate
-                # SLA, not a latency target. The resolver also sets a
-                # cooperative compute_deadline INSIDE this budget so refutation
-                # self-gates instead of orphaning to_thread compute.
-                timeout_ms=150000,
+                # missing inputs. 120s is the default per-agent ceiling: a
+                # timeout >= the 150s chat surface budget could never fire
+                # before the chat itself times out, and no completed run has
+                # been measured yet (the route was inoperable) — raise past
+                # 120s only with a measured completion time, per the
+                # experiment_designer/het_optimizer convention. The resolver
+                # also sets a cooperative compute_deadline INSIDE this budget
+                # so refutation self-gates instead of orphaning to_thread
+                # compute.
+                timeout_ms=120000,
                 fallback_agent="explainer",
             )
         ],

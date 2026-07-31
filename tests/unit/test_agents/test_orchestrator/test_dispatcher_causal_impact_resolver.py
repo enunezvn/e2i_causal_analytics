@@ -94,13 +94,15 @@ class TestRegistryShape:
     def test_router_budget_holds_a_real_causal_run(self) -> None:
         # 30s could not hold ANY real DoWhy chain (refutation alone is ~15s on
         # linear estimators, ~60s on meta-learners); pre-resolver this never
-        # surfaced because every chat dispatch crashed in <10ms. 150s matches
-        # the chat surface budget (#1353 precedent).
+        # surfaced because every chat dispatch crashed in <10ms. 120s is the
+        # default per-agent ceiling — a timeout >= the 150s chat budget could
+        # never fire before the chat itself times out, and no completed run
+        # has been measured yet to justify a cap exception.
         from src.agents.orchestrator.nodes.router import RouterNode
 
         dispatch = RouterNode.INTENT_TO_AGENTS["causal_effect"][0]
         assert dispatch["agent_name"] == "causal_impact"
-        assert dispatch["timeout_ms"] >= 150000
+        assert dispatch["timeout_ms"] >= 120000
 
 
 class TestExplicitParams:
