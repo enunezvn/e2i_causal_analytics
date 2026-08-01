@@ -323,6 +323,7 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
 from src.utils.llm_attribution import (
     drain_run_usage,
+    get_attribution,
     set_authenticated_user,
     set_chat_attribution,
 )
@@ -1605,7 +1606,8 @@ async def _collect_copilot_learning_signal(
 async def _ensure_conversation_exists(session_id: str) -> bool:
     """
     Ensure a conversation record exists for the given session_id.
-    Creates one if it doesn't exist (for anonymous CopilotKit users).
+    Creates one attributed to the JWT-verified owner if it doesn't exist
+    (falls back to the anon sentinel only when genuinely unattributed).
 
     Args:
         session_id: The session/thread ID (must be a valid UUID)
@@ -1648,9 +1650,16 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
         # NOTE: Using direct synchronous Supabase call since supabase-py is synchronous
         logger.debug("_ensure_conversation_exists: Creating new conversation...")
         try:
+            # #1405: attribute the conversation to the JWT-verified owner (stashed in
+            # the attribution contextvar by the auth gate). The anon sentinel is only a
+            # fallback for a genuinely unattributed request — never a fabricated id.
+            # chatbot_messages/chatbot_message_feedback.computed_user_id inherit this
+            # via migration 123's trigger, so message-owner == conversation-owner.
+            attr = get_attribution()
+            owner_id = (attr.user_id if attr else None) or _ANONYMOUS_USER_ID
             conversation_data = {
                 "session_id": session_id,
-                "user_id": _ANONYMOUS_USER_ID,
+                "user_id": owner_id,
                 "title": "CopilotKit Conversation",
                 "query_type": "general",
                 "metadata": {"source": "copilotkit", "created_automatically": True},
@@ -2949,7 +2958,7 @@ def create_e2i_chat_agent():
                     )
                     if result:
                         user_message_id = result.get("id")
-                        logger.error(f"[CopilotKit] Persisted user message id={user_message_id}")
+                        logger.debug(f"[CopilotKit] Persisted user message id={user_message_id}")
             except Exception as e:
                 logger.error(f"[CopilotKit] Failed to persist user message: {e}", exc_info=True)
 
@@ -3197,7 +3206,7 @@ def create_e2i_chat_agent():
                 if session_id:
                     try:
                         elapsed_ms = int((time.time() - node_start) * 1000)
-                        _persist_message_sync(
+                        persisted = _persist_message_sync(
                             session_id=session_id,
                             role="assistant",
                             content=response.content,  # type: ignore[union-attr]
@@ -3209,7 +3218,16 @@ def create_e2i_chat_agent():
                             },
                             run_id=state.get("run_id"),
                         )
-                        logger.info("[CopilotKit] Persisted assistant message")
+                        # #1405: only claim persistence when a row actually came back —
+                        # the old unconditional info log overstated persistence on a None result.
+                        if persisted:
+                            logger.debug(
+                                f"[CopilotKit] Persisted assistant message id={persisted.get('id')}"
+                            )
+                        else:
+                            logger.warning(
+                                "[CopilotKit] Assistant message not persisted (no row returned)"
+                            )
                     except Exception as e:
                         logger.warning(f"[CopilotKit] Failed to persist assistant message: {e}")
 
