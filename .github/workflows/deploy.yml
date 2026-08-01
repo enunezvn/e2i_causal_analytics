@@ -73,6 +73,10 @@ jobs:
   build-and-push:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    # Bounded so a wedged buildx / stalled GHCR push cannot hold the now-serialized
+    # deploy queue (concurrency: deploy-production, cancel-in-progress: false) hostage
+    # for GitHub's 360-min job default — that would block even an emergency hotfix. (#1412 review)
+    timeout-minutes: 20
     needs: test
     permissions:
       contents: read
@@ -121,6 +125,8 @@ jobs:
   build-and-push-frontend:
     name: Build & Push Frontend Image
     runs-on: ubuntu-latest
+    # Same starvation guard as build-and-push (see above): bound the serialized queue. (#1412 review)
+    timeout-minutes: 20
     needs: test
     permissions:
       contents: read
@@ -163,6 +169,10 @@ jobs:
   deploy:
     name: Deploy to Droplet
     runs-on: ubuntu-latest
+    # Exceeds the 30m appleboy/ssh-action command_timeout (below) plus checkout + SSH
+    # handshake overhead, so a hung deploy self-cancels instead of blockading the
+    # serialized deploy-production queue for GitHub's 360-min default. (#1412 review)
+    timeout-minutes: 40
     needs: [build-and-push, build-and-push-frontend]
     environment: production
     # #528-B: packages:read so the job's GITHUB_TOKEN can pull the images it just
