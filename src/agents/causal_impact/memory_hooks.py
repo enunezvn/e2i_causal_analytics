@@ -720,18 +720,17 @@ async def contribute_to_memory(
     if memory_hooks is None:
         memory_hooks = get_causal_impact_memory_hooks()
 
+    # Preserve the RAW chat session id (a composite ``{user_uuid}~{session_uuid}``
+    # or ``~bridge`` id, or a plain uuid). The episodic writer coerces it to the
+    # real session uuid for the uuid-typed ``episodic_memories.session_id`` column
+    # (#1404), while the working-memory cache and the activity provenance keep the
+    # raw id for real session linkage. We NO LONGER parse-or-mint a fresh uuid for
+    # an unparseable id — that silently replaced a real composite id with a random
+    # one and destroyed session linkage (#1403). Only the genuinely session-less
+    # call (no id anywhere) falls back to a placeholder uuid — which loses no
+    # linkage because there is none, and keeps the non-Optional downstream contract.
     if session_id is None:
         session_id = state.get("session_id") or str(uuid.uuid4())
-
-    # ``session_id`` reaches the ``episodic_memories.session_id uuid`` column. Coerce any
-    # non-UUID value — a non-UUID ``state['session_id']`` or a caller-supplied id (e.g. a
-    # ``query_id``/``experiment_id``) — to a fresh UUID rather than letting the insert fail
-    # the enum/type check and be swallowed (the #787/#788 column trap). Validates BOTH the
-    # None-fallback path above and any explicitly-passed session_id.
-    try:
-        session_id = str(uuid.UUID(str(session_id)))
-    except (ValueError, TypeError):
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,

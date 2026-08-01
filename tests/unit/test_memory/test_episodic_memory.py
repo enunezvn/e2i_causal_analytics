@@ -435,7 +435,11 @@ class TestInsertEpisodicMemory:
             record = insert_call[0][0]
             assert record["event_type"] == "query_answer"
             assert record["description"] == sample_memory_input.description
-            assert record["session_id"] == "sess_123"
+            # #1404: "sess_123" is not a uuid, so the writer coerces it to an
+            # honest NULL and the None-filter drops the key (the column defaults
+            # to NULL) — never a raw non-uuid that would fail 22P02, never a
+            # fabricated uuid. A composite/plain-uuid id would be preserved.
+            assert "session_id" not in record
             assert record["cycle_id"] == "cycle_456"
             assert record["brand"] == "Kisqali"
             assert record["hcp_id"] == "hcp_123"
