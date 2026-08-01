@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.agents.tool_composer.models.composition_models import CompositionStatus
 from src.api.routes.chatbot_tools import (
     # Exports
     E2I_CHATBOT_TOOLS,
@@ -562,17 +563,37 @@ class TestQueryCausalChains:
 
     @pytest.mark.asyncio
     async def test_query_causal_chains_with_kpi(self):
-        """Test causal chains query with KPI uses RAG."""
-        mock_rag_result = MagicMock()
-        mock_rag_result.source_id = "causal-1"
-        mock_rag_result.content = "TRx affects NRx"
-        mock_rag_result.score = 0.85
-        mock_rag_result.metadata = {"confidence": 0.9}
+        """Test causal chains query with KPI reads the causal_paths registry.
 
-        with patch(
-            "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
-        ) as mock_search:
-            mock_search.return_value = [mock_rag_result]
+        2026-07-07 rewire (commit 70446ea6): the kpi_name branch no longer
+        detours into hybrid_search — it queries the registry via
+        CausalPathRepository.search_paths_for_outcome and enriches with
+        _fetch_refutation_summaries.
+        """
+        mock_paths = [
+            {
+                "path_id": "causal-1",
+                "start_node": "HCP engagement",
+                "end_node": "TRx",
+                "confidence_level": 0.9,
+                "method_used": "dowhy",
+            },
+        ]
+
+        with (
+            patch(
+                "src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock
+            ) as mock_client,
+            patch("src.api.routes.chatbot_tools.CausalPathRepository") as mock_repo_class,
+            patch(
+                "src.api.routes.chatbot_tools._fetch_refutation_summaries", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
+            mock_client.return_value = MagicMock()
+            mock_repo = MagicMock()
+            mock_repo.search_paths_for_outcome = AsyncMock(return_value=mock_paths)
+            mock_repo_class.return_value = mock_repo
+            mock_fetch.return_value = {}
 
             result = await _query_causal_chains(
                 brand="Kisqali",
@@ -612,8 +633,18 @@ class TestQueryCausalChains:
 
     @pytest.mark.asyncio
     async def test_query_causal_chains_real_mode_by_default(self):
-        """#893: the chat path must read the repo in real mode (exclude synthetic)."""
-        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+        """#893: the chat path must read the repo in real mode (exclude synthetic).
+
+        include_synthetic=None resolves via kpi_include_synthetic() (src:593-594),
+        which reads E2I_INCLUDE_SYNTHETIC/E2I_KPI_INCLUDE_SYNTHETIC live. Repo-root
+        .env sets both true (documented walk-up contamination vector), so the gate
+        is pinned to production-default False here to test the #893 contract
+        deterministically rather than whatever the ambient env happens to be.
+        """
+        with (
+            patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client,
+            patch("src.api.routes.chatbot_tools.kpi_include_synthetic", return_value=False),
+        ):
             mock_repo = AsyncMock()
             mock_repo.get_many.return_value = []
             mock_client.return_value = MagicMock()
@@ -901,17 +932,38 @@ class TestCausalAnalysisTool:
 
     @pytest.mark.asyncio
     async def test_causal_analysis_success(self):
-        """Test successful causal analysis."""
-        mock_result = MagicMock()
-        mock_result.source_id = "causal-1"
-        mock_result.content = "TRx driven by HCP engagement"
-        mock_result.score = 0.85
-        mock_result.metadata = {"confidence": 0.9, "effect_magnitude": 0.3}
+        """Test successful causal analysis.
 
-        with patch(
-            "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
-        ) as mock_search:
-            mock_search.return_value = [mock_result]
+        2026-07-07 rewire (commit 70446ea6): causal_analysis_tool queries the
+        causal_paths registry via CausalPathRepository.search_paths_for_outcome
+        (real 0-1 confidence_level) + _fetch_refutation_summaries — not
+        hybrid_search RAG scores.
+        """
+        mock_paths = [
+            {
+                "path_id": "causal-1",
+                "start_node": "HCP engagement",
+                "end_node": "TRx",
+                "confidence_level": 0.9,
+                "causal_effect_size": 0.3,
+                "method_used": "dowhy",
+            },
+        ]
+
+        with (
+            patch(
+                "src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock
+            ) as mock_client,
+            patch("src.api.routes.chatbot_tools.CausalPathRepository") as mock_repo_class,
+            patch(
+                "src.api.routes.chatbot_tools._fetch_refutation_summaries", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
+            mock_client.return_value = MagicMock()
+            mock_repo = MagicMock()
+            mock_repo.search_paths_for_outcome = AsyncMock(return_value=mock_paths)
+            mock_repo_class.return_value = mock_repo
+            mock_fetch.return_value = {}
 
             result = await causal_analysis_tool.ainvoke(
                 {
@@ -929,21 +981,32 @@ class TestCausalAnalysisTool:
 
     @pytest.mark.asyncio
     async def test_causal_analysis_filters_by_confidence(self):
-        """Test that results are filtered by min_confidence."""
-        mock_low_conf = MagicMock()
-        mock_low_conf.score = 0.5
-        mock_low_conf.metadata = {"confidence": 0.5}
+        """min_confidence is forwarded to the repository query (the filtering
+        layer, .gte in causal_path.py:200) — not applied tool-side."""
+        mock_paths = [
+            {
+                "path_id": "causal-1",
+                "start_node": "x",
+                "end_node": "TRx",
+                "confidence_level": 0.9,
+                "method_used": "dowhy",
+            },
+        ]
 
-        mock_high_conf = MagicMock()
-        mock_high_conf.source_id = "high"
-        mock_high_conf.content = "High confidence result"
-        mock_high_conf.score = 0.9
-        mock_high_conf.metadata = {"confidence": 0.9}
-
-        with patch(
-            "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
-        ) as mock_search:
-            mock_search.return_value = [mock_low_conf, mock_high_conf]
+        with (
+            patch(
+                "src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock
+            ) as mock_client,
+            patch("src.api.routes.chatbot_tools.CausalPathRepository") as mock_repo_class,
+            patch(
+                "src.api.routes.chatbot_tools._fetch_refutation_summaries", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
+            mock_client.return_value = MagicMock()
+            mock_repo = MagicMock()
+            mock_repo.search_paths_for_outcome = AsyncMock(return_value=mock_paths)
+            mock_repo_class.return_value = mock_repo
+            mock_fetch.return_value = {}
 
             result = await causal_analysis_tool.ainvoke(
                 {
@@ -952,16 +1015,28 @@ class TestCausalAnalysisTool:
                 }
             )
 
-        # Only high confidence result should be included
-        assert result["causal_chains_found"] == 1
+        # The tool forwards the threshold to the repo (the real responsibility).
+        mock_repo.search_paths_for_outcome.assert_awaited_once()
+        assert mock_repo.search_paths_for_outcome.call_args.kwargs["min_confidence"] == 0.8
+        assert result["min_confidence_applied"] == 0.8
+        assert result["causal_chains_found"] == len(mock_paths)
 
     @pytest.mark.asyncio
     async def test_causal_analysis_error_handling(self):
-        """Test causal analysis error handling."""
-        with patch(
-            "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
-        ) as mock_search:
-            mock_search.side_effect = Exception("RAG unavailable")
+        """Registry-query errors fail closed. The error surface moved with the
+        70446ea6 rewire from hybrid_search to repo.search_paths_for_outcome."""
+        with (
+            patch(
+                "src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock
+            ) as mock_client,
+            patch("src.api.routes.chatbot_tools.CausalPathRepository") as mock_repo_class,
+        ):
+            mock_client.return_value = MagicMock()
+            mock_repo = MagicMock()
+            mock_repo.search_paths_for_outcome = AsyncMock(
+                side_effect=Exception("registry unavailable")
+            )
+            mock_repo_class.return_value = mock_repo
 
             result = await causal_analysis_tool.ainvoke({"kpi_name": "TRx"})
 
@@ -1266,6 +1341,12 @@ class TestToolComposerTool:
         mock_result.plan = mock_plan
         mock_result.execution = mock_execution
         mock_result.response = mock_response
+        # F6 audit fix (commit 688f1959): the route envelope now surfaces the
+        # real CompositionResult.success / status.value instead of a hardcoded
+        # success=True, so a FAILED composition is reported honestly. The mock
+        # must set the fields the model actually carries.
+        mock_result.success = True
+        mock_result.status = CompositionStatus.SUCCESS
 
         with patch(
             "src.api.routes.chatbot_tools.compose_query", new_callable=AsyncMock
@@ -1397,17 +1478,36 @@ class TestIntegration:
 
         assert kpi_result["success"] is True
 
-        # Then run causal analysis on the same KPI
-        mock_causal = MagicMock()
-        mock_causal.source_id = "causal-1"
-        mock_causal.content = "HCP engagement drives TRx"
-        mock_causal.score = 0.9
-        mock_causal.metadata = {"confidence": 0.9}
+        # Then run causal analysis on the same KPI. Post-70446ea6 rewire the
+        # tool reads the causal_paths registry, not hybrid_search.
+        mock_paths = [
+            {
+                "path_id": "causal-1",
+                "start_node": "HCP engagement",
+                "end_node": "TRx",
+                "intermediate_nodes": [],
+                "causal_effect_size": 0.3,
+                "confidence_level": 0.9,
+                "method_used": "dowhy",
+                "brand": None,
+                "validation_status": None,
+            },
+        ]
 
-        with patch(
-            "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
-        ) as mock_search:
-            mock_search.return_value = [mock_causal]
+        with (
+            patch(
+                "src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock
+            ) as mock_client,
+            patch("src.api.routes.chatbot_tools.CausalPathRepository") as mock_repo_class,
+            patch(
+                "src.api.routes.chatbot_tools._fetch_refutation_summaries", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
+            mock_client.return_value = MagicMock()
+            mock_repo = MagicMock()
+            mock_repo.search_paths_for_outcome = AsyncMock(return_value=mock_paths)
+            mock_repo_class.return_value = mock_repo
+            mock_fetch.return_value = {}
 
             causal_result = await causal_analysis_tool.ainvoke(
                 {
