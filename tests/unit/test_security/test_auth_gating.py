@@ -258,6 +258,20 @@ def app_with_real_auth_middleware(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     import src.api.dependencies.auth as auth_dep
     import src.api.middleware.auth_middleware as auth_mw
 
+    # #1438: ``importlib.reload`` rebinds *every* symbol in the module's
+    # __dict__ — including the ``AuthError`` class object. Any module that
+    # imported ``AuthError`` by name BEFORE this reload (e.g.
+    # ``src.api.routes.copilotkit``, pulled in earlier by the copilotkit
+    # test files) keeps a frozen reference to the *original* class, while a
+    # fresh ``from src.api.dependencies.auth import AuthError`` after the
+    # reload returns the *new* one. ``pytest.raises(AuthError)`` in a later
+    # test then cannot match an ``AuthError`` raised from copilotkit — a
+    # cross-file leak that CI's loadscope sharding (one file per worker)
+    # masks but a serial run exposes. Snapshot the pre-reload module dicts
+    # so the teardown can restore them and the rebinding never escapes.
+    _auth_dep_dict_snapshot = auth_dep.__dict__.copy()
+    _auth_mw_dict_snapshot = auth_mw.__dict__.copy()
+
     importlib.reload(auth_dep)
     importlib.reload(auth_mw)
 
@@ -274,10 +288,16 @@ def app_with_real_auth_middleware(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
     yield app
 
-    # Restore testing-mode (other tests in this run depend on it).
-    monkeypatch.setenv("E2I_TESTING_MODE", "1")
-    importlib.reload(auth_dep)
-    importlib.reload(auth_mw)
+    # Restore the exact pre-reload module state. This undoes the reload's
+    # rebinding of ``AuthError`` et al. (so no other test sees a diverged
+    # class identity) AND restores testing-mode for the tests that follow
+    # — the snapshot was taken while ``TESTING_MODE`` was still on, before
+    # the reload flipped it off. ``clear()`` + ``update()`` makes each
+    # module's __dict__ byte-for-byte identical to its pre-fixture state.
+    auth_dep.__dict__.clear()
+    auth_dep.__dict__.update(_auth_dep_dict_snapshot)
+    auth_mw.__dict__.clear()
+    auth_mw.__dict__.update(_auth_mw_dict_snapshot)
 
 
 def test_unauthenticated_request_to_executive_insights_returns_401(

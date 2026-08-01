@@ -1212,7 +1212,7 @@ def _persist_message_sync(
             # _stamp_frontend_message_ids).
             row_metadata["run_id"] = run_id
 
-        message_data = {
+        message_data: dict[str, Any] = {
             "session_id": session_id,
             "role": role,
             "content": content,
