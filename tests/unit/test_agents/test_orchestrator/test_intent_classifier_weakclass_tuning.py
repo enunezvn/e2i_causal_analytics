@@ -238,3 +238,106 @@ class TestSentenceBoundarySplitsMultipart:
             "Break down Remibrutinib NRx by patient segment where conversion is 15.5%."
         )
         assert len(agents) == 1
+
+
+# ---------------------------------------------------------------------------
+# #1408 (partial) — predictive-model adjective exclusion (Lever A only).
+#
+# SCOPE (2026-08-01 decision). Of the three post-#1400 residual levers, only the
+# bench-0221 fix ships: the `predict` lexeme must not fire on the "predictive
+# model" / "predictive analytics" ADJECTIVE (a model-MONITORING subject: ROC-AUC,
+# calibration, drift), so system_health / drift_check win those asks. The one
+# residual — "predictive model" + a genuine forecast — fails OPEN to the LLM
+# fallback, never a confident wrong route.
+#
+# The bench-0016 "likely"-family broadening (Lever B) and the #1409
+# compound-object collapse (Lever C) were EVALUATED, prototyped, and REVERTED:
+# adversarial review found both regress phrasings that `main` routes correctly
+# today into CONFIDENT misroutes that bypass the LLM safety net —
+#   * "likely to have caused/driven X" -> forecaster (should stay causal), and
+#   * a terse independent "forecast the uplift, and design a sample-size plan"
+#     -> a silently dropped forecast task.
+# bench-0016 and all of #1409 defer to the #1406 semantic classifier; both
+# issues stay OPEN. The two "guard" tests below pin the currently-correct `main`
+# behaviour so neither reverted lever can silently return.
+#
+# Guarded end-to-end by pattern_diff.py over the full 337 gold: +1 agent-exact
+# (bench-0221), 0 losses, 0 escalate-boundary crossings.
+# ---------------------------------------------------------------------------
+class TestIntentTieBreakResiduals1408:
+    def test_bench0221_predictive_model_routes_health_score(self):
+        # bench-0221: model-MONITORING subject -> health_score, not prediction.
+        assert _classify_and_route(
+            "How well is our Kisqali predictive model performing in terms of "
+            "ROC-AUC and calibration metrics?"
+        ) == ["health_score"]
+
+    def test_predictive_model_adjective_suppressed_but_forecast_verb_fires(self):
+        # The `predict` lexeme must NOT match the "predictive model" adjective
+        # phrase (model monitoring), but MUST still fire on the forecast verb.
+        assert (
+            _classify("How is the predictive model performing?")["primary_intent"] != "prediction"
+        )
+        assert _classify("Predict next quarter TRx for Kisqali")["primary_intent"] == "prediction"
+
+    def test_prediction_model_noun_stays_a_forecast(self):
+        # Lever A is scoped to the "predictive" ADJECTIVE only — the "prediction
+        # model" NOUN is a live forecast subject and must still route prediction,
+        # not fail open. (A broader `ion model` exclusion silently dropped this
+        # genuine forecast to the LLM fallback.)
+        assert _classify_and_route(
+            "What does the prediction model say about Kisqali TRx for next quarter?"
+        ) == ["prediction_synthesizer"]
+
+    def test_predictive_model_plus_forecast_fails_open_not_confidently_wrong(self):
+        # ACCEPTED residual: "predictive model" (adjective) + a genuine forecast
+        # cannot be disambiguated lexically from the bench-0221 MONITORING ask, so
+        # prediction is suppressed and the query falls to the LLM fallback (primary
+        # "general", confidence below the 0.8 pattern-trust floor) — fails OPEN to
+        # the safety net, never a confident wrong route. The monitoring-vs-forecast
+        # split here is #1406's semantic job.
+        intent = _classify("What does the predictive model say about Kisqali TRx next quarter?")
+        assert intent["primary_intent"] == "general"
+        assert intent["confidence"] < 0.8
+
+
+class TestRevertedLeverGuards:
+    """Pin the currently-correct `main` behaviour that Levers B and C would break,
+    so neither reverted lever can silently return without tripping a test."""
+
+    def test_likely_cause_is_causal_not_prediction(self):
+        # Lever B guard: prediction outranks causal_effect in INTENT_PRIORITY, so a
+        # "likely"-family broadening would let a causal-ATTRIBUTION ask win the tie
+        # and confidently misroute to prediction_synthesizer. On `main` (no such
+        # broadening) "likely cause" stays causal_effect -> causal_impact.
+        assert _classify_and_route(
+            "What is the likely cause of the Kisqali TRx decline in the northeast?"
+        ) == ["causal_impact"]
+        assert _classify_and_route(
+            "What is the most likely cause of the drop in conversion rate?"
+        ) == ["causal_impact"]
+        # The adversarial case that specifically broke the `likely to` anchor.
+        assert _classify_and_route("What is likely to have caused the Kisqali TRx decline?") == [
+            "causal_impact"
+        ]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Independent forecast + design pairs must dispatch BOTH agents — a
+            # compound-object collapse would silently drop the forecast task.
+            "Forecast next quarter Kisqali TRx, and separately, design an A/B test "
+            "for the new copay assistance program.",
+            "Predict Q4 TRx for Kisqali. Also, design an experiment testing the new rep messaging.",
+            # The terse phrasing that broke Lever C's tight-window anchor (effect
+            # + sample-size within 30 chars, but two genuinely independent tasks).
+            "Forecast the expected uplift, and design a sample size plan for the trial.",
+        ],
+    )
+    def test_independent_forecast_and_design_not_collapsed(self, query):
+        # Lever C guard: without the compound-object collapse these stay parallel.
+        agents = _classify_and_route(query)
+        assert "prediction_synthesizer" in agents and "experiment_designer" in agents, (
+            f"{query!r} wrongly collapsed to {agents}; an independent forecast task "
+            f"must not be dropped by a compound-object rule"
+        )

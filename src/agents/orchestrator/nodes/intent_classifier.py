@@ -224,7 +224,29 @@ class IntentClassifierNode:
             r"hypothesis.*test",
         ],
         "prediction": [
-            r"predict|forecast|project",
+            # #1408 (bench-0221): the "predictive model" / "predictive analytics"
+            # ADJECTIVE names a model-MONITORING subject (ROC-AUC, calibration,
+            # drift), NOT a forecast — exclude it so system_health / drift_check
+            # win those asks. Scoped to the "predictive" adjective ONLY:
+            # "prediction model" stays a live forecast noun ("what does the
+            # prediction model say about TRx next quarter"). The lone residual —
+            # "predictive model" + a genuine forecast — fails OPEN to the LLM
+            # fallback, never confidently wrong (pinned in
+            # TestIntentTieBreakResiduals1408). The forecast verb/noun still
+            # fires ("predict which ...", "the prediction").
+            #
+            # SCOPE (2026-08-01 decision): only this adjective exclusion (Lever A)
+            # ships. The bench-0016 "likely"-family broadening (Lever B) and the
+            # #1409 compound-object collapse (Lever C) were REVERTED — adversarial
+            # review showed both regress currently-correct phrasings to CONFIDENT
+            # misroutes that bypass the LLM safety net ("likely to have caused X"
+            # -> forecaster; a terse independent "forecast the uplift, and design
+            # a sample-size plan" -> a dropped forecast). bench-0016 and all of
+            # #1409 defer to the #1406 semantic classifier. Guarded by
+            # test_likely_cause_is_causal_not_prediction +
+            # test_independent_forecast_and_design_not_collapsed so neither lever
+            # silently returns.
+            r"predict(?!ive\s+(?:model|analytic))|forecast|project",
             r"what will|expected",
             r"likelihood|probability",
         ],
