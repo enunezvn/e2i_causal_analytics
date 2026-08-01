@@ -40,11 +40,12 @@ profile.
   prescriptions in [start, end)"), the platform's established windowed-KPI
   semantic. Criteria-less asks ride the mig-084/105 `_windowed` /
   `_segment_windowed` / `_line_windowed` calculator variants (window is part
-  of the KPI cache key); window + min-age asks use the mig-117
+  of the KPI cache key); window + age-bound asks use the mig-117
   `cohort_profiler_patient_criteria_profile_windowed` statement
-  (params `[brand, start, end, min_age_exclusive]`). The ONE unservable
-  combo — max-age + window (the mig-044 RPC caps at 4 positional params) —
-  is disclosed as NOT applied while the window still binds. The bound window
+  (params `[brand, start, end, min_age_exclusive, max_age_exclusive]`).
+  #1402 / mig-122 restored the max-age bind as `$5` now the `kpi_query`
+  RPC allows 6 positional params (mig-120), so max-age + window is fully
+  servable — it is bound, not disclosed as NOT applied. The bound window
   is always named with explicit dates in the narrative and in
   `cohort_profile.window`.
 - **HCP-entity cohorts with quantitative KPI thresholds** (#1356 part 2):
