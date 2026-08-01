@@ -77,9 +77,10 @@ _NRX_KPI_ID = "WS3-BI-006"
 # SYNTHETIC_TWINNED_QUERY_IDS, which is locked to migrations 066/085/095).
 _HCP_COHORT_QUERY_ID = "cohort_profiler_hcp_trx_cohort"
 _PATIENT_CRITERIA_QUERY_ID = "cohort_profiler_patient_criteria_profile"
-# Windowed sibling (codex iter-2): [brand, start, end, min_age_exclusive] — the
-# mig-044 RPC caps at 4 positional params, so max-age cannot ALSO bind in a
-# windowed ask (it gets NOT-applied disclosure instead; see _analyze_patients).
+# Windowed sibling: [brand, start, end, min_age_exclusive, max_age_exclusive].
+# The mig-044 RPC once capped at 4 positional params (so max-age was dropped);
+# mig-120 (#1388) raised the cap to 6 and mig-122 (#1402) restored the max-age
+# bound as $5 — both age bounds now co-bind with the window.
 _PATIENT_CRITERIA_WINDOWED_QUERY_ID = "cohort_profiler_patient_criteria_profile_windowed"
 
 # (context value, human label) for each severity tier and line-of-therapy bucket.
@@ -181,35 +182,10 @@ class CohortProfilerAgent:
         # bounds the NRx counting window — 'patients with new prescriptions in
         # [start, end)' — the platform's established windowed-KPI semantic
         # (mig-084/105 `_windowed` variants, calculator context['window'],
-        # already part of the KPI cache key). The ONE unservable combo is
-        # max-age + window: the mig-044 kpi_query RPC caps at 4 positional
-        # params (brand, window start/end, minimum age), so a max-age bound in
-        # a windowed ask is DISCLOSED as not applied rather than silently
-        # dropped, and the window binds on the legacy path.
-        if ask.window is not None:
-            still_servable: List[Criterion] = []
-            for c in servable:
-                if c.kind == "age_max":
-                    unserved.append(
-                        Criterion(
-                            kind=c.kind,
-                            label=c.label,
-                            servable=False,
-                            value=c.value,
-                            guidance=(
-                                "a maximum-age bound cannot bind together with "
-                                "a time window today (the allowlisted windowed "
-                                "criteria statement caps at 4 parameters: "
-                                "brand, window start/end, minimum age) — drop "
-                                "the window or the max-age bound, or use the "
-                                "ML cohort pipeline (scope_definer → "
-                                "cohort_constructor)"
-                            ),
-                        )
-                    )
-                else:
-                    still_servable.append(c)
-            servable = still_servable
+        # already part of the KPI cache key). Both age bounds now co-bind with
+        # the window: mig-120 (#1388) raised the kpi_query cap to 6 params and
+        # mig-122 (#1402) restored the windowed statement's max-age bound as $5,
+        # so max-age + window is served rather than disclosed as not-applied.
 
         # The ask pinned down ONLY things the data model cannot serve (and no
         # brand, no window): a canned profile would answer a different question
@@ -289,10 +265,10 @@ class CohortProfilerAgent:
         Binds brand + age bounds into ONE grouped statement over the same
         NRx substrate as the mig-105 path (prescription events, sequence 1,
         most recent 30 days of data — or the ask's explicit window via the
-        `_windowed` sibling, params [brand, start, end, min_age]) joined to
-        ``patient_journeys`` for ``age_at_diagnosis`` / ``segment_assignment``
-        / ``prior_therapy_lines`` (all fully populated — verified READ-ONLY
-        2026-07-30).
+        `_windowed` sibling, params [brand, start, end, min_age, max_age])
+        joined to ``patient_journeys`` for ``age_at_diagnosis`` /
+        ``segment_assignment`` / ``prior_therapy_lines`` (all fully populated —
+        verified READ-ONLY 2026-07-30).
         """
         age_min = next((c.value for c in servable if c.kind == "age_min"), None)
         age_max = next((c.value for c in servable if c.kind == "age_max"), None)
@@ -300,8 +276,9 @@ class CohortProfilerAgent:
 
         try:
             if window is not None:
-                # max-age was already moved to `unserved` by _analyze_patients
-                # for windowed asks (4-param cap), so only min-age binds here.
+                # Both age bounds bind alongside the window now the kpi_query
+                # RPC allows 6 positional params (#1388 / mig-120) and mig-122
+                # (#1402) restored the windowed statement's $5 max-age bound.
                 rows = await self._rpc_rows(
                     _profiler_query_id(_PATIENT_CRITERIA_WINDOWED_QUERY_ID),
                     [
@@ -309,6 +286,7 @@ class CohortProfilerAgent:
                         window.start.isoformat(),
                         window.end.isoformat(),
                         age_min,
+                        age_max,
                     ],
                 )
             else:

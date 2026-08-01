@@ -470,7 +470,9 @@ async def test_two_asks_differing_only_by_window_do_not_collapse():
 @pytest.mark.asyncio
 async def test_patient_window_plus_criteria_binds_windowed_statement():
     """Iter-2 (HIGH): window + servable age criterion bind TOGETHER via the
-    mig-117 windowed criteria statement (params [brand, start, end, min_age])."""
+    mig-117 windowed criteria statement. Post-#1402 (mig-122) the statement
+    takes 5 positional params ([brand, start, end, min_age, max_age]); a
+    min-age-only windowed ask binds max_age as a trailing NULL."""
     rows = [[{"severity": "low_severity", "therapy_line": 0, "nrx": 42}]]
     agent, db = _agent(calc=_RecordingCalc(_REMI_NRX), db_rows=rows, today=date(2026, 7, 30))
     out = await agent.analyze(
@@ -482,23 +484,52 @@ async def test_patient_window_plus_criteria_binds_windowed_statement():
     # _include_synthetic suffix — the semantic pinned here is that the WINDOWED
     # statement family was chosen.
     assert args["query_id"].startswith("cohort_profiler_patient_criteria_profile_windowed")
-    assert args["params"] == ["Remibrutinib", "2026-04-01", "2026-07-01", 18]
+    assert args["params"] == ["Remibrutinib", "2026-04-01", "2026-07-01", 18, None]
     assert "2026-04-01" in out["narrative"]
 
 
+# --------------------------------- #1402: max-age + window now co-bind (mig-122)
+
+
 @pytest.mark.asyncio
-async def test_patient_window_with_max_age_only_disclosed():
-    """Iter-2 (HIGH), the one genuinely unservable combo: max-age + window
-    cannot bind together (the mig-044 RPC caps at 4 positional params) — the
-    window binds on the legacy path and the max-age bound is DISCLOSED as not
-    applied, never silently dropped."""
-    calc = _RecordingCalc(_REMI_NRX)
-    agent, db = _agent(calc=calc, today=date(2026, 7, 30))
+async def test_patient_window_with_max_age_binds_fifth_param():
+    """#1402: with the kpi_query cap raised to 6 params (#1388 / mig-120), a
+    max-age bound now BINDS alongside a window as the windowed statement's 5th
+    positional param — no longer DISCLOSED as not-applied. min-age is the
+    trailing-NULL $4; max-age is $5."""
+    rows = [[{"severity": "low_severity", "therapy_line": 0, "nrx": 42}]]
+    agent, db = _agent(calc=_RecordingCalc(_REMI_NRX), db_rows=rows, today=date(2026, 7, 30))
     out = await agent.analyze({"query": "Remibrutinib cohort of patients under 65 last quarter"})
 
     assert out["status"] == "completed"
-    labels = " ".join(c["label"] for c in out["cohort_profile"]["criteria_not_applied"]).lower()
-    assert "under 65" in labels
-    expected_window = {"start": "2026-04-01", "end": "2026-07-01"}
-    assert calc.contexts and all(c.get("window") == expected_window for c in calc.contexts)
-    assert not db.calls
+    # The windowed allowlist statement ran with max-age bound at position 5.
+    assert db.calls, "windowed criteria ask must go through the kpi_query RPC now"
+    _fn, args = db.calls[0]
+    assert args["query_id"].startswith("cohort_profiler_patient_criteria_profile_windowed")
+    assert args["params"] == ["Remibrutinib", "2026-04-01", "2026-07-01", None, 65]
+    # max-age is APPLIED, not disclosed as unservable.
+    not_applied = " ".join(
+        c["label"] for c in out["cohort_profile"]["criteria_not_applied"]
+    ).lower()
+    assert "under 65" not in not_applied
+    applied = " ".join(out["cohort_profile"]["criteria_applied"]).lower()
+    assert "65" in applied
+
+
+@pytest.mark.asyncio
+async def test_patient_window_with_both_age_bounds_binds_all_five_params():
+    """#1402: min-age AND max-age bind together with a window — all five
+    positional params ([brand, start, end, min_age, max_age]) reach the
+    windowed allowlist statement, with nothing left in the not-applied
+    accounting."""
+    rows = [[{"severity": "medium_severity", "therapy_line": 1, "nrx": 88}]]
+    agent, db = _agent(calc=_RecordingCalc(_REMI_NRX), db_rows=rows, today=date(2026, 7, 30))
+    out = await agent.analyze(
+        {"query": "Remibrutinib cohort of adults over 18 and patients under 65 last quarter"}
+    )
+
+    assert out["status"] == "completed"
+    _fn, args = db.calls[0]
+    assert args["query_id"].startswith("cohort_profiler_patient_criteria_profile_windowed")
+    assert args["params"] == ["Remibrutinib", "2026-04-01", "2026-07-01", 18, 65]
+    assert not out["cohort_profile"]["criteria_not_applied"]
