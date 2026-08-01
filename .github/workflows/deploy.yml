@@ -293,6 +293,41 @@ jobs:
               fi
             }
 
+            # #1431: probe GHCR for a commit's PUBLISHED app images. Returns 0 iff
+            # BOTH e2i-api (shared by api/worker_*/scheduler) AND e2i-frontend (the
+            # OOM-prone React/esbuild build #528-B pre-builds to keep OFF the droplet)
+            # have a manifest at that exact SHA tag. `docker manifest inspect` reads
+            # only the manifest (no layer pull) — cheap. Requires a prior GHCR
+            # `docker login` (the images are private). Any probe error (auth blip,
+            # network) is treated as "not built" and simply makes the walk consider an
+            # older ancestor or fall through — never a broken deploy: a false NEGATIVE
+            # costs a slightly older deploy that the skipped commit's own queued run
+            # supersedes; a false POSITIVE is still caught by the forward pull's
+            # `--build` fallback below. REGISTRY is not forwarded to the droplet
+            # (envs: IMAGE_OWNER,GHCR_USER,GHCR_TOKEN), so default it like the pull does.
+            image_exists() {
+              _sha="$1"
+              docker manifest inspect "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" >/dev/null 2>&1 \
+                && docker manifest inspect "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}" >/dev/null 2>&1
+            }
+
+            # Given candidate SHAs on stdin (newest first), echo the FIRST whose images
+            # exist per image_exists, then stop; echo nothing if none qualify. Pure
+            # control-flow with the probe injected, so it is unit-testable with a
+            # stubbed image_exists (see the PR's dry-run). No `local` (plain /bin/sh
+            # portable, like the helpers above); `_cand` is namespaced to avoid
+            # clobbering caller vars.
+            select_built_sha() {
+              while read -r _cand; do
+                [ -n "$_cand" ] || continue
+                if image_exists "$_cand"; then
+                  echo "$_cand"
+                  return 0
+                fi
+              done
+              return 1
+            }
+
             cd "$PROJECT_DIR"
             PREV_SHA=$(git rev-parse HEAD)
             echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
@@ -309,7 +344,45 @@ jobs:
               exit 1
             fi
             git fetch origin main
-            git reset --hard origin/main
+            ORIGIN_SHA=$(git rev-parse origin/main)
+
+            # #1431: do NOT blindly `reset --hard origin/main`. Production deploys are
+            # serialized (concurrency: deploy-production, cancel-in-progress:false —
+            # #1412/#1428), so a NEWER commit can land on main while THIS deploy is
+            # mid-flight; its own build-and-push is still QUEUED behind us, so no GHCR
+            # image exists for it yet. Hard-resetting onto that SHA would fail the pull
+            # below and fall back to a LOCAL droplet build — reintroducing exactly the
+            # #528-B React/esbuild OOM the pre-built-image path exists to avoid. So walk
+            # origin/main newest->oldest and deploy the newest ANCESTOR that ALREADY has
+            # both published images. The skipped newer commit is deployed by its OWN
+            # queued run (which builds its images first), so main still CONVERGES to the
+            # newest SHA — just never via a local OOM build. Bounded walk: in a race only
+            # a handful of commits can be ahead of the last built one, so 30 is generous
+            # headroom without an unbounded registry-probe loop; the walk also stops at
+            # the first hit, normally origin/main HEAD (1 probe) or PREV_SHA (already
+            # deployed, so definitely built). If GHCR auth fails or no built ancestor is
+            # found in the window, fall back to the prior origin/main behavior (never
+            # WORSE than before — the pull's --build fallback still runs). NOTE: this
+            # rests on code-reasoning + review, NOT on a faithful reproduction of a live
+            # deploy race (which cannot be staged on the box); the SHA-selection core is
+            # exercised by a stubbed-probe dry-run in the PR.
+            export IMAGE_OWNER="$(echo "${IMAGE_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
+            TARGET_SHA=""
+            if [ -n "$IMAGE_OWNER" ] \
+               && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1; then
+              TARGET_SHA=$(git rev-list origin/main | head -n 30 | select_built_sha || true)
+            fi
+            if [ -n "$TARGET_SHA" ]; then
+              if [ "$TARGET_SHA" != "$ORIGIN_SHA" ]; then
+                echo "==> origin/main ${ORIGIN_SHA:0:7} has NO published GHCR image yet (its build is queued behind this deploy); deploying newest BUILT ancestor ${TARGET_SHA:0:7} instead. origin/main ${ORIGIN_SHA:0:7} will deploy via its own queued run."
+              else
+                echo "==> origin/main ${ORIGIN_SHA:0:7} has published images — deploying it."
+              fi
+              git reset --hard "$TARGET_SHA"
+            else
+              echo "==> WARN: no pre-built GHCR image confirmed for any recent origin/main ancestor (GHCR auth failed or none built in the 30-commit window). Falling back to origin/main ${ORIGIN_SHA:0:7} — the pull below may take the local-build path."
+              git reset --hard origin/main
+            fi
             NEW_SHA=$(git rev-parse HEAD)
             echo "==> Deploying ${NEW_SHA:0:7}"
 
