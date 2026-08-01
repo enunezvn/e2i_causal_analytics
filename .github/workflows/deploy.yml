@@ -43,6 +43,23 @@ on:
       - 'docker/bentoml/**'
   workflow_dispatch:
 
+# Serialize production deploys: at most one run of THIS workflow proceeds at a
+# time, and a newer run is QUEUED rather than cancelled. GitHub keeps a single
+# pending run per group and auto-supersedes older *pending* runs, so a batch
+# merge to main no longer produces a droplet-side deploy pileup — the shared box
+# gets git/compose collisions and a feast force-recreate SIGKILL (exit 137, NOT
+# kernel OOM) when concurrent SSH deploys race, all concluding `failure` while
+# the droplet nonetheless converges healthy (cf. #1412's 6-way 2026-07-31 pileup).
+# Whole-workflow (top-level) group, not job-level on `deploy`: it supersedes an
+# older pending run BEFORE it burns a test+build cycle, and folds workflow_dispatch
+# into the same lane so a manual deploy also serializes against a push deploy.
+# cancel-in-progress is deliberately false: cancelling a mid-flight SSH deploy is
+# exactly how a REAL partial state gets created. Newest queued SHA still wins — the
+# deploy script hard-resets to origin/main and the checkout-SHA tag mechanic converges.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/e2i-api
@@ -56,6 +73,10 @@ jobs:
   build-and-push:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    # Bounded so a wedged buildx / stalled GHCR push cannot hold the now-serialized
+    # deploy queue (concurrency: deploy-production, cancel-in-progress: false) hostage
+    # for GitHub's 360-min job default — that would block even an emergency hotfix. (#1412 review)
+    timeout-minutes: 20
     needs: test
     permissions:
       contents: read
@@ -104,6 +125,8 @@ jobs:
   build-and-push-frontend:
     name: Build & Push Frontend Image
     runs-on: ubuntu-latest
+    # Same starvation guard as build-and-push (see above): bound the serialized queue. (#1412 review)
+    timeout-minutes: 20
     needs: test
     permissions:
       contents: read
@@ -146,6 +169,10 @@ jobs:
   deploy:
     name: Deploy to Droplet
     runs-on: ubuntu-latest
+    # Exceeds the 30m appleboy/ssh-action command_timeout (below) plus checkout + SSH
+    # handshake overhead, so a hung deploy self-cancels instead of blockading the
+    # serialized deploy-production queue for GitHub's 360-min default. (#1412 review)
+    timeout-minutes: 40
     needs: [build-and-push, build-and-push-frontend]
     environment: production
     # #528-B: packages:read so the job's GITHUB_TOKEN can pull the images it just
