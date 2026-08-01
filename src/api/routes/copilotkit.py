@@ -3721,18 +3721,30 @@ async def _require_auth_for_copilotkit_execution(request: Request) -> Dict[str, 
     """Validate JWT for CopilotKit execution paths.
 
     Mirrors ``src.api.dependencies.auth.require_auth`` but callable
-    directly from inside ``copilotkit_custom_handler``. The public
-    ``/api/copilotkit`` + ``/info`` paths permit unauthenticated
-    DISCOVERY requests (empty body / ``{}`` / ``{"method":"info"}``);
-    this function gates EXECUTION request bodies (``agent/run``,
-    ``action/run``, ``agent/connect``, anything else) before they reach
-    the SDK handler.
+    directly from inside ``copilotkit_custom_handler``. It is invoked
+    from TWO sites in that handler, together covering every execution
+    surface:
+
+      * the POST-to-root branch (``path in ("", "info")``), where the
+        public ``/api/copilotkit`` + ``/info`` allowlist entries permit
+        unauthenticated DISCOVERY requests (empty body / ``{}`` /
+        ``{"method":"info"}``) — this gate runs only after the
+        discovery shapes have returned, so it covers execution BODIES
+        (``agent/run``, ``action/run``, ``agent/connect``); and
+      * the sub-path fallthrough (#1432), where execution/state URL
+        paths (``agent/{name}``, ``agent/{name}/state``,
+        ``action/{name}``, ``agents/execute``, ...) reach the SDK
+        handler — gated there before delegation so the "anything else
+        before the SDK handler" contract holds for those paths too.
 
     Closes #399 codex iter-0 H1+H2: path-based middleware allowlist
     alone is insufficient because the CopilotKit JSON-RPC protocol
     mixes discovery and execution under the same paths via the
     ``method`` field in the request body. Body-aware auth lives where
-    the body is already being inspected — inside the handler.
+    the body is already being inspected — inside the handler. #1432
+    extends the same in-handler gate to the ``agent/{name}`` fallthrough
+    (defense-in-depth behind the middleware allowlist, which already
+    marks those sub-paths non-public).
 
     Args:
         request: FastAPI request; ``Authorization`` header is read.
@@ -4010,6 +4022,34 @@ async def copilotkit_custom_handler(
         except Exception as e:
             logger.warning(f"[CopilotKit] Error parsing POST body: {e}")
             # Fall through to SDK handler on error
+
+    # #1432: sub-path execution/state endpoints (agent/{name},
+    # agent/{name}/state, action/{name}, agents/execute, actions/execute) reach
+    # the third-party SDK handler through THIS fallthrough — the POST-to-root
+    # gate above only covers ``path in ("", "info")``. The JWTAuthMiddleware
+    # allowlist already marks every such sub-path non-public (see
+    # ``src/api/middleware/auth_middleware.py`` PUBLIC_PATHS), but that
+    # middleware is the ONLY gate today; mirror the root's body-aware auth here
+    # so the handler itself enforces auth — defense-in-depth if the allowlist
+    # regresses or ``is_auth_enabled()`` is False (misconfig → middleware warns
+    # and passes through), and it makes
+    # ``_require_auth_for_copilotkit_execution``'s "anything else before the SDK
+    # handler" contract actually true. The only public discovery surfaces — GET
+    # "" / "info" (handled above) and the static GET /status route (served by
+    # the standalone router, never this handler) — do not reach here, so every
+    # non-OPTIONS request that does is execution- or state-shaped. OPTIONS (CORS
+    # preflight) is exempt, matching the middleware.
+    if method != "OPTIONS":
+        try:
+            await _require_auth_for_copilotkit_execution(request)
+        except AuthError as auth_exc:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Authentication required for CopilotKit execution endpoints",
+                    "detail": str(auth_exc.detail) if auth_exc.detail else str(auth_exc),
+                },
+            )
 
     # Build context for SDK handler (for non-root paths)
     try:
