@@ -68,6 +68,39 @@ async def test_conversation_falls_back_to_anon_when_unattributed():
     assert payload["user_id"] == ANONYMOUS_USER_ID
 
 
+@pytest.mark.asyncio
+async def test_conversation_falls_back_to_anon_on_owner_fk_failure():
+    """#1405 HIGH: if the real owner lacks a chatbot_user_profiles row the conversation
+    FK-fails; the fix must retry with the anon owner so the session still persists —
+    never the silent-drop failure this migration exists to kill."""
+    from src.api.routes import copilotkit
+
+    client = MagicMock()
+    tbl = client.table.return_value
+    tbl.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    ok_exec = MagicMock()
+    ok_exec.data = [{"session_id": "x"}]
+    # first insert (real owner) FK-fails; the anon retry succeeds
+    tbl.insert.return_value.execute.side_effect = [
+        Exception("insert or update violates foreign key constraint (23503)"),
+        ok_exec,
+    ]
+    repo = MagicMock()
+    repo.client = client
+
+    with (
+        patch.object(copilotkit, "get_attribution", return_value=LLMAttribution(user_id=_OWNER)),
+        patch.object(copilotkit, "_get_chatbot_conversation_repository", return_value=repo),
+    ):
+        ok = await copilotkit._ensure_conversation_exists("bare-thread")
+
+    assert ok is True  # session NOT silently dropped
+    attempts = tbl.insert.call_args_list
+    assert len(attempts) == 2
+    assert attempts[0][0][0]["user_id"] == _OWNER  # tried the real owner first
+    assert attempts[1][0][0]["user_id"] == ANONYMOUS_USER_ID  # fell back to anon
+
+
 def test_migration_123_inherits_owner_and_drops_generated_cast():
     """Migration 123 must stop casting split_part(session_id) on BOTH tables (the 22P02
     source) and inherit the owner from the parent conversation via a trigger."""

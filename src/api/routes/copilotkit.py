@@ -1649,17 +1649,18 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
         # Create new conversation for this session (use 'general' query_type from enum)
         # NOTE: Using direct synchronous Supabase call since supabase-py is synchronous
         logger.debug("_ensure_conversation_exists: Creating new conversation...")
-        try:
-            # #1405: attribute the conversation to the JWT-verified owner (stashed in
-            # the attribution contextvar by the auth gate). The anon sentinel is only a
-            # fallback for a genuinely unattributed request — never a fabricated id.
-            # chatbot_messages/chatbot_message_feedback.computed_user_id inherit this
-            # via migration 123's trigger, so message-owner == conversation-owner.
-            attr = get_attribution()
-            owner_id = (attr.user_id if attr else None) or _ANONYMOUS_USER_ID
+        # #1405: attribute the conversation to the JWT-verified owner (stashed in the
+        # attribution contextvar by the auth gate). The anon sentinel is only a fallback
+        # for a genuinely unattributed request — never a fabricated id.
+        # chatbot_messages/chatbot_message_feedback.computed_user_id inherit this via
+        # migration 123's trigger, so message-owner == conversation-owner.
+        attr = get_attribution()
+        owner_id = (attr.user_id if attr else None) or _ANONYMOUS_USER_ID
+
+        def _insert_conversation(uid: str) -> bool:
             conversation_data = {
                 "session_id": session_id,
-                "user_id": owner_id,
+                "user_id": uid,
                 "title": "CopilotKit Conversation",
                 "query_type": "general",
                 "metadata": {"source": "copilotkit", "created_automatically": True},
@@ -1668,18 +1669,35 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
                 conv_repo.client.table("chatbot_conversations").insert(conversation_data).execute()
             )
             logger.debug(f"_ensure_conversation_exists: create result data={result.data}")
-            if result.data:
+            return bool(result.data)
+
+        try:
+            if _insert_conversation(owner_id):
                 logger.info(
                     f"[CopilotKit] Created conversation for session_id={session_id[:20]}..."
                 )
                 return True
-            else:
-                logger.warning(
-                    f"[CopilotKit] Failed to create conversation for session_id={session_id}"
-                )
-                return False
+            logger.warning(
+                f"[CopilotKit] Failed to create conversation for session_id={session_id}"
+            )
+            return False
         except Exception as create_err:
-            logger.debug(f"_ensure_conversation_exists: Create error: {create_err}")
+            # #1405 HIGH: a real owner_id with no chatbot_user_profiles row FK-fails
+            # (23503). Never silently drop the whole session — the exact failure this
+            # migration fixes — so retry with the always-provisioned anon owner. Honest
+            # fallback attribution; the conversation (and its messages/feedback) persists.
+            if owner_id != _ANONYMOUS_USER_ID:
+                logger.warning(
+                    f"[CopilotKit] conversation create failed for owner={owner_id} "
+                    f"({create_err}); retrying as anon for session_id={session_id[:20]}..."
+                )
+                try:
+                    if _insert_conversation(_ANONYMOUS_USER_ID):
+                        return True
+                except Exception as retry_err:
+                    logger.debug(f"_ensure_conversation_exists: anon retry error: {retry_err}")
+            else:
+                logger.debug(f"_ensure_conversation_exists: Create error: {create_err}")
             return False
     except Exception as e:
         logger.error(f"[CopilotKit] Error ensuring conversation exists: {e}")
