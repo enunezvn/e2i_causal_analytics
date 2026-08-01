@@ -293,22 +293,42 @@ jobs:
               fi
             }
 
-            # #1431: probe GHCR for a commit's PUBLISHED app images. Returns 0 iff
-            # BOTH e2i-api (shared by api/worker_*/scheduler) AND e2i-frontend (the
-            # OOM-prone React/esbuild build #528-B pre-builds to keep OFF the droplet)
-            # have a manifest at that exact SHA tag. `docker manifest inspect` reads
-            # only the manifest (no layer pull) — cheap. Requires a prior GHCR
-            # `docker login` (the images are private). Any probe error (auth blip,
-            # network) is treated as "not built" and simply makes the walk consider an
-            # older ancestor or fall through — never a broken deploy: a false NEGATIVE
-            # costs a slightly older deploy that the skipped commit's own queued run
-            # supersedes; a false POSITIVE is still caught by the forward pull's
-            # `--build` fallback below. REGISTRY is not forwarded to the droplet
+            # Probe ONE image ref. 0 = manifest present. A DEFINITIVE "absent"
+            # (no such manifest / manifest unknown / not found) is trusted at once and
+            # NOT retried — that is the common case for a race's newest, not-yet-built
+            # commit, and retrying it would needlessly slow the walk (and the pathological
+            # nothing-built window). Any OTHER non-zero (auth blip, rate-limit, transient
+            # network) is retried ONCE after a short sleep, so a flake cannot push the
+            # walk past a good candidate. Captured in an `if <assign>` so the failing
+            # probe is set -e-exempt (never aborts the deploy). Error-string matching is
+            # a best effort: a wording change only degrades a definitive-absent to one
+            # needless retry — never an incorrect result (the #1431 downgrade floor and
+            # the forward pull's --build fallback both still protect correctness).
+            manifest_present() {
+              _ref="$1"
+              if _err=$(docker manifest inspect "$_ref" 2>&1 >/dev/null); then
+                return 0
+              fi
+              case "$_err" in
+                *"no such manifest"*|*"manifest unknown"*|*"not found"*|*"UNKNOWN"*) return 1 ;;
+              esac
+              sleep 3
+              docker manifest inspect "$_ref" >/dev/null 2>&1
+            }
+
+            # #1431: a commit's app images are PUBLISHED iff BOTH e2i-api (shared by
+            # api/worker_*/scheduler) AND e2i-frontend (the OOM-prone React/esbuild
+            # build #528-B pre-builds to keep OFF the droplet) have a manifest at that
+            # exact SHA tag. `docker manifest inspect` reads only the manifest (no layer
+            # pull) — cheap. Requires a prior GHCR `docker login` (images are private).
+            # A false NEGATIVE costs a slightly older deploy that the skipped commit's
+            # own queued run supersedes; a false POSITIVE is still caught by the forward
+            # pull's `--build` fallback below. REGISTRY is not forwarded to the droplet
             # (envs: IMAGE_OWNER,GHCR_USER,GHCR_TOKEN), so default it like the pull does.
             image_exists() {
               _sha="$1"
-              docker manifest inspect "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" >/dev/null 2>&1 \
-                && docker manifest inspect "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}" >/dev/null 2>&1
+              manifest_present "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" \
+                && manifest_present "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}"
             }
 
             # Given candidate SHAs on stdin (newest first), echo the FIRST whose images
@@ -356,21 +376,40 @@ jobs:
             # origin/main newest->oldest and deploy the newest ANCESTOR that ALREADY has
             # both published images. The skipped newer commit is deployed by its OWN
             # queued run (which builds its images first), so main still CONVERGES to the
-            # newest SHA — just never via a local OOM build. Bounded walk: in a race only
+            # newest SHA — just never via a local OOM build. Bounded walk (--topo-order
+            # so ancestry cannot be perturbed by commit-date/clock skew): in a race only
             # a handful of commits can be ahead of the last built one, so 30 is generous
-            # headroom without an unbounded registry-probe loop; the walk also stops at
-            # the first hit, normally origin/main HEAD (1 probe) or PREV_SHA (already
-            # deployed, so definitely built). If GHCR auth fails or no built ancestor is
-            # found in the window, fall back to the prior origin/main behavior (never
-            # WORSE than before — the pull's --build fallback still runs). NOTE: this
-            # rests on code-reasoning + review, NOT on a faithful reproduction of a live
-            # deploy race (which cannot be staged on the box); the SHA-selection core is
-            # exercised by a stubbed-probe dry-run in the PR.
+            # headroom without an unbounded registry-probe loop; the walk stops at the
+            # first hit, normally origin/main HEAD (1 probe). A DOWNGRADE FLOOR (below)
+            # then refuses any TARGET_SHA that is a strict ANCESTOR of the running
+            # PREV_SHA: PREV_SHA is NOT guaranteed to have a GHCR image (a prior deploy
+            # may have taken the local-build fallback onto a commit whose CI run was
+            # orphaned/cancelled under the concurrency group), so WITHOUT the floor the
+            # walk could skip past it and land on an older-but-built ancestor — silently
+            # deploying + migrating STRICTLY OLDER code. If GHCR auth fails, no built
+            # ancestor is found in the window, OR the only built ancestor would be a
+            # downgrade, fall back to the prior blind origin/main behavior (never WORSE
+            # than before — the pull's --build fallback still runs). NOTE: this rests on
+            # code-reasoning + review, NOT on a faithful reproduction of a live deploy
+            # race (which cannot be staged on the box); the SHA-selection core + the
+            # downgrade floor are exercised by a committed stubbed-probe dry-run
+            # (scripts/test_deploy_sha_selection.sh).
             export IMAGE_OWNER="$(echo "${IMAGE_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
             TARGET_SHA=""
             if [ -n "$IMAGE_OWNER" ] \
                && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1; then
-              TARGET_SHA=$(git rev-list origin/main | head -n 30 | select_built_sha || true)
+              TARGET_SHA=$(git rev-list --topo-order origin/main | head -n 30 | select_built_sha || true)
+            fi
+            # #1431 downgrade floor: never deploy code strictly OLDER than what is running.
+            # If the newest built ancestor is a strict ancestor of PREV_SHA (older), reject
+            # it and fall through to the blind origin/main path (today's behavior). The
+            # `!= PREV_SHA` guard keeps a same-SHA redeploy (not a downgrade) allowed; a
+            # NEWER TARGET_SHA (PREV_SHA is its ancestor) makes --is-ancestor return non-zero
+            # so the floor does not fire.
+            if [ -n "$TARGET_SHA" ] && [ "$TARGET_SHA" != "$PREV_SHA" ] \
+               && git merge-base --is-ancestor "$TARGET_SHA" "$PREV_SHA"; then
+              echo "==> WARN: newest built ancestor ${TARGET_SHA:0:7} is OLDER than the running ${PREV_SHA:0:7} — refusing to downgrade; using origin/main instead."
+              TARGET_SHA=""
             fi
             if [ -n "$TARGET_SHA" ]; then
               if [ "$TARGET_SHA" != "$ORIGIN_SHA" ]; then
