@@ -241,52 +241,36 @@ class TestSentenceBoundarySplitsMultipart:
 
 
 # ---------------------------------------------------------------------------
-# #1408 / #1409 — intent tie-break + compound-object residuals (post-#1400).
+# #1408 (partial) — predictive-model adjective exclusion (Lever A only).
 #
-# With PR #1400's PARALLEL over-trigger fixed, three residual defects it had
-# MASKED surfaced on the deterministic gold subset (these rows already collapse
-# to ONE dispatch above; the residual is WHICH agent / the last few that still
-# split):
+# SCOPE (2026-08-01 decision). Of the three post-#1400 residual levers, only the
+# bench-0221 fix ships: the `predict` lexeme must not fire on the "predictive
+# model" / "predictive analytics" ADJECTIVE (a model-MONITORING subject: ROC-AUC,
+# calibration, drift), so system_health / drift_check win those asks. The one
+# residual — "predictive model" + a genuine forecast — fails OPEN to the LLM
+# fallback, never a confident wrong route.
 #
-#   * #1408 — the intent tie-break picked the WRONG single agent. bench-0221's
-#     "predictive model" is a model-MONITORING subject (ROC-AUC, calibration →
-#     health_score), not a forecast (prediction_synthesizer); bench-0016's
-#     leading "Predict … most likely to increase … next quarter" is a
-#     likelihood FORECAST (prediction_synthesizer), not the incidental
-#     "segments" CATE co-match (heterogeneous_optimizer).
-#   * #1409 — compound-object experiment-design asks still split to PARALLEL: a
-#     digital-twin-simulation readout names its power-analysis OUTPUTS across
-#     two clauses ("expected lift AND sample size"; "projected performance gains
-#     AND the required sample size"), the effect-size clause co-fires
-#     `prediction`, and the clause gate counted two facets. Semantically it is
-#     ONE experiment_designer task.
+# The bench-0016 "likely"-family broadening (Lever B) and the #1409
+# compound-object collapse (Lever C) were EVALUATED, prototyped, and REVERTED:
+# adversarial review found both regress phrasings that `main` routes correctly
+# today into CONFIDENT misroutes that bypass the LLM safety net —
+#   * "likely to have caused/driven X" -> forecaster (should stay causal), and
+#   * a terse independent "forecast the uplift, and design a sample-size plan"
+#     -> a silently dropped forecast task.
+# bench-0016 and all of #1409 defer to the #1406 semantic classifier; both
+# issues stay OPEN. The two "guard" tests below pin the currently-correct `main`
+# behaviour so neither reverted lever can silently return.
 #
-# Guarded end-to-end by pattern_diff.py over the full 337 gold: +5 agent-exact,
-# 0 losses, 0 escalate-boundary crossings. Verbatim gold rows (bench-NNNN) —
-# behavioural pins, not phrase overfitting. The #1406 semantic classifier is
-# expected to subsume these lexical levers.
+# Guarded end-to-end by pattern_diff.py over the full 337 gold: +1 agent-exact
+# (bench-0221), 0 losses, 0 escalate-boundary crossings.
 # ---------------------------------------------------------------------------
 class TestIntentTieBreakResiduals1408:
-    @pytest.mark.parametrize(
-        "query,expected_agent",
-        [
-            # bench-0221: model-monitoring subject → health_score, not prediction.
-            (
-                "How well is our Kisqali predictive model performing in terms of "
-                "ROC-AUC and calibration metrics?",
-                "health_score",
-            ),
-            # bench-0016: leading forecast verb + likelihood → prediction_synthesizer,
-            # NOT the incidental "segments" CATE match.
-            (
-                "Predict which HCP segments are most likely to increase Fabhalta "
-                "prescriptions next quarter",
-                "prediction_synthesizer",
-            ),
-        ],
-    )
-    def test_tie_break_picks_gold_agent(self, query, expected_agent):
-        assert _classify_and_route(query) == [expected_agent]
+    def test_bench0221_predictive_model_routes_health_score(self):
+        # bench-0221: model-MONITORING subject -> health_score, not prediction.
+        assert _classify_and_route(
+            "How well is our Kisqali predictive model performing in terms of "
+            "ROC-AUC and calibration metrics?"
+        ) == ["health_score"]
 
     def test_predictive_model_adjective_suppressed_but_forecast_verb_fires(self):
         # The `predict` lexeme must NOT match the "predictive model" adjective
@@ -299,92 +283,61 @@ class TestIntentTieBreakResiduals1408:
     def test_prediction_model_noun_stays_a_forecast(self):
         # Lever A is scoped to the "predictive" ADJECTIVE only — the "prediction
         # model" NOUN is a live forecast subject and must still route prediction,
-        # not fail open. (Reviewer counterexample: a broader `ion model`
-        # exclusion silently dropped this genuine forecast to the LLM fallback.)
+        # not fail open. (A broader `ion model` exclusion silently dropped this
+        # genuine forecast to the LLM fallback.)
         assert _classify_and_route(
             "What does the prediction model say about Kisqali TRx for next quarter?"
         ) == ["prediction_synthesizer"]
 
     def test_predictive_model_plus_forecast_fails_open_not_confidently_wrong(self):
-        # ACCEPTED residual (reviewer MEDIUM): "predictive model" (adjective) + a
-        # genuine forecast cannot be disambiguated lexically from the bench-0221
-        # MONITORING ask, so prediction is suppressed and the query falls to the
-        # LLM fallback (primary "general", confidence below the 0.8 pattern-trust
-        # floor) — fails OPEN to the safety net, never a confident wrong route.
-        # The monitoring-vs-forecast split here is #1406's semantic job.
+        # ACCEPTED residual: "predictive model" (adjective) + a genuine forecast
+        # cannot be disambiguated lexically from the bench-0221 MONITORING ask, so
+        # prediction is suppressed and the query falls to the LLM fallback (primary
+        # "general", confidence below the 0.8 pattern-trust floor) — fails OPEN to
+        # the safety net, never a confident wrong route. The monitoring-vs-forecast
+        # split here is #1406's semantic job.
         intent = _classify("What does the predictive model say about Kisqali TRx next quarter?")
         assert intent["primary_intent"] == "general"
         assert intent["confidence"] < 0.8
 
+
+class TestRevertedLeverGuards:
+    """Pin the currently-correct `main` behaviour that Levers B and C would break,
+    so neither reverted lever can silently return without tripping a test."""
+
     def test_likely_cause_is_causal_not_prediction(self):
-        # Lever B negative (reviewer HIGH): bare "likely" must NOT fire prediction
-        # on causal-ATTRIBUTION phrasing. prediction outranks causal_effect in
-        # INTENT_PRIORITY, so an unanchored "likely" would WIN the tie and
-        # confidently misroute a "why did X drop" ask to prediction_synthesizer.
-        # The lever is anchored to "likely to <action>", so "likely cause" stays
-        # causal_effect -> causal_impact.
+        # Lever B guard: prediction outranks causal_effect in INTENT_PRIORITY, so a
+        # "likely"-family broadening would let a causal-ATTRIBUTION ask win the tie
+        # and confidently misroute to prediction_synthesizer. On `main` (no such
+        # broadening) "likely cause" stays causal_effect -> causal_impact.
         assert _classify_and_route(
             "What is the likely cause of the Kisqali TRx decline in the northeast?"
         ) == ["causal_impact"]
         assert _classify_and_route(
             "What is the most likely cause of the drop in conversion rate?"
         ) == ["causal_impact"]
-
-
-class TestCompoundObjectExperimentDesign1409:
-    @pytest.mark.parametrize(
-        "query",
-        [
-            # bench-0018 / bench-0200: "expected lift AND sample size".
-            "What did the digital twin simulation say about expected lift and sample size?",
-            "what did the digital twin sim say about expected lift and sample size??",
-            # bench-0199: "projected performance gains AND the required sample size".
-            "According to the digital twin simulation results, what were the projected "
-            "performance gains and the required sample size for statistical validity?",
-        ],
-    )
-    def test_compound_object_stays_single_experiment_designer(self, query):
-        assert _classify_and_route(query) == ["experiment_designer"]
+        # The adversarial case that specifically broke the `likely to` anchor.
+        assert _classify_and_route("What is likely to have caused the Kisqali TRx decline?") == [
+            "causal_impact"
+        ]
 
     @pytest.mark.parametrize(
         "query",
         [
-            # Reviewer HIGH: bare "forecast/predict TRx" + "design an experiment"
-            # is TWO independent tasks — the prediction signal is a free-standing
-            # forecast, NOT a power-analysis-output collocation — so the collapse
-            # must NOT fire and BOTH agents must dispatch.
+            # Independent forecast + design pairs must dispatch BOTH agents — a
+            # compound-object collapse would silently drop the forecast task.
             "Forecast next quarter Kisqali TRx, and separately, design an A/B test "
             "for the new copay assistance program.",
             "Predict Q4 TRx for Kisqali. Also, design an experiment testing the new rep messaging.",
-            # Reviewer HIGH (co-located adversarial): an "expected lift" output for
-            # one study and a "sample size" design for a DIFFERENT trial sit far
-            # apart (>30 chars, across a clause boundary), so the tight-window
-            # power-analysis-output anchor does NOT match — the pair stays parallel
-            # rather than dropping the forecast.
-            "What is the expected lift from the digital twin, and please also design "
-            "a sample size calculation for a totally unrelated adherence trial.",
+            # The terse phrasing that broke Lever C's tight-window anchor (effect
+            # + sample-size within 30 chars, but two genuinely independent tasks).
+            "Forecast the expected uplift, and design a sample size plan for the trial.",
         ],
     )
     def test_independent_forecast_and_design_not_collapsed(self, query):
+        # Lever C guard: without the compound-object collapse these stay parallel.
         agents = _classify_and_route(query)
         assert "prediction_synthesizer" in agents and "experiment_designer" in agents, (
             f"{query!r} wrongly collapsed to {agents}; an independent forecast task "
-            f"must not be dropped by the compound-object rule"
+            f"must not be dropped by a compound-object rule"
         )
-
-    def test_third_intent_pipeline_not_caught_by_compound_object_collapse(self):
-        # Scope guard: the collapse fires ONLY on the exact-two-set
-        # {experiment_design, prediction}. bench-0047 (gold tool_composer) has a
-        # THIRD strong intent → promotes to multi_faceted, untouched by the
-        # 2-set compound-object rule.
-        agents = _classify_and_route(
-            "Our Kisqali TRx dropped in the northeast last quarter while conversion "
-            "rates for Remibrutinib stayed flat, and I need to understand several "
-            "things: what actually caused the Kisqali decline, whether "
-            "biologic-experienced patient segments were disproportionately affected "
-            "compared to biologic-naive ones, what the models predict for both "
-            "brands next quarter, whether any data drift could be confounding these "
-            "reads, and finally what experiment we should run to test whether adding "
-            "rep capacity in the northeast would recover the trend."
-        )
-        assert agents == ["tool_composer"]
