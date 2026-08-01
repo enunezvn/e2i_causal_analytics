@@ -175,6 +175,29 @@ PARALLEL_INTENT_PAIRS: frozenset[frozenset[str]] = frozenset(
 )
 
 
+# #1409 — power-analysis OUTPUT collocation. A design/simulation READOUT asks
+# about the {expected effect size, required sample size} pair — the canonical
+# power-analysis outputs — as a compound object ("expected lift AND sample
+# size"; "projected performance gains AND the required sample size"). The
+# effect-size term co-fires the `prediction` pattern ("expected"/"projected"),
+# but it describes an experiment-design OUTPUT, not an independent forecast. The
+# TIGHT window (<=30 chars, no clause-terminator) between the effect-size noun
+# and "sample size" is what separates this single-task compound object from a
+# genuinely independent "forecast X, and separately design Y for an unrelated
+# trial" pair — whose effect-size and sample-size live in different clauses,
+# spanning far more than 30 chars. Matches EXACTLY the three gold readouts
+# (bench-0018/0199/0200) over the 337 gold; a bare "forecast/predict TRx" +
+# "design an experiment" pair does NOT match and stays parallel. Lexical stopgap
+# the #1406 semantic classifier is expected to subsume.
+_POWER_ANALYSIS_OUTPUT_RE = re.compile(
+    r"\b(?:expected|projected|estimated|anticipated|predicted|forecasted?)\s+"
+    r"(?:\w+\s+){0,3}?"
+    r"(?:lift|uplift|gains?|effects?|improvements?|performance|responses?|differences?)\b"
+    r"[^.?!;]{0,30}?\bsample[\s-]?size",
+    re.I,
+)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -224,20 +247,29 @@ class IntentClassifierNode:
             r"hypothesis.*test",
         ],
         "prediction": [
-            # #1408 (bench-0221): "predictive model" / "prediction model" /
-            # "predictive analytics" name a model-MONITORING subject (ROC-AUC,
-            # calibration, drift), not a forecast request — the adjective/
-            # noun-modifier use must NOT fire prediction, so system_health /
-            # drift_check win those asks. The forecast VERB/NOUN still fires
-            # ("predict which ...", "give me a prediction", "the prediction").
-            r"predict(?!ive\s+(?:model|analytic)|ion\s+model)|forecast|project",
+            # #1408 (bench-0221): "predictive model" / "predictive analytics"
+            # name a model-MONITORING subject (ROC-AUC, calibration, drift), not
+            # a forecast — the ADJECTIVE use must not fire prediction so
+            # system_health / drift_check win those asks. Scoped to the
+            # "predictive" adjective ONLY: "prediction model" stays a live
+            # forecast noun ("what does the prediction model say about TRx next
+            # quarter") — the monitoring-vs-forecast split for that noun is
+            # CONTEXT (performing/roc-auc vs next-quarter) only the #1406
+            # semantic classifier can judge, so suppressing it unconditionally
+            # would fail a genuine forecast. The one residual — "predictive
+            # model" + a genuine forecast — fails OPEN to the LLM fallback, not
+            # confidently wrong (pinned in TestIntentTieBreakResiduals1408). The
+            # forecast verb/noun still fires ("predict which ...", "prediction").
+            r"predict(?!ive\s+(?:model|analytic))|forecast|project",
             r"what will|expected",
-            # #1408 (bench-0016): "most likely to increase ... next quarter" is
-            # a likelihood/probability forecast; broaden the noun-only
-            # likelihood|probability to the adjective/adverb forms so a genuine
-            # ranking-by-likelihood ask scores prediction over an incidental
-            # segment co-match (blast radius = one gold row carries "likely").
-            r"likelihood|probability|likely|probable|probably",
+            # #1408 (bench-0016): "most likely TO increase ... next quarter" is a
+            # likelihood forecast. Anchor to "likely to <action>" — the
+            # forward-looking collocation — NOT bare "likely", which co-fires on
+            # causal ATTRIBUTION ("likely cause of the decline" must stay
+            # causal_effect, since prediction outranks causal_effect in
+            # INTENT_PRIORITY and would win the tie). Gold blast radius = the one
+            # row carrying "likely to increase".
+            r"likelihood|probability|likely\s+to",
         ],
         "resource_allocation": [
             r"(allocat|optimi|distribut).*(resource|budget|rep)",
@@ -471,22 +503,26 @@ class IntentClassifierNode:
         # into two agents (30 rows; PARALLEL precision 0.028). The clause count
         # is the structural gate the incidental co-matches cannot pass.
         n_intent_clauses = self._count_intent_bearing_clauses(query, strong_components)
-        # #1409 compound-object collapse: an experiment-design ask routinely
-        # describes its power-analysis OUTPUTS across separate clauses — the
-        # expected/projected effect size and the required sample size
-        # ("expected lift and sample size"; "projected performance gains and
-        # the required sample size for statistical validity"). The effect-size
-        # clause co-fires the `prediction` pattern ("expected"/"projected"), so
-        # the clause gate above counts two intent-bearing clauses — but they are
-        # two OBJECTS of ONE experiment-design task, not an independent forecast
-        # facet. When the ONLY strong intents are EXACTLY
-        # {experiment_design, prediction}, treat prediction as this incidental
-        # compound-object co-match and do NOT parallel-split. A genuine
-        # forecast+design PIPELINE carries a third intent / dependency marker and
-        # promotes to multi_faceted below (bench-0047/0259), so the exact-two-set
-        # test leaves those untouched. Lexical stopgap the #1406 semantic
+        # #1409 compound-object collapse: an experiment-design READOUT asks about
+        # its power-analysis OUTPUTS — the {expected effect size, required sample
+        # size} pair — as a compound object across two clauses ("expected lift
+        # and sample size"; "projected performance gains and the required sample
+        # size"). The effect-size clause co-fires the `prediction` pattern, so
+        # the clause gate above counts two facets, but they are two OBJECTS of
+        # ONE experiment-design task, not an independent forecast. The collapse
+        # is gated on TWO conditions so it cannot silently drop a genuine
+        # forecast task: (1) the ONLY strong intents are EXACTLY
+        # {experiment_design, prediction} — a third facet / dependency marker
+        # promotes to multi_faceted below (bench-0047/0259) — AND (2) the
+        # prediction signal is the tight power-analysis-output collocation
+        # (_POWER_ANALYSIS_OUTPUT_RE), NOT a free-standing forecast. A "forecast
+        # next quarter TRx, and separately design an experiment" pair fails
+        # condition (2) and stays parallel. Lexical stopgap the #1406 semantic
         # classifier is expected to subsume.
-        is_compound_object_pair = set(strong_components) == {"experiment_design", "prediction"}
+        is_compound_object_pair = (
+            set(strong_components) == {"experiment_design", "prediction"}
+            and _POWER_ANALYSIS_OUTPUT_RE.search(query) is not None
+        )
         requires_multi_agent = (
             len(secondary) > 0
             and scores.get(secondary[0], 0) > 0.8

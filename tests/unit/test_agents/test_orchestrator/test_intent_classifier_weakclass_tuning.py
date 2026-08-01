@@ -296,6 +296,40 @@ class TestIntentTieBreakResiduals1408:
         )
         assert _classify("Predict next quarter TRx for Kisqali")["primary_intent"] == "prediction"
 
+    def test_prediction_model_noun_stays_a_forecast(self):
+        # Lever A is scoped to the "predictive" ADJECTIVE only — the "prediction
+        # model" NOUN is a live forecast subject and must still route prediction,
+        # not fail open. (Reviewer counterexample: a broader `ion model`
+        # exclusion silently dropped this genuine forecast to the LLM fallback.)
+        assert _classify_and_route(
+            "What does the prediction model say about Kisqali TRx for next quarter?"
+        ) == ["prediction_synthesizer"]
+
+    def test_predictive_model_plus_forecast_fails_open_not_confidently_wrong(self):
+        # ACCEPTED residual (reviewer MEDIUM): "predictive model" (adjective) + a
+        # genuine forecast cannot be disambiguated lexically from the bench-0221
+        # MONITORING ask, so prediction is suppressed and the query falls to the
+        # LLM fallback (primary "general", confidence below the 0.8 pattern-trust
+        # floor) — fails OPEN to the safety net, never a confident wrong route.
+        # The monitoring-vs-forecast split here is #1406's semantic job.
+        intent = _classify("What does the predictive model say about Kisqali TRx next quarter?")
+        assert intent["primary_intent"] == "general"
+        assert intent["confidence"] < 0.8
+
+    def test_likely_cause_is_causal_not_prediction(self):
+        # Lever B negative (reviewer HIGH): bare "likely" must NOT fire prediction
+        # on causal-ATTRIBUTION phrasing. prediction outranks causal_effect in
+        # INTENT_PRIORITY, so an unanchored "likely" would WIN the tie and
+        # confidently misroute a "why did X drop" ask to prediction_synthesizer.
+        # The lever is anchored to "likely to <action>", so "likely cause" stays
+        # causal_effect -> causal_impact.
+        assert _classify_and_route(
+            "What is the likely cause of the Kisqali TRx decline in the northeast?"
+        ) == ["causal_impact"]
+        assert _classify_and_route(
+            "What is the most likely cause of the drop in conversion rate?"
+        ) == ["causal_impact"]
+
 
 class TestCompoundObjectExperimentDesign1409:
     @pytest.mark.parametrize(
@@ -311,6 +345,32 @@ class TestCompoundObjectExperimentDesign1409:
     )
     def test_compound_object_stays_single_experiment_designer(self, query):
         assert _classify_and_route(query) == ["experiment_designer"]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Reviewer HIGH: bare "forecast/predict TRx" + "design an experiment"
+            # is TWO independent tasks — the prediction signal is a free-standing
+            # forecast, NOT a power-analysis-output collocation — so the collapse
+            # must NOT fire and BOTH agents must dispatch.
+            "Forecast next quarter Kisqali TRx, and separately, design an A/B test "
+            "for the new copay assistance program.",
+            "Predict Q4 TRx for Kisqali. Also, design an experiment testing the new rep messaging.",
+            # Reviewer HIGH (co-located adversarial): an "expected lift" output for
+            # one study and a "sample size" design for a DIFFERENT trial sit far
+            # apart (>30 chars, across a clause boundary), so the tight-window
+            # power-analysis-output anchor does NOT match — the pair stays parallel
+            # rather than dropping the forecast.
+            "What is the expected lift from the digital twin, and please also design "
+            "a sample size calculation for a totally unrelated adherence trial.",
+        ],
+    )
+    def test_independent_forecast_and_design_not_collapsed(self, query):
+        agents = _classify_and_route(query)
+        assert "prediction_synthesizer" in agents and "experiment_designer" in agents, (
+            f"{query!r} wrongly collapsed to {agents}; an independent forecast task "
+            f"must not be dropped by the compound-object rule"
+        )
 
     def test_third_intent_pipeline_not_caught_by_compound_object_collapse(self):
         # Scope guard: the collapse fires ONLY on the exact-two-set
