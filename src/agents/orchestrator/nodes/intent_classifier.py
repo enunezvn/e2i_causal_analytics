@@ -176,27 +176,30 @@ PARALLEL_INTENT_PAIRS: frozenset[frozenset[str]] = frozenset(
 
 
 # #1409 — digital-twin simulation READOUT is a SINGLE experiment_designer task.
-# A query about a digital-twin simulation's outputs asks about the
-# {expected effect size, required sample size} pair as a compound object
-# ("what did the digital twin simulation say about expected lift and sample
-# size?"; "projected performance gains and the required sample size"). The
-# effect-size term co-fires the `prediction` pattern ("expected"/"projected"),
-# so the clause gate counts two facets — but a digital-twin pre-screen
-# (enable_twin_simulation) AND its power-analysis output (required sample size)
-# are BOTH explicit experiment_designer covers: one OBJECT, one task, not an
-# independent forecast.
+# A query ABOUT a digital-twin simulation's outputs asks for the {expected
+# effect size, required sample size} pair as a compound object ("what did the
+# digital twin simulation SAY about expected lift and sample size?"; "the
+# digital twin simulation RESULTS ... projected performance gains and the
+# required sample size"). The effect-size term co-fires the `prediction` pattern
+# ("expected"/"projected"), so the clause gate counts two facets — but a
+# digital-twin pre-screen AND its power-analysis output are BOTH explicit
+# experiment_designer covers: one OBJECT, one task, not an independent forecast.
 #
-# Anchored on the "digital twin" OBJECT specifically — NOT a generic
-# expected-effect/sample-size collocation. The reverted Lever C used that
-# collocation and proved it false-collapses a genuine independent
-# "forecast the uplift, and design a sample-size plan" pair (effect + sample
-# size within 30 chars but two separate tasks; guarded by
-# test_independent_forecast_and_design_not_collapsed). Keying on "digital twin"
-# is strictly narrower: none of those adversarial pairs name a digital twin, so
-# they stay parallel. Gold blast radius = EXACTLY the 3 readouts
-# (bench-0018/0199/0200); no other gold row's text contains "digital twin".
-# Lexical stopgap the #1406 semantic classifier is expected to subsume.
-_DIGITAL_TWIN_RE = re.compile(r"\bdigital\s+twin\b", re.I)
+# Gated on the READOUT SHAPE, not the bare "digital twin" object: a readout verb
+# (say/report/results/show/indicate/tell/reveal) must sit within 40 chars of
+# "digital twin". Keying on the object alone (the first cut) false-collapses a
+# genuine independent DIRECTIVE pair that merely USES a twin —
+# "Forecast NRx next quarter using the digital twin, and separately design an
+# A/B test ..." — dropping the forecast task (guarded by
+# test_independent_forecast_and_design_not_collapsed). Those imperative pairs
+# name no readout verb next to the twin, so they stay parallel. Matches EXACTLY
+# the 3 gold readouts (bench-0018/0199/0200) over the 337 gold. Lexical stopgap
+# the #1406 semantic classifier is expected to subsume.
+_DIGITAL_TWIN_READOUT_RE = re.compile(
+    r"\bdigital\s+twin\b[^.?!]{0,40}?"
+    r"\b(?:say|said|says|report(?:ed|s)?|results?|show(?:ed|s|n)?|indicat\w+|told|tell|reveal\w*)\b",
+    re.I,
+)
 
 
 def _get_opik_connector():
@@ -328,14 +331,20 @@ class IntentClassifierNode:
         "experiment_monitor": [
             r"(monitor|check|status).*(experiment|trial|a\/?b ?test)",
             r"sample ratio mismatch|\bsrm\b",
-            # #1408 (bench-0282): an "interim" readout/results/look is by
-            # definition a report on an IN-PROGRESS experiment — monitoring, not
-            # design. Broadened from the narrower "interim analysis": the same
-            # in-flight signal appears as "interim readout"/"interim results".
-            # experiment_monitor is the highest-priority intent, so this wins the
-            # tie over experiment_design's "run(ning)...test" co-match. Gold
-            # blast radius = the one row (no other gold text says "interim").
-            r"\binterim\b",
+            r"interim analysis",
+            # #1408 (bench-0282): an "interim readout/results/look" is a report on
+            # an IN-PROGRESS experiment — but ONLY when an experiment noun
+            # co-occurs. A bare `\binterim\b` (the first cut) over-fired and
+            # CONFIDENTLY misrouted non-experiment asks to experiment_monitor (the
+            # highest-priority intent, so it won the tie and skipped the LLM):
+            # "interim CFO's view", "interim FDA guidance", "interim head of
+            # oncology", and — a real regression of a correct row — "in the
+            # interim, what caused the TRx drop" (-> causal). DOMAIN-GATE it:
+            # require "interim" AND an experiment noun (either order). bench-0282
+            # "interim readout on the running ... speaker-program test" carries
+            # "test"; none of the misrouted probes carry an experiment noun. The
+            # narrower "interim analysis" above is preserved from origin/main.
+            r"(?=.*\binterim\b)(?=.*\b(?:experiments?|trials?|a\/?b ?tests?|tests?|enroll\w*)\b)",
             r"(active|running).*(experiments?|trials?)",
             r"experiments?.*(health|status|issues)",
         ],
@@ -343,16 +352,20 @@ class IntentClassifierNode:
         # (issue #288). Identity-checked in test_multi_faceted_ssot.py.
         "multi_faceted": MULTI_FACETED_PATTERNS,
         "cohort_definition": [
+            # Original construction objects keep the unbounded gap (unchanged
+            # from origin/main — no regression on existing cohort rows).
+            r"(define|create|build|construct).*(cohort|patient set|patient population)",
             # #1408 (bench-0177): "create a patient segment ... restricted to
-            # [age / diagnosis-date criteria]" is cohort CONSTRUCTION (a patient
-            # segment you CREATE with eligibility rules is a cohort), NOT the
-            # segment_analysis CATE ask. "patient segment" is added as a
-            # construction OBJECT here (gated by the create/build verb), distinct
-            # from the bare "segment" keyword that fires segment_analysis. The
-            # verb gate keeps analysis phrasings ("which patient segments have
-            # the worst adherence") out — those carry no construction verb. Gold
-            # blast radius = the one construct-verb row.
-            r"(define|create|build|construct).*(cohort|patient set|patient population|patient segment)",
+            # [age / diagnosis-date criteria]" is cohort CONSTRUCTION. "patient
+            # segment" is added as a SEPARATE, verb-ADJACENT object (<=3 filler
+            # words) — NOT on the unbounded `.*` above. A bounded gap stops a
+            # construction verb elsewhere in the sentence from reaching across to
+            # "patient segment" and misrouting a segment_analysis ask to cohort:
+            # "as we DEFINE our GTM strategy, which patient segments ..." and
+            # "can you BUILD a report ... how the patient segment responded ..."
+            # (both segment_analysis) stay out — the verb is >3 words from the
+            # object. bench-0177's "create a patient segment" is verb-adjacent.
+            r"(define|create|build|construct)\s+(?:\w+\s+){0,3}patient\s+segments?\b",
             r"cohort.*(definition|construction|criteria)",
             r"(inclusion|exclusion).*(criteria|rules)",
             r"patient.*eligib",
@@ -531,12 +544,14 @@ class IntentClassifierNode:
         # output). Gated on TWO conditions so it cannot drop a genuine forecast:
         # (1) the ONLY strong intents are EXACTLY {experiment_design, prediction}
         # — a third facet / dependency marker promotes to multi_faceted below —
-        # AND (2) the query names a "digital twin" (see _DIGITAL_TWIN_RE). A bare
-        # "forecast X, and design an experiment" pair fails (2) and stays
-        # parallel. Lexical stopgap the #1406 semantic classifier subsumes.
+        # AND (2) the query is a digital-twin READOUT (see
+        # _DIGITAL_TWIN_READOUT_RE — "digital twin" + a nearby readout verb). A
+        # "forecast X using the digital twin, and separately design an
+        # experiment" DIRECTIVE pair names no readout verb by the twin, fails (2),
+        # and stays parallel. Lexical stopgap the #1406 semantic classifier subsumes.
         is_compound_object_pair = (
             set(strong_components) == {"experiment_design", "prediction"}
-            and _DIGITAL_TWIN_RE.search(query) is not None
+            and _DIGITAL_TWIN_READOUT_RE.search(query) is not None
         )
         requires_multi_agent = (
             len(secondary) > 0
