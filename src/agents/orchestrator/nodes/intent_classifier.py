@@ -224,9 +224,20 @@ class IntentClassifierNode:
             r"hypothesis.*test",
         ],
         "prediction": [
-            r"predict|forecast|project",
+            # #1408 (bench-0221): "predictive model" / "prediction model" /
+            # "predictive analytics" name a model-MONITORING subject (ROC-AUC,
+            # calibration, drift), not a forecast request — the adjective/
+            # noun-modifier use must NOT fire prediction, so system_health /
+            # drift_check win those asks. The forecast VERB/NOUN still fires
+            # ("predict which ...", "give me a prediction", "the prediction").
+            r"predict(?!ive\s+(?:model|analytic)|ion\s+model)|forecast|project",
             r"what will|expected",
-            r"likelihood|probability",
+            # #1408 (bench-0016): "most likely to increase ... next quarter" is
+            # a likelihood/probability forecast; broaden the noun-only
+            # likelihood|probability to the adjective/adverb forms so a genuine
+            # ranking-by-likelihood ask scores prediction over an incidental
+            # segment co-match (blast radius = one gold row carries "likely").
+            r"likelihood|probability|likely|probable|probably",
         ],
         "resource_allocation": [
             r"(allocat|optimi|distribut).*(resource|budget|rep)",
@@ -460,8 +471,27 @@ class IntentClassifierNode:
         # into two agents (30 rows; PARALLEL precision 0.028). The clause count
         # is the structural gate the incidental co-matches cannot pass.
         n_intent_clauses = self._count_intent_bearing_clauses(query, strong_components)
+        # #1409 compound-object collapse: an experiment-design ask routinely
+        # describes its power-analysis OUTPUTS across separate clauses — the
+        # expected/projected effect size and the required sample size
+        # ("expected lift and sample size"; "projected performance gains and
+        # the required sample size for statistical validity"). The effect-size
+        # clause co-fires the `prediction` pattern ("expected"/"projected"), so
+        # the clause gate above counts two intent-bearing clauses — but they are
+        # two OBJECTS of ONE experiment-design task, not an independent forecast
+        # facet. When the ONLY strong intents are EXACTLY
+        # {experiment_design, prediction}, treat prediction as this incidental
+        # compound-object co-match and do NOT parallel-split. A genuine
+        # forecast+design PIPELINE carries a third intent / dependency marker and
+        # promotes to multi_faceted below (bench-0047/0259), so the exact-two-set
+        # test leaves those untouched. Lexical stopgap the #1406 semantic
+        # classifier is expected to subsume.
+        is_compound_object_pair = set(strong_components) == {"experiment_design", "prediction"}
         requires_multi_agent = (
-            len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8 and n_intent_clauses >= 2
+            len(secondary) > 0
+            and scores.get(secondary[0], 0) > 0.8
+            and n_intent_clauses >= 2
+            and not is_compound_object_pair
         )
 
         # Fix 2 (audit C2/C3) — sequential-pipeline promotion. A dependency

@@ -238,3 +238,93 @@ class TestSentenceBoundarySplitsMultipart:
             "Break down Remibrutinib NRx by patient segment where conversion is 15.5%."
         )
         assert len(agents) == 1
+
+
+# ---------------------------------------------------------------------------
+# #1408 / #1409 — intent tie-break + compound-object residuals (post-#1400).
+#
+# With PR #1400's PARALLEL over-trigger fixed, three residual defects it had
+# MASKED surfaced on the deterministic gold subset (these rows already collapse
+# to ONE dispatch above; the residual is WHICH agent / the last few that still
+# split):
+#
+#   * #1408 — the intent tie-break picked the WRONG single agent. bench-0221's
+#     "predictive model" is a model-MONITORING subject (ROC-AUC, calibration →
+#     health_score), not a forecast (prediction_synthesizer); bench-0016's
+#     leading "Predict … most likely to increase … next quarter" is a
+#     likelihood FORECAST (prediction_synthesizer), not the incidental
+#     "segments" CATE co-match (heterogeneous_optimizer).
+#   * #1409 — compound-object experiment-design asks still split to PARALLEL: a
+#     digital-twin-simulation readout names its power-analysis OUTPUTS across
+#     two clauses ("expected lift AND sample size"; "projected performance gains
+#     AND the required sample size"), the effect-size clause co-fires
+#     `prediction`, and the clause gate counted two facets. Semantically it is
+#     ONE experiment_designer task.
+#
+# Guarded end-to-end by pattern_diff.py over the full 337 gold: +5 agent-exact,
+# 0 losses, 0 escalate-boundary crossings. Verbatim gold rows (bench-NNNN) —
+# behavioural pins, not phrase overfitting. The #1406 semantic classifier is
+# expected to subsume these lexical levers.
+# ---------------------------------------------------------------------------
+class TestIntentTieBreakResiduals1408:
+    @pytest.mark.parametrize(
+        "query,expected_agent",
+        [
+            # bench-0221: model-monitoring subject → health_score, not prediction.
+            (
+                "How well is our Kisqali predictive model performing in terms of "
+                "ROC-AUC and calibration metrics?",
+                "health_score",
+            ),
+            # bench-0016: leading forecast verb + likelihood → prediction_synthesizer,
+            # NOT the incidental "segments" CATE match.
+            (
+                "Predict which HCP segments are most likely to increase Fabhalta "
+                "prescriptions next quarter",
+                "prediction_synthesizer",
+            ),
+        ],
+    )
+    def test_tie_break_picks_gold_agent(self, query, expected_agent):
+        assert _classify_and_route(query) == [expected_agent]
+
+    def test_predictive_model_adjective_suppressed_but_forecast_verb_fires(self):
+        # The `predict` lexeme must NOT match the "predictive model" adjective
+        # phrase (model monitoring), but MUST still fire on the forecast verb.
+        assert (
+            _classify("How is the predictive model performing?")["primary_intent"] != "prediction"
+        )
+        assert _classify("Predict next quarter TRx for Kisqali")["primary_intent"] == "prediction"
+
+
+class TestCompoundObjectExperimentDesign1409:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # bench-0018 / bench-0200: "expected lift AND sample size".
+            "What did the digital twin simulation say about expected lift and sample size?",
+            "what did the digital twin sim say about expected lift and sample size??",
+            # bench-0199: "projected performance gains AND the required sample size".
+            "According to the digital twin simulation results, what were the projected "
+            "performance gains and the required sample size for statistical validity?",
+        ],
+    )
+    def test_compound_object_stays_single_experiment_designer(self, query):
+        assert _classify_and_route(query) == ["experiment_designer"]
+
+    def test_third_intent_pipeline_not_caught_by_compound_object_collapse(self):
+        # Scope guard: the collapse fires ONLY on the exact-two-set
+        # {experiment_design, prediction}. bench-0047 (gold tool_composer) has a
+        # THIRD strong intent → promotes to multi_faceted, untouched by the
+        # 2-set compound-object rule.
+        agents = _classify_and_route(
+            "Our Kisqali TRx dropped in the northeast last quarter while conversion "
+            "rates for Remibrutinib stayed flat, and I need to understand several "
+            "things: what actually caused the Kisqali decline, whether "
+            "biologic-experienced patient segments were disproportionately affected "
+            "compared to biologic-naive ones, what the models predict for both "
+            "brands next quarter, whether any data drift could be confounding these "
+            "reads, and finally what experiment we should run to test whether adding "
+            "rep capacity in the northeast would recover the trend."
+        )
+        assert agents == ["tool_composer"]
