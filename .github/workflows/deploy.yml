@@ -43,6 +43,23 @@ on:
       - 'docker/bentoml/**'
   workflow_dispatch:
 
+# Serialize production deploys: at most one run of THIS workflow proceeds at a
+# time, and a newer run is QUEUED rather than cancelled. GitHub keeps a single
+# pending run per group and auto-supersedes older *pending* runs, so a batch
+# merge to main no longer produces a droplet-side deploy pileup — the shared box
+# gets git/compose collisions and a feast force-recreate SIGKILL (exit 137, NOT
+# kernel OOM) when concurrent SSH deploys race, all concluding `failure` while
+# the droplet nonetheless converges healthy (cf. #1412's 6-way 2026-07-31 pileup).
+# Whole-workflow (top-level) group, not job-level on `deploy`: it supersedes an
+# older pending run BEFORE it burns a test+build cycle, and folds workflow_dispatch
+# into the same lane so a manual deploy also serializes against a push deploy.
+# cancel-in-progress is deliberately false: cancelling a mid-flight SSH deploy is
+# exactly how a REAL partial state gets created. Newest queued SHA still wins — the
+# deploy script hard-resets to origin/main and the checkout-SHA tag mechanic converges.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/e2i-api
