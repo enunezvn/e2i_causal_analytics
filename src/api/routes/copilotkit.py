@@ -4039,7 +4039,16 @@ async def copilotkit_custom_handler(
     # the standalone router, never this handler) — do not reach here, so every
     # non-OPTIONS request that does is execution- or state-shaped. OPTIONS (CORS
     # preflight) is exempt, matching the middleware.
-    if method != "OPTIONS":
+    #
+    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good. A
+    # successful ``_require_auth_for_copilotkit_execution`` sets
+    # ``request.state.user`` (both the TESTING_MODE and JWT branches), while
+    # every failure raises BEFORE any assignment — so ``request.state.user is
+    # None`` reliably means "identity not yet established". Guarding on it
+    # avoids the duplicate Supabase round-trip when the root-POST branch already
+    # authenticated and then fell through here on a later exception, WITHOUT
+    # ever letting an unauthenticated sub-path pass: unknown identity ⇒ gate runs.
+    if method != "OPTIONS" and getattr(request.state, "user", None) is None:
         try:
             await _require_auth_for_copilotkit_execution(request)
         except AuthError as auth_exc:

@@ -126,3 +126,36 @@ async def test_authenticated_agent_name_still_reaches_execution_and_stashes_owne
     assert called["sdk"] is True, "authenticated agent/{name} must still reach execution"
     assert stashed["uid"] == _OWNER, "verified owner must be stashed for chat attribution"
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_known_good_identity_skips_duplicate_auth_roundtrip(monkeypatch):
+    """FAIL-SAFE guard: when identity is already established (``request.state.user``
+    set — e.g. the root-POST branch authenticated then fell through on a later
+    exception), the sub-path gate must NOT re-run the auth check (no duplicate
+    Supabase round-trip) yet must still reach execution. Unknown identity still
+    runs the gate (covered by the unauthenticated test above)."""
+    import src.api.routes.copilotkit as ck
+
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+
+    async def _verify_must_not_be_called(token):
+        raise AssertionError("re-auth ran despite known-good request.state.user")
+
+    monkeypatch.setattr(ck, "verify_supabase_token", _verify_must_not_be_called)
+
+    called = {"sdk": False}
+
+    async def _fake_sdk_handler(request, sdk):
+        called["sdk"] = True
+        return JSONResponse(content={"reached": "execution"})
+
+    monkeypatch.setattr(ck, "sdk_handler", _fake_sdk_handler)
+
+    request = _make_request("POST", "agent/default", headers={}, body=b'{"messages":[]}')
+    request.state.user = {"id": _OWNER}  # identity already established upstream
+
+    response = await ck.copilotkit_custom_handler(request, MagicMock(), path="agent/default")
+
+    assert called["sdk"] is True, "known-good identity must still reach execution"
+    assert response.status_code == 200
