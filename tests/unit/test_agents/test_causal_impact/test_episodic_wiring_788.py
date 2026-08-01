@@ -155,10 +155,13 @@ async def test_contribute_to_memory_falls_back_to_fresh_uuid_when_no_workflow_id
 # ---------------------------------------------------------------------------
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_contribute_to_memory_coerces_non_uuid_session_to_uuid():
-    """The canonical contribute_to_memory must coerce a non-UUID session_id to a valid
-    UUID before it reaches the ``episodic_memories.session_id uuid`` column — protecting
-    every caller, not just run() (codex-rescue Q5; the #787/#788 column trap)."""
+async def test_contribute_to_memory_forwards_raw_session_id_not_minted():
+    """contribute_to_memory forwards the RAW session_id downstream; it no longer mints
+    a fresh uuid for a non-uuid id (the #787/#788 mint is reversed). Coercion for the
+    uuid-typed ``episodic_memories.session_id`` column now happens at the writer
+    boundary (#1404) — a non-uuid becomes an honest NULL there and a composite
+    ``{user}~{session}`` id recovers the real session uuid, never a fabricated one that
+    destroys session linkage (#1403)."""
     from src.agents.causal_impact.memory_hooks import contribute_to_memory
 
     captured: dict = {}
@@ -186,8 +189,9 @@ async def test_contribute_to_memory_coerces_non_uuid_session_to_uuid():
         result=result, state=state, memory_hooks=_Hooks(), session_id="q-not-a-uuid"
     )
 
-    uuid.UUID(captured["session_id"])  # must be a valid UUID
-    assert captured["session_id"] != "q-not-a-uuid"
+    # Forwarded as-is — the writer coerces it to an honest NULL downstream; the hook
+    # no longer replaces a real id with a random uuid (#1403).
+    assert captured["session_id"] == "q-not-a-uuid"
 
 
 @pytest.mark.unit

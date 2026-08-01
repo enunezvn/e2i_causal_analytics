@@ -50,8 +50,24 @@ from src.memory.services.factories import (
     get_supabase_client,
     validate_embedding_dimensions,
 )
+from src.utils.session_ids import coerce_session_uuid
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_session_id(session_id: Optional[str]) -> Optional[str]:
+    """Coerce a chat session identifier for the uuid-typed ``session_id`` column.
+
+    ``episodic_memories.session_id`` is a ``uuid`` column, but chat surfaces pass
+    a composite ``{user_uuid}~{session_uuid}`` id (and a ``~bridge`` variant).
+    Recover the real session uuid via :func:`coerce_session_uuid`; return an
+    honest ``None`` (stored NULL) for anything that isn't a uuid — never a
+    fabricated random uuid, and never a raw non-uuid that would fail 22P02 and be
+    swallowed by the agent hooks' broad excepts (#1403/#1404). Idempotent: a
+    plain uuid is returned unchanged.
+    """
+    coerced = coerce_session_uuid(session_id)
+    return str(coerced) if coerced is not None else None
 
 
 # ============================================================================
@@ -604,7 +620,7 @@ async def insert_episodic_memory(
 
     record = {
         "memory_id": memory_id,
-        "session_id": session_id,
+        "session_id": _coerce_session_id(session_id),
         "cycle_id": cycle_id,
         "event_type": memory.event_type,
         "event_subtype": memory.event_subtype,
@@ -729,7 +745,7 @@ async def bulk_insert_episodic_memories(
 
         record = {
             "memory_id": memory_id,
-            "session_id": session_id,
+            "session_id": _coerce_session_id(session_id),
             "cycle_id": cycle_id,
             "event_type": memory.event_type,
             "event_subtype": memory.event_subtype,
