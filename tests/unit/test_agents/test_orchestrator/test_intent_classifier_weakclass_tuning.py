@@ -341,3 +341,148 @@ class TestRevertedLeverGuards:
             f"{query!r} wrongly collapsed to {agents}; an independent forecast task "
             f"must not be dropped by a compound-object rule"
         )
+
+
+# ---------------------------------------------------------------------------
+# #1409 — digital-twin simulation READOUT collapses to a single experiment_designer.
+#
+# A query about a digital-twin simulation's outputs asks about the {expected
+# effect size, required sample size} pair as a compound OBJECT. The effect-size
+# term ("expected lift"/"projected gains") co-fires `prediction`, so the clause
+# gate counts two facets and the pre-fix router split these into
+# [experiment_designer, prediction_synthesizer] — silently dispatching a forecast
+# agent. But a digital-twin pre-screen AND its power-analysis sample-size output
+# are BOTH explicit experiment_designer covers: one object, one task. The
+# collapse is gated on the READOUT SHAPE (see _DIGITAL_TWIN_READOUT_RE — "digital
+# twin" + a nearby readout verb say/report/results/show/indicate/tell/reveal),
+# NOT the bare "digital twin" object: an imperative DIRECTIVE that merely USES a
+# twin ("forecast NRx using the digital twin, and separately design ...") names
+# no readout verb by the twin and stays parallel. Rows are verbatim gold
+# (bench-0018/0199/0200), all gold_agents==experiment_designer.
+# ---------------------------------------------------------------------------
+class TestDigitalTwinReadoutCollapses1409:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # bench-0018
+            "What did the digital twin simulation say about expected lift and sample size?",
+            # bench-0199
+            "According to the digital twin simulation results, what were the projected "
+            "performance gains and the required sample size for statistical validity?",
+            # bench-0200 (typo variant)
+            "what did the digital twin sim say about expected lift and sample size??",
+        ],
+    )
+    def test_digital_twin_readout_single_experiment_designer(self, query):
+        assert _classify_and_route(query) == ["experiment_designer"], (
+            f"{query!r} should be one experiment_designer task (digital-twin readout), "
+            f"not split with a spurious prediction_synthesizer"
+        )
+
+    def test_collapse_anchored_on_readout_shape_not_bare_object(self):
+        # NEGATIVE guards: the collapse must fire ONLY on a digital-twin READOUT,
+        # never on a bare {experiment_design, prediction} pair. Both a pair with no
+        # twin AND — the reviewer's counterexample — an imperative DIRECTIVE that
+        # merely USES a digital twin for a forecast while separately directing a
+        # design must stay parallel so the forecast task is never dropped.
+        for query in (
+            # No digital-twin object at all.
+            "Forecast the expected lift, and design a sample size plan for the trial.",
+            # Digital twin PRESENT but as a forecasting TOOL in an independent
+            # directive pair — no readout verb next to the twin (reviewer MEDIUM).
+            "Forecast Kisqali NRx next quarter using the digital twin, and separately "
+            "design an A/B test for the speaker program.",
+        ):
+            agents = _classify_and_route(query)
+            assert "prediction_synthesizer" in agents and "experiment_designer" in agents, (
+                f"{query!r} wrongly collapsed to {agents}; only a digital-twin readout "
+                f"(twin + a nearby readout verb) may collapse, never an independent directive"
+            )
+
+
+# ---------------------------------------------------------------------------
+# #1408 — single-agent tie-break recoveries (subset shippable deterministically).
+#
+# Two rows where the incumbent picked the wrong single agent and a PRINCIPLED,
+# single-row-blast-radius keyword recovers gold without regressing any other gold
+# row or crossing the escalate boundary (proven end-to-end by pattern_diff.py):
+#   * bench-0177: "create a patient segment ... restricted to [age/diagnosis]" is
+#     cohort CONSTRUCTION -> cohort_profiler, not the segment_analysis CATE ask.
+#   * bench-0282: an "interim readout" is a report on an IN-PROGRESS experiment ->
+#     experiment_monitor, not experiment_designer (whose "run(ning)...test"
+#     co-match otherwise wins).
+# The larger segment_analysis->heterogeneous_optimizer cluster and the
+# experiment_monitor rows whose only clean anchor crosses the escalate boundary
+# (bench-0283/0285/0289) are deferred to the #1406 semantic classifier.
+# ---------------------------------------------------------------------------
+class TestSingleAgentTieBreakRecovered1408:
+    def test_create_patient_segment_is_cohort_construction(self):
+        # bench-0177
+        assert _classify_and_route(
+            "I need to create a patient segment for Remibrutinib indicated for chronic "
+            "spontaneous urticaria, restricted to individuals aged 18 and above who "
+            "received their initial diagnosis during the 2024 calendar year."
+        ) == ["cohort_profiler"]
+
+    def test_construction_verb_gate_keeps_analysis_asks_out(self):
+        # NEGATIVE guard: a bare "which patient segments ..." analysis ask carries
+        # no construction verb, so it must NOT be pulled into cohort_definition by
+        # the new "patient segment" object — it stays segment_analysis.
+        assert _classify_and_route(
+            "Which patient segments have the worst adherence for Fabhalta?"
+        ) == ["heterogeneous_optimizer"]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Reviewer probe: a construction verb EARLIER in the sentence (bound to
+            # its own object) must not reach across >3 words to "patient segments"
+            # and misroute a segment_analysis ask to cohort.
+            "As we define our GTM strategy, which patient segments have the lowest engagement?",
+            "Can you build a report showing how the patient segment responded to the "
+            "new copay program?",
+        ],
+    )
+    def test_far_construction_verb_does_not_pull_segment_to_cohort(self, query):
+        assert "cohort_profiler" not in _classify_and_route(query), (
+            f"{query!r} is a segment_analysis ask; a distant construction verb must "
+            f"not bound-jump to 'patient segment' and route it to cohort"
+        )
+
+    def test_interim_readout_routes_experiment_monitor(self):
+        # bench-0282
+        assert _classify_and_route(
+            "Give me an interim readout on the running Fabhalta speaker-program test"
+        ) == ["experiment_monitor"]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Reviewer HIGH: bare "interim" over-fired experiment_monitor (highest
+            # priority intent, so it won the tie and skipped the LLM) on
+            # non-experiment asks. Domain-gated now — no experiment noun co-occurs,
+            # so these must NOT route experiment_monitor.
+            "What's our interim CFO's view on Q3 pharma spend?",
+            "summarize the interim guidance from FDA on labeling for Fabhalta",
+            "Who is the interim head of oncology commercial?",
+        ],
+    )
+    def test_interim_without_experiment_noun_not_monitor(self, query):
+        assert "experiment_monitor" not in _classify_and_route(query), (
+            f"{query!r} names no experiment; 'interim' alone must not route to experiment_monitor"
+        )
+
+    def test_in_the_interim_causal_stays_causal(self):
+        # Reviewer HIGH: a real regression of a previously-correct row — the
+        # "in the interim" preamble must not steal a causal-attribution ask.
+        assert _classify_and_route(
+            "In the interim, can you tell me what caused the Kisqali TRx drop?"
+        ) == ["causal_impact"]
+
+    def test_design_ask_still_routes_experiment_designer(self):
+        # NEGATIVE guard: a genuine design ask (no "interim"/monitoring signal)
+        # still routes experiment_designer — the interim broadening did not steal
+        # the design class.
+        assert _classify_and_route(
+            "Design an experiment to measure whether speaker programs increase Fabhalta NRx"
+        ) == ["experiment_designer"]
