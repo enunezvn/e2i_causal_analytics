@@ -341,3 +341,96 @@ class TestRevertedLeverGuards:
             f"{query!r} wrongly collapsed to {agents}; an independent forecast task "
             f"must not be dropped by a compound-object rule"
         )
+
+
+# ---------------------------------------------------------------------------
+# #1409 — digital-twin simulation READOUT collapses to a single experiment_designer.
+#
+# A query about a digital-twin simulation's outputs asks about the {expected
+# effect size, required sample size} pair as a compound OBJECT. The effect-size
+# term ("expected lift"/"projected gains") co-fires `prediction`, so the clause
+# gate counts two facets and the pre-fix router split these into
+# [experiment_designer, prediction_synthesizer] — silently dispatching a forecast
+# agent. But a digital-twin pre-screen (enable_twin_simulation) AND its
+# power-analysis sample-size output are BOTH explicit experiment_designer covers:
+# one object, one task. The collapse is anchored on the "digital twin" object
+# (see _DIGITAL_TWIN_RE) — strictly narrower than the reverted Lever C
+# collocation, so the independent forecast+design pairs above stay parallel.
+# Rows are verbatim gold (bench-0018/0199/0200), all gold_agents==experiment_designer.
+# ---------------------------------------------------------------------------
+class TestDigitalTwinReadoutCollapses1409:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # bench-0018
+            "What did the digital twin simulation say about expected lift and sample size?",
+            # bench-0199
+            "According to the digital twin simulation results, what were the projected "
+            "performance gains and the required sample size for statistical validity?",
+            # bench-0200 (typo variant)
+            "what did the digital twin sim say about expected lift and sample size??",
+        ],
+    )
+    def test_digital_twin_readout_single_experiment_designer(self, query):
+        assert _classify_and_route(query) == ["experiment_designer"], (
+            f"{query!r} should be one experiment_designer task (digital-twin readout), "
+            f"not split with a spurious prediction_synthesizer"
+        )
+
+    def test_collapse_anchored_on_digital_twin_only(self):
+        # NEGATIVE guard: the SAME {experiment_design, prediction} facet pair
+        # WITHOUT a digital-twin object must NOT collapse — it stays parallel so a
+        # genuine independent forecast is never dropped. (Overlaps the Lever C
+        # guard above; kept explicit so the anchor cannot silently widen back to a
+        # bare effect/sample-size collocation.)
+        agents = _classify_and_route(
+            "Forecast the expected lift, and design a sample size plan for the trial."
+        )
+        assert "prediction_synthesizer" in agents and "experiment_designer" in agents
+
+
+# ---------------------------------------------------------------------------
+# #1408 — single-agent tie-break recoveries (subset shippable deterministically).
+#
+# Two rows where the incumbent picked the wrong single agent and a PRINCIPLED,
+# single-row-blast-radius keyword recovers gold without regressing any other gold
+# row or crossing the escalate boundary (proven end-to-end by pattern_diff.py):
+#   * bench-0177: "create a patient segment ... restricted to [age/diagnosis]" is
+#     cohort CONSTRUCTION -> cohort_profiler, not the segment_analysis CATE ask.
+#   * bench-0282: an "interim readout" is a report on an IN-PROGRESS experiment ->
+#     experiment_monitor, not experiment_designer (whose "run(ning)...test"
+#     co-match otherwise wins).
+# The larger segment_analysis->heterogeneous_optimizer cluster and the
+# experiment_monitor rows whose only clean anchor crosses the escalate boundary
+# (bench-0283/0285/0289) are deferred to the #1406 semantic classifier.
+# ---------------------------------------------------------------------------
+class TestSingleAgentTieBreakRecovered1408:
+    def test_create_patient_segment_is_cohort_construction(self):
+        # bench-0177
+        assert _classify_and_route(
+            "I need to create a patient segment for Remibrutinib indicated for chronic "
+            "spontaneous urticaria, restricted to individuals aged 18 and above who "
+            "received their initial diagnosis during the 2024 calendar year."
+        ) == ["cohort_profiler"]
+
+    def test_construction_verb_gate_keeps_analysis_asks_out(self):
+        # NEGATIVE guard: a bare "which patient segments ..." analysis ask carries
+        # no construction verb, so it must NOT be pulled into cohort_definition by
+        # the new "patient segment" object — it stays segment_analysis.
+        assert _classify_and_route(
+            "Which patient segments have the worst adherence for Fabhalta?"
+        ) == ["heterogeneous_optimizer"]
+
+    def test_interim_readout_routes_experiment_monitor(self):
+        # bench-0282
+        assert _classify_and_route(
+            "Give me an interim readout on the running Fabhalta speaker-program test"
+        ) == ["experiment_monitor"]
+
+    def test_design_ask_still_routes_experiment_designer(self):
+        # NEGATIVE guard: a genuine design ask (no "interim"/monitoring signal)
+        # still routes experiment_designer — the interim broadening did not steal
+        # the design class.
+        assert _classify_and_route(
+            "Design an experiment to measure whether speaker programs increase Fabhalta NRx"
+        ) == ["experiment_designer"]

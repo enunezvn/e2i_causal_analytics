@@ -175,6 +175,30 @@ PARALLEL_INTENT_PAIRS: frozenset[frozenset[str]] = frozenset(
 )
 
 
+# #1409 — digital-twin simulation READOUT is a SINGLE experiment_designer task.
+# A query about a digital-twin simulation's outputs asks about the
+# {expected effect size, required sample size} pair as a compound object
+# ("what did the digital twin simulation say about expected lift and sample
+# size?"; "projected performance gains and the required sample size"). The
+# effect-size term co-fires the `prediction` pattern ("expected"/"projected"),
+# so the clause gate counts two facets — but a digital-twin pre-screen
+# (enable_twin_simulation) AND its power-analysis output (required sample size)
+# are BOTH explicit experiment_designer covers: one OBJECT, one task, not an
+# independent forecast.
+#
+# Anchored on the "digital twin" OBJECT specifically — NOT a generic
+# expected-effect/sample-size collocation. The reverted Lever C used that
+# collocation and proved it false-collapses a genuine independent
+# "forecast the uplift, and design a sample-size plan" pair (effect + sample
+# size within 30 chars but two separate tasks; guarded by
+# test_independent_forecast_and_design_not_collapsed). Keying on "digital twin"
+# is strictly narrower: none of those adversarial pairs name a digital twin, so
+# they stay parallel. Gold blast radius = EXACTLY the 3 readouts
+# (bench-0018/0199/0200); no other gold row's text contains "digital twin".
+# Lexical stopgap the #1406 semantic classifier is expected to subsume.
+_DIGITAL_TWIN_RE = re.compile(r"\bdigital\s+twin\b", re.I)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -304,7 +328,14 @@ class IntentClassifierNode:
         "experiment_monitor": [
             r"(monitor|check|status).*(experiment|trial|a\/?b ?test)",
             r"sample ratio mismatch|\bsrm\b",
-            r"interim analysis",
+            # #1408 (bench-0282): an "interim" readout/results/look is by
+            # definition a report on an IN-PROGRESS experiment — monitoring, not
+            # design. Broadened from the narrower "interim analysis": the same
+            # in-flight signal appears as "interim readout"/"interim results".
+            # experiment_monitor is the highest-priority intent, so this wins the
+            # tie over experiment_design's "run(ning)...test" co-match. Gold
+            # blast radius = the one row (no other gold text says "interim").
+            r"\binterim\b",
             r"(active|running).*(experiments?|trials?)",
             r"experiments?.*(health|status|issues)",
         ],
@@ -312,7 +343,16 @@ class IntentClassifierNode:
         # (issue #288). Identity-checked in test_multi_faceted_ssot.py.
         "multi_faceted": MULTI_FACETED_PATTERNS,
         "cohort_definition": [
-            r"(define|create|build|construct).*(cohort|patient set|patient population)",
+            # #1408 (bench-0177): "create a patient segment ... restricted to
+            # [age / diagnosis-date criteria]" is cohort CONSTRUCTION (a patient
+            # segment you CREATE with eligibility rules is a cohort), NOT the
+            # segment_analysis CATE ask. "patient segment" is added as a
+            # construction OBJECT here (gated by the create/build verb), distinct
+            # from the bare "segment" keyword that fires segment_analysis. The
+            # verb gate keeps analysis phrasings ("which patient segments have
+            # the worst adherence") out — those carry no construction verb. Gold
+            # blast radius = the one construct-verb row.
+            r"(define|create|build|construct).*(cohort|patient set|patient population|patient segment)",
             r"cohort.*(definition|construction|criteria)",
             r"(inclusion|exclusion).*(criteria|rules)",
             r"patient.*eligib",
@@ -482,8 +522,27 @@ class IntentClassifierNode:
         # into two agents (30 rows; PARALLEL precision 0.028). The clause count
         # is the structural gate the incidental co-matches cannot pass.
         n_intent_clauses = self._count_intent_bearing_clauses(query, strong_components)
+        # #1409 compound-object collapse: a digital-twin simulation READOUT asks
+        # about its power-analysis outputs — the {expected effect size, required
+        # sample size} pair — across two clauses ("expected lift and sample
+        # size"). The effect-size clause co-fires `prediction`, so the clause
+        # gate counts two facets, but they are two OBJECTS of ONE
+        # experiment-design task (the digital-twin pre-screen + its sample-size
+        # output). Gated on TWO conditions so it cannot drop a genuine forecast:
+        # (1) the ONLY strong intents are EXACTLY {experiment_design, prediction}
+        # — a third facet / dependency marker promotes to multi_faceted below —
+        # AND (2) the query names a "digital twin" (see _DIGITAL_TWIN_RE). A bare
+        # "forecast X, and design an experiment" pair fails (2) and stays
+        # parallel. Lexical stopgap the #1406 semantic classifier subsumes.
+        is_compound_object_pair = (
+            set(strong_components) == {"experiment_design", "prediction"}
+            and _DIGITAL_TWIN_RE.search(query) is not None
+        )
         requires_multi_agent = (
-            len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8 and n_intent_clauses >= 2
+            len(secondary) > 0
+            and scores.get(secondary[0], 0) > 0.8
+            and n_intent_clauses >= 2
+            and not is_compound_object_pair
         )
 
         # Fix 2 (audit C2/C3) — sequential-pipeline promotion. A dependency
