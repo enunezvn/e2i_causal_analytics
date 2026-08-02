@@ -232,6 +232,60 @@ class TestPinConversation(TestChatbotConversationRepository):
         assert result["is_pinned"] is True
 
 
+class TestUpdateMetadata(TestChatbotConversationRepository):
+    """Tests for update_metadata method (#1407 multi-turn clarification home)."""
+
+    def _mock_update_chain(self, mock_client, returned_row):
+        """Wire table().update().eq().execute() and return the update MagicMock."""
+        mock_result = MagicMock()
+        mock_result.data = [returned_row]
+        mock_execute = AsyncMock(return_value=mock_result)
+        mock_update = MagicMock()
+        mock_update.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update = mock_update
+        return mock_update
+
+    @pytest.mark.asyncio
+    async def test_merges_patch_preserving_other_keys(self, repo, mock_client, sample_conversation):
+        """A patch merges into existing metadata without dropping other keys."""
+        existing = {**sample_conversation, "metadata": {"keep": 1}}
+        repo.get_by_session_id = AsyncMock(return_value=existing)
+        mock_update = self._mock_update_chain(mock_client, existing)
+
+        pending = {"original_query": "why did it drop?", "asked_at": "2026-08-02T00:00:00+00:00"}
+        await repo.update_metadata("user-123~uuid-456", {"pending_clarification": pending})
+
+        written = mock_update.call_args.args[0]["metadata"]
+        assert written == {"keep": 1, "pending_clarification": pending}
+
+    @pytest.mark.asyncio
+    async def test_none_value_pops_key(self, repo, mock_client, sample_conversation):
+        """A None value in the patch POPS that key (used to CLEAR pending)."""
+        existing = {
+            **sample_conversation,
+            "metadata": {"keep": 1, "pending_clarification": {"x": 1}},
+        }
+        repo.get_by_session_id = AsyncMock(return_value=existing)
+        mock_update = self._mock_update_chain(mock_client, existing)
+
+        await repo.update_metadata("user-123~uuid-456", {"pending_clarification": None})
+
+        written = mock_update.call_args.args[0]["metadata"]
+        assert written == {"keep": 1}
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_client(self):
+        repo = ChatbotConversationRepository(None)
+        result = await repo.update_metadata("s", {"a": 1})
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_conversation_missing(self, repo):
+        repo.get_by_session_id = AsyncMock(return_value=None)
+        result = await repo.update_metadata("missing", {"a": 1})
+        assert result is None
+
+
 class TestFactoryFunction:
     """Tests for factory function."""
 
