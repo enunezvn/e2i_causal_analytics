@@ -1188,11 +1188,17 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     # does not, so a fresh underspecified analytical ask after it still clarifies.
     if resumed:
         missing_slots: List[str] = []
+    elif not (CHATBOT_CLARIFY_ENABLED and intent in CLARIFY_INTENTS):
+        # Non-clarify intent (or flag off): never clarifies. Short-circuit BEFORE
+        # touching the vocab extractor — otherwise the referent check below would
+        # build it inline (~200ms) on the loop for the first greeting/help/general
+        # turn in a worker, the very #1406-class block _warm_query_extractor exists
+        # to avoid (the warm-up is gated on CLARIFY intent, so it wouldn't fire here).
+        missing_slots = []
     else:
-        if CHATBOT_CLARIFY_ENABLED and intent in CLARIFY_INTENTS:
-            # Build the vocab extractor off the event loop before the (sync) slot
-            # extraction below touches it (Rev2-M4).
-            await _warm_query_extractor()
+        # Build the vocab extractor off the event loop before the (sync) slot
+        # extraction below touches it (Rev2-M4).
+        await _warm_query_extractor()
         # messages[-1] is THIS turn's HumanMessage (added by init_node); exclude
         # it so the current query never counts as its own referent.
         prior_messages = messages[:-1] if messages else []

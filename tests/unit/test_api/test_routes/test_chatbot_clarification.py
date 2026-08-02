@@ -621,3 +621,55 @@ class TestRetrieveRagMergedQuery:
                 await retrieve_rag_node(state)
         spy.assert_awaited_once()
         assert spy.await_args.kwargs["query"] == "why did it drop? Kisqali TRx"
+
+
+class TestExtractorWarmGuardScope:
+    """Regression: the extractor-backed referent check must NOT run (and thus must
+    not lazily build the vocab extractor inline on the loop) for a non-clarify
+    current-turn intent — the warm-up is gated on CLARIFY intent, so an ungated
+    referent check on a greeting/help turn would reintroduce the #1406 loop-block."""
+
+    @pytest.mark.asyncio
+    async def test_non_clarify_intent_skips_referent_check(self):
+        state = create_initial_state("u1", "hello there", "r2", session_id="u1~s1")
+        # a prior analytical turn exists, but the CURRENT turn is a greeting
+        state["messages"] = [
+            HumanMessage(content="What is TRx for Kisqali?"),
+            AIMessage(content="It was 1234."),
+            HumanMessage(content="hello there"),
+        ]
+        referent_spy = MagicMock(return_value=False)
+        with patch.object(
+            g,
+            "classify_intent_dspy",
+            AsyncMock(return_value=(IntentType.GREETING, 0.9, "", "dspy")),
+        ):
+            with patch.object(g, "route_agent_hardcoded", return_value=("chatbot", [], 0.9, "")):
+                with patch.object(g, "_has_analytical_referent", referent_spy):
+                    result = await classify_intent_node(state)
+        # extractor-backed referent check never ran for a non-clarify intent
+        referent_spy.assert_not_called()
+        assert result["needs_clarification"] is False
+        assert result["missing_slots"] == []
+
+    @pytest.mark.asyncio
+    async def test_clarify_intent_warms_before_referent_check(self):
+        state = create_initial_state("u1", "why did it drop?", "r2", session_id="u1~s1")
+        state["messages"] = [HumanMessage(content="why did it drop?")]
+        warm_spy = AsyncMock()
+        referent_spy = MagicMock(return_value=False)
+        with patch.object(
+            g,
+            "classify_intent_dspy",
+            AsyncMock(return_value=(IntentType.CAUSAL_ANALYSIS, 0.9, "", "dspy")),
+        ):
+            with patch.object(
+                g, "route_agent_hardcoded", return_value=("causal-impact", [], 0.9, "")
+            ):
+                with patch.object(g, "_warm_query_extractor", warm_spy):
+                    with patch.object(g, "_has_analytical_referent", referent_spy):
+                        result = await classify_intent_node(state)
+        # warmed off-loop, THEN the referent check ran
+        warm_spy.assert_awaited_once()
+        referent_spy.assert_called_once()
+        assert result["needs_clarification"] is True
