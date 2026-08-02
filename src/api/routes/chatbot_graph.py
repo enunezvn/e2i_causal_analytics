@@ -857,9 +857,19 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
     # (b) re-stream the prior assistant message on turn 2+ (stream_chat emits every
     # AIMessage in a node's `messages` delta as new output text). We detect that
     # the checkpointer already provided history by the presence of any prior
-    # AIMessage in state, and only fall back to the DB load when it's absent
-    # (e.g. Redis down -> per-worker MemorySaver, which doesn't persist across
-    # requests). This keeps degraded-mode context while fixing the primary path.
+    # AIMessage in state, and only fall back to the DB load when it's absent.
+    #
+    # When does the fallback fire? Only when the checkpointer did not retain this
+    # thread's history: Redis unreachable at worker boot (get_langgraph_checkpointer
+    # -> a process-level MemorySaver, which persists within ONE worker but not
+    # across the 2 gunicorn workers or a restart), so turn 2 can land on a worker
+    # whose MemorySaver never saw turn 1. In that degraded case we reload DB history
+    # to preserve conversation context. The replay is still prevented there because
+    # stream_chat skips load_context's `messages` entirely (#1442, copilotkit.py).
+    # Known residual (degraded path only): init added THIS turn's HumanMessage
+    # before us, and operator.add appends, so the fallback history lands AFTER it
+    # (order [current_human, prior_human, prior_ai]) — a minor context-ordering
+    # quirk that does not occur on the primary checkpointer-up path.
     existing_messages = state.get("messages", [])
     checkpointer_has_history = any(isinstance(m, AIMessage) for m in existing_messages)
     history_messages: List[BaseMessage] = []

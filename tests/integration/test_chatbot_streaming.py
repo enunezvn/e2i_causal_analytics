@@ -57,6 +57,44 @@ class TestChatStreamEndpoint:
         assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
     @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_graph.stream_chatbot")
+    async def test_stream_does_not_replay_load_context_history(self, mock_stream_chatbot):
+        """#1442: stream_chat must NOT emit load_context's messages (restored
+        conversation HISTORY) as new text — only answer nodes' messages. Guards
+        the replay on the Redis-down/cross-worker fallback where load_context
+        still re-loads DB history into the `messages` channel."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        PRIOR = "PRIOR_ANSWER_kisqali_trx_1234"
+        NEW = "NEW_ANSWER_fabhalta_5678"
+
+        async def mock_stream(*args, **kwargs):
+            yield {"init": {"messages": [HumanMessage(content="What about Fabhalta?")]}}
+            # load_context restores prior turn as HISTORY (the replay source)
+            yield {
+                "load_context": {
+                    "messages": [
+                        HumanMessage(content="What is TRx for Kisqali?"),
+                        AIMessage(content=PRIOR),
+                    ]
+                }
+            }
+            # direct-LLM answer path: content ONLY in messages, no response_text
+            yield {"generate": {"messages": [AIMessage(content=NEW)], "agent_name": "chatbot"}}
+            yield {"finalize": {"streaming_complete": True}}
+
+        mock_stream_chatbot.return_value = mock_stream()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/api/copilotkit/chat/stream",
+                json={"query": "What about Fabhalta?", "user_id": "u1", "request_id": "r2"},
+            )
+        body = response.text
+        assert NEW in body, "the actual new answer must be streamed"
+        assert PRIOR not in body, "load_context history must NOT be re-streamed (#1442 replay)"
+
+    @pytest.mark.asyncio
     async def test_stream_requires_query(self):
         """Test that query is required."""
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

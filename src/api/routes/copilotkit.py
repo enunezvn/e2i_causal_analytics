@@ -4432,8 +4432,15 @@ async def _stream_chat_response(
                                 conversation_title = title
                                 yield f"data: {json.dumps({'type': 'conversation_title', 'data': title})}\n\n"
 
-                        # Handle messages (for AIMessage content)
-                        if "messages" in node_output:
+                        # Handle messages (for AIMessage content).
+                        # NEVER stream load_context's messages (#1442): that node
+                        # returns conversation HISTORY restored for downstream
+                        # context, not new output. Emitting its AIMessages here
+                        # re-streams the prior assistant turn (and mis-slices the
+                        # real answer). This guard closes the replay on every path
+                        # — including the Redis-down/cross-worker fallback where
+                        # load_context still re-loads DB history into `messages`.
+                        if "messages" in node_output and _node_name != "load_context":
                             for msg in node_output["messages"]:
                                 if isinstance(msg, AIMessage) and msg.content:
                                     # AIMessage.content is str | list of content
