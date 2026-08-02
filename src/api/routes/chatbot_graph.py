@@ -21,8 +21,8 @@ general) skip orchestrator and generate responses directly.
 import logging
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
@@ -95,6 +95,50 @@ ORCHESTRATOR_ROUTED_INTENTS = {
     IntentType.COHORT_DEFINITION,  # Route cohort queries through orchestrator to CohortConstructor
 }
 
+# =============================================================================
+# MULTI-TURN CLARIFICATION (#1407)
+# =============================================================================
+# An underspecified analytical ask (kpi_query/causal_analysis with NO brand AND
+# NO metric AND no prior referent) today runs a full ~13-17s orchestrator
+# dispatch that fails closed (#883). When this flag is on, such a turn instead
+# routes to a stateful ask-back (clarify_node) that names the missing slots and
+# asks 1-3 clarifying questions, persisting the pending state to
+# chatbot_conversations.metadata so the NEXT turn's answer resumes on a merged
+# query. Set CHATBOT_CLARIFY=false to force the legacy retrieve_rag path.
+CHATBOT_CLARIFY_ENABLED = os.getenv("CHATBOT_CLARIFY", "true").lower() == "true"
+
+# How long a pending clarification stays resumable. After this the next turn is
+# treated as a NEW question (the stale ask-back is dropped).
+CLARIFY_TTL_MINUTES = int(os.getenv("CHATBOT_CLARIFY_TTL_MINUTES", "30"))
+
+# Real tracked brands (lowercase). A query naming one of these has its brand
+# slot filled. Kept local (not derived from the 91KB vocab) so the slot check
+# is a cheap set membership.
+_REAL_BRANDS = {"remibrutinib", "fabhalta", "kisqali"}
+
+# Only these two intents can trigger a clarification ask-back. Greeting/help/
+# agent_status/general/search/recommendation/cohort never clarify — they either
+# need no slots or have their own handling.
+CLARIFY_INTENTS = {IntentType.KPI_QUERY, IntentType.CAUSAL_ANALYSIS}
+
+# First-token starters that mark a turn as a phrased question/directive rather
+# than a bare slot-answer fragment.
+_QUESTION_STARTERS = {
+    "what",
+    "why",
+    "how",
+    "when",
+    "where",
+    "who",
+    "which",
+    "show",
+    "list",
+    "compare",
+    "explain",
+    "give",
+    "tell",
+}
+
 logger = logging.getLogger(__name__)
 
 # Context variable for active trace context (accessible by nodes)
@@ -119,6 +163,7 @@ WORKFLOW_PROGRESS = {
     "orchestrator": (60, "Routing to specialized agents...", "processing"),
     "generate": (80, "Generating response...", "processing"),
     "tools": (70, "Executing tools...", "processing"),
+    "clarify": (90, "Requesting clarification...", "waiting"),
     "finalize": (100, "Complete", "complete"),
 }
 
@@ -387,6 +432,154 @@ def classify_intent(query: str) -> str:
 # =============================================================================
 
 
+# =============================================================================
+# CLARIFICATION SLOT DETECTION (#1407)
+# =============================================================================
+
+# Memoized E2IQueryExtractor. Instantiation loads config/domain_vocabulary.yaml
+# (~91KB) and parses it; build it once per process, not per request.
+_query_extractor: Optional[Any] = None
+
+
+def _get_query_extractor() -> Any:
+    """Lazily build and cache the E2IQueryExtractor for brand slot detection."""
+    global _query_extractor
+    if _query_extractor is None:
+        from pathlib import Path
+
+        from src.ontology.query_extractor import E2IQueryExtractor
+
+        vocab_path = "config/domain_vocabulary.yaml"
+        if not os.path.exists(vocab_path):
+            # CWD-robust fallback: resolve relative to the repo root
+            # (src/api/routes/chatbot_graph.py -> parents[3] is the repo root).
+            vocab_path = str(
+                Path(__file__).resolve().parents[3] / "config" / "domain_vocabulary.yaml"
+            )
+        _query_extractor = E2IQueryExtractor(vocab_path)
+    return _query_extractor
+
+
+def _slot_presence(query: str) -> Tuple[bool, bool]:
+    """Return ``(brand_present, metric_present)`` for a query.
+
+    Brand: the vocabulary brand extractor resolves to a REAL tracked brand
+    (Remibrutinib/Fabhalta/Kisqali; "competitor"/"other" don't count). Metric:
+    ``cognitive._extract_kpi_from_query`` finds a KPI keyword (TRx/NRx/conversion
+    /market share/adherence/churn). The vocabulary's own ``_extract_kpis`` is
+    DEAD for this purpose — the vocab has no ``kpis`` key, so it never matches
+    TRx/NRx — hence the cognitive extractor is used instead.
+    """
+    from src.api.routes.cognitive import _extract_kpi_from_query
+
+    ent = _get_query_extractor()._extract_brand(query)
+    brand_present = bool(ent and ent.text and ent.text.lower() in _REAL_BRANDS)
+    metric_present = _extract_kpi_from_query(query) is not None
+    return brand_present, metric_present
+
+
+def _detect_missing_slots(
+    query: str,
+    intent: Optional[str],
+    brand_context: Optional[str],
+    has_prior_referent: bool,
+) -> List[str]:
+    """Return the missing required slots for an underspecified analytical ask.
+
+    Returns ``["brand", "metric"]`` iff the query is a KPI/causal intent that
+    names NEITHER a real brand NOR a recognizable metric AND has no prior
+    conversational referent; otherwise ``[]`` (no clarification). This is the
+    predicate VERIFIED on the real extractors (#1407) — deliberately narrow so
+    it never over-abstains on already-specified queries.
+    """
+    if intent not in CLARIFY_INTENTS:
+        return []
+    if has_prior_referent:
+        return []
+
+    brand_present, metric_present = _slot_presence(query)
+    brand_present = brand_present or bool(brand_context and brand_context.lower() in _REAL_BRANDS)
+
+    if not brand_present and not metric_present:
+        return ["brand", "metric"]
+    return []
+
+
+def _is_slot_like(text: str) -> bool:
+    """True if ``text`` reads as a short slot-answer fragment, not a question.
+
+    A slot-like fragment is <= 6 words, not phrased as a question (no trailing
+    ``?``), and does not start with a question/directive word. Used to treat a
+    terse reply ("Kisqali", "the northeast", "last quarter") as an ANSWER to a
+    pending ask-back even when it names no brand/metric slot.
+    """
+    q = text.strip()
+    words = q.split()
+    if not words:
+        return False
+    first = words[0].lower().strip("?.,!")
+    return len(words) <= 6 and not q.endswith("?") and first not in _QUESTION_STARTERS
+
+
+def _classify_pending_followup(current_query: str, pending_intent: Optional[str]) -> str:
+    """Decide whether ``current_query`` ANSWERS a pending ask-back or PIVOTS away.
+
+    Returns ``"answer"`` (merge original + current, resume) or ``"pivot"`` (drop
+    the pending clarification, run the current turn fresh). Precedence:
+
+    1. A self-sufficient NEW question (BOTH slots present AND phrased as a
+       question/directive, not a bare fragment) -> pivot.
+    2. Otherwise, supplies >= 1 missing slot OR is a short slot-like fragment
+       (region/time/etc.) -> answer.
+    3. A fresh unrelated question that shares no slots -> pivot.
+    """
+    q = current_query.strip()
+    brand_present, metric_present = _slot_presence(q)
+    slot_like = _is_slot_like(q)
+
+    # Self-sufficient new question: both slots, phrased as a full question.
+    if brand_present and metric_present and not slot_like:
+        return "pivot"
+
+    # Partial slot answer, or a short slot-like context fragment.
+    if brand_present or metric_present or slot_like:
+        return "answer"
+
+    # Zero slots and not slot-like -> a fresh, unrelated question.
+    return "pivot"
+
+
+def _pending_is_expired(pending: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """True if a pending clarification is older than ``CLARIFY_TTL_MINUTES``.
+
+    A missing or malformed ``asked_at`` is treated as expired (fail-safe: drop
+    the stale ask-back rather than resume against an unknown age).
+    """
+    asked_at_raw = pending.get("asked_at")
+    if not asked_at_raw:
+        return True
+    try:
+        asked_at = datetime.fromisoformat(str(asked_at_raw))
+    except (ValueError, TypeError):
+        return True
+    if asked_at.tzinfo is None:
+        asked_at = asked_at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return (now - asked_at) > timedelta(minutes=CLARIFY_TTL_MINUTES)
+
+
+def route_after_classify(state: ChatbotState) -> Literal["clarify", "retrieve_rag"]:
+    """Conditional edge after classify_intent: ask-back vs. normal pipeline.
+
+    Routes to ``clarify`` iff the feature is enabled AND classify_intent flagged
+    missing slots; otherwise the normal ``retrieve_rag`` path (which reaches the
+    orchestrator + #883 fail-closed bridge).
+    """
+    if CHATBOT_CLARIFY_ENABLED and state.get("needs_clarification"):
+        return "clarify"
+    return "retrieve_rag"
+
+
 async def init_node(state: ChatbotState) -> Dict[str, Any]:
     """
     Initialize the conversation state.
@@ -480,8 +673,13 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
     previous_messages: List[Dict[str, Any]] = []
     conversation_title = None
 
+    # Multi-turn clarification RESUME state (#1407)
+    resumed_from_clarification = False
+    merged_query: Optional[str] = None
+
     async def _execute_load_context():
         nonlocal previous_messages, conversation_title, brand, region
+        nonlocal resumed_from_clarification, merged_query
         try:
             client = await get_async_supabase_client()
             if client:
@@ -497,6 +695,43 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
                         brand = conv.get("brand_context")
                     if not region:
                         region = conv.get("region_context")
+
+                    # ---- #1407 RESUME: is there a pending clarification? ----
+                    if CHATBOT_CLARIFY_ENABLED:
+                        pending = (conv.get("metadata") or {}).get("pending_clarification")
+                        if pending:
+                            current_query = state.get("query", "")
+                            if _pending_is_expired(pending):
+                                # Stale ask-back -> drop it, treat this as a NEW turn.
+                                await conv_repo.update_metadata(
+                                    session_id, {"pending_clarification": None}
+                                )
+                                logger.info(
+                                    "clarify: dropped expired pending clarification "
+                                    f"(session={session_id})"
+                                )
+                            else:
+                                decision = _classify_pending_followup(
+                                    current_query, pending.get("intent")
+                                )
+                                # Single-shot ask-back: always clear the pending
+                                # once we act on it (answer OR pivot).
+                                await conv_repo.update_metadata(
+                                    session_id, {"pending_clarification": None}
+                                )
+                                if decision == "answer":
+                                    original = pending.get("original_query", "")
+                                    merged_query = f"{original} {current_query}".strip()
+                                    resumed_from_clarification = True
+                                    logger.info(
+                                        "clarify: resumed from clarification on merged query "
+                                        f"(session={session_id})"
+                                    )
+                                else:
+                                    logger.info(
+                                        "clarify: pivot detected, dropped pending "
+                                        f"(session={session_id})"
+                                    )
 
                 # Get recent messages for context
                 recent_msgs = await msg_repo.get_recent_messages(session_id, count=10)
@@ -539,6 +774,9 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
         "conversation_title": conversation_title,
         "brand_context": brand,
         "region_context": region,
+        # Multi-turn clarification resume (#1407)
+        "resumed_from_clarification": resumed_from_clarification,
+        "merged_query": merged_query,
         "metadata": {
             **state.get("metadata", {}),
             "context_loaded": True,
@@ -761,6 +999,12 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     brand_context = state.get("brand_context", "") or ""
     messages = state.get("messages", [])
 
+    # #1407: a resumed turn classifies (and later dispatches) on the merged
+    # ask-back query + answer, not just this turn's terse reply.
+    merged_query = state.get("merged_query")
+    effective_query = merged_query or query
+    resumed = bool(state.get("resumed_from_clarification"))
+
     # Build conversation context from recent messages (last 3)
     conversation_context = ""
     if messages:
@@ -793,7 +1037,7 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
 
         # Use DSPy classifier with fallback to hardcoded
         intent, confidence, reasoning, classification_method = await classify_intent_dspy(
-            query=query,
+            query=effective_query,
             conversation_context=conversation_context,
             brand_context=brand_context,
             collect_signal=True,  # Collect training signals for optimization
@@ -805,7 +1049,7 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
         # Route to specialized agent based on query and intent
         routed_agent, secondary_agents, routing_confidence, routing_rationale = (
             route_agent_hardcoded(
-                query=query,
+                query=effective_query,
                 intent=intent,
             )
         )
@@ -826,6 +1070,27 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     else:
         await _execute_classify()
 
+    # ---- #1407: detect an underspecified analytical ask ----
+    # A resumed turn HARD-suppresses re-detection: once the user has answered a
+    # pending ask-back, we proceed on the merged query even if a slot is still
+    # missing (the orchestrator then fails closed per #883 — no clarify loop).
+    #
+    # has_prior_referent must NOT be `bool(conversation_context)`: init_node
+    # adds THIS turn's HumanMessage before classify runs, so that string is
+    # non-empty on turn 1 and would suppress every clarification. A prior
+    # *assistant* turn (or a second human turn) is the real signal that a
+    # pronoun like "it"/"that" has an antecedent worth trusting.
+    if resumed:
+        missing_slots: List[str] = []
+    else:
+        human_turns = sum(1 for m in messages if isinstance(m, HumanMessage))
+        has_prior_ai = any(isinstance(m, AIMessage) for m in messages)
+        has_prior_referent = has_prior_ai or human_turns > 1
+        missing_slots = _detect_missing_slots(
+            effective_query, intent, brand_context, has_prior_referent
+        )
+    needs_clarification = bool(missing_slots)
+
     # Build progress update with custom step showing detected intent
     custom_step = f"Intent: {intent}" if intent else None
     progress = get_progress_update(
@@ -843,6 +1108,9 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
         "secondary_agents": secondary_agents,
         "routing_confidence": routing_confidence,
         "routing_rationale": routing_rationale,
+        # Multi-turn clarification (#1407)
+        "needs_clarification": needs_clarification,
+        "missing_slots": missing_slots,
         **progress,
     }
 
@@ -933,7 +1201,8 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
     and the chatbot generates responses directly via generate_node.
     """
     intent = state.get("intent")
-    query = state.get("query", "")
+    # #1407: a resumed turn dispatches on the merged ask-back query + answer.
+    query = state.get("merged_query") or state.get("query", "")
     session_id = state.get("session_id", "")
     user_id = state.get("user_id", "")
     rag_context = state.get("rag_context", [])
@@ -1404,6 +1673,118 @@ def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
         "messages": [AIMessage(content=response_text)],
         "response_text": response_text,
         "agent_name": routed_agent,
+    }
+
+
+async def clarify_node(state: ChatbotState) -> Dict[str, Any]:
+    """Generate a stateful multi-turn clarification ask-back (#1407).
+
+    Reached only when classify_intent flagged an underspecified KPI/causal ask
+    (no brand, no metric, no prior referent). Produces 1-3 clarifying questions
+    via ``AMBIGUITY_RESOLUTION_PROMPT`` (LLM), falling back on ANY LLM failure to
+    the honest canned per-intent string from ``_generate_fallback_response`` — it
+    NEVER fabricates analytical content. Persists the pending clarification to
+    ``chatbot_conversations.metadata`` (keyed on session) so the next turn's
+    answer can resume, then routes to finalize.
+    """
+    query = state.get("query", "")
+    intent = state.get("intent")
+    session_id = state.get("session_id", "") or ""
+    missing = list(state.get("missing_slots") or ["brand", "metric"])
+    trace_ctx = _active_trace_context.get()
+
+    slot_phrase = " and ".join(missing) if missing else "brand and metric"
+    honest_intro = (
+        "I want to make sure I analyze the right thing — your question doesn't yet "
+        f"specify the {slot_phrase}, so running an analysis now could give a "
+        "misleading answer."
+    )
+
+    llm_questions: List[str] = []
+
+    async def _generate_questions():
+        nonlocal llm_questions
+        try:
+            import json
+            import re
+
+            from src.agents.orchestrator.classifier.prompts import AMBIGUITY_RESOLUTION_PROMPT
+
+            prompt = AMBIGUITY_RESOLUTION_PROMPT.format(
+                query=query,
+                domain_scores=f"(missing slots: {', '.join(missing)})",
+            )
+            llm = get_chat_llm(model_tier="standard", max_tokens=512, temperature=0.3)
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You generate short clarifying questions for an "
+                            "underspecified pharmaceutical analytics query. Return "
+                            "ONLY the requested JSON."
+                        )
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            content = normalize_llm_content(response.content)
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                raw = data.get("clarifying_questions") or []
+                llm_questions = [str(q).strip() for q in raw if str(q).strip()][:3]
+        except Exception as e:
+            logger.warning(f"clarify_node LLM ask-back failed, using canned fallback: {e}")
+            llm_questions = []
+
+    if trace_ctx:
+        async with trace_ctx.trace_node("clarify"):
+            await _generate_questions()
+    else:
+        await _generate_questions()
+
+    # Build the ask-back text. LLM questions -> honest intro + bulleted asks.
+    # No usable questions -> the canned per-intent prompt (already an honest ask).
+    if llm_questions:
+        questions = llm_questions
+        lines = [honest_intro, "", "To point me to the right data, could you tell me:"]
+        lines += [f"- {q}" for q in questions]
+        response_text = "\n".join(lines)
+    else:
+        canned = _generate_fallback_response(state)["response_text"]
+        questions = [canned]
+        response_text = canned
+
+    # Persist the pending clarification so the next turn can resume. A DB error
+    # here must NOT drop the ask-back — the user still needs the question.
+    pending = {
+        "original_query": query,
+        "intent": intent,
+        "missing_slots": missing,
+        "clarifying_questions": questions,
+        "asked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        client = await get_async_supabase_client()
+        if client:
+            conv_repo = get_chatbot_conversation_repository(client)
+            await conv_repo.update_metadata(session_id, {"pending_clarification": pending})
+    except Exception as e:
+        logger.warning(f"clarify_node failed to persist pending clarification: {e}")
+
+    progress = get_progress_update(
+        "clarify",
+        current_steps=state.get("progress_steps", []),
+        custom_step="Requesting clarification...",
+    )
+
+    return {
+        "messages": [AIMessage(content=response_text)],
+        "response_text": response_text,
+        "agent_name": "clarifier",
+        "clarifying_questions": questions,
+        "needs_clarification": True,
+        **progress,
     }
 
 
@@ -1962,6 +2343,7 @@ def create_e2i_chatbot_graph() -> Any:
     workflow.add_node(
         "orchestrator", orchestrator_node
     )  # Routes complex queries to specialized agents
+    workflow.add_node("clarify", clarify_node)  # #1407 multi-turn ask-back
     workflow.add_node("generate", generate_node)
     workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("finalize", finalize_node)
@@ -1972,7 +2354,18 @@ def create_e2i_chatbot_graph() -> Any:
     # Add edges
     workflow.add_edge("init", "load_context")
     workflow.add_edge("load_context", "classify_intent")
-    workflow.add_edge("classify_intent", "retrieve_rag")
+    # #1407: an underspecified analytical ask routes to the clarify ask-back
+    # (which persists pending state + ends at finalize) instead of the full
+    # retrieve_rag -> orchestrator dispatch that fails closed (#883).
+    workflow.add_conditional_edges(
+        "classify_intent",
+        route_after_classify,
+        {
+            "clarify": "clarify",
+            "retrieve_rag": "retrieve_rag",
+        },
+    )
+    workflow.add_edge("clarify", "finalize")
     workflow.add_edge(
         "retrieve_rag", "orchestrator"
     )  # Route through orchestrator for potential agent dispatch
