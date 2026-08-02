@@ -292,6 +292,55 @@ class ChatbotConversationRepository(BaseRepository):
 
         return self._to_model(result.data[0]) if result.data else None
 
+    async def update_metadata(
+        self,
+        session_id: str,
+        patch: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Merge ``patch`` into the conversation's ``metadata`` jsonb.
+
+        Read-merge-write, mirroring :meth:`update_tools_used`: reads the current
+        ``metadata``, applies ``patch`` on top (``{**existing, **patch}``), and
+        writes the result back. A ``None`` VALUE in ``patch`` POPS that key from
+        ``metadata`` (used to CLEAR a pending clarification, #1407) rather than
+        storing a JSON ``null``.
+
+        Note: this is a client-side read-merge-write, so two concurrent turns on
+        the SAME session could race (last-writer-wins on the whole ``metadata``
+        blob). Chat turns on one session are effectively serial (one in-flight
+        request per conversation), so this is acceptable here; a fully atomic
+        server-side ``jsonb ||`` merge would require an RPC.
+
+        Args:
+            session_id: Session identifier
+            patch: Keys to merge; a ``None`` value pops that key.
+
+        Returns:
+            Updated conversation or None
+        """
+        if not self.client:
+            return None
+
+        conv = await self.get_by_session_id(session_id)
+        if not conv:
+            return None
+
+        metadata = dict(conv.get("metadata") or {})
+        for key, value in patch.items():
+            if value is None:
+                metadata.pop(key, None)
+            else:
+                metadata[key] = value
+
+        result = await (
+            self.client.table(self.table_name)
+            .update({"metadata": metadata})
+            .eq("session_id", session_id)
+            .execute()
+        )
+
+        return self._to_model(result.data[0]) if result.data else None
+
     async def get_by_brand(
         self,
         brand: str,

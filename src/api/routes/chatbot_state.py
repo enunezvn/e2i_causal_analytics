@@ -107,6 +107,18 @@ class ChatbotState(TypedDict, total=False):
     synthesis_method: Optional[str]  # "dspy" or "hardcoded"
     follow_up_suggestions: List[str]  # Suggested follow-up questions
 
+    # Multi-turn clarification (#1407). An underspecified analytical ask
+    # (kpi_query/causal_analysis with no brand, no metric, no prior referent)
+    # routes to a stateful ask-back instead of a fail-closed orchestrator
+    # dispatch. Pending state persists in chatbot_conversations.metadata; these
+    # fields are the per-turn working copy (total=False, no reducers).
+    needs_clarification: bool  # classify_intent detected missing required slots
+    missing_slots: List[str]  # e.g. ["brand", "metric"]
+    pending_clarification: Optional[Dict[str, Any]]  # the ask-back awaiting an answer
+    clarifying_questions: List[str]  # questions surfaced to the user this turn
+    resumed_from_clarification: bool  # this turn answered a prior ask-back
+    merged_query: Optional[str]  # original ask-back query + this turn's answer
+
     # Conversation metadata
     conversation_title: Optional[str]
     agent_name: Optional[str]
@@ -242,6 +254,13 @@ def create_initial_state(
         evidence_citations=[],
         synthesis_method=None,
         follow_up_suggestions=[],
+        # Multi-turn clarification (#1407)
+        needs_clarification=False,
+        missing_slots=[],
+        pending_clarification=None,
+        clarifying_questions=[],
+        resumed_from_clarification=False,
+        merged_query=None,
         conversation_title=None,
         agent_name=None,
         agent_tier=None,
