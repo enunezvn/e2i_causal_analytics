@@ -53,7 +53,10 @@ export interface E2IChatSidebarProps {
   defaultOpen?: boolean;
   /** Position of the sidebar */
   position?: 'left' | 'right';
-  /** Default width of the sidebar (px value; the user can drag-resize from there) */
+  /**
+   * Default width of the sidebar (px value; the user can drag-resize from there).
+   * See the default below for why it is 480px rather than a rounder 400px.
+   */
   width?: string;
   /** Show agent status panel */
   showAgentStatus?: boolean;
@@ -290,7 +293,18 @@ function ConversationSuggestions({
 export function E2IChatSidebar({
   defaultOpen = false,
   position = 'right',
-  width = '400px',
+  // 480px, not 400px, so a markdown table fits without horizontal scrolling.
+  // The panel loses ~68px to chrome before markdown gets any width (the
+  // messages list's own scrollbar, .copilotKitMessagesContainer's 24px side
+  // padding, and the assistant bubble's 12px right padding), so the usable
+  // column is much narrower than the panel. Measured against the 5-column
+  // region x metric table the chat actually emits: 400px left 332px of column
+  // against 377px of table (the ROI column sat off-screen), 460px was the exact
+  // break-even with zero slack, and 480px gives 412px — enough for the table to
+  // render at its natural 408px width. Overriding this only changes where the
+  // drag starts; the panel is still resizable from 320px and the width the user
+  // drags to persists in the UI store.
+  width = '480px',
   showAgentStatus = true,
   className,
 }: E2IChatSidebarProps) {
@@ -324,7 +338,7 @@ export function E2IChatSidebar({
     isDragging,
     handleProps,
   } = useResizablePanel({
-    defaultWidth: Number.parseInt(width, 10) || 400,
+    defaultWidth: Number.parseInt(width, 10) || 480,
     minWidth: 320,
     edge: position === 'right' ? 'left' : 'right',
     persistedWidth: chatPanelWidth,

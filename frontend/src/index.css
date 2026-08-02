@@ -498,3 +498,60 @@ html.dark {
 .copilotKitChat .copilotKitMessages {
   min-height: 0;
 }
+
+/* ============================================
+   CopilotKit Markdown Tables
+   ============================================ */
+
+/* GFM tables reach the DOM as bare <table>/<thead>/<th>/<td>. CopilotKit's
+   <Markdown> does enable remark-gfm, so the assistant's pipe tables parse into
+   real table elements — but its component map classes only a, code, h1-h6, p,
+   pre, blockquote, ul and li, so the table tags arrive without a class, and its
+   stylesheet carries no table rules at all. Nothing else fills the gap:
+   @tailwindcss/typography is not installed, so there is no `prose` fallback,
+   and Tailwind v4's Preflight actively removes what the UA stylesheet would
+   have supplied — `*, ::before, ::after { border: 0 solid }` zeroes every
+   border width and `table { border-collapse: collapse }` drops the default
+   border-spacing. Cells were left with 1px of UA padding and no rules between
+   them, so a region x metric table rendered as one run-on wall of text with no
+   visible column boundaries.
+
+   Scoped to .copilotKitMarkdown so app tables (styled with Tailwind utilities)
+   are untouched. Colours go through the theme tokens, which re-resolve when
+   ThemeManager toggles .dark on <html>, so one set of rules covers both modes. */
+
+.copilotKitMarkdown table {
+  /* display:block + overflow-x lets a wide table scroll within the narrow chat
+     pane instead of widening the whole message column; width:max-content stops
+     a narrow table from stretching to fill it. */
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.copilotKitMarkdown th,
+.copilotKitMarkdown td {
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.625rem;
+  /* Left by default; remark-gfm emits inline text-align for `|---:|` columns,
+     and an inline style still wins over this rule. */
+  text-align: left;
+  vertical-align: top;
+}
+
+.copilotKitMarkdown thead th {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Zebra striping keeps a long region x metric table readable row to row. */
+.copilotKitMarkdown tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
