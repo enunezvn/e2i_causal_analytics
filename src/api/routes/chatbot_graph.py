@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -849,15 +849,38 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
     else:
         await _execute_load_context()
 
-    # Convert previous messages to LangChain message format
-    history_messages = []
-    for msg in previous_messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-        if role == "user":
-            history_messages.append(HumanMessage(content=content))
-        elif role == "assistant":
-            history_messages.append(AIMessage(content=content))  # type: ignore[arg-type]
+    # Convert previous messages to LangChain message format — but ONLY as a
+    # fallback (#1442). The Redis checkpointer (create_e2i_chatbot_graph, ~L2530)
+    # already restores prior turns into state["messages"] across requests, so
+    # re-loading DB history here would: (a) DUPLICATE history every turn — the
+    # `messages` reducer is `operator.add`, which concatenates with no dedup — and
+    # (b) re-stream the prior assistant message on turn 2+ (stream_chat emits every
+    # AIMessage in a node's `messages` delta as new output text). We detect that
+    # the checkpointer already provided history by the presence of any prior
+    # AIMessage in state, and only fall back to the DB load when it's absent.
+    #
+    # When does the fallback fire? Only when the checkpointer did not retain this
+    # thread's history: Redis unreachable at worker boot (get_langgraph_checkpointer
+    # -> a process-level MemorySaver, which persists within ONE worker but not
+    # across the 2 gunicorn workers or a restart), so turn 2 can land on a worker
+    # whose MemorySaver never saw turn 1. In that degraded case we reload DB history
+    # to preserve conversation context. The replay is still prevented there because
+    # stream_chat skips load_context's `messages` entirely (#1442, copilotkit.py).
+    # Known residual (degraded path only): init added THIS turn's HumanMessage
+    # before us, and operator.add appends, so the fallback history lands AFTER it
+    # (order [current_human, prior_human, prior_ai]) — a minor context-ordering
+    # quirk that does not occur on the primary checkpointer-up path.
+    existing_messages = state.get("messages", [])
+    checkpointer_has_history = any(isinstance(m, AIMessage) for m in existing_messages)
+    history_messages: List[BaseMessage] = []
+    if not checkpointer_has_history:
+        for msg in previous_messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                history_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                history_messages.append(AIMessage(content=content))  # type: ignore[arg-type]
 
     # Include progress update
     progress = get_progress_update(
@@ -866,7 +889,9 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
     )
 
     return {
-        "messages": history_messages,  # Prepend history
+        # Fallback-only history prepend; empty when the checkpointer already has it
+        # (#1442) — never re-emit historical assistant turns as new stream output.
+        "messages": history_messages,
         "conversation_title": conversation_title,
         "brand_context": brand,
         "region_context": region,

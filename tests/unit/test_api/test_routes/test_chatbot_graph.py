@@ -702,6 +702,43 @@ class TestLoadContextNode:
                     assert isinstance(result["messages"][0], HumanMessage)
                     assert isinstance(result["messages"][1], AIMessage)
 
+    @pytest.mark.asyncio
+    async def test_load_context_skips_history_when_checkpointer_has_it(self):
+        """#1442: when the Redis checkpointer already restored prior turns into
+        state['messages'] (a prior AIMessage is present), load_context must NOT
+        re-load DB history into the `messages` channel. Re-adding it duplicates
+        history (operator.add reducer, no dedup) AND re-streams the prior
+        assistant message on turn 2+ (the reported replay bug)."""
+        state = create_initial_state("u1", "What about Fabhalta?", "r2", session_id="u1~s1")
+        # Simulate checkpointer-restored history [H1, A1] + init's current human turn
+        state["messages"] = [
+            HumanMessage(content="What is the TRx for Kisqali?"),
+            AIMessage(content="Kisqali TRx was 1234."),
+            HumanMessage(content="What about Fabhalta?"),
+        ]
+        mock_client = AsyncMock()
+        mock_msg_repo = AsyncMock()
+        mock_msg_repo.get_recent_messages.return_value = [
+            {"role": "user", "content": "What is the TRx for Kisqali?"},
+            {"role": "assistant", "content": "Kisqali TRx was 1234."},
+        ]
+        mock_conv_repo = AsyncMock()
+        mock_conv_repo.get_by_session_id.return_value = {"title": "t"}
+        with patch(
+            "src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client
+        ):
+            with patch(
+                "src.api.routes.chatbot_graph.get_chatbot_message_repository",
+                return_value=mock_msg_repo,
+            ):
+                with patch(
+                    "src.api.routes.chatbot_graph.get_chatbot_conversation_repository",
+                    return_value=mock_conv_repo,
+                ):
+                    result = await load_context_node(state)
+        # checkpointer already holds history -> no prepend -> empty messages delta
+        assert result["messages"] == []
+
 
 # =============================================================================
 # classify_intent_node Tests
