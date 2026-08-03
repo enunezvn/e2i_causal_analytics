@@ -555,3 +555,6 @@ html.dark {
 .copilotKitMarkdown tbody tr:nth-child(even) {
   background: color-mix(in srgb, var(--muted) 45%, transparent);
 }
+
+/* CI verification probe — this PR is opened only to confirm a frontend-only
+   change satisfies the required contexts, and will be closed unmerged. */
