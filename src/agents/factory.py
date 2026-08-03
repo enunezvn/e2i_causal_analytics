@@ -392,6 +392,14 @@ def _create_agent(module_path: str, class_name: str) -> Optional[Any]:
         # status="failed" honestly rather than fabricating a prediction.
         if class_name == "PredictionSynthesizerAgent":
             return agent_class(**_prediction_synthesizer_kwargs())
+        # #1450: health_score needs its four real backends. Without them every
+        # dimension fail-closes to UNMEASURED and a chat health question answers
+        # "UNKNOWN - nothing was measured" (#1447 narration) — which is honest
+        # but useless. The REST route already wires the real adapters in
+        # ``_execute_health_check``; this is the same construction for the CHAT
+        # path (cognitive.get_orchestrator -> create_agent_registry -> here).
+        if class_name == "HealthScoreAgent":
+            return agent_class(**_health_score_kwargs())
         return agent_class()
     except ImportError as e:
         logger.warning(f"Import error for {module_path}.{class_name}: {e}")
@@ -399,6 +407,37 @@ def _create_agent(module_path: str, class_name: str) -> Optional[Any]:
     except AttributeError as e:
         logger.warning(f"Class not found: {class_name} in {module_path}: {e}")
         return None
+
+
+def _health_score_kwargs() -> Dict[str, Any]:
+    """Build the health_score constructor kwargs (#1450).
+
+    Injects the SAME real backends ``src/api/routes/health_score.py``'s
+    ``_execute_health_check`` uses — the component health client plus the three
+    store adapters built by ``_build_real_health_stores`` — so a health check
+    dispatched from CHAT measures the same four dimensions the REST endpoint
+    does. The adapters are deliberately REUSED rather than reimplemented: they
+    are the single bridge from the live tables (ml_model_health_dashboard /
+    ml_performance_metrics / etl_pipeline_metrics / agent_registry) into the
+    node Protocols.
+
+    The route module is imported lazily HERE (not at module scope) for the same
+    reason ``src/agents/cohort_profiler/agent.py`` imports ``routes.kpi``
+    lazily: the routes module imports agents inside its own functions, so a
+    module-level import in either direction would be a cycle. Construction is
+    cheap — the adapters do no I/O until a node first calls them, and each
+    fails CLOSED to an honest UNMEASURED null if its backend is unreachable.
+    """
+    from src.agents.health_score import SupabaseHealthClient
+    from src.api.routes.health_score import _build_real_health_stores
+
+    metrics_store, pipeline_store, agent_registry = _build_real_health_stores()
+    return {
+        "health_client": SupabaseHealthClient(),
+        "metrics_store": metrics_store,
+        "pipeline_store": pipeline_store,
+        "agent_registry": agent_registry,
+    }
 
 
 def _prediction_synthesizer_kwargs() -> Dict[str, Any]:

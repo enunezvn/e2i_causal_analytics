@@ -354,7 +354,9 @@ class HealthScoreAgent:
                         health_summary=result.get("health_summary", "Health check completed"),
                         total_latency_ms=result.get("total_latency_ms", 0),
                         timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                        data_provenance=result.get("data_provenance", "unknown"),
+                        data_provenance=self._reconcile_provenance(
+                            result.get("data_provenance", "unknown")
+                        ),
                         # Contract-required fields (v4.3 fix)
                         errors=errors,
                         status=result.get("status", "completed"),
@@ -408,7 +410,9 @@ class HealthScoreAgent:
                     health_summary=result.get("health_summary", "Health check completed"),
                     total_latency_ms=result.get("total_latency_ms", 0),
                     timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                    data_provenance=result.get("data_provenance", "unknown"),
+                    data_provenance=self._reconcile_provenance(
+                        result.get("data_provenance", "unknown")
+                    ),
                     # Contract-required fields (v4.3 fix)
                     errors=errors,
                     status=result.get("status", "completed"),
@@ -583,6 +587,39 @@ class HealthScoreAgent:
             return None
         raw = result.get(score_key)
         return float(raw) if raw is not None else None
+
+    def _reconcile_provenance(self, composite: str) -> str:
+        """Downgrade a "measured" composite to "partial" when a store is PARTIAL.
+
+        The composer reports "measured" once all four dimension SCORES are real.
+        A dimension's SCORE can be a real measurement while its underlying reader
+        is PARTIAL: the model reader sources status and eval metrics but has no
+        serving telemetry (latency / predictions_24h / error_rate), and the agent
+        reader sources availability but often no runtime telemetry. Claiming
+        "measured" then overclaims.
+
+        ``src/api/routes/health_score.py`` has always applied this to
+        ``/health-score/full`` (``_reconcile_full_provenance``). Since #1450 the
+        CHAT path is wired with the same adapters, so the same reconciliation
+        must apply there or the two surfaces would disagree about how sourced the
+        very same numbers are. Duck-typed on the store's optional ``provenance``
+        attribute (compared by value) so the agent keeps no dependency on the API
+        layer; a store without one contributes nothing.
+        """
+        if composite != "measured":
+            return composite
+        for store in (
+            self.health_client,
+            self.metrics_store,
+            self.pipeline_store,
+            self.agent_registry,
+        ):
+            provenance = getattr(store, "provenance", None)
+            if provenance is None:
+                continue
+            if str(getattr(provenance, "value", provenance)).lower() == "partial":
+                return "partial"
+        return composite
 
     @staticmethod
     def _recommendations_from_scores(

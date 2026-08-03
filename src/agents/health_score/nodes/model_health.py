@@ -167,6 +167,19 @@ class ModelHealthNode:
                 predictions_last_24h=metrics.get("prediction_count"),
                 error_rate=metrics.get("error_rate"),
                 status=cast(Literal["healthy", "degraded", "unhealthy"], status),
+                # #1450: the named evaluation metrics ride through to the
+                # composer so a metric-naming question is answered with the
+                # measurement (and its cohort/date), not a composite grade.
+                # A store that does not supply them yields {}/None -> the
+                # composer says "not recorded", never a substituted number.
+                # These do NOT participate in scoring: the status above stays
+                # the authoritative health signal.
+                model_version=metrics.get("model_version"),
+                model_stage=metrics.get("model_stage"),
+                eval_metrics=metrics.get("eval_metrics") or {},
+                eval_cohort=metrics.get("eval_cohort"),
+                eval_sample_size=metrics.get("eval_sample_size"),
+                eval_as_of=metrics.get("eval_as_of"),
             )
 
         except Exception as e:
@@ -184,6 +197,14 @@ class ModelHealthNode:
                 predictions_last_24h=0,
                 error_rate=1.0,
                 status="unhealthy",
+                # The store call FAILED, so nothing about this model's quality
+                # was measured. Empty/None -> "not recorded", never a number.
+                model_version=None,
+                model_stage=None,
+                eval_metrics={},
+                eval_cohort=None,
+                eval_sample_size=None,
+                eval_as_of=None,
             )
 
     def _determine_status(self, metrics: Dict[str, Any]) -> str:
