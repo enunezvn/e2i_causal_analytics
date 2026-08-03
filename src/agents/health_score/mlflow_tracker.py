@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Mapping, Optional
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from .agent import HealthScoreOutput
@@ -28,6 +30,164 @@ logger = logging.getLogger(__name__)
 # Experiment prefix for Health Score Agent
 EXPERIMENT_PREFIX = "e2i_causal/health_score"
 
+# Fallback when MLFLOW_TRACKING_URI is absent. Deliberately a tracking SERVER and
+# not MLflow's own "./mlruns" default: every deployment of this platform runs an
+# MLflow server (docker/docker-compose.yml `mlflow`), and a silent fall-back to a
+# local file store writes a metrics trail nobody ever reads. Matches the twelve
+# sibling agent trackers (gap_analyzer, explainer, causal_impact, ...).
+DEFAULT_TRACKING_URI = "http://localhost:5000"
+
+# Artifact URI schemes the MLflow client hands off to the tracking server or an
+# object store — nothing is written through THIS process's filesystem.
+_NON_LOCAL_ARTIFACT_SCHEMES = frozenset(
+    {
+        "mlflow-artifacts",
+        "http",
+        "https",
+        "s3",
+        "gs",
+        "abfs",
+        "abfss",
+        "wasbs",
+        "dbfs",
+        "ftp",
+        "sftp",
+    }
+)
+
+
+def resolve_tracking_uri(
+    explicit: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Resolve the MLflow tracking URI this tracker should talk to.
+
+    Precedence: explicit argument > ``MLFLOW_TRACKING_URI`` > DEFAULT_TRACKING_URI.
+
+    #1452: this tracker previously left ``mlflow``'s global URI untouched when no
+    URI was passed, relying on MLflow's implicit env read. That works in the
+    container (compose x-common-env forwards ``MLFLOW_TRACKING_URI=http://mlflow:5000``)
+    but silently degrades to a local ``./mlruns`` file store anywhere the env var
+    is missing. Resolving explicitly makes the destination testable and uniform.
+    """
+    if explicit and explicit.strip():
+        return explicit.strip()
+    source = os.environ if env is None else env
+    from_env = (source.get("MLFLOW_TRACKING_URI") or "").strip()
+    return from_env or DEFAULT_TRACKING_URI
+
+
+@dataclass(frozen=True)
+class ArtifactDestination:
+    """Where ``mlflow.log_artifact`` would actually put bytes for a run.
+
+    Attributes:
+        uri: the run's ``artifact_uri`` as reported by the tracking server.
+        local_path: filesystem path this process would write to, or ``None``
+            when the upload is proxied through the tracking server / an object
+            store (the healthy case).
+        blocked_root: the nearest existing ancestor of ``local_path`` that this
+            process cannot write to, or ``None`` when the write can succeed.
+    """
+
+    uri: str
+    local_path: Optional[str]
+    blocked_root: Optional[str]
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.blocked_root is not None
+
+
+def classify_artifact_destination(artifact_uri: str) -> ArtifactDestination:
+    """Classify a run's ``artifact_uri`` as proxied, locally-writable, or blocked.
+
+    #1452 root cause: experiment ``e2i_causal/health_score/default`` (id 9) was
+    created before b0a30f11 added ``artifact_location="mlflow-artifacts:/"``, so
+    it still carries the tracking server's own filesystem path
+    (``/mlflow/artifacts/9``). MLflow hands that path straight to the CLIENT,
+    which in the read-only api container tries to ``mkdir('/mlflow')`` and dies
+    with ``[Errno 30] Read-only file system``. ``artifact_location`` is
+    create-time only — MLflow's UpdateExperiment can rename an experiment but
+    cannot rewrite its artifact root — so the client has to detect this rather
+    than retry it forever.
+    """
+    parsed = urlparse(artifact_uri)
+    if parsed.scheme in _NON_LOCAL_ARTIFACT_SCHEMES:
+        return ArtifactDestination(uri=artifact_uri, local_path=None, blocked_root=None)
+
+    # Bare path or file:// -> the client writes it itself.
+    local_path = parsed.path if parsed.scheme == "file" else artifact_uri
+    if not local_path:
+        return ArtifactDestination(uri=artifact_uri, local_path=None, blocked_root=None)
+
+    probe = os.path.abspath(local_path)
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+
+    writable = os.path.isdir(probe) and os.access(probe, os.W_OK)
+    return ArtifactDestination(
+        uri=artifact_uri,
+        local_path=local_path,
+        blocked_root=None if writable else probe,
+    )
+
+
+# Persistent-condition reports are deduplicated for the LIFETIME OF THE PROCESS,
+# not per tracker instance: src/api/routes/health_score.py builds a fresh
+# HealthScoreAgent (and therefore a fresh tracker) on every request, so
+# per-instance state would never suppress anything. #1452 asks for "once at
+# startup, not a per-run warning forever" — process-wide is the faithful scope.
+_reported_conditions: set[str] = set()
+
+
+def reset_tracking_reports() -> None:
+    """Clear the once-per-process report ledger (test seam)."""
+    _reported_conditions.clear()
+
+
+def _report_once(key: str, message: str) -> bool:
+    """WARNING on the first occurrence of ``key``, DEBUG on every repeat.
+
+    Returns True when this call was the first (i.e. the WARNING was emitted).
+    """
+    if key in _reported_conditions:
+        logger.debug("%s [recurring; already reported once this process]", message)
+        return False
+    _reported_conditions.add(key)
+    logger.warning(message)
+    return True
+
+
+def report_artifact_write_blocked(artifact_uri: str, run_id: str) -> bool:
+    """Report — at most once per process — that artifacts cannot be written.
+
+    Returns True when the destination is blocked AND this was the first report,
+    False when the destination is fine or the condition was already surfaced.
+    """
+    destination = classify_artifact_destination(artifact_uri)
+    if not destination.is_blocked:
+        return False
+
+    return _report_once(
+        f"artifact-root-unwritable:{destination.blocked_root}",
+        (
+            "MLflow artifact logging is disabled for health_score: the experiment's "
+            f"artifact_location resolves to the local path {destination.local_path!r}, "
+            f"but {destination.blocked_root!r} is not writable from this process "
+            "(the api container rootfs is read-only by design). Metrics, params and "
+            "tags are unaffected and still reach the tracking server. Remediation: "
+            "this experiment predates the artifact-proxy convention and MLflow cannot "
+            "rewrite artifact_location in place — rename/archive it on the tracking "
+            "server so it is recreated with artifact_location='mlflow-artifacts:/', "
+            f"or mount a writable volume at {destination.blocked_root!r}. "
+            f"(first seen on run {run_id})"
+        ),
+    )
+
 
 @dataclass
 class HealthScoreContext:
@@ -37,6 +197,9 @@ class HealthScoreContext:
     experiment_name: str
     check_scope: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Where the tracking server says this run's artifacts belong (#1452). None
+    # for the degraded contexts yielded when MLflow is unavailable.
+    artifact_uri: Optional[str] = None
 
 
 @dataclass
@@ -119,12 +282,20 @@ class HealthScoreMLflowTracker:
         """Initialize MLflow tracker.
 
         Args:
-            tracking_uri: Optional MLflow tracking URI. If not provided,
-                uses the default from environment or local storage.
+            tracking_uri: Optional MLflow tracking URI. When omitted the URI is
+                resolved from ``MLFLOW_TRACKING_URI`` (compose x-common-env
+                forwards ``http://mlflow:5000`` to every service), falling back
+                to :data:`DEFAULT_TRACKING_URI`.
         """
         self._mlflow = None
-        self._tracking_uri = tracking_uri
+        self._tracking_uri = resolve_tracking_uri(tracking_uri)
         self._current_run_id: Optional[str] = None
+        self._current_artifact_uri: Optional[str] = None
+
+    @property
+    def tracking_uri(self) -> str:
+        """The MLflow tracking URI this tracker talks to (always resolved)."""
+        return self._tracking_uri
 
     def _get_mlflow(self):
         """Lazy load MLflow to avoid import errors when not installed."""
@@ -132,8 +303,9 @@ class HealthScoreMLflowTracker:
             try:
                 import mlflow
 
-                if self._tracking_uri:
-                    mlflow.set_tracking_uri(self._tracking_uri)
+                # Always pin the resolved URI — never inherit whatever another
+                # component left on mlflow's process-global setting (#1452).
+                mlflow.set_tracking_uri(self._tracking_uri)
                 self._mlflow = mlflow
             except ImportError:
                 logger.warning("MLflow not installed, tracking disabled")
@@ -178,7 +350,16 @@ class HealthScoreMLflowTracker:
             else:
                 experiment_id = experiment.experiment_id
         except Exception as e:
-            logger.warning(f"Could not create/get experiment: {e}")
+            # Persistent condition (server down / bad URI) — surface it once per
+            # process, not on every health check forever (#1452).
+            _report_once(
+                f"experiment-unavailable:{full_experiment_name}:{type(e).__name__}",
+                (
+                    f"Health-score MLflow tracking is degraded: could not create/get "
+                    f"experiment {full_experiment_name!r} on {self._tracking_uri!r}: {e}. "
+                    "Health checks continue; their metrics trail is not being recorded."
+                ),
+            )
             yield HealthScoreContext(
                 run_id="experiment-error",
                 experiment_name=experiment_name,
@@ -190,6 +371,7 @@ class HealthScoreMLflowTracker:
         try:
             with mlflow.start_run(experiment_id=experiment_id) as run:
                 self._current_run_id = run.info.run_id
+                self._current_artifact_uri = getattr(run.info, "artifact_uri", None)
 
                 # Log run parameters
                 mlflow.log_params(
@@ -205,15 +387,18 @@ class HealthScoreMLflowTracker:
                     run_id=run.info.run_id,
                     experiment_name=experiment_name,
                     check_scope=check_scope,
+                    artifact_uri=self._current_artifact_uri,
                 )
 
                 yield ctx
 
                 self._current_run_id = None
+                self._current_artifact_uri = None
 
         except Exception as e:
             logger.error(f"MLflow run failed: {e}")
             self._current_run_id = None
+            self._current_artifact_uri = None
             raise
 
     async def log_health_result(
@@ -231,8 +416,13 @@ class HealthScoreMLflowTracker:
         if mlflow is None or self._current_run_id is None:
             return
 
+        # --- Metrics + tags -------------------------------------------------
+        # Deliberately separated from the artifact upload below (#1452): these
+        # two failed as one broad try/except, so an artifact-only failure was
+        # reported as "Failed to log health metrics" even though every metric
+        # had already reached the tracking server. Misattributed errors send
+        # people looking in the wrong place.
         try:
-            # Create structured metrics
             metrics = HealthScoreMetrics(
                 overall_health_score=output.overall_health_score,
                 health_grade=output.health_grade,
@@ -245,7 +435,6 @@ class HealthScoreMLflowTracker:
                 total_latency_ms=output.total_latency_ms,
             )
 
-            # Log metrics
             mlflow.log_metrics(metrics.to_dict())
 
             # Log tags for filtering
@@ -257,44 +446,68 @@ class HealthScoreMLflowTracker:
                 }
             )
 
-            # Log detailed results as artifact
-            if state:
-                artifact_data = {
-                    "timestamp": output.timestamp,
-                    "overall_health_score": output.overall_health_score,
-                    "health_grade": output.health_grade,
-                    "health_summary": output.health_summary,
-                    "component_scores": {
-                        "component": output.component_health_score,
-                        "model": output.model_health_score,
-                        "pipeline": output.pipeline_health_score,
-                        "agent": output.agent_health_score,
-                    },
-                    "critical_issues": output.critical_issues,
-                    "warnings": output.warnings,
-                    "component_statuses": state.get("component_statuses", []),
-                    "model_metrics": state.get("model_metrics", []),
-                    "pipeline_statuses": state.get("pipeline_statuses", []),
-                    "agent_statuses": state.get("agent_statuses", []),
-                }
-
-                # Write artifact
-                import os
-                import tempfile
-
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    artifact_path = os.path.join(tmpdir, "health_check_results.json")
-                    with open(artifact_path, "w") as f:
-                        json.dump(artifact_data, f, indent=2, default=str)
-                    mlflow.log_artifact(artifact_path)
-
             logger.debug(
                 f"Logged health metrics to MLflow run {self._current_run_id}: "
                 f"score={output.overall_health_score}, grade={output.health_grade}"
             )
+        except Exception as e:
+            _report_once(
+                f"metrics-log-failed:{type(e).__name__}",
+                f"Failed to log health metrics to MLflow ({self._tracking_uri}): {e}",
+            )
+            return
+
+        # --- Detailed results artifact --------------------------------------
+        if not state:
+            return
+
+        # Preflight the destination instead of discovering it via OSError on
+        # every single run. Experiments created before the artifact-proxy
+        # convention hand the CLIENT a server-local path (e.g. /mlflow/...)
+        # that the read-only api rootfs can never satisfy.
+        artifact_uri = self._current_artifact_uri
+        if artifact_uri and classify_artifact_destination(artifact_uri).is_blocked:
+            # Warns on the first occurrence in this process, DEBUG thereafter.
+            report_artifact_write_blocked(artifact_uri, self._current_run_id or "unknown")
+            return
+
+        try:
+            artifact_data = {
+                "timestamp": output.timestamp,
+                "overall_health_score": output.overall_health_score,
+                "health_grade": output.health_grade,
+                "health_summary": output.health_summary,
+                "component_scores": {
+                    "component": output.component_health_score,
+                    "model": output.model_health_score,
+                    "pipeline": output.pipeline_health_score,
+                    "agent": output.agent_health_score,
+                },
+                "critical_issues": output.critical_issues,
+                "warnings": output.warnings,
+                "component_statuses": state.get("component_statuses", []),
+                "model_metrics": state.get("model_metrics", []),
+                "pipeline_statuses": state.get("pipeline_statuses", []),
+                "agent_statuses": state.get("agent_statuses", []),
+            }
+
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                artifact_path = os.path.join(tmpdir, "health_check_results.json")
+                with open(artifact_path, "w") as f:
+                    json.dump(artifact_data, f, indent=2, default=str)
+                mlflow.log_artifact(artifact_path)
 
         except Exception as e:
-            logger.warning(f"Failed to log health metrics to MLflow: {e}")
+            _report_once(
+                f"artifact-log-failed:{type(e).__name__}",
+                (
+                    "Failed to log the health-check results artifact to MLflow "
+                    f"(run {self._current_run_id}, artifact_uri={artifact_uri!r}): {e}. "
+                    "Metrics, params and tags for this run were persisted."
+                ),
+            )
 
     async def get_health_history(
         self,
@@ -427,7 +640,8 @@ def create_tracker(tracking_uri: Optional[str] = None) -> HealthScoreMLflowTrack
     """Factory function to create a Health Score MLflow tracker.
 
     Args:
-        tracking_uri: Optional MLflow tracking URI
+        tracking_uri: Optional MLflow tracking URI. Omit to resolve it from
+            ``MLFLOW_TRACKING_URI`` (see :func:`resolve_tracking_uri`).
 
     Returns:
         Configured HealthScoreMLflowTracker instance
