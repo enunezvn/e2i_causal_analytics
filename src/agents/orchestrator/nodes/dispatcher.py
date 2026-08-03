@@ -359,6 +359,15 @@ class NeedsStructuredInput:
     missing: Tuple[str, ...]
     reason: str
     rest_endpoint: Optional[str] = None
+    # #1451: a self-contained, USER-facing invitation naming what the analyst
+    # can supply to get the full analysis — written for a chat reader, not for
+    # an operator. ``reason``/``to_error()`` stay as-is: they are the internal
+    # audit record (they name the substrate, the contract and the fail-closed
+    # discipline) and are what the fail-closed summary shows. Surfaces that
+    # speak TO the user (the #1336 chat bridge) render ``user_action`` instead,
+    # so pipeline jargon never reaches the chat. Optional — a resolver with no
+    # honest actionable ask leaves it None and the surface says nothing.
+    user_action: Optional[str] = None
 
     def to_error(self) -> str:
         endpoint = f" Supply them via {self.rest_endpoint}." if self.rest_endpoint else ""
@@ -691,6 +700,13 @@ def _resolve_causal_impact_input(
     # (3) cannot ground in real data → graceful fail-closed with KG-seeded
     # candidates (never the raw contract raise, never fabricated variables).
     candidate_note = ""
+    # #1451: the same candidates, phrased for a chat reader. The base ask holds
+    # even when the KG is unavailable — "name a treatment and an outcome" is
+    # actionable on its own.
+    user_action = (
+        "To run the full causal analysis, name a treatment and an outcome"
+        f"{f' for {brand}' if brand else ''} (plus any confounders)."
+    )
     try:
         kg_treatments, kg_outcomes = _kg_causal_variable_candidates(brand)
         if kg_treatments or kg_outcomes:
@@ -700,6 +716,13 @@ def _resolve_causal_impact_input(
                 f"{', '.join(kg_treatments) or 'none'}; outcomes: "
                 f"{', '.join(kg_outcomes) or 'none'} — name one of each (plus "
                 "confounders) to run a scoped analysis"
+            )
+            user_action = (
+                "To run the full causal analysis, name a treatment and an outcome"
+                f"{f' for {brand}' if brand else ''} (plus any confounders) — "
+                f"candidates from the causal knowledge graph are treatments: "
+                f"{', '.join(kg_treatments) or 'none'}; outcomes: "
+                f"{', '.join(kg_outcomes) or 'none'}."
             )
     except Exception as kg_exc:  # noqa: BLE001 - candidate seeding is a courtesy
         logger.debug("causal_impact dispatch: KG candidate seeding unavailable: %s", kg_exc)
@@ -713,6 +736,7 @@ def _resolve_causal_impact_input(
             "alone cannot name the treatment/outcome/confounder columns." + candidate_note
         ),
         rest_endpoint="POST /causal/agent-analyze",
+        user_action=user_action,
     )
 
 
@@ -1693,6 +1717,10 @@ def _resolve_explainer_input(
                 "ask for the explanation"
             ),
             rest_endpoint=None,
+            user_action=(
+                "Run an analysis first (a causal, gap or segmentation question), "
+                "then ask me to explain it."
+            ),
         )
 
     out: Dict[str, Any] = {
@@ -2305,6 +2333,10 @@ class DispatcherNode:
                         result=None,
                         error=resolved.to_error(),
                         latency_ms=latency,
+                        # #1451: carry the user-facing invitation alongside the
+                        # audit error so chat surfaces can offer the next step
+                        # instead of a generic apology.
+                        user_action=resolved.user_action,
                     )
                 if spec.uses_kwargs:
                     # kwargs agents (optimize/synthesize): the resolver returns the

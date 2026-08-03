@@ -17,6 +17,9 @@ Discipline preserved:
 - Fails open to the status quo: any bridge error/timeout returns ``None`` and
   the caller keeps the original fail-closed summary. The bridge can only
   improve on the status quo, never mask it.
+- The preamble never overstates the answer (#1451): it discloses that the
+  deeper multi-agent analysis did not run, and it claims live platform data
+  ONLY when a tool actually executed on the bridged turn.
 - A fresh graph instance is created per call: the AG-UI module singleton
   carries a ``MemorySaver`` checkpointer, which in a long-lived API process
   would accumulate every bridged turn. (Explicit checkpointer also means no
@@ -26,9 +29,9 @@ Discipline preserved:
 import asyncio
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional, Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from src.utils.llm_content import normalize_llm_content
 from src.utils.redaction import redact_query
@@ -37,10 +40,75 @@ logger = logging.getLogger(__name__)
 
 # Honest preamble: the bridged answer is real tool-grounded data, but it is
 # NOT the full multi-agent analysis the router chose — say so (#883 honesty).
+#
+# #1451: the honesty stays, the self-flagellation goes. The old wording
+# ("The full analysis pipeline couldn't complete for this question…") led with
+# the INTERNAL pipeline's outcome in the pipeline's own terms and buried a
+# correct, grounded answer beneath an apology — three measured 2026-08-03 turns
+# (TRx = 12,867; a refutation answer; a scoping answer) all read as a failed
+# system apologising. Lead with what the answer IS, then disclose what did not
+# run. Used ONLY when a tool actually executed — see BRIDGE_PREAMBLE_UNGROUNDED.
 BRIDGE_PREAMBLE = (
-    "The full analysis pipeline couldn't complete for this question, "
-    "so here's what I can tell you from the data available:"
+    "Answered from live platform data, pulled through the analytics tools just now. "
+    "The deeper multi-agent analysis did not run for this question."
 )
+
+# #1451: the bridged turn answered without executing a tool (e.g. a scoping
+# answer). Claiming live platform data there would be a fabricated provenance
+# claim, so the ungrounded variant states only what is actually true.
+BRIDGE_PREAMBLE_UNGROUNDED = (
+    "Answered directly by the platform assistant. "
+    "The deeper multi-agent analysis did not run for this question."
+)
+
+
+class BridgeAnswer(NamedTuple):
+    """The bridged answer plus the evidence needed to describe it honestly.
+
+    ``tool_grounded`` is EVIDENCE, not a guess: it is True only when the AG-UI
+    run actually executed a tool (a ``ToolMessage`` came back). The preamble
+    may only claim live platform data when it is True (#1451).
+    """
+
+    text: str
+    tool_grounded: bool
+
+
+def _first_user_action(failure_details: Optional[Sequence[Any]]) -> Optional[str]:
+    """The primary failed agent's user-facing invitation, if the dispatcher wrote one.
+
+    ``failure_details`` follows ``agent_results`` order, so the first entry
+    carrying a ``user_action`` is the primary agent's. Only ONE is surfaced —
+    two invitations for a single turn contradict each other (causal_impact's
+    "name a treatment and an outcome" vs explainer's "run an analysis first").
+    The shape is orchestrator-supplied, so anything unexpected degrades to no
+    invitation rather than raising on the rescue path.
+    """
+    for detail in failure_details or []:
+        if not isinstance(detail, dict):
+            continue
+        action = detail.get("user_action")
+        if isinstance(action, str) and action.strip():
+            return action.strip()
+    return None
+
+
+def build_bridge_preamble(
+    *,
+    tool_grounded: bool,
+    failure_details: Optional[Sequence[Any]] = None,
+) -> str:
+    """Compose the preamble for a bridged turn (#1451).
+
+    Leads with what the answer IS (its provenance), then discloses that the
+    deeper multi-agent analysis did not run, then — when the dispatcher wrote
+    one — the actionable invitation naming exactly what it would need. Before
+    #1451 that invitation was discarded and replaced with a generic apology.
+    """
+    preamble = BRIDGE_PREAMBLE if tool_grounded else BRIDGE_PREAMBLE_UNGROUNDED
+    action = _first_user_action(failure_details)
+    return f"{preamble} {action}" if action else preamble
+
 
 _BRIDGE_HISTORY_CAP = 8
 
@@ -87,8 +155,8 @@ async def run_conversational_bridge(
     session_id: str,
     history: Optional[list[Any]] = None,
     timeout_s: Optional[float] = None,
-) -> Optional[str]:
-    """Run the query through the AG-UI chat brain; return its answer text.
+) -> Optional[BridgeAnswer]:
+    """Run the query through the AG-UI chat brain; return its answer.
 
     Returns ``None`` on any failure (disabled, timeout, provider error, no
     assistant text) — the caller must then keep its existing fail-closed
@@ -139,11 +207,17 @@ async def run_conversational_bridge(
         finally:
             _session_id_context.reset(token)
 
-        for msg in reversed(final_state.get("messages") or []):
+        messages = final_state.get("messages") or []
+        # #1451: a ToolMessage is the only real evidence a tool EXECUTED. The
+        # preamble's "live platform data" claim is gated on it — an answer the
+        # model produced without touching a tool must not be dressed up as a
+        # data lookup.
+        tool_grounded = any(isinstance(m, ToolMessage) for m in messages)
+        for msg in reversed(messages):
             if isinstance(msg, AIMessage):
                 text = normalize_llm_content(msg.content).strip()
                 if text:
-                    return text
+                    return BridgeAnswer(text=text, tool_grounded=tool_grounded)
         logger.warning("Chat bridge produced no assistant text for query=%s", redact_query(query))
         return None
     except Exception as e:

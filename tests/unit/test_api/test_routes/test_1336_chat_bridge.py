@@ -20,11 +20,14 @@ Contract pins:
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.api.routes.chat_bridge import (
     BRIDGE_PREAMBLE,
+    BRIDGE_PREAMBLE_UNGROUNDED,
+    BridgeAnswer,
     _prepare_bridge_messages,
+    build_bridge_preamble,
     run_conversational_bridge,
 )
 from src.api.routes.chatbot_graph import orchestrator_node
@@ -96,7 +99,9 @@ class TestOrchestratorNodeBridge:
             ),
             patch(
                 "src.api.routes.chatbot_graph.run_conversational_bridge",
-                new=AsyncMock(return_value="TRx conversion for Kisqali is 48.3%."),
+                new=AsyncMock(
+                    return_value=BridgeAnswer("TRx conversion for Kisqali is 48.3%.", True)
+                ),
             ) as bridge,
         ):
             result = await orchestrator_node(_state())
@@ -196,9 +201,9 @@ class TestRunConversationalBridge:
         with patch(
             "src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph
         ) as factory:
-            text = await run_conversational_bridge(query="q", session_id="u~s", history=None)
+            answer = await run_conversational_bridge(query="q", session_id="u~s", history=None)
 
-        assert text == "grounded answer"
+        assert answer.text == "grounded answer"
         # Fresh instance per call: the module singleton's MemorySaver must not
         # accumulate bridged turns in a long-lived API process.
         factory.assert_called_once()
@@ -215,9 +220,9 @@ class TestRunConversationalBridge:
             }
         )
         with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
-            text = await run_conversational_bridge(query="q", session_id="u~s")
+            answer = await run_conversational_bridge(query="q", session_id="u~s")
 
-        assert text == "block answer"
+        assert answer.text == "block answer"
 
     async def test_timeout_returns_none(self):
         graph = _FakeGraph(final_state={"messages": [AIMessage(content="late")]}, delay_s=0.5)
@@ -294,9 +299,9 @@ class TestBridgeNeverRaises:
         monkeypatch.setenv("E2I_CHAT_BRIDGE_TIMEOUT_S", "not-a-number")
         graph = _FakeGraph(final_state={"messages": [AIMessage(content="answer")]})
         with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
-            text = await run_conversational_bridge(query="q", session_id="u~s")
+            answer = await run_conversational_bridge(query="q", session_id="u~s")
 
-        assert text == "answer"
+        assert answer.text == "answer"
 
 
 class TestBridgePersistenceIsolation:
@@ -321,9 +326,9 @@ class TestBridgePersistenceIsolation:
         graph = _CtxCapturingGraph(final_state={"messages": [AIMessage(content="answer")]})
         before = _session_id_context.get()
         with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
-            text = await run_conversational_bridge(query="q", session_id="u~s")
+            answer = await run_conversational_bridge(query="q", session_id="u~s")
 
-        assert text == "answer"
+        assert answer.text == "answer"
         assert observed["ctxvar"] == "u~s~bridge"
         state, _config = graph.calls[0]
         assert state["session_id"] == "u~s~bridge"
@@ -331,3 +336,252 @@ class TestBridgePersistenceIsolation:
         assert observed["ctxvar"].split("~")[0] == "u"
         # ctxvar restored after the call
         assert _session_id_context.get() == before
+
+
+# ---------------------------------------------------------------------------
+# #1451 — a rescued turn must READ as an answer, not as an apology
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-08-03: A.5 returned the correct grounded TRx = 12,867, 5.7 a
+# correct refutation answer and 4.3 a correct scoping answer — every one of
+# them opened with "The full analysis pipeline couldn't complete...". The
+# preamble described the INTERNAL pipeline's outcome in the pipeline's own
+# terms and buried a good answer under an apology.
+#
+# What must NOT regress (#883 / #1336 honesty): the preamble still has to say
+# the deeper multi-agent analysis did not run, and it must not assert live
+# platform data for a turn where no tool actually executed.
+
+_CAUSAL_USER_ACTION = (
+    "To run the full causal analysis, name a treatment and an outcome "
+    "(plus any confounders) — candidates from the causal knowledge graph "
+    "are treatments: rep_visits, samples; outcomes: trx, nrx."
+)
+_EXPLAINER_USER_ACTION = (
+    "Run an analysis first (a causal, gap or segmentation question), then ask me to explain it."
+)
+
+_FAILURE_DETAILS_WITH_ACTION = [
+    {
+        "agent_name": "causal_impact",
+        "error": "causal_impact needs structured inputs that could not be grounded",
+        "latency_ms": 12,
+        "user_action": _CAUSAL_USER_ACTION,
+    },
+    {
+        "agent_name": "explainer",
+        "error": "explainer needs structured inputs that could not be grounded",
+        "latency_ms": 3,
+        "user_action": _EXPLAINER_USER_ACTION,
+    },
+]
+
+_ORCH_FAILED_WITH_ACTION = {
+    **_ORCH_FAILED,
+    "failure_details": _FAILURE_DETAILS_WITH_ACTION,
+}
+
+
+class TestBridgePreambleReadsAsAnAnswer:
+    """The preamble leads with what the answer IS, then discloses what did not run."""
+
+    def test_preamble_leads_with_provenance_not_with_the_pipeline_failure(self):
+        low = BRIDGE_PREAMBLE.lower()
+        # what the answer IS comes first...
+        assert "live platform data" in low
+        # ...and the disclosure of what did not run comes after it
+        assert low.index("live platform data") < low.index("did not run")
+        # the old apology opener is gone
+        assert "couldn't complete" not in low
+        assert not low.startswith("the full analysis pipeline")
+
+    def test_preamble_still_discloses_that_the_full_analysis_did_not_run(self):
+        low = BRIDGE_PREAMBLE.lower()
+        assert "multi-agent analysis" in low
+        assert "did not run" in low
+
+    def test_ungrounded_preamble_never_claims_live_platform_data(self):
+        # A bridged turn where no tool executed (e.g. the measured 4.3 scoping
+        # answer) must not be dressed up as a data lookup — that would be a
+        # fabricated provenance claim on a user-facing surface.
+        low = BRIDGE_PREAMBLE_UNGROUNDED.lower()
+        assert "live platform data" not in low
+        assert "multi-agent analysis" in low
+        assert "did not run" in low
+
+    def test_neither_preamble_implies_the_full_analysis_ran(self):
+        for preamble in (BRIDGE_PREAMBLE, BRIDGE_PREAMBLE_UNGROUNDED):
+            low = preamble.lower()
+            assert "multi-agent analysis did not run" in low
+
+
+class TestBridgePreambleCarriesTheActionableInvitation:
+    """The dispatcher's fail-closed message names exactly what is missing —
+    surface it instead of discarding it for a generic apology."""
+
+    def test_first_available_user_action_is_appended(self):
+        text = build_bridge_preamble(
+            tool_grounded=True, failure_details=_FAILURE_DETAILS_WITH_ACTION
+        )
+        assert text.startswith(BRIDGE_PREAMBLE)
+        assert _CAUSAL_USER_ACTION in text
+        # the PRIMARY failed agent's invitation only — two invitations for one
+        # turn would contradict each other
+        assert _EXPLAINER_USER_ACTION not in text
+
+    def test_no_user_action_leaves_the_bare_preamble(self):
+        assert build_bridge_preamble(tool_grounded=True, failure_details=None) == BRIDGE_PREAMBLE
+        assert (
+            build_bridge_preamble(
+                tool_grounded=True,
+                failure_details=[{"agent_name": "causal_impact", "error": "boom"}],
+            )
+            == BRIDGE_PREAMBLE
+        )
+        assert (
+            build_bridge_preamble(tool_grounded=False, failure_details=None)
+            == BRIDGE_PREAMBLE_UNGROUNDED
+        )
+
+    def test_malformed_failure_details_are_tolerated(self):
+        # failure_details is orchestrator-supplied; a shape change must not
+        # crash the rescue path (fail open to the bare preamble).
+        assert (
+            build_bridge_preamble(tool_grounded=True, failure_details=["not-a-dict", None, {}])
+            == BRIDGE_PREAMBLE
+        )
+
+
+class TestOrchestratorNodeSurfacesTheInvitation:
+    async def test_rescued_turn_leads_with_provenance_and_invites_the_scoped_run(self):
+        with (
+            patch(
+                "src.api.routes.chatbot_graph.get_orchestrator",
+                return_value=_mock_orchestrator(_ORCH_FAILED_WITH_ACTION),
+            ),
+            patch(
+                "src.api.routes.chatbot_graph.run_conversational_bridge",
+                new=AsyncMock(return_value=BridgeAnswer("Kisqali TRx = 12,867.", True)),
+            ),
+        ):
+            result = await orchestrator_node(_state())
+
+        text = result["response_text"]
+        assert text.startswith(BRIDGE_PREAMBLE)
+        assert _CAUSAL_USER_ACTION in text
+        assert "Kisqali TRx = 12,867." in text
+        # provenance before the disclosure, both before the answer
+        low = text.lower()
+        assert low.index("live platform data") < low.index("did not run")
+        assert low.index("did not run") < low.index("kisqali trx = 12,867.")
+        # honesty instrument untouched
+        assert result["metadata"]["bridge_used"] is True
+        assert result["metadata"]["orchestrator_status"] == "failed"
+
+    async def test_answer_without_a_tool_call_gets_the_ungrounded_preamble(self):
+        with (
+            patch(
+                "src.api.routes.chatbot_graph.get_orchestrator",
+                return_value=_mock_orchestrator(_ORCH_FAILED_WITH_ACTION),
+            ),
+            patch(
+                "src.api.routes.chatbot_graph.run_conversational_bridge",
+                new=AsyncMock(return_value=BridgeAnswer("Here is how I would scope that.", False)),
+            ),
+        ):
+            result = await orchestrator_node(_state())
+
+        text = result["response_text"]
+        assert text.startswith(BRIDGE_PREAMBLE_UNGROUNDED)
+        assert "live platform data" not in text.lower()
+        assert "Here is how I would scope that." in text
+
+
+class TestBridgeReportsToolGrounding:
+    """``tool_grounded`` is real evidence (an executed ToolMessage), not a guess."""
+
+    async def test_tool_message_makes_the_answer_tool_grounded(self):
+        graph = _FakeGraph(
+            final_state={
+                "messages": [
+                    HumanMessage(content="q"),
+                    AIMessage(content=""),
+                    ToolMessage(content="12867", tool_call_id="call-1"),
+                    AIMessage(content="Kisqali TRx = 12,867."),
+                ]
+            }
+        )
+        with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
+            answer = await run_conversational_bridge(query="q", session_id="u~s")
+
+        assert answer.text == "Kisqali TRx = 12,867."
+        assert answer.tool_grounded is True
+
+    async def test_no_tool_message_is_not_tool_grounded(self):
+        graph = _FakeGraph(
+            final_state={
+                "messages": [
+                    HumanMessage(content="q"),
+                    AIMessage(content="Here is how I would scope that."),
+                ]
+            }
+        )
+        with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
+            answer = await run_conversational_bridge(query="q", session_id="u~s")
+
+        assert answer.tool_grounded is False
+
+
+class TestActionableInvitationPlumbing:
+    """The invitation text must actually reach the bridge call site — the
+    dispatcher authors it, ``_build_output`` carries it in failure_details."""
+
+    def test_causal_impact_fail_closed_authors_a_user_facing_invitation(self):
+        from src.agents.orchestrator.nodes.dispatcher import (
+            NeedsStructuredInput,
+            _resolve_causal_impact_input,
+        )
+
+        needs = _resolve_causal_impact_input({"query": "why did it drop?"}, {"parameters": {}})
+
+        assert isinstance(needs, NeedsStructuredInput)
+        assert needs.user_action
+        low = needs.user_action.lower()
+        assert "treatment" in low and "outcome" in low
+        # user-facing: no pipeline jargon leaks into the invitation
+        for jargon in ("fail", "structured inputs", "substrate", "fabricat"):
+            assert jargon not in low
+
+    def test_explainer_fail_closed_authors_a_user_facing_invitation(self):
+        from src.agents.orchestrator.nodes.dispatcher import (
+            NeedsStructuredInput,
+            _resolve_explainer_input,
+        )
+
+        needs = _resolve_explainer_input({"query": "explain that"}, {"parameters": {}})
+
+        assert isinstance(needs, NeedsStructuredInput)
+        assert needs.user_action
+        assert "analysis" in needs.user_action.lower()
+
+    def test_build_output_carries_user_action_into_failure_details(self):
+        from src.agents.orchestrator.agent import OrchestratorAgent
+
+        orchestrator = OrchestratorAgent(agent_registry={}, enable_checkpointing=False)
+        output = orchestrator._build_output(
+            {
+                "query_id": "q-1451",
+                "status": "failed",
+                "agent_results": [
+                    {
+                        "agent_name": "causal_impact",
+                        "success": False,
+                        "error": "fail-closed",
+                        "latency_ms": 12,
+                        "user_action": _CAUSAL_USER_ACTION,
+                    }
+                ],
+            }
+        )
+
+        assert output["failure_details"][0]["user_action"] == _CAUSAL_USER_ACTION
