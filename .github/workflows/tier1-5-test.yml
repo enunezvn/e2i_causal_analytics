@@ -13,43 +13,17 @@ name: Tier 1-5 Agent Harness
 # follow-up self-hosted-runner workflow.
 
 on:
+  # DELIBERATELY NOT path-filtered — the filtering moved into the `changes` job.
+  #
+  # "Tier 1-5 agent harness" is a REQUIRED status check on main. GitHub resolves
+  # a conditionally-skipped JOB as "Success", but a workflow that never starts
+  # because of a `paths:` filter leaves its check "Pending" forever — so a
+  # frontend-only PR could never satisfy this context and could only land via
+  # `gh pr merge --admin` (hit on PR #1444). The traced path list below is
+  # preserved verbatim as the `changes` job's match pattern; only the place it
+  # is evaluated changed.
   pull_request:
-    paths:
-      - "src/agents/**"
-      - "src/testing/**"
-      - "scripts/run_tier0_test.py"
-      - "scripts/run_tier1_5_test.py"
-      - "config/agents/**"
-      - ".github/workflows/tier1-5-test.yml"
-      - "docker/docker-compose.yml"
-      # Shared SCHEMA modules the agent state/input CONTRACTS import
-      # transitively (issue #618). A Pydantic/TypedDict change in any of these
-      # can break an agent contract / the tier0 mapper without otherwise
-      # touching src/agents/** — the harness exists to catch exactly that drift,
-      # so its trigger must include them. This list was TRACED, not guessed:
-      # importing the AGENT_METHOD_MAP state_module + input_module entries
-      # pulls in schema-bearing modules from each package below (measured via a
-      # runtime import-closure scan, 2026-06-02). NOTE the issue's guessed
-      # ``src/causal/`` is only an empty placeholder package (a bare
-      # __init__.py, no schema modules, no contract importers) — the real
-      # schema home is ``src/causal_engine/**`` (the densest, incl.
-      # validation_outcome consumed by feedback_learner's contract).
-      - "src/causal_engine/**"  # 18 schema modules in the contract closure
-      - "src/data/**"           # 6 schema modules (issue-named, real)
-      - "src/ml/**"             # issue-named; small but contract-adjacent (DGP)
-      - "src/mlops/**"          # 8/10 schema modules; drift_monitor direct dep
-      - "src/repositories/**"   # 9 schema modules (validation/result row models)
-      - "src/digital_twin/**"   # 5 schema modules (twin/simulation models)
-      - "src/optimization/**"   # 10 schema modules (GEPA metric contracts)
-      - "src/rag/**"            # 10 schema modules (retrieval models/types)
-      - "src/services/**"       # 4/5 schema modules (roi/alert contracts)
-      - "src/tool_registry/**"  # 4/6 schema modules (tool I/O schemas)
-      - "src/memory/**"         # 3 schema modules (episodic/config models)
-      - "src/utils/**"          # 4 schema modules (shared util schemas)
-      - "src/skills/**"         # 2 schema modules (loader/matcher models)
-      - "src/lifecycle/**"      # 1 schema module (gate lifecycle)
-      - "src/nlp/**"            # 1 schema module (typo handler config)
-  # Weekly backstop (issue #618): the path-filtered PR trigger above is
+  # Weekly backstop (issue #618): the path-gated PR trigger is
   # high-signal but cannot enumerate EVERY shared module that might one day be
   # pulled into a contract's import closure. A scheduled run guarantees schema
   # drift in ANY src/ module is still exercised at least weekly, independent of
@@ -62,10 +36,81 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect harness-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.gate.outputs.relevant }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the merge-base diff below can resolve.
+          fetch-depth: 0
+
+      - name: Decide whether the harness must run
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          # This pattern IS the former `paths:` trigger list, moved here so the
+          # required context still reports on PRs it does not apply to. The
+          # entries below src/agents|src/testing are shared SCHEMA modules the
+          # agent state/input CONTRACTS import transitively (issue #618): a
+          # Pydantic/TypedDict change in any of them can break an agent contract
+          # or the tier0 mapper without touching src/agents/** at all, and this
+          # harness exists to catch exactly that drift. The list was TRACED, not
+          # guessed — importing the AGENT_METHOD_MAP state_module + input_module
+          # entries pulls in schema-bearing modules from each package (runtime
+          # import-closure scan, 2026-06-02). The issue's guessed ``src/causal/``
+          # is only an empty placeholder package; the real schema home is
+          # ``src/causal_engine/`` (densest, incl. validation_outcome consumed by
+          # feedback_learner's contract).
+          PATTERN='^(src/agents/|src/testing/|scripts/run_tier0_test\.py$|scripts/run_tier1_5_test\.py$|config/agents/|\.github/workflows/tier1-5-test\.yml$|docker/docker-compose\.yml$|src/causal_engine/|src/data/|src/ml/|src/mlops/|src/repositories/|src/digital_twin/|src/optimization/|src/rag/|src/services/|src/tool_registry/|src/memory/|src/utils/|src/skills/|src/lifecycle/|src/nlp/)'
+
+          # FAIL OPEN, always: schedule/dispatch runs and any diff failure run
+          # the harness. A false "not relevant" would let agent-contract drift
+          # through behind a green required check.
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "Event is $EVENT_NAME, not pull_request — running the harness."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
+            echo "::warning::Could not diff $BASE_SHA...$HEAD_SHA — running the harness."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$files" ]]; then
+            echo "::warning::Diff was empty — running the harness."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "$files" | sed 's/^/  /'
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Harness-relevant paths changed — running the harness."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No harness-relevant paths changed — the harness job will skip."
+          fi
+
   tier1-5-harness:
     name: Tier 1-5 agent harness
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    needs: changes
+    # GitHub reports a conditionally-skipped job as "Success", so this is what
+    # lets the REQUIRED "Tier 1-5 agent harness" context resolve on a PR that
+    # touches none of the traced paths (e.g. frontend-only). A path-filtered
+    # workflow trigger could not do this — it would leave the check Pending.
+    if: needs.changes.outputs.relevant == 'true'
     # Hard-fail mode for INFRA (flipped 2026-05-16 per issue #263) — the
     # dispatcher wrapped-input fix landed in PR #275 (commit ac68ae41), and the
     # boot-stack + install-deps steps have been stable on consecutive runs.
