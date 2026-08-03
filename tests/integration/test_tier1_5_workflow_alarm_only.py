@@ -24,6 +24,7 @@ invariants); both must pass.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -210,16 +211,43 @@ def test_report_results_runs_when_harness_ran():
 
 
 # ---------------------------------------------------------------------------
-# Issue #618: trigger paths cover shared schema modules the contracts import
+# Issue #618: the path gate covers shared schema modules the contracts import
+#
+# The gate MOVED (2026-08-03): it used to be ``on.pull_request.paths``, and now
+# lives in the ``changes`` job's ``PATTERN`` regex. "Tier 1-5 agent harness" is a
+# REQUIRED status check, and GitHub leaves a path-filtered workflow's check
+# "Pending" forever while resolving a conditionally-skipped JOB as "Success" —
+# so a path-filtered trigger made frontend-only PRs unmergeable (#1444).
+# Filtering therefore moved into a job-level ``if:``. The #618 invariant is
+# unchanged and still enforced below; only where it is expressed moved, so these
+# tests now exercise the regex against representative paths — which checks what
+# actually matches rather than that a glob string is present.
 # ---------------------------------------------------------------------------
 
 
-def _pr_paths() -> list[str]:
+def _gate_pattern() -> str:
+    """The extended-regex the ``changes`` job uses to decide harness relevance."""
     workflow = cast(dict[str, Any], yaml.safe_load(_WORKFLOW_PATH.read_text()))
-    # PyYAML parses the bare ``on:`` key as the boolean True.
-    on = workflow.get("on") if "on" in workflow else workflow.get(True)
-    assert isinstance(on, dict), f"Unexpected 'on' shape: {on!r}"
-    return list((on.get("pull_request") or {}).get("paths") or [])
+    jobs = workflow.get("jobs", {}) or {}
+    assert "changes" in jobs, "Expected a `changes` gate job in tier1-5-test.yml."
+    steps = cast(dict[str, Any], jobs["changes"]).get("steps", []) or []
+    gate = [s for s in steps if s.get("id") == "gate"]
+    assert len(gate) == 1, f"Expected exactly one step id=gate; found {len(gate)}."
+    match = re.search(r"PATTERN='([^']+)'", cast(str, gate[0].get("run") or ""))
+    assert match, "Could not find the PATTERN regex in the `changes` gate step."
+    return match.group(1)
+
+
+def _covers(path: str) -> bool:
+    """Would the gate treat a change to ``path`` as harness-relevant?"""
+    return re.search(_gate_pattern(), path) is not None
+
+
+def _probe(trigger_path: str) -> str:
+    """A representative changed-file path for a former trigger glob."""
+    if trigger_path.endswith("/**"):
+        return trigger_path[: -len("/**")] + "/probe.py"
+    return trigger_path
 
 
 def test_trigger_paths_include_traced_schema_packages():
@@ -227,25 +255,18 @@ def test_trigger_paths_include_traced_schema_packages():
     import transitively must trigger the harness. The traced (not guessed) set
     includes src/causal_engine (the issue's wrong src/causal), src/data, src/ml,
     src/mlops, etc. Pin the highest-signal ones."""
-    paths = _pr_paths()
-    # The issue's ``src/causal/**`` does NOT exist; the real package is causal_engine.
-    assert "src/causal/**" not in paths, (
-        "src/causal/** is not a real package (issue #618 guess was wrong); "
-        "use src/causal_engine/** instead."
+    # The issue's ``src/causal/`` does NOT exist; the real package is causal_engine.
+    assert not _covers("src/causal/probe.py"), (
+        "src/causal/ is not a real package (issue #618 guess was wrong); "
+        "the gate must key on src/causal_engine/ instead."
     )
-    required = {
-        "src/causal_engine/**",
-        "src/data/**",
-        "src/ml/**",
-        "src/mlops/**",
-    }
-    missing = required - set(paths)
-    assert not missing, f"tier1-5 trigger paths missing traced schema packages: {sorted(missing)}"
+    required = ("src/causal_engine/**", "src/data/**", "src/ml/**", "src/mlops/**")
+    missing = sorted(p for p in required if not _covers(_probe(p)))
+    assert not missing, f"tier1-5 path gate missing traced schema packages: {missing}"
 
 
 def test_trigger_still_covers_original_paths():
     """Broadening must not drop the original high-signal triggers."""
-    paths = set(_pr_paths())
     for original in (
         "src/agents/**",
         "src/testing/**",
@@ -254,7 +275,32 @@ def test_trigger_still_covers_original_paths():
         ".github/workflows/tier1-5-test.yml",
         "docker/docker-compose.yml",
     ):
-        assert original in paths, f"original trigger path dropped: {original}"
+        assert _covers(_probe(original)), f"original trigger path dropped: {original}"
+
+
+def test_pull_request_trigger_stays_unfiltered_and_gate_is_wired():
+    """The REQUIRED context can only resolve on an unrelated (e.g. frontend-only)
+    PR if the workflow actually STARTS. Re-adding a ``paths:`` filter here would
+    silently reinstate the un-mergeable frontend-only PR of #1444, and dropping
+    the job-level ``if:`` would run the full harness on every PR — so pin both
+    halves of the mechanism."""
+    workflow = cast(dict[str, Any], yaml.safe_load(_WORKFLOW_PATH.read_text()))
+    # PyYAML parses the bare ``on:`` key as the boolean True.
+    on = workflow.get("on") if "on" in workflow else workflow.get(True)
+    assert isinstance(on, dict), f"Unexpected 'on' shape: {on!r}"
+    assert not (on.get("pull_request") or {}).get("paths"), (
+        "on.pull_request must NOT be path-filtered — the filter belongs in the "
+        "`changes` job so the required status check still reports (#1444)."
+    )
+
+    harness = _harness_job()
+    needs = harness.get("needs") or []
+    needs = [needs] if isinstance(needs, str) else list(needs)
+    assert "changes" in needs, "harness must depend on the `changes` gate job."
+    assert "needs.changes.outputs.relevant" in str(harness.get("if") or ""), (
+        "harness must be gated on the `changes` job's `relevant` output, or the "
+        "path filter is not actually applied."
+    )
 
 
 def test_scheduled_backstop_present():

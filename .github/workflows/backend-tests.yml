@@ -17,18 +17,20 @@ on:
       - 'pyproject.toml'
       - 'requirements.txt'
       - '.github/workflows/backend-tests.yml'
+  # DELIBERATELY NOT path-filtered — the filtering moved into the `changes` job.
+  #
+  # `Backend CI Success` is a REQUIRED status check on main. GitHub resolves a
+  # conditionally-skipped JOB as "Success", but a workflow that never starts
+  # because of a `paths:` filter leaves its check "Pending" forever. So a
+  # path-filtered trigger here meant a frontend-only PR could never satisfy this
+  # context and could only land via `gh pr merge --admin` (hit on PR #1444).
+  #
+  # The path list therefore lives in the `changes` job below, which gates `lint`
+  # — and every other job depends on `lint`, so one `if:` skips the whole matrix
+  # while the required context still reports. Keep that list in sync with the
+  # `push:` filter above.
   pull_request:
     branches: [main, develop]
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      # Generated-Bento package floors live in this script; its unit guard
-      # (tests/unit/test_scripts/test_deploy_model_service_packages.py) must
-      # run when the script alone changes (#869 codex R2).
-      - 'scripts/deploy_model.py'
-      - 'pyproject.toml'
-      - 'requirements.txt'
-      - '.github/workflows/backend-tests.yml'
   workflow_dispatch:
   workflow_call:
 
@@ -36,10 +38,69 @@ env:
   PYTHON_VERSION: '3.12'
 
 jobs:
+  changes:
+    name: Detect backend-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.gate.outputs.backend }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the merge-base diff below can resolve.
+          fetch-depth: 0
+
+      - name: Decide whether backend CI must run
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          # Mirrors the `push:` paths filter at the top of this file.
+          PATTERN='^(src/|tests/|scripts/deploy_model\.py$|pyproject\.toml$|requirements\.txt$|\.github/workflows/backend-tests\.yml$)'
+
+          # FAIL OPEN, always. The only dangerous answer this job can give is a
+          # false "no backend changes", which would land untested backend code
+          # behind a green required check — so every unexpected condition runs
+          # the full suite rather than skipping it.
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "Event is $EVENT_NAME, not pull_request — running full backend CI."
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
+            echo "::warning::Could not diff $BASE_SHA...$HEAD_SHA — running full backend CI."
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$files" ]]; then
+            echo "::warning::Diff was empty — running full backend CI."
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "$files" | sed 's/^/  /'
+          if echo "$files" | grep -qE "$PATTERN"; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "Backend-relevant paths changed — running full backend CI."
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+            echo "No backend-relevant paths changed — backend CI jobs will skip."
+          fi
+
   lint:
     name: Lint (Ruff)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    needs: changes
+    # Every other job in this workflow depends on `lint` (directly, or on a job
+    # that does), so gating here cascades the skip across the whole matrix and
+    # keeps the conditional logic in exactly one place.
+    if: needs.changes.outputs.backend == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -757,33 +818,58 @@ jobs:
   ci-success:
     name: Backend CI Success
     runs-on: ubuntu-latest
-    needs: [lint, type-check, unit-tests, heavy-unit-tests, integration-tests, agents-tests]
+    needs: [changes, lint, type-check, unit-tests, heavy-unit-tests, integration-tests, agents-tests]
+    # Runs unconditionally so the REQUIRED context always reports a real
+    # conclusion — including on a frontend-only PR, where every job above is
+    # skipped and this is the only thing that speaks.
     if: always()
     steps:
       - name: Check all jobs passed
+        env:
+          BACKEND: ${{ needs.changes.outputs.backend }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
         run: |
-          if [[ "${{ needs.lint.result }}" != "success" ]]; then
-            echo "Lint failed"
+          set -uo pipefail
+
+          # If change detection itself did not succeed we cannot trust its
+          # verdict, so refuse to report green rather than guess.
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "Change detection did not succeed (result: $CHANGES_RESULT)."
             exit 1
           fi
-          if [[ "${{ needs.type-check.result }}" != "success" ]]; then
-            echo "Type check failed (mypy ceiling exceeded or job error)"
+
+          # Two modes, because "skipped" means opposite things in each:
+          #   backend=true  -> the suite ran; ONLY success is acceptable, so a
+          #                    skipped job is treated as a failure and can never
+          #                    be mistaken for a pass.
+          #   backend=false -> nothing backend-relevant changed; skipped is the
+          #                    expected result, but a real failure still fails.
+          status=0
+          check() {
+            local name="$1" result="$2"
+            if [[ "$BACKEND" == "true" ]]; then
+              [[ "$result" == "success" ]] && return 0
+            else
+              [[ "$result" == "success" || "$result" == "skipped" ]] && return 0
+            fi
+            echo "  $name: $result"
+            return 1
+          }
+
+          check "Lint" "${{ needs.lint.result }}" || status=1
+          check "Type check (mypy ceiling)" "${{ needs.type-check.result }}" || status=1
+          check "Unit tests" "${{ needs.unit-tests.result }}" || status=1
+          check "Heavy unit tests" "${{ needs.heavy-unit-tests.result }}" || status=1
+          check "Integration tests" "${{ needs.integration-tests.result }}" || status=1
+          check "Agent unit tests" "${{ needs.agents-tests.result }}" || status=1
+
+          if [[ $status -ne 0 ]]; then
+            echo "Backend CI failed (backend-changes=$BACKEND)."
             exit 1
           fi
-          if [[ "${{ needs.unit-tests.result }}" != "success" ]]; then
-            echo "Unit tests failed"
-            exit 1
+
+          if [[ "$BACKEND" == "true" ]]; then
+            echo "All backend CI jobs passed!"
+          else
+            echo "No backend-relevant paths changed — backend CI skipped, reporting success."
           fi
-          if [[ "${{ needs.heavy-unit-tests.result }}" != "success" ]]; then
-            echo "Heavy unit tests failed"
-            exit 1
-          fi
-          if [[ "${{ needs.integration-tests.result }}" != "success" ]]; then
-            echo "Integration tests failed"
-            exit 1
-          fi
-          if [[ "${{ needs.agents-tests.result }}" != "success" ]]; then
-            echo "Agent unit tests failed"
-            exit 1
-          fi
-          echo "All backend CI jobs passed!"
