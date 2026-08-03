@@ -281,8 +281,32 @@ _TIER_PARTITION_VERBS = (
 # territories, sales reps, call plans, experiment arms, spend — because those
 # belong to resource_allocation / experiment_design / prediction, not to cohort
 # construction. Mirrors the anchors the rest of this pattern list already uses.
+#
+# "provider" is the one anchor that straddles that line, so it is NOT admitted
+# bare: on a pharma-commercial platform a *distribution* provider, a *data*
+# provider and a *specialty pharmacy* provider are trading partners, while a
+# *healthcare* provider is an HCP. Admitted bare it re-opened the very
+# over-reach class this constant closes — measured on the real _pattern_classify
+# -> RouterNode chain, all at/above the 0.8 pattern-trust floor (confident,
+# LLM-free), and two of the three were SAFE 0.5 escalations before #1449:
+#
+#   Segment our specialty pharmacy providers into service tiers ... -> 0.867
+#   Classify our distribution providers into performance tiers      -> 0.867
+#   Rank our data providers into high, medium, and low quality tiers-> 0.933
+#
+# all landing on cohort_profiler, which never fails closed
+# (_resolve_cohort_profiler_input) and so returns a real-looking clinical cohort
+# profile for a vendor question with no failure signal. Requiring a care
+# qualifier keeps the clinical sense (bench-0207's "healthcare providers" — the
+# ONLY gold row containing the token, and it is qualified) while letting the
+# ambiguous vendor sense fall through to the LLM safety net instead of being
+# answered confidently and wrongly. Same fail-closed direction as the veto.
+# `care\s+providers?` covers "health care" and "health-care" (the hyphen is a
+# word boundary) plus "primary/urgent care"; the concatenated "healthcare"
+# spelling needs its own alternative because \bcare cannot match inside it.
 _TIER_POPULATION_ANCHORS = (
-    r"hcps?|physicians?|doctors?|prescribers?|prescribing|providers?|clinicians?"
+    r"hcps?|physicians?|doctors?|prescribers?|prescribing|clinicians?"
+    r"|healthcare\s+providers?|care\s+providers?"
     r"|patients?|cohorts?|populations?"
     r"|remibrutinib|fabhalta|kisqali|csu|pnh|breast\s+cancer"
 )

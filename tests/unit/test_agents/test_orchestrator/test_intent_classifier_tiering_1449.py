@@ -23,14 +23,17 @@ safety net. It is ALSO broad enough to steal any question that merely uses tier
 language — budgets, sales territories, rep rosters, A/B arms. So the tiering
 signal is gated FOUR ways:
 
-  1. a clinical POPULATION anchor (hcp/physician/prescriber/provider/patient/
-     cohort/population, or a brand/disease name) must be present AND positioned
-     as the thing being partitioned — after the partition verb in shape (a),
-     before the ladder in shape (b). Without it "Divide the Q3 budget into
-     tiers" and "Split the sales territories into tiers" matched CONFIDENTLY;
-     see ``TestNonPopulationTieringIsNotCohortWork``. "Anywhere in the query" is
-     NOT enough either — "Rank call-plan tiers ... for Kisqali" partitions call
-     plans, so the anchor is positional.
+  1. a clinical POPULATION anchor (hcp/physician/prescriber/*care* provider/
+     patient/cohort/population, or a brand/disease name) must be present AND
+     positioned as the thing being partitioned — after the partition verb in
+     shape (a), before the ladder in shape (b). Without it "Divide the Q3 budget
+     into tiers" and "Split the sales territories into tiers" matched
+     CONFIDENTLY; see ``TestNonPopulationTieringIsNotCohortWork``. "Anywhere in
+     the query" is NOT enough either — "Rank call-plan tiers ... for Kisqali"
+     partitions call plans, so the anchor is positional. "provider" is not
+     admitted BARE — a distribution/data/specialty-pharmacy provider is a
+     trading partner, not a population; it needs a care qualifier. See
+     ``TestCommercialProvidersAreNotAClinicalPopulation``.
   2. it requires an explicit tier CONTAINER (a partition verb + tiers/buckets/
      quartiles/deciles/categories) or an explicit 3-level ordinal LADDER
      (high/medium/low, top/middle/bottom) — never a bare "tier" token
@@ -241,6 +244,89 @@ class TestNonPopulationTieringIsNotCohortWork:
             _classify("Rank call-plan tiers by expected ROI for Kisqali")["primary_intent"]
             != "cohort_definition"
         )
+
+
+# ---------------------------------------------------------------------------
+# Review finding — a COMMERCIAL "provider" is not a clinical population.
+# ---------------------------------------------------------------------------
+class TestCommercialProvidersAreNotAClinicalPopulation:
+    """A bare ``provider`` token names a trading partner as often as an HCP.
+
+    ``_TIER_POPULATION_ANCHORS`` exists to say WHAT is being partitioned, and
+    its own comment excludes "commercial objects that also get tiered". But
+    "provider" is the one anchor that straddles the line: on this platform a
+    *distribution* provider, a *data* provider and a *specialty pharmacy*
+    provider are all vendors — channel/procurement objects — while a
+    *healthcare* provider is an HCP. Admitted bare, the token let the vendor
+    sense in, re-opening the exact over-reach class the anchor was added to
+    close, and two of the three probes below were converted from a SAFE
+    escalation into a CONFIDENT misroute (the #1408 lesson, again).
+
+    Harm is not hypothetical: ``_resolve_cohort_profiler_input`` deliberately
+    never fails closed, so a vendor-tiering ask silently returns a real-looking
+    per-brand clinical cohort profile with no failure signal.
+
+    The fix requires a care qualifier (healthcare / health-care / primary care
+    / …). Ambiguity now falls through to the LLM safety net instead of being
+    answered confidently and wrongly — the same fail-closed direction as the
+    ``_EFFECT_CLAIM_VETO``.
+    """
+
+    @pytest.mark.parametrize(
+        ("query", "expected_agents"),
+        [
+            # A specialty pharmacy is a distribution channel, not a patient set.
+            # Pre-#1449 this was a confident segment_analysis; #1449 must not
+            # move it, and this test does not endorse that route — it pins it.
+            (
+                "Segment our specialty pharmacy providers into service tiers by turnaround time",
+                ["heterogeneous_optimizer"],
+            ),
+        ],
+    )
+    def test_commercial_provider_tiering_keeps_its_pre_1449_route(
+        self, query: str, expected_agents: list[str]
+    ) -> None:
+        assert _classify(query)["primary_intent"] != "cohort_definition"
+        assert _classify_and_route(query) == expected_agents
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # 3PL / wholesaler tiering — procurement, not cohort construction.
+            "Classify our distribution providers into performance tiers",
+            # Data-vendor quality tiering — squarely a vendor-management ask.
+            "Rank our data providers into high, medium, and low quality tiers",
+        ],
+    )
+    def test_commercial_provider_tiering_keeps_escalating_to_the_llm(self, query: str) -> None:
+        """Both carry no deterministic signal on main (confidence 0.5).
+
+        #1449 turned them into confident ``cohort_definition`` hits at 0.867 /
+        0.933 — above the 0.8 pattern-trust floor, so the LLM safety net was
+        never reached. They must go back to escalating.
+        """
+        intent = _classify(query)
+        assert intent["primary_intent"] != "cohort_definition"
+        assert intent["confidence"] < PATTERN_TRUST_FLOOR
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # bench-0207's spelling (concatenated) — the gold row that put
+            # "provider" in the lexicon in the first place. Must still match.
+            "Segment healthcare providers into high, medium, and low prescribing tiers",
+            # Spaced and hyphenated spellings of the same clinical sense.
+            "Segment health care providers into high, medium, and low prescribing tiers",
+            "Segment health-care providers into high, medium, and low prescribing tiers",
+            # Other genuinely clinical care-provider phrasings.
+            "Segment primary care providers into high, medium, and low volume tiers",
+        ],
+    )
+    def test_care_qualified_providers_are_still_a_clinical_population(self, query: str) -> None:
+        """Tightening the anchor must not cost the clinical sense of the word."""
+        assert _classify(query)["primary_intent"] == "cohort_definition"
+        assert _classify_and_route(query) == ["cohort_profiler"]
 
 
 # ---------------------------------------------------------------------------
