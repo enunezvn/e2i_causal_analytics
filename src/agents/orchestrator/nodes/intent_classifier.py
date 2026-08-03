@@ -304,9 +304,19 @@ _TIER_PARTITION_VERBS = (
 # `care\s+providers?` covers "health care" and "health-care" (the hyphen is a
 # word boundary) plus "primary/urgent care"; the concatenated "healthcare"
 # spelling needs its own alternative because \bcare cannot match inside it.
+#
+# The `(?<!managed )` guard closes the last measured hole in this lexicon: in US
+# pharma "managed care providers" means PAYERS / health plans, not clinicians, so
+# "Segment our managed care providers into tiers" was routing cohort_definition
+# @0.867 — above the 0.8 pattern-trust floor, hence a confident LLM-free misroute
+# into cohort_profiler, which never fails closed. Measured, not assumed. The
+# lookbehind is fixed-width (Python requires that) and leaves every clinical
+# sense intact: verified MATCH for "primary care providers", "urgent care
+# provider", "care providers" and bench-0207's "healthcare providers"; verified
+# no-match for "managed care providers" and "specialty pharmacy providers".
 _TIER_POPULATION_ANCHORS = (
     r"hcps?|physicians?|doctors?|prescribers?|prescribing|clinicians?"
-    r"|healthcare\s+providers?|care\s+providers?"
+    r"|healthcare\s+providers?|(?<!managed )care\s+providers?"
     r"|patients?|cohorts?|populations?"
     r"|remibrutinib|fabhalta|kisqali|csu|pnh|breast\s+cancer"
 )

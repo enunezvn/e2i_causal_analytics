@@ -328,6 +328,30 @@ class TestCommercialProvidersAreNotAClinicalPopulation:
         assert _classify(query)["primary_intent"] == "cohort_definition"
         assert _classify_and_route(query) == ["cohort_profiler"]
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Segment our managed care providers into tiers",
+            "Tier our managed care providers by formulary access",
+        ],
+    )
+    def test_managed_care_is_a_payer_not_a_clinical_population(self, query: str) -> None:
+        """ "Managed care providers" are PAYERS, not clinicians.
+
+        The care-qualifier fix above still admitted this phrasing: in US pharma
+        "managed care" names a health plan / PBM, so "Segment our managed care
+        providers into tiers" is a payer-segmentation ask, not cohort work. It
+        measured cohort_definition @0.867 — above the 0.8 pattern-trust floor,
+        so it was a CONFIDENT, LLM-free misroute into cohort_profiler, which
+        never fails closed. Same harm mechanism as the vendor senses above.
+
+        Closed with a fixed-width ``(?<!managed )`` lookbehind on the
+        ``care\\s+providers?`` alternative, which leaves every clinical sense
+        matching (pinned by the test directly above).
+        """
+        assert _classify(query)["primary_intent"] != "cohort_definition"
+        assert _classify_and_route(query) != ["cohort_profiler"]
+
 
 # ---------------------------------------------------------------------------
 # Rows the change must leave exactly as they are.
