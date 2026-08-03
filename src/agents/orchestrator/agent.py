@@ -383,6 +383,10 @@ class OrchestratorAgent:
                     "agent_name": r["agent_name"],
                     "error": r.get("error", "Unknown error"),
                     "latency_ms": r.get("latency_ms", 0),
+                    # #1451: the dispatcher's user-facing next step, when it
+                    # authored one — chat surfaces render this instead of the
+                    # internal ``error`` string.
+                    "user_action": r.get("user_action"),
                 }
             )
 

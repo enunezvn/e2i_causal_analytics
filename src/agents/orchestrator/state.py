@@ -108,6 +108,11 @@ class AgentResult(TypedDict, total=False):
     result: Optional[Dict[str, Any]]
     error: Optional[str]
     latency_ms: int
+    # #1451: user-facing next step for a fail-closed dispatch ("name a
+    # treatment and an outcome…"). ``error`` stays the internal audit record;
+    # this is what a chat surface may show a reader. None when the failure has
+    # no honest actionable ask (crash, timeout).
+    user_action: Optional[str]
 
 
 class Citation(TypedDict, total=False):

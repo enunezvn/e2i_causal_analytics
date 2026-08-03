@@ -30,7 +30,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from src.agents.multi_faceted import is_multi_faceted_facet_score
-from src.api.routes.chat_bridge import BRIDGE_PREAMBLE, run_conversational_bridge
+from src.api.routes.chat_bridge import build_bridge_preamble, run_conversational_bridge
 from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
@@ -1437,14 +1437,22 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                 # user would get the fail-closed error summary. Route the turn
                 # through the AG-UI chat brain (chat_node + tools) for a real
                 # grounded answer; on any bridge failure keep the summary.
-                bridge_text = await run_conversational_bridge(
+                bridge_answer = await run_conversational_bridge(
                     query=query,
                     session_id=session_id,
                     history=state.get("messages"),
                 )
-                if bridge_text:
+                if bridge_answer:
                     bridge_used = True
-                    response_text = f"{BRIDGE_PREAMBLE}\n\n{bridge_text}"
+                    # #1451: the preamble leads with what the answer IS and
+                    # carries the dispatcher's own actionable "here is what I
+                    # would need" text — which used to be discarded here in
+                    # favour of a generic apology.
+                    preamble = build_bridge_preamble(
+                        tool_grounded=bridge_answer.tool_grounded,
+                        failure_details=failure_details,
+                    )
+                    response_text = f"{preamble}\n\n{bridge_answer.text}"
                     logger.info(
                         "Chat bridge answered after complete orchestrator failure "
                         f"(failed_agents={failed_agents})"
