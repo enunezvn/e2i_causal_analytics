@@ -19,22 +19,34 @@ enough to steal genuine CATE asks ("which HCP segments show the strongest
 treatment effect") away from ``heterogeneous_optimizer`` — a
 higher-priority intent (``cohort_definition`` outranks ``segment_analysis`` in
 ``INTENT_PRIORITY``) wins the tie CONFIDENTLY and so never reaches the LLM
-safety net. So the tiering signal is DOMAIN-GATED three ways:
+safety net. It is ALSO broad enough to steal any question that merely uses tier
+language — budgets, sales territories, rep rosters, A/B arms. So the tiering
+signal is gated FOUR ways:
 
-  1. it requires an explicit tier CONTAINER (a partition verb + tiers/buckets/
+  1. a clinical POPULATION anchor (hcp/physician/prescriber/provider/patient/
+     cohort/population, or a brand/disease name) must be present AND positioned
+     as the thing being partitioned — after the partition verb in shape (a),
+     before the ladder in shape (b). Without it "Divide the Q3 budget into
+     tiers" and "Split the sales territories into tiers" matched CONFIDENTLY;
+     see ``TestNonPopulationTieringIsNotCohortWork``. "Anywhere in the query" is
+     NOT enough either — "Rank call-plan tiers ... for Kisqali" partitions call
+     plans, so the anchor is positional.
+  2. it requires an explicit tier CONTAINER (a partition verb + tiers/buckets/
      quartiles/deciles/categories) or an explicit 3-level ordinal LADDER
      (high/medium/low, top/middle/bottom) — never a bare "tier" token
      (``"high-decile HCPs"``, bench-0263 gold ``resource_optimizer``, must
      stay out), and
-  2. a treatment-effect veto: any causal/CATE/uplift/responder/effect lexeme
+  3. a treatment-effect veto: any causal/CATE/uplift/responder/effect lexeme
      anywhere in the query suppresses the tiering match entirely. The veto can
      only ever DOWNGRADE to today's behaviour, so it is the safe direction.
-  3. the classifier's existing clause gate keeps the co-firing
+  4. the classifier's existing clause gate keeps the co-firing
      ``segment_analysis`` from splitting the ask into a 2-agent dispatch.
 
 Queries are verbatim gold rows (bench-NNNN) plus authored out-of-gold
-adversarial probes — behavioural pins, not phrase overfitting. No mocks: the
-real ``_pattern_classify`` -> ``RouterNode.execute`` chain runs.
+adversarial probes — behavioural pins, not phrase overfitting. The out-of-gold
+probes carry the load here: the 337-row gold contains no non-clinical tiering
+row, so it reported 0 losses for a build that misrouted every one of them. No
+mocks: the real ``_pattern_classify`` -> ``RouterNode.execute`` chain runs.
 """
 
 from __future__ import annotations
@@ -155,6 +167,80 @@ class TestGenuineCateAsksStayOnHeterogeneousOptimizer:
         )
         assert intent["primary_intent"] != "cohort_definition"
         assert intent["confidence"] < PATTERN_TRUST_FLOOR
+
+
+# ---------------------------------------------------------------------------
+# OUT-OF-DOMAIN OVER-REACH — tier language is not owned by cohort work.
+#
+# The first cut of #1449 gated only on the tier CONTAINER/LADDER and never on
+# WHAT is being partitioned, so any partition verb + tier noun matched: budgets,
+# sales territories, rep rosters, A/B arms, marketing spend. Every one of them
+# landed on ``cohort_profiler`` at confidence 0.867-0.933 — above the 0.8
+# pattern-trust floor, so the LLM safety net is never consulted. That is the
+# ``\binterim\b`` failure (#1408) in full: rows that were previously correct (or
+# that safely ESCALATED) turned CONFIDENTLY wrong, and ``cohort_profiler``'s
+# resolver deliberately "never fails closed" (it profiles every supported brand
+# when none is named), so the user gets a real-looking patient-cohort report for
+# a question about budget or territories with no failure signal at all.
+#
+# The 337-row gold cannot see this class — it contains no budget/territory/rep/
+# A-B-arm tiering rows — so these authored probes ARE the regression signal.
+# Each expectation below is the MEASURED pre-#1449 (main a6d05a9b) behaviour.
+# ---------------------------------------------------------------------------
+class TestNonPopulationTieringIsNotCohortWork:
+    @pytest.mark.parametrize(
+        ("query", "expected_agents"),
+        [
+            # Resource/finance tiering — main routes these to a forecast or gap read.
+            ("Divide the Q3 budget into tiers by expected impact", ["prediction_synthesizer"]),
+            ("Rank call-plan tiers by expected ROI for Kisqali", ["prediction_synthesizer"]),
+            ("Split the sales territories into tiers based on potential", ["gap_analyzer"]),
+            # Experiment-design tiering — the arms of a test are not a patient cohort.
+            (
+                "Classify the A/B test arms into tiers by statistical power",
+                ["experiment_designer"],
+            ),
+            # A bare ordinal ladder with ZERO pharma/population content anywhere.
+            (
+                "The forecast confidence is high, medium, or low depending on the scenario.",
+                ["prediction_synthesizer"],
+            ),
+        ],
+    )
+    def test_non_population_tiering_keeps_its_pre_1449_route(
+        self, query: str, expected_agents: list[str]
+    ) -> None:
+        assert _classify(query)["primary_intent"] != "cohort_definition"
+        assert _classify_and_route(query) == expected_agents
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # A sales-rep roster is a population, but not a CLINICAL one.
+            "Divide the sales reps into top, middle, and bottom performers",
+            "Bucket the marketing spend into quartiles",
+            "Split the launch budget into high, medium and low priority buckets",
+        ],
+    )
+    def test_non_population_tiering_keeps_escalating_to_the_llm(self, query: str) -> None:
+        """These carry no deterministic signal on main (confidence 0.5) and must
+        keep escalating. Turning a safely-escalating row into a CONFIDENT wrong
+        answer is strictly worse than leaving it to the LLM — the #1408 lesson."""
+        intent = _classify(query)
+        assert intent["primary_intent"] != "cohort_definition"
+        assert intent["confidence"] < PATTERN_TRUST_FLOOR
+
+    def test_population_anchor_must_precede_the_tier_container(self) -> None:
+        """A brand named AFTER the container is not the thing being partitioned.
+
+        "Rank call-plan tiers ... for Kisqali" partitions CALL PLANS; the brand is
+        incidental trailing context. An anchor test that accepted the token
+        anywhere in the query would re-admit exactly this row.
+        """
+        assert (
+            _classify("Rank call-plan tiers by expected ROI for Kisqali")["primary_intent"]
+            != "cohort_definition"
+        )
 
 
 # ---------------------------------------------------------------------------
