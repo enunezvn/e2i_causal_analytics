@@ -1,0 +1,288 @@
+[
+  {
+    "question_id": "4.3",
+    "session": "n4",
+    "tier": "T4",
+    "intent_expected": "multi_faceted",
+    "label": "clarifyprobe",
+    "request_id": "perf-clarifyprobe-4.3",
+    "ts_start": "2026-08-03T16:26:35+0000",
+    "session_id": "7bfeb864-56e4-496b-952b-705910894ffe",
+    "events": [
+      {
+        "t_ms": 4276.2,
+        "type": "session_id",
+        "data": "7bfeb864-56e4-496b-952b-705910894ffe"
+      },
+      {
+        "t_ms": 79711.0,
+        "type": "text",
+        "data": "The full analysis pipeline couldn't complete for this question, so here's what I can tell you from the data available:\n\nI can help with this, but I need a couple of clarifications to give you an honest, accurate answer:\n\n1. **Which brand?** (Kisqali, Fabhalta, or Remibrutinib) \u2014 HCP scoring models are brand-specific, and I don't have a brand-agnostic \"all HCPs\" volume dataset to query.\n2. **What \"segmentation\" do you need?**\n   - If you want HCPs grouped by **predicted likelihood to prescribe** (i.e., a propensity-based tiering), I can use the brand's promoted HCP-adoption champion model (`predict_hcp_segment_likelihood_tool`) \u2014 but note that tool ranks **segments** (specialty or geographic region) by mean predicted adoption propensity, not individual HCPs, and it scores *current adoption propensity*, not raw historical Rx volume.\n   - If you specifically want HCPs bucketed into **high/medium/low tiers by actual historical prescription volume** (TRx/NRx counts per HCP), that's a different cut \u2014 I don't have a tool that returns per-HCP volume deciles/tiers directly. I can query aggregate TRx/NRx KPIs, but not an individual-HCP volume ranking table.\n\nLet me know the brand and which of these two you're after (or both), and I'll pull the real data rather than guess."
+      },
+      {
+        "t_ms": 79904.8,
+        "type": "conversation_title",
+        "data": "Segment HCPs by prescription volume into high, med..."
+      },
+      {
+        "t_ms": 79907.1,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": true,
+          "agents_dispatched": [
+            "heterogeneous_optimizer",
+            "gap_analyzer"
+          ],
+          "routed_agent": "heterogeneous_optimizer",
+          "response_confidence": 0.0,
+          "intent": "multi_faceted",
+          "intent_confidence": 0.82,
+          "routing_rationale": "Keyword match (score: 1, total: 1)",
+          "routing_pattern": "CLARIFICATION_NEEDED",
+          "classification_latency_ms": 6.842374801635742,
+          "used_llm_layer": false,
+          "execution_time_ms": 79321.63
+        }
+      },
+      {
+        "t_ms": 79908.0,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "The full analysis pipeline couldn't complete for this question, so here's what I can tell you from the data available:\n\nI can help with this, but I need a couple of clarifications to give you an honest, accurate answer:\n\n1. **Which brand?** (Kisqali, Fabhalta, or Remibrutinib) \u2014 HCP scoring models are brand-specific, and I don't have a brand-agnostic \"all HCPs\" volume dataset to query.\n2. **What \"segmentation\" do you need?**\n   - If you want HCPs grouped by **predicted likelihood to prescribe** (i.e., a propensity-based tiering), I can use the brand's promoted HCP-adoption champion model (`predict_hcp_segment_likelihood_tool`) \u2014 but note that tool ranks **segments** (specialty or geographic region) by mean predicted adoption propensity, not individual HCPs, and it scores *current adoption propensity*, not raw historical Rx volume.\n   - If you specifically want HCPs bucketed into **high/medium/low tiers by actual historical prescription volume** (TRx/NRx counts per HCP), that's a different cut \u2014 I don't have a tool that returns per-HCP volume deciles/tiers directly. I can query aggregate TRx/NRx KPIs, but not an individual-HCP volume ranking table.\n\nLet me know the brand and which of these two you're after (or both), and I'll pull the real data rather than guess.",
+    "dispatch_info": {
+      "orchestrator_used": true,
+      "agents_dispatched": [
+        "heterogeneous_optimizer",
+        "gap_analyzer"
+      ],
+      "routed_agent": "heterogeneous_optimizer",
+      "response_confidence": 0.0,
+      "intent": "multi_faceted",
+      "intent_confidence": 0.82,
+      "routing_rationale": "Keyword match (score: 1, total: 1)",
+      "routing_pattern": "CLARIFICATION_NEEDED",
+      "classification_latency_ms": 6.842374801635742,
+      "used_llm_layer": false,
+      "execution_time_ms": 79321.63
+    },
+    "ttfb_ms": 79711.0,
+    "total_ms": 79908.6,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "7bfeb864-56e4-496b-952b-705910894ffe",
+    "_gold_pattern": "SINGLE_AGENT",
+    "_clarify_watch": "cold-turn clarify expected (#1407)"
+  },
+  {
+    "question_id": "5.5",
+    "session": "n5",
+    "tier": "T3",
+    "intent_expected": "causal_analysis",
+    "label": "clarifyprobe",
+    "request_id": "perf-clarifyprobe-5.5",
+    "ts_start": "2026-08-03T16:27:58+0000",
+    "session_id": "661327d9-d023-4232-b2ca-4069639f5e39",
+    "events": [
+      {
+        "t_ms": 2047.9,
+        "type": "session_id",
+        "data": "661327d9-d023-4232-b2ca-4069639f5e39"
+      },
+      {
+        "t_ms": 33523.8,
+        "type": "text",
+        "data": "I want to make sure I analyze the right thing \u2014 your question doesn't yet specify the brand and metric, so running an analysis now could give a misleading answer.\n\nTo point me to the right data, could you tell me:\n- Which brand and model/prediction (e.g., churn risk, next-best-action, adoption propensity) are you referring to?\n- Which HCP segment specifically was flagged, and over what time period was the prediction generated?\n- Are you looking for the top feature importances/SHAP values driving the flag, or a business-level explanation of the segment's behavior?"
+      },
+      {
+        "t_ms": 33650.9,
+        "type": "conversation_title",
+        "data": "Why did the model flag this HCP segment - what fea..."
+      },
+      {
+        "t_ms": 33651.0,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": false,
+          "agents_dispatched": [],
+          "routed_agent": "causal_impact",
+          "response_confidence": null,
+          "intent": "causal_analysis",
+          "intent_confidence": 0.95,
+          "routing_rationale": "Keyword match (score: 3, total: 6)",
+          "routing_pattern": null,
+          "classification_latency_ms": null,
+          "used_llm_layer": null,
+          "execution_time_ms": 33059.31
+        }
+      },
+      {
+        "t_ms": 33653.8,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "I want to make sure I analyze the right thing \u2014 your question doesn't yet specify the brand and metric, so running an analysis now could give a misleading answer.\n\nTo point me to the right data, could you tell me:\n- Which brand and model/prediction (e.g., churn risk, next-best-action, adoption propensity) are you referring to?\n- Which HCP segment specifically was flagged, and over what time period was the prediction generated?\n- Are you looking for the top feature importances/SHAP values driving the flag, or a business-level explanation of the segment's behavior?",
+    "dispatch_info": {
+      "orchestrator_used": false,
+      "agents_dispatched": [],
+      "routed_agent": "causal_impact",
+      "response_confidence": null,
+      "intent": "causal_analysis",
+      "intent_confidence": 0.95,
+      "routing_rationale": "Keyword match (score: 3, total: 6)",
+      "routing_pattern": null,
+      "classification_latency_ms": null,
+      "used_llm_layer": null,
+      "execution_time_ms": 33059.31
+    },
+    "ttfb_ms": 33523.8,
+    "total_ms": 33654.2,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "661327d9-d023-4232-b2ca-4069639f5e39",
+    "_gold_pattern": "SINGLE_AGENT",
+    "_clarify_watch": "cold-turn clarify expected (#1407)"
+  },
+  {
+    "question_id": "5.7",
+    "session": "n5",
+    "tier": "T3",
+    "intent_expected": "causal_analysis",
+    "label": "clarifyprobe",
+    "request_id": "perf-clarifyprobe-5.7",
+    "ts_start": "2026-08-03T16:28:34+0000",
+    "session_id": "b7de872d-faae-403f-80c6-79d53254671f",
+    "events": [
+      {
+        "t_ms": 489.3,
+        "type": "session_id",
+        "data": "b7de872d-faae-403f-80c6-79d53254671f"
+      },
+      {
+        "t_ms": 7797.4,
+        "type": "text",
+        "data": "I want to make sure I analyze the right thing \u2014 your question doesn't yet specify the brand and metric, so running an analysis now could give a misleading answer.\n\nTo point me to the right data, could you tell me:\n- Which brand and outcome metric (e.g., prescriptions, sales, NRx/TRx) is the rep-visit effect being measured on?\n- Which causal model or estimation approach are you referring to, and what time period/cohort was used to estimate the effect?\n- Which specific refutation tests do you want checked (e.g., placebo treatment, random common cause, subset validation, bootstrap sensitivity)?"
+      },
+      {
+        "t_ms": 7852.0,
+        "type": "conversation_title",
+        "data": "How confident are we in the rep-visit effect - did..."
+      },
+      {
+        "t_ms": 7853.4,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": false,
+          "agents_dispatched": [],
+          "routed_agent": "causal_impact",
+          "response_confidence": null,
+          "intent": "causal_analysis",
+          "intent_confidence": 0.98,
+          "routing_rationale": "Keyword match (score: 3, total: 4)",
+          "routing_pattern": null,
+          "classification_latency_ms": null,
+          "used_llm_layer": null,
+          "execution_time_ms": 7376.06
+        }
+      },
+      {
+        "t_ms": 7855.1,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "I want to make sure I analyze the right thing \u2014 your question doesn't yet specify the brand and metric, so running an analysis now could give a misleading answer.\n\nTo point me to the right data, could you tell me:\n- Which brand and outcome metric (e.g., prescriptions, sales, NRx/TRx) is the rep-visit effect being measured on?\n- Which causal model or estimation approach are you referring to, and what time period/cohort was used to estimate the effect?\n- Which specific refutation tests do you want checked (e.g., placebo treatment, random common cause, subset validation, bootstrap sensitivity)?",
+    "dispatch_info": {
+      "orchestrator_used": false,
+      "agents_dispatched": [],
+      "routed_agent": "causal_impact",
+      "response_confidence": null,
+      "intent": "causal_analysis",
+      "intent_confidence": 0.98,
+      "routing_rationale": "Keyword match (score: 3, total: 4)",
+      "routing_pattern": null,
+      "classification_latency_ms": null,
+      "used_llm_layer": null,
+      "execution_time_ms": 7376.06
+    },
+    "ttfb_ms": 7797.4,
+    "total_ms": 7855.4,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "b7de872d-faae-403f-80c6-79d53254671f",
+    "_gold_pattern": "SINGLE_AGENT",
+    "_clarify_watch": "cold-turn clarify expected (#1407)"
+  },
+  {
+    "question_id": "A.5",
+    "session": "a5",
+    "tier": "T6",
+    "intent_expected": "clarification",
+    "label": "clarifyprobe",
+    "request_id": "perf-clarifyprobe-A.5",
+    "ts_start": "2026-08-03T16:28:45+0000",
+    "session_id": "f0ff4927-1038-449d-a3f1-ee260dd2cfa5",
+    "events": [
+      {
+        "t_ms": 514.5,
+        "type": "session_id",
+        "data": "f0ff4927-1038-449d-a3f1-ee260dd2cfa5"
+      },
+      {
+        "t_ms": 5530.0,
+        "type": "text",
+        "data": "I want to make sure I analyze the right thing \u2014 your question doesn't yet specify the brand and metric, so running an analysis now could give a misleading answer.\n\nTo point me to the right data, could you tell me:\n- Which brand or product are you referring to?\n- What metric are you asking about (e.g., sales, market share, prescriptions, revenue)?\n- What time period or comparison points define the 'drop' (e.g., month-over-month, year-over-year)?"
+      },
+      {
+        "t_ms": 5570.5,
+        "type": "conversation_title",
+        "data": "Why did it drop?"
+      },
+      {
+        "t_ms": 5571.3,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": false,
+          "agents_dispatched": [],
+          "routed_agent": "causal_impact",
+          "response_confidence": null,
+          "intent": "causal_analysis",
+          "intent_confidence": 0.93,
+          "routing_rationale": "Keyword match (score: 3, total: 3)",
+          "routing_pattern": null,
+          "classification_latency_ms": null,
+          "used_llm_layer": null,
+          "execution_time_ms": 5105.71
+        }
+      },
+      {
+        "t_ms": 5572.8,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "I want to make sure I analyze the right thing \u2014 your question doesn't yet specify the brand and metric, so running an analysis now could give a misleading answer.\n\nTo point me to the right data, could you tell me:\n- Which brand or product are you referring to?\n- What metric are you asking about (e.g., sales, market share, prescriptions, revenue)?\n- What time period or comparison points define the 'drop' (e.g., month-over-month, year-over-year)?",
+    "dispatch_info": {
+      "orchestrator_used": false,
+      "agents_dispatched": [],
+      "routed_agent": "causal_impact",
+      "response_confidence": null,
+      "intent": "causal_analysis",
+      "intent_confidence": 0.93,
+      "routing_rationale": "Keyword match (score: 3, total: 3)",
+      "routing_pattern": null,
+      "classification_latency_ms": null,
+      "used_llm_layer": null,
+      "execution_time_ms": 5105.71
+    },
+    "ttfb_ms": 5530.0,
+    "total_ms": 5573.1,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "f0ff4927-1038-449d-a3f1-ee260dd2cfa5",
+    "_gold_pattern": "CLARIFICATION_NEEDED",
+    "_clarify_watch": "cold-turn clarify expected (#1407)"
+  }
+]

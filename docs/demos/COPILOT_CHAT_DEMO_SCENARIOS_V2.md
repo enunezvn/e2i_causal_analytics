@@ -3,6 +3,21 @@
 **Supersedes** `COPILOT_CHAT_DEMO_SCENARIOS.md` (v1, retained as a point-in-time
 record). **Closes #1345.**
 
+> **Rubric re-verified 2026-08-03.** The question set is **unchanged** since v1 —
+> v2 re-annotated the *rubric*, not the *stimulus*. (Diffing v1 against v2
+> question text yields only the `A.2` → `A.2a`/`A.2b` split, which the runner
+> JSON already carried, plus two cosmetic parentheticals. There is therefore no
+> reason to run v1 and v2 as separate passes: one run of the 51 turns scored
+> against this file covers both.)
+>
+> Refreshed on 2026-08-03 against current `main` (221 commits past the
+> 2026-07-29 baseline) — see **"What changed since the 2026-07-29 baseline"**
+> below for the full delta. Headline changes: legacy routing accuracy
+> re-measured **0.843 → 0.852**; **#1407 shipped**, so clarification is now
+> deliverable on `/chat/stream` (§ "Clarification"); question **3.5**'s legacy
+> route was fixed. Machine-readable rubric:
+> `scripts/demos/copilot_demo_questions.json` (`rubric_verified: 2026-08-03`).
+
 v1 was hand-authored before three things that each invalidated parts of it:
 
 1. the **recorded baseline** (`docs/demos/results/2026-07-29_copilot_chat_perf/`
@@ -92,14 +107,67 @@ Verified in source (file references are current `main`):
   asks. In the legacy patterns: `model.*perform` → `system_health` →
   health_score; `model.*degrad` → `drift_check` → drift_monitor
   (`intent_classifier.py` INTENT_PATTERNS).
-- **CLARIFICATION is structurally unreachable on the legacy path** (open issue
-  #1407): `derive_legacy_pattern` only emits SINGLE_AGENT / PARALLEL_DELEGATION
-  / TOOL_COMPOSER, and in active mode a pipeline CLARIFICATION_NEEDED causes
-  *abstention to legacy* rather than a clarify flow. **No v2 annotation
-  promises a clarification response from the orchestrator path.** Gold rows
-  labeled CLARIFICATION_NEEDED (A.1, A.2a, A.5) document what routing *should*
-  do, not what any surface delivers today; the AG-UI brain may still clarify
-  conversationally (model-elected, not routed).
+- **Clarification: reachable since #1407 — but through a different door than
+  this doc originally described** (updated 2026-08-03; #1407 shipped 2026-08-02,
+  `23494dd5`). Two separate things must be kept apart:
+  - The **orchestrator routing taxonomy is unchanged**: it still only emits
+    SINGLE_AGENT / PARALLEL_DELEGATION / TOOL_COMPOSER, and in active mode a
+    pipeline CLARIFICATION_NEEDED still causes *abstention to legacy*
+    (`RouterNode._dispatch_from_classification` returns `None` on
+    CLARIFICATION_NEEDED or confidence < `MIN_ACTIVE_CONFIDENCE` = 0.5).
+    Verified on current `main`; the benchmark's
+    `derive_legacy_pattern` (`scripts/benchmarks/routing/step0_scoring.py` — a
+    scorer, **not** production code) likewise never emits CLARIFICATION, which
+    is why gold CLARIFICATION rows still score 0.000 recall in `pattern_diff`.
+  - **`/chat/stream` gained a pre-orchestrator clarification gate** in
+    `src/api/routes/chatbot_graph.py` (`route_after_classify` → `clarify_node`),
+    which intercepts underspecified analytical asks *before* dispatch. Gate
+    (verified by reading `_detect_missing_slots`): fires iff intent ∈
+    `CLARIFY_INTENTS` = {`kpi_query`, `causal_analysis`} **AND** no prior
+    analytical referent in-session **AND** the query names neither a real brand
+    nor a recognizable metric. Flag `CHATBOT_CLARIFY` (default on), pending state
+    persists to `chatbot_conversations.metadata` with a 30-min TTL and resumes on
+    the next turn via a merged query.
+
+  **MEASURED live on `/chat/stream` 2026-08-03** (7 turns; each cold probe in a
+  fresh session, verdict confirmed by three converging methods — `dispatch_info`,
+  the answer text, and the persisted `chatbot_conversations.metadata`
+  `pending_clarification` row):
+
+  | Q | Cold turn (fresh session) | In narrative order | Verdict |
+  |---|---|---|---|
+  | **A.5** | **CLARIFIES**, 5.6 s, `orchestrator_used=false`, pending persisted `["brand","metric"]` | always cold by design | ✅ **the intended #1407 win** |
+  | **5.7** | CLARIFIES, 7.9 s | **ANSWERS** — seeded with 5.3, then dispatched `causal_impact`+`explainer` in 55.0 s and returned a real refutation answer, no ask-back | ✅ no regression |
+  | **5.5** | CLARIFIES, 33.7 s | suppressed (same mechanism as 5.7) | ✅ no regression |
+  | **4.3** | **never reaches the gate** — live intent is `multi_faceted` (0.82), outside `CLARIFY_INTENTS`; dispatched `heterogeneous_optimizer`+`gap_analyzer`, 79.9 s, no pending row | same | ✅ unrelated to #1407 |
+
+  **Conclusion: there is no over-abstention regression in the demo flow.** The
+  only suite question that clarifies in narrative order is A.5, which is exactly
+  what #1407 was built to do. 5.5/5.7 clarify *only* if run as an isolated cold
+  turn, because `_has_analytical_referent` finds a brand/metric token in their
+  session's earlier turns (4.1/4.2 carry "TRx"; 5.3/5.4 carry "Kisqali").
+
+  **Round-trip verified**: answering A.5's ask-back with `"Kisqali TRx"` resumed
+  on the merged query, dispatched `causal_impact`+`explainer`, returned a real
+  grounded number (**TRx = 12,867**), and cleared the pending row. The
+  clarification is not a dead end.
+
+  ⚠️ **A rule-fallback prediction is not a live prediction.** The cold set was
+  first derived from the deterministic fallback classifier, which predicted
+  `kpi_query` for 4.3 — production's DSPy classifier returned `multi_faceted`,
+  so 4.3 never touched the gate. Anyone re-deriving this set offline should
+  treat the fallback as a hypothesis generator only.
+
+  Remaining known divergences:
+  - **`A.1` and `A.2a` still do not clarify** despite gold CLARIFICATION_NEEDED:
+    their intents (`greeting`, `help`) are outside `CLARIFY_INTENTS`, so the gate
+    short-circuits. Gold and delivery diverge here by design.
+  - **`1.6` and `A.9-followup`** are suppressed in-session by the prior-referent
+    check — they clarify only if run cold.
+  - **The AG-UI surface is unaffected.** The clarify gate lives in
+    `chatbot_graph.py`, which serves `/chat/stream` only; the demo-answer brain
+    (`agent/default`) may still clarify conversationally, model-elected and
+    unrouted, exactly as before.
 
 ### Which agents each path can reach
 
@@ -118,14 +186,33 @@ stack once inside); its ordinary answers come from bound tools, not agents.
 
 ### Benchmark context (why "Gold ≠ Legacy" rows exist)
 
-From the #1337 Step 0 benchmark and post-remediation reruns (reproduced on
-current `main` with `pattern_diff.py`, 2026-07-31): legacy pattern accuracy
-over the 337-row gold is **0.843** (full set) / **0.891** (deterministic
-subset, n=193), with TOOL_COMPOSER precision **1.000** but recall 0.321 — the
-incumbent under-fires the composer and never abstains. The 2026-07-29 shadow
-recording predates the remediation chain (PRs #1347–#1372), so its
-`routing_pattern` column shows the *old* 56%-CLARIFICATION pipeline — treat it
-as the point-in-time record it is.
+From the #1337 Step 0 benchmark and post-remediation reruns. **Re-measured
+2026-08-03 on current `main`** with
+`.venv/bin/python scripts/benchmarks/routing/pattern_diff.py` (zero LLM calls,
+fully reproducible):
+
+| Metric | 2026-07-31 (as v2 first shipped) | **2026-08-03 (current `main`)** |
+|---|---|---|
+| pattern accuracy, full set (n=337) | 0.843 | **0.852** |
+| pattern accuracy, deterministic subset (n=193) | 0.891 | **0.907** |
+| TOOL_COMPOSER precision / recall | 1.000 / 0.321 | **1.000 / 0.321** (unchanged) |
+| agents exact-match (full set) | — | 0.558 (jaccard 0.562) |
+
+Per-pattern on the full set today: SINGLE_AGENT recall 1.000 / precision 0.852;
+PARALLEL_DELEGATION recall 0.400 (gold n=5); TOOL_COMPOSER recall 0.321 (gold
+n=28); CLARIFICATION_NEEDED recall 0.000 (gold n=28, all → SINGLE_AGENT — see
+the Clarification note above for why this is expected on the *orchestrator*
+taxonomy even though `/chat/stream` now clarifies).
+
+The ≈ +0.9 pp / +1.6 pp gain is small and comes from ~3 rows across the whole
+gold set — one of which is demo question **3.5** (see Narrative 3). **The
+incumbent's weakest cell is unmoved**: it still under-fires the composer
+(recall 0.321) and still never abstains. Anyone hoping the July remediation
+chain fixed composer recall should read this row first.
+
+The 2026-07-29 shadow recording predates the remediation chain (PRs
+#1347–#1372), so its `routing_pattern` column shows the *old*
+56%-CLARIFICATION pipeline — treat it as the point-in-time record it is.
 
 ---
 
@@ -142,7 +229,7 @@ Values and method are in "Latency budgets" directly below the table.
 | **T3 — Single agent** | routing: SINGLE_AGENT; AG-UI: one analytical tool call | Streaming progress visible; structured result |
 | **T4 — Multi-domain composite / full orchestration** | routing: TOOL_COMPOSER (**multi-domain + dependency-linked** — see gate above) or PARALLEL_DELEGATION (multi-domain, independent); also AG-UI turns that elect `orchestrator_tool` for a full orchestrated run (3.4) | Visible decomposition; each facet resolved; coherent synthesis |
 | **T5 — Context / memory** | follow-up turns and paraphrase repeats against session memory (AG-UI full-history resend) | Correct referent resolution; paraphrase repeats acknowledge/reuse the earlier analysis with consistent grounded numbers — **measured PASS 5/5, 2026-07-31** (`results/2026-07-31_t5_paraphrase_repeat/RESULTS.md`; #1339 closed measured-not-needed) |
-| **T6 — Robustness** | typos, ambiguity | Typos silently corrected; ambiguous queries produce honest scope-limiting, not hallucination (**routed** clarification is not deliverable today — #1407) |
+| **T6 — Robustness** | typos, ambiguity | Typos silently corrected; ambiguous queries produce honest scope-limiting, not hallucination. **Updated 2026-08-03 (measured):** since #1407 shipped, `/chat/stream` delivers a real ask-back for underspecified `kpi_query`/`causal_analysis` turns. **A.5 now clarifies instead of guessing (5.6 s) and resumes to a grounded answer** — T6's ambiguity criterion passes on this surface for the first time. The inverse failure was checked and did not occur: 4.3/5.5/5.7 do not clarify in narrative order |
 
 ### Latency budgets (re-baselined 2026-07-31 — #1338)
 
@@ -246,8 +333,15 @@ showcase.
 | 3.2 | What is the current TRx volume for Fabhalta? | SINGLE_AGENT → explainer | explanation → explainer ✓ | kpi_calculate_tool · 5.0 s | T2 |
 | 3.3 | Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter | SINGLE_AGENT → prediction_synthesizer | segment_analysis → heterogeneous_optimizer ✗ | e2i_data_query_tool · 17.3 s | T3 |
 | 3.4 | Design an experiment to measure whether speaker programs increase Fabhalta NRx | SINGLE_AGENT → experiment_designer | experiment_design → experiment_designer ✓ | **orchestrator_tool** · 75.2 s | T4 |
-| 3.5 | *(follow-up)* What did the digital twin simulation say about expected lift and sample size? | SINGLE_AGENT → experiment_designer | experiment_design + prediction → PARALLEL (experiment_designer, prediction_synthesizer) ✗ | e2i_data_query_tool · 12.7 s | T5 |
+| 3.5 | *(follow-up)* What did the digital twin simulation say about expected lift and sample size? | SINGLE_AGENT → experiment_designer | experiment_design → experiment_designer ✓ **(fixed since 2026-07-31)** | e2i_data_query_tool · 12.7 s | T5 |
 | 3.6 | Design an experiment to test whether increasing rep visits improves Fabhalta adoption | SINGLE_AGENT → experiment_designer | experiment_design → experiment_designer ✓ | causal_analysis_tool · 81.4 s | T3 |
+
+**3.5 changed since v2 first shipped**: it previously mis-fired as
+PARALLEL_DELEGATION (experiment_designer + prediction_synthesizer); on current
+`main` it routes SINGLE_AGENT → experiment_designer, matching gold. This is the
+one per-question routing annotation in the whole suite that moved between
+2026-07-31 and 2026-08-03 (regenerated with `pattern_diff.py`; credit most
+likely to the #1408/#1409 tie-break work).
 
 Notes: experiment-design turns are the longest single-agent runs on record
 (75–90 s; the `experiment_design` dispatch SLA was raised to 150 s on these
@@ -336,7 +430,7 @@ decomposition in the agent-progress renderer) fires reliably on 6.1/6.2/A.10.
 | A.2b | What KPIs are available for Kisqali? | SINGLE_AGENT → explainer | general → explainer **(LLM)** ✓ | Capability grounding with entity (9.6 s) |
 | A.3 | Waht is the TRx for Kisqali? | SINGLE_AGENT → explainer | general → explainer **(LLM)** ✓ | Typo handler — same answer as 1.1 (5.7 s; the `explanation` KPI regex tolerates the recurring "teh" typo but not "Waht") |
 | A.4 | Show me converson rate for Remibrutnib | SINGLE_AGENT → explainer | general → explainer **(LLM)** ✓ | Typos in metric and brand (5.1 s) |
-| A.5 | Why did it drop? *(cold first message)* | CLARIFICATION_NEEDED | causal_effect → causal_impact ✗ | The canonical #1407 case: gold says clarify; legacy structurally cannot; AG-UI asks conversationally |
+| A.5 | Why did it drop? *(cold first message)* | CLARIFICATION_NEEDED | causal_effect → causal_impact ✗ *(orchestrator taxonomy)* | The canonical #1407 case — **now expected to PASS on `/chat/stream`**: the pre-orchestrator clarify gate fires (causal_analysis · no referent · no brand · no metric) and asks back instead of dispatching. The orchestrator's own pattern is still SINGLE_AGENT, so `pattern_diff` continues to score this a miss — that is a scorer artifact, not a delivery failure. AG-UI still asks conversationally |
 | A.6 | What is TRx? | SINGLE_AGENT → explainer | explanation → explainer ✓ | Definitional — should define, not dump data (9.2 s) |
 | A.7 | Ask 1.1, then immediately ask 1.4 while streaming | — (UI-only, not a gold row) | — | Concurrent/interrupt behavior; baseline: both turns complete, episodic recap on repeat |
 | A.8 | Paraphrase 1.1 later in the same session | — (measured separately) | — | **Paraphrase repeat: measured PASS 5/5** — recap acknowledges/reuses the earlier grounded number, often faster than cold because the recap skips the tool round-trip (`results/2026-07-31_t5_paraphrase_repeat/RESULTS.md`; #1339 closed measured-not-needed; verbatim caching out of scope) |
@@ -353,6 +447,25 @@ Retired v1 caveats (all fixed and verified post-merge):
 - **#1336 (D5)**: complete orchestrator failures now bridge to the AG-UI brain
   (PR #1394) instead of returning a bare fail-closed summary.
 - **#1340**: silent-dead-turn and stale "Working…" header fixed in the UI.
+
+## What changed since the 2026-07-29 baseline
+
+221 commits landed on `main` between the recorded baseline and 2026-08-03. The
+ones that can move a number in this suite, and what to watch for on a re-run:
+
+| Change | Merged | Surface affected | What should move |
+|---|---|---|---|
+| **#1407** stateful multi-turn clarification ask-back | 2026-08-02 `23494dd5` | `/chat/stream` only | ✅ **MEASURED 2026-08-03 — clean.** A.5 clarifies (5.6 s) and resumes to a real answer; 4.3/5.5/5.7 do **not** clarify in narrative order, so no over-abstention. Full evidence table in the Clarification section |
+| **#1406** semantic dispatcher gate (haiku hybrid; replaced the unbounded attribution-veto lexicon) | 2026-08-01 | routing | ranking-vs-attribution asks; net effect already folded into the 0.852 figure |
+| **#1408 / #1409** routing tie-break + digital-twin collapse residuals | 2026-08-01 | routing | **3.5 fixed** (PARALLEL → SINGLE_AGENT, now matches gold); ≈ +0.9 pp overall |
+| **#1442 / #1443** `/chat/stream` re-streamed the prior assistant message every turn ≥ 2 | 2026-08-02 `e60d0caa` | `/chat/stream` | multi-turn sessions (1.6, 1.7, 3.5, A.8-warm, A.9-followup) — baseline transcripts on that surface contain replayed text; a clean re-run should not |
+| **#1444** markdown tables render as real columns in the copilot sidebar | 2026-08-02 `f913cf6d` | UI pass | KPI/segment answers that emit tables (1.3, 2.2, 2.3, 4.5) — previously ran together as text (`NortheastNRx`). Sidebar also widened 400 → 480 px |
+| **#1445** conditional required CI contexts | 2026-08-03 `a6d05a9b` | none (CI only) | nothing in this suite |
+
+**Not yet re-measured** (needs the LLM-spending passes, steps 2–3): every
+`AG-UI baseline` column in the narrative tables, all latency budgets, and the
+live clarify set. Those still describe the 2026-07-29 run and are labelled as
+such throughout.
 
 ## Appendix B — Measurement sheet (fields are real since PR #1330)
 

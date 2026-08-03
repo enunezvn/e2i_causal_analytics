@@ -1,63 +1,1008 @@
 {
-  "source": "docs/demos/COPILOT_CHAT_DEMO_SCENARIOS.md",
-  "notes": "Question set for the Copilot Chat performance/demo pass. Sessions group turns that must share a chat session_id (T5 follow-ups, A.8 repeat, A.9 memory). A.7 (concurrent interrupt) is UI-pass-only and deliberately absent.",
+  "source": "docs/demos/COPILOT_CHAT_DEMO_SCENARIOS_V2.md",
+  "rubric_verified": "2026-08-03",
+  "notes": "Question set for the Copilot Chat performance/demo pass. TEXT IS UNCHANGED from v1 \u2014 v2 re-annotated the rubric, not the stimulus. Sessions group turns that must share a chat session_id (T5 follow-ups, A.8 repeat, A.9 memory). A.7 (concurrent interrupt) is UI-pass-only and deliberately absent. Scoring axis is gold_pattern/gold_agents (from benchmark_queries_gold.jsonl, source=='demo', 48 rows); legacy_* is the deterministic legacy-chain prediction regenerated on current main by pattern_diff.py (zero LLM calls) on 2026-08-03; intent_expected is a v1 passthrough retained only because the runners write it to CSV. clarify_watch flags the #1407 ask-back gate. clarify_watch values were MEASURED live on /chat/stream 2026-08-03 (see docs/demos/results/2026-08-03_clarify_probe_1407/).",
   "questions": [
-    {"question_id": "1.1", "session": "n1", "tier": "T2", "intent_expected": "kpi_query", "text": "What is TRx for Kisqali?", "expected_path": "KPI engine (highest-volume production query)"},
-    {"question_id": "1.2", "session": "n1", "tier": "T2", "intent_expected": "kpi_query", "text": "What are the TRx trends for Kisqali in Q4?", "expected_path": "KPI engine, trend charting"},
-    {"question_id": "1.3", "session": "n1", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the market share for Kisqali compared to competitors?", "expected_path": "TRx Share windows"},
-    {"question_id": "1.4", "session": "n1", "tier": "T3", "intent_expected": "causal_analysis", "text": "Why did Kisqali TRx drop in Q1 in the northeast region?", "expected_path": "causal_impact (effect estimation + 5 DoWhy refutation tests)"},
-    {"question_id": "1.5", "session": "n1", "tier": "T3", "intent_expected": "causal_analysis", "text": "What is the causal impact of rep visits on TRx for Kisqali?", "expected_path": "causal_impact (ATE with refutation gating)"},
-    {"question_id": "1.6", "session": "n1", "tier": "T5", "intent_expected": "causal_analysis", "text": "Which HCP segments show the strongest effect?", "expected_path": "heterogeneous_optimizer (CATE by segment); reference-chain follow-up", "follow_up": true},
-    {"question_id": "1.7", "session": "n1", "tier": "T5", "intent_expected": "recommendation", "text": "Based on that, how should we reallocate rep effort next quarter?", "expected_path": "resource_optimizer", "follow_up": true},
-
-    {"question_id": "2.1", "session": "n2", "tier": "T3", "intent_expected": "search", "text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024", "expected_path": "cohort_constructor (COHORT_DEFINITION domain)"},
-    {"question_id": "2.2", "session": "n2", "tier": "T2", "intent_expected": "kpi_query", "text": "Give me an NRx breakdown by patient clinical segment for Remibrutinib", "expected_path": "KPI engine, clinical segment breakdown"},
-    {"question_id": "2.3", "session": "n2", "tier": "T2", "intent_expected": "kpi_query", "text": "What are biologic-naive vs biologic-experienced NRx numbers for Remibrutinib?", "expected_path": "KPI engine, segment routing"},
-    {"question_id": "2.4", "session": "n2", "tier": "T3", "intent_expected": "causal_analysis", "text": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?", "expected_path": "causal_impact"},
-    {"question_id": "2.5", "session": "n2", "tier": "T3", "intent_expected": "recommendation", "text": "Where are the biggest untapped opportunities to grow Remibrutinib market share?", "expected_path": "gap_analyzer (ROI opportunity ranking)"},
-    {"question_id": "2.6", "session": "n2", "tier": "T3", "intent_expected": "recommendation", "text": "How can I optimize resource allocation for Remibrutinib in the northeast region?", "expected_path": "resource_optimizer"},
-    {"question_id": "2.7", "session": "n2", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the intent-to-prescribe delta for Remibrutinib?", "expected_path": "brand-specific KPI (Remi - Intent-to-Prescribe delta)"},
-
-    {"question_id": "3.1", "session": "n3", "tier": "T2", "intent_expected": "kpi_query", "text": "What percentage of PNH patients have been tested?", "expected_path": "brand-specific KPI (Fabhalta - % PNH Tested)"},
-    {"question_id": "3.2", "session": "n3", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the current TRx volume for Fabhalta?", "expected_path": "KPI engine"},
-    {"question_id": "3.3", "session": "n3", "tier": "T3", "intent_expected": "prediction", "text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter", "expected_path": "prediction_synthesizer"},
-    {"question_id": "3.4", "session": "n3", "tier": "T3-T4", "intent_expected": "recommendation", "text": "Design an experiment to measure whether speaker programs increase Fabhalta NRx", "expected_path": "experiment_designer with Digital Twin pre-screening"},
-    {"question_id": "3.5", "session": "n3", "tier": "T5", "intent_expected": "recommendation", "text": "What did the digital twin simulation say about expected lift and sample size?", "expected_path": "digital_twin results via experiment_designer", "follow_up": true},
-    {"question_id": "3.6", "session": "n3", "tier": "T3", "intent_expected": "recommendation", "text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption", "expected_path": "experiment_designer (consistency check vs 3.4)"},
-
-    {"question_id": "4.1", "session": "n4", "tier": "T3", "intent_expected": "search", "text": "Create a cohort of HCPs who are oncologists in the northeast", "expected_path": "cohort_constructor"},
-    {"question_id": "4.2", "session": "n4", "tier": "T3", "intent_expected": "search", "text": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter", "expected_path": "cohort_constructor with quantitative criterion"},
-    {"question_id": "4.3", "session": "n4", "tier": "T4", "intent_expected": "multi_faceted", "text": "Segment HCPs by prescription volume into high, medium, and low tiers", "expected_path": "tool composer / segmentation"},
-    {"question_id": "4.4", "session": "n4", "tier": "T3", "intent_expected": "causal_analysis", "text": "Which HCP segments show the strongest treatment effect for Remibrutinib?", "expected_path": "heterogeneous_optimizer (CATE)"},
-    {"question_id": "4.5", "session": "n4", "tier": "T2", "intent_expected": "kpi_query", "text": "What is our trigger precision and acceptance rate this month?", "expected_path": "trigger KPIs (Trigger Precision, Acceptance Rate)"},
-    {"question_id": "4.6", "session": "n4", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the false alert rate and override rate for triggers?", "expected_path": "trigger KPIs"},
-    {"question_id": "4.7", "session": "n4", "tier": "T3", "intent_expected": "causal_analysis", "text": "Did rep actions driven by triggers actually lift prescriptions?", "expected_path": "Action Rate Uplift KPI -> causal framing"},
-
-    {"question_id": "5.1", "session": "n5", "tier": "T2-T3", "intent_expected": "agent_status", "text": "What is the current system health score?", "expected_path": "health_score"},
-    {"question_id": "5.2", "session": "n5", "tier": "T1", "intent_expected": "agent_status", "text": "What agents are available in the system?", "expected_path": "agent registry"},
-    {"question_id": "5.3", "session": "n5", "tier": "T2", "intent_expected": "kpi_query", "text": "What is the ROC-AUC and calibration of the current Kisqali model?", "expected_path": "ML KPIs (ROC-AUC, Calibration Slope Deviation, Brier)"},
-    {"question_id": "5.4", "session": "n5", "tier": "T3", "intent_expected": "kpi_query", "text": "Is there any feature drift in the Kisqali model?", "expected_path": "drift_monitor (Feature Drift PSI)"},
-    {"question_id": "5.5", "session": "n5", "tier": "T3", "intent_expected": "causal_analysis", "text": "Why did the model flag this HCP segment - what features drove the prediction?", "expected_path": "explainer (SHAP interpretability API)"},
-    {"question_id": "5.6", "session": "n5", "tier": "T1", "intent_expected": "general", "text": "Explain what heterogeneous treatment effects mean in our analyses", "expected_path": "explanation, no data fetch"},
-    {"question_id": "5.7", "session": "n5", "tier": "T3", "intent_expected": "causal_analysis", "text": "How confident are we in the rep-visit effect - did it pass refutation tests?", "expected_path": "causal_impact refutation report (fail-closed gating, E-value)"},
-
-    {"question_id": "6.1", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Compare TRx market share for Kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter", "expected_path": "TOOL_COMPOSER - 3 sub-questions with LOGICAL_SEQUENCE dependencies (KPI -> causal -> resource)"},
-    {"question_id": "6.2", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Which regions are underperforming on Remibrutinib conversion rate, and for those regions, what would be the ROI of shifting 20% more rep capacity there?", "expected_path": "TOOL_COMPOSER - ENTITY_TRANSFORMATION dependency"},
-    {"question_id": "6.3", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "If conversion rate in the west is below 15%, which patient segments should we prioritize?", "expected_path": "CONDITIONAL dependency detection"},
-    {"question_id": "6.4", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Give me a launch-readiness snapshot for Fabhalta: % PNH tested, NRx trend, top adoption barriers, and one experiment we should run next", "expected_path": "TOOL_COMPOSER - 4-facet decomposition ending in experiment_designer"},
-    {"question_id": "6.5", "session": "n6", "tier": "T4", "intent_expected": "multi_faceted", "text": "Forecast Kisqali TRx volume for the next two quarters and tell me the biggest risk to that forecast", "expected_path": "prediction_synthesizer + causal/drift context"},
-
-    {"question_id": "A.1", "session": "a1", "tier": "T6", "intent_expected": "greeting", "text": "Hello, how are you?", "expected_path": "greeting - should NOT dispatch agents; instant"},
-    {"question_id": "A.2a", "session": "a2", "tier": "T6", "intent_expected": "help", "text": "What can you do?", "expected_path": "help - capability grounding, instant"},
-    {"question_id": "A.2b", "session": "a2", "tier": "T6", "intent_expected": "help", "text": "What KPIs are available for Kisqali?", "expected_path": "help - capability grounding"},
-    {"question_id": "A.3", "session": "a3", "tier": "T6", "intent_expected": "kpi_query", "text": "Waht is the TRx for Kisqali?", "expected_path": "typo handler - same answer as 1.1, no latency cliff"},
-    {"question_id": "A.4", "session": "a4", "tier": "T6", "intent_expected": "kpi_query", "text": "Show me converson rate for Remibrutnib", "expected_path": "typo in both metric and brand"},
-    {"question_id": "A.5", "session": "a5", "tier": "T6", "intent_expected": "clarification", "text": "Why did it drop?", "expected_path": "cold first message - CLARIFICATION expected, should ask which metric/brand, not hallucinate"},
-    {"question_id": "A.6", "session": "a6", "tier": "T6", "intent_expected": "help", "text": "What is TRx?", "expected_path": "definitional edge - should define, not dump data"},
-    {"question_id": "A.8-cold", "session": "a8", "tier": "T2", "intent_expected": "kpi_query", "text": "What is TRx for Kisqali?", "expected_path": "cold baseline for the repeat test"},
-    {"question_id": "A.8-warm", "session": "a8", "tier": "T5", "intent_expected": "kpi_query", "text": "What is TRx for Kisqali?", "expected_path": "verbatim repeat in same session - should be faster than cold", "follow_up": true},
-    {"question_id": "A.9-seed", "session": "a9", "tier": "T3", "intent_expected": "causal_analysis", "text": "Why did Kisqali TRx drop in Q1 in the northeast region?", "expected_path": "seed turn for the memory follow-up"},
-    {"question_id": "A.9-followup", "session": "a9", "tier": "T5", "intent_expected": "causal_analysis", "text": "Why is this happening?", "expected_path": "T5 memory: episodic context retrieval", "follow_up": true},
-    {"question_id": "A.10", "session": "a10", "tier": "T6", "intent_expected": "multi_faceted", "text": "Our Kisqali TRx dropped in the northeast last quarter while conversion rates for Remibrutinib stayed flat, and I need to understand several things: what actually caused the Kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.", "expected_path": "complexity warning / graceful decomposition, no timeout (60+ words, 4+ domains)"}
+    {
+      "question_id": "1.1",
+      "session": "n1",
+      "text": "What is TRx for Kisqali?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "explanation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "1.2",
+      "session": "n1",
+      "text": "What are the TRx trends for Kisqali in Q4?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "explanation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "1.3",
+      "session": "n1",
+      "text": "What is the market share for Kisqali compared to competitors?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge+human-confirmed",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "explanation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "1.4",
+      "session": "n1",
+      "text": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "causal_impact"
+      ],
+      "legacy_intent": "causal_effect",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "1.5",
+      "session": "n1",
+      "text": "What is the causal impact of rep visits on TRx for Kisqali?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "causal_impact"
+      ],
+      "legacy_intent": "causal_effect",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "1.6",
+      "session": "n1",
+      "text": "Which HCP segments show the strongest effect?",
+      "tier": "T5",
+      "follow_up": true,
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "clarify_watch": "gate suppressed in-session by prior referent (#1407)",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "1.7",
+      "session": "n1",
+      "text": "Based on that, how should we reallocate rep effort next quarter?",
+      "tier": "T5",
+      "follow_up": true,
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "resource_optimizer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "resource_optimizer"
+      ],
+      "legacy_intent": "resource_allocation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "recommendation",
+      "intent_expected": "recommendation"
+    },
+    {
+      "question_id": "2.1",
+      "session": "n2",
+      "text": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "cohort_profiler"
+      ],
+      "legacy_intent": "cohort_definition",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "search",
+      "intent_expected": "search"
+    },
+    {
+      "question_id": "2.2",
+      "session": "n2",
+      "text": "Give me an NRx breakdown by patient clinical segment for Remibrutinib",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "2.3",
+      "session": "n2",
+      "text": "What are biologic-naive vs biologic-experienced NRx numbers for Remibrutinib?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "explanation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "2.4",
+      "session": "n2",
+      "text": "What is driving the drop in Remibrutinib NRx in the northeast region this quarter?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "causal_impact"
+      ],
+      "legacy_intent": "causal_effect",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "2.5",
+      "session": "n2",
+      "text": "Where are the biggest untapped opportunities to grow Remibrutinib market share?",
+      "tier": "T3",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "gap_analyzer"
+      ],
+      "legacy_intent": "performance_gap",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "MISS",
+      "intent_expected_v1": "recommendation",
+      "intent_expected": "recommendation"
+    },
+    {
+      "question_id": "2.6",
+      "session": "n2",
+      "text": "How can I optimize resource allocation for Remibrutinib in the northeast region?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "resource_optimizer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "resource_optimizer"
+      ],
+      "legacy_intent": "resource_allocation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "recommendation",
+      "intent_expected": "recommendation"
+    },
+    {
+      "question_id": "2.7",
+      "session": "n2",
+      "text": "What is the intent-to-prescribe delta for Remibrutinib?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge+human-confirmed",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "3.1",
+      "session": "n3",
+      "text": "What percentage of PNH patients have been tested?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "human-triage",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "cohort_profiler"
+      ],
+      "legacy_intent": "cohort_definition",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "3.2",
+      "session": "n3",
+      "text": "What is the current TRx volume for Fabhalta?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "explanation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "3.3",
+      "session": "n3",
+      "text": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "prediction_synthesizer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "prediction",
+      "intent_expected": "prediction"
+    },
+    {
+      "question_id": "3.4",
+      "session": "n3",
+      "text": "Design an experiment to measure whether speaker programs increase Fabhalta NRx",
+      "tier": "T4",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "experiment_designer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "experiment_designer"
+      ],
+      "legacy_intent": "experiment_design",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "recommendation",
+      "intent_expected": "recommendation"
+    },
+    {
+      "question_id": "3.5",
+      "session": "n3",
+      "text": "What did the digital twin simulation say about expected lift and sample size?",
+      "tier": "T5",
+      "follow_up": true,
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "experiment_designer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "experiment_designer"
+      ],
+      "legacy_intent": "experiment_design",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "recommendation",
+      "intent_expected": "recommendation"
+    },
+    {
+      "question_id": "3.6",
+      "session": "n3",
+      "text": "Design an experiment to test whether increasing rep visits improves Fabhalta adoption",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "experiment_designer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "experiment_designer"
+      ],
+      "legacy_intent": "experiment_design",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "recommendation",
+      "intent_expected": "recommendation"
+    },
+    {
+      "question_id": "4.1",
+      "session": "n4",
+      "text": "Create a cohort of HCPs who are oncologists in the northeast",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "cohort_profiler"
+      ],
+      "legacy_intent": "cohort_definition",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "search",
+      "intent_expected": "search"
+    },
+    {
+      "question_id": "4.2",
+      "session": "n4",
+      "text": "Build a cohort of high-value HCPs who prescribed more than 50 TRx last quarter",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "cohort_profiler"
+      ],
+      "legacy_intent": "cohort_definition",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "search",
+      "intent_expected": "search"
+    },
+    {
+      "question_id": "4.3",
+      "session": "n4",
+      "text": "Segment HCPs by prescription volume into high, medium, and low tiers",
+      "tier": "T4",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "cohort_profiler"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "clarify_watch": "MEASURED 2026-08-03: never reaches the gate \u2014 live DSPy intent is multi_faceted (0.82), outside CLARIFY_INTENTS",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "4.4",
+      "session": "n4",
+      "text": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "4.5",
+      "session": "n4",
+      "text": "What is our trigger precision and acceptance rate this month?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "human-triage",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "4.6",
+      "session": "n4",
+      "text": "What is the false alert rate and override rate for triggers?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "experiment_monitor"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "4.7",
+      "session": "n4",
+      "text": "Did rep actions driven by triggers actually lift prescriptions?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "5.1",
+      "session": "n5",
+      "text": "What is the current system health score?",
+      "tier": "T2-T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "health_score"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "health_score"
+      ],
+      "legacy_intent": "system_health",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "agent_status",
+      "intent_expected": "agent_status"
+    },
+    {
+      "question_id": "5.2",
+      "session": "n5",
+      "text": "What agents are available in the system?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "health_score"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "agent_status",
+      "intent_expected": "agent_status"
+    },
+    {
+      "question_id": "5.3",
+      "session": "n5",
+      "text": "What is the ROC-AUC and calibration of the current Kisqali model?",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "health_score"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "5.4",
+      "session": "n5",
+      "text": "Is there any feature drift in the Kisqali model?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "drift_monitor"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "drift_monitor"
+      ],
+      "legacy_intent": "drift_check",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "5.5",
+      "session": "n5",
+      "text": "Why did the model flag this HCP segment - what features drove the prediction?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "clarify_watch": "MEASURED 2026-08-03: clarifies ONLY if run cold (33.7s); suppressed in narrative order by prior referent \u2014 not a regression",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "5.6",
+      "session": "n5",
+      "text": "Explain what heterogeneous treatment effects mean in our analyses",
+      "tier": "T2",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "general",
+      "intent_expected": "general"
+    },
+    {
+      "question_id": "5.7",
+      "session": "n5",
+      "text": "How confident are we in the rep-visit effect - did it pass refutation tests?",
+      "tier": "T3",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "clarify_watch": "MEASURED 2026-08-03: clarifies cold (7.9s); narrative control confirmed live \u2014 answers normally in 55.0s after a 5.3 seed",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "6.1",
+      "session": "n6",
+      "text": "Compare TRx market share for Kisqali vs its competitors over the last 6 months, explain what's driving the difference, and recommend where to focus reps next quarter",
+      "tier": "T4",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "TOOL_COMPOSER",
+      "legacy_agents": [
+        "tool_composer"
+      ],
+      "legacy_intent": "multi_faceted",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "6.2",
+      "session": "n6",
+      "text": "Which regions are underperforming on Remibrutinib conversion rate, and for those regions, what would be the ROI of shifting 20% more rep capacity there?",
+      "tier": "T4",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "TOOL_COMPOSER",
+      "legacy_agents": [
+        "tool_composer"
+      ],
+      "legacy_intent": "multi_faceted",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "6.3",
+      "session": "n6",
+      "text": "If conversion rate in the west is below 15%, which patient segments should we prioritize?",
+      "tier": "T4",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "heterogeneous_optimizer"
+      ],
+      "legacy_intent": "segment_analysis",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "MISS",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "6.4",
+      "session": "n6",
+      "text": "Give me a launch-readiness snapshot for Fabhalta: % PNH tested, NRx trend, top adoption barriers, and one experiment we should run next",
+      "tier": "T4",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "MISS",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "6.5",
+      "session": "n6",
+      "text": "Forecast Kisqali TRx volume for the next two quarters and tell me the biggest risk to that forecast",
+      "tier": "T4",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "prediction_synthesizer"
+      ],
+      "legacy_intent": "prediction",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "MISS",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    },
+    {
+      "question_id": "A.1",
+      "session": "a1",
+      "text": "Hello, how are you?",
+      "tier": "T6",
+      "gold_pattern": "CLARIFICATION_NEEDED",
+      "gold_agents": [],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "MISS",
+      "intent_expected_v1": "greeting",
+      "intent_expected": "greeting"
+    },
+    {
+      "question_id": "A.2a",
+      "session": "a2",
+      "text": "What can you do?",
+      "tier": "T6",
+      "gold_pattern": "CLARIFICATION_NEEDED",
+      "gold_agents": [],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "MISS",
+      "intent_expected_v1": "help",
+      "intent_expected": "help"
+    },
+    {
+      "question_id": "A.2b",
+      "session": "a2",
+      "text": "What KPIs are available for Kisqali?",
+      "tier": "T6",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "help",
+      "intent_expected": "help"
+    },
+    {
+      "question_id": "A.3",
+      "session": "a3",
+      "text": "Waht is the TRx for Kisqali?",
+      "tier": "T6",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "A.4",
+      "session": "a4",
+      "text": "Show me converson rate for Remibrutnib",
+      "tier": "T6",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "A.5",
+      "session": "a5",
+      "text": "Why did it drop?",
+      "tier": "T6",
+      "gold_pattern": "CLARIFICATION_NEEDED",
+      "gold_agents": [],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "causal_impact"
+      ],
+      "legacy_intent": "causal_effect",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "MISS",
+      "clarify_watch": "MEASURED 2026-08-03: clarifies cold (5.6s), pending persisted, resumes to grounded answer (TRx 12,867) \u2014 intended #1407 win",
+      "intent_expected_v1": "clarification",
+      "intent_expected": "clarification"
+    },
+    {
+      "question_id": "A.6",
+      "session": "a6",
+      "text": "What is TRx?",
+      "tier": "T6",
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "explainer"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "explanation",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "help",
+      "intent_expected": "help"
+    },
+    {
+      "question_id": "A.8-cold",
+      "session": "a8",
+      "text": "What is TRx for Kisqali?",
+      "tier": "T2",
+      "gold_pattern": null,
+      "gold_agents": null,
+      "gold_source": null,
+      "gold_note": "no gold row \u2014 measured separately (T5 probe / seed turn)",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "A.8-warm",
+      "session": "a8",
+      "text": "What is TRx for Kisqali?",
+      "tier": "T5",
+      "follow_up": true,
+      "gold_pattern": null,
+      "gold_agents": null,
+      "gold_source": null,
+      "gold_note": "no gold row \u2014 measured separately (T5 probe / seed turn)",
+      "intent_expected_v1": "kpi_query",
+      "intent_expected": "kpi_query"
+    },
+    {
+      "question_id": "A.9-seed",
+      "session": "a9",
+      "text": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+      "tier": "T3",
+      "gold_pattern": null,
+      "gold_agents": null,
+      "gold_source": null,
+      "gold_note": "no gold row \u2014 measured separately (T5 probe / seed turn)",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "A.9-followup",
+      "session": "a9",
+      "text": "Why is this happening?",
+      "tier": "T5",
+      "follow_up": true,
+      "gold_pattern": "SINGLE_AGENT",
+      "gold_agents": [
+        "causal_impact"
+      ],
+      "gold_source": "llm-judge",
+      "legacy_pattern": "SINGLE_AGENT",
+      "legacy_agents": [
+        "explainer"
+      ],
+      "legacy_intent": "general",
+      "legacy_escalates_to_llm": true,
+      "gold_vs_legacy": "match",
+      "clarify_watch": "gate suppressed in-session by prior referent (#1407)",
+      "intent_expected_v1": "causal_analysis",
+      "intent_expected": "causal_analysis"
+    },
+    {
+      "question_id": "A.10",
+      "session": "a10",
+      "text": "Our Kisqali TRx dropped in the northeast last quarter while conversion rates for Remibrutinib stayed flat, and I need to understand several things: what actually caused the Kisqali decline, whether biologic-experienced patient segments were disproportionately affected compared to biologic-naive ones, what the models predict for both brands next quarter, whether any data drift could be confounding these reads, and finally what experiment we should run to test whether adding rep capacity in the northeast would recover the trend.",
+      "tier": "T6",
+      "gold_pattern": "TOOL_COMPOSER",
+      "gold_agents": [
+        "tool_composer"
+      ],
+      "gold_source": "human-ratified",
+      "legacy_pattern": "TOOL_COMPOSER",
+      "legacy_agents": [
+        "tool_composer"
+      ],
+      "legacy_intent": "multi_faceted",
+      "legacy_escalates_to_llm": false,
+      "gold_vs_legacy": "match",
+      "intent_expected_v1": "multi_faceted",
+      "intent_expected": "multi_faceted"
+    }
   ]
 }
