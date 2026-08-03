@@ -202,6 +202,56 @@ _DIGITAL_TWIN_READOUT_RE = re.compile(
 )
 
 
+# #1449 — DESCRIPTIVE TIERING is cohort CONSTRUCTION, not CATE.
+#
+# Demo 4.3 ("Segment HCPs by prescription volume into high, medium, and low
+# tiers") misrouted to heterogeneous_optimizer + its gap_analyzer fallback: the
+# legacy ``segment_analysis`` pattern ``(segment|group|heterogen)`` fires on the
+# bare word "Segment" and ``segment_analysis`` maps to a CATE estimator. Both
+# agents then fail closed (a chat query cannot name a treatment/outcome column,
+# and the ask names no brand) and the orchestrator reports complete failure —
+# for a question ``cohort_profiler`` can genuinely answer. Gold (bench-0022 /
+# 0207 / 0208, ``demo_meta.question_id == "4.3"``) is SINGLE_AGENT ->
+# cohort_profiler: partitioning a population into descriptive tiers is
+# single-domain cohort work no matter how many internal steps it takes.
+#
+# THE OVER-REACH RISK (the #1408 bare-``\binterim\b`` lesson). ``cohort_definition``
+# outranks ``segment_analysis`` in INTENT_PRIORITY, so anything this matches wins
+# the tie CONFIDENTLY and never reaches the LLM safety net. A bare tier token was
+# the first cut and it captured "high-decile HCPs" (bench-0263, gold
+# resource_optimizer) — turning a row that currently escalates into one that is
+# confidently wrong. So the signal is DOMAIN-GATED on the tier CONTAINER, two
+# shapes only, both requiring an explicit partition to build:
+#
+#   (a) a partition VERB followed (within one clause, <=80 chars) by an explicit
+#       tier-container NOUN — "segment ... into tiers", "classify ... into
+#       categories", "bucket ... into quartiles". A bare verb or a bare noun is
+#       not enough.
+#   (b) an explicit 3-LEVEL ordinal ladder — high/medium/low, top/middle/bottom,
+#       in either direction. Two-level contrasts ("high vs low responders", which
+#       is heterogeneous_optimizer's own vocabulary) deliberately do NOT match:
+#       the middle rung is required.
+#
+# ...and both carry ``_EFFECT_CLAIM_VETO``: ANY treatment-effect/causal/uplift/
+# responder lexeme anywhere in the query suppresses the tiering match entirely,
+# so a tier ladder glued onto a genuine CATE ask ("compare the treatment effect
+# across high, medium and low volume prescribers") stays with
+# heterogeneous_optimizer. The veto can only ever DOWNGRADE to today's
+# behaviour, which is the safe direction — the same fail-closed posture as the
+# #1406 ranking-vs-attribution gate. Measured over the 337-row gold: matches
+# exactly 5 rows, ALL gold ``cohort_profiler``; zero non-cohort rows.
+_EFFECT_CLAIM_VETO = (
+    r"treatment\s+effect|\beffects?\b|\bcate\b|causal|uplift|incremental"
+    r"|respond(?:er|ers|ing|s)?\b|heterogene"
+)
+_TIER_CONTAINER_NOUNS = (
+    r"tiers?|buckets?|categor(?:y|ies)|quartiles?|quintiles?|deciles?|tertiles?|percentiles?"
+)
+_TIER_PARTITION_VERBS = (
+    r"segment|classif|categor|bucket|tier|divide|split|rank|group|stratif|break\s+down"
+)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -376,6 +426,19 @@ class IntentClassifierNode:
             r"\bcohort\b.*\bhcp",  # "cohort of HCPs" type queries
             r"\bhcp\b.*\bcohort",  # "HCP cohort" type queries
             r"(high.?value|high.?priority).*\b(hcp|physician|doctor)",  # high-value HCP queries
+            # #1449 (a) — partition VERB + explicit tier-container NOUN, same
+            # clause. See _TIER_PARTITION_VERBS / _EFFECT_CLAIM_VETO above.
+            r"(?s)\A(?!.*(?:" + _EFFECT_CLAIM_VETO + r"))"
+            r".*?\b(?:" + _TIER_PARTITION_VERBS + r")\w*\b"
+            r"[^.?!]{0,80}?\b(?:" + _TIER_CONTAINER_NOUNS + r")\b",
+            # #1449 (b) — explicit 3-level ordinal ladder, either direction. The
+            # MIDDLE rung is required so 2-level "high vs low responders"
+            # (heterogeneous_optimizer's own vocabulary) cannot match.
+            r"(?s)\A(?!.*(?:" + _EFFECT_CLAIM_VETO + r"))"
+            r".*?(?:\b(?:high|top)\b[^.?!]{0,40}?\b(?:medium|middle|mid|med)\b"
+            r"[^.?!]{0,40}?\b(?:low|bottom)\b"
+            r"|\b(?:low|bottom)\b[^.?!]{0,40}?\b(?:medium|middle|mid|med)\b"
+            r"[^.?!]{0,40}?\b(?:high|top)\b)",
         ],
     }
 
