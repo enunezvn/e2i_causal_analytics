@@ -56,6 +56,14 @@ x-common-env: &common-env
   # active hands routing authority to it when confident. Must be forwarded
   # here or the in-code default governs regardless of the host .env.
   ORCHESTRATOR_CLASSIFIER_MODE: ${ORCHESTRATOR_CLASSIFIER_MODE:-shadow}
+  # #1448 agent-registry completeness gate. DISARMED by default: a partial registry
+  # is a degradation (the dispatcher already fails closed per missing agent, #814),
+  # so hard-failing on it would trade "18 of 21 agents work" for "no orchestrator at
+  # all". Arm it (true) to turn a partial registry into a raised
+  # PartialAgentRegistryError — use for a post-deploy verification boot, not as a
+  # steady-state setting. Must be forwarded here or the host .env never reaches the
+  # containers and the in-code default governs (the OPIK_ENABLED lesson above).
+  E2I_REQUIRE_FULL_AGENT_REGISTRY: ${E2I_REQUIRE_FULL_AGENT_REGISTRY:-false}
   # Routing-label loop (#1341 Phase 1): nightly Celery labeler for
   # classification_logs. Must be forwarded here or host-.env overrides never
   # reach the worker containers and the in-code defaults govern.

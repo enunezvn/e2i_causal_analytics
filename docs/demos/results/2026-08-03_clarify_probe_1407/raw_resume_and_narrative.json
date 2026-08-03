@@ -1,0 +1,222 @@
+[
+  {
+    "question_id": "A.5-resume",
+    "session": "a5",
+    "tier": "T6",
+    "intent_expected": "clarification",
+    "label": "clarifyprobe2",
+    "request_id": "perf-clarifyprobe2-A.5-resume",
+    "ts_start": "2026-08-03T16:30:09+0000",
+    "session_id": "f0ff4927-1038-449d-a3f1-ee260dd2cfa5",
+    "events": [
+      {
+        "t_ms": 633.7,
+        "type": "session_id",
+        "data": "f0ff4927-1038-449d-a3f1-ee260dd2cfa5"
+      },
+      {
+        "t_ms": 39838.8,
+        "type": "text",
+        "data": "The full analysis pipeline couldn't complete for this question, so here's what I can tell you from the data available:\n\nQuick clarification on data coverage first: the current Kisqali TRx figure is **12,867** for the engine's default reporting window (most recent 30 days, data through 2026-08-03). No non-overlapping prior-period TRx figure was returned by the tools, so I can't actually confirm a \"drop\" or quantify its size from this data \u2014 I'd be manufacturing a comparison that isn't there. If you have a specific baseline period in mind (e.g., prior 30 days, same month last year), let me know and I'll pull that figure for a valid comparison.\n\nThat said, here's what the causal engine identifies as the **validated drivers currently acting on Kisqali TRx/market share** (confidence \u22650.5, synthetic data):\n\n| Driver | Effect on | Effect Size | Confidence | Direction |\n|---|---|---|---|---|\n| Persistent 180-day adherence (refill continuity) | TRx volume | +0.285 | 0.892 | Positive contributor |\n| Formulary status (patient access) | TRx volume | +0.223 | 0.805 | Positive contributor |\n| Rep detailing frequency (HCP engagement) | TRx volume | +0.166 | 0.796 | Positive contributor |\n| Copay support program (adherence) | TRx volume | +0.088 | 0.794 | Positive contributor |\n| HCP coverage (prescriber base) | Market share | +0.09 | 0.899 | Positive contributor |\n| **Competitor activity (share of voice)** | Market share | **-0.073** | 0.793 | **Negative \u2014 pulls share down** |\n\nThe **only negative driver** in the validated causal chain is **competitor activity via share-of-voice**, with an estimated business impact of **-$24,218**. If TRx did decline, this is the leading causal candidate \u2014 everything else in the model (adherence, formulary access, detailing, copay support, HCP coverage) is working in Kisqali's favor, so a drop would most plausibly reflect competitive share erosion rather than an internal execution issue.\n\nSupporting signal from recent triggers: multiple **competitive_threat** and **churn_prevention** triggers tied to \"competitor activity detected in territory\" and \"recent competitive detailing\" have fired for Kisqali HCPs/patients, several still pending or expired without action \u2014 consistent with competitive pressure being a live, underexploited risk.\n\n**Recommendation:** If you can confirm the baseline period you're comparing against, I can pull the actual prior-period TRx to size the drop precisely. In the meantime, prioritizing response to open competitive-threat triggers would directly counter the one negative driver in the model."
+      },
+      {
+        "t_ms": 39898.8,
+        "type": "conversation_title",
+        "data": "Kisqali TRx"
+      },
+      {
+        "t_ms": 39901.1,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": true,
+          "agents_dispatched": [
+            "causal_impact",
+            "explainer"
+          ],
+          "routed_agent": "causal_impact",
+          "response_confidence": 0.0,
+          "intent": "causal_analysis",
+          "intent_confidence": 0.98,
+          "routing_rationale": "Keyword match (score: 3, total: 3)",
+          "routing_pattern": "SINGLE_AGENT",
+          "classification_latency_ms": 0.8628368377685547,
+          "used_llm_layer": false,
+          "execution_time_ms": 39274.84
+        }
+      },
+      {
+        "t_ms": 39903.0,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "The full analysis pipeline couldn't complete for this question, so here's what I can tell you from the data available:\n\nQuick clarification on data coverage first: the current Kisqali TRx figure is **12,867** for the engine's default reporting window (most recent 30 days, data through 2026-08-03). No non-overlapping prior-period TRx figure was returned by the tools, so I can't actually confirm a \"drop\" or quantify its size from this data \u2014 I'd be manufacturing a comparison that isn't there. If you have a specific baseline period in mind (e.g., prior 30 days, same month last year), let me know and I'll pull that figure for a valid comparison.\n\nThat said, here's what the causal engine identifies as the **validated drivers currently acting on Kisqali TRx/market share** (confidence \u22650.5, synthetic data):\n\n| Driver | Effect on | Effect Size | Confidence | Direction |\n|---|---|---|---|---|\n| Persistent 180-day adherence (refill continuity) | TRx volume | +0.285 | 0.892 | Positive contributor |\n| Formulary status (patient access) | TRx volume | +0.223 | 0.805 | Positive contributor |\n| Rep detailing frequency (HCP engagement) | TRx volume | +0.166 | 0.796 | Positive contributor |\n| Copay support program (adherence) | TRx volume | +0.088 | 0.794 | Positive contributor |\n| HCP coverage (prescriber base) | Market share | +0.09 | 0.899 | Positive contributor |\n| **Competitor activity (share of voice)** | Market share | **-0.073** | 0.793 | **Negative \u2014 pulls share down** |\n\nThe **only negative driver** in the validated causal chain is **competitor activity via share-of-voice**, with an estimated business impact of **-$24,218**. If TRx did decline, this is the leading causal candidate \u2014 everything else in the model (adherence, formulary access, detailing, copay support, HCP coverage) is working in Kisqali's favor, so a drop would most plausibly reflect competitive share erosion rather than an internal execution issue.\n\nSupporting signal from recent triggers: multiple **competitive_threat** and **churn_prevention** triggers tied to \"competitor activity detected in territory\" and \"recent competitive detailing\" have fired for Kisqali HCPs/patients, several still pending or expired without action \u2014 consistent with competitive pressure being a live, underexploited risk.\n\n**Recommendation:** If you can confirm the baseline period you're comparing against, I can pull the actual prior-period TRx to size the drop precisely. In the meantime, prioritizing response to open competitive-threat triggers would directly counter the one negative driver in the model.",
+    "dispatch_info": {
+      "orchestrator_used": true,
+      "agents_dispatched": [
+        "causal_impact",
+        "explainer"
+      ],
+      "routed_agent": "causal_impact",
+      "response_confidence": 0.0,
+      "intent": "causal_analysis",
+      "intent_confidence": 0.98,
+      "routing_rationale": "Keyword match (score: 3, total: 3)",
+      "routing_pattern": "SINGLE_AGENT",
+      "classification_latency_ms": 0.8628368377685547,
+      "used_llm_layer": false,
+      "execution_time_ms": 39274.84
+    },
+    "ttfb_ms": 39838.8,
+    "total_ms": 39903.6,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "f0ff4927-1038-449d-a3f1-ee260dd2cfa5"
+  },
+  {
+    "question_id": "5.3-seed",
+    "session": "n5",
+    "tier": "T2",
+    "intent_expected": "kpi_query",
+    "label": "clarifyprobe2",
+    "request_id": "perf-clarifyprobe2-5.3-seed",
+    "ts_start": "2026-08-03T16:30:52+0000",
+    "session_id": "8fa1a389-434e-4ed5-bfc2-e1ea6bb9f4db",
+    "events": [
+      {
+        "t_ms": 574.9,
+        "type": "session_id",
+        "data": "8fa1a389-434e-4ed5-bfc2-e1ea6bb9f4db"
+      },
+      {
+        "t_ms": 59103.0,
+        "type": "text",
+        "data": "System health is critical (Grade: F, Score: 0.0/100). 1 critical issue(s) detected."
+      },
+      {
+        "t_ms": 59164.6,
+        "type": "conversation_title",
+        "data": "What is the ROC-AUC and calibration of the current..."
+      },
+      {
+        "t_ms": 59165.3,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": true,
+          "agents_dispatched": [
+            "health_score"
+          ],
+          "routed_agent": "health_score",
+          "response_confidence": 0.5,
+          "intent": "kpi_query",
+          "intent_confidence": 0.93,
+          "routing_rationale": "Keyword match (score: 1, total: 2)",
+          "routing_pattern": "CLARIFICATION_NEEDED",
+          "classification_latency_ms": 4.728794097900391,
+          "used_llm_layer": false,
+          "execution_time_ms": 58643.03
+        }
+      },
+      {
+        "t_ms": 59167.9,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "System health is critical (Grade: F, Score: 0.0/100). 1 critical issue(s) detected.",
+    "dispatch_info": {
+      "orchestrator_used": true,
+      "agents_dispatched": [
+        "health_score"
+      ],
+      "routed_agent": "health_score",
+      "response_confidence": 0.5,
+      "intent": "kpi_query",
+      "intent_confidence": 0.93,
+      "routing_rationale": "Keyword match (score: 1, total: 2)",
+      "routing_pattern": "CLARIFICATION_NEEDED",
+      "classification_latency_ms": 4.728794097900391,
+      "used_llm_layer": false,
+      "execution_time_ms": 58643.03
+    },
+    "ttfb_ms": 59103.0,
+    "total_ms": 59168.9,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "8fa1a389-434e-4ed5-bfc2-e1ea6bb9f4db"
+  },
+  {
+    "question_id": "5.7-after-seed",
+    "session": "n5",
+    "tier": "T3",
+    "intent_expected": "causal_analysis",
+    "label": "clarifyprobe2",
+    "request_id": "perf-clarifyprobe2-5.7-after-seed",
+    "ts_start": "2026-08-03T16:31:54+0000",
+    "session_id": "8fa1a389-434e-4ed5-bfc2-e1ea6bb9f4db",
+    "events": [
+      {
+        "t_ms": 599.0,
+        "type": "session_id",
+        "data": "8fa1a389-434e-4ed5-bfc2-e1ea6bb9f4db"
+      },
+      {
+        "t_ms": 54966.8,
+        "type": "text",
+        "data": "The full analysis pipeline couldn't complete for this question, so here's what I can tell you from the data available:\n\nYes \u2014 rep-visit effects on Kisqali all passed refutation testing. From the causal-paths registry (Kisqali, no time window specified \u2014 this reflects the current registry snapshot, latest test run **2026-07-31**):\n\n| Causal path | Effect size | Confidence | Refutation tests | Gate decision |\n|---|---|---|---|---|\n| rep_detailing_high \u2192 treatment_initiated | 0.043 | 0.93 | 5/5 passed | Proceed |\n| rep_detailing_frequency \u2192 ROI (via TRx volume) | 0.198 | 0.851 | 5/5 passed | Proceed |\n| rep_detailing_frequency \u2192 TRx volume (via HCP engagement) | 0.166 | 0.796 | 5/5 passed | Proceed |\n| rep_detailing_frequency \u2192 intent to prescribe (via message recall) | 0.267 | 0.772 | 5/5 passed | Proceed |\n\n**Bottom line:** all 4 rep-visit causal paths were validated with 5/5 refutation tests passed (0 failed, 0 warnings), and each carries a \"proceed\" gate decision. Confidence ranges from **0.772\u20130.93**, highest for the direct rep-visit \u2192 treatment-initiation link.\n\n\u26a0\ufe0f Caveat: the tool flags `evidence_is_synthetic: true` \u2014 this is synthetic/demo data, not live production causal evidence, and `data_source` is listed as \"synthetic.\""
+      },
+      {
+        "t_ms": 55022.8,
+        "type": "conversation_title",
+        "data": "How confident are we in the rep-visit effect - did..."
+      },
+      {
+        "t_ms": 55022.9,
+        "type": "dispatch_info",
+        "data": {
+          "orchestrator_used": true,
+          "agents_dispatched": [
+            "causal_impact",
+            "explainer"
+          ],
+          "routed_agent": "causal_impact",
+          "response_confidence": 0.0,
+          "intent": "causal_analysis",
+          "intent_confidence": 0.98,
+          "routing_rationale": "Keyword match (score: 3, total: 4)",
+          "routing_pattern": "PARALLEL_DELEGATION",
+          "classification_latency_ms": 0.8482933044433594,
+          "used_llm_layer": false,
+          "execution_time_ms": 54436.58
+        }
+      },
+      {
+        "t_ms": 55024.0,
+        "type": "done",
+        "data": ""
+      }
+    ],
+    "response_text": "The full analysis pipeline couldn't complete for this question, so here's what I can tell you from the data available:\n\nYes \u2014 rep-visit effects on Kisqali all passed refutation testing. From the causal-paths registry (Kisqali, no time window specified \u2014 this reflects the current registry snapshot, latest test run **2026-07-31**):\n\n| Causal path | Effect size | Confidence | Refutation tests | Gate decision |\n|---|---|---|---|---|\n| rep_detailing_high \u2192 treatment_initiated | 0.043 | 0.93 | 5/5 passed | Proceed |\n| rep_detailing_frequency \u2192 ROI (via TRx volume) | 0.198 | 0.851 | 5/5 passed | Proceed |\n| rep_detailing_frequency \u2192 TRx volume (via HCP engagement) | 0.166 | 0.796 | 5/5 passed | Proceed |\n| rep_detailing_frequency \u2192 intent to prescribe (via message recall) | 0.267 | 0.772 | 5/5 passed | Proceed |\n\n**Bottom line:** all 4 rep-visit causal paths were validated with 5/5 refutation tests passed (0 failed, 0 warnings), and each carries a \"proceed\" gate decision. Confidence ranges from **0.772\u20130.93**, highest for the direct rep-visit \u2192 treatment-initiation link.\n\n\u26a0\ufe0f Caveat: the tool flags `evidence_is_synthetic: true` \u2014 this is synthetic/demo data, not live production causal evidence, and `data_source` is listed as \"synthetic.\"",
+    "dispatch_info": {
+      "orchestrator_used": true,
+      "agents_dispatched": [
+        "causal_impact",
+        "explainer"
+      ],
+      "routed_agent": "causal_impact",
+      "response_confidence": 0.0,
+      "intent": "causal_analysis",
+      "intent_confidence": 0.98,
+      "routing_rationale": "Keyword match (score: 3, total: 4)",
+      "routing_pattern": "PARALLEL_DELEGATION",
+      "classification_latency_ms": 0.8482933044433594,
+      "used_llm_layer": false,
+      "execution_time_ms": 54436.58
+    },
+    "ttfb_ms": 54966.8,
+    "total_ms": 55024.4,
+    "error": null,
+    "http_status": 200,
+    "_session_id": "8fa1a389-434e-4ed5-bfc2-e1ea6bb9f4db"
+  }
+]

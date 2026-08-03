@@ -161,6 +161,18 @@ ENV PATH="/app/.venv/bin:$PATH" \
     MPLCONFIGDIR=/app/tmp \
     MPLBACKEND=Agg
 
+# Project-root marker (#1448). ``src/utils/project_root.py`` resolves the project
+# root by walking UP from its own location to a ``pyproject.toml`` marker, and three
+# Tier-0 agents call it at *module import* time (model_trainer via
+# nodes/detect_class_imbalance._DEFAULT_CONFIG_PATH; model_selector and
+# model_deployer transitively through the trainer package). Without the marker under
+# /app the walk runs off the filesystem root and all three raise
+# ProjectRootNotFoundError inside create_agent_registry — prod ran an 18/21 PARTIAL
+# registry. The `dependencies` and `development` stages already ship it; this stage
+# is a fresh FROM python:3.12-slim and copies only the venv, so it needs its own.
+# Kept ahead of `COPY src/` so a source change does not invalidate this layer.
+COPY pyproject.toml ./
+
 # Copy application code
 COPY src/ ./src/
 COPY config/ ./config/
