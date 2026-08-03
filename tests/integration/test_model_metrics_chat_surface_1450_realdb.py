@@ -32,6 +32,8 @@ import uuid
 
 import pytest
 
+from tests.integration._asyncio_compat import run_sync
+
 _GATE = os.environ.get("E2I_DB_INTEGRATION") == "1"
 _HAS_CREDS = bool(os.environ.get("SUPABASE_URL"))
 
@@ -226,6 +228,11 @@ def test_reported_numbers_equal_the_live_rows(owned_session):
 
 
 def _await(coro):
-    import asyncio
+    """Sync -> async boundary via the repo's sanctioned helper.
 
-    return asyncio.run(coro)
+    Bare ``asyncio.run`` is rejected in ``tests/integration/`` by
+    ``test_no_bare_asyncio_run_in_integration_tests.py`` — it is a latent victim
+    of the RAGAS event-loop pollution chain (#215/#218/#220). ``run_sync`` builds
+    an explicit fresh loop instead.
+    """
+    return run_sync(coro)
