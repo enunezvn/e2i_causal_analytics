@@ -16,7 +16,7 @@ import importlib.util
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +43,46 @@ class HealthReportPrompts:
     for generating human-readable summaries and recommendations.
     """
 
-    # Summary generation prompt.
+    # Summary generation prompt (MEASURED / PARTIAL states).
     #
     # NOTE: this template is the OPTIMIZABLE source of the human-readable health
-    # summary that ``ScoreComposerNode._generate_summary`` emits. The default
-    # value below renders BYTE-IDENTICALLY to the node's historical inline
-    # construction so wiring the getter in is a pure drop-in. The
-    # ``{components_suffix}`` placeholder is empty for score_composer (which
-    # supplies no component names) and only renders when components are passed.
+    # summary that ``ScoreComposerNode._generate_summary`` emits. With
+    # ``{scope_label}`` -> "System" (the full-scope / scope-absent default) it
+    # renders BYTE-IDENTICALLY to the node's historical inline construction, so
+    # wiring the getter in stayed a pure drop-in. The ``{components_suffix}``
+    # placeholder is empty for score_composer (which supplies no component
+    # names) and only renders when components are passed.
+    #
+    # #1447: ``{scope_label}`` replaced the hardcoded literal "System" because a
+    # models/pipelines/agents/quick-scoped check is NOT a whole-system verdict
+    # (see ``_record_full_check`` in src/api/routes/health_score.py, which
+    # already refuses to trend anything but a FULL check for that reason).
     summary_template: str = (
-        "System health is {status} (Grade: {grade}, Score: {score:.1f}/100). "
+        "{scope_label} health is {status} (Grade: {grade}, Score: {score:.1f}/100). "
         "{issue_clause}{components_suffix}"
+    )
+
+    # Summary rendered when NOTHING was measured (``data_provenance ==
+    # "unknown"``) — #1447.
+    #
+    # The composer's F1 anti-fabrication guard DELIBERATELY reports 0.0 / grade
+    # "F" for a zero-measured check so no consumer can mistake an unmeasured
+    # system for a healthy one. That payload is correct and unchanged; what was
+    # wrong was the NARRATION: the measured template rendered the unmeasured
+    # state byte-identically to a genuine grade-F catastrophe ("System health is
+    # critical ... 1 critical issue(s) detected.") and dropped the explanatory
+    # issue the node already builds. This template says UNKNOWN, reconciles the
+    # 0.0/F placeholder so a reader comparing prose to the widget is not misled,
+    # and surfaces the leading critical-issue TEXT via ``{issue_detail}``.
+    #
+    # No DSPy signature backs this field (``RECIPIENT_SIGNATURE_FIELDS`` lists
+    # only signature-backed fields), so the optimizer never rewrites it — but it
+    # still round-trips through to_dict()/update_optimized_prompts() with the
+    # rest of the bundle.
+    unknown_summary_template: str = (
+        "{scope_label} health status is UNKNOWN - nothing was measured. "
+        "The {score:.1f}/100 Grade-{grade} score is a fail-closed placeholder for "
+        "UNMEASURED, not a measured failure. {issue_detail}"
     )
 
     # Recommendation prompt
@@ -79,6 +108,7 @@ class HealthReportPrompts:
         """Convert to dictionary for serialization."""
         return {
             "summary_template": self.summary_template,
+            "unknown_summary_template": self.unknown_summary_template,
             "recommendation_template": self.recommendation_template,
             "issue_description_template": self.issue_description_template,
             "version": self.version,
@@ -208,6 +238,8 @@ class HealthScoreDSPyIntegration:
         """
         if "summary_template" in prompts:
             self._prompts.summary_template = prompts["summary_template"]
+        if "unknown_summary_template" in prompts:
+            self._prompts.unknown_summary_template = prompts["unknown_summary_template"]
         if "recommendation_template" in prompts:
             self._prompts.recommendation_template = prompts["recommendation_template"]
         if "issue_description_template" in prompts:
@@ -233,6 +265,23 @@ class HealthScoreDSPyIntegration:
         "F": "critical",
     }
 
+    # Maps ``check_scope`` to the subject of the summary sentence (#1447). Only a
+    # FULL check is a whole-"System" verdict; ``quick`` is the component-only
+    # graph (audit_init -> component -> compose), and the single-dimension scopes
+    # narrate that dimension. An absent/unrecognised scope keeps the historical
+    # "System" label so the default rendering is unchanged.
+    _SCOPE_LABELS: Dict[str, str] = {
+        "full": "System",
+        "quick": "Component",
+        "models": "Model",
+        "pipelines": "Pipeline",
+        "agents": "Agent",
+    }
+
+    def scope_label(self, check_scope: Optional[str]) -> str:
+        """Subject of the summary sentence for a given check scope."""
+        return self._SCOPE_LABELS.get(check_scope or "full", "System")
+
     def get_summary_prompt(
         self,
         grade: str,
@@ -240,16 +289,45 @@ class HealthScoreDSPyIntegration:
         components: str,
         critical_count: int,
         warning_count: int,
+        data_provenance: str = "measured",
+        check_scope: Optional[str] = None,
+        critical_issues: Optional[List[str]] = None,
     ) -> str:
         """Get the formatted summary via the current (optimizable) template.
 
         Drop-in replacement for ScoreComposerNode's inline summary construction:
-        with ``components=""`` (as score_composer calls it) the output is
-        byte-identical to the historical ``_generate_summary`` string. When
-        component names ARE supplied, a ``Components: ...`` suffix is appended.
-        ``status`` and ``issue_clause`` are derived here so the template stays a
-        pure ``.format()`` string (no conditionals) and remains optimizable.
+        with ``components=""`` and a full/absent ``check_scope`` (as
+        score_composer historically called it) the output is byte-identical to
+        the historical ``_generate_summary`` string. When component names ARE
+        supplied, a ``Components: ...`` suffix is appended. ``status``,
+        ``issue_clause``, ``scope_label`` and ``issue_detail`` are derived here
+        so the templates stay pure ``.format()`` strings (no conditionals) and
+        remain optimizable.
+
+        ``data_provenance == "unknown"`` (NOTHING measured) selects
+        ``unknown_summary_template`` instead — see #1447: the composer's
+        deliberate 0.0/grade-"F" fail-closed payload must not be NARRATED as a
+        measured critical failure. The three new parameters default to the
+        historical behaviour so existing 5-argument callers are unaffected.
         """
+        label = self.scope_label(check_scope)
+        if data_provenance == "unknown":
+            # Surface the leading critical issue's TEXT (the composer builds an
+            # explanatory one for exactly this state), not merely its count.
+            issue_detail = (
+                critical_issues[0]
+                if critical_issues
+                else "No health backends are wired for this scope."
+            )
+            return self._prompts.unknown_summary_template.format(
+                grade=grade,
+                score=score,
+                scope_label=label,
+                issue_detail=issue_detail,
+                critical_count=critical_count,
+                warning_count=warning_count,
+            )
+
         status = self._STATUS_BY_GRADE.get(grade, "unknown")
         if critical_count:
             issue_clause = f"{critical_count} critical issue(s) detected."
@@ -265,6 +343,7 @@ class HealthScoreDSPyIntegration:
             status=status,
             issue_clause=issue_clause,
             components_suffix=components_suffix,
+            scope_label=label,
         )
 
     def get_recommendation_prompt(
@@ -307,7 +386,7 @@ class HealthScoreDSPyIntegration:
             "agent": "health_score",
             "dspy_type": self.dspy_type,
             "prompts": self._prompts.to_dict(),
-            "prompt_count": 3,
+            "prompt_count": 4,
             "dspy_available": DSPY_AVAILABLE,
         }
 

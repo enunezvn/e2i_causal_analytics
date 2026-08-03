@@ -148,8 +148,18 @@ class ScoreComposerNode:
             # Generate diagnostic reasoning
             diagnosis = self._generate_diagnosis(state, scores)
 
-            # Generate enhanced summary with diagnosis (via the optimizable template)
-            summary = self._generate_summary(overall_score_100, grade, critical_issues, warnings)
+            # Generate enhanced summary with diagnosis (via the optimizable
+            # template). #1447: provenance and scope are threaded in so an
+            # UNMEASURED result is not narrated as a measured critical failure,
+            # and a scoped check is not narrated as a whole-system verdict.
+            summary = self._generate_summary(
+                overall_score_100,
+                grade,
+                critical_issues,
+                warnings,
+                data_provenance=data_provenance,
+                check_scope=state.get("check_scope"),
+            )
 
             # Add diagnosis insights to summary if there are issues
             if diagnosis["root_causes"]:
@@ -261,16 +271,31 @@ class ScoreComposerNode:
         return critical, warnings
 
     def _generate_summary(
-        self, score: float, grade: str, issues: List[str], warnings: Optional[List[str]] = None
+        self,
+        score: float,
+        grade: str,
+        issues: List[str],
+        warnings: Optional[List[str]] = None,
+        data_provenance: str = "measured",
+        check_scope: Optional[str] = None,
     ) -> str:
         """Generate health summary via the optimizable summary template.
 
         Drop-in for the former inline construction: routes through
         ``HealthScoreDSPyIntegration.get_summary_prompt`` (the previously-dead
         getter) so the optimizable ``summary_template`` is actually consumed. The
-        default template renders byte-identically to the historical string;
-        ``components=""`` is passed since score_composer summaries do not enumerate
-        component names.
+        default template renders byte-identically to the historical string for a
+        MEASURED full-scope check; ``components=""`` is passed since
+        score_composer summaries do not enumerate component names.
+
+        #1447 — the narration seam. The score/grade/counts alone cannot
+        distinguish "nothing could be measured" (the deliberate fail-closed
+        0.0/grade-"F" payload) from a genuinely measured grade-F catastrophe:
+        both used to render as "System health is critical (Grade: F, Score:
+        0.0/100). 1 critical issue(s) detected." Passing ``data_provenance``
+        selects the UNKNOWN template and hands the ISSUE TEXT (not just its
+        count) to the reader; passing ``check_scope`` names what was actually
+        checked instead of always claiming "System".
         """
         integration = get_health_score_dspy_integration()
         return integration.get_summary_prompt(
@@ -279,6 +304,9 @@ class ScoreComposerNode:
             components="",
             critical_count=len(issues),
             warning_count=len(warnings or []),
+            data_provenance=data_provenance,
+            check_scope=check_scope,
+            critical_issues=issues,
         )
 
     async def _emit_summary_signal(
@@ -297,6 +325,12 @@ class ScoreComposerNode:
         ``recipient_required_input_keys('health_score')['summary_template']``):
         ``overall_score, grade, component_scores, critical_issues``. Only fields
         backed by real, fully-populated node data are emitted.
+
+        #1447 corollary: a zero-measured run has an EMPTY ``scores`` dict, so
+        ``component_scores`` is "" and the populated-fields guard below returns
+        before emitting. The UNKNOWN narration therefore never reaches
+        ``_signal_reward`` (whose heuristic docks a summary containing
+        "unknown", a signal that only makes sense for the MEASURED template).
         """
         try:
             component_scores = ", ".join(f"{dim}={val:.2f}" for dim, val in scores.items())
