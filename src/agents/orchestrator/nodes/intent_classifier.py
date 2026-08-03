@@ -202,6 +202,126 @@ _DIGITAL_TWIN_READOUT_RE = re.compile(
 )
 
 
+# #1449 — DESCRIPTIVE TIERING is cohort CONSTRUCTION, not CATE.
+#
+# Demo 4.3 ("Segment HCPs by prescription volume into high, medium, and low
+# tiers") misrouted to heterogeneous_optimizer + its gap_analyzer fallback: the
+# legacy ``segment_analysis`` pattern ``(segment|group|heterogen)`` fires on the
+# bare word "Segment" and ``segment_analysis`` maps to a CATE estimator. Both
+# agents then fail closed (a chat query cannot name a treatment/outcome column,
+# and the ask names no brand) and the orchestrator reports complete failure —
+# for a question ``cohort_profiler`` can genuinely answer. Gold (bench-0022 /
+# 0207 / 0208, ``demo_meta.question_id == "4.3"``) is SINGLE_AGENT ->
+# cohort_profiler: partitioning a population into descriptive tiers is
+# single-domain cohort work no matter how many internal steps it takes.
+#
+# THE OVER-REACH RISK (the #1408 bare-``\binterim\b`` lesson). ``cohort_definition``
+# outranks ``segment_analysis`` in INTENT_PRIORITY, so anything this matches wins
+# the tie CONFIDENTLY and never reaches the LLM safety net. A bare tier token was
+# the first cut and it captured "high-decile HCPs" (bench-0263, gold
+# resource_optimizer) — turning a row that currently escalates into one that is
+# confidently wrong.
+#
+# The SECOND cut gated on the tier CONTAINER only, and that was still wrong: a
+# container noun is not a domain gate. It constrains the SHAPE of the partition
+# but never says WHAT is being partitioned, so tier language glued to anything at
+# all matched. Measured on the real chain (all >= the 0.8 trust floor, i.e.
+# confident and LLM-free): "Divide the Q3 budget into tiers by expected impact",
+# "Classify the A/B test arms into tiers by statistical power", "Split the sales
+# territories into tiers based on potential" and even the domain-free "The
+# forecast confidence is high, medium, or low depending on the scenario." all
+# became ``cohort_profiler``, displacing prediction/experiment_design/
+# performance_gap; three further probes ("Bucket the marketing spend into
+# quartiles") were converted from a SAFE escalation into a confident misroute.
+# The 337-row gold contains no budget/territory/rep/A-B-arm tiering rows, so it
+# scored 0 losses throughout and could not see any of it.
+#
+# So the real gate is the POPULATION being partitioned, which is also the
+# convention every other pattern in this list already follows (cohort, patient,
+# hcp, brand and disease anchors). THREE conjuncts, in positional order:
+#
+#   (a) a partition VERB, then the clinical POPULATION it partitions within <=40
+#       chars (the verb's object, not an incidental mention), then an explicit
+#       tier-container NOUN within <=80 — "segment HCPs ... into tiers",
+#       "classify healthcare providers into ... categories". A bare verb, a bare
+#       container, or a verb+container with no population between them is not
+#       enough: "Rank call-plan tiers by expected ROI for Kisqali" partitions
+#       CALL PLANS, and the trailing brand does not make it cohort work — which
+#       is exactly why the anchor is positional rather than "anywhere in query".
+#   (b) a clinical POPULATION followed within <=60 chars (same sentence) by an
+#       explicit 3-LEVEL ordinal ladder — high/medium/low, top/middle/bottom, in
+#       either direction. Two-level contrasts ("high vs low responders", which is
+#       heterogeneous_optimizer's own vocabulary) deliberately do NOT match: the
+#       middle rung is required.
+#
+# ...and both carry ``_EFFECT_CLAIM_VETO``: ANY treatment-effect/causal/uplift/
+# responder lexeme anywhere in the query suppresses the tiering match entirely,
+# so a tier ladder glued onto a genuine CATE ask ("compare the treatment effect
+# across high, medium and low volume prescribers") stays with
+# heterogeneous_optimizer. The veto can only ever DOWNGRADE to today's
+# behaviour, which is the safe direction — the same fail-closed posture as the
+# #1406 ranking-vs-attribution gate. Measured over the 337-row gold: matches
+# exactly 5 rows, ALL gold ``cohort_profiler``; zero non-cohort rows.
+#
+# Guarded by test_intent_classifier_tiering_1449.py — in particular
+# TestNonPopulationTieringIsNotCohortWork, which pins the out-of-gold
+# budget/territory/rep/A-B-arm probes the gold set cannot express.
+_EFFECT_CLAIM_VETO = (
+    r"treatment\s+effect|\beffects?\b|\bcate\b|causal|uplift|incremental"
+    r"|respond(?:er|ers|ing|s)?\b|heterogene"
+)
+_TIER_CONTAINER_NOUNS = (
+    r"tiers?|buckets?|categor(?:y|ies)|quartiles?|quintiles?|deciles?|tertiles?|percentiles?"
+)
+_TIER_PARTITION_VERBS = (
+    r"segment|classif|categor|bucket|tier|divide|split|rank|group|stratif|break\s+down"
+)
+# The CLINICAL population a descriptive tiering can legitimately partition.
+# Deliberately excludes commercial objects that also get tiered — budgets,
+# territories, sales reps, call plans, experiment arms, spend — because those
+# belong to resource_allocation / experiment_design / prediction, not to cohort
+# construction. Mirrors the anchors the rest of this pattern list already uses.
+#
+# "provider" is the one anchor that straddles that line, so it is NOT admitted
+# bare: on a pharma-commercial platform a *distribution* provider, a *data*
+# provider and a *specialty pharmacy* provider are trading partners, while a
+# *healthcare* provider is an HCP. Admitted bare it re-opened the very
+# over-reach class this constant closes — measured on the real _pattern_classify
+# -> RouterNode chain, all at/above the 0.8 pattern-trust floor (confident,
+# LLM-free), and two of the three were SAFE 0.5 escalations before #1449:
+#
+#   Segment our specialty pharmacy providers into service tiers ... -> 0.867
+#   Classify our distribution providers into performance tiers      -> 0.867
+#   Rank our data providers into high, medium, and low quality tiers-> 0.933
+#
+# all landing on cohort_profiler, which never fails closed
+# (_resolve_cohort_profiler_input) and so returns a real-looking clinical cohort
+# profile for a vendor question with no failure signal. Requiring a care
+# qualifier keeps the clinical sense (bench-0207's "healthcare providers" — the
+# ONLY gold row containing the token, and it is qualified) while letting the
+# ambiguous vendor sense fall through to the LLM safety net instead of being
+# answered confidently and wrongly. Same fail-closed direction as the veto.
+# `care\s+providers?` covers "health care" and "health-care" (the hyphen is a
+# word boundary) plus "primary/urgent care"; the concatenated "healthcare"
+# spelling needs its own alternative because \bcare cannot match inside it.
+#
+# The `(?<!managed )` guard closes the last measured hole in this lexicon: in US
+# pharma "managed care providers" means PAYERS / health plans, not clinicians, so
+# "Segment our managed care providers into tiers" was routing cohort_definition
+# @0.867 — above the 0.8 pattern-trust floor, hence a confident LLM-free misroute
+# into cohort_profiler, which never fails closed. Measured, not assumed. The
+# lookbehind is fixed-width (Python requires that) and leaves every clinical
+# sense intact: verified MATCH for "primary care providers", "urgent care
+# provider", "care providers" and bench-0207's "healthcare providers"; verified
+# no-match for "managed care providers" and "specialty pharmacy providers".
+_TIER_POPULATION_ANCHORS = (
+    r"hcps?|physicians?|doctors?|prescribers?|prescribing|clinicians?"
+    r"|healthcare\s+providers?|(?<!managed )care\s+providers?"
+    r"|patients?|cohorts?|populations?"
+    r"|remibrutinib|fabhalta|kisqali|csu|pnh|breast\s+cancer"
+)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -376,6 +496,27 @@ class IntentClassifierNode:
             r"\bcohort\b.*\bhcp",  # "cohort of HCPs" type queries
             r"\bhcp\b.*\bcohort",  # "HCP cohort" type queries
             r"(high.?value|high.?priority).*\b(hcp|physician|doctor)",  # high-value HCP queries
+            # #1449 (a) — partition VERB -> the clinical POPULATION it partitions
+            # -> explicit tier-container NOUN, in that order, one clause. The
+            # population anchor is what makes this cohort work rather than
+            # budget/territory/experiment-arm tiering. See _TIER_PARTITION_VERBS /
+            # _TIER_POPULATION_ANCHORS / _EFFECT_CLAIM_VETO above.
+            r"(?s)\A(?!.*(?:" + _EFFECT_CLAIM_VETO + r"))"
+            r".*?\b(?:" + _TIER_PARTITION_VERBS + r")\w*\b"
+            r"[^.?!]{0,40}?\b(?:" + _TIER_POPULATION_ANCHORS + r")\b"
+            r"[^.?!]{0,80}?\b(?:" + _TIER_CONTAINER_NOUNS + r")\b",
+            # #1449 (b) — clinical POPULATION followed by an explicit 3-level
+            # ordinal ladder, either direction. The MIDDLE rung is required so
+            # 2-level "high vs low responders" (heterogeneous_optimizer's own
+            # vocabulary) cannot match; the population anchor is required so a
+            # bare ladder on any subject ("forecast confidence is high, medium,
+            # or low") cannot match.
+            r"(?s)\A(?!.*(?:" + _EFFECT_CLAIM_VETO + r"))"
+            r".*?\b(?:" + _TIER_POPULATION_ANCHORS + r")\b[^.?!]{0,60}?"
+            r"(?:\b(?:high|top)\b[^.?!]{0,40}?\b(?:medium|middle|mid|med)\b"
+            r"[^.?!]{0,40}?\b(?:low|bottom)\b"
+            r"|\b(?:low|bottom)\b[^.?!]{0,40}?\b(?:medium|middle|mid|med)\b"
+            r"[^.?!]{0,40}?\b(?:high|top)\b)",
         ],
     }
 
