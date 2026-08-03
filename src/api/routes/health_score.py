@@ -28,9 +28,10 @@ Version: 4.2.0
 
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
@@ -1406,6 +1407,151 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
     return models, DataProvenance.PARTIAL
 
 
+# =============================================================================
+# NAMED EVALUATION METRICS (#1450)
+#
+# ``ml_model_health_dashboard`` answers "is this model HEALTHY?" — status, drift,
+# alerts, and (since migration 103) the latest accuracy/auc_roc/f1. It cannot
+# answer "what is this model's ROC-AUC, calibration and Brier, on which cohort,
+# as of when?": the view exposes neither calibration_slope/brier_score nor the
+# model version, evaluation cohort or measurement date. Those live one level
+# down, in ``ml_performance_metrics`` (+ ``ml_model_registry`` for the version),
+# which is what these two readers read. They are a DIFFERENT question over the
+# SAME source of truth, not a second copy of the dashboard reader.
+# =============================================================================
+
+# The scalar evaluation metrics the platform records per model. Curve payloads
+# (``roc_curve`` / ``confusion_matrix``, written with source ``holdout_curve``)
+# are deliberately excluded — they are not scalar quality metrics.
+_EVAL_METRIC_NAMES: Tuple[str, ...] = (
+    "auc_roc",
+    "pr_auc",
+    "brier_score",
+    "calibration_slope",
+    "accuracy",
+    "f1",
+    "precision",
+    "recall",
+)
+
+# Per-model row budget for the eval-metric read. One evaluation EVENT contributes
+# at most ``len(_EVAL_METRIC_NAMES)`` rows, so ordering by measured_at DESC and
+# taking this many rows always contains the latest event in full — the bound can
+# never produce a false "no metrics recorded". (A single global read with a flat
+# limit CAN: measured against the live table on 2026-08-03, a 1500-row bulk read
+# truncated before reaching the oldest model's latest event.)
+_EVAL_ROWS_PER_MODEL = len(_EVAL_METRIC_NAMES) * 4
+
+
+def _fetch_model_registry_facts() -> Dict[str, Dict[str, Any]]:
+    """Registry facts (version + stage) for the real production/staging models.
+
+    Keyed by ``model_id``. Returns ``{}`` when the backend is unreachable — the
+    caller degrades to "version not recorded", never to a fabricated version.
+    """
+    db = _health_source_client()
+    if db is None:
+        return {}
+    try:
+        rows = (
+            db.table("ml_model_registry")
+            .select("id, model_name, model_version, stage")
+            # Same structural exclusions as _fetch_model_health: synthetic
+            # experiment artifacts are not real models.
+            .eq("is_synthetic", False)
+            .in_("stage", ["production", "staging"])
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"model registry facts: live query failed ({e})")
+        return {}
+    facts: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        model_id = str(r.get("id") or "")
+        if not model_id:
+            continue
+        stage = r.get("stage")
+        facts[model_id] = {
+            "model_version": (str(r["model_version"]) if r.get("model_version") else None),
+            "model_stage": (str(stage) if stage else None),
+        }
+    return facts
+
+
+def _fetch_model_eval_metrics(model_id: str) -> Dict[str, Any]:
+    """The model's LATEST evaluation event, as one coherent set of metrics.
+
+    Returns ``{"eval_metrics": {name: value}, "eval_cohort", "eval_sample_size",
+    "eval_as_of"}`` or ``{}`` when nothing is recorded / the backend is down.
+
+    "One coherent event" is the honesty property: ``ml_performance_metrics``
+    holds a monthly walk-forward backtest series (``source='backtest_wf'``)
+    ALONGSIDE the held-out gold-standard evaluation (``source='holdout'``).
+    Taking each metric's own latest row independently could pair a fresh holdout
+    ROC-AUC with a stale backtest Brier and present the mixture as one
+    evaluation. Instead we pick the single latest event — ordered by
+    ``(measured_at, sample_size, source)``, which reproduces the value the
+    dashboard view's ``ORDER BY measured_at DESC LIMIT 1`` LATERALs return while
+    resolving the same-day holdout/backtest tie deterministically toward the
+    larger cohort — and report only the metrics measured in it.
+    """
+    db = _health_source_client()
+    if db is None:
+        return {}
+    try:
+        rows = (
+            db.table("ml_performance_metrics")
+            .select("metric_name, metric_value, sample_size, measured_at, source, data_split")
+            .eq("model_id", model_id)
+            .in_("metric_name", list(_EVAL_METRIC_NAMES))
+            .order("measured_at", desc=True)
+            .limit(_EVAL_ROWS_PER_MODEL)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"model eval metrics: live query failed for {model_id} ({e})")
+        return {}
+    if not rows:
+        return {}
+
+    def _event_key(row: Dict[str, Any]) -> Tuple[str, int, str]:
+        sample_size = row.get("sample_size")
+        return (
+            str(row.get("measured_at") or ""),
+            int(sample_size) if isinstance(sample_size, (int, float)) else -1,
+            str(row.get("source") or ""),
+        )
+
+    try:
+        latest = max(_event_key(r) for r in rows)
+        event_rows = [r for r in rows if _event_key(r) == latest]
+        metrics: Dict[str, float] = {}
+        for r in event_rows:
+            name = str(r.get("metric_name") or "")
+            value = r.get("metric_value")
+            if not name or value is None:
+                continue
+            metrics[name] = float(value)
+    except (TypeError, ValueError) as e:
+        # A malformed row must fail closed to "nothing recorded", never to a
+        # partially-parsed number presented as a measurement.
+        logger.warning(f"model eval metrics: unparseable row for {model_id} ({e})")
+        return {}
+    if not metrics:
+        return {}
+    measured_at, sample_size, source = latest
+    return {
+        "eval_metrics": metrics,
+        "eval_cohort": source or None,
+        "eval_sample_size": sample_size if sample_size >= 0 else None,
+        "eval_as_of": measured_at or None,
+    }
+
+
 def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvenance]]:
     """Real pipeline health: latest run per non-synthetic pipeline from
     etl_pipeline_metrics."""
@@ -1610,30 +1756,82 @@ class HealthSourceUnavailable(RuntimeError):
     — never a fabricated healthy score."""
 
 
-class _ModelMetricsStoreAdapter:
-    """MetricsStore adapter backed by ``_fetch_model_health`` (ml_model_health_dashboard).
+# How long an adapter may serve its cached reader result (#1450).
+#
+# The cache exists so ONE health check does not re-read the table once per model
+# (the node's get_active_models -> get_model_metrics(id) access pattern). The
+# REST route builds a fresh adapter per request, so the original load-once flag
+# was bounded by the request. The CHAT path holds a single HealthScoreAgent for
+# the process lifetime (the ``cognitive.get_orchestrator`` singleton), where
+# load-once would pin the first reading forever and report a retrained model's
+# old numbers as current. A TTL keeps the intra-check single-read intent while
+# bounding staleness.
+_ADAPTER_CACHE_TTL_SECONDS = 300.0
 
-    Calls the reader ONCE and caches per the node's get_active_models ->
-    get_model_metrics(model_id) access pattern, carrying the reader's
-    authoritative ``status`` so the node scores identically to /models."""
+
+class _TTLCachedStoreAdapter:
+    """Shared TTL-cache bookkeeping for the three real-table store adapters."""
 
     def __init__(self) -> None:
-        self._by_id: Dict[str, ModelHealth] = {}
-        self._loaded = False
+        self._loaded_at: Optional[float] = None
         # The reader's source provenance, captured at load so the route can
         # downgrade the composite to "partial" when sub-fields are unsourced
         # (PARTIAL) even though the dimension SCORE is a real measurement.
         self.provenance: Optional[DataProvenance] = None
 
+    def _cache_is_stale(self) -> bool:
+        """True when the adapter must (re-)read its backend."""
+        if self._loaded_at is None:
+            return True
+        return (time.monotonic() - self._loaded_at) >= _ADAPTER_CACHE_TTL_SECONDS
+
+    def _mark_loaded(self) -> None:
+        self._loaded_at = time.monotonic()
+
+
+class _ModelMetricsStoreAdapter(_TTLCachedStoreAdapter):
+    """MetricsStore adapter backed by ``_fetch_model_health`` (ml_model_health_dashboard).
+
+    Calls the reader ONCE per cache window and serves the node's
+    get_active_models -> get_model_metrics(model_id) access pattern from it,
+    carrying the reader's authoritative ``status`` so the node scores
+    identically to /models.
+
+    #1450: it ALSO carries the model's named evaluation metrics (ROC-AUC,
+    calibration slope, Brier, ...) together with the model version, evaluation
+    cohort and as-of date, so a chat question naming a metric can be answered
+    with the measurement instead of a composite grade. Those come from
+    ``_fetch_model_eval_metrics`` / ``_fetch_model_registry_facts`` — a
+    different question over the same tables, read lazily per model and cached
+    for the same window. When nothing is recorded the fields stay absent/None;
+    the consumer must say "not recorded", never substitute a number."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._by_id: Dict[str, ModelHealth] = {}
+        self._registry_facts: Dict[str, Dict[str, Any]] = {}
+        self._eval_by_id: Dict[str, Dict[str, Any]] = {}
+
     def _load(self) -> None:
-        if self._loaded:
+        if not self._cache_is_stale():
             return
         models, provenance = _fetch_model_health()
         if provenance is None:
             raise HealthSourceUnavailable("model health backend unreachable")
         self._by_id = {m.model_id: m for m in models}
         self.provenance = provenance
-        self._loaded = True
+        # Registry facts are one small read for the whole fleet; eval metrics are
+        # read lazily per model (see _eval_detail) since the node only asks for
+        # the models it actually scores.
+        self._registry_facts = _fetch_model_registry_facts()
+        self._eval_by_id = {}
+        self._mark_loaded()
+
+    def _eval_detail(self, model_id: str) -> Dict[str, Any]:
+        """Latest evaluation event for ``model_id`` (cached for the window)."""
+        if model_id not in self._eval_by_id:
+            self._eval_by_id[model_id] = _fetch_model_eval_metrics(model_id)
+        return self._eval_by_id[model_id]
 
     async def get_active_models(self) -> List[str]:
         self._load()
@@ -1649,6 +1847,8 @@ class _ModelMetricsStoreAdapter:
         # that have no source remain null/absent — never fabricated.
         # model_name rides along so composer-issued alerts can name the model
         # instead of printing a bare registry UUID.
+        facts = self._registry_facts.get(model_id) or {}
+        detail = self._eval_detail(model_id)
         return {
             "status": m.status.value,
             "model_name": m.model_name,
@@ -1661,26 +1861,33 @@ class _ModelMetricsStoreAdapter:
             "latency_p99": m.prediction_latency_p99_ms,
             "prediction_count": m.predictions_last_24h,
             "error_rate": m.error_rate,
+            # #1450 named-metric detail. All Optional: absent/None means NOT
+            # RECORDED, which the consumer must state honestly.
+            "model_version": facts.get("model_version"),
+            "model_stage": facts.get("model_stage"),
+            "eval_metrics": detail.get("eval_metrics") or {},
+            "eval_cohort": detail.get("eval_cohort"),
+            "eval_sample_size": detail.get("eval_sample_size"),
+            "eval_as_of": detail.get("eval_as_of"),
         }
 
 
-class _PipelineStoreAdapter:
+class _PipelineStoreAdapter(_TTLCachedStoreAdapter):
     """PipelineStore adapter backed by ``_fetch_pipeline_health`` (etl_pipeline_metrics)."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._by_name: Dict[str, PipelineHealth] = {}
-        self._loaded = False
-        self.provenance: Optional[DataProvenance] = None
 
     def _load(self) -> None:
-        if self._loaded:
+        if not self._cache_is_stale():
             return
         pipelines, provenance = _fetch_pipeline_health()
         if provenance is None:
             raise HealthSourceUnavailable("pipeline health backend unreachable")
         self._by_name = {p.pipeline_name: p for p in pipelines}
         self.provenance = provenance
-        self._loaded = True
+        self._mark_loaded()
 
     async def get_all_pipelines(self) -> List[str]:
         self._load()
@@ -1705,25 +1912,24 @@ class _PipelineStoreAdapter:
         }
 
 
-class _AgentRegistryAdapter:
+class _AgentRegistryAdapter(_TTLCachedStoreAdapter):
     """AgentRegistry adapter backed by ``_fetch_agent_health`` (agent_registry +
     audit_chain_entries). The reader already measures availability and (where
     telemetry exists) success_rate/latency; unmeasured runtime metrics stay null."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._by_name: Dict[str, AgentHealth] = {}
-        self._loaded = False
-        self.provenance: Optional[DataProvenance] = None
 
     def _load(self) -> None:
-        if self._loaded:
+        if not self._cache_is_stale():
             return
         agents, provenance = _fetch_agent_health()
         if provenance is None:
             raise HealthSourceUnavailable("agent health backend unreachable")
         self._by_name = {a.agent_name: a for a in agents}
         self.provenance = provenance
-        self._loaded = True
+        self._mark_loaded()
 
     async def get_all_agents(self) -> List[Dict[str, Any]]:
         self._load()
