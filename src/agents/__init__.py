@@ -20,6 +20,9 @@ Example:
 
 from src.agents.factory import (
     AGENT_REGISTRY_CONFIG,
+    REQUIRE_FULL_REGISTRY_ENV,
+    PartialAgentRegistryError,
+    assert_full_agent_registry,
     create_agent_registry,
     get_agent_config,
     get_all_analytics_agents,
@@ -35,4 +38,8 @@ __all__ = [
     "get_tier2_agents",
     "get_all_analytics_agents",
     "AGENT_REGISTRY_CONFIG",
+    # #1448 registry-completeness gate
+    "assert_full_agent_registry",
+    "PartialAgentRegistryError",
+    "REQUIRE_FULL_REGISTRY_ENV",
 ]

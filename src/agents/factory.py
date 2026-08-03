@@ -17,9 +17,56 @@ Example:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Set, cast
+import os
+from typing import Any, Dict, Iterable, List, Optional, Set, cast
 
 logger = logging.getLogger(__name__)
+
+
+# #1448: strict-mode switch for the registry completeness gate. When truthy, a
+# registry that is missing ANY enabled + selected agent raises instead of quietly
+# degrading. Off by default — see ``_require_full_default`` for the rationale.
+REQUIRE_FULL_REGISTRY_ENV = "E2I_REQUIRE_FULL_AGENT_REGISTRY"
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+class PartialAgentRegistryError(RuntimeError):
+    """The agent registry is missing enabled agents and strict mode is armed.
+
+    Raised by :func:`create_agent_registry` when ``require_full`` resolves True.
+    Carries the machine-readable ``dropped`` / ``expected`` sets so a deploy gate
+    can report exactly which agents failed to construct.
+    """
+
+    def __init__(
+        self,
+        dropped: Iterable[str],
+        expected: Iterable[str],
+        registry_size: int,
+    ) -> None:
+        self.dropped: List[str] = sorted(dropped)
+        self.expected: List[str] = sorted(expected)
+        self.registry_size = registry_size
+        super().__init__(
+            f"PARTIAL registry — {len(self.dropped)} of {len(self.expected)} enabled "
+            f"agent(s) failed to construct: {self.dropped}. "
+            f"Registry has {registry_size} agent(s); dispatches to the missing agents "
+            f"would FAIL CLOSED. ({REQUIRE_FULL_REGISTRY_ENV} is armed.)"
+        )
+
+
+def _require_full_default() -> bool:
+    """Resolve strict mode from the environment when the caller did not decide.
+
+    Default OFF. A partial registry is a *degradation*, not a corruption: the
+    dispatcher already fails closed for a missing agent (#814), so the agents that
+    DID construct keep serving. Hard-failing by default would convert "18 of 21
+    agents work" into "nothing works" — and, at the only production construction
+    site (``src/api/routes/cognitive.get_orchestrator``), into "no orchestrator at
+    all". Operators opt in per deployment / per deploy-gate invocation.
+    """
+    return os.environ.get(REQUIRE_FULL_REGISTRY_ENV, "").strip().lower() in _TRUTHY
 
 
 # Agent metadata for lazy instantiation
@@ -174,6 +221,7 @@ def create_agent_registry(
     include_agents: Optional[List[str]] = None,
     exclude_agents: Optional[List[str]] = None,
     fail_on_import_error: bool = False,
+    require_full: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Create agent registry with instantiated agents.
 
@@ -188,9 +236,19 @@ def create_agent_registry(
         exclude_agents: Agent names to exclude from registry.
         fail_on_import_error: If True, raise on import errors.
                               If False, log warning and continue.
+        require_full: #1448 completeness gate. If True, raise
+                      :class:`PartialAgentRegistryError` when any selected+enabled
+                      agent failed to construct. If None (default), read
+                      ``E2I_REQUIRE_FULL_AGENT_REGISTRY`` from the environment.
+                      Pass False to force the degrade-and-log behaviour even when
+                      the env flag is armed (subset builders: benchmarks, CLIs).
 
     Returns:
         Dict mapping agent_name to agent instance
+
+    Raises:
+        PartialAgentRegistryError: strict mode armed and the registry is partial.
+        ImportError: ``fail_on_import_error`` and an agent failed to import.
 
     Example:
         # All enabled agents
@@ -211,6 +269,9 @@ def create_agent_registry(
     # makes the dispatcher fail closed for that route, so a silent drop would look
     # like a routing bug rather than a missing-credential / import misconfig.
     dropped: List[str] = []
+    # Agents that PASSED every filter and were therefore expected in the result.
+    # The denominator of the completeness gate (#1448).
+    expected: List[str] = []
 
     for agent_name, config in AGENT_REGISTRY_CONFIG.items():
         # Skip disabled agents
@@ -233,6 +294,8 @@ def create_agent_registry(
             if config["tier"] not in include_tiers:
                 continue
 
+        expected.append(agent_name)
+
         # Try to instantiate agent
         try:
             agent_instance = _create_agent(
@@ -253,15 +316,57 @@ def create_agent_registry(
             logger.warning(f"Failed to create agent {agent_name}: {e}")
 
     if dropped:
-        logger.warning(
-            "create_agent_registry: PARTIAL registry — %d enabled agent(s) dropped: %s. "
-            "Dispatches routed to these agents will FAIL CLOSED (no fabricated fallback); "
-            "check missing credentials/imports if this is unexpected.",
+        strict = _require_full_default() if require_full is None else require_full
+        # #1448: ERROR, not WARNING. A partial registry means named capabilities are
+        # gone from production; at WARNING it sat in the log stream on every worker
+        # boot until readers stopped seeing it. ERROR is the severity alerting rules
+        # key on, and the structured ``extra`` fields make it machine-actionable
+        # rather than something an operator has to regex out of prose.
+        logger.error(
+            "create_agent_registry: PARTIAL registry — %d of %d enabled agent(s) "
+            "dropped: %s. Dispatches routed to these agents will FAIL CLOSED (no "
+            "fabricated fallback); check missing credentials/imports/packaging "
+            "(e.g. #1448: pyproject.toml project-root marker absent from the image). "
+            "%s=%s",
             len(dropped),
+            len(expected),
             sorted(dropped),
+            REQUIRE_FULL_REGISTRY_ENV,
+            strict,
+            extra={
+                "dropped_agents": sorted(dropped),
+                "expected_agent_count": len(expected),
+                "registry_size": len(registry),
+                "require_full_agent_registry": strict,
+            },
         )
+        if strict:
+            raise PartialAgentRegistryError(
+                dropped=dropped, expected=expected, registry_size=len(registry)
+            )
     logger.info(f"Created agent registry with {len(registry)} agents")
     return registry
+
+
+def assert_full_agent_registry(**kwargs: Any) -> Dict[str, Any]:
+    """Build the registry and RAISE unless every enabled agent constructed (#1448).
+
+    The deploy gate. Unlike the ``E2I_REQUIRE_FULL_AGENT_REGISTRY`` env default this
+    is unconditional, so an operator can probe a *running* container without
+    mutating its environment or restarting it::
+
+        docker compose -f docker/docker-compose.yml exec api \\
+          python -c "from src.agents.factory import assert_full_agent_registry as a; \\
+                     print(len(a(exclude_agents=['orchestrator'])))"
+
+    Returns:
+        The complete registry (never partial).
+
+    Raises:
+        PartialAgentRegistryError: any selected+enabled agent failed to construct.
+    """
+    kwargs["require_full"] = True
+    return create_agent_registry(**kwargs)
 
 
 def _create_agent(module_path: str, class_name: str) -> Optional[Any]:

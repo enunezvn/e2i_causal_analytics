@@ -103,6 +103,21 @@ def get_orchestrator():
                 f"{len(registry)} real agents: {sorted(registry.keys())}"
             )
         except Exception as e:
+            # #1448: the completeness gate must NOT be swallowed. Catching it here
+            # would turn ``E2I_REQUIRE_FULL_AGENT_REGISTRY=true`` into a trap — the
+            # gate fires, we return None, and every request loses orchestration
+            # entirely, which is strictly worse than the partial registry it was
+            # armed to flag. Imported inside the handler because reaching this
+            # branch already means ``src.agents.factory`` imported successfully.
+            from src.agents.factory import PartialAgentRegistryError
+
+            if isinstance(e, PartialAgentRegistryError):
+                logger.error(
+                    "OrchestratorAgent initialization ABORTED by the agent-registry "
+                    "completeness gate: %s",
+                    e,
+                )
+                raise
             logger.warning(f"OrchestratorAgent initialization failed: {e}")
             return None
     return _orchestrator_instance
