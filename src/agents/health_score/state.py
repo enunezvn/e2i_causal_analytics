@@ -28,6 +28,15 @@ class ModelMetrics(TypedDict):
     is UNMEASURED (the ml_model_health_dashboard view sources status but not these
     sub-fields), NOT a fabricated 0. Consumers must guard None before comparing or
     formatting (the score composer does).
+
+    The ``eval_*`` / ``model_version`` / ``model_stage`` block (#1450) is
+    ``NotRequired``: a store that does not supply it simply omits it, and every
+    pre-existing construction site stays valid. It carries the model's LATEST
+    single evaluation event — the named quality metrics (auc_roc,
+    calibration_slope, brier_score, ...) together with the cohort they were
+    measured on and the date — so a chat question naming a metric can be
+    answered with the measurement rather than a composite grade. An absent or
+    empty ``eval_metrics`` means NOT RECORDED and must be narrated as such.
     """
 
     model_id: str
@@ -44,6 +53,16 @@ class ModelMetrics(TypedDict):
     predictions_last_24h: Optional[int]
     error_rate: Optional[float]
     status: Literal["healthy", "degraded", "unhealthy"]
+
+    # === NAMED EVALUATION METRICS (#1450, all NotRequired) ===
+    model_version: NotRequired[Optional[str]]
+    model_stage: NotRequired[Optional[str]]
+    # {metric_name: value} from ONE evaluation event; {} means not recorded.
+    eval_metrics: NotRequired[Dict[str, float]]
+    # Which cohort the event measured (e.g. "holdout"), its size, and when.
+    eval_cohort: NotRequired[Optional[str]]
+    eval_sample_size: NotRequired[Optional[int]]
+    eval_as_of: NotRequired[Optional[str]]
 
 
 class PipelineStatus(TypedDict):

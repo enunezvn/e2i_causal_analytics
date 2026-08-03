@@ -7,9 +7,10 @@ Purpose: Compose overall health score from component scores
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 from src.agents.feedback_learner.recipient_emit import emit_recipient_signal
 
@@ -18,6 +19,129 @@ from ..metrics import DEFAULT_GRADES, DEFAULT_WEIGHTS, GradeThresholds, ScoreWei
 from ..state import HealthScoreState
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# MODEL-QUALITY QUESTIONS (#1450)
+#
+# Demo 5.3 ("What is the ROC-AUC and calibration of the current Kisqali
+# model?") routes correctly to health_score with check_scope="models" — the
+# dispatcher's _derive_health_scope already maps the word "model" — and then
+# gets a composite grade back, because health_summary is the only field the
+# orchestrator's synthesizer reads (AGENT_RESPONSE_FIELDS["health_score"]).
+# The reviewer asked for the MEASUREMENT, so when the question names a metric
+# the summary leads with the metric values, their cohort and their as-of date;
+# the composite line still follows.
+#
+# Ownership note: this belongs in health_score's models scope rather than a new
+# bound chat tool because (a) health_score is the GOLD agent for 5.3 in
+# benchmark_queries_gold.jsonl, (b) the /chat/stream path classifies straight to
+# an AGENT and never sees the bound-tool set, so a tool would leave the
+# reported surface unfixed, and (c) the codebase already assigns this ownership
+# in KPI_SEMANTIC_NOTES["WS2-TR-001"]: "model telemetry lives with health_score".
+# =============================================================================
+
+# Query phrasings -> the ml_performance_metrics metric_name they name. "psi" has
+# no such metric recorded; it is matched so the answer can name it as NOT
+# RECORDED rather than silently answering a different question.
+_METRIC_QUERY_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    (r"\broc[\s\-_]?auc\b|\bauc[\s\-_]?roc\b|\bauroc\b|\bc[\-\s]statistic\b", "auc_roc"),
+    (r"\bpr[\s\-_]?auc\b|\bprecision[\s\-]recall\s+auc\b|\baverage\s+precision\b", "pr_auc"),
+    (r"\bcalibrat\w*", "calibration_slope"),
+    (r"\bbrier\b", "brier_score"),
+    (r"\bpsi\b|\bpopulation\s+stability\b", "psi"),
+    (r"\baccuracy\b", "accuracy"),
+    (r"\bf1\b|\bf[\s\-]1\s+score\b", "f1"),
+    (r"\bprecision\b", "precision"),
+    (r"\brecall\b|\bsensitivity\b", "recall"),
+    # A bare "auc" last so the more specific ROC-AUC/PR-AUC patterns win first.
+    (r"\bauc\b", "auc_roc"),
+)
+
+# Tokens that appear in EVERY registered model name (or are generic English) and
+# therefore cannot identify which model a question is about. Everything else in a
+# model_name — brand ("kisqali"), target ("initiation", "adoption") — can.
+_GENERIC_MODEL_NAME_TOKENS = frozenset(
+    {
+        "goldstd",
+        "gold",
+        "standard",
+        "model",
+        "models",
+        "logistic",
+        "regression",
+        "calibrated",
+        "classifier",
+        "baseline",
+        "champion",
+        "prod",
+        "production",
+        "staging",
+        "test",
+        "train",
+    }
+)
+
+# Metric names that are ALSO ordinary business words. "What is the recall rate?"
+# can mean a product recall, and "accuracy" / "precision" are used loosely about
+# forecasts and targeting. These only count as a model-quality request when the
+# question is visibly about a model, so an unrelated ask never gets a wall of ML
+# metrics. The unambiguous ones (ROC-AUC, Brier, calibration, PSI, PR-AUC, F1)
+# need no such qualifier.
+_AMBIGUOUS_METRIC_KEYS = frozenset({"accuracy", "precision", "recall"})
+_MODEL_CONTEXT_RE = re.compile(r"\bmodels?\b|\bclassifiers?\b|\bpredict\w*\b|\bml\b")
+
+# Upper bound on models enumerated in one answer. A brand names up to 4 models
+# today (initiation / persistence / discontinuation / hcp_adoption); the cap
+# keeps an unscoped question from dumping the whole fleet into chat.
+_MAX_MODEL_METRIC_LINES = 8
+
+
+def _requested_eval_metrics(query: Optional[str]) -> List[str]:
+    """Metric keys the question names, in the order the patterns match them."""
+    lowered = (query or "").lower()
+    if not lowered:
+        return []
+    model_context = bool(_MODEL_CONTEXT_RE.search(lowered))
+    requested: List[str] = []
+    for pattern, key in _METRIC_QUERY_PATTERNS:
+        if key in requested or not re.search(pattern, lowered):
+            continue
+        if key in _AMBIGUOUS_METRIC_KEYS and not model_context:
+            continue
+        requested.append(key)
+    return requested
+
+
+def _identifying_tokens(model_name: str) -> set:
+    """Tokens of a model name that can identify WHICH model a question means."""
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", (model_name or "").lower())
+        if len(token) >= 4 and token not in _GENERIC_MODEL_NAME_TOKENS
+    }
+
+
+def _models_matching_query(
+    query: Optional[str], models: Sequence[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Models the question names, plus whether the match was a real one.
+
+    Returns ``(models, matched)``. When no registered model name matches the
+    question (a brand that has no model — Xolair is not in the data model at
+    all), ``matched`` is False and ALL models are returned so the caller can
+    disclose that it is answering about every registered model rather than
+    silently attributing another brand's numbers to the one asked about.
+    """
+    tokens = set(re.findall(r"[a-z0-9]+", (query or "").lower()))
+    matched = [
+        m
+        for m in models
+        if _identifying_tokens(str(m.get("model_name") or m.get("model_id") or "")) & tokens
+    ]
+    if matched:
+        return matched, True
+    return list(models), False
 
 
 def _signal_reward(output: str, inputs: Dict[str, Any]) -> float:
@@ -169,7 +293,13 @@ class ScoreComposerNode:
                     top_fix = diagnosis["priority_fixes"][0]
                     summary += f"\n- Top Priority: {top_fix['action']} ({top_fix['component']})"
 
-            # Emit a recipient training signal for the summary template (best-effort).
+            # Emit a recipient training signal for the summary template
+            # (best-effort). Deliberately emitted with the SUMMARY-template
+            # output only: the #1450 model-quality block below is rendered from
+            # its own (unoptimised) templates, so feeding it to the summary
+            # signal would train the optimizer on text that template never
+            # produced — and its honest "UNKNOWN"/"not recorded" wording would
+            # dock ``_signal_reward``'s status-word credit for the wrong reason.
             await self._emit_summary_signal(
                 overall_score=overall_score_100,
                 grade=grade,
@@ -177,6 +307,11 @@ class ScoreComposerNode:
                 critical_issues=critical_issues,
                 summary=summary,
             )
+
+            # #1450: a question naming a metric is answered with the METRIC.
+            metrics_block = self._model_metrics_answer(state, measured_flags["model"])
+            if metrics_block:
+                summary = f"{metrics_block}\n\n{summary}"
 
             check_time = (state.get("total_latency_ms") or 0) + int(
                 (time.time() - start_time) * 1000
@@ -308,6 +443,56 @@ class ScoreComposerNode:
             check_scope=check_scope,
             critical_issues=issues,
         )
+
+    def _model_metrics_answer(self, state: HealthScoreState, model_measured: bool) -> str:
+        """Answer a metric-naming question with the METRICS (#1450), or "".
+
+        Returns the empty string when the question names no metric — the
+        composite summary is then rendered exactly as before (regression pin:
+        ``TestNonMetricQueriesAreUnchanged``).
+
+        Honesty rules, in order:
+          * model dimension NOT measured -> the unavailable template. No number
+            is printed at all; the #1447 UNKNOWN summary follows it.
+          * no registered model name matches the question -> every registered
+            model is listed WITH that disclosure, so another brand's numbers are
+            never silently attributed to the one asked about.
+          * a requested metric that is not recorded -> named as not recorded.
+        """
+        requested = _requested_eval_metrics(state.get("query"))
+        if not requested:
+            return ""
+        scope = state.get("check_scope")
+        if scope not in ("full", "models"):
+            # The models dimension was deliberately out of scope for this check;
+            # it was not "not measured" so much as "not asked for".
+            return ""
+
+        integration = get_health_score_dspy_integration()
+        models = list(state.get("model_metrics") or [])
+        if not model_measured or not models:
+            reason = (
+                "the model health dimension was not measured (no metrics store is "
+                "reachable), so no evaluation metric could be read."
+            )
+            return integration.get_model_metrics_prompt(requested, [], unavailable_reason=reason)
+
+        matched, was_matched = _models_matching_query(state.get("query"), models)
+        truncated = len(matched) > _MAX_MODEL_METRIC_LINES
+        block = integration.get_model_metrics_prompt(requested, matched[:_MAX_MODEL_METRIC_LINES])
+        if not was_matched:
+            block += (
+                "\nNo registered model name matched the question, so every registered "
+                f"model is listed above ({len(models)} in total) rather than "
+                "attributing another model's numbers to the one asked about."
+            )
+        if truncated:
+            noun = "matching" if was_matched else "registered"
+            block += (
+                f"\nShowing {_MAX_MODEL_METRIC_LINES} of {len(matched)} {noun} models; "
+                "name the brand and prediction target to narrow it."
+            )
+        return block
 
     async def _emit_summary_signal(
         self,

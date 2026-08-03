@@ -16,7 +16,7 @@ import importlib.util
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,32 @@ class HealthReportPrompts:
         "UNMEASURED, not a measured failure. {issue_detail}"
     )
 
+    # === MODEL QUALITY METRICS (#1450) ===
+    #
+    # A question naming a metric ("what is the ROC-AUC and calibration of the
+    # current Kisqali model?") asks for the MEASUREMENT, not a composite grade.
+    # These render the named evaluation metrics the model_health node carried
+    # through from ``ml_performance_metrics``, always with the model version and
+    # the cohort/date the numbers were measured on — a bare 0.77 with no cohort
+    # or as-of date is not an auditable answer for a governance reviewer.
+    #
+    # Like ``unknown_summary_template`` these are NOT registered in
+    # ``RECIPIENT_SIGNATURE_FIELDS`` (no backing DSPy signature), so the
+    # optimizer never rewrites them; they still round-trip through
+    # ``to_dict()``/``update_optimized_prompts()`` so a bundle install cannot
+    # silently drop them.
+    model_metrics_header_template: str = "Model quality metrics (requested: {requested}):"
+    model_metrics_template: str = "- {model_label}: {metric_list} [{provenance_clause}]"
+    model_metrics_missing_template: str = (
+        "Requested but NOT recorded for any matched model: {missing}. No value is "
+        "reported for it - reporting one without a measurement would be a fabrication."
+    )
+    model_metrics_unavailable_template: str = (
+        "Model quality metrics (requested: {requested}) are UNKNOWN - {reason} "
+        "No number is reported, because reporting one without a measurement "
+        "would be a fabrication."
+    )
+
     # Recommendation prompt
     recommendation_template: str = (
         "Given health status: component={component_score}, model={model_score}, "
@@ -109,6 +135,10 @@ class HealthReportPrompts:
         return {
             "summary_template": self.summary_template,
             "unknown_summary_template": self.unknown_summary_template,
+            "model_metrics_header_template": self.model_metrics_header_template,
+            "model_metrics_template": self.model_metrics_template,
+            "model_metrics_missing_template": self.model_metrics_missing_template,
+            "model_metrics_unavailable_template": self.model_metrics_unavailable_template,
             "recommendation_template": self.recommendation_template,
             "issue_description_template": self.issue_description_template,
             "version": self.version,
@@ -240,6 +270,14 @@ class HealthScoreDSPyIntegration:
             self._prompts.summary_template = prompts["summary_template"]
         if "unknown_summary_template" in prompts:
             self._prompts.unknown_summary_template = prompts["unknown_summary_template"]
+        for field in (
+            "model_metrics_header_template",
+            "model_metrics_template",
+            "model_metrics_missing_template",
+            "model_metrics_unavailable_template",
+        ):
+            if field in prompts:
+                setattr(self._prompts, field, prompts[field])
         if "recommendation_template" in prompts:
             self._prompts.recommendation_template = prompts["recommendation_template"]
         if "issue_description_template" in prompts:
@@ -346,6 +384,128 @@ class HealthScoreDSPyIntegration:
             scope_label=label,
         )
 
+    # Display names for the recorded evaluation metrics (#1450). Keys are the
+    # ``ml_performance_metrics.metric_name`` values; "psi" has no key there and
+    # is listed so a question naming it can be answered "not recorded" BY NAME.
+    _EVAL_METRIC_LABELS: Dict[str, str] = {
+        "auc_roc": "ROC-AUC",
+        "pr_auc": "PR-AUC",
+        "brier_score": "Brier score",
+        "calibration_slope": "calibration slope",
+        "accuracy": "accuracy",
+        "f1": "F1",
+        "precision": "precision",
+        "recall": "recall",
+        "psi": "PSI",
+    }
+
+    # Always reported when recorded, even if the question named only one of
+    # them: discrimination WITHOUT calibration is the classic misleading model
+    # answer, and Brier is the proper score that reconciles the two.
+    _CORE_QUALITY_METRICS = ("auc_roc", "calibration_slope", "brier_score")
+
+    def metric_label(self, metric_key: str) -> str:
+        """Human-readable name for a metric key (falls back to the key)."""
+        return self._EVAL_METRIC_LABELS.get(metric_key, metric_key)
+
+    def get_model_metrics_prompt(
+        self,
+        requested: Sequence[str],
+        models: Sequence[Mapping[str, Any]],
+        unavailable_reason: str = "",
+    ) -> str:
+        """Render the model-quality answer for a metric-naming question (#1450).
+
+        ``models`` are the ``ModelMetrics`` entries the composer already matched
+        to the question. Each contributes ONE line naming the model, its version
+        and stage, the metric values, and the cohort/size/date they were
+        measured on. Metrics that were requested but are not recorded for any
+        matched model are named explicitly — never silently dropped and never
+        substituted with a different metric's value.
+
+        ``unavailable_reason`` (non-empty) short-circuits to the unavailable
+        template: nothing was measured, so no number may be printed at all.
+        """
+        requested_label = (
+            ", ".join(self.metric_label(m) for m in requested) if requested else "model quality"
+        )
+        if unavailable_reason:
+            return self._prompts.model_metrics_unavailable_template.format(
+                requested=requested_label,
+                reason=unavailable_reason,
+            )
+
+        lines: List[str] = [
+            self._prompts.model_metrics_header_template.format(requested=requested_label)
+        ]
+        reported: set[str] = set()
+        for model in models:
+            eval_metrics = dict(model.get("eval_metrics") or {})
+            name = model.get("model_name") or model.get("model_id") or "unknown model"
+            version = model.get("model_version")
+            stage = model.get("model_stage")
+            model_label = str(name)
+            if version:
+                model_label += f" v{version}"
+            if stage:
+                model_label += f" ({stage})"
+
+            if not eval_metrics:
+                lines.append(
+                    self._prompts.model_metrics_template.format(
+                        model_label=model_label,
+                        metric_list="no evaluation metrics recorded",
+                        provenance_clause="nothing to attribute - no evaluation on record",
+                    )
+                )
+                continue
+
+            # Requested-and-recorded first (in the order asked), then the core
+            # quality trio so discrimination is never reported without
+            # calibration.
+            ordered: List[str] = [k for k in requested if k in eval_metrics]
+            ordered += [
+                k for k in self._CORE_QUALITY_METRICS if k in eval_metrics and k not in ordered
+            ]
+            reported.update(ordered)
+            metric_list = ", ".join(
+                f"{self.metric_label(k)} {eval_metrics[k]:.3f}" for k in ordered
+            )
+            lines.append(
+                self._prompts.model_metrics_template.format(
+                    model_label=model_label,
+                    metric_list=metric_list,
+                    provenance_clause=self._provenance_clause(model),
+                )
+            )
+
+        missing = [m for m in requested if m not in reported]
+        if missing:
+            lines.append(
+                self._prompts.model_metrics_missing_template.format(
+                    missing=", ".join(self.metric_label(m) for m in missing)
+                )
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _provenance_clause(model: Mapping[str, Any]) -> str:
+        """ "holdout cohort, n=1000, as of 2026-06-01" — with honest gaps.
+
+        Every part is Optional at the source; an absent part is named as not
+        recorded rather than defaulted, so a reader can never mistake an
+        unlabelled number for a labelled one.
+        """
+        cohort = model.get("eval_cohort")
+        sample_size = model.get("eval_sample_size")
+        as_of = model.get("eval_as_of")
+        parts = [
+            f"{cohort} cohort" if cohort else "evaluation cohort not recorded",
+            f"n={sample_size}" if sample_size is not None else "cohort size not recorded",
+            f"as of {str(as_of)[:10]}" if as_of else "measurement date not recorded",
+        ]
+        return ", ".join(parts)
+
     def get_recommendation_prompt(
         self,
         component_score: float,
@@ -386,7 +546,9 @@ class HealthScoreDSPyIntegration:
             "agent": "health_score",
             "dspy_type": self.dspy_type,
             "prompts": self._prompts.to_dict(),
-            "prompt_count": 4,
+            # summary, unknown_summary, the 4 model-quality templates (#1450),
+            # recommendation, issue_description.
+            "prompt_count": 8,
             "dspy_available": DSPY_AVAILABLE,
         }
 

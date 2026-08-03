@@ -262,7 +262,19 @@ class TestScopeIsNamed:
         with patch(EMIT_TARGET, new=AsyncMock()):
             result = await node.execute(_unmeasured_state(scope=scope))
 
-        assert result["health_summary"].startswith(f"{label} health status is UNKNOWN")
+        # The pinned property is that the UNKNOWN NARRATION names the scope it
+        # actually checked. #1450 may prepend a targeted model-quality answer
+        # (the fixture query above names ROC-AUC and calibration, and that block
+        # is itself an UNKNOWN statement — it never prints a number), so assert
+        # on the narration sentence rather than on the whole string's prefix.
+        summary = result["health_summary"]
+        narration = f"{label} health status is UNKNOWN - nothing was measured."
+        assert narration in summary
+        preamble = summary.split(narration)[0].strip()
+        assert preamble == "" or preamble.startswith("Model quality metrics"), (
+            "only the #1450 model-quality answer may precede the UNKNOWN "
+            f"narration, got: {preamble!r}"
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
