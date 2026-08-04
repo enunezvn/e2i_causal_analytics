@@ -363,3 +363,88 @@ class TestMultiProductionDisambiguation1461:
             "the answer must state explicitly that several production models "
             f"exist for the brand: {summary!r}"
         )
+
+
+class TestExplicitStageOverride1461Iter2:
+    """codex iter-1 findings (2026-08-04): an explicit stage the question names
+    must beat the ambient production reading of "current"/"live" (HIGH — the
+    staging model asked for was silently swapped for a production one), and a
+    stage constraint matching nothing must say so instead of silently
+    answering with another stage's model (MED)."""
+
+    FABHALTA_STAGING = _model(
+        "initiation_fabhalta_goldstd_lr_v1",
+        "staging",
+        {"auc_roc": 0.812345, "calibration_slope": 0.98, "brier_score": 0.15},
+        model_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    def test_explicit_staging_beats_current(self):
+        """codex HIGH scenario: "current" must not veto an explicit "staging"."""
+        result = _models_matching_query(
+            "What is the current ROC-AUC of the staging Kisqali initiation model?",
+            [KISQALI_PROD, KISQALI_STAGING],
+        )
+        assert [m["model_name"] for m in result[0]] == ["initiation_kisqali_goldstd_lr_v1"]
+        assert result[1] is True
+
+    def test_explicit_staging_alone_filters_to_staging(self):
+        result = _models_matching_query(
+            "What is the ROC-AUC of the staging Kisqali model?",
+            [KISQALI_PROD, KISQALI_STAGING],
+        )
+        assert [m["model_name"] for m in result[0]] == ["initiation_kisqali_goldstd_lr_v1"]
+        assert result[1] is True
+
+    def test_two_stages_named_is_a_comparison_and_constrains_nothing(self):
+        result = _models_matching_query(
+            "Compare the production and staging Kisqali models",
+            [KISQALI_PROD, KISQALI_STAGING],
+        )
+        assert {m["model_name"] for m in result[0]} == {
+            "hcp_adoption_kisqali_goldstd_lr_v1",
+            "initiation_kisqali_goldstd_lr_v1",
+        }
+        assert result[1] is True
+
+    def test_no_model_in_requested_stage_discloses_it(self):
+        """codex MED scenario: a production-constrained question over a brand
+        with only a staging model must NOT silently answer as if the staging
+        model were the requested one."""
+        result = _models_matching_query(
+            "What is the ROC-AUC of the production Fabhalta initiation model?",
+            [KISQALI_PROD, self.FABHALTA_STAGING],
+        )
+        assert [m["model_name"] for m in result[0]] == ["initiation_fabhalta_goldstd_lr_v1"]
+        assert result[1] is True
+        assert "No production-stage model" in result[2], result[2]
+
+    def test_unregistered_brand_with_stage_word_keeps_1450_disclosure(self):
+        """#1450 pin: no name match at all still returns (all, False, "")."""
+        result = _models_matching_query(
+            "What is the ROC-AUC of the staging Xolair model?",
+            [KISQALI_PROD, KISQALI_STAGING],
+        )
+        assert result[1] is False
+        assert len(result[0]) == 2
+        assert result[2] == ""
+
+    @pytest.mark.asyncio
+    async def test_composer_renders_the_no_stage_match_note(self):
+        state = _models_state(
+            "What is the ROC-AUC of the production Fabhalta initiation model?",
+            [KISQALI_PROD, self.FABHALTA_STAGING],
+        )
+        summary = (await _compose(state))["health_summary"]
+        assert "initiation_fabhalta_goldstd_lr_v1" in summary, summary
+        assert "No production-stage model" in summary, summary
+
+    @pytest.mark.asyncio
+    async def test_composer_answers_staging_question_with_the_staging_model(self):
+        state = _models_state(
+            "What is the current ROC-AUC of the staging Kisqali initiation model?",
+            [KISQALI_PROD, KISQALI_STAGING],
+        )
+        summary = (await _compose(state))["health_summary"]
+        assert "initiation_kisqali_goldstd_lr_v1" in summary, summary
+        assert "hcp_adoption_kisqali_goldstd_lr_v1" not in summary, summary
