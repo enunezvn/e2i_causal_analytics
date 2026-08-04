@@ -88,11 +88,16 @@ class ArtifactDestination:
             store (the healthy case).
         blocked_root: the nearest existing ancestor of ``local_path`` that this
             process cannot write to, or ``None`` when the write can succeed.
+        missing_root: the first component of ``local_path`` that does not exist
+            (#1459: the REAL gap to name — e.g. ``/mlflow`` for the legacy
+            production URI, whose ``blocked_root`` is merely ``/``). ``None``
+            when the write can succeed or when ``local_path`` fully exists.
     """
 
     uri: str
     local_path: Optional[str]
     blocked_root: Optional[str]
+    missing_root: Optional[str] = None
 
     @property
     def is_blocked(self) -> bool:
@@ -122,7 +127,11 @@ def classify_artifact_destination(artifact_uri: str) -> ArtifactDestination:
         return ArtifactDestination(uri=artifact_uri, local_path=None, blocked_root=None)
 
     probe = os.path.abspath(local_path)
+    missing_root: Optional[str] = None
     while not os.path.exists(probe):
+        # After the walk this holds the SHALLOWEST nonexistent component —
+        # e.g. '/mlflow' for '/mlflow/artifacts/9/<run>/artifacts' (#1459).
+        missing_root = probe
         parent = os.path.dirname(probe)
         if parent == probe:
             break
@@ -133,6 +142,7 @@ def classify_artifact_destination(artifact_uri: str) -> ArtifactDestination:
         uri=artifact_uri,
         local_path=local_path,
         blocked_root=None if writable else probe,
+        missing_root=None if writable else missing_root,
     )
 
 
@@ -167,23 +177,39 @@ def report_artifact_write_blocked(artifact_uri: str, run_id: str) -> bool:
 
     Returns True when the destination is blocked AND this was the first report,
     False when the destination is fine or the condition was already surfaced.
+
+    #1459: the message names the MISSING artifact root (e.g. ``/mlflow``)
+    separately from the unwritable ancestor (``/`` in production), and it must
+    NEVER advise mounting a writable volume — for the real production URI the
+    blocked root is ``/``, so that advice told operators to defeat the very
+    ``read_only: true`` hardening (docker-compose ``e2i_api``) it cites.
+    Recreating the experiment onto the artifact-proxy convention (b0a30f11) is
+    the single recommended remediation.
     """
     destination = classify_artifact_destination(artifact_uri)
     if not destination.is_blocked:
         return False
+
+    if destination.missing_root:
+        gap = (
+            f"but {destination.missing_root!r} does not exist in this container and "
+            f"its nearest existing ancestor {destination.blocked_root!r} is not "
+            "writable from this process"
+        )
+    else:
+        gap = f"but {destination.blocked_root!r} is not writable from this process"
 
     return _report_once(
         f"artifact-root-unwritable:{destination.blocked_root}",
         (
             "MLflow artifact logging is disabled for health_score: the experiment's "
             f"artifact_location resolves to the local path {destination.local_path!r}, "
-            f"but {destination.blocked_root!r} is not writable from this process "
+            f"{gap} "
             "(the api container rootfs is read-only by design). Metrics, params and "
             "tags are unaffected and still reach the tracking server. Remediation: "
             "this experiment predates the artifact-proxy convention and MLflow cannot "
             "rewrite artifact_location in place — rename/archive it on the tracking "
-            "server so it is recreated with artifact_location='mlflow-artifacts:/', "
-            f"or mount a writable volume at {destination.blocked_root!r}. "
+            "server so it is recreated with artifact_location='mlflow-artifacts:/'. "
             f"(first seen on run {run_id})"
         ),
     )
