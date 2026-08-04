@@ -67,8 +67,22 @@ _TRUTHY = ("1", "true", "yes", "on")
 
 
 def chatbot_warm_enabled() -> bool:
-    """Whether the startup warm is enabled (default: yes)."""
-    return os.getenv(WARM_ENABLED_ENV, "true").strip().lower() in _TRUTHY
+    """Whether the startup warm is enabled (production default: yes).
+
+    Default OFF under the pytest harness. Any test that drives the real lifespan
+    would otherwise schedule a real warm, and the jitter is
+    ``random.uniform(0, 5)`` — it can draw ~0, in which case the agent registry
+    build and live Supabase/embedding calls start inside the test process, and
+    the executor thread outlives the lifespan cancellation. An explicit
+    ``CHATBOT_STARTUP_WARM_ENABLED`` always wins, so the warm's own tests still
+    opt in.
+    """
+    explicit = os.getenv(WARM_ENABLED_ENV)
+    if explicit is not None:
+        return explicit.strip().lower() in _TRUTHY
+    if os.getenv("E2I_TESTING_MODE", "").strip().lower() in _TRUTHY:
+        return False
+    return True
 
 
 # =============================================================================

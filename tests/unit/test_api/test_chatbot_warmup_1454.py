@@ -48,6 +48,14 @@ from src.api import main
 # =============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _opt_in_to_warming(monkeypatch):
+    """pytest sets ``E2I_TESTING_MODE=true``, which defaults the warm OFF so no
+    test can accidentally schedule a real one. This module exercises the warm
+    itself, so it opts in explicitly; the flag tests delete or override it."""
+    monkeypatch.setenv(warmup.WARM_ENABLED_ENV, "true")
+
+
 def _recording_step(calls, name, delay=0.0):
     """An async warm leg that records its call order and thread."""
 
@@ -154,8 +162,21 @@ class TestWarmStepOrderAndFailOpen:
 
 
 class TestWarmFlag:
-    def test_enabled_by_default(self, monkeypatch):
+    def test_enabled_by_default_in_production(self, monkeypatch):
         monkeypatch.delenv(warmup.WARM_ENABLED_ENV, raising=False)
+        monkeypatch.delenv("E2I_TESTING_MODE", raising=False)
+        assert warmup.chatbot_warm_enabled() is True
+
+    def test_disabled_by_default_under_the_pytest_harness(self, monkeypatch):
+        """A test driving the real lifespan must not schedule a real warm: the
+        0-5s jitter can draw ~0, and the executor thread outlives cancellation."""
+        monkeypatch.delenv(warmup.WARM_ENABLED_ENV, raising=False)
+        monkeypatch.setenv("E2I_TESTING_MODE", "true")
+        assert warmup.chatbot_warm_enabled() is False
+
+    def test_explicit_flag_wins_over_the_harness_default(self, monkeypatch):
+        monkeypatch.setenv("E2I_TESTING_MODE", "true")
+        monkeypatch.setenv(warmup.WARM_ENABLED_ENV, "true")
         assert warmup.chatbot_warm_enabled() is True
 
     @pytest.mark.parametrize("value", ["false", "FALSE", "0", "no"])
