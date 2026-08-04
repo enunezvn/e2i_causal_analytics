@@ -403,6 +403,41 @@ _TIER_PRE_ANCHOR_COMMERCIAL_VETO = (
 )
 
 
+# #1470 — hard bound on how much of a query the regex table ever scans.
+#
+# ``_pattern_classify`` runs the WHOLE table on every request ahead of the LLM
+# fallback, and most entries join two token groups with an unbounded ``.*``.
+# Each occurrence of a leading anchor starts a fresh scan to end-of-line, so
+# cost is quadratic in the query length: measured on the dev box,
+# ``_pattern_classify`` took 1.43s at 8K chars, 6.90s at 20K and 32.75s at 45K.
+# The classification path is in front of every chat request, so one long input
+# stalls it.
+#
+# A cap is the fix rather than rewriting the ~35 unbounded-``.*`` entries
+# because tightening a pattern CHANGES ROUTING, and this table has a scar from
+# exactly that (#1408: a bare ``\binterim\b`` confidently misrouted "interim
+# CFO/FDA"). The cap reaches no query anyone can currently send through
+# ``/chat`` (its own ``MAX_MESSAGE_CHARS`` is 1500) nor any row in the routing
+# gold set (longest query: 593 chars).
+#
+# Past the cap the layer ABSTAINS — it does not score the first 2000 chars.
+# Scoring a prefix was the first cut of this fix and it was WRONG (codex iter-1
+# HIGH, reproduced before changing it): several entries are ``\A``-anchored with
+# a whole-query negative lookahead, and truncating the input hides the veto
+# evidence instead of the positive evidence. Measured on the truncating build,
+# "what is the trx for kisqali <2KB of filler> please forecast it" scored
+# explanation@0.867 — above the 0.8 trust floor, so ``execute`` acted on it
+# without consulting the LLM — where the same query intact scores prediction.
+# Truncation therefore fails in BOTH directions; abstention fails in only one.
+#
+# Abstaining returns the module's existing "pattern layer has nothing" verdict
+# (general@0.5), which is below ``execute``'s 0.8 trust floor, so an over-cap
+# query goes to the LLM fallback — and that fallback receives the query in FULL
+# (``execute`` passes ``state["query"]``, never a truncated head). It is also
+# strictly cheaper than truncating: no regex runs at all.
+_PATTERN_SCAN_MAX_CHARS = 2000
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -545,7 +580,19 @@ class IntentClassifierNode:
             # "interim readout on the running ... speaker-program test" carries
             # "test"; none of the misrouted probes carry an experiment noun. The
             # narrower "interim analysis" above is preserved from origin/main.
-            r"(?=.*\binterim\b)(?=.*\b(?:experiments?|trials?|a\/?b ?tests?|tests?|enroll\w*)\b)",
+            # #1470: `(?m)^`-ANCHORED, and that is semantics-preserving. The
+            # body is a pair of zero-width lookaheads, so unanchored `re.search`
+            # retries it at all N start offsets and each try scans to
+            # end-of-line — the single largest backtracking cost in this table
+            # (28.0s on 45K chars of "a", i.e. quadratic even on input holding
+            # none of its tokens). Since `.` excludes newlines, the unanchored
+            # form matches iff SOME SINGLE LINE carries both an "interim" and an
+            # experiment noun, which is exactly what testing at line starts
+            # decides — same language, one pass (28.0s -> 1.7ms at 45K).
+            # Equivalence measured over 1,019 stored routing queries and 200,000
+            # newline-heavy fuzz strings: 0 divergences. Pinned by
+            # TestInterimPatternLinearization1470.
+            r"(?m)^(?=.*\binterim\b)(?=.*\b(?:experiments?|trials?|a\/?b ?tests?|tests?|enroll\w*)\b)",
             r"(active|running).*(experiments?|trials?)",
             r"experiments?.*(health|status|issues)",
         ],
@@ -734,6 +781,18 @@ class IntentClassifierNode:
         Returns:
             Intent classification result
         """
+        # #1470: the table below is quadratic in the query length, so past the
+        # cap abstain outright rather than scoring a prefix — a prefix can hide
+        # a pattern's own whole-query veto and produce a CONFIDENT misroute.
+        # See _PATTERN_SCAN_MAX_CHARS. Escalates to the LLM, which sees it all.
+        if len(query) > _PATTERN_SCAN_MAX_CHARS:
+            return IntentClassification(
+                primary_intent="general",
+                confidence=0.5,
+                secondary_intents=[],
+                requires_multi_agent=False,
+            )
+
         scores = {}
 
         for intent, patterns in self.INTENT_PATTERNS.items():
