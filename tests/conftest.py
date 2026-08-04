@@ -463,8 +463,14 @@ os.environ["E2I_TESTING_MODE"] = "1"
 #    model-env inference reflects the ACTUAL installed packages. Prod docker
 #    images never contain uv.lock (docker/Dockerfile copies requirements.txt /
 #    requirements.lock / pyproject.toml only), so detection cannot fire there.
-os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
-os.environ.setdefault("MLFLOW_UV_AUTO_DETECT", "false")
+# Hard assignments (not setdefault): tests/conftest.py load_dotenv(override=
+# True) has already run above, so a stray MLFLOW_ALLOW_FILE_STORE=false /
+# MLFLOW_UV_AUTO_DETECT=true in a developer .env or CI environment would
+# silently defeat the harness. Matches the E2I_TESTING_MODE precedent. A test
+# that needs the upstream defaults can still monkeypatch.setenv per-test
+# (fixtures run after this module-level assignment).
+os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
+os.environ["MLFLOW_UV_AUTO_DETECT"] = "false"
 
 
 def _load_dotenv_at_configure():

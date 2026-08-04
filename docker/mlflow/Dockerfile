@@ -40,7 +40,7 @@ RUN pip install --no-cache-dir \
     boto3==1.34.14 \
     google-cloud-storage==2.14.0 \
     azure-storage-blob==12.19.0 \
-    cryptography==41.0.7
+    cryptography==49.0.0
 
 # Switch to mlflow user
 USER mlflow

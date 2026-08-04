@@ -27,6 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ROOT_REQS = REPO_ROOT / "requirements.txt"
 DEV_REQS = REPO_ROOT / "requirements-dev.txt"
 REQS_LOCK = REPO_ROOT / "requirements.lock"
+UV_LOCK = REPO_ROOT / "uv.lock"
+MLFLOW_DOCKERFILE = REPO_ROOT / "docker" / "mlflow" / "Dockerfile"
 SECURITY_YML = REPO_ROOT / ".github" / "workflows" / "security.yml"
 
 # The exact cryptography pin required post-#1476. 49.0.0 is the only 49.x
@@ -85,6 +87,56 @@ def test_requirements_lock_pins_cryptography_49() -> None:
         f"requirements.lock pins cryptography=={matches!r}; expected exactly "
         f"[{CRYPTOGRAPHY_REQUIRED_PIN!r}] — regenerate the lock (command in "
         f"its header) after bumping requirements.txt."
+    )
+
+
+def test_mlflow_dockerfile_pins_cryptography_49() -> None:
+    """docker/mlflow/Dockerfile must pin cryptography==49.0.0.
+
+    Codex iter-2 HIGH finding on #1476: the image build carried an ancient
+    explicit ``cryptography==41.0.7`` pip arg — which violates even mlflow
+    3.11's ``cryptography>=43`` floor, so any rebuild would fail resolution
+    (the deployed compose services pull ``ghcr.io/mlflow/mlflow`` instead,
+    which is why the breakage never surfaced). Keep it in lockstep so a
+    rebuild of the custom image resolves and ships the patched wheels.
+    """
+    text = MLFLOW_DOCKERFILE.read_text()
+    # Dockerfile pip args are indented continuation lines — anchor on
+    # whitespace, not line start (unlike the requirements-file regex).
+    matches = re.findall(r"^\s*cryptography==([^\s\\#']+)", text, re.MULTILINE)
+    assert matches == [CRYPTOGRAPHY_REQUIRED_PIN], (
+        f"docker/mlflow/Dockerfile pins cryptography=={matches!r}; expected "
+        f"exactly [{CRYPTOGRAPHY_REQUIRED_PIN!r}] — mlflow 3.15.1 requires "
+        f"cryptography>=43,<50, so a stale pin fails the image build."
+    )
+
+
+def test_uv_lock_carries_cryptography_49_and_mlflow_315() -> None:
+    """uv.lock must agree with the bumped resolution.
+
+    Codex iter-2 MED finding on #1476: uv.lock still locked cryptography
+    46.0.7 + the mlflow trio at 3.11.1 with the pre-#1476 pyproject specifier
+    recorded — leaving ``uv sync --locked`` (and any uv-export-based mlflow
+    model-env inference outside the test harness) on the vulnerable
+    pre-#1476 resolution, and inconsistent with the bumped pyproject.
+    """
+    text = UV_LOCK.read_text()
+    crypto_versions = re.findall(r'name = "cryptography"\nversion = "([^"]+)"', text)
+    assert crypto_versions == [CRYPTOGRAPHY_REQUIRED_PIN], (
+        f"uv.lock locks cryptography at {crypto_versions!r}; expected "
+        f"[{CRYPTOGRAPHY_REQUIRED_PIN!r}] — run the targeted "
+        f"``uv lock --upgrade-package`` update from #1476."
+    )
+    for pkg in ("mlflow", "mlflow-skinny", "mlflow-tracing"):
+        versions = re.findall(rf'name = "{pkg}"\nversion = "([^"]+)"', text)
+        assert versions == ["3.15.1"], (
+            f"uv.lock locks {pkg} at {versions!r}; expected ['3.15.1'] "
+            f"(lockstep with requirements.txt, #1476)."
+        )
+    assert 'name = "mlflow", specifier = ">=3.15.1,<3.16.0"' in text, (
+        "uv.lock's recorded pyproject specifier for mlflow is stale — "
+        "regenerate the lock so it matches pyproject.toml's "
+        ">=3.15.1,<3.16.0 (#1476)."
     )
 
 
