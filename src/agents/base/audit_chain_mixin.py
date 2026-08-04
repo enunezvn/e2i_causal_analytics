@@ -41,6 +41,7 @@ from src.utils.audit_chain import (
     ChainVerificationResult,
     RefutationResults,
 )
+from src.utils.stage_timing import record_stage_wall_time
 
 logger = logging.getLogger(__name__)
 
@@ -650,6 +651,20 @@ def audited_node(
                 except Exception:  # pragma: no cover - defensive
                     pass  # never let audit failure mask the real error
             raise
+
+        finally:
+            # #1475: per-request stage attribution. No-op unless a stage
+            # ledger is active in this context (the chatbot's orchestrator
+            # node activates one around orchestrator.run). Recorded in
+            # ``finally`` — same perf_counter start — so a failing node is
+            # still attributed.
+            record_stage_wall_time(
+                f"{agent_name}.{node_name}", (time.perf_counter() - start) * 1000.0
+            )
+
+    # Structural marker for the #1475 coverage pin: a graph node without this
+    # wrapper would silently vanish from orchestrator_stage_ms.
+    wrapper.__stage_timed__ = True  # type: ignore[attr-defined]
 
     return wrapper
 

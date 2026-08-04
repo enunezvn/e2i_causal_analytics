@@ -4393,6 +4393,10 @@ async def _stream_chat_response(
             # #1454: which worker served this request — pairs with the pid on
             # the startup-warm completion log line.
             "worker_pid": None,
+            # #1475: orchestrator-internal attribution (same span item)
+            "orchestrator_stage_ms": None,
+            "orchestrator_run_ms": None,
+            "orchestrator_untimed_ms": None,
         }
 
         # Stream through chatbot workflow
@@ -4417,6 +4421,14 @@ async def _stream_chat_response(
                         "first_request_in_worker"
                     )
                     dispatch_info["worker_pid"] = span_payload.get("worker_pid")
+                    # #1475: orchestrator-internal attribution
+                    dispatch_info["orchestrator_stage_ms"] = span_payload.get(
+                        "orchestrator_stage_ms"
+                    )
+                    dispatch_info["orchestrator_run_ms"] = span_payload.get("orchestrator_run_ms")
+                    dispatch_info["orchestrator_untimed_ms"] = span_payload.get(
+                        "orchestrator_untimed_ms"
+                    )
                     continue
 
                 # Check for node outputs

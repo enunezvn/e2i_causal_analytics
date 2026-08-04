@@ -1079,6 +1079,10 @@ class TestRunChatbot:
             mock_trace_ctx.__aexit__.return_value = None
             mock_trace_ctx.trace_id = "trace-123"
             mock_trace_ctx.node_wall_ms = {}  # real dict, as on the dataclass (#1454)
+            # real values, as on the dataclass (#1475)
+            mock_trace_ctx.orchestrator_stage_ms = {}
+            mock_trace_ctx.orchestrator_run_ms = None
+            mock_trace_ctx.orchestrator_untimed_ms = None
             mock_tracer.return_value.trace_workflow.return_value = mock_trace_ctx
 
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
@@ -1105,6 +1109,10 @@ class TestRunChatbot:
             mock_trace_ctx.__aexit__.return_value = None
             mock_trace_ctx.trace_id = "trace-123"
             mock_trace_ctx.node_wall_ms = {}  # real dict, as on the dataclass (#1454)
+            # real values, as on the dataclass (#1475)
+            mock_trace_ctx.orchestrator_stage_ms = {}
+            mock_trace_ctx.orchestrator_run_ms = None
+            mock_trace_ctx.orchestrator_untimed_ms = None
             mock_tracer.return_value.trace_workflow.return_value = mock_trace_ctx
 
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
