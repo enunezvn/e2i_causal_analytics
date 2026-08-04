@@ -50,8 +50,11 @@ _CONTENT_BLOCK_TYPES = frozenset(
 )
 
 # Where those wrappers keep the payload: text blocks in ``text``, json blocks
-# in ``json``, search_result blocks nest further blocks in ``content``.
-_BLOCK_PAYLOAD_KEYS = ("text", "json", "content")
+# in ``json``, search_result blocks nest further blocks in ``content``, and
+# langchain_openai's @custom_tool wraps every return as ``output``. A block
+# type admitted above whose payload key is missing here waves its envelope
+# through — ``all()`` over no keys is True — so the two must stay in step.
+_BLOCK_PAYLOAD_KEYS = ("text", "json", "content", "output")
 
 # Nesting is bounded in every shape a tool can actually produce; the cap only
 # keeps hostile or malformed input from exhausting the stack. Past it we

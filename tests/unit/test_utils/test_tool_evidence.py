@@ -131,6 +131,27 @@ class TestContentBlockEvidence:
     def test_non_envelope_block_is_evidence(self):
         assert payload_carries_evidence([{"type": "image", "url": "https://x/y.png"}]) is True
 
+    def test_custom_tool_call_output_block_is_graded(self):
+        """Built by the REAL ``langchain_openai.custom_tool`` decorator, which
+        wraps every return as ``[{"type": "custom_tool_call_output",
+        "output": ...}]`` — list content whose payload key is neither text,
+        json nor content. Pins the block-type set against the payload-key
+        map: admitting a block type whose key is unmapped silently waves the
+        envelope through, since ``all()`` over no keys is True.
+        """
+        from langchain_openai import custom_tool
+
+        @custom_tool
+        def failing_custom_tool(x: str) -> str:
+            """Fails closed with the E2I envelope."""
+            return FAILED_JSON
+
+        content = failing_custom_tool.invoke(
+            {"type": "tool_call", "id": "c1", "name": "failing_custom_tool", "args": {"x": "q"}}
+        ).content
+        assert content == [{"type": "custom_tool_call_output", "output": FAILED_JSON}]
+        assert payload_carries_evidence(content) is False
+
     def test_block_types_match_langchain(self):
         """The unwrap is keyed to the block types langchain actually admits
         into ToolMessage.content. Pinned rather than imported so the module
