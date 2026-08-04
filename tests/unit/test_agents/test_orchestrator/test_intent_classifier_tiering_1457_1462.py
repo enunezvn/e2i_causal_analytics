@@ -84,6 +84,12 @@ class TestBrandModifiedCommercialTieringEscalates:
             # Ladder shape (b) with NO container noun after the anchor — the
             # head-noun disqualifier must cover the anchor->ladder span too.
             "Tier the breast cancer conference sponsorships from high to medium to low",
+            # codex iter-1 HIGH (2026-08-04): commercial head noun BEFORE the
+            # brand anchor. The tempered gaps only guard spans AFTER the
+            # anchor, so shape (b) started at "Kisqali" and never saw "call
+            # plans" — measured cohort_definition @0.867 on the first lane
+            # build. The pre-anchor veto must kill it.
+            "Rank call plans for Kisqali into high, medium, and low priority tiers",
         ],
     )
     def test_branded_commercial_tiering_escalates_to_the_llm(self, query: str) -> None:
@@ -169,3 +175,41 @@ class TestModerateMiddleRungIsCohortWork:
             _classify("Rank call-plan tiers by expected ROI for Kisqali")["primary_intent"]
             != "cohort_definition"
         )
+
+
+# ---------------------------------------------------------------------------
+# codex iter-1 HIGH/MED (2026-08-04): two head-noun lexemes over-matched
+# ordinary clinical/idiomatic vocabulary. Both queries below classified
+# cohort_definition @0.933 on main (6e099100) and fell to a confident
+# segment_analysis @0.867 (a CATE misroute) on the first lane build — a
+# REGRESSION the lexicon narrowing must undo.
+# ---------------------------------------------------------------------------
+class TestClinicalVocabularyNotDisqualified:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # \baccounts?\b matched the idiom "taking into account".
+            "Segment HCPs taking into account prescription volume into high, medium, and low tiers",
+            # bare \bchannels?\b matched biological "calcium channel".
+            "Segment patients by calcium channel expression into high, medium, and low tiers",
+        ],
+    )
+    def test_idiomatic_and_biological_vocabulary_keeps_matching(self, query: str) -> None:
+        intent = _classify(query)
+        assert intent["primary_intent"] == "cohort_definition"
+        assert intent["confidence"] >= PATTERN_TRUST_FLOOR
+        assert _classify_and_route(query) == ["cohort_profiler"]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # The narrowing must NOT free genuinely commercial phrasings:
+            # qualified channels and plural accounts stay in the lexicon.
+            "Rank the Kisqali marketing channels into high, medium, and low performing tiers",
+            "Tier the Kisqali key accounts from high to medium to low",
+        ],
+    )
+    def test_qualified_commercial_vocabulary_still_escalates(self, query: str) -> None:
+        intent = _classify(query)
+        assert intent["primary_intent"] != "cohort_definition"
+        assert intent["confidence"] < PATTERN_TRUST_FLOOR
