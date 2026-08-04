@@ -294,7 +294,7 @@ services:
   # 3.11.x line resolves CVE-2026-2652 / CVE-2026-33866 / CVE-2026-33865 —
   # three GHSAs dropped from .github/workflows/security.yml in PR #442.
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.11.1
+    image: ghcr.io/mlflow/mlflow:v3.15.1
     container_name: e2i-mlflow
     restart: unless-stopped
     expose:

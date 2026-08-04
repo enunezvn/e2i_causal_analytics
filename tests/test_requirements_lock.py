@@ -4,7 +4,7 @@ Background
 ----------
 ``requirements.txt`` is a near-complete ``pip freeze`` snapshot: every line is
 an exact ``==`` pin EXCEPT (a) the three ``mlflow`` lines, deliberately held as
-a CVE-anchored range ``>=3.11.0,<3.12.0`` (see ``test_mlflow_upgrade_pin.py``),
+a CVE-anchored range ``>=3.15.1,<3.16.0`` (see ``test_mlflow_upgrade_pin.py``),
 and (b) two local patched packages installed from ``./patches/`` paths. Because
 PyPI versions are immutable, the ``==`` lines are already reproducible; the real
 rebuild-drift surface is the mlflow range, and there is no supply-chain
@@ -59,7 +59,7 @@ PATCH_PACKAGES = {canonicalize_name("copilotkit"), canonicalize_name("ag-ui-lang
 # The mlflow range held in requirements.txt (kept in lockstep with
 # test_mlflow_upgrade_pin.py::MLFLOW_REQUIRED_SPEC). The lock must pin each
 # mlflow package to a single concrete version WITHIN this window.
-MLFLOW_SPEC = SpecifierSet(">=3.11.0,<3.12.0")
+MLFLOW_SPEC = SpecifierSet(">=3.15.1,<3.16.0")
 MLFLOW_PACKAGES = {"mlflow", "mlflow-skinny", "mlflow-tracing"}
 
 _REQ_RE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<ver>[^\s;\\]+)")
