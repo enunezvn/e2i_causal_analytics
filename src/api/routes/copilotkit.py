@@ -4390,6 +4390,9 @@ async def _stream_chat_response(
             "graph_total_ms": None,
             "untimed_overhead_ms": None,
             "first_request_in_worker": None,
+            # #1454: which worker served this request — pairs with the pid on
+            # the startup-warm completion log line.
+            "worker_pid": None,
         }
 
         # Stream through chatbot workflow
@@ -4413,6 +4416,7 @@ async def _stream_chat_response(
                     dispatch_info["first_request_in_worker"] = span_payload.get(
                         "first_request_in_worker"
                     )
+                    dispatch_info["worker_pid"] = span_payload.get("worker_pid")
                     continue
 
                 # Check for node outputs

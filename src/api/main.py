@@ -27,6 +27,14 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+# #1454: chatbot cold-start warming (stdlib-only at import time; every heavy
+# import lives inside the warm legs)
+from src.api.chatbot_warmup import (
+    chatbot_warm_enabled,
+    log_warm_task_outcome,
+    warm_chatbot_stack,
+)
+
 # Import middleware
 from src.api.dependencies.auth import is_auth_enabled
 
@@ -432,6 +440,23 @@ async def lifespan(app: FastAPI):
         except Exception as e:  # noqa: BLE001 - never block startup on this
             logger.warning(f"Health-history heartbeat not started: {e}")
 
+    # #1454: pre-build the chatbot's process-scoped singletons so the ~30s cold
+    # init does not land on whichever user sends this worker's first request.
+    # Fire-and-forget: never awaited, so it cannot slow a deploy, and it is NOT
+    # a readiness gate — a request racing it takes today's lazy path.
+    chatbot_warm_task = None
+    if chatbot_warm_enabled():
+        try:
+            chatbot_warm_task = asyncio.create_task(warm_chatbot_stack())
+            chatbot_warm_task.add_done_callback(log_warm_task_outcome)
+            logger.info("Chatbot startup warm task scheduled")
+        except Exception as e:  # noqa: BLE001 - never block startup on this
+            logger.warning("Chatbot startup warm task not started: %s", e)
+    else:
+        # Say so out loud: silence here is indistinguishable from a warm that
+        # was scheduled and produced no completion line.
+        logger.info("Chatbot startup warm DISABLED (CHATBOT_STARTUP_WARM_ENABLED)")
+
     logger.info("API server ready to accept connections")
 
     # Run the application, then ALWAYS run shutdown cleanup — on normal AND on
@@ -453,6 +478,22 @@ async def lifespan(app: FastAPI):
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             logger.info("Health-history heartbeat stopped")
+
+        # #1454: stop the chatbot warm task. BEST-EFFORT ONLY — cancelling a
+        # task parked on ``asyncio.to_thread`` raises CancelledError at the await
+        # point (so no FURTHER warm step starts), but it cannot interrupt the
+        # executor thread: a step mid-way through a sync HTTP call runs that call
+        # to completion, bounded only by the client's own timeout. Worst case a
+        # recycle is delayed by that timeout; every step is individually
+        # try/except'd, so a step meeting torn-down resources logs a WARNING
+        # rather than crashing shutdown.
+        if chatbot_warm_task is not None:
+            chatbot_warm_task.cancel()
+            try:
+                await chatbot_warm_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            logger.info("Chatbot startup warm task cancelled (best-effort)")
 
         # #609: reset the audit-chain global first so it is cleared even on
         # EXCEPTIONAL shutdown and never leaks into a subsequent same-process

@@ -22,6 +22,7 @@ consumer, the DB, or MLflow. These tests pin the instrumentation:
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -534,3 +535,62 @@ class TestMlflowPerNodeMetrics:
         )
         assert not any(k.startswith("node_") for k in metrics)
         assert metrics["is_error"] == 1
+
+
+# =============================================================================
+# 6. worker_pid on the span (#1454 warm lane)
+# =============================================================================
+
+
+class TestWorkerPidSpanField:
+    """The warm task logs its completion with a pid; the probe needs the SAME
+    identifier on the request side to prove the worker it hit is one whose warm
+    completed. Derived at emission time — never carried on a ChatbotState
+    channel (the #1442 checkpointer-replay class)."""
+
+    def test_span_payload_carries_the_emitting_worker_pid(self):
+        payload = g._build_latency_span_payload("req-pid", None, 12.0, True)
+        assert payload["worker_pid"] == os.getpid()
+
+    def test_span_log_line_carries_worker_pid(self, caplog):
+        """The non-streaming /chat path surfaces the span ONLY through this log
+        line, so the pid has to be on it for warm/request correlation."""
+        caplog.set_level(logging.INFO)
+        g._log_request_span(g._build_latency_span_payload("req-pid-log", None, 12.0, True))
+
+        lines = [r.getMessage() for r in caplog.records if "request span" in r.getMessage()]
+        assert lines, "span line must be logged"
+        assert f"worker_pid={os.getpid()}" in lines[-1]
+
+    def test_worker_pid_is_not_a_chatbot_state_channel(self):
+        assert "worker_pid" not in ChatbotState.__annotations__, (
+            "#1442 class: per-request worker identity must not ride graph state"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_info_carries_worker_pid(self, monkeypatch):
+        async def fake_stream(**kwargs):
+            yield {"finalize": {"response_text": "hello"}}
+            yield {
+                g.LATENCY_SPAN_KEY: {
+                    "request_id": "r3",
+                    "node_wall_ms": {"init": 5.0},
+                    "graph_total_ms": 40.0,
+                    "untimed_overhead_ms": 35.0,
+                    "first_request_in_worker": True,
+                    "worker_pid": 4242,
+                }
+            }
+
+        monkeypatch.setattr(g, "stream_chatbot", fake_stream)
+        req = ck.ChatRequest(query="hi", user_id="u", request_id="r3", session_id="s3")
+
+        events = []
+        async for chunk in ck._stream_chat_response(req, "auth-user"):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[len("data: ") :]))
+
+        dispatch = [e for e in events if e["type"] == "dispatch_info"]
+        assert len(dispatch) == 1
+        assert dispatch[0]["data"]["worker_pid"] == 4242
