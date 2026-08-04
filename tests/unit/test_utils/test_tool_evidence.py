@@ -131,6 +131,32 @@ class TestContentBlockEvidence:
     def test_non_envelope_block_is_evidence(self):
         assert payload_carries_evidence([{"type": "image", "url": "https://x/y.png"}]) is True
 
+    def test_block_types_match_langchain(self):
+        """The unwrap is keyed to the block types langchain actually admits
+        into ToolMessage.content. Pinned rather than imported so the module
+        stays stdlib-only; this fails loudly if upstream's set changes."""
+        from langchain_core.tools.base import TOOL_MESSAGE_BLOCK_TYPES
+
+        from src.utils.tool_evidence import _CONTENT_BLOCK_TYPES
+
+        assert _CONTENT_BLOCK_TYPES == frozenset(TOOL_MESSAGE_BLOCK_TYPES)
+
+    @pytest.mark.parametrize("bad_type", [["text"], {"a": 1}, 7, None])
+    def test_unhashable_or_non_string_type_does_not_raise(self, bad_type):
+        """``type`` comes from arbitrary tool JSON, so it need not be a
+        string — a set membership test on an unhashable value would raise
+        TypeError straight through evidence_tool_count's call sites."""
+        assert payload_carries_evidence({"type": bad_type, "content": FAILED_JSON}) is True
+
+    def test_result_dict_with_unrelated_type_is_not_re_graded_by_children(self):
+        """A structured E2I result is not a content block: it may legitimately
+        carry a ``type`` and nest a failed sub-result under ``content``. Only a
+        POSITIVE failure marker on the payload ITSELF removes evidence status
+        (#1257), so gating the unwrap on "type is a string" was too loose."""
+        payload = {"type": "analytics_result", "content": {"success": False}}
+        assert payload_carries_evidence(payload) is True
+        assert payload_carries_evidence([payload]) is True
+
     def _nest(self, depth):
         payload: object = [{"type": "text", "text": FAILED_JSON}]
         for _ in range(depth):
@@ -161,6 +187,15 @@ class TestUnchangedScalarSemantics:
             ("", True),
             (None, True),
             (12867, True),
+            # Only the `False` singleton is a failure marker: the pre-#1469
+            # check was `parsed.get("success") is False`, so these falsy and
+            # absent values always counted as evidence and must keep doing so.
+            ({"success": None}, True),
+            ({"success": 0}, True),
+            ({"success": ""}, True),
+            ({"success": "no"}, True),
+            ({"data": {"trx": 1}}, True),
+            ({}, True),
         ],
     )
     def test_scalar_payloads(self, payload, expected):

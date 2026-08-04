@@ -30,11 +30,27 @@ reachability assumption.
 import json
 from typing import Any, Dict, List
 
-# Payload-bearing fields of the typed content blocks langchain admits into
-# ToolMessage.content (langchain_core.tools.base.TOOL_MESSAGE_BLOCK_TYPES).
-# A block is a wrapper, so the envelope sits one level in: text blocks carry
-# it in ``text``, json blocks in ``json``, search_result blocks nest further
-# blocks in ``content``.
+# The block types langchain admits into ToolMessage.content, mirrored from
+# langchain_core.tools.base.TOOL_MESSAGE_BLOCK_TYPES so this module stays
+# stdlib-only; the test suite pins the two sets equal. Only these are
+# WRAPPERS around a payload — a structured tool result may carry its own
+# unrelated ``type``, and re-grading such a dict by its children would strip
+# evidence status from something never positively marked failed.
+_CONTENT_BLOCK_TYPES = frozenset(
+    {
+        "text",
+        "image_url",
+        "image",
+        "json",
+        "search_result",
+        "custom_tool_call_output",
+        "document",
+        "file",
+    }
+)
+
+# Where those wrappers keep the payload: text blocks in ``text``, json blocks
+# in ``json``, search_result blocks nest further blocks in ``content``.
 _BLOCK_PAYLOAD_KEYS = ("text", "json", "content")
 
 # Nesting is bounded in every shape a tool can actually produce; the cap only
@@ -79,9 +95,10 @@ def _dict_carries_evidence(parsed: Dict[str, Any], depth: int) -> bool:
     if "success" in parsed:
         return parsed["success"] is not False
     # No envelope of its own — but a typed content block wraps one a level in.
-    # Gated on ``type`` so a plain result dict that happens to hold a "content"
-    # or "text" key is never re-graded by its children.
-    if isinstance(parsed.get("type"), str):
+    # Gated on langchain's block types so a plain result dict that happens to
+    # hold a "content" or "text" key is never re-graded by its children.
+    block_type = parsed.get("type")
+    if isinstance(block_type, str) and block_type in _CONTENT_BLOCK_TYPES:
         return all(
             _carries_evidence(parsed[key], depth + 1)
             for key in _BLOCK_PAYLOAD_KEYS
