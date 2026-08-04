@@ -396,7 +396,7 @@ class TestExplicitStageOverride1461Iter2:
         assert [m["model_name"] for m in result[0]] == ["initiation_kisqali_goldstd_lr_v1"]
         assert result[1] is True
 
-    def test_two_stages_named_is_a_comparison_and_constrains_nothing(self):
+    def test_two_stages_named_returns_models_from_both_stages(self):
         result = _models_matching_query(
             "Compare the production and staging Kisqali models",
             [KISQALI_PROD, KISQALI_STAGING],
@@ -405,6 +405,52 @@ class TestExplicitStageOverride1461Iter2:
             "hcp_adoption_kisqali_goldstd_lr_v1",
             "initiation_kisqali_goldstd_lr_v1",
         }
+        assert result[1] is True
+
+    def test_comparison_filters_to_the_named_stage_set(self):
+        """codex iter-2 MED: naming two stages must exclude models in a THIRD
+        stage — "production and staging" is a constraint to that set, not the
+        absence of a constraint."""
+        archived = _model(
+            "persistence_kisqali_goldstd_lr_v1",
+            "archived",
+            {"auc_roc": 0.7, "calibration_slope": 1.0, "brier_score": 0.2},
+            model_id="22222222-2222-2222-2222-222222222222",
+        )
+        result = _models_matching_query(
+            "Compare the production and staging Kisqali models",
+            [KISQALI_PROD, KISQALI_STAGING, archived],
+        )
+        assert {m["model_name"] for m in result[0]} == {
+            "hcp_adoption_kisqali_goldstd_lr_v1",
+            "initiation_kisqali_goldstd_lr_v1",
+        }, "the archived model must not leak into a production-vs-staging comparison"
+        assert result[1] is True
+
+    def test_comparison_still_narrows_on_a_named_target(self):
+        """A comparison naming a prediction target keeps only that target's
+        models (one per compared stage)."""
+        initiation_prod = _model(
+            "initiation_kisqali_goldstd_lr_v1",
+            "production",
+            {"auc_roc": 0.83, "calibration_slope": 1.0, "brier_score": 0.16},
+            model_id="33333333-3333-3333-3333-333333333333",
+        )
+        adoption_staging = _model(
+            "hcp_adoption_kisqali_goldstd_lr_v1",
+            "staging",
+            {"auc_roc": 0.75, "calibration_slope": 0.9, "brier_score": 0.2},
+            model_id="44444444-4444-4444-4444-444444444444",
+        )
+        result = _models_matching_query(
+            "Compare the production and staging Kisqali initiation models",
+            [KISQALI_PROD, KISQALI_STAGING, initiation_prod, adoption_staging],
+        )
+        assert [m["model_name"] for m in result[0]] == [
+            "initiation_kisqali_goldstd_lr_v1",
+            "initiation_kisqali_goldstd_lr_v1",
+        ], [m["model_name"] for m in result[0]]
+        assert {m["model_stage"] for m in result[0]} == {"production", "staging"}
         assert result[1] is True
 
     def test_no_model_in_requested_stage_discloses_it(self):

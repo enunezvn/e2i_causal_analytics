@@ -132,7 +132,8 @@ def _identifying_tokens(model_name: str) -> set:
 # codex iter-1 HIGH (2026-08-04): a stage the question names EXPLICITLY must
 # beat the ambient production reading of "current"/"live" — "the current
 # staging Kisqali model" is a staging question, not a production one. Naming
-# several stages (a comparison) applies no constraint at all.
+# several stages (a comparison) constrains to that SET of stages — codex
+# iter-2 MED: "production and staging" must not let an archived model leak in.
 _EXPLICIT_STAGE_RES: Dict[str, "re.Pattern[str]"] = {
     "production": re.compile(r"\bproduction\b|\bprod\b"),
     "staging": re.compile(r"\bstaging\b"),
@@ -143,15 +144,13 @@ _EXPLICIT_STAGE_RES: Dict[str, "re.Pattern[str]"] = {
 _CURRENCY_PRODUCTION_RE = re.compile(r"\bcurrent\b|\blive\b|\bchampion\b")
 
 
-def _stage_constraint(lowered: str) -> Optional[str]:
-    """The single stage the question constrains to, or None."""
+def _stage_constraint(lowered: str) -> Optional[List[str]]:
+    """The stage(s) the question constrains to, or None for no constraint."""
     named = [stage for stage, rx in _EXPLICIT_STAGE_RES.items() if rx.search(lowered)]
-    if len(named) == 1:
-        return named[0]
     if named:
-        return None
+        return named
     if _CURRENCY_PRODUCTION_RE.search(lowered):
-        return "production"
+        return ["production"]
     return None
 
 
@@ -170,8 +169,11 @@ def _models_matching_query(
     #1461: an explicit stage in the question ("production"/"staging"), or the
     currency words "current"/"live"/"champion" (production, unless an explicit
     stage overrides them), are applied as a STAGE CONSTRAINT before token
-    matching. If any candidate in that stage matches the question's
-    identifying tokens, only those are answered with. Several candidates in
+    matching. Naming several stages constrains to that SET (a comparison —
+    codex iter-2 MED: an archived model must not leak into a
+    production-vs-staging question). If any candidate in the constrained
+    stage(s) matches the question's identifying tokens, only those are
+    answered with. Several candidates in
     one stage for one brand (different prediction targets) are disambiguated
     on the target named in the question — a named target matches more
     identifying tokens than the brand alone; when the question names none, all
@@ -191,34 +193,38 @@ def _models_matching_query(
             & tokens
         )
 
-    stage = _stage_constraint(lowered)
-    if stage is not None:
-        staged = [m for m in models if str(m.get("model_stage") or "").lower() == stage]
+    stages = _stage_constraint(lowered)
+    if stages is not None:
+        staged = [m for m in models if str(m.get("model_stage") or "").lower() in stages]
         staged_matched = [m for m in staged if _overlap(m)]
         if len(staged_matched) > 1:
             # Disambiguate on the prediction target: keep the candidate(s)
             # whose names match the MOST query tokens (brand + target beats
-            # brand alone).
+            # brand alone). In a multi-stage comparison this keeps one model
+            # per compared stage for the named target.
             best = max(len(_overlap(m)) for m in staged_matched)
             staged_matched = [m for m in staged_matched if len(_overlap(m)) == best]
-        if len(staged_matched) == 1:
+        if len(staged_matched) == 1 or (staged_matched and len(stages) > 1):
+            # A multi-stage question is a comparison: several survivors (one
+            # per compared stage) are the expected answer, not ambiguity.
             return staged_matched, True, ""
         if staged_matched:
             names = ", ".join(str(m.get("model_name") or m.get("model_id")) for m in staged_matched)
             note = (
-                f"Several {stage} models exist for this brand: {names}. The "
+                f"Several {stages[0]} models exist for this brand: {names}. The "
                 "question does not name a single prediction target, so all of "
                 "them are listed above; name the prediction target to narrow "
                 "the answer."
             )
             return staged_matched, True, note
-        # No candidate in the requested stage matches the question's tokens
+        # No candidate in the requested stage(s) matches the question's tokens
         # (e.g. the brand has only staging models): answer with the
         # unconstrained match, but SAY the requested stage had no match.
         matched = [m for m in models if _overlap(m)]
         if matched:
+            label = "/".join(stages)
             note = (
-                f"No {stage}-stage model matches this question; the closest "
+                f"No {label}-stage model matches this question; the closest "
                 "matching model(s) are listed with their actual stage."
             )
             return matched, True, note
