@@ -321,6 +321,69 @@ class TestThreadAffinity:
         assert built == ["rewriter", "hop"]
 
 
+class TestRagWarmFailureHonesty:
+    """``_rag_warm_sync`` is called INSIDE a ``to_thread`` worker (no running
+    loop), which is why these tests are sync — ``asyncio.run`` on the test's own
+    loop would be a harness artefact, not the production shape."""
+
+    def test_rag_warm_surfaces_a_swallowed_rpc_failure(self):
+        """``vector_search``/``fulltext_search`` catch RPC exceptions, log ERROR
+        and return ``[]`` (src/rag/memory_connector.py:174,245). An empty list is
+        a legitimate result for the "warmup" query, so the connector's own ERROR
+        log is the only honest failure signal — without it the warm would report
+        success for a leg that never reached Supabase."""
+
+        class _FailingConnector:
+            async def vector_search_by_text(self, query, k=10, **kwargs):
+                logging.getLogger("src.rag.memory_connector").error(
+                    "Vector search failed: connection refused"
+                )
+                return []
+
+            async def fulltext_search(self, query, k=10, **kwargs):
+                return []
+
+        with patch("src.rag.memory_connector.get_memory_connector", lambda: _FailingConnector()):
+            with pytest.raises(RuntimeError, match="connection refused"):
+                warmup._rag_warm_sync()
+
+    @pytest.mark.asyncio
+    async def test_rag_warm_failure_is_reported_by_the_warm_routine(self):
+        class _FailingConnector:
+            async def vector_search_by_text(self, query, k=10, **kwargs):
+                return []
+
+            async def fulltext_search(self, query, k=10, **kwargs):
+                logging.getLogger("src.rag.memory_connector").error(
+                    "Fulltext search failed: relation does not exist"
+                )
+                return []
+
+        calls = []
+        with (
+            patch("src.rag.memory_connector.get_memory_connector", lambda: _FailingConnector()),
+            patch.object(warmup, "_warm_dspy_config", _recording_step(calls, "dspy_config")),
+            patch.object(warmup, "_warm_rag_dspy_modules", lambda: None),
+            patch.object(warmup, "_warm_orchestrator", _recording_step(calls, "orchestrator")),
+            patch.object(warmup, "_warm_classify", _recording_step(calls, "classify")),
+        ):
+            result = await warmup.warm_chatbot_stack(jitter_seconds=0.0)
+
+        assert "rag" in result["failed"], "a degraded RAG warm must not report success"
+        assert "relation does not exist" in result["failed"]["rag"]
+
+    def test_quiet_connector_is_a_clean_rag_warm(self):
+        class _QuietConnector:
+            async def vector_search_by_text(self, query, k=10, **kwargs):
+                return []  # no rows for "warmup" is NORMAL, not a failure
+
+            async def fulltext_search(self, query, k=10, **kwargs):
+                return []
+
+        with patch("src.rag.memory_connector.get_memory_connector", lambda: _QuietConnector()):
+            warmup._rag_warm_sync()  # must not raise
+
+
 # =============================================================================
 # 6. The loop keeps serving during a slow warm (#1406 heartbeat method)
 # =============================================================================

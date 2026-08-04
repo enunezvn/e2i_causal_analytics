@@ -267,9 +267,10 @@ def _build_latency_span_payload(
 def _log_request_span(payload: Dict[str, Any]) -> None:
     """One INFO line per request — the grep-able span record #1454 asked for."""
     logger.info(
-        "[Chatbot] request span: request_id=%s first_request_in_worker=%s "
+        "[Chatbot] request span: request_id=%s worker_pid=%s first_request_in_worker=%s "
         "total_ms=%.1f untimed_overhead_ms=%.1f node_wall_ms=%s",
         payload["request_id"],
+        payload["worker_pid"],
         payload["first_request_in_worker"],
         payload["graph_total_ms"],
         payload["untimed_overhead_ms"],

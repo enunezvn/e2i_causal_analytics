@@ -552,6 +552,16 @@ class TestWorkerPidSpanField:
         payload = g._build_latency_span_payload("req-pid", None, 12.0, True)
         assert payload["worker_pid"] == os.getpid()
 
+    def test_span_log_line_carries_worker_pid(self, caplog):
+        """The non-streaming /chat path surfaces the span ONLY through this log
+        line, so the pid has to be on it for warm/request correlation."""
+        caplog.set_level(logging.INFO)
+        g._log_request_span(g._build_latency_span_payload("req-pid-log", None, 12.0, True))
+
+        lines = [r.getMessage() for r in caplog.records if "request span" in r.getMessage()]
+        assert lines, "span line must be logged"
+        assert f"worker_pid={os.getpid()}" in lines[-1]
+
     def test_worker_pid_is_not_a_chatbot_state_channel(self):
         assert "worker_pid" not in ChatbotState.__annotations__, (
             "#1442 class: per-request worker identity must not ride graph state"

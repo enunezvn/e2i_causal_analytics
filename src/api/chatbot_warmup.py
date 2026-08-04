@@ -96,16 +96,45 @@ async def _rag_warm(connector: Any) -> None:
     await connector.fulltext_search("warmup", k=1)
 
 
+class _ErrorCapture(logging.Handler):
+    """Collects ERROR records emitted by another logger while attached."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.messages: List[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
 def _rag_warm_sync() -> None:
     """Run both retrieval legs on a private loop inside this worker thread.
 
     The clients underneath are sync objects holding no loop-bound state, so a
     short-lived ``asyncio.run`` loop is safe and closes its own resources.
+
+    Both connector methods CATCH their RPC exceptions, log ERROR and return
+    ``[]`` (src/rag/memory_connector.py:174 and :245). An empty list is a
+    legitimate result for the "warmup" query, so the return value cannot tell us
+    whether Supabase was reached — the connector's own ERROR log is the only
+    honest signal. Capture it and raise, so the step is reported as failed
+    instead of a warm that never happened being reported as success. (A real
+    request erroring concurrently would be attributed here too; that only makes
+    the warm report more pessimistic, and only about an error that did occur.)
     """
     import src.rag.retriever  # noqa: F401  # the request path's lazy import (chatbot_dspy.py:1622)
     from src.rag.memory_connector import get_memory_connector
 
-    asyncio.run(_rag_warm(get_memory_connector()))
+    capture = _ErrorCapture()
+    connector_logger = logging.getLogger("src.rag.memory_connector")
+    connector_logger.addHandler(capture)
+    try:
+        asyncio.run(_rag_warm(get_memory_connector()))
+    finally:
+        connector_logger.removeHandler(capture)
+
+    if capture.messages:
+        raise RuntimeError("retrieval RPC error: " + "; ".join(capture.messages[:3]))
 
 
 def _warm_rag_dspy_modules() -> None:
