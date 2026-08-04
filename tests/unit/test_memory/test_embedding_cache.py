@@ -25,13 +25,17 @@ from src.memory.services.factories import (
 
 
 class _StubOpenAIClient:
-    """Counts how many times the embeddings backend is invoked."""
+    """Counts how many times the embeddings backend is invoked.
+
+    ``create`` is async since #1475 migrated the service to
+    ``openai.AsyncOpenAI`` (the awaited SDK surface).
+    """
 
     def __init__(self) -> None:
         self.call_count = 0
         self.embeddings = self
 
-    def create(self, model: str, input):  # noqa: A002 - mirror openai signature
+    async def create(self, model: str, input):  # noqa: A002 - mirror openai signature
         # input may be str (embed) or list (embed_batch)
         self.call_count += 1
 

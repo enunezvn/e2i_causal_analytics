@@ -16,7 +16,12 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from src.memory.semantic_memory import get_semantic_memory
-from src.memory.services.factories import get_embedding_service, get_supabase_client
+
+# #1475: the search methods await the ASYNC Supabase client. The previous sync
+# get_supabase_client() + sync .rpc().execute() ran the whole RPC round-trip on
+# the event loop inside async defs, stalling every other in-flight request for
+# ~2s per warm RAG leg (issue #1475 measurement).
+from src.memory.services.factories import get_async_supabase_client, get_embedding_service
 from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
 
@@ -131,7 +136,7 @@ class MemoryConnector:
         Returns:
             List of RetrievalResult with dense retrieval method
         """
-        client = get_supabase_client()
+        client = await get_async_supabase_client()
 
         # Build RPC filters dict, including max_staleness when provided
         rpc_filters: Dict[str, Any] = dict(filters or {})
@@ -139,8 +144,9 @@ class MemoryConnector:
             rpc_filters["max_staleness"] = max_staleness
 
         try:
-            # Call Supabase RPC function
-            response = client.rpc(
+            # Call Supabase RPC function (awaited — the RPC round-trip must
+            # not hold the event loop, #1475)
+            response = await client.rpc(
                 "hybrid_vector_search",
                 {"query_embedding": query_embedding, "match_count": k, "filters": rpc_filters},
             ).execute()
@@ -235,7 +241,7 @@ class MemoryConnector:
         Returns:
             List of RetrievalResult with sparse retrieval method
         """
-        client = get_supabase_client()
+        client = await get_async_supabase_client()
 
         # Build RPC filters dict, including max_staleness when provided
         rpc_filters: Dict[str, Any] = dict(filters or {})
@@ -243,8 +249,9 @@ class MemoryConnector:
             rpc_filters["max_staleness"] = max_staleness
 
         try:
-            # Call Supabase RPC function
-            response = client.rpc(
+            # Call Supabase RPC function (awaited — the RPC round-trip must
+            # not hold the event loop, #1475)
+            response = await client.rpc(
                 "hybrid_fulltext_search",
                 {"search_query": query_text, "match_count": k, "filters": rpc_filters},
             ).execute()

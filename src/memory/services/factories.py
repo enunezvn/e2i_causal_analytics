@@ -136,7 +136,18 @@ class EmbeddingService(ABC):
 
 
 class OpenAIEmbeddingService(EmbeddingService):
-    """OpenAI embeddings for local pilot environment."""
+    """OpenAI embeddings for local pilot environment.
+
+    #1475: uses ``openai.AsyncOpenAI``. The previous sync ``openai.OpenAI``
+    client ran the whole embedding HTTP round-trip inside ``async def embed``
+    ON the event loop, stalling heartbeats and every other in-flight request
+    on the worker for the duration (~2s warm, ~15s on a cold first call).
+    The async client is loop-native; callers were already ``await``-ing these
+    methods, so the contract is unchanged. NOTE: the client (and its
+    connection pool) belongs to the loop that first awaits it — do not share
+    one service instance across event loops (the startup warm runs its RAG
+    probe on the main loop for exactly this reason, src/api/chatbot_warmup.py).
+    """
 
     def __init__(self, model: str = "text-embedding-ada-002"):
         self._client = None
@@ -153,7 +164,7 @@ class OpenAIEmbeddingService(EmbeddingService):
                     raise ServiceConnectionError(
                         "OpenAI", "OPENAI_API_KEY environment variable is not set"
                     )
-                self._client = openai.OpenAI(api_key=api_key)
+                self._client = openai.AsyncOpenAI(api_key=api_key)
             except ImportError as e:
                 raise ServiceConnectionError(
                     "OpenAI", "openai package is not installed. Run: pip install openai"
@@ -168,7 +179,7 @@ class OpenAIEmbeddingService(EmbeddingService):
 
         client = self._get_client()
         try:
-            response = client.embeddings.create(model=self.model, input=text)
+            response = await client.embeddings.create(model=self.model, input=text)
             embedding: List[float] = response.data[0].embedding
             _cache_put_bounded(self._cache, cache_key, embedding)
             return embedding
@@ -179,7 +190,7 @@ class OpenAIEmbeddingService(EmbeddingService):
         """Generate embeddings for multiple texts."""
         client = self._get_client()
         try:
-            response = client.embeddings.create(model=self.model, input=texts)
+            response = await client.embeddings.create(model=self.model, input=texts)
             return [item.embedding for item in response.data]
         except Exception as e:
             raise ServiceConnectionError(
