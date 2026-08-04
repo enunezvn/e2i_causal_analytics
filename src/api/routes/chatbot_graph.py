@@ -19,6 +19,7 @@ general) skip orchestrator and generate responses directly.
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -26,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -170,6 +172,103 @@ import contextvars
 _active_trace_context: contextvars.ContextVar[Optional[ChatbotTraceContext]] = (
     contextvars.ContextVar("chatbot_trace_context", default=None)
 )
+
+
+# =============================================================================
+# #1454: PER-REQUEST NODE-SPAN INSTRUMENTATION
+# The first request after a worker start measured ~80s with ~68s of one-time
+# cold init, but the classify -> cognitive-RAG -> orchestrator span was
+# unattributable: stream_chatbot never activated the trace context (run_chatbot
+# does), and per-node durations only ever reached DEBUG logs.
+# =============================================================================
+
+# Key of the synthetic final item stream_chatbot yields carrying the
+# per-request latency span. Not a graph node update — consumers must treat it
+# as observability data, never as answer text.
+LATENCY_SPAN_KEY = "__latency_span__"
+
+# True until this worker process serves its first chatbot request. That request
+# pays the process-scoped cold init (DSPy classifier construction, the agent
+# registry build), so its span is labelled to keep cold and warm latency
+# populations separable in logs and analytics.
+_worker_first_request_pending: bool = True
+
+# Node names that received the _timed_node wrapper at graph build. The
+# structural test asserts this covers every node in the compiled graph, so a
+# new node cannot silently reopen the attribution hole.
+TIMED_NODE_NAMES: set = set()
+
+
+def _claim_worker_cold_start() -> bool:
+    """Return whether this request is the worker's first, and mark it claimed."""
+    global _worker_first_request_pending
+    was_cold = _worker_first_request_pending
+    _worker_first_request_pending = False
+    return was_cold
+
+
+def _timed_node(name: str, target: Any) -> Any:
+    """Wrap a graph node so its FULL wall time lands on the active trace context.
+
+    The nodes' own ``trace_node`` blocks time only the fragment they wrap (and
+    only when a context is active); attribution needs the whole node — cold
+    singleton builds can happen in node preambles too. Works for plain async
+    functions and for Runnables like ToolNode (timed through ``ainvoke``).
+    Records in ``finally`` so a node that raises still gets attributed.
+    """
+    runnable_ainvoke = getattr(target, "ainvoke", None)
+
+    async def timed(state: ChatbotState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
+        start = time.perf_counter()
+        try:
+            if runnable_ainvoke is not None:
+                return await runnable_ainvoke(state, config)  # type: ignore[no-any-return]
+            return await target(state)  # type: ignore[no-any-return]
+        finally:
+            trace_ctx = _active_trace_context.get()
+            if trace_ctx is not None:
+                trace_ctx.record_node_wall_time(name, (time.perf_counter() - start) * 1000.0)
+
+    timed.__name__ = f"timed_{name}"
+    return timed
+
+
+def _build_latency_span_payload(
+    request_id: str,
+    trace_ctx: Optional[ChatbotTraceContext],
+    total_ms: float,
+    first_request_in_worker: bool,
+) -> Dict[str, Any]:
+    """Assemble the per-request latency span (#1454).
+
+    ``untimed_overhead_ms`` is the wall time NOT attributed to any node —
+    checkpointer writes between nodes, graph scheduling, and generator
+    consumption gaps. A large value here means the bottleneck is outside the
+    nodes, which is itself an answer.
+    """
+    node_wall_ms = (
+        {node: round(ms, 1) for node, ms in trace_ctx.node_wall_ms.items()} if trace_ctx else {}
+    )
+    return {
+        "request_id": request_id,
+        "node_wall_ms": node_wall_ms,
+        "graph_total_ms": round(total_ms, 1),
+        "untimed_overhead_ms": round(total_ms - sum(node_wall_ms.values()), 1),
+        "first_request_in_worker": first_request_in_worker,
+    }
+
+
+def _log_request_span(payload: Dict[str, Any]) -> None:
+    """One INFO line per request — the grep-able span record #1454 asked for."""
+    logger.info(
+        "[Chatbot] request span: request_id=%s first_request_in_worker=%s "
+        "total_ms=%.1f untimed_overhead_ms=%.1f node_wall_ms=%s",
+        payload["request_id"],
+        payload["first_request_in_worker"],
+        payload["graph_total_ms"],
+        payload["untimed_overhead_ms"],
+        json.dumps(payload["node_wall_ms"], sort_keys=True),
+    )
 
 
 # =============================================================================
@@ -2270,6 +2369,15 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                         "intent": state.get("intent"),
                         "brand_context": state.get("brand_context"),
                         "region_context": state.get("region_context"),
+                        # #1454: per-node wall times measured so far (init
+                        # through generate — finalize's own time can't be in
+                        # its own write; the full span is in the request-span
+                        # log line). Honest None when nothing was measured.
+                        "node_wall_ms": (
+                            {node: round(ms, 1) for node, ms in trace_ctx.node_wall_ms.items()}
+                            if trace_ctx and trace_ctx.node_wall_ms
+                            else None
+                        ),
                     },
                 )
                 messages_persisted += 1
@@ -2499,18 +2607,26 @@ def create_e2i_chatbot_graph() -> Any:
     # Create the graph
     workflow = StateGraph(ChatbotState)
 
+    def add_timed_node(name: str, target: Any) -> None:
+        # #1454: every node goes through _timed_node so per-request latency
+        # attribution covers the whole graph. TIMED_NODE_NAMES records what
+        # actually got wrapped; a structural test compares it to the compiled
+        # graph's node set.
+        TIMED_NODE_NAMES.add(name)
+        workflow.add_node(name, _timed_node(name, target))
+
     # Add nodes
-    workflow.add_node("init", init_node)
-    workflow.add_node("load_context", load_context_node)
-    workflow.add_node("classify_intent", classify_intent_node)
-    workflow.add_node("retrieve_rag", retrieve_rag_node)
-    workflow.add_node(
+    add_timed_node("init", init_node)
+    add_timed_node("load_context", load_context_node)
+    add_timed_node("classify_intent", classify_intent_node)
+    add_timed_node("retrieve_rag", retrieve_rag_node)
+    add_timed_node(
         "orchestrator", orchestrator_node
     )  # Routes complex queries to specialized agents
-    workflow.add_node("clarify", clarify_node)  # #1407 multi-turn ask-back
-    workflow.add_node("generate", generate_node)
-    workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
-    workflow.add_node("finalize", finalize_node)
+    add_timed_node("clarify", clarify_node)  # #1407 multi-turn ask-back
+    add_timed_node("generate", generate_node)
+    add_timed_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
+    add_timed_node("finalize", finalize_node)
 
     # Set entry point
     workflow.set_entry_point("init")
@@ -2575,6 +2691,68 @@ def create_e2i_chatbot_graph() -> Any:
 e2i_chatbot_graph = create_e2i_chatbot_graph()
 
 
+def _build_chat_mlflow_metrics(
+    result: Optional[Dict[str, Any]],
+    latency_ms: float,
+    error_occurred: bool,
+    trace_ctx: Optional[ChatbotTraceContext] = None,
+) -> Dict[str, float]:
+    """Build the per-request MLflow metrics dict.
+
+    Extracted verbatim from run_chatbot's finally block (Tasks 2.4-2.7) so it
+    is testable; #1454 adds per-node wall-time attribution from the trace
+    context's ``node_wall_ms`` ledger.
+    """
+    metrics: Dict[str, float] = {
+        "latency_ms": latency_ms,
+    }
+
+    if result:
+        # Token usage from metadata
+        metadata = result.get("metadata", {})
+        total_tokens = metadata.get("total_tokens", 0)
+        if total_tokens:
+            metrics["total_tokens"] = total_tokens
+
+        # Response metrics
+        response_text = result.get("response_text", "")
+        metrics["response_length"] = len(response_text)
+
+        # Task 2.5: Log intent distribution metrics
+        intent = result.get("intent")
+        if intent:
+            # Convert intent to numeric for MLflow (1 for each type)
+            intent_str = intent.value if hasattr(intent, "value") else str(intent)
+            metrics[f"intent_{intent_str}"] = 1
+
+        # Tool usage metrics
+        tool_results = result.get("tool_results", [])
+        metrics["tool_calls_count"] = len(tool_results)
+
+        # Task 2.6: Log RAG quality metrics
+        rag_context = result.get("rag_context", [])
+        metrics["rag_result_count"] = len(rag_context)
+        if rag_context:
+            # Calculate average relevance score
+            scores = [ctx.get("score", 0) for ctx in rag_context if "score" in ctx]
+            if scores:
+                metrics["rag_avg_relevance"] = sum(scores) / len(scores)
+                metrics["rag_max_relevance"] = max(scores)
+                metrics["rag_min_relevance"] = min(scores)
+
+    # Task 2.7: Log error tracking metrics
+    metrics["is_error"] = 1 if error_occurred else 0
+    if result and result.get("error"):
+        metrics["has_workflow_error"] = 1
+
+    # #1454: per-node wall-time attribution
+    if trace_ctx is not None:
+        for node_name, wall_ms in trace_ctx.node_wall_ms.items():
+            metrics[f"node_{node_name}_ms"] = round(wall_ms, 1)
+
+    return metrics
+
+
 async def run_chatbot(
     query: str,
     user_id: str,
@@ -2599,6 +2777,7 @@ async def run_chatbot(
     """
     # Start timing for latency metrics
     start_time = time.time()
+    first_request_in_worker = _claim_worker_cold_start()  # #1454
 
     # Get the tracer (singleton)
     tracer = get_chatbot_tracer()
@@ -2665,6 +2844,13 @@ async def run_chatbot(
             # Calculate latency
             latency_ms = (time.time() - start_time) * 1000
 
+            # #1454: same grep-able span record as the streaming path
+            _log_request_span(
+                _build_latency_span_payload(
+                    request_id, trace_ctx, latency_ms, first_request_in_worker
+                )
+            )
+
             # =====================================================================
             # MLFLOW SESSION METRICS (Phase 2)
             # Log chatbot session metrics to MLflow for experiment tracking
@@ -2702,52 +2888,15 @@ async def run_chatbot(
                                 }
                             )
 
-                            # Task 2.4: Log per-request metrics (latency, token usage)
-                            metrics = {
-                                "latency_ms": latency_ms,
-                            }
-
-                            if result:
-                                # Token usage from metadata
-                                metadata = result.get("metadata", {})
-                                total_tokens = metadata.get("total_tokens", 0)
-                                if total_tokens:
-                                    metrics["total_tokens"] = total_tokens
-
-                                # Response metrics
-                                response_text = result.get("response_text", "")
-                                metrics["response_length"] = len(response_text)
-
-                                # Task 2.5: Log intent distribution metrics
-                                intent = result.get("intent")
-                                if intent:
-                                    # Convert intent to numeric for MLflow (1 for each type)
-                                    intent_str = (
-                                        intent.value if hasattr(intent, "value") else str(intent)
-                                    )
-                                    metrics[f"intent_{intent_str}"] = 1
-
-                                # Tool usage metrics
-                                tool_results = result.get("tool_results", [])
-                                metrics["tool_calls_count"] = len(tool_results)
-
-                                # Task 2.6: Log RAG quality metrics
-                                rag_context = result.get("rag_context", [])
-                                metrics["rag_result_count"] = len(rag_context)
-                                if rag_context:
-                                    # Calculate average relevance score
-                                    scores = [
-                                        ctx.get("score", 0) for ctx in rag_context if "score" in ctx
-                                    ]
-                                    if scores:
-                                        metrics["rag_avg_relevance"] = sum(scores) / len(scores)
-                                        metrics["rag_max_relevance"] = max(scores)
-                                        metrics["rag_min_relevance"] = min(scores)
-
-                            # Task 2.7: Log error tracking metrics
-                            metrics["is_error"] = 1 if error_occurred else 0
-                            if result and result.get("error"):
-                                metrics["has_workflow_error"] = 1
+                            # Task 2.4-2.7 + #1454: per-request metrics
+                            # (latency, tokens, intent, tools, RAG quality,
+                            # errors, per-node wall times)
+                            metrics = _build_chat_mlflow_metrics(
+                                result=result,
+                                latency_ms=latency_ms,
+                                error_occurred=error_occurred,
+                                trace_ctx=trace_ctx,
+                            )
 
                             await mlflow_run.log_metrics(metrics)
 
@@ -2783,18 +2932,62 @@ async def stream_chatbot(
         region_context: Optional region filter
 
     Yields:
-        State updates from each node
+        State updates from each node, then one final synthetic item
+        ``{LATENCY_SPAN_KEY: {...}}`` carrying the per-request latency span
+        (#1454) — observability data, never answer text. The same span is
+        logged at INFO as ``[Chatbot] request span``.
     """
-    initial_state = create_initial_state(
-        user_id=user_id,
+    start_time = time.perf_counter()
+    first_request_in_worker = _claim_worker_cold_start()
+
+    # #1454: activate the trace context (parity with run_chatbot). Without it,
+    # every node's trace_node block is skipped on the streaming path — the
+    # exact reason the cold-start span was unattributable. With Opik stopped,
+    # trace_workflow is two UUIDs and a dataclass.
+    tracer = get_chatbot_tracer()
+    async with tracer.trace_workflow(
         query=query,
-        request_id=request_id,
         session_id=session_id,
+        user_id=user_id,
         brand_context=brand_context,
         region_context=region_context,
-    )
+        metadata={"request_id": request_id},
+    ) as trace_ctx:
+        _active_trace_context.set(trace_ctx)
+        try:
+            initial_state = create_initial_state(
+                user_id=user_id,
+                query=query,
+                request_id=request_id,
+                session_id=session_id,
+                brand_context=brand_context,
+                region_context=region_context,
+                trace_id=trace_ctx.trace_id,
+            )
 
-    # Pass thread_id config for checkpointer (uses session_id for conversation tracking)
-    config = {"configurable": {"thread_id": initial_state["session_id"]}}
-    async for state_update in e2i_chatbot_graph.astream(initial_state, config=config):
-        yield state_update
+            # Pass thread_id config for checkpointer (uses session_id for
+            # conversation tracking)
+            config = {"configurable": {"thread_id": initial_state["session_id"]}}
+            async for state_update in e2i_chatbot_graph.astream(initial_state, config=config):
+                yield state_update
+
+            yield {
+                LATENCY_SPAN_KEY: _build_latency_span_payload(
+                    request_id,
+                    trace_ctx,
+                    (time.perf_counter() - start_time) * 1000.0,
+                    first_request_in_worker,
+                )
+            }
+        finally:
+            _active_trace_context.set(None)
+            # Log even when the graph raised or the client disconnected — a
+            # request that dies mid-graph is the one whose span you need.
+            _log_request_span(
+                _build_latency_span_payload(
+                    request_id,
+                    trace_ctx,
+                    (time.perf_counter() - start_time) * 1000.0,
+                    first_request_in_worker,
+                )
+            )

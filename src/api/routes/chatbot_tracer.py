@@ -464,9 +464,22 @@ class ChatbotTraceContext:
     duration_ms: Optional[float] = None
     node_spans: Dict[str, NodeSpanContext] = field(default_factory=dict)
     node_durations: Dict[str, int] = field(default_factory=dict)
+    node_wall_ms: Dict[str, float] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     _opik_span: Optional[Any] = None
     _tracer: Optional["ChatbotOpikTracer"] = None
+
+    def record_node_wall_time(self, node_name: str, duration_ms: float) -> None:
+        """Accumulate FULL-node wall time (#1454).
+
+        Unlike ``node_durations`` — which times only the fragment each node
+        happens to wrap in ``trace_node``, and only when the node checks for
+        an active context — this is recorded by the graph-level wrapper around
+        the entire node callable. Repeat visits (the tools<->generate loop)
+        accumulate rather than overwrite, so the dict reads as total wall time
+        attributed to each node for the request.
+        """
+        self.node_wall_ms[node_name] = self.node_wall_ms.get(node_name, 0.0) + duration_ms
 
     @asynccontextmanager
     async def trace_node(
