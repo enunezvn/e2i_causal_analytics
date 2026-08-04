@@ -403,6 +403,49 @@ _TIER_PRE_ANCHOR_COMMERCIAL_VETO = (
 )
 
 
+# #1470 — hard bound on how much of a query the regex table ever scans.
+#
+# ``_pattern_classify`` runs the WHOLE table on every request ahead of the LLM
+# fallback, and most entries join two token groups with an unbounded ``.*``.
+# Each occurrence of a leading anchor starts a fresh scan to end-of-line, so
+# cost is quadratic in the query length: measured on the dev box,
+# ``_pattern_classify`` took 1.43s at 8K chars, 6.90s at 20K and 32.75s at 45K.
+# The classification path is in front of every chat request, so one long input
+# stalls it.
+#
+# The cap is the fix rather than rewriting the ~35 unbounded-``.*`` entries
+# because tightening a pattern CHANGES ROUTING, and this table has a scar from
+# exactly that (#1408: a bare ``\binterim\b`` confidently misrouted "interim
+# CFO/FDA"). Truncation changes routing for no query anyone can currently send
+# through ``/chat`` (its own ``MAX_MESSAGE_CHARS`` is 1500) and for no row in
+# the routing gold set (longest query: 593 chars) — and where it does fire, it
+# fires in the SAFE direction: fewer pattern matches means the query falls
+# through to the LLM fallback, which still receives the query in full
+# (``execute`` passes ``state["query"]``, never the truncated head).
+#
+# 2000 is above ``/chat``'s own 1500-char message limit and 3.4x the longest
+# gold query. The residual worst case at the cap is ~74ms (measured, adversarial
+# input), inside the node's <500ms budget.
+_PATTERN_SCAN_MAX_CHARS = 2000
+
+
+def _bounded_scan_text(query: str) -> str:
+    """Head of ``query`` the pattern table is allowed to scan (#1470).
+
+    Trailing partial tokens are dropped. ``\\b`` matches at end-of-string, so a
+    naive slice landing inside ``"cohortsomething"`` would leave ``"cohort"`` —
+    a whole word the user never wrote, which ``\\bcohort\\b`` then matches.
+    Cutting back to the last complete token means every boundary in the head is
+    a boundary the original query really had.
+    """
+    if len(query) <= _PATTERN_SCAN_MAX_CHARS:
+        return query
+    head = query[:_PATTERN_SCAN_MAX_CHARS]
+    if re.match(r"\w", query[_PATTERN_SCAN_MAX_CHARS]):
+        head = re.sub(r"\w+\Z", "", head)
+    return head
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -545,7 +588,19 @@ class IntentClassifierNode:
             # "interim readout on the running ... speaker-program test" carries
             # "test"; none of the misrouted probes carry an experiment noun. The
             # narrower "interim analysis" above is preserved from origin/main.
-            r"(?=.*\binterim\b)(?=.*\b(?:experiments?|trials?|a\/?b ?tests?|tests?|enroll\w*)\b)",
+            # #1470: `(?m)^`-ANCHORED, and that is semantics-preserving. The
+            # body is a pair of zero-width lookaheads, so unanchored `re.search`
+            # retries it at all N start offsets and each try scans to
+            # end-of-line — the single largest backtracking cost in this table
+            # (28.0s on 45K chars of "a", i.e. quadratic even on input holding
+            # none of its tokens). Since `.` excludes newlines, the unanchored
+            # form matches iff SOME SINGLE LINE carries both an "interim" and an
+            # experiment noun, which is exactly what testing at line starts
+            # decides — same language, one pass (28.0s -> 1.7ms at 45K).
+            # Equivalence measured over 1,019 stored routing queries and 200,000
+            # newline-heavy fuzz strings: 0 divergences. Pinned by
+            # TestInterimPatternLinearization1470.
+            r"(?m)^(?=.*\binterim\b)(?=.*\b(?:experiments?|trials?|a\/?b ?tests?|tests?|enroll\w*)\b)",
             r"(active|running).*(experiments?|trials?)",
             r"experiments?.*(health|status|issues)",
         ],
@@ -734,6 +789,11 @@ class IntentClassifierNode:
         Returns:
             Intent classification result
         """
+        # #1470: bound what the quadratic-in-length pattern table ever sees.
+        # Everything below (including _count_intent_bearing_clauses and the
+        # digital-twin probe) reads this bounded head, not the raw query.
+        query = _bounded_scan_text(query)
+
         scores = {}
 
         for intent, patterns in self.INTENT_PATTERNS.items():
