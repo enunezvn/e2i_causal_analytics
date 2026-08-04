@@ -4357,7 +4357,7 @@ async def _stream_chat_response(
     start_time = time.time()
 
     try:
-        from src.api.routes.chatbot_graph import stream_chatbot
+        from src.api.routes.chatbot_graph import LATENCY_SPAN_KEY, stream_chatbot
 
         # Yield session_id first. Identity is the AUTHENTICATED user id
         # (Finding 1 — never trust request.user_id for identity).
@@ -4385,6 +4385,11 @@ async def _stream_chat_response(
             "routing_pattern": None,
             "classification_latency_ms": None,
             "used_llm_layer": None,
+            # #1454: per-request latency span (from the __latency_span__ item)
+            "node_wall_ms": None,
+            "graph_total_ms": None,
+            "untimed_overhead_ms": None,
+            "first_request_in_worker": None,
         }
 
         # Stream through chatbot workflow
@@ -4398,6 +4403,18 @@ async def _stream_chat_response(
         ):
             # Extract response from state updates
             if isinstance(state_update, dict):
+                # #1454: synthetic latency-span item — observability only,
+                # surfaced via dispatch_info, never rendered as answer text.
+                span_payload = state_update.get(LATENCY_SPAN_KEY)
+                if span_payload is not None:
+                    dispatch_info["node_wall_ms"] = span_payload.get("node_wall_ms")
+                    dispatch_info["graph_total_ms"] = span_payload.get("graph_total_ms")
+                    dispatch_info["untimed_overhead_ms"] = span_payload.get("untimed_overhead_ms")
+                    dispatch_info["first_request_in_worker"] = span_payload.get(
+                        "first_request_in_worker"
+                    )
+                    continue
+
                 # Check for node outputs
                 for _node_name, node_output in state_update.items():
                     if isinstance(node_output, dict):

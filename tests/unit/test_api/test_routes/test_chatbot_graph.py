@@ -25,6 +25,7 @@ from src.api.routes.chatbot_graph import (
     # Constants
     E2I_CHATBOT_SYSTEM_PROMPT,
     INTENT_TO_EVENT_TYPE,
+    LATENCY_SPAN_KEY,
     ORCHESTRATOR_ROUTED_INTENTS,
     SIGNIFICANCE_THRESHOLD,
     SIGNIFICANT_INTENTS,
@@ -1077,6 +1078,7 @@ class TestRunChatbot:
             mock_trace_ctx.__aenter__.return_value = mock_trace_ctx
             mock_trace_ctx.__aexit__.return_value = None
             mock_trace_ctx.trace_id = "trace-123"
+            mock_trace_ctx.node_wall_ms = {}  # real dict, as on the dataclass (#1454)
             mock_tracer.return_value.trace_workflow.return_value = mock_trace_ctx
 
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
@@ -1102,6 +1104,7 @@ class TestRunChatbot:
             mock_trace_ctx.__aenter__.return_value = mock_trace_ctx
             mock_trace_ctx.__aexit__.return_value = None
             mock_trace_ctx.trace_id = "trace-123"
+            mock_trace_ctx.node_wall_ms = {}  # real dict, as on the dataclass (#1454)
             mock_tracer.return_value.trace_workflow.return_value = mock_trace_ctx
 
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
@@ -1152,9 +1155,13 @@ class TestStreamChatbot:
             ):
                 collected.append(update)
 
-            assert len(collected) == 3
+            # 3 node updates + the final synthetic latency-span item (#1454)
+            assert len(collected) == 4
             assert "init" in collected[0]
             assert "finalize" in collected[2]
+            span = collected[3][LATENCY_SPAN_KEY]
+            assert span["request_id"] == "req-123"
+            assert isinstance(span["node_wall_ms"], dict)
 
 
 # =============================================================================
