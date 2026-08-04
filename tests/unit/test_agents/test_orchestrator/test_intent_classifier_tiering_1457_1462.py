@@ -90,6 +90,16 @@ class TestBrandModifiedCommercialTieringEscalates:
             # plans" — measured cohort_definition @0.867 on the first lane
             # build. The pre-anchor veto must kill it.
             "Rank call plans for Kisqali into high, medium, and low priority tiers",
+            # Reviewer finding (2026-08-04, measured @0.933): "budgetary" is a
+            # one-word morphological paraphrase of the issue's own "marketing
+            # budget" row that `budgets?` missed (no \w* tolerance).
+            "Rank Kisqali budgetary allocations into high, medium, and low priority tiers",
+            # codex iter-2 HIGH (2026-08-04): narrowing channels to
+            # qualified-only freed UNQUALIFIED commercial channel compounds —
+            # "channel tactics/mix/strategy/plan" are commercial objects even
+            # without a marketing/sales qualifier.
+            "Rank Kisqali channel tactics into high, medium, and low tiers",
+            "Bucket the Fabhalta channel mix into high, medium, and low tiers",
         ],
     )
     def test_branded_commercial_tiering_escalates_to_the_llm(self, query: str) -> None:

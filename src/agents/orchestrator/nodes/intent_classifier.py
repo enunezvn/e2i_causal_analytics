@@ -356,10 +356,19 @@ _TIER_POPULATION_ANCHORS = (
 #   longer vetoed — accepted, the idiom is far more frequent.
 # - bare `channels?` matched biological "calcium channel", same regression
 #   class. Now only commercially-qualified channels (promotional/marketing/
-#   digital/media/engagement/sales) and "omnichannel".
+#   digital/media/engagement/sales), "omnichannel", and — codex iter-2 HIGH —
+#   UNQUALIFIED commercial channel compounds ("channel tactics/mix/strategy/
+#   plan"), which are commercial objects even without a qualifier and were
+#   freed by the first narrowing ("Rank Kisqali channel tactics into ...
+#   tiers" measured @0.867+). Biological compounds ("channel expression",
+#   "channel blockers") stay unmatched.
+# - `budgets?` missed the morphological paraphrase "budgetary" (reviewer
+#   finding, measured @0.933 on "Rank Kisqali budgetary allocations into ...
+#   priority tiers") — now budget(?:ary|s)?.
 _TIER_COMMERCIAL_HEAD_NOUNS = (
-    r"call[\s-]+plans?|budgets?|spend(?:ing|s)?|territor(?:y|ies)"
+    r"call[\s-]+plans?|budget(?:ary|s)?|spend(?:ing|s)?|territor(?:y|ies)"
     r"|(?:promotional|marketing|digital|media|engagement|sales|omni)[\s-]*channels?"
+    r"|channels?[\s-]+(?:tactics?|mix|strateg(?:y|ies)|plans?)"
     r"|creatives?|campaigns?|sponsorships?|account[\s-]+plans?|accounts|roi"
 )
 
