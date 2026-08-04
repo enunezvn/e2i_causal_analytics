@@ -369,8 +369,16 @@ class HealthScoreDSPyIntegration:
         status = self._STATUS_BY_GRADE.get(grade, "unknown")
         if critical_count:
             issue_clause = f"{critical_count} critical issue(s) detected."
-        else:
+        elif label == "System":
+            # Full (or absent/unrecognised, historical-default) scope: every
+            # dimension was evaluated, so the whole-system claim is earned.
             issue_clause = "All systems operational."
+        else:
+            # #1460: a scoped check measured ONLY its own dimension (e.g.
+            # scope="models" runs model_health alone), so "All systems
+            # operational." would assert health for dimensions never evaluated.
+            # Name what was actually checked, mirroring the #1447 scope_label.
+            issue_clause = f"No {label.lower()} health issues detected."
         components_suffix = f" Components: {components}." if components else ""
         return self._prompts.summary_template.format(
             grade=grade,
@@ -419,9 +427,13 @@ class HealthScoreDSPyIntegration:
         ``models`` are the ``ModelMetrics`` entries the composer already matched
         to the question. Each contributes ONE line naming the model, its version
         and stage, the metric values, and the cohort/size/date they were
-        measured on. Metrics that were requested but are not recorded for any
-        matched model are named explicitly — never silently dropped and never
-        substituted with a different metric's value.
+        measured on. Metrics that were requested but are not recorded are named
+        explicitly — never silently dropped and never substituted with a
+        different metric's value. #1460: the disclosure is PER MODEL LINE (a
+        model's own recorded set decides its own line), because a single global
+        "missing" set made model B's silent omission indistinguishable from
+        "fine" whenever model A recorded the metric. A metric recorded by NO
+        matched model additionally gets the global missing line.
 
         ``unavailable_reason`` (non-empty) short-circuits to the unavailable
         template: nothing was measured, so no number may be printed at all.
@@ -471,6 +483,14 @@ class HealthScoreDSPyIntegration:
             metric_list = ", ".join(
                 f"{self.metric_label(k)} {eval_metrics[k]:.3f}" for k in ordered
             )
+            # #1460: THIS model's requested-but-unrecorded metrics are disclosed
+            # on THIS model's line — computed from its own eval_metrics only, so
+            # another model recording the metric can never mask the omission.
+            missing_here = [k for k in requested if k not in eval_metrics]
+            if missing_here:
+                metric_list += "; " + ", ".join(
+                    f"{self.metric_label(k)} not recorded" for k in missing_here
+                )
             lines.append(
                 self._prompts.model_metrics_template.format(
                     model_label=model_label,

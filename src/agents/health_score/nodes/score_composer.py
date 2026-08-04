@@ -122,26 +122,130 @@ def _identifying_tokens(model_name: str) -> set:
     }
 
 
+# #1461: these query words name a STAGE, not a model. They never appear in a
+# registered model_name ("production"/"champion" are even generic name tokens),
+# so token-overlap matching silently ignored them and a question about "the
+# current Kisqali model" matched EVERY kisqali-named model, staging included
+# (live-verified: demo 5.3 listed initiation_kisqali_goldstd_lr_v1 (staging)
+# alongside the production champion).
+#
+# codex iter-1 HIGH (2026-08-04): a stage the question names EXPLICITLY must
+# beat the ambient production reading of "current"/"live" — "the current
+# staging Kisqali model" is a staging question, not a production one. Naming
+# several stages (a comparison) constrains to that SET of stages — codex
+# iter-2 MED: "production and staging" must not let an archived model leak in.
+_EXPLICIT_STAGE_RES: Dict[str, "re.Pattern[str]"] = {
+    "production": re.compile(r"\bproduction\b|\bprod\b"),
+    "staging": re.compile(r"\bstaging\b"),
+    "archived": re.compile(r"\barchived\b"),
+}
+# Currency words imply the production champion only when no explicit stage is
+# named (the original #1461 incident: "the current Kisqali model").
+_CURRENCY_PRODUCTION_RE = re.compile(r"\bcurrent\b|\blive\b|\bchampion\b")
+
+
+def _stage_constraint(lowered: str) -> Optional[List[str]]:
+    """The stage(s) the question constrains to, or None for no constraint."""
+    named = [stage for stage, rx in _EXPLICIT_STAGE_RES.items() if rx.search(lowered)]
+    if named:
+        return named
+    if _CURRENCY_PRODUCTION_RE.search(lowered):
+        return ["production"]
+    return None
+
+
 def _models_matching_query(
     query: Optional[str], models: Sequence[Dict[str, Any]]
-) -> Tuple[List[Dict[str, Any]], bool]:
-    """Models the question names, plus whether the match was a real one.
+) -> Tuple[List[Dict[str, Any]], bool, str]:
+    """Models the question names, whether the match was real, and a caller note.
 
-    Returns ``(models, matched)``. When no registered model name matches the
-    question (a brand that has no model — Xolair is not in the data model at
+    Returns ``(models, matched, note)``. When no registered model name matches
+    the question (a brand that has no model — Xolair is not in the data model at
     all), ``matched`` is False and ALL models are returned so the caller can
     disclose that it is answering about every registered model rather than
-    silently attributing another brand's numbers to the one asked about.
+    silently attributing another brand's numbers to the one asked about (#1450 —
+    unchanged).
+
+    #1461: an explicit stage in the question ("production"/"staging"), or the
+    currency words "current"/"live"/"champion" (production, unless an explicit
+    stage overrides them), are applied as a STAGE CONSTRAINT before token
+    matching. Naming several stages constrains to that SET (a comparison —
+    codex iter-2 MED: an archived model must not leak into a
+    production-vs-staging question). If any candidate in the constrained
+    stage(s) matches the question's identifying tokens, only those are
+    answered with. Several candidates in
+    one stage for one brand (different prediction targets) are disambiguated
+    on the target named in the question — a named target matches more
+    identifying tokens than the brand alone; when the question names none, all
+    are returned with a non-empty ``note`` for the caller to render, stating
+    that several models in that stage exist. When NOTHING in the requested
+    stage matches but another stage's model does, that model is returned with
+    a note saying the requested stage had no match (codex iter-1 MED — the
+    silent fall-through made a production question look answered by a staging
+    model).
     """
-    tokens = set(re.findall(r"[a-z0-9]+", (query or "").lower()))
-    matched = [
-        m
-        for m in models
-        if _identifying_tokens(str(m.get("model_name") or m.get("model_id") or "")) & tokens
-    ]
+    lowered = (query or "").lower()
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+
+    def _overlap(model: Dict[str, Any]) -> set:
+        return (
+            _identifying_tokens(str(model.get("model_name") or model.get("model_id") or ""))
+            & tokens
+        )
+
+    stages = _stage_constraint(lowered)
+    if stages is not None:
+        staged = [m for m in models if str(m.get("model_stage") or "").lower() in stages]
+        staged_matched = [m for m in staged if _overlap(m)]
+        if len(staged_matched) > 1:
+            # Disambiguate on the prediction target: keep the candidate(s)
+            # whose names match the MOST query tokens (brand + target beats
+            # brand alone). In a multi-stage comparison this keeps one model
+            # per compared stage for the named target.
+            best = max(len(_overlap(m)) for m in staged_matched)
+            staged_matched = [m for m in staged_matched if len(_overlap(m)) == best]
+        if staged_matched and len(stages) > 1:
+            # A multi-stage question is a comparison: several survivors (one
+            # per compared stage) are the expected answer, not ambiguity. But
+            # if the named target exists in only SOME of the compared stages,
+            # say so (codex iter-3 MED — the collapse was silent).
+            covered = {str(m.get("model_stage") or "").lower() for m in staged_matched}
+            missing = [s for s in stages if s not in covered]
+            note = ""
+            if missing:
+                note = (
+                    f"No {'/'.join(missing)}-stage model matches this question; "
+                    "only the stage(s) with a matching model are shown."
+                )
+            return staged_matched, True, note
+        if len(staged_matched) == 1:
+            return staged_matched, True, ""
+        if staged_matched:
+            names = ", ".join(str(m.get("model_name") or m.get("model_id")) for m in staged_matched)
+            note = (
+                f"Several {stages[0]} models exist for this brand: {names}. The "
+                "question does not name a single prediction target, so all of "
+                "them are listed above; name the prediction target to narrow "
+                "the answer."
+            )
+            return staged_matched, True, note
+        # No candidate in the requested stage(s) matches the question's tokens
+        # (e.g. the brand has only staging models): answer with the
+        # unconstrained match, but SAY the requested stage had no match.
+        matched = [m for m in models if _overlap(m)]
+        if matched:
+            label = "/".join(stages)
+            note = (
+                f"No {label}-stage model matches this question; the closest "
+                "matching model(s) are listed with their actual stage."
+            )
+            return matched, True, note
+        return list(models), False, ""
+
+    matched = [m for m in models if _overlap(m)]
     if matched:
-        return matched, True
-    return list(models), False
+        return matched, True, ""
+    return list(models), False, ""
 
 
 def _signal_reward(output: str, inputs: Dict[str, Any]) -> float:
@@ -477,9 +581,13 @@ class ScoreComposerNode:
             )
             return integration.get_model_metrics_prompt(requested, [], unavailable_reason=reason)
 
-        matched, was_matched = _models_matching_query(state.get("query"), models)
+        matched, was_matched, stage_note = _models_matching_query(state.get("query"), models)
         truncated = len(matched) > _MAX_MODEL_METRIC_LINES
         block = integration.get_model_metrics_prompt(requested, matched[:_MAX_MODEL_METRIC_LINES])
+        if stage_note:
+            # #1461: several production models exist for the brand and the
+            # question named no prediction target — say so explicitly.
+            block += f"\n{stage_note}"
         if not was_matched:
             block += (
                 "\nNo registered model name matched the question, so every registered "

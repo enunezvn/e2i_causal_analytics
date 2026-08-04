@@ -532,8 +532,11 @@ class TestMetricQuestionReturnsMetrics:
         assert emit.await_count == 1, "exactly one summary signal"
         emitted = emit.await_args.kwargs["generated_output"]
         assert "ROC-AUC" not in emitted, emitted
+        # #1460: a models-scoped check no longer claims "All systems
+        # operational." — its no-issue clause names the dimension it measured.
         assert emitted == (
-            "Model health is excellent (Grade: A, Score: 100.0/100). All systems operational."
+            "Model health is excellent (Grade: A, Score: 100.0/100). "
+            "No model health issues detected."
         )
         # ...while the RETURNED summary does carry the metrics.
         assert "ROC-AUC" in out["health_summary"]
