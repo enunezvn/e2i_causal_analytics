@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import random
+import sys
 import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
@@ -69,20 +70,20 @@ _TRUTHY = ("1", "true", "yes", "on")
 def chatbot_warm_enabled() -> bool:
     """Whether the startup warm is enabled (production default: yes).
 
-    Default OFF under the pytest harness. Any test that drives the real lifespan
+    Default OFF inside a pytest process. Any test that drives the real lifespan
     would otherwise schedule a real warm, and the jitter is
     ``random.uniform(0, 5)`` — it can draw ~0, in which case the agent registry
     build and live Supabase/embedding calls start inside the test process, and
-    the executor thread outlives the lifespan cancellation. An explicit
-    ``CHATBOT_STARTUP_WARM_ENABLED`` always wins, so the warm's own tests still
-    opt in.
+    the executor thread outlives the lifespan cancellation. The signal is
+    ``sys.modules`` deliberately, not an env var: a test-env variable copied into
+    a container would silently reintroduce the #1454 cold start, whereas pytest
+    is never imported in the API image. An explicit
+    ``CHATBOT_STARTUP_WARM_ENABLED`` always wins, so the warm's own tests opt in.
     """
     explicit = os.getenv(WARM_ENABLED_ENV)
     if explicit is not None:
         return explicit.strip().lower() in _TRUTHY
-    if os.getenv("E2I_TESTING_MODE", "").strip().lower() in _TRUTHY:
-        return False
-    return True
+    return "pytest" not in sys.modules
 
 
 # =============================================================================
@@ -154,9 +155,7 @@ def _rag_warm_sync() -> None:
     legitimate result for the "warmup" query, so the return value cannot tell us
     whether Supabase was reached — the connector's own ERROR log is the only
     honest signal. Capture it and raise, so the step is reported as failed
-    instead of a warm that never happened being reported as success. (A real
-    request erroring concurrently would be attributed here too; that only makes
-    the warm report more pessimistic, and only about an error that did occur.)
+    instead of a warm that never happened being reported as success.
     """
     import src.rag.retriever  # noqa: F401  # the request path's lazy import (chatbot_dspy.py:1622)
     from src.rag.memory_connector import get_memory_connector

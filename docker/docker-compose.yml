@@ -64,6 +64,13 @@ x-common-env: &common-env
   # steady-state setting. Must be forwarded here or the host .env never reaches the
   # containers and the in-code default governs (the OPIK_ENABLED lesson above).
   E2I_REQUIRE_FULL_AGENT_REGISTRY: ${E2I_REQUIRE_FULL_AGENT_REGISTRY:-false}
+  # #1454 chatbot cold-start warming. ON by default: each worker pre-builds the
+  # DSPy LM config, the retrieval clients, the orchestrator registry and the
+  # intent classifier in a fail-open background task, so the ~30s cold init does
+  # not land on the first user request. Set false to disable (e.g. to isolate a
+  # startup problem) — must be forwarded here or the host .env never reaches the
+  # containers and the in-code default governs (the OPIK_ENABLED lesson above).
+  CHATBOT_STARTUP_WARM_ENABLED: ${CHATBOT_STARTUP_WARM_ENABLED:-true}
   # Routing-label loop (#1341 Phase 1): nightly Celery labeler for
   # classification_logs. Must be forwarded here or host-.env overrides never
   # reach the worker containers and the in-code defaults govern.

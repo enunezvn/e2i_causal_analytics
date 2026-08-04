@@ -50,9 +50,9 @@ from src.api import main
 
 @pytest.fixture(autouse=True)
 def _opt_in_to_warming(monkeypatch):
-    """pytest sets ``E2I_TESTING_MODE=true``, which defaults the warm OFF so no
-    test can accidentally schedule a real one. This module exercises the warm
-    itself, so it opts in explicitly; the flag tests delete or override it."""
+    """Inside a pytest process the warm defaults OFF, so no test can accidentally
+    schedule a real one. This module exercises the warm itself, so it opts in
+    explicitly; the flag tests delete or override the variable."""
     monkeypatch.setenv(warmup.WARM_ENABLED_ENV, "true")
 
 
@@ -162,22 +162,45 @@ class TestWarmStepOrderAndFailOpen:
 
 
 class TestWarmFlag:
-    def test_enabled_by_default_in_production(self, monkeypatch):
+    def test_enabled_by_default_outside_pytest(self, monkeypatch):
+        """The production default. Simulated by hiding pytest from sys.modules —
+        an env var is deliberately NOT the signal, because a test-env variable
+        copied into a container would silently reintroduce the cold start."""
         monkeypatch.delenv(warmup.WARM_ENABLED_ENV, raising=False)
-        monkeypatch.delenv("E2I_TESTING_MODE", raising=False)
+        monkeypatch.delitem(sys.modules, "pytest")
         assert warmup.chatbot_warm_enabled() is True
 
-    def test_disabled_by_default_under_the_pytest_harness(self, monkeypatch):
+    def test_disabled_by_default_inside_pytest(self, monkeypatch):
         """A test driving the real lifespan must not schedule a real warm: the
         0-5s jitter can draw ~0, and the executor thread outlives cancellation."""
         monkeypatch.delenv(warmup.WARM_ENABLED_ENV, raising=False)
-        monkeypatch.setenv("E2I_TESTING_MODE", "true")
         assert warmup.chatbot_warm_enabled() is False
 
-    def test_explicit_flag_wins_over_the_harness_default(self, monkeypatch):
-        monkeypatch.setenv("E2I_TESTING_MODE", "true")
+    def test_explicit_flag_wins_over_the_pytest_default(self, monkeypatch):
         monkeypatch.setenv(warmup.WARM_ENABLED_ENV, "true")
         assert warmup.chatbot_warm_enabled() is True
+
+    def test_e2i_testing_mode_alone_does_not_disable_warming(self, monkeypatch):
+        """codex round 4: the guard must be narrower than "some test env var is
+        set" — a copied CI variable in a real container must not silently
+        reintroduce the #1454 cold start."""
+        monkeypatch.delenv(warmup.WARM_ENABLED_ENV, raising=False)
+        monkeypatch.setenv("E2I_TESTING_MODE", "true")
+        monkeypatch.delitem(sys.modules, "pytest")
+        assert warmup.chatbot_warm_enabled() is True
+
+    def test_flag_is_forwarded_into_the_containers(self):
+        """docker-compose's ``x-common-env`` is an explicit WHITELIST: a variable
+        missing from it never reaches the api container, so the host ``.env``
+        would be inert and the in-code default would govern regardless — the
+        OPIK_ENABLED / E2I_REQUIRE_FULL_AGENT_REGISTRY lesson recorded in that
+        file. A kill switch that cannot be flipped in production is not a kill
+        switch."""
+        import yaml
+
+        compose = Path(__file__).resolve().parents[3] / "docker" / "docker-compose.yml"
+        common_env = yaml.safe_load(compose.read_text())["x-common-env"]
+        assert warmup.WARM_ENABLED_ENV in common_env
 
     @pytest.mark.parametrize("value", ["false", "FALSE", "0", "no"])
     def test_disabled_values(self, monkeypatch, value):
@@ -661,6 +684,21 @@ class TestLifespanWiring:
                 await asyncio.sleep(0.05)
 
         assert called == [], "flag off must not even create the task"
+
+    @pytest.mark.asyncio
+    async def test_lifespan_says_so_when_warming_is_disabled(self, monkeypatch, caplog):
+        """Silence would be indistinguishable from a warm that was scheduled and
+        never completed."""
+        monkeypatch.setenv(warmup.WARM_ENABLED_ENV, "false")
+        caplog.set_level(logging.INFO)
+
+        with _hermetic_lifespan_io():
+            async with main.lifespan(_fake_app()):
+                pass
+
+        assert any("warm DISABLED" in r.getMessage() for r in caplog.records), (
+            "a disabled warm must be visible in the startup log"
+        )
 
     @pytest.mark.asyncio
     async def test_lifespan_survives_a_warm_task_that_raises(self, monkeypatch, caplog):

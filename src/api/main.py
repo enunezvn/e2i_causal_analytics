@@ -452,6 +452,10 @@ async def lifespan(app: FastAPI):
             logger.info("Chatbot startup warm task scheduled")
         except Exception as e:  # noqa: BLE001 - never block startup on this
             logger.warning("Chatbot startup warm task not started: %s", e)
+    else:
+        # Say so out loud: silence here is indistinguishable from a warm that
+        # was scheduled and produced no completion line.
+        logger.info("Chatbot startup warm DISABLED (CHATBOT_STARTUP_WARM_ENABLED)")
 
     logger.info("API server ready to accept connections")
 
