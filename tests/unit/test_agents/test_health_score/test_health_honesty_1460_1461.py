@@ -453,6 +453,19 @@ class TestExplicitStageOverride1461Iter2:
         assert {m["model_stage"] for m in result[0]} == {"production", "staging"}
         assert result[1] is True
 
+    def test_comparison_discloses_a_stage_with_no_matching_target(self):
+        """codex iter-3 MED: if one compared stage has no model for the named
+        target, the collapse to the other stage must be disclosed, not
+        silent — production has only hcp_adoption here, so a
+        production-vs-staging INITIATION comparison can only show staging."""
+        result = _models_matching_query(
+            "Compare the production and staging Kisqali initiation models",
+            [KISQALI_PROD, KISQALI_STAGING],
+        )
+        assert [m["model_name"] for m in result[0]] == ["initiation_kisqali_goldstd_lr_v1"]
+        assert result[1] is True
+        assert "No production-stage model" in result[2], result[2]
+
     def test_no_model_in_requested_stage_discloses_it(self):
         """codex MED scenario: a production-constrained question over a brand
         with only a staging model must NOT silently answer as if the staging

@@ -204,9 +204,21 @@ def _models_matching_query(
             # per compared stage for the named target.
             best = max(len(_overlap(m)) for m in staged_matched)
             staged_matched = [m for m in staged_matched if len(_overlap(m)) == best]
-        if len(staged_matched) == 1 or (staged_matched and len(stages) > 1):
+        if staged_matched and len(stages) > 1:
             # A multi-stage question is a comparison: several survivors (one
-            # per compared stage) are the expected answer, not ambiguity.
+            # per compared stage) are the expected answer, not ambiguity. But
+            # if the named target exists in only SOME of the compared stages,
+            # say so (codex iter-3 MED — the collapse was silent).
+            covered = {str(m.get("model_stage") or "").lower() for m in staged_matched}
+            missing = [s for s in stages if s not in covered]
+            note = ""
+            if missing:
+                note = (
+                    f"No {'/'.join(missing)}-stage model matches this question; "
+                    "only the stage(s) with a matching model are shown."
+                )
+            return staged_matched, True, note
+        if len(staged_matched) == 1:
             return staged_matched, True, ""
         if staged_matched:
             names = ", ".join(str(m.get("model_name") or m.get("model_id")) for m in staged_matched)
