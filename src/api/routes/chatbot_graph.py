@@ -245,6 +245,11 @@ def _build_latency_span_payload(
     checkpointer writes between nodes, graph scheduling, and generator
     consumption gaps. A large value here means the bottleneck is outside the
     nodes, which is itself an answer.
+
+    ``worker_pid`` is read HERE, at emission time, and matches the pid on the
+    startup-warm completion log line, so a probe can prove the worker it hit is
+    one whose warm finished. It is never stored on a ChatbotState channel — a
+    checkpointer replay would resurrect another worker's pid (#1442 class).
     """
     node_wall_ms = (
         {node: round(ms, 1) for node, ms in trace_ctx.node_wall_ms.items()} if trace_ctx else {}
@@ -255,6 +260,7 @@ def _build_latency_span_payload(
         "graph_total_ms": round(total_ms, 1),
         "untimed_overhead_ms": round(total_ms - sum(node_wall_ms.values()), 1),
         "first_request_in_worker": first_request_in_worker,
+        "worker_pid": os.getpid(),
     }
 
 
