@@ -1,4 +1,4 @@
-"""Shared tool-result evidence semantics (#1257, #1458).
+"""Shared tool-result evidence semantics (#1257, #1458, #1469).
 
 E2I tools fail closed with a ``{"success": false, ...}`` JSON envelope that
 still becomes a ToolMessage. Treating mere tool EXECUTION as evidence
@@ -16,10 +16,32 @@ The rule, shared by both surfaces: only results NOT positively marked
 unparseable ones) ARE the evidence, not an error marker, so they count.
 Extracted here (rather than imported across route modules) because
 chat_bridge must stay importable without loading the CopilotKit SDK surface.
+
+#1469 extends the rule past scalar payloads. langchain_core 1.4.0 stringifies
+the ``Dict[str, Any]`` all ten E2I chatbot tools return, so today every
+payload arrives as a JSON string — but the same version passes list content
+(a list of strings, or of typed content blocks) through UNSTRINGIFIED, so one
+tool changing its return type would hide envelopes from a dict-only check.
+A list is graded per element and is an error marker only when every element
+is; ``tests/unit/test_utils/test_tool_evidence.py`` pins both halves of that
+reachability assumption.
 """
 
 import json
 from typing import Any, Dict, List
+
+# Payload-bearing fields of the typed content blocks langchain admits into
+# ToolMessage.content (langchain_core.tools.base.TOOL_MESSAGE_BLOCK_TYPES).
+# A block is a wrapper, so the envelope sits one level in: text blocks carry
+# it in ``text``, json blocks in ``json``, search_result blocks nest further
+# blocks in ``content``.
+_BLOCK_PAYLOAD_KEYS = ("text", "json", "content")
+
+# Nesting is bounded in every shape a tool can actually produce; the cap only
+# keeps hostile or malformed input from exhausting the stack. Past it we
+# cannot establish a failure marker, so the payload counts as evidence —
+# the same direction the #1257 rule takes for anything it cannot parse.
+_MAX_DEPTH = 16
 
 
 def payload_carries_evidence(payload: Any) -> bool:
@@ -27,18 +49,44 @@ def payload_carries_evidence(payload: Any) -> bool:
 
     ``payload`` is a raw tool result: typically the JSON string a tool
     returned (a ToolMessage's content), but any shape is tolerated. A JSON
-    string is parsed; a dict is inspected directly; anything else — including
-    unparseable strings and non-dict JSON — counts as evidence per the #1257
-    rule above.
+    string is parsed; a dict is inspected directly; a list is graded per
+    element (#1469); anything else — including unparseable strings — counts
+    as evidence per the #1257 rule above.
     """
+    return _carries_evidence(payload, 0)
+
+
+def _carries_evidence(payload: Any, depth: int) -> bool:
+    if depth > _MAX_DEPTH:
+        return True
     parsed: Any = payload
     if isinstance(payload, str):
         try:
             parsed = json.loads(payload)
         except (ValueError, TypeError):
             parsed = None
-    if isinstance(parsed, dict) and parsed.get("success") is False:
-        return False
+    if isinstance(parsed, dict):
+        return _dict_carries_evidence(parsed, depth)
+    if isinstance(parsed, list):
+        # A list is an error marker only when EVERY element is one: one
+        # element carrying real content makes the whole payload evidence,
+        # and an empty list is not POSITIVELY marked failed either.
+        return not parsed or any(_carries_evidence(item, depth + 1) for item in parsed)
+    return True
+
+
+def _dict_carries_evidence(parsed: Dict[str, Any], depth: int) -> bool:
+    if "success" in parsed:
+        return parsed["success"] is not False
+    # No envelope of its own — but a typed content block wraps one a level in.
+    # Gated on ``type`` so a plain result dict that happens to hold a "content"
+    # or "text" key is never re-graded by its children.
+    if isinstance(parsed.get("type"), str):
+        return all(
+            _carries_evidence(parsed[key], depth + 1)
+            for key in _BLOCK_PAYLOAD_KEYS
+            if key in parsed
+        )
     return True
 
 
