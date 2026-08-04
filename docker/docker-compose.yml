@@ -409,13 +409,13 @@ services:
   # ===========================================================================
 
   # MLflow - Experiment Tracking & Model Registry
-  # Pinned to v3.11.1 in lockstep with requirements.txt mlflow line (#442;
-  # supersedes #362). v3.11.1 is the latest 3.11.x GA (mlflow project never
-  # published a v3.11.0 GA — only rc0/rc1, then jumped to 3.11.1). The 3.11.x
-  # line resolves CVE-2026-2652 / CVE-2026-33866 / CVE-2026-33865 — three GHSAs
-  # dropped from .github/workflows/security.yml in PR #442.
+  # Pinned to v3.15.1 in lockstep with requirements.txt mlflow line (#1476;
+  # supersedes #442 / #362). The 3.15.x line is the first whose cryptography
+  # cap is <50, unlocking cryptography 49.0.0 (clears GHSA-537c-gmf6-5ccf +
+  # CVE-2026-69248 + CVE-2026-69249 — entries dropped from
+  # .github/workflows/security.yml in the #1476 PR).
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.11.1
+    image: ghcr.io/mlflow/mlflow:v3.15.1
     container_name: e2i_mlflow
     restart: unless-stopped
     logging: *default-logging

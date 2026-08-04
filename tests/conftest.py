@@ -438,6 +438,40 @@ def _restore_tool_registry_after_pollution():
 # =============================================================================
 os.environ["E2I_TESTING_MODE"] = "1"
 
+# =============================================================================
+# MLFLOW 3.15 TEST-HARNESS COMPAT (#1476 — mlflow 3.11.1 -> 3.15.1)
+# =============================================================================
+# Two mlflow behavior changes land between 3.11 and 3.15 that affect ONLY the
+# test harness (prod uses an HTTP tracking server + sqlite-backed mlflow
+# service container; neither var is set in any compose environment):
+#
+# 1. mlflow 3.13.0 (upstream #22773): pointing the tracking or model-registry
+#    store at a local filesystem path raises MlflowException by default.
+#    Several unit tests deliberately use throwaway ``file://{tmp_path}`` stores
+#    (test_twin_persistence, test_training_job, test_execute_twin_retraining_real,
+#    test_mlflow_tracker_artifact_dest_1452, ...). The upstream opt-out restores
+#    them without changing what they exercise.
+#
+# 2. mlflow ~3.14 uv auto-detection (MLFLOW_UV_AUTO_DETECT, default true):
+#    ``log_model`` detects a uv project (uv.lock + pyproject.toml in cwd
+#    ancestry) and infers the MODEL's pip requirements from ``uv export`` of
+#    the repo's uv.lock instead of capture-based inference. Our uv.lock is NOT
+#    the installed-env source of truth (requirements.lock is) and drifts from
+#    it (measured 2026-08-04: uv.lock xgboost==3.2.0 vs installed 3.1.2), which
+#    makes ``mlflow.xgboost.log_model`` raise "requirements versions are
+#    incompatible" from inside the repo checkout. Disable auto-detection so
+#    model-env inference reflects the ACTUAL installed packages. Prod docker
+#    images never contain uv.lock (docker/Dockerfile copies requirements.txt /
+#    requirements.lock / pyproject.toml only), so detection cannot fire there.
+# Hard assignments (not setdefault): tests/conftest.py load_dotenv(override=
+# True) has already run above, so a stray MLFLOW_ALLOW_FILE_STORE=false /
+# MLFLOW_UV_AUTO_DETECT=true in a developer .env or CI environment would
+# silently defeat the harness. Matches the E2I_TESTING_MODE precedent. A test
+# that needs the upstream defaults can still monkeypatch.setenv per-test
+# (fixtures run after this module-level assignment).
+os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
+os.environ["MLFLOW_UV_AUTO_DETECT"] = "false"
+
 
 def _load_dotenv_at_configure():
     """Run load_dotenv again at configure time for safety."""

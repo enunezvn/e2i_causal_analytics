@@ -97,7 +97,7 @@ C4Container
         ContainerDb(redis, "Redis", "Redis 7.2", "Task broker, result backend, working memory, feature cache")
         ContainerDb(falkordb, "FalkorDB", "FalkorDB v4.14.11", "Knowledge graph: 8 node types, 11 edge types")
 
-        Container(mlflow, "MLflow", "MLflow v3.11.1", "Experiment tracking, model registry")
+        Container(mlflow, "MLflow", "MLflow v3.15.1", "Experiment tracking, model registry")
         Container(bentoml, "BentoML", "Custom Python 3.12", "Model serving (churn, conversion, causal)")
         Container(feast, "Feast", "Feast Feature Server", "Online/offline feature serving")
 
@@ -148,7 +148,7 @@ C4Container
 
 | Container | Image | Port (host:container) | Purpose |
 |-----------|-------|----------------------|---------|
-| `mlflow` | ghcr.io/mlflow/mlflow:v3.11.1 | 127.0.0.1:5000:5000 | Experiment tracking, model registry |
+| `mlflow` | ghcr.io/mlflow/mlflow:v3.15.1 | 127.0.0.1:5000:5000 | Experiment tracking, model registry |
 | `bentoml` | Local build (`docker/bentoml/Dockerfile`) | 127.0.0.1:3000:3000 | Model serving |
 | `feast` | feastdev/feature-server:latest | 127.0.0.1:6567:6566 | Feature serving |
 

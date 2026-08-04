@@ -28,19 +28,19 @@ RUN useradd -m -u 1000 mlflow && \
 WORKDIR /mlflow
 
 # Install MLflow and dependencies
-# Pinned in lockstep with requirements.txt mlflow line (#442; supersedes #362). The
-# >=3.11.0,<3.12.0 spec resolves CVE-2026-2652 (GHSA-75cm-x2w3-8mgf, fixed in 3.11.0)
-# + CVE-2026-33866 (GHSA-46r5-x6jq-v8g6, fixed in 3.11.1 per release notes)
-# + CVE-2026-33865 (GHSA-fh64-r2vc-xvhr, fixed in 3.11.1) — three entries dropped
-# from .github/workflows/security.yml in PR #442. GHSA-7qhf-v65m-g5f3 remains
-# unfixed upstream and stays on the allowlist (mitigated: job execution disabled).
+# Pinned in lockstep with requirements.txt mlflow line (#1476; supersedes #442 /
+# #362). The >=3.15.1,<3.16.0 spec is the first mlflow line whose cryptography
+# cap is <50 (3.11/3.12 cap <47; 3.13/3.14 cap <49), unlocking cryptography
+# 49.0.0 which clears GHSA-537c-gmf6-5ccf + CVE-2026-69248 + CVE-2026-69249.
+# GHSA-7qhf-v65m-g5f3 remains unfixed upstream and stays on the allowlist
+# (mitigated: job execution disabled).
 RUN pip install --no-cache-dir \
-    'mlflow>=3.11.0,<3.12.0' \
+    'mlflow>=3.15.1,<3.16.0' \
     psycopg2-binary==2.9.9 \
     boto3==1.34.14 \
     google-cloud-storage==2.14.0 \
     azure-storage-blob==12.19.0 \
-    cryptography==41.0.7
+    cryptography==49.0.0
 
 # Switch to mlflow user
 USER mlflow
