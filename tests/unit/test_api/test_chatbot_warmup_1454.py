@@ -224,12 +224,18 @@ class TestThreadAffinity:
         """dspy 3.1.0 binds the owner thread on the FIRST configure; running the
         config leg on the loop thread arms every ``settings.lm is not None``
         guard before any worker thread can reach ``dspy.configure``."""
+        import dspy
+
         seen = {}
 
         def fake_ensure():
             seen["thread"] = threading.get_ident()
 
-        with patch("src.api.routes.chatbot_dspy._ensure_dspy_configured", fake_ensure):
+        with (
+            patch("src.api.routes.chatbot_dspy._ensure_dspy_configured", fake_ensure),
+            # satisfy the postcondition; this test is about WHERE it ran
+            patch.object(dspy, "settings", types.SimpleNamespace(lm=object())),
+        ):
             await warmup._warm_dspy_config()
 
         assert seen["thread"] == threading.get_ident(), "config leg must NOT be to_thread'd"
@@ -306,19 +312,92 @@ class TestThreadAffinity:
     @pytest.mark.asyncio
     async def test_rag_dspy_modules_leg_builds_rewriter_and_hop_decider(self):
         built = []
+
+        def _rewriter():
+            built.append("rewriter")
+            return object()
+
+        def _hop():
+            built.append("hop")
+            return object()
+
         with (
-            patch(
-                "src.api.routes.chatbot_dspy._get_dspy_query_rewriter",
-                lambda: built.append("rewriter"),
-            ),
-            patch(
-                "src.api.routes.chatbot_dspy._get_dspy_hop_decider",
-                lambda: built.append("hop"),
-            ),
+            patch("src.api.routes.chatbot_dspy._get_dspy_query_rewriter", _rewriter),
+            patch("src.api.routes.chatbot_dspy._get_dspy_hop_decider", _hop),
         ):
             warmup._warm_rag_dspy_modules()
 
         assert built == ["rewriter", "hop"]
+
+
+class TestSwallowedFailureHonesty:
+    """Every warm leg calls a request-path helper that FAILS SOFT by design:
+    ``_ensure_dspy_configured`` catches and warns (chatbot_dspy.py:75), and the
+    three ``_get_dspy_*`` getters return ``None`` after a swallowed construction
+    error (chatbot_dspy.py:517, 1271, 1577). That is correct for a request (fall
+    back to the non-DSPy path) but it means the warm sees no exception — so
+    without a postcondition the completion line would claim ``failed=[]`` for a
+    leg that warmed nothing. The postcondition must distinguish "failed" from
+    "feature is switched off", which is also a legitimate ``None``."""
+
+    @pytest.mark.asyncio
+    async def test_dspy_config_leg_fails_when_no_lm_is_configured(self):
+        import dspy
+
+        with (
+            patch("src.api.routes.chatbot_dspy._ensure_dspy_configured", lambda: None),
+            patch.object(dspy, "settings", types.SimpleNamespace(lm=None)),
+        ):
+            with pytest.raises(RuntimeError, match="DSPy"):
+                await warmup._warm_dspy_config()
+
+    @pytest.mark.asyncio
+    async def test_dspy_config_leg_is_clean_when_dspy_is_unavailable(self):
+        with (
+            patch("src.api.routes.chatbot_dspy.DSPY_AVAILABLE", False),
+            patch("src.api.routes.chatbot_dspy._ensure_dspy_configured", lambda: None),
+        ):
+            await warmup._warm_dspy_config()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_classify_leg_fails_when_the_enabled_classifier_is_none(self):
+        with (
+            patch("src.api.routes.chatbot_dspy.DSPY_AVAILABLE", True),
+            patch("src.api.routes.chatbot_dspy.CHATBOT_DSPY_INTENT_ENABLED", True),
+            patch("src.api.routes.chatbot_dspy._get_dspy_classifier", lambda: None),
+        ):
+            with pytest.raises(RuntimeError, match="classifier"):
+                await warmup._warm_classify()
+
+    @pytest.mark.asyncio
+    async def test_classify_leg_is_clean_when_the_feature_is_off(self):
+        """Flag off -> the getter returns None BY DESIGN. Reporting that as a
+        warm failure would be a fabricated failure."""
+        with (
+            patch("src.api.routes.chatbot_dspy.DSPY_AVAILABLE", True),
+            patch("src.api.routes.chatbot_dspy.CHATBOT_DSPY_INTENT_ENABLED", False),
+            patch("src.api.routes.chatbot_dspy._get_dspy_classifier", lambda: None),
+        ):
+            await warmup._warm_classify()  # must not raise
+
+    def test_rag_dspy_modules_fail_when_an_enabled_singleton_is_none(self):
+        with (
+            patch("src.api.routes.chatbot_dspy.DSPY_AVAILABLE", True),
+            patch("src.api.routes.chatbot_dspy.CHATBOT_COGNITIVE_RAG_ENABLED", True),
+            patch("src.api.routes.chatbot_dspy._get_dspy_query_rewriter", lambda: object()),
+            patch("src.api.routes.chatbot_dspy._get_dspy_hop_decider", lambda: None),
+        ):
+            with pytest.raises(RuntimeError, match="hop decider"):
+                warmup._warm_rag_dspy_modules()
+
+    def test_rag_dspy_modules_are_clean_when_cognitive_rag_is_off(self):
+        with (
+            patch("src.api.routes.chatbot_dspy.DSPY_AVAILABLE", True),
+            patch("src.api.routes.chatbot_dspy.CHATBOT_COGNITIVE_RAG_ENABLED", False),
+            patch("src.api.routes.chatbot_dspy._get_dspy_query_rewriter", lambda: None),
+            patch("src.api.routes.chatbot_dspy._get_dspy_hop_decider", lambda: None),
+        ):
+            warmup._warm_rag_dspy_modules()  # must not raise
 
 
 class TestRagWarmFailureHonesty:
@@ -381,6 +460,32 @@ class TestRagWarmFailureHonesty:
                 return []
 
         with patch("src.rag.memory_connector.get_memory_connector", lambda: _QuietConnector()):
+            warmup._rag_warm_sync()  # must not raise
+
+    def test_another_threads_error_does_not_fail_the_warm(self):
+        """The capture is attached to the process-global connector logger, so a
+        real request racing startup would otherwise emit "Vector search failed"
+        into it and fabricate a warm failure. Only records from the warm's OWN
+        thread count."""
+
+        class _QuietConnectorWithNoisyNeighbour:
+            async def vector_search_by_text(self, query, k=10, **kwargs):
+                noisy = threading.Thread(
+                    target=lambda: logging.getLogger("src.rag.memory_connector").error(
+                        "Vector search failed: a CONCURRENT REQUEST's error"
+                    )
+                )
+                noisy.start()
+                noisy.join()
+                return []
+
+            async def fulltext_search(self, query, k=10, **kwargs):
+                return []
+
+        with patch(
+            "src.rag.memory_connector.get_memory_connector",
+            lambda: _QuietConnectorWithNoisyNeighbour(),
+        ):
             warmup._rag_warm_sync()  # must not raise
 
 

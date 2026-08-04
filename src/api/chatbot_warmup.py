@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
@@ -80,10 +81,20 @@ async def _warm_dspy_config() -> None:
 
     Cheap (``dspy.LM()`` is a no-I/O litellm wrapper, ``configure`` writes a
     dict) and deliberately not ``to_thread``'d: see the module docstring.
-    """
-    from src.api.routes.chatbot_dspy import _ensure_dspy_configured
 
-    _ensure_dspy_configured()
+    ``_ensure_dspy_configured`` catches its own errors and only warns
+    (chatbot_dspy.py:75) — right for a request, but it would let the warm report
+    success for a leg that configured nothing, so the postcondition is checked.
+    """
+    from src.api.routes import chatbot_dspy
+
+    chatbot_dspy._ensure_dspy_configured()
+
+    if chatbot_dspy.DSPY_AVAILABLE:
+        import dspy
+
+        if dspy.settings.lm is None:
+            raise RuntimeError("DSPy LM still unconfigured after _ensure_dspy_configured()")
 
 
 async def _rag_warm(connector: Any) -> None:
@@ -97,14 +108,25 @@ async def _rag_warm(connector: Any) -> None:
 
 
 class _ErrorCapture(logging.Handler):
-    """Collects ERROR records emitted by another logger while attached."""
+    """Collects ERROR records emitted from THIS thread while attached.
+
+    The handler sits on the process-global connector logger, so a real request
+    racing startup would otherwise leak its own "Vector search failed" into the
+    warm's report and fabricate a failure. The warm's retrieval calls all run on
+    the thread that attaches this handler (its private ``asyncio.run`` loop runs
+    there too), so the thread id is an exact filter. A record with no thread id
+    (``logging.logThreads`` disabled) cannot be attributed and is kept: over-
+    reporting a real error beats silently claiming a warm that did not happen.
+    """
 
     def __init__(self) -> None:
         super().__init__(level=logging.ERROR)
+        self.thread_id = threading.get_ident()
         self.messages: List[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
+        if record.thread is None or record.thread == self.thread_id:
+            self.messages.append(record.getMessage())
 
 
 def _rag_warm_sync() -> None:
@@ -142,11 +164,22 @@ def _warm_rag_dspy_modules() -> None:
 
     Their internal ``_ensure_dspy_configured()`` calls no-op because the config
     leg already armed the guard on the loop thread.
-    """
-    from src.api.routes.chatbot_dspy import _get_dspy_hop_decider, _get_dspy_query_rewriter
 
-    _get_dspy_query_rewriter()
-    _get_dspy_hop_decider()
+    Both getters return ``None`` on a swallowed construction failure — and also
+    when the feature is switched off, which is not a failure. Only the first
+    case is reported.
+    """
+    from src.api.routes import chatbot_dspy
+
+    rewriter = chatbot_dspy._get_dspy_query_rewriter()
+    decider = chatbot_dspy._get_dspy_hop_decider()
+
+    if not (chatbot_dspy.DSPY_AVAILABLE and chatbot_dspy.CHATBOT_COGNITIVE_RAG_ENABLED):
+        return
+    if rewriter is None:
+        raise RuntimeError("cognitive-RAG query rewriter did not build")
+    if decider is None:
+        raise RuntimeError("cognitive-RAG hop decider did not build")
 
 
 async def _warm_rag() -> None:
@@ -166,9 +199,21 @@ async def _warm_orchestrator() -> None:
 
 
 def _build_classifier() -> Any:
-    from src.api.routes.chatbot_dspy import _get_dspy_classifier
+    """Build the intent classifier, reporting a swallowed build failure.
 
-    return _get_dspy_classifier()
+    ``None`` means "feature off" as well as "build failed"; only the latter is a
+    warm failure.
+    """
+    from src.api.routes import chatbot_dspy
+
+    classifier = chatbot_dspy._get_dspy_classifier()
+    if (
+        classifier is None
+        and chatbot_dspy.DSPY_AVAILABLE
+        and chatbot_dspy.CHATBOT_DSPY_INTENT_ENABLED
+    ):
+        raise RuntimeError("DSPy intent classifier did not build")
+    return classifier
 
 
 async def _warm_classify() -> None:
