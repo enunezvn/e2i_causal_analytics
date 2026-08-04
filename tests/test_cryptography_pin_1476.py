@@ -25,6 +25,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROOT_REQS = REPO_ROOT / "requirements.txt"
+DEV_REQS = REPO_ROOT / "requirements-dev.txt"
 REQS_LOCK = REPO_ROOT / "requirements.lock"
 SECURITY_YML = REPO_ROOT / ".github" / "workflows" / "security.yml"
 
@@ -56,6 +57,22 @@ def test_requirements_txt_pins_cryptography_49() -> None:
         f"requirements.txt pins cryptography=={matches!r}; expected exactly "
         f"[{CRYPTOGRAPHY_REQUIRED_PIN!r}] (#1476 — 49.0.0 clears "
         f"GHSA-537c-gmf6-5ccf + CVE-2026-69248 + CVE-2026-69249)."
+    )
+
+
+def test_requirements_dev_pins_cryptography_49() -> None:
+    """requirements-dev.txt must match the root pin (same lockstep rationale
+    as test_mlflow_upgrade_pin.py::test_mlflow_dev_requirements_match_root_pin:
+    a stale dev pin downgrades dev/CI installs back to the vulnerable 46.0.7
+    wheels or conflicts with the root pin depending on install order).
+
+    Codex iter-1 HIGH finding on #1476: the initial bump missed this file.
+    """
+    matches = _CRYPTO_REQ_RE.findall(DEV_REQS.read_text())
+    assert matches == [CRYPTOGRAPHY_REQUIRED_PIN], (
+        f"requirements-dev.txt pins cryptography=={matches!r}; expected exactly "
+        f"[{CRYPTOGRAPHY_REQUIRED_PIN!r}] — keep dev in lockstep with "
+        f"requirements.txt (#1476)."
     )
 
 
