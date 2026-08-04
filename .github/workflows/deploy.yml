@@ -41,6 +41,11 @@ on:
       # already covered by 'src/**'.
       - 'scripts/bentoml/**'
       - 'docker/bentoml/**'
+      # #1479: the post-deploy image-drift check + its allowlist are consumed at
+      # deploy time from the droplet checkout (not baked into any image), so a
+      # change there — e.g. removing the mlflow allowlist entry after the
+      # deliberate recreate — must itself trigger a deploy to take effect.
+      - 'scripts/deploy/**'
   workflow_dispatch:
 
 # Serialize production deploys: at most one run of THIS workflow proceeds at a
@@ -672,6 +677,23 @@ jobs:
             docker image prune -a -f || true
             docker builder prune -a -f || true
 
+            # #1479 recurrence guard: compare every compose-pinned service's RUNNING
+            # image (docker inspect via compose labels) against the pin the deploy's
+            # own $COMPOSE_CMD resolves. The mlflow pin bumps #442/#1477 never reached
+            # the live server because the rollout above never recreates mlflow — and
+            # nothing noticed for 5 weeks. Any mismatch not held by a dated, ticketed
+            # entry in scripts/deploy/image_drift_allowlist.json FAILS the run (exit 1
+            # under set -e). Deliberately NO rollback here: the rollout converged and
+            # was health-gated; a pin mismatch on a never-recreated sidecar is fixed
+            # by a deliberate operator recreate (stateful services need a backup
+            # first — mlflow's first v3.15.1 boot runs a one-way sqlite migration),
+            # not by rolling back code. Runs AFTER the prune so disk hygiene still
+            # happens when the alarm fires. IMAGE_OWNER/IMAGE_TAG are already
+            # exported above, so the app tier resolves to THIS deploy's SHA tags —
+            # a stale app container (failed recreate) is caught here too.
+            echo "==> Post-deploy image drift check (#1479)"
+            python3 scripts/deploy/check_image_drift.py --compose-cmd "$COMPOSE_CMD"
+
       - name: Deployment summary
         if: always()
         env:
@@ -683,7 +705,9 @@ jobs:
           if [ "$JOB_STATUS" = "success" ]; then
             echo "## Deployment Succeeded" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "## Deployment Failed — Rollback Triggered" >> "$GITHUB_STEP_SUMMARY"
+            # A failure here is EITHER a rolled-back deploy OR a converged deploy
+            # whose post-deploy image-drift check (#1479) fired — read the log.
+            echo "## Deployment Failed — rollback triggered or post-deploy drift check failed (see log)" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "- **Commit:** \`$COMMIT_SHA\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Branch:** $BRANCH_NAME" >> "$GITHUB_STEP_SUMMARY"

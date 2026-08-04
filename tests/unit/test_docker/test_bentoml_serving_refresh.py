@@ -157,6 +157,15 @@ def _prepare(tmp_path: Path) -> tuple[Path, Path]:
     )
     (project_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (project_dir / "scripts" / "run_migrations.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    # #1479 added `python3 scripts/deploy/check_image_drift.py ...` at the END of the
+    # deploy `script:` (after the prune). Same rationale as the run_migrations.sh stub
+    # above: this harness validates the bentoml refresh contract, so a clean drift
+    # check is the faithful default (its own control flow is covered by
+    # test_image_drift_check.py).
+    (project_dir / "scripts" / "deploy").mkdir(parents=True, exist_ok=True)
+    (project_dir / "scripts" / "deploy" / "check_image_drift.py").write_text(
+        "import sys\nsys.exit(0)\n"
+    )
 
     script = _extract_deploy_script()
     assert "${{" not in script, (

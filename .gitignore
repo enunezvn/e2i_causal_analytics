@@ -232,8 +232,11 @@ frontend/E2I_Causal_Dashboard_*.html
 frontend/graph_viewer.html
 docker/e2i_docker_volume_strategy.html
 
-# Stale deploy artifacts (BentoML now runs in Docker)
-deploy/
+# Stale deploy artifacts (BentoML now runs in Docker). Root-anchored (#1479):
+# the unanchored `deploy/` also swallowed nested source dirs — specifically
+# scripts/deploy/ (the post-deploy image-drift check) — while the stale
+# artifacts only ever lived at the repo root (deploy/e2i-bentoml.{env,service}).
+/deploy/
 backups/
 
 # Phase 2.9 Stage 2 KG cache (raw caches gitignored; .summary.md committed)
