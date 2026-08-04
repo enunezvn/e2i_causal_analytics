@@ -18,6 +18,7 @@ Contract pins:
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -530,6 +531,87 @@ class TestBridgeReportsToolGrounding:
             answer = await run_conversational_bridge(query="q", session_id="u~s")
 
         assert answer.tool_grounded is False
+
+
+class TestToolGroundingRequiresRealEvidence:
+    """#1458: an executed tool is not evidence when it FAILED.
+
+    E2I tools fail closed with a ``{"success": false, ...}`` JSON envelope
+    that is still a ToolMessage — a turn where every tool errored must NOT
+    get the "answered from live platform data" preamble (a stronger trust
+    signal for a weaker answer, and #1257 notes these rows persist as
+    top-reward training examples). Same evidence rule as copilotkit's
+    ``_evidence_tool_count`` (#1257): only results not positively marked
+    ``success: false`` count; payloads without the envelope (or unparseable
+    ones) ARE the evidence, so they still count.
+    """
+
+    async def _bridge(self, messages):
+        graph = _FakeGraph(final_state={"messages": messages})
+        with patch("src.api.routes.copilotkit.create_e2i_chat_agent", return_value=graph):
+            return await run_conversational_bridge(query="q", session_id="u~s")
+
+    async def test_all_failed_envelope_turn_is_not_tool_grounded(self):
+        # The RED case for #1458: the ONLY ToolMessage is a fail-closed
+        # envelope — presence-based gating wrongly grounds this turn.
+        answer = await self._bridge(
+            [
+                HumanMessage(content="q"),
+                AIMessage(content=""),
+                ToolMessage(
+                    content=json.dumps({"success": False, "error": "kpi substrate unavailable"}),
+                    tool_call_id="call-1",
+                ),
+                AIMessage(content="I could not retrieve that data."),
+            ]
+        )
+        assert answer.text == "I could not retrieve that data."
+        assert answer.tool_grounded is False
+
+    async def test_success_envelope_is_tool_grounded(self):
+        answer = await self._bridge(
+            [
+                HumanMessage(content="q"),
+                AIMessage(content=""),
+                ToolMessage(
+                    content=json.dumps({"success": True, "value": 12867}),
+                    tool_call_id="call-1",
+                ),
+                AIMessage(content="Kisqali TRx = 12,867."),
+            ]
+        )
+        assert answer.tool_grounded is True
+
+    async def test_non_envelope_payload_still_counts_as_evidence(self):
+        # Per the #1257 rule: a payload without the envelope (unparseable as
+        # JSON) IS the evidence, not an error marker.
+        answer = await self._bridge(
+            [
+                HumanMessage(content="q"),
+                AIMessage(content=""),
+                ToolMessage(content="TRx rows: 12,867 (Kisqali)", tool_call_id="call-1"),
+                AIMessage(content="Kisqali TRx = 12,867."),
+            ]
+        )
+        assert answer.tool_grounded is True
+
+    async def test_mixed_failed_and_real_evidence_is_tool_grounded(self):
+        answer = await self._bridge(
+            [
+                HumanMessage(content="q"),
+                AIMessage(content=""),
+                ToolMessage(
+                    content=json.dumps({"success": False, "error": "boom"}),
+                    tool_call_id="call-1",
+                ),
+                ToolMessage(
+                    content=json.dumps({"success": True, "value": 42}),
+                    tool_call_id="call-2",
+                ),
+                AIMessage(content="The value is 42."),
+            ]
+        )
+        assert answer.tool_grounded is True
 
 
 class TestActionableInvitationPlumbing:

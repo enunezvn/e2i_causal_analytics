@@ -330,6 +330,7 @@ from src.utils.llm_attribution import (
 from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 from src.utils.redaction import redact_query
+from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
@@ -1470,20 +1471,12 @@ def _evidence_tool_count(tool_results: List[Dict[str, Any]]) -> int:
     those rows persist as top-reward training examples. Only results not
     positively marked failed count; payloads without the envelope (or
     unparseable ones) ARE the evidence, not an error marker, so they count.
+
+    The semantics live in ``src.utils.tool_evidence`` — extracted for #1458
+    so chat_bridge's ``tool_grounded`` gate applies the exact same rule
+    without importing this module's heavy SDK surface.
     """
-    count = 0
-    for tr in tool_results:
-        result = tr.get("result")
-        parsed: Any = result
-        if isinstance(result, str):
-            try:
-                parsed = json.loads(result)
-            except (ValueError, TypeError):
-                parsed = None
-        if isinstance(parsed, dict) and parsed.get("success") is False:
-            continue
-        count += 1
-    return count
+    return evidence_tool_count(tool_results)
 
 
 def _grade_copilot_turn(response: str, tool_count: int, synthesis_error: bool = False) -> float:

@@ -35,6 +35,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from src.utils.llm_content import normalize_llm_content
 from src.utils.redaction import redact_query
+from src.utils.tool_evidence import payload_carries_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,9 @@ class BridgeAnswer(NamedTuple):
     """The bridged answer plus the evidence needed to describe it honestly.
 
     ``tool_grounded`` is EVIDENCE, not a guess: it is True only when the AG-UI
-    run actually executed a tool (a ``ToolMessage`` came back). The preamble
+    run executed a tool (a ``ToolMessage`` came back) AND at least one result
+    was not a fail-closed ``{"success": false, ...}`` envelope (#1458, same
+    rule as copilotkit's ``_evidence_tool_count`` for #1257). The preamble
     may only claim live platform data when it is True (#1451).
     """
 
@@ -212,7 +215,17 @@ async def run_conversational_bridge(
         # preamble's "live platform data" claim is gated on it — an answer the
         # model produced without touching a tool must not be dressed up as a
         # data lookup.
-        tool_grounded = any(isinstance(m, ToolMessage) for m in messages)
+        #
+        # #1458: execution alone is NOT evidence. E2I tools fail closed with a
+        # {"success": false, ...} envelope that is still a ToolMessage, so
+        # presence-gating stamped all-tools-errored turns with the live-data
+        # preamble — a stronger trust signal for a weaker answer, persisted as
+        # top-reward training rows (the #1257 defect class). Apply the same
+        # rule as copilotkit's _evidence_tool_count: only payloads not
+        # positively marked failed count; non-envelope payloads still count.
+        tool_grounded = any(
+            isinstance(m, ToolMessage) and payload_carries_evidence(m.content) for m in messages
+        )
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
                 text = normalize_llm_content(msg.content).strip()
