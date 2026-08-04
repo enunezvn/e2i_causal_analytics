@@ -321,6 +321,45 @@ _TIER_POPULATION_ANCHORS = (
     r"|remibrutinib|fabhalta|kisqali|csu|pnh|breast\s+cancer"
 )
 
+# #1457 — the tiered OBJECT disqualifies the anchor. A lone brand/disease token
+# satisfies _TIER_POPULATION_ANCHORS, so when it appears BEFORE the container/
+# ladder a tiering ask about a purely COMMERCIAL object matched cohort_definition
+# at 0.867+ — above the 0.8 pattern-trust floor, hence a confident LLM-free
+# misroute into cohort_profiler, which never fails closed. Measured, not
+# theorized: "Rank Kisqali call plans into high, medium, and low priority
+# tiers", "Bucket the Kisqali marketing budget ...", "Split the Fabhalta sales
+# territories ...", "Categorize CSU campaign creatives ..." and "Tier the
+# breast cancer conference sponsorships from high to medium to low" all landed
+# on cohort_profiler, which returned a real-looking per-segment HCP population
+# profile for a call-plan/budget/territory/creative/sponsorship question.
+#
+# The DISPROVEN fix is removing brand/disease tokens from the anchor lexicon —
+# that breaks "Break down Remibrutinib NRx by IgE tier (low / medium / high)."
+# (bench-0142), where the brand token is the ONLY population signal. Instead,
+# the gaps joining verb -> anchor -> container (shape a) and anchor -> ladder
+# (shape b) refuse to cross one of these commercial HEAD NOUNS: when the brand
+# sits inside "Kisqali call plans" or "breast cancer conference sponsorships",
+# it is a MODIFIER of the commercial object actually being tiered, not the
+# population being partitioned. Same fail-closed direction as the
+# `(?<!managed )` payer guard: the commercial rows fall back to the LLM safety
+# net instead of being answered confidently and wrongly, and every clinical row
+# in test_intent_classifier_tiering_1449.py keeps matching (their spans carry
+# no commercial noun). Guarded by test_intent_classifier_tiering_1457_1462.py.
+_TIER_COMMERCIAL_HEAD_NOUNS = (
+    r"call[\s-]+plans?|budgets?|spend(?:ing|s)?|territor(?:y|ies)|channels?"
+    r"|creatives?|campaigns?|sponsorships?|accounts?|roi"
+)
+
+
+def _tier_object_gap(max_chars: int) -> str:
+    """Bounded intra-clause gap that refuses to cross a commercial head noun.
+
+    Drop-in replacement for the plain ``[^.?!]{0,N}?`` gaps in the #1449
+    tiering patterns: same clause bound, but a commercial head noun anywhere in
+    the span kills the match (#1457 — see _TIER_COMMERCIAL_HEAD_NOUNS above).
+    """
+    return r"(?:(?!\b(?:" + _TIER_COMMERCIAL_HEAD_NOUNS + r")\b)[^.?!]){0," + str(max_chars) + r"}?"
+
 
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
@@ -500,22 +539,45 @@ class IntentClassifierNode:
             # -> explicit tier-container NOUN, in that order, one clause. The
             # population anchor is what makes this cohort work rather than
             # budget/territory/experiment-arm tiering. See _TIER_PARTITION_VERBS /
-            # _TIER_POPULATION_ANCHORS / _EFFECT_CLAIM_VETO above.
+            # _TIER_POPULATION_ANCHORS / _EFFECT_CLAIM_VETO above. #1457: the
+            # verb->anchor and anchor->container gaps are TEMPERED — a
+            # commercial head noun inside either span means the anchor is a
+            # modifier of a commercial object ("Rank Kisqali CALL PLANS into
+            # ... tiers"), not the population partitioned, so the match dies
+            # and the row escalates. See _TIER_COMMERCIAL_HEAD_NOUNS.
             r"(?s)\A(?!.*(?:" + _EFFECT_CLAIM_VETO + r"))"
-            r".*?\b(?:" + _TIER_PARTITION_VERBS + r")\w*\b"
-            r"[^.?!]{0,40}?\b(?:" + _TIER_POPULATION_ANCHORS + r")\b"
-            r"[^.?!]{0,80}?\b(?:" + _TIER_CONTAINER_NOUNS + r")\b",
+            r".*?\b(?:"
+            + _TIER_PARTITION_VERBS
+            + r")\w*\b"
+            + _tier_object_gap(40)
+            + r"\b(?:"
+            + _TIER_POPULATION_ANCHORS
+            + r")\b"
+            + _tier_object_gap(80)
+            + r"\b(?:"
+            + _TIER_CONTAINER_NOUNS
+            + r")\b",
             # #1449 (b) — clinical POPULATION followed by an explicit 3-level
             # ordinal ladder, either direction. The MIDDLE rung is required so
             # 2-level "high vs low responders" (heterogeneous_optimizer's own
             # vocabulary) cannot match; the population anchor is required so a
             # bare ladder on any subject ("forecast confidence is high, medium,
-            # or low") cannot match.
+            # or low") cannot match. #1462: "moderate" is a middle rung —
+            # "Segment HCPs into three groups by prescription volume: high,
+            # moderate, and low" is demo-4.3 in different clothes and carried
+            # only segment_analysis (a CATE misroute) without it. The widening
+            # is only safe because the anchor->ladder gap is TEMPERED (#1457):
+            # "split the Kisqali sales TERRITORIES into three groups: high,
+            # moderate, low" dies on the commercial head noun instead of newly
+            # matching. See _TIER_COMMERCIAL_HEAD_NOUNS.
             r"(?s)\A(?!.*(?:" + _EFFECT_CLAIM_VETO + r"))"
-            r".*?\b(?:" + _TIER_POPULATION_ANCHORS + r")\b[^.?!]{0,60}?"
-            r"(?:\b(?:high|top)\b[^.?!]{0,40}?\b(?:medium|middle|mid|med)\b"
+            r".*?\b(?:"
+            + _TIER_POPULATION_ANCHORS
+            + r")\b"
+            + _tier_object_gap(60)
+            + r"(?:\b(?:high|top)\b[^.?!]{0,40}?\b(?:medium|moderate|middle|mid|med)\b"
             r"[^.?!]{0,40}?\b(?:low|bottom)\b"
-            r"|\b(?:low|bottom)\b[^.?!]{0,40}?\b(?:medium|middle|mid|med)\b"
+            r"|\b(?:low|bottom)\b[^.?!]{0,40}?\b(?:medium|moderate|middle|mid|med)\b"
             r"[^.?!]{0,40}?\b(?:high|top)\b)",
         ],
     }
