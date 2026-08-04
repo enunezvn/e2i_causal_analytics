@@ -8,6 +8,7 @@ Tests the cognitive workflow endpoints:
 - DELETE /cognitive/session/{id}
 """
 
+import logging
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -329,7 +330,12 @@ class TestErrorHandling:
             response = client.post("/api/cognitive/query", json={"query": "Test query"})
 
         assert response.status_code == 500
-        assert "Query processing failed" in response.json()["detail"]
+        body = response.json()
+        # E2I error envelope: 'message' is the user-facing field; 'detail' is
+        # FastAPI's raw default but the global handler wraps it (see
+        # TestListSessions.test_handles_memory_error). Pre-existing failure
+        # measured on base — assert envelope-tolerantly, same idiom as there.
+        assert "Query processing failed" in body.get("message", body.get("detail", ""))
 
 
 # =============================================================================
@@ -440,3 +446,44 @@ class TestCognitiveStatus:
         data = response.json()
         assert data["status"] == "healthy"
         assert data["agents"] == []
+
+    def test_status_gate_failure_returns_503_naming_missing_agents(self):
+        """#1463: an armed-and-firing completeness gate (#1448) must surface as
+        an explicit 503 ``gate_failed`` naming the missing agents — not a 200
+        "degraded" indistinguishable from a transient dependency blip."""
+        from src.agents.factory import PartialAgentRegistryError
+
+        gate_error = PartialAgentRegistryError(
+            dropped=["causal_impact", "gap_analyzer"],
+            expected=["causal_impact", "gap_analyzer", "health_score"],
+            registry_size=1,
+        )
+        with patch("src.api.routes.cognitive.get_orchestrator", side_effect=gate_error):
+            response = client.get("/api/cognitive/status")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "gate_failed"
+        assert data["missing_agents"] == ["causal_impact", "gap_analyzer"]
+        assert data["expected_agents"] == ["causal_impact", "gap_analyzer", "health_score"]
+        assert data["registry_size"] == 1
+        # The human-readable gate message also names the dropped agents.
+        assert "PARTIAL registry" in data["message"]
+        assert "causal_impact" in data["message"]
+
+    def test_status_generic_init_failure_stays_degraded_and_is_logged(self, caplog):
+        """#1463: a generic (non-gate) init failure keeps the degraded-200
+        contract, but the swallowed exception must leave a log record — no
+        silent ``except Exception: pass`` discard."""
+        with caplog.at_level(logging.WARNING, logger="src.api.routes.cognitive"):
+            with patch(
+                "src.api.routes.cognitive.get_orchestrator",
+                side_effect=Exception("redis blip"),
+            ):
+                response = client.get("/api/cognitive/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["agents"] == []
+        assert any("redis blip" in record.getMessage() for record in caplog.records)

@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import (
@@ -803,10 +804,16 @@ async def list_sessions(
     "/status",
     summary="Get cognitive service status",
     operation_id="get_cognitive_status",
+    # #1463: explicit response_model keeps the documented 200 schema identical
+    # to the previous annotation-derived Dict[str, Any] (the frontend type
+    # baseline frontend/src/types/generated/api.ts is a byte-for-byte CI gate),
+    # while the union return annotation below allows returning the 503
+    # JSONResponse directly.
+    response_model=Dict[str, Any],
 )
 async def get_cognitive_status(
     user: Dict[str, Any] = Depends(require_viewer),
-) -> Dict[str, Any]:
+) -> Dict[str, Any] | JSONResponse:
     """
     Get current cognitive service status: configured agents and dependency health.
     """
@@ -817,8 +824,48 @@ async def get_cognitive_status(
             orchestrator = get_orchestrator()
             registry = getattr(orchestrator, "agent_registry", None) or {}
             agents = sorted(registry.keys()) if isinstance(registry, dict) else []
-        except Exception:
-            pass
+        except Exception as init_error:
+            # #1463: ``get_orchestrator`` deliberately re-raises the armed
+            # agent-registry completeness gate (#1448). Reporting it as a 200
+            # "degraded" here would swallow the gate again — on the one
+            # endpoint whose job is to report cognitive health — making a
+            # firing deploy gate indistinguishable from a transient dependency
+            # blip. Imported inside the handler for the same reason as in
+            # ``get_orchestrator``: reaching this branch already means
+            # ``src.agents.factory`` imported successfully.
+            from src.agents.factory import PartialAgentRegistryError
+
+            if isinstance(init_error, PartialAgentRegistryError):
+                logger.error(
+                    "Cognitive status: agent-registry completeness gate FAILED — "
+                    "missing agents %s: %s",
+                    init_error.dropped,
+                    init_error,
+                )
+                # Direct JSONResponse (the ``readiness_check`` pattern): a 503
+                # HTTPException would be masked by the global handler into a
+                # generic "Dependency 'service' is unavailable" envelope,
+                # losing the structured gate payload.
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "status": "gate_failed",
+                        "version": "4.2.0",
+                        "agents": [],
+                        "missing_agents": init_error.dropped,
+                        "expected_agents": init_error.expected,
+                        "registry_size": init_error.registry_size,
+                        "message": str(init_error),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            # Genuinely transient/unexpected init failure: keep the degraded
+            # 200 contract, but never discard the reason silently (#1463).
+            logger.warning(
+                "Cognitive status: orchestrator unavailable, reporting degraded: %s",
+                init_error,
+                exc_info=True,
+            )
 
         return {
             "status": "healthy" if orchestrator is not None else "degraded",
