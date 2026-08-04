@@ -64,8 +64,9 @@ def ensure_real_module():
 
 @pytest.fixture
 def mock_supabase():
-    """Create a mock Supabase client."""
+    """Create a mock Supabase client (async: #1475 — execute() is awaited)."""
     client = MagicMock()
+    client.rpc.return_value.execute = AsyncMock()
     client.rpc.return_value.execute.return_value.data = []
     return client
 
@@ -94,7 +95,10 @@ def mock_semantic_memory():
 def memory_connector(mock_supabase, mock_embedding_service):
     """Create memory connector with mocks."""
     reset_memory_connector()
-    with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+    with patch(
+        "src.rag.memory_connector.get_async_supabase_client",
+        new=AsyncMock(return_value=mock_supabase),
+    ):
         with patch(
             "src.rag.memory_connector.get_embedding_service", return_value=mock_embedding_service
         ):
@@ -123,7 +127,10 @@ class TestVectorSearch:
             }
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.vector_search(query_embedding=[0.1] * 1536, k=10)
 
@@ -154,7 +161,10 @@ class TestVectorSearch:
             },
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.vector_search(
                 query_embedding=[0.1] * 1536, k=10, min_similarity=0.5
@@ -168,7 +178,10 @@ class TestVectorSearch:
         """vector_search should pass filters to RPC call."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             await connector.vector_search(
                 query_embedding=[0.1] * 1536,
@@ -189,7 +202,10 @@ class TestVectorSearch:
         """vector_search_by_text should auto-generate embedding."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             with patch(
                 "src.rag.memory_connector.get_embedding_service",
                 return_value=mock_embedding_service,
@@ -204,7 +220,10 @@ class TestVectorSearch:
         """vector_search should return empty list on error."""
         mock_supabase.rpc.side_effect = Exception("Connection failed")
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.vector_search(query_embedding=[0.1] * 1536, k=10)
 
@@ -232,7 +251,10 @@ class TestFulltextSearch:
             }
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="TRx increase", k=10)
 
@@ -262,7 +284,10 @@ class TestFulltextSearch:
             },
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="test", k=10)
 
@@ -274,7 +299,10 @@ class TestFulltextSearch:
         """fulltext_search should handle empty results."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="nonexistent query", k=10)
 
@@ -285,7 +313,10 @@ class TestFulltextSearch:
         """fulltext_search should return empty list on error."""
         mock_supabase.rpc.side_effect = Exception("Connection failed")
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="test", k=10)
 
@@ -416,7 +447,7 @@ class TestSingleton:
         """get_memory_connector should return same instance."""
         reset_memory_connector()
 
-        with patch("src.rag.memory_connector.get_supabase_client"):
+        with patch("src.rag.memory_connector.get_async_supabase_client"):
             connector1 = get_memory_connector()
             connector2 = get_memory_connector()
 
@@ -426,7 +457,7 @@ class TestSingleton:
         """reset_memory_connector should clear singleton."""
         reset_memory_connector()
 
-        with patch("src.rag.memory_connector.get_supabase_client"):
+        with patch("src.rag.memory_connector.get_async_supabase_client"):
             connector1 = get_memory_connector()
             reset_memory_connector()
             connector2 = get_memory_connector()
@@ -528,7 +559,10 @@ class TestMaxStalenessFilter:
         """vector_search with max_staleness should pass it through the RPC filters dict."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             await connector.vector_search(query_embedding=[0.1] * 1536, k=10, max_staleness=0.0)
 
@@ -566,7 +600,10 @@ class TestMaxStalenessFilter:
             },
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="test", k=10, max_staleness=0.5)
 
@@ -595,7 +632,10 @@ class TestMaxStalenessFilter:
             },
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="test", k=10, max_staleness=1.0)
 
@@ -704,7 +744,10 @@ class TestMaxStalenessFilter:
             },
         ]
 
-        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+        with patch(
+            "src.rag.memory_connector.get_async_supabase_client",
+            new=AsyncMock(return_value=mock_supabase),
+        ):
             connector = MemoryConnector()
             results = await connector.fulltext_search(query_text="test", k=10)
 

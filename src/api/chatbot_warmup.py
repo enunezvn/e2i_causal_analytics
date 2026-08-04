@@ -33,23 +33,27 @@ Thread discipline (the two constraints this module exists to honour):
   before any ``to_thread`` step, so no worker thread ever reaches
   ``dspy.configure``. Pinned by the dspy tests in
   tests/unit/test_api/test_chatbot_warmup_1454.py.
-* Every other leg runs OFF the loop via ``asyncio.to_thread``. The retrieval
-  calls are async functions wrapping SYNC clients (sync ``openai.OpenAI`` for
-  the embedding at src/memory/services/factories.py:155, sync Supabase
-  ``.rpc().execute()`` at src/rag/memory_connector.py:134), so awaiting them
-  here would block the loop for the full external-HTTP duration. "Background
-  task" is not by itself a non-blocking guarantee.
+* Heavy sync construction legs run OFF the loop via ``asyncio.to_thread``.
+* The RAG retrieval leg runs ON the loop (#1475). It used to be async
+  functions wrapping SYNC clients, so PR #1474 pushed it into a ``to_thread``
+  worker with a private ``asyncio.run`` loop. After #1475's migration
+  (``openai.AsyncOpenAI`` + async Supabase client) the internals are genuinely
+  async — and the old workaround would be actively harmful: the private loop
+  would create the loop-affine async client singletons
+  (``_async_supabase_client``, the service's ``AsyncOpenAI``), then close,
+  handing the request path pooled connections bound to a DEAD loop. Warming
+  on the main loop creates them exactly where requests will use them.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import random
 import sys
-import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
@@ -122,51 +126,63 @@ async def _rag_warm(connector: Any) -> None:
     await connector.fulltext_search("warmup", k=1)
 
 
+# True inside the warm's OWN task context (and any task it spawns —
+# ``create_task`` copies the context). A real request racing startup runs in
+# its own task with the default False, so its connector errors are never
+# attributed to the warm. Replaces the pre-#1475 thread-id filter: the
+# retrieval legs now run ON the loop thread, which a racing request shares.
+_warm_rag_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "chatbot_warm_rag_active", default=False
+)
+
+
 class _ErrorCapture(logging.Handler):
-    """Collects ERROR records emitted from THIS thread while attached.
+    """Collects ERROR records emitted from the warm's task context.
 
     The handler sits on the process-global connector logger, so a real request
     racing startup would otherwise leak its own "Vector search failed" into the
-    warm's report and fabricate a failure. The warm's retrieval calls all run on
-    the thread that attaches this handler (its private ``asyncio.run`` loop runs
-    there too), so the thread id is an exact filter. A record with no thread id
-    (``logging.logThreads`` disabled) cannot be attributed and is kept: over-
-    reporting a real error beats silently claiming a warm that did not happen.
+    warm's report and fabricate a failure. ``Handler.emit`` runs synchronously
+    in the logging caller's own context, so the ``_warm_rag_active`` contextvar
+    is an exact per-task filter.
     """
 
     def __init__(self) -> None:
         super().__init__(level=logging.ERROR)
-        self.thread_id = threading.get_ident()
         self.messages: List[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.thread is None or record.thread == self.thread_id:
+        if _warm_rag_active.get():
             self.messages.append(record.getMessage())
 
 
-def _rag_warm_sync() -> None:
-    """Run both retrieval legs on a private loop inside this worker thread.
+async def _rag_warm_probe() -> None:
+    """Run both retrieval legs ON the event loop (#1475).
 
-    The clients underneath are sync objects holding no loop-bound state, so a
-    short-lived ``asyncio.run`` loop is safe and closes its own resources.
+    The internals are genuinely async now (``openai.AsyncOpenAI`` +
+    ``get_async_supabase_client``), so awaiting them here no longer blocks the
+    loop — and running them on the MAIN loop is required, not just allowed:
+    this first touch creates the loop-affine async client singletons on the
+    loop the request path uses (see module docstring).
 
     Both connector methods CATCH their RPC exceptions, log ERROR and return
-    ``[]`` (src/rag/memory_connector.py:174 and :245). An empty list is a
-    legitimate result for the "warmup" query, so the return value cannot tell us
-    whether Supabase was reached — the connector's own ERROR log is the only
-    honest signal. Capture it and raise, so the step is reported as failed
-    instead of a warm that never happened being reported as success.
+    ``[]``. An empty list is a legitimate result for the "warmup" query, so
+    the return value cannot tell us whether Supabase was reached — the
+    connector's own ERROR log is the only honest signal. Capture it and raise,
+    so the step is reported as failed instead of a warm that never happened
+    being reported as success.
     """
     import src.rag.retriever  # noqa: F401  # the request path's lazy import (chatbot_dspy.py:1622)
     from src.rag.memory_connector import get_memory_connector
 
     capture = _ErrorCapture()
     connector_logger = logging.getLogger("src.rag.memory_connector")
+    token = _warm_rag_active.set(True)
     connector_logger.addHandler(capture)
     try:
-        asyncio.run(_rag_warm(get_memory_connector()))
+        await _rag_warm(get_memory_connector())
     finally:
         connector_logger.removeHandler(capture)
+        _warm_rag_active.reset(token)
 
     if capture.messages:
         raise RuntimeError("retrieval RPC error: " + "; ".join(capture.messages[:3]))
@@ -196,7 +212,9 @@ def _warm_rag_dspy_modules() -> None:
 
 
 async def _warm_rag() -> None:
-    await asyncio.to_thread(_rag_warm_sync)
+    # Retrieval ON the loop (#1475 — async clients are loop-affine);
+    # DSPy module construction stays off-loop (sync build work).
+    await _rag_warm_probe()
     await asyncio.to_thread(_warm_rag_dspy_modules)
 
 

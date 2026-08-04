@@ -465,6 +465,9 @@ class ChatbotTraceContext:
     node_spans: Dict[str, NodeSpanContext] = field(default_factory=dict)
     node_durations: Dict[str, int] = field(default_factory=dict)
     node_wall_ms: Dict[str, float] = field(default_factory=dict)
+    orchestrator_stage_ms: Dict[str, float] = field(default_factory=dict)
+    orchestrator_run_ms: Optional[float] = None
+    orchestrator_untimed_ms: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     _opik_span: Optional[Any] = None
     _tracer: Optional["ChatbotOpikTracer"] = None
@@ -480,6 +483,30 @@ class ChatbotTraceContext:
         attributed to each node for the request.
         """
         self.node_wall_ms[node_name] = self.node_wall_ms.get(node_name, 0.0) + duration_ms
+
+    def record_orchestrator_stage_time(self, stage: str, duration_ms: float) -> None:
+        """Accumulate orchestrator-internal stage wall time (#1475).
+
+        Stages are ``{agent}.{node}`` for graph nodes recorded by the shared
+        ``audited_node`` wrapper (``orchestrator.*`` = the orchestrator's own
+        stages; other prefixes = dispatched agents' nodes, i.e. attribution
+        WITHIN ``orchestrator.dispatch``) plus the chatbot node's own legs
+        (``get_orchestrator``, ``chat_bridge``) and the run's non-graph awaits
+        (``orchestrator.memory_read`` / ``orchestrator.memory_contribute``).
+        All perf_counter, accumulating — mirrors ``record_node_wall_time``.
+        """
+        self.orchestrator_stage_ms[stage] = self.orchestrator_stage_ms.get(stage, 0.0) + duration_ms
+
+    def record_orchestrator_run(self, run_ms: float, untimed_ms: float) -> None:
+        """Record one ``orchestrator.run`` invocation's wall time (#1475).
+
+        ``untimed_ms`` is computed by the caller as run wall time minus the
+        run's own top-level stages (``orchestrator.*`` only — nested agent
+        stages run INSIDE ``orchestrator.dispatch`` and would double-count).
+        Accumulates in case a request ever visits the node more than once.
+        """
+        self.orchestrator_run_ms = (self.orchestrator_run_ms or 0.0) + run_ms
+        self.orchestrator_untimed_ms = (self.orchestrator_untimed_ms or 0.0) + untimed_ms
 
     @asynccontextmanager
     async def trace_node(

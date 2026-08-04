@@ -69,6 +69,7 @@ from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_chat_llm, get_llm_provider
 from src.utils.redaction import redact_query
 from src.utils.session_ids import coerce_session_uuid
+from src.utils.stage_timing import activate_stage_ledger, deactivate_stage_ledger
 
 # MLflow metrics feature flag
 CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").lower() == "true"
@@ -254,27 +255,55 @@ def _build_latency_span_payload(
     node_wall_ms = (
         {node: round(ms, 1) for node, ms in trace_ctx.node_wall_ms.items()} if trace_ctx else {}
     )
+    # #1475: orchestrator-internal attribution. {} / None when unmeasured —
+    # an honest absence, never fabricated zeros.
+    orchestrator_stage_ms = (
+        {stage: round(ms, 1) for stage, ms in trace_ctx.orchestrator_stage_ms.items()}
+        if trace_ctx
+        else {}
+    )
+    orchestrator_run_ms = (
+        round(trace_ctx.orchestrator_run_ms, 1)
+        if trace_ctx and trace_ctx.orchestrator_run_ms is not None
+        else None
+    )
+    orchestrator_untimed_ms = (
+        round(trace_ctx.orchestrator_untimed_ms, 1)
+        if trace_ctx and trace_ctx.orchestrator_untimed_ms is not None
+        else None
+    )
     return {
         "request_id": request_id,
         "node_wall_ms": node_wall_ms,
         "graph_total_ms": round(total_ms, 1),
         "untimed_overhead_ms": round(total_ms - sum(node_wall_ms.values()), 1),
+        "orchestrator_stage_ms": orchestrator_stage_ms,
+        "orchestrator_run_ms": orchestrator_run_ms,
+        "orchestrator_untimed_ms": orchestrator_untimed_ms,
         "first_request_in_worker": first_request_in_worker,
         "worker_pid": os.getpid(),
     }
 
 
 def _log_request_span(payload: Dict[str, Any]) -> None:
-    """One INFO line per request — the grep-able span record #1454 asked for."""
+    """One INFO line per request — the grep-able span record #1454 asked for.
+
+    #1475 appends the orchestrator-internal attribution on the same line so
+    one grep still yields the whole request span.
+    """
     logger.info(
         "[Chatbot] request span: request_id=%s worker_pid=%s first_request_in_worker=%s "
-        "total_ms=%.1f untimed_overhead_ms=%.1f node_wall_ms=%s",
+        "total_ms=%.1f untimed_overhead_ms=%.1f node_wall_ms=%s "
+        "orchestrator_run_ms=%s orchestrator_untimed_ms=%s orchestrator_stage_ms=%s",
         payload["request_id"],
         payload["worker_pid"],
         payload["first_request_in_worker"],
         payload["graph_total_ms"],
         payload["untimed_overhead_ms"],
         json.dumps(payload["node_wall_ms"], sort_keys=True),
+        payload["orchestrator_run_ms"],
+        payload["orchestrator_untimed_ms"],
+        json.dumps(payload["orchestrator_stage_ms"], sort_keys=True),
     )
 
 
@@ -1476,7 +1505,19 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
         """
         nonlocal result, orchestrator_used, agents_dispatched, response_text, response_confidence
 
-        orchestrator = get_orchestrator()
+        # #1475: time the singleton resolution — the agent-registry build
+        # (~3.4-4s cold) happens inside get_orchestrator(), outside run().
+        # Recorded in finally (codex iter-1 LOW): get_orchestrator re-raises
+        # the #1448 registry completeness gate, and a cold build that dies is
+        # exactly the cost that must not vanish from the span.
+        _get_orch_start = time.perf_counter()
+        try:
+            orchestrator = get_orchestrator()
+        finally:
+            if trace_ctx is not None:
+                trace_ctx.record_orchestrator_stage_time(
+                    "get_orchestrator", (time.perf_counter() - _get_orch_start) * 1000.0
+                )
         if not orchestrator:
             logger.warning("Orchestrator not available, falling back to direct generation")
             return
@@ -1485,19 +1526,45 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             # Build evidence context from RAG results
             evidence = [ctx.get("content", "") for ctx in rag_context[:5]] if rag_context else []
 
-            # Call orchestrator
-            orchestrator_result = await orchestrator.run(
-                {
-                    "query": query,
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "user_context": {
-                        "brand": brand_context,
-                        "region": region_context,
-                        "evidence": evidence,
-                    },
-                }
-            )
+            # Call orchestrator. #1475: activate the stage-timing contextvar
+            # ledger around run() — the shared audited_node wrapper fills it
+            # with {agent}.{node} wall times (all perf_counter), and the run's
+            # own non-graph awaits record their memory_* stages. The ledger
+            # rides the CONTEXT, never ChatbotState (#1442 replay class). Only
+            # activated when a trace context is consuming it.
+            _ledger = None
+            _ledger_token = None
+            if trace_ctx is not None:
+                _ledger, _ledger_token = activate_stage_ledger()
+            _run_start = time.perf_counter()
+            try:
+                orchestrator_result = await orchestrator.run(
+                    {
+                        "query": query,
+                        "session_id": session_id,
+                        "user_id": user_id,
+                        "user_context": {
+                            "brand": brand_context,
+                            "region": region_context,
+                            "evidence": evidence,
+                        },
+                    }
+                )
+            finally:
+                _run_ms = (time.perf_counter() - _run_start) * 1000.0
+                if _ledger_token is not None:
+                    deactivate_stage_ledger(_ledger_token)
+                if trace_ctx is not None and _ledger is not None:
+                    for _stage, _ms in _ledger.items():
+                        trace_ctx.record_orchestrator_stage_time(_stage, _ms)
+                    # Untimed = run wall minus the run's own TOP-LEVEL stages.
+                    # Only "orchestrator."-prefixed stages partition the run;
+                    # other prefixes are dispatched agents' nodes, which run
+                    # INSIDE orchestrator.dispatch and would double-count.
+                    _top_level_ms = sum(
+                        _ms for _stage, _ms in _ledger.items() if _stage.startswith("orchestrator.")
+                    )
+                    trace_ctx.record_orchestrator_run(_run_ms, _run_ms - _top_level_ms)
 
             orchestrator_used = True
             response_text = orchestrator_result.get("response_text", "")
@@ -1543,11 +1610,20 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                 # user would get the fail-closed error summary. Route the turn
                 # through the AG-UI chat brain (chat_node + tools) for a real
                 # grounded answer; on any bridge failure keep the summary.
-                bridge_answer = await run_conversational_bridge(
-                    query=query,
-                    session_id=session_id,
-                    history=state.get("messages"),
-                )
+                # #1475: stage-timed — a bridge turn is a second LLM round-trip
+                # that would otherwise hide inside the node's wall time.
+                _bridge_start = time.perf_counter()
+                try:
+                    bridge_answer = await run_conversational_bridge(
+                        query=query,
+                        session_id=session_id,
+                        history=state.get("messages"),
+                    )
+                finally:
+                    if trace_ctx is not None:
+                        trace_ctx.record_orchestrator_stage_time(
+                            "chat_bridge", (time.perf_counter() - _bridge_start) * 1000.0
+                        )
                 if bridge_answer:
                     bridge_used = True
                     # #1451: the preamble leads with what the answer IS and
@@ -2756,6 +2832,16 @@ def _build_chat_mlflow_metrics(
     if trace_ctx is not None:
         for node_name, wall_ms in trace_ctx.node_wall_ms.items():
             metrics[f"node_{node_name}_ms"] = round(wall_ms, 1)
+
+        # #1475: orchestrator-internal attribution. Stage names carry an
+        # "{agent}.{node}" dot; MLflow metric keys use "_" for greppability.
+        # Keys only appear when measured — absence is honest, zeros are not.
+        if trace_ctx.orchestrator_run_ms is not None:
+            metrics["orch_run_ms"] = round(trace_ctx.orchestrator_run_ms, 1)
+        if trace_ctx.orchestrator_untimed_ms is not None:
+            metrics["orch_untimed_ms"] = round(trace_ctx.orchestrator_untimed_ms, 1)
+        for stage, wall_ms in trace_ctx.orchestrator_stage_ms.items():
+            metrics[f"orch_{stage.replace('.', '_')}_ms"] = round(wall_ms, 1)
 
     return metrics
 

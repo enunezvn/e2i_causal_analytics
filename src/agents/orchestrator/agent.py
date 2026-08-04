@@ -16,6 +16,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
+from src.utils.stage_timing import record_stage_wall_time
+
 from .graph import create_orchestrator_graph
 from .memory_hooks import (
     OrchestratorMemoryHooks,
@@ -245,9 +247,18 @@ class OrchestratorAgent:
         # absent/None is it hydrated from working memory (budgeted,
         # fail-open — see _load_conversation_history). An explicit [] is a
         # caller statement of "no history" and is respected as-is.
+        # #1475: stage-timed (perf_counter) — this await runs OUTSIDE the
+        # graph nodes and would otherwise land in untimed overhead.
         conversation_history = input_data.get("conversation_history")
         if conversation_history is None:
-            conversation_history = await self._load_conversation_history(session_id)
+            _mem_read_start = time.perf_counter()
+            try:
+                conversation_history = await self._load_conversation_history(session_id)
+            finally:
+                record_stage_wall_time(
+                    "orchestrator.memory_read",
+                    (time.perf_counter() - _mem_read_start) * 1000.0,
+                )
 
         # Prepare initial state
         initial_state: OrchestratorState = {
@@ -285,7 +296,16 @@ class OrchestratorAgent:
             # opik/non-opik branches and keyed to the graph outcome — when the
             # graph raises, no output is built and nothing is stored (there is
             # no trustworthy turn to record). Non-blocking by contract.
-            await self._contribute_to_memory(output, dict(final_state), session_id)
+            # #1475: stage-timed (perf_counter) — runs after the graph, outside
+            # any node, so it needs its own attribution.
+            _mem_contrib_start = time.perf_counter()
+            try:
+                await self._contribute_to_memory(output, dict(final_state), session_id)
+            finally:
+                record_stage_wall_time(
+                    "orchestrator.memory_contribute",
+                    (time.perf_counter() - _mem_contrib_start) * 1000.0,
+                )
             return output
 
         if opik_tracer:

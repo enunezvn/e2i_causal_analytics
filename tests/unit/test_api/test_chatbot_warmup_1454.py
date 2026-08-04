@@ -331,26 +331,33 @@ class TestThreadAffinity:
         assert all(c[2] == 1 for c in calls), "warm calls must be tiny (k=1)"
 
     @pytest.mark.asyncio
-    async def test_rag_leg_runs_off_the_loop_thread(self):
-        """The retrieval calls are async-wrapping-SYNC (sync openai client for
-        the embedding, sync supabase client for the RPC) — awaiting them on the
-        loop would block it for the full external-HTTP duration."""
+    async def test_rag_retrieval_leg_runs_on_the_loop_and_dspy_modules_off(self):
+        """#1475 INVERTS the old off-loop pin for the retrieval leg: the
+        internals are genuinely async now (AsyncOpenAI + async Supabase
+        client), so the leg must run ON the loop. The old private-loop
+        ``asyncio.run`` inside ``to_thread`` would create the loop-affine
+        async client singletons on a short-lived loop and hand the request
+        path connections bound to a CLOSED loop. The DSPy module builds are
+        still sync construction work and stay off-loop."""
         seen = {}
 
-        def fake_rag_sync():
+        async def fake_probe():
             seen["rag"] = threading.get_ident()
 
         def fake_dspy_modules():
             seen["dspy_modules"] = threading.get_ident()
 
         with (
-            patch.object(warmup, "_rag_warm_sync", fake_rag_sync),
+            patch.object(warmup, "_rag_warm_probe", fake_probe),
             patch.object(warmup, "_warm_rag_dspy_modules", fake_dspy_modules),
         ):
             await warmup._warm_rag()
 
         loop_thread = threading.get_ident()
-        assert seen["rag"] != loop_thread
+        assert seen["rag"] == loop_thread, (
+            "#1475: the retrieval leg must NOT be to_thread'd — its clients are "
+            "async and loop-affine now"
+        )
         assert seen["dspy_modules"] != loop_thread
 
     @pytest.mark.asyncio
@@ -445,13 +452,14 @@ class TestSwallowedFailureHonesty:
 
 
 class TestRagWarmFailureHonesty:
-    """``_rag_warm_sync`` is called INSIDE a ``to_thread`` worker (no running
-    loop), which is why these tests are sync — ``asyncio.run`` on the test's own
-    loop would be a harness artefact, not the production shape."""
+    """#1475: ``_rag_warm_probe`` runs ON the event loop (the retrieval
+    internals are genuinely async now), so these tests await it directly —
+    that IS the production shape."""
 
-    def test_rag_warm_surfaces_a_swallowed_rpc_failure(self):
+    @pytest.mark.asyncio
+    async def test_rag_warm_surfaces_a_swallowed_rpc_failure(self):
         """``vector_search``/``fulltext_search`` catch RPC exceptions, log ERROR
-        and return ``[]`` (src/rag/memory_connector.py:174,245). An empty list is
+        and return ``[]`` (src/rag/memory_connector.py). An empty list is
         a legitimate result for the "warmup" query, so the connector's own ERROR
         log is the only honest failure signal — without it the warm would report
         success for a leg that never reached Supabase."""
@@ -468,7 +476,7 @@ class TestRagWarmFailureHonesty:
 
         with patch("src.rag.memory_connector.get_memory_connector", lambda: _FailingConnector()):
             with pytest.raises(RuntimeError, match="connection refused"):
-                warmup._rag_warm_sync()
+                await warmup._rag_warm_probe()
 
     @pytest.mark.asyncio
     async def test_rag_warm_failure_is_reported_by_the_warm_routine(self):
@@ -495,7 +503,8 @@ class TestRagWarmFailureHonesty:
         assert "rag" in result["failed"], "a degraded RAG warm must not report success"
         assert "relation does not exist" in result["failed"]["rag"]
 
-    def test_quiet_connector_is_a_clean_rag_warm(self):
+    @pytest.mark.asyncio
+    async def test_quiet_connector_is_a_clean_rag_warm(self):
         class _QuietConnector:
             async def vector_search_by_text(self, query, k=10, **kwargs):
                 return []  # no rows for "warmup" is NORMAL, not a failure
@@ -504,23 +513,59 @@ class TestRagWarmFailureHonesty:
                 return []
 
         with patch("src.rag.memory_connector.get_memory_connector", lambda: _QuietConnector()):
-            warmup._rag_warm_sync()  # must not raise
+            await warmup._rag_warm_probe()  # must not raise
 
-    def test_another_threads_error_does_not_fail_the_warm(self):
+    @pytest.mark.asyncio
+    async def test_a_concurrent_tasks_error_does_not_fail_the_warm(self):
         """The capture is attached to the process-global connector logger, so a
         real request racing startup would otherwise emit "Vector search failed"
-        into it and fabricate a warm failure. Only records from the warm's OWN
-        thread count."""
+        into it and fabricate a warm failure. Post-#1475 the retrieval legs run
+        ON the loop thread — a racing request shares the thread — so
+        attribution is per-TASK (contextvar), no longer per-thread."""
+        in_vector = asyncio.Event()
+        release = asyncio.Event()
 
-        class _QuietConnectorWithNoisyNeighbour:
+        class _SlowQuietConnector:
             async def vector_search_by_text(self, query, k=10, **kwargs):
-                noisy = threading.Thread(
-                    target=lambda: logging.getLogger("src.rag.memory_connector").error(
-                        "Vector search failed: a CONCURRENT REQUEST's error"
+                in_vector.set()
+                await release.wait()
+                return []
+
+            async def fulltext_search(self, query, k=10, **kwargs):
+                return []
+
+        async def noisy_concurrent_request():
+            await in_vector.wait()
+            logging.getLogger("src.rag.memory_connector").error(
+                "Vector search failed: a CONCURRENT REQUEST's error"
+            )
+            release.set()
+
+        with patch(
+            "src.rag.memory_connector.get_memory_connector",
+            lambda: _SlowQuietConnector(),
+        ):
+            # Both tasks run on the SAME loop thread; only the probe's own
+            # task context may attribute connector errors to the warm.
+            await asyncio.gather(
+                warmup._rag_warm_probe(),  # must not raise
+                noisy_concurrent_request(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_an_error_from_a_task_spawned_by_the_warm_still_counts(self):
+        """A task the warm's own retrieval leg spawns inherits the warm's
+        context (contextvars copy on create_task) — its connector ERROR is the
+        warm's error and must fail the leg, not vanish down the task boundary."""
+
+        class _ConnectorThatDelegates:
+            async def vector_search_by_text(self, query, k=10, **kwargs):
+                async def inner_rpc():
+                    logging.getLogger("src.rag.memory_connector").error(
+                        "Vector search failed: pooled sub-task error"
                     )
-                )
-                noisy.start()
-                noisy.join()
+
+                await asyncio.create_task(inner_rpc())
                 return []
 
             async def fulltext_search(self, query, k=10, **kwargs):
@@ -528,9 +573,10 @@ class TestRagWarmFailureHonesty:
 
         with patch(
             "src.rag.memory_connector.get_memory_connector",
-            lambda: _QuietConnectorWithNoisyNeighbour(),
+            lambda: _ConnectorThatDelegates(),
         ):
-            warmup._rag_warm_sync()  # must not raise
+            with pytest.raises(RuntimeError, match="pooled sub-task error"):
+                await warmup._rag_warm_probe()
 
 
 # =============================================================================

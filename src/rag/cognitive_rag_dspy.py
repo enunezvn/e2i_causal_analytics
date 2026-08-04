@@ -1425,11 +1425,26 @@ def create_production_cognitive_workflow(
     # Configure DSPy if requested. Resolve the model from env (provider-aware)
     # when not explicitly given, so we never reconfigure onto a retired model
     # the deployed key cannot serve.
+    #
+    # #1475: guard on an already-configured LM, mirroring every
+    # request-reachable configure site (canonical pattern:
+    # src/api/routes/chatbot_dspy.py:62). dspy 3.1.0's FIRST configure
+    # permanently binds an owner thread/task and a later configure from a
+    # different thread raises RuntimeError — without this guard any future
+    # non-owner-thread caller crashes even though an LM is already usable.
+    # When the guard skips, the EXISTING global LM wins over ``lm_model``;
+    # callers needing a different model must configure it on the owner thread.
     if configure_dspy:
-        from src.optimization.dspy_lm import get_default_dspy_model
+        if hasattr(dspy.settings, "lm") and dspy.settings.lm is not None:
+            logger.debug(
+                "DSPy LM already configured — skipping configure "
+                "(dspy 3.1.0 cross-thread configure would raise)"
+            )
+        else:
+            from src.optimization.dspy_lm import get_default_dspy_model
 
-        lm = dspy.LM(lm_model or get_default_dspy_model())
-        dspy.configure(lm=lm)
+            lm = dspy.LM(lm_model or get_default_dspy_model())
+            dspy.configure(lm=lm)
 
     # Create adapters that wrap real backends
     episodic_adapter = EpisodicMemoryAdapter(
