@@ -22,6 +22,7 @@ consumer, the DB, or MLflow. These tests pin the instrumentation:
 import asyncio
 import json
 import logging
+import re
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -454,6 +455,41 @@ class TestFinalizePersistsSpan:
             if c.kwargs.get("role") == "assistant"
         ]
         assert assistant_calls[0].kwargs["metadata"]["node_wall_ms"] is None
+
+
+# =============================================================================
+# 4b. run_chatbot span totals use the monotonic clock (codex iter-1 MED)
+# =============================================================================
+
+
+class TestRunChatbotSpanClock:
+    @pytest.mark.asyncio
+    async def test_span_total_uses_monotonic_clock(self, monkeypatch, caplog):
+        """codex iter-1 MED: node timings use perf_counter; if /chat's span
+        total comes from time.time(), a stepped wall clock fabricates or hides
+        untimed_overhead_ms. Freeze time.time() — the span total must still
+        measure the real ~30ms of graph work."""
+        caplog.set_level(logging.INFO)
+        monkeypatch.setattr("time.time", lambda: 1_754_300_000.0)
+
+        async def slow_ainvoke(state, config=None):
+            await asyncio.sleep(0.03)
+            return {"response_text": "ok", "metadata": {}}
+
+        with patch.object(g.e2i_chatbot_graph, "ainvoke", new=AsyncMock(side_effect=slow_ainvoke)):
+            await g.run_chatbot(query="hi", user_id="u", request_id="req-clock")
+
+        span_logs = [
+            r.message
+            for r in caplog.records
+            if "request span" in r.message and "req-clock" in r.message
+        ]
+        assert span_logs, "run_chatbot must emit the request-span log line"
+        match = re.search(r"total_ms=([0-9.]+)", span_logs[-1])
+        assert match, span_logs[-1]
+        assert float(match.group(1)) >= 25.0, (
+            f"span total came from the frozen wall clock, not perf_counter: {span_logs[-1]}"
+        )
 
 
 # =============================================================================

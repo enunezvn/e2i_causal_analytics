@@ -2777,6 +2777,11 @@ async def run_chatbot(
     """
     # Start timing for latency metrics
     start_time = time.time()
+    # #1454: span totals must share a clock with the per-node timings
+    # (perf_counter) — a stepped wall clock would fabricate or hide
+    # untimed_overhead_ms. latency_ms keeps its pre-existing wall-clock
+    # semantics for the MLflow metric.
+    span_start = time.perf_counter()
     first_request_in_worker = _claim_worker_cold_start()  # #1454
 
     # Get the tracer (singleton)
@@ -2845,9 +2850,13 @@ async def run_chatbot(
             latency_ms = (time.time() - start_time) * 1000
 
             # #1454: same grep-able span record as the streaming path
+            # (monotonic clock, matching the node timings)
             _log_request_span(
                 _build_latency_span_payload(
-                    request_id, trace_ctx, latency_ms, first_request_in_worker
+                    request_id,
+                    trace_ctx,
+                    (time.perf_counter() - span_start) * 1000.0,
+                    first_request_in_worker,
                 )
             )
 
