@@ -26,11 +26,20 @@ and the API layer can use it without layering inversions.
 from __future__ import annotations
 
 import contextvars
+import threading
 from typing import Dict, Optional, Tuple
 
 _active_stage_ledger: contextvars.ContextVar[Optional[Dict[str, float]]] = contextvars.ContextVar(
     "agent_stage_ledger", default=None
 )
+
+# codex iter-1 LOW: today every recording for a given ledger lands on that
+# graph's event-loop thread (the audited_node wrapper records in its coroutine
+# finally, AFTER any to_thread hop returns) — but context propagation means a
+# worker thread running its own loop COULD share the ledger object. The
+# accumulation is a read-modify-write, so guard it. One process-wide lock is
+# fine: the critical section is sub-microsecond and uncontended in practice.
+_record_lock = threading.Lock()
 
 
 def activate_stage_ledger() -> Tuple[Dict[str, float], "contextvars.Token"]:
@@ -68,7 +77,8 @@ def record_stage_wall_time(stage: str, duration_ms: float) -> None:
     """
     ledger = _active_stage_ledger.get()
     if ledger is not None:
-        ledger[stage] = ledger.get(stage, 0.0) + duration_ms
+        with _record_lock:
+            ledger[stage] = ledger.get(stage, 0.0) + duration_ms
 
 
 __all__ = [

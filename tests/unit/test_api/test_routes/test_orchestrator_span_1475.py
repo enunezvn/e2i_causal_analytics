@@ -459,3 +459,29 @@ class TestOrchestratorAgentMemoryStages:
 
         assert "orchestrator.memory_read" in ledger
         assert "orchestrator.memory_contribute" in ledger
+
+
+class TestGetOrchestratorFailureAttribution:
+    @pytest.mark.asyncio
+    async def test_raising_get_orchestrator_still_attributes_its_stage(self):
+        """codex iter-1 LOW: get_orchestrator re-raises the #1448 registry
+        completeness gate. A cold registry build that dies is exactly the
+        cost that must not vanish from the span — record in finally."""
+        ctx = _ctx()
+        token = g._active_trace_context.set(ctx)
+        try:
+
+            def exploding_get_orchestrator():
+                time.sleep(0.02)  # part of the cold build happened
+                raise RuntimeError("registry completeness gate")
+
+            with (
+                patch.object(g, "CHATBOT_ORCHESTRATOR_ENABLED", True),
+                patch.object(g, "get_orchestrator", exploding_get_orchestrator),
+            ):
+                with pytest.raises(RuntimeError, match="registry completeness gate"):
+                    await g.orchestrator_node(_state())
+        finally:
+            g._active_trace_context.reset(token)
+
+        assert ctx.orchestrator_stage_ms["get_orchestrator"] >= 15.0

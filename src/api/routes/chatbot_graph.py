@@ -1507,12 +1507,17 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
 
         # #1475: time the singleton resolution — the agent-registry build
         # (~3.4-4s cold) happens inside get_orchestrator(), outside run().
+        # Recorded in finally (codex iter-1 LOW): get_orchestrator re-raises
+        # the #1448 registry completeness gate, and a cold build that dies is
+        # exactly the cost that must not vanish from the span.
         _get_orch_start = time.perf_counter()
-        orchestrator = get_orchestrator()
-        if trace_ctx is not None:
-            trace_ctx.record_orchestrator_stage_time(
-                "get_orchestrator", (time.perf_counter() - _get_orch_start) * 1000.0
-            )
+        try:
+            orchestrator = get_orchestrator()
+        finally:
+            if trace_ctx is not None:
+                trace_ctx.record_orchestrator_stage_time(
+                    "get_orchestrator", (time.perf_counter() - _get_orch_start) * 1000.0
+                )
         if not orchestrator:
             logger.warning("Orchestrator not available, falling back to direct generation")
             return

@@ -273,3 +273,52 @@ def test_every_orchestrator_graph_node_is_stage_timed():
             "audited_node wrapper — its wall time would vanish from "
             "orchestrator_stage_ms"
         )
+
+
+# =============================================================================
+# 4. codex iter-1 LOWs
+# =============================================================================
+
+
+class TestAccumulationThreadSafety:
+    def test_same_key_accumulation_is_exact_under_thread_contention(self):
+        """codex iter-1 LOW: context propagation (e.g. to_thread into a thread
+        that runs its own loop) can put recordings for ONE ledger on multiple
+        threads. The read-modify-write accumulation must not lose updates for
+        a contended key. Pre-fix this loses updates with near-certainty at
+        this iteration count; post-fix it is exact by construction (lock)."""
+        import contextvars
+        import threading
+
+        ledger, token = activate_stage_ledger()
+        try:
+            n_threads, n_iter = 4, 50_000
+            errors: list = []
+
+            def body():
+                for _ in range(n_iter):
+                    record_stage_wall_time("orchestrator.dispatch", 1.0)
+
+            def hammer(ctx: contextvars.Context):
+                # Each propagated thread runs in its OWN context copy (as
+                # to_thread does per call) that shares the ledger OBJECT.
+                try:
+                    ctx.run(body)
+                except Exception as e:  # pragma: no cover - harness honesty
+                    errors.append(e)
+
+            threads = [
+                threading.Thread(target=hammer, args=(contextvars.copy_context(),))
+                for _ in range(n_threads)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert errors == []
+            assert ledger["orchestrator.dispatch"] == pytest.approx(float(n_threads * n_iter)), (
+                "lost updates under same-key thread contention"
+            )
+        finally:
+            deactivate_stage_ledger(token)
