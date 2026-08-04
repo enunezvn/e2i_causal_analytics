@@ -23,6 +23,16 @@ Scope and semantics:
   * Services are taken from the deploy's own compose resolution
     (``$COMPOSE_CMD config --format json``), so the check always compares
     against the file set the deploy actually used.
+  * ALL compose profiles are included (``config --profiles`` is enumerated and
+    every profile passed back via ``--profile``): a profile-gated service like
+    ``falkordb-browser`` (profiles: [debug]) is otherwise OMITTED from the
+    default resolution while its container runs 24/7 on this box — the exact
+    mlflow fail-open class again (codex audit finding, 2026-08-04).
+  * A RUNNING container in this compose project whose service is absent even
+    from the profile-inclusive resolution (e.g. a container from a different
+    overlay era) is reported UNMANAGED — info, not failure: its pin is not
+    resolvable from the deploy's file set, but it must never silently vanish
+    from the report.
   * Service -> container mapping uses compose labels
     (com.docker.compose.project / .service), NEVER container names: the live
     mlflow container is ``e2i_mlflow_dev`` (dev-overlay era) while the base
@@ -100,6 +110,12 @@ class Skipped:
     service: str
 
 
+@dataclass(frozen=True)
+class Unmanaged:
+    service: str
+    running: str
+
+
 @dataclass
 class Report:
     ok: list[Ok] = field(default_factory=list)
@@ -107,6 +123,7 @@ class Report:
     allowlisted: list[Allowed] = field(default_factory=list)
     not_running: list[NotRunning] = field(default_factory=list)
     skipped: list[Skipped] = field(default_factory=list)
+    unmanaged: list[Unmanaged] = field(default_factory=list)
     stale_entries: list[dict] = field(default_factory=list)
 
     @property
@@ -174,6 +191,11 @@ def evaluate(
                     break
             if not matched:
                 report.drift.append(Drift(service, ref, pin))
+    # Running containers of this project whose service is not in the (profile-
+    # inclusive) resolution: no pin to compare, but never silently omit them.
+    for service in sorted(set(running) - set(pinned)):
+        for ref in running[service]:
+            report.unmanaged.append(Unmanaged(service, ref))
     report.stale_entries = [e for i, e in enumerate(allowlist) if i not in used_entries]
     return report
 
@@ -190,9 +212,29 @@ def _run(cmd: list[str], timeout: int = 120) -> str:
     return proc.stdout
 
 
+def config_argv(compose_cmd: list[str], profiles: list[str]) -> list[str]:
+    """Pure: the ``config --format json`` argv with every profile included.
+
+    ``docker compose config`` omits profile-gated services unless their profile
+    is passed — which would fail-open on e.g. ``falkordb-browser`` (profiles:
+    [debug], running 24/7 on this box). ``--profile`` is a root ``docker
+    compose`` flag, so it goes before the ``config`` subcommand.
+    """
+    argv = list(compose_cmd)
+    for p in profiles:
+        argv += ["--profile", p]
+    return [*argv, "config", "--format", "json"]
+
+
+def list_profiles(compose_cmd: list[str]) -> list[str]:
+    """Profile names defined by the compose file set (may be empty)."""
+    return _run([*compose_cmd, "config", "--profiles"]).split()
+
+
 def resolve_pins(compose_cmd: list[str]) -> tuple[str, dict[str, str | None]]:
-    """Return (compose project name, service -> pinned image ref or None)."""
-    out = _run([*compose_cmd, "config", "--format", "json"])
+    """Return (compose project name, service -> pinned image ref or None),
+    including services gated behind ANY compose profile."""
+    out = _run(config_argv(compose_cmd, list_profiles(compose_cmd)))
     cfg = json.loads(out)
     project = cfg.get("name")
     if not project:
@@ -241,6 +283,11 @@ def render(report: Report) -> str:
         lines.append(f"NOTRUN    {n.service}: pinned={n.pinned} (no running container — info only)")
     for s in report.skipped:
         lines.append(f"NOPIN     {s.service}: build-only service, no image pin (skipped)")
+    for u in report.unmanaged:
+        lines.append(
+            f"UNMANAGED {u.service}: running={u.running} (service not in the deploy's "
+            "compose resolution — info only)"
+        )
     for e in report.stale_entries:
         lines.append(
             f"STALE     allowlist entry for {e['service']} ({e['issue']}) matches no "

@@ -186,6 +186,46 @@ def test_multi_replica_service_checks_every_container() -> None:
     ) in [(d.service, d.running, d.pinned) for d in report.drift]
 
 
+def test_unmanaged_running_service_is_info_not_failure() -> None:
+    """A RUNNING container of this project whose service is absent from the
+    resolution (e.g. a different overlay era) has no pin to compare — info,
+    never a silent omission and never a false alarm."""
+    report = cid.evaluate(
+        pinned={"redis": "redis:7-alpine"},
+        running={"redis": ["redis:7-alpine"], "opik": ["opik/opik:1.0"]},
+        allowlist=[],
+    )
+    assert not report.failed
+    assert ("opik", "opik/opik:1.0") in [(u.service, u.running) for u in report.unmanaged]
+
+
+def test_config_argv_includes_every_profile() -> None:
+    """codex audit finding (2026-08-04): `docker compose config` omits
+    profile-gated services (falkordb-browser, profiles: [debug], running 24/7
+    live) — the exact mlflow fail-open class. The config argv must pass every
+    enumerated profile back as a root-level --profile flag before `config`."""
+    argv = cid.config_argv(["docker", "compose", "-f", "docker/docker-compose.yml"], ["debug"])
+    assert argv == [
+        "docker",
+        "compose",
+        "-f",
+        "docker/docker-compose.yml",
+        "--profile",
+        "debug",
+        "config",
+        "--format",
+        "json",
+    ]
+    # No profiles -> plain config argv.
+    assert cid.config_argv(["docker", "compose"], []) == [
+        "docker",
+        "compose",
+        "config",
+        "--format",
+        "json",
+    ]
+
+
 def test_stale_allowlist_entry_warns_but_does_not_fail() -> None:
     """After the deliberate recreate lands, the running image matches the pin and
     the #1479 entry goes stale. The recreate happens on the box; removing the
@@ -488,3 +528,21 @@ def test_live_service_to_container_mapping_end_to_end() -> None:
         "mlflow has a live container — NOTRUN means service->container label "
         "mapping is broken:\n" + proc.stdout
     )
+    # Profile inclusion (codex audit finding): every profile-gated service that
+    # carries an image pin in the REAL compose file must appear in the report
+    # in SOME category — `docker compose config` omits them by default, which
+    # was a fail-open hole for falkordb-browser (profiles: [debug], running
+    # 24/7 live).
+    compose = yaml.safe_load((REPO_ROOT / "docker" / "docker-compose.yml").read_text())
+    profiled = [
+        svc
+        for svc, body in (compose.get("services") or {}).items()
+        if body.get("profiles") and body.get("image")
+    ]
+    for svc in profiled:
+        assert any(
+            re.search(rf"\b{re.escape(svc)}\b", line) for line in proc.stdout.splitlines()
+        ), (
+            f"profile-gated pinned service {svc!r} is missing from the report "
+            "(compose profiles not enumerated?):\n" + proc.stdout
+        )
