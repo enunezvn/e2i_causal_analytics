@@ -413,37 +413,29 @@ _TIER_PRE_ANCHOR_COMMERCIAL_VETO = (
 # The classification path is in front of every chat request, so one long input
 # stalls it.
 #
-# The cap is the fix rather than rewriting the ~35 unbounded-``.*`` entries
+# A cap is the fix rather than rewriting the ~35 unbounded-``.*`` entries
 # because tightening a pattern CHANGES ROUTING, and this table has a scar from
 # exactly that (#1408: a bare ``\binterim\b`` confidently misrouted "interim
-# CFO/FDA"). Truncation changes routing for no query anyone can currently send
-# through ``/chat`` (its own ``MAX_MESSAGE_CHARS`` is 1500) and for no row in
-# the routing gold set (longest query: 593 chars) — and where it does fire, it
-# fires in the SAFE direction: fewer pattern matches means the query falls
-# through to the LLM fallback, which still receives the query in full
-# (``execute`` passes ``state["query"]``, never the truncated head).
+# CFO/FDA"). The cap reaches no query anyone can currently send through
+# ``/chat`` (its own ``MAX_MESSAGE_CHARS`` is 1500) nor any row in the routing
+# gold set (longest query: 593 chars).
 #
-# 2000 is above ``/chat``'s own 1500-char message limit and 3.4x the longest
-# gold query. The residual worst case at the cap is ~74ms (measured, adversarial
-# input), inside the node's <500ms budget.
+# Past the cap the layer ABSTAINS — it does not score the first 2000 chars.
+# Scoring a prefix was the first cut of this fix and it was WRONG (codex iter-1
+# HIGH, reproduced before changing it): several entries are ``\A``-anchored with
+# a whole-query negative lookahead, and truncating the input hides the veto
+# evidence instead of the positive evidence. Measured on the truncating build,
+# "what is the trx for kisqali <2KB of filler> please forecast it" scored
+# explanation@0.867 — above the 0.8 trust floor, so ``execute`` acted on it
+# without consulting the LLM — where the same query intact scores prediction.
+# Truncation therefore fails in BOTH directions; abstention fails in only one.
+#
+# Abstaining returns the module's existing "pattern layer has nothing" verdict
+# (general@0.5), which is below ``execute``'s 0.8 trust floor, so an over-cap
+# query goes to the LLM fallback — and that fallback receives the query in FULL
+# (``execute`` passes ``state["query"]``, never a truncated head). It is also
+# strictly cheaper than truncating: no regex runs at all.
 _PATTERN_SCAN_MAX_CHARS = 2000
-
-
-def _bounded_scan_text(query: str) -> str:
-    """Head of ``query`` the pattern table is allowed to scan (#1470).
-
-    Trailing partial tokens are dropped. ``\\b`` matches at end-of-string, so a
-    naive slice landing inside ``"cohortsomething"`` would leave ``"cohort"`` —
-    a whole word the user never wrote, which ``\\bcohort\\b`` then matches.
-    Cutting back to the last complete token means every boundary in the head is
-    a boundary the original query really had.
-    """
-    if len(query) <= _PATTERN_SCAN_MAX_CHARS:
-        return query
-    head = query[:_PATTERN_SCAN_MAX_CHARS]
-    if re.match(r"\w", query[_PATTERN_SCAN_MAX_CHARS]):
-        head = re.sub(r"\w+\Z", "", head)
-    return head
 
 
 def _get_opik_connector():
@@ -789,10 +781,17 @@ class IntentClassifierNode:
         Returns:
             Intent classification result
         """
-        # #1470: bound what the quadratic-in-length pattern table ever sees.
-        # Everything below (including _count_intent_bearing_clauses and the
-        # digital-twin probe) reads this bounded head, not the raw query.
-        query = _bounded_scan_text(query)
+        # #1470: the table below is quadratic in the query length, so past the
+        # cap abstain outright rather than scoring a prefix — a prefix can hide
+        # a pattern's own whole-query veto and produce a CONFIDENT misroute.
+        # See _PATTERN_SCAN_MAX_CHARS. Escalates to the LLM, which sees it all.
+        if len(query) > _PATTERN_SCAN_MAX_CHARS:
+            return IntentClassification(
+                primary_intent="general",
+                confidence=0.5,
+                secondary_intents=[],
+                requires_multi_agent=False,
+            )
 
         scores = {}
 

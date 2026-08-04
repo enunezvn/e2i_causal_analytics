@@ -18,12 +18,16 @@ WHAT BROKE
     input containing NONE of its tokens: 28.0 s on 45 000 chars of ``"a"``.
 
 THE TWO GUARDS BELOW
-    1. A scan cap at the ``_pattern_classify`` boundary. This is the guard that
-       covers the WHOLE table, including the ~35 unbounded-``.*`` entries this
-       PR deliberately does not rewrite (each rewrite is a routing-semantics
-       change; the cap is not).
+    1. A scan cap at the ``_pattern_classify`` boundary, past which the layer
+       ABSTAINS (general@0.5, below the router's 0.8 trust floor) rather than
+       scoring a prefix. This covers the WHOLE table, including the ~35
+       unbounded-``.*`` entries this PR deliberately does not rewrite — each
+       rewrite is a routing-semantics change; abstaining is not.
+       Scoring a truncated prefix was the first cut and it was WRONG: it hid
+       whole-query vetoes and manufactured a confident misroute. See
+       ``test_evidence_past_the_cap_cannot_flip_a_veto``.
     2. Line-anchoring ``experiment_monitor[3]``, which is a semantics-PRESERVING
-       rewrite (see ``TestInterimPatternLinearization``) and removes the
+       rewrite (see ``TestInterimPatternLinearization1470``) and removes the
        dominant cost below the cap.
 
 The semantic behaviour of the #1408 interim gate itself is pinned by
@@ -88,31 +92,33 @@ class TestPatternClassifyBacktracking1470:
             "quadratic backtracking of issue #1470 is back"
         )
 
-    def test_scan_cap_is_applied_beyond_the_boundary(self):
-        """A trigger past the cap must not be seen by the pattern table.
+    def test_cap_boundary_is_exact(self):
+        """At the cap the table still runs; one char over, it abstains.
 
         Deterministic companion to the timing pin above: it fails if the cap is
-        removed even on a machine fast enough to hide the cost.
+        removed even on a machine fast enough to hide the cost, and it pins the
+        boundary so a query at the limit is not needlessly escalated.
         """
         cap = ic._PATTERN_SCAN_MAX_CHARS
-        trigger = " build a remibrutinib patient cohort for csu"
+        trigger = "build a remibrutinib patient cohort for csu "
 
-        within = ("filler " * cap)[: cap - len(trigger)] + trigger
-        assert _node()._pattern_classify(within)["primary_intent"] == "cohort_definition", (
-            "a trigger inside the cap must still classify normally"
+        at_cap = (trigger + "filler " * cap)[:cap]
+        assert len(at_cap) == cap
+        assert _node()._pattern_classify(at_cap)["primary_intent"] == "cohort_definition", (
+            "a query exactly at the cap must still be classified normally"
         )
 
-        beyond = ("filler " * cap)[:cap] + trigger
-        assert _node()._pattern_classify(beyond)["primary_intent"] == "general", (
-            "a trigger past the scan cap must not be matched"
+        over_cap = at_cap + "x"
+        assert _node()._pattern_classify(over_cap)["primary_intent"] == "general", (
+            "one character past the cap the pattern layer must abstain"
         )
 
     def test_scan_cap_clears_every_real_query_bound(self):
         """The cap may never be tightened below real traffic.
 
         ``/chat`` bounds one message at ``MAX_MESSAGE_CHARS``; the routing gold
-        set is the widest corpus of real queries we hold. Truncation must be
-        unreachable for both, so the cap only ever fires on abuse.
+        set is the widest corpus of real queries we hold. Abstention must be
+        unreachable for both, so the cap costs real traffic nothing.
         """
         from src.api.routes.chat import MAX_MESSAGE_CHARS
 
@@ -131,22 +137,57 @@ class TestPatternClassifyBacktracking1470:
             f"scan cap {cap} does not clear the longest gold query ({max(lengths)} chars)"
         )
 
-    def test_truncation_does_not_fabricate_a_word_boundary(self):
-        """Cutting mid-token must not manufacture a match.
+    def test_over_cap_query_abstains_below_the_llm_trust_floor(self):
+        """Past the cap the pattern layer must ABSTAIN, not classify a prefix.
 
-        ``\\b`` matches at end-of-string, so a naive ``query[:cap]`` that lands
-        inside ``"cohorts..."`` would leave a trailing ``"cohort"`` that
-        ``\\bcohort\\b`` newly matches — a token the user never wrote.
+        ``execute`` trusts a pattern verdict only at ``confidence >= 0.8``;
+        below that the query goes to the LLM fallback, which receives it in
+        FULL. Abstaining is what makes "the cap only ever fails safe" true.
         """
         cap = ic._PATTERN_SCAN_MAX_CHARS
-        # "...define ... cohortsomething": no whole-word "cohort" anywhere.
-        head = ("filler " * cap)[: cap - len("define x ")] + "define x "
-        query = head + "cohortsomething trailing"
-        assert len(query) > cap and query[cap].isalnum(), "probe must cut mid-token"
+        query = "build a remibrutinib patient cohort for csu " + ("filler " * cap)
+        assert len(query) > cap
 
         result = _node()._pattern_classify(query)
-        assert result["primary_intent"] == "general", (
-            "truncation split 'cohortsomething' into a 'cohort' token the query never contained"
+        assert result["primary_intent"] == "general"
+        assert result["confidence"] < 0.8, (
+            f"an over-cap query scored {result['confidence']} — at or above the "
+            "0.8 trust floor the router skips the LLM fallback and acts on "
+            "evidence read from a truncated prefix"
+        )
+
+    def test_evidence_past_the_cap_cannot_flip_a_veto(self):
+        """A veto beyond the cap must not turn into a CONFIDENT misroute.
+
+        codex iter-1 HIGH, reproduced before the fix. Several patterns are
+        ``\\A``-anchored with a whole-query negative lookahead — the KPI
+        ``explanation`` entry vetoes itself when any forecast lexeme appears
+        ANYWHERE. Scoring a truncated prefix hides that evidence, so the veto
+        silently lifts. Measured on the truncating build:
+
+            "what is the trx for kisqali ... please forecast it"
+              veto visible (short) -> prediction  @0.867   (correct)
+              veto past the cap    -> explanation @0.867   (confident misroute)
+
+        0.867 is above the 0.8 trust floor, so the LLM never saw it — the exact
+        confident-misroute class as the #1408 ``\\binterim\\b`` incident.
+        """
+        cap = ic._PATTERN_SCAN_MAX_CHARS
+        head = "what is the trx for kisqali "
+        tail = " please forecast it"
+
+        short = head + tail
+        assert _node()._pattern_classify(short)["primary_intent"] == "prediction", (
+            "control: with the whole query visible the forecast veto holds"
+        )
+
+        long_query = head + ("and some more context " * cap) + tail
+        assert len(long_query) > cap
+        result = _node()._pattern_classify(long_query)
+        assert result["confidence"] < 0.8, (
+            f"hiding the forecast veto past the cap produced "
+            f"{result['primary_intent']}@{result['confidence']} — a confident "
+            "route decided on partial evidence"
         )
 
 
