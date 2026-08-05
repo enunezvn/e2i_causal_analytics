@@ -28,9 +28,11 @@ the smoke depends on, and run with no Docker daemon required.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 # tests/unit/test_docker/<this file>  ->  parents[3] == repo root
@@ -976,3 +978,183 @@ def test_base_bentoml_serving_binds_are_read_only():
         assert entry.rstrip().endswith(":ro"), (
             f"bentoml serving bind must be read-only (:ro); got {entry!r}"
         )
+
+
+# =============================================================================
+# #1479 mlflow v3.15 security middleware - cross-container Host header
+# =============================================================================
+def _mlflow_host_matcher(compose_path):
+    """Build the real is_allowed_host_header predicate from a compose file's
+    mlflow --allowed-hosts value (mlflow/server/security_utils.py: EXACT string
+    equality unless the entry contains '*', then fnmatch)."""
+    doc = _load(compose_path)
+    command = _services(doc)["mlflow"]["command"]
+    assert "--allowed-hosts" in command, (
+        f"{compose_path.name}: mlflow server command must set --allowed-hosts "
+        "(v3.15 middleware 403s the compose-DNS Host header 'mlflow:5000' otherwise)"
+    )
+    match = re.search(r"--allowed-hosts\s+(\S+)", command)
+    assert match, f"{compose_path.name}: --allowed-hosts must carry an inline value: {command!r}"
+    hosts = match.group(1).split(",")
+
+    def _allowed(host_header: str) -> bool:
+        return any(
+            fnmatch.fnmatch(host_header, entry) if "*" in entry else host_header == entry
+            for entry in hosts
+        )
+
+    _allowed.hosts = hosts  # type: ignore[attr-defined]
+    return _allowed
+
+
+def test_mlflow_server_allows_compose_dns_host_header():
+    """mlflow >=3.15 ships security middleware that 403s any Host header outside
+    localhost/private-IPs ("Invalid Host header - possible DNS rebinding attack
+    detected"). Every app container reaches the tracking server as
+    http://mlflow:5000 (x-common-env MLFLOW_TRACKING_URI), so the server command
+    must explicitly allow the compose DNS name — measured live 2026-08-05 right
+    after the #1479 recreate: without --allowed-hosts every cross-container
+    tracking call failed with 403 while the localhost healthcheck stayed green.
+    Setting the flag REPLACES the built-in default (localhost + private IPs),
+    so localhost/127.0.0.1 must be re-listed for the healthcheck + host-side UI.
+
+    Matching semantics (mlflow/server/security_utils.py, is_allowed_host_header):
+    EXACT string equality unless the entry contains '*', then fnmatch. The Host
+    header carries the port ('mlflow:5000'), so a bare 'mlflow' entry never
+    matches — measured live: the first fix attempt with bare names still 403'd.
+    This test replicates the real matcher against the real Host headers."""
+    _allowed = _mlflow_host_matcher(REPO_ROOT / "docker" / "docker-compose.yml")
+    hosts = _allowed.hosts
+
+    # The three real Host headers this server receives:
+    assert _allowed("mlflow:5000"), (
+        f"app containers send Host 'mlflow:5000' (x-common-env tracking URI) — "
+        f"not matched by --allowed-hosts {hosts}"
+    )
+    assert _allowed("localhost:5000"), (
+        f"container healthcheck sends Host 'localhost:5000' — not matched by {hosts}"
+    )
+    assert _allowed("127.0.0.1:5000"), (
+        f"host-side UI sends Host '127.0.0.1:5000' — not matched by {hosts}"
+    )
+
+
+def test_mlflow_secure_compose_allows_compose_dns_host_header():
+    """docker-compose.secure.yml pins the SAME v3.15.1 image (lockstep pin test
+    above) and four of its app services set MLFLOW_TRACKING_URI=http://mlflow:5000,
+    so the standalone secure stack hits the identical v3.15 Host-header 403 unless
+    its mlflow command also sets --allowed-hosts (codex MED on #1480 iter-1)."""
+    _allowed = _mlflow_host_matcher(REPO_ROOT / "docker" / "docker-compose.secure.yml")
+    hosts = _allowed.hosts
+
+    assert _allowed("mlflow:5000"), (
+        f"secure-stack app services send Host 'mlflow:5000' — not matched by {hosts}"
+    )
+    assert _allowed("localhost:5000"), (
+        f"secure-stack healthcheck urlopens http://localhost:5000/ — not matched by {hosts}"
+    )
+    assert _allowed("127.0.0.1:5000"), (
+        f"host-side debugging sends Host '127.0.0.1:5000' — not matched by {hosts}"
+    )
+
+
+# Each nginx conf's /mlflow/ proxy pairs with the compose file whose mlflow
+# server will receive the forwarded Host header.
+_NGINX_MLFLOW_PROXIES = [
+    ("host-nginx.conf", "docker-compose.yml"),
+    ("nginx.conf", "docker-compose.yml"),
+    ("nginx.secure.conf", "docker-compose.secure.yml"),
+]
+
+
+@pytest.mark.parametrize(("conf_name", "compose_name"), _NGINX_MLFLOW_PROXIES)
+def test_nginx_mlflow_proxy_forwards_allowed_host_header(conf_name, compose_name):
+    """The /mlflow/ UI proxy must forward a LITERAL Host header the mlflow
+    --allowed-hosts list accepts. `proxy_set_header Host $host` forwards the
+    public domain (e.g. 'eznomics.site'), which the v3.15 middleware 403s —
+    measured live 2026-08-05 on the recreated server: Host eznomics.site -> 403
+    'Invalid Host header', Host localhost:5000 -> 200. Widening --allowed-hosts
+    to the public domain would defeat the DNS-rebinding guard, so the proxy
+    rewrites Host to its upstream instead (codex MED on #1480 iter-1)."""
+    conf = (REPO_ROOT / "docker" / "nginx" / conf_name).read_text()
+    block = re.search(r"location /mlflow/ \{(.*?)\n\s*\}", conf, re.DOTALL)
+    assert block, f"{conf_name}: no 'location /mlflow/' block found"
+    host_directive = re.search(r"proxy_set_header\s+Host\s+(\S+);", block.group(1))
+    assert host_directive, f"{conf_name}: /mlflow/ block sets no 'proxy_set_header Host'"
+    forwarded = host_directive.group(1)
+
+    assert "$" not in forwarded, (
+        f"{conf_name}: /mlflow/ proxy forwards Host {forwarded!r} — an nginx "
+        "variable resolves to the client's Host (public domain), which mlflow "
+        ">=3.15 403s. Forward the upstream's own name instead."
+    )
+    _allowed = _mlflow_host_matcher(REPO_ROOT / "docker" / compose_name)
+    assert _allowed(forwarded), (
+        f"{conf_name}: forwards Host {forwarded!r}, not matched by "
+        f"{compose_name}'s --allowed-hosts {_allowed.hosts}"
+    )
+
+
+# =============================================================================
+# #1479 mlflow v3.15 security middleware - CORS Origin gate (codex iter-2 MED)
+# =============================================================================
+# The one public browser origin that reaches the /mlflow/ UI through the host
+# nginx proxy (server_name eznomics.site; no www variant is served).
+PUBLIC_MLFLOW_ORIGIN = "https://eznomics.site"
+
+
+def _mlflow_origin_matcher(compose_path):
+    """Build the real should_block_cors_request allowlist predicate from a
+    compose file's mlflow --cors-allowed-origins value
+    (mlflow/server/security_utils.py: EXACT string equality unless the entry
+    contains '*', then fnmatch — same rule as the Host matcher above)."""
+    doc = _load(compose_path)
+    command = _services(doc)["mlflow"]["command"]
+    assert "--cors-allowed-origins" in command, (
+        f"{compose_path.name}: mlflow server command must set "
+        "--cors-allowed-origins (the v3.15 CORS gate 403s every state-changing "
+        "browser request from the public /mlflow/ UI otherwise)"
+    )
+    match = re.search(r"--cors-allowed-origins\s+(\S+)", command)
+    assert match, (
+        f"{compose_path.name}: --cors-allowed-origins must carry an inline value: {command!r}"
+    )
+    origins = match.group(1).split(",")
+
+    def _allowed(origin: str) -> bool:
+        return any(
+            fnmatch.fnmatch(origin, entry) if "*" in entry else origin == entry for entry in origins
+        )
+
+    _allowed.origins = origins  # type: ignore[attr-defined]
+    return _allowed
+
+
+@pytest.mark.parametrize("compose_name", ["docker-compose.yml", "docker-compose.secure.yml"])
+def test_mlflow_cors_allows_public_ui_origin(compose_name):
+    """mlflow >=3.15 runs a SECOND, independent 403 gate besides Host
+    validation: block_cross_origin_state_changes (mlflow/server/security.py)
+    403s every POST/PUT/DELETE/PATCH to /api/ or /ajax-api/ whose Origin header
+    is neither localhost nor in --cors-allowed-origins — and with the flag
+    unset the allowlist is EMPTY, so every non-localhost browser origin is
+    blocked ("Cross-origin request blocked"). MLflow's UI search endpoints
+    (SearchRuns/SearchExperiments/...) are POST, so this breaks interactive
+    browsing, not just writes. Measured live 2026-08-05 through the public
+    proxy right after the Host fix: authenticated POST
+    /ajax-api/2.0/mlflow/experiments/search with 'Origin: https://eznomics.site'
+    -> 403 'Cross-origin request blocked'; the same POST without an Origin
+    header (non-browser client) -> 200 with real data. Compose-internal
+    tracking clients send no Origin header, which is why only the browser UI
+    breaks. The flag wires verbatim into MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
+    (mlflow/cli) and does not touch the Host gate."""
+    _allowed = _mlflow_origin_matcher(REPO_ROOT / "docker" / compose_name)
+    assert "*" not in _allowed.origins, (
+        f"{compose_name}: --cors-allowed-origins must not contain a bare '*' — "
+        "that lets ANY origin drive state-changing requests with the browser's "
+        f"cached basic-auth credentials (CSRF); got {_allowed.origins}"
+    )
+    assert _allowed(PUBLIC_MLFLOW_ORIGIN), (
+        f"{compose_name}: the public UI browser sends Origin "
+        f"'{PUBLIC_MLFLOW_ORIGIN}' on every /ajax-api POST — not matched by "
+        f"--cors-allowed-origins {_allowed.origins}"
+    )
