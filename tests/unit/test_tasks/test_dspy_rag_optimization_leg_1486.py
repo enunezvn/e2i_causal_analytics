@@ -426,6 +426,44 @@ class TestBudgetExhaustionIsNotSuccess:
         assert _artifact_count(tmp_path) == 0, "a baseline-identical artifact was saved"
 
     @pytest.mark.asyncio
+    async def test_no_improvement_still_fingerprints_so_it_does_not_re_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A no-improvement result is a completed measurement, not a failure.
+
+        Without persisting the fingerprint, identical records at an identical
+        budget would re-run the FULL compile every triggered beat — a nightly
+        re-spend of the whole judge budget at steady state, the exact class the
+        dedup exists to prevent. Persisting is safe only because the budget is
+        part of the key (F4a): raising DSPY_RAG_MAX_METRIC_CALLS changes the key
+        and re-runs. Contrast the DEGRADED path, which must NOT fingerprint —
+        there the judge failed transiently and a retry is wanted.
+        """
+        import src.tasks.dspy_optimization_tasks as task_module
+        from src.rag.cognitive_rag_dspy import EvidenceSynthesisSignature
+
+        seed_instructions = EvidenceSynthesisSignature.instructions
+        _arm_leg(tmp_path, monkeypatch, instructions=seed_instructions)
+
+        first = await task_module.run_rag_prompt_optimization()
+        assert first["status"] == "skipped"
+        assert "budget" in first["reason"].lower()
+        assert "rag_records_fingerprint" in task_module._load_trigger_state(), (
+            "a no-improvement run left the records un-fingerprinted, so the next "
+            "beat re-spends the whole judge budget on identical inputs"
+        )
+
+        # The second call must short-circuit on the fingerprint, BEFORE building
+        # an optimizer — otherwise the dedup saved nothing.
+        def _explode(*a: Any, **k: Any) -> Any:
+            raise AssertionError("second run built an optimizer despite the dedup")
+
+        monkeypatch.setattr("src.optimization.gepa.create_gepa_optimizer", _explode, raising=True)
+        second = await task_module.run_rag_prompt_optimization()
+        assert second["status"] == "skipped"
+        assert "already optimized" in second["reason"].lower()
+
+    @pytest.mark.asyncio
     async def test_fingerprint_covers_the_budget_so_a_raise_reruns(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -309,22 +309,34 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
     # GEPA seeds its candidate pool with the base program (dspy gepa.py:553 ->
     # gepa core/state.py:54) and picks argmax over val_aggregate_scores
     # (core/result.py:77), where `max` resolves ties to the FIRST index — the
-    # seed. So an exhausted budget hands back the base prompt unchanged. Saving
-    # that as "optimized" would be a lie, and fingerprinting it would silently
-    # skip a later budget increase — the one action that could still help.
+    # seed. So an exhausted budget hands back the base prompt unchanged, and
+    # saving that as "optimized" would be a lie.
+    #
+    # But it IS a completed measurement, so the fingerprint is persisted: these
+    # records at this budget have been tried. Skipping that would re-run the
+    # whole compile every triggered beat and re-spend the entire judge budget on
+    # identical inputs at steady state. Persisting is safe precisely because the
+    # budget is part of the key — raising DSPY_RAG_MAX_METRIC_CALLS produces a
+    # different fingerprint and re-runs. (The degraded path above deliberately
+    # does NOT fingerprint: there the judge failed transiently and a retry is
+    # exactly what we want.)
     if _instructions_of(optimized) == seed_instructions:
         reason = f"budget exhausted without improvement (max_metric_calls={budget})"
         logger.info(
             "RAG prompt optimization produced no change: %s. Nothing saved; raise %s "
-            "to search harder on these records.",
+            "to search harder on the same records, or refresh them.",
             reason,
             RAG_MAX_METRIC_CALLS_ENV,
         )
+        no_improvement_state = _load_trigger_state()
+        no_improvement_state["rag_records_fingerprint"] = fingerprint
+        _save_trigger_state(no_improvement_state)
         return {
             "status": "skipped",
             "reason": reason,
             "examples": len(examples),
             "max_metric_calls": budget,
+            "fingerprint": fingerprint,
         }
 
     info = save_optimized_module(
