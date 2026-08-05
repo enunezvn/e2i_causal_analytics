@@ -280,6 +280,90 @@ class TestArtifactConsumerChain:
         )
 
 
+class TestBeatPreservesLegState:
+    """The trigger-state file has two writers now; neither may clobber the other.
+
+    The RAG leg persists ``rag_records_fingerprint`` mid-beat, and the beat's
+    final save used to write a FRESH two-key dict — erasing the fingerprint five
+    lines after it was written. That made the dedup dead on arrival: every
+    triggered beat would re-optimize identical records and re-spend the judge
+    budget, which is precisely what the fingerprint exists to prevent.
+    """
+
+    @pytest.fixture
+    def _stubbed_beat(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Stub the beat's collaborators so _run reaches its final state save."""
+        import src.agents.feedback_learner.optimization_runner as runner_module
+        import src.agents.feedback_learner.prompt_bundles as bundles_module
+        import src.agents.feedback_learner.signal_store as signal_module
+
+        monkeypatch.chdir(tmp_path)
+
+        async def _no_signals(*a: Any, **k: Any) -> list:
+            return []
+
+        async def _no_optimization(*a: Any, **k: Any) -> dict:
+            return {"status": "stubbed"}
+
+        monkeypatch.setattr(
+            signal_module, "get_feedback_learner_training_signals", _no_signals, raising=True
+        )
+        monkeypatch.setattr(
+            runner_module, "run_feedback_learner_optimization", _no_optimization, raising=True
+        )
+        monkeypatch.setattr(bundles_module, "RECIPIENT_FACTORIES", {}, raising=True)
+        monkeypatch.setattr(
+            bundles_module, "install_all_prompt_bundles", lambda *a, **k: {}, raising=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_fingerprint_survives_the_beats_final_save(
+        self, _stubbed_beat: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.tasks.dspy_optimization_tasks as task_module
+
+        async def _leg_that_persists(*a: Any, **k: Any) -> dict:
+            # Exactly what the real leg does on success.
+            state = task_module._load_trigger_state()
+            state["rag_records_fingerprint"] = "FINGERPRINT-1486"
+            task_module._save_trigger_state(state)
+            return {"status": "completed"}
+
+        monkeypatch.setattr(
+            task_module, "run_rag_prompt_optimization", _leg_that_persists, raising=True
+        )
+
+        result = await task_module._run("task-1", force=True, budget="light")
+        assert result["status"] == "completed"
+
+        state = task_module._load_trigger_state()
+        assert state.get("rag_records_fingerprint") == "FINGERPRINT-1486", (
+            "the beat's final save clobbered the leg's fingerprint; dedup can never "
+            "survive a beat, so every run re-spends the judge budget"
+        )
+        # The beat's own keys must still be written.
+        assert "last_optimization" in state
+        assert "baseline_reward" in state
+
+    @pytest.mark.asyncio
+    async def test_unrelated_pre_existing_keys_also_survive(
+        self, _stubbed_beat: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pins the general two-writer fix, not a special case for one key."""
+        import src.tasks.dspy_optimization_tasks as task_module
+
+        task_module._save_trigger_state({"some_other_writer": "keep-me"})
+
+        async def _noop_leg(*a: Any, **k: Any) -> dict:
+            return {"status": "skipped", "reason": "stubbed"}
+
+        monkeypatch.setattr(task_module, "run_rag_prompt_optimization", _noop_leg, raising=True)
+
+        await task_module._run("task-2", force=True, budget="light")
+
+        assert task_module._load_trigger_state().get("some_other_writer") == "keep-me"
+
+
 class TestLegIsolation:
     """One leg must never abort the nightly beat."""
 

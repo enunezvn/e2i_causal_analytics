@@ -280,8 +280,12 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
             "max_metric_calls": budget,
         },
     )
-    state["rag_records_fingerprint"] = fingerprint
-    _save_trigger_state(state)
+    # Merge into freshly-loaded state, not the copy read before the compile: that
+    # snapshot is minutes stale by now, and writing it back would revert whatever
+    # another writer recorded meanwhile. Same discipline as the beat's final save.
+    persisted = _load_trigger_state()
+    persisted["rag_records_fingerprint"] = fingerprint
+    _save_trigger_state(persisted)
 
     logger.info(
         "RAG prompt optimization complete: saved %s (version %s)",
@@ -405,12 +409,21 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     mean_reward = (
         sum(float(s.get("reward", 0.0)) for s in signals) / len(signals) if signals else 0.0
     )
-    _save_trigger_state(
+    # Merge into FRESHLY-loaded state rather than writing a fresh dict. The file
+    # has more than one writer now: the RAG leg above persists
+    # rag_records_fingerprint mid-beat, and a whole-file overwrite here erased it
+    # a few lines after it was written — which made the dedup dead on arrival,
+    # re-spending the judge budget on identical records every triggered beat.
+    # Re-load rather than reusing `state` from before the legs ran, or this
+    # would restore a snapshot that predates their writes.
+    final_state = _load_trigger_state()
+    final_state.update(
         {
             "last_optimization": datetime.now(timezone.utc).isoformat(),
             "baseline_reward": mean_reward,
         }
     )
+    _save_trigger_state(final_state)
     return {
         "status": "completed",
         "trigger_reason": reason,
