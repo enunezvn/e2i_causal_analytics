@@ -3,6 +3,18 @@
 Network-free: payload construction, JWT sub decoding, dry-run discipline,
 and golden-dataset sanity. The live path is exercised manually (smoke run
 --limit 2 against prod) per the plan's Task 8.
+
+Sender contract (#1485): ``send_chat`` / ``send_cognitive`` return
+``(ok, detail, body)``. The third element is the parsed response body, which
+the real-pipeline RAGAS gate needs — before #1485 the senders returned only
+``(ok, detail)`` and threw the body away, so nothing downstream could see the
+answer the pipeline generated or the contexts it retrieved.
+
+``body`` is load-bearing, not incidental: ``main()`` switches on it to choose
+``build_cognitive_record`` (a real turn to judge) versus
+``build_failed_record`` (no body at all). So a transport failure MUST yield
+``{}`` while an in-band workflow error MUST yield the full body — the tests
+below pin both.
 """
 
 from __future__ import annotations
@@ -62,9 +74,12 @@ def test_send_chat_never_raises_on_connection_reset(monkeypatch):
         raise ConnectionResetError("connection reset by peer")
 
     monkeypatch.setattr(mod.urllib.request, "urlopen", _reset)
-    ok, detail = mod.send_chat("http://api.invalid", "tok", {"query": "q"}, 1)
+    ok, detail, body = mod.send_chat("http://api.invalid", "tok", {"query": "q"}, 1)
     assert ok is False
     assert "ConnectionResetError" in detail
+    # No body was ever received; main() relies on this falsy body to record
+    # the turn as a transport failure rather than a judgeable answer.
+    assert body == {}
 
 
 def test_main_reminting_on_401(monkeypatch):
@@ -78,8 +93,8 @@ def test_main_reminting_on_401(monkeypatch):
 
     def _send(api_base, token, payload, timeout):
         if token == "t1":
-            return False, "HTTP 401: token expired"
-        return True, "ok"
+            return False, "HTTP 401: token expired", {}
+        return True, "ok", {"response": "answer", "evidence": []}
 
     monkeypatch.setattr(mod, "mint_token", _mint)
     monkeypatch.setattr(mod, "jwt_sub", lambda token: "u1")
@@ -118,11 +133,11 @@ def test_default_target_is_cognitive(monkeypatch):
     def _send_cognitive(api_base, token, payload, timeout):
         calls["cognitive"] += 1
         assert set(payload) == {"query", "conversation_id"}
-        return True, "ok"
+        return True, "ok", {"response": "answer", "evidence": []}
 
     def _send_chat(api_base, token, payload, timeout):  # pragma: no cover - must not run
         calls["chat"] += 1
-        return True, "ok"
+        return True, "ok", {}
 
     monkeypatch.setattr(mod, "mint_token", lambda: "tok")
     monkeypatch.setattr(mod, "send_cognitive", _send_cognitive)
@@ -140,12 +155,12 @@ def test_target_chat_still_available(monkeypatch):
 
     def _send_cognitive(api_base, token, payload, timeout):  # pragma: no cover
         calls["cognitive"] += 1
-        return True, "ok"
+        return True, "ok", {}
 
     def _send_chat(api_base, token, payload, timeout):
         calls["chat"] += 1
         assert set(payload) == {"query", "user_id", "session_id"}
-        return True, "ok"
+        return True, "ok", {"response": "answer"}
 
     monkeypatch.setattr(mod, "mint_token", lambda: "tok")
     monkeypatch.setattr(mod, "jwt_sub", lambda token: "u1")
@@ -175,16 +190,28 @@ def test_send_cognitive_ok_requires_response_and_no_error(monkeypatch):
 
         return _urlopen
 
-    good = {"response": "Kisqali adoption rose...", "error": None, "latency_ms": 15500.0}
+    good = {
+        "response": "Kisqali adoption rose...",
+        "evidence": [{"content": "Northeast TRx up 12%."}],
+        "error": None,
+        "latency_ms": 15500.0,
+    }
     monkeypatch.setattr(mod.urllib.request, "urlopen", _urlopen_factory(good))
-    ok, detail = mod.send_cognitive("http://api.invalid", "tok", {"query": "q"}, 1)
+    ok, detail, body = mod.send_cognitive("http://api.invalid", "tok", {"query": "q"}, 1)
     assert ok is True
+    # The answer and the really-retrieved contexts must survive the call —
+    # discarding them is exactly what #1485 had to undo.
+    assert body["response"] == "Kisqali adoption rose..."
+    assert body["evidence"] == [{"content": "Northeast TRx up 12%."}]
 
     errored = {"response": "", "error": "workflow failed", "latency_ms": 10.0}
     monkeypatch.setattr(mod.urllib.request, "urlopen", _urlopen_factory(errored))
-    ok, detail = mod.send_cognitive("http://api.invalid", "tok", {"query": "q"}, 1)
+    ok, detail, body = mod.send_cognitive("http://api.invalid", "tok", {"query": "q"}, 1)
     assert ok is False
     assert "workflow failed" in detail
+    # An in-band failure still returned a real body, so main() records it as a
+    # cognitive turn stamped with the error — NOT as a transport failure.
+    assert body["error"] == "workflow failed"
 
 
 def test_send_cognitive_never_raises_on_connection_reset(monkeypatch):
@@ -194,9 +221,10 @@ def test_send_cognitive_never_raises_on_connection_reset(monkeypatch):
         raise ConnectionResetError("connection reset by peer")
 
     monkeypatch.setattr(mod.urllib.request, "urlopen", _reset)
-    ok, detail = mod.send_cognitive("http://api.invalid", "tok", {"query": "q"}, 1)
+    ok, detail, body = mod.send_cognitive("http://api.invalid", "tok", {"query": "q"}, 1)
     assert ok is False
     assert "ConnectionResetError" in detail
+    assert body == {}
 
 
 def test_dry_run_names_cognitive_endpoint(monkeypatch, capsys):

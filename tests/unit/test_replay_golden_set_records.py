@@ -7,6 +7,13 @@ The real-pipeline RAGAS gate needs what that body carried: the genuinely
 generated answer and the genuinely retrieved contexts. These tests pin the
 capture, including the case that matters most — a turn that retrieved nothing
 must record an EMPTY context list, never a reference stand-in.
+
+SIBLING SUITE: ``tests/unit/test_scripts/test_replay_golden_set.py`` owns the
+script's pre-existing contracts (dry-run discipline, 401 re-minting, the
+never-raises guarantees) and pins the ``(ok, detail, body)`` sender contract
+this file depends on. Run BOTH when touching scripts/replay_golden_set.py —
+changing the senders' return arity breaks that file, not this one, and it was
+missed for four commits because it sits under a different test directory.
 """
 
 from __future__ import annotations
