@@ -41,6 +41,7 @@ brand/region, missing substrate, or empty results — callers then proceed witho
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -120,6 +121,14 @@ _ALIASES: Dict[str, str] = {
     "conversion funnel": "WS2-TR-009",
     "trigger funnel": "WS2-TR-009",
 }
+
+# Reverse-share phrasing that tolerates a brand/modifier gap between "of" and
+# the metric ("share of Kisqali TRx" -> WS3-BI-008). Mirrors the of-chain
+# tolerance in the dispatcher's governing-head guard; punctuation breaks the
+# chain the same way.
+_REVERSE_SHARE_RE = re.compile(
+    r"\bshare\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}?(?:trx|total\s+prescriptions?)\b"
+)
 
 
 @dataclass
@@ -210,7 +219,9 @@ KPI_SEMANTIC_NOTES = {
 # ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
-def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int, int]]:
+def recognize_kpi_span(
+    query: Optional[str], *, aliases_only: bool = False
+) -> Optional[Tuple[KPIMetadata, str, int, int]]:
     """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
     Returns ``(kpi, normalized_query, match_start, match_end)`` —
@@ -226,6 +237,17 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
     q = " ".join(str(query).lower().split())
     registry = get_registry()
 
+    # 0) reverse-share phrasing with a brand/modifier gap (#1475 codex iter-4):
+    # "the share of Kisqali TRx" is WS3-BI-008 language, but the contiguous
+    # "share of trx" alias cannot see through the brand token, so the bare
+    # "trx" alias would read it as a WS3-BI-005 mention inside a "share of"
+    # chain and die on the head guard.
+    m = _REVERSE_SHARE_RE.search(q)
+    if m is not None:
+        share_kpi = registry.get("WS3-BI-008")
+        if share_kpi is not None:
+            return share_kpi, q, m.start(), m.end()
+
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
         idx = q.find(alias)
@@ -235,6 +257,12 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
                 return kpi, q, idx, idx + len(alias)
 
     # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
+    # ``aliases_only`` skips it: registry names carry BRAND tokens ("kisqali"
+    # resolves a brand KPI), so a caller probing for a SECOND metric mention
+    # (the dispatcher's multi-KPI veto) must see only the precise alias
+    # vocabulary — "TRx for Kisqali" names one metric, not two.
+    if aliases_only:
+        return None
     stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
     for kpi in registry.get_all():
         for tok in (

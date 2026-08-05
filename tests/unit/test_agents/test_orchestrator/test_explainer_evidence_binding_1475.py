@@ -263,7 +263,7 @@ def test_kpi_lookup_binds_a_real_zero(monkeypatch) -> None:
 
 
 def _failed_causal_impact_input(query: str = CAUSAL_QUERY) -> Dict[str, Any]:
-    return _agent_input(
+    payload = _agent_input(
         query,
         agent_results=[
             {
@@ -274,6 +274,12 @@ def _failed_causal_impact_input(query: str = CAUSAL_QUERY) -> Dict[str, Any]:
             }
         ],
     )
+    # The prod shape: _dispatch_fallback stamps WHICH agent this dispatch
+    # stands in for (pinned by test_dispatch_fallback_marks_its_origin) —
+    # fallback detection is dispatch-scoped, never a scan of the accumulated
+    # cross-turn agent_results channel (codex iter-4).
+    payload["parameters"] = {"fallback_from": "causal_impact"}
+    return payload
 
 
 def test_causal_fallback_binds_registry_paths(monkeypatch) -> None:
@@ -771,6 +777,119 @@ def test_value_of_brand_kpi_still_binds_the_value(monkeypatch) -> None:
 
     assert isinstance(resolved, dict), resolved
     assert resolved["analysis_results"][0]["value"] == 12345.0
+    assert len(stub.calls) == 1
+
+
+def test_stale_causal_failure_does_not_hijack_a_fresh_value_ask(monkeypatch) -> None:
+    """[iter-4 HIGH] ``agent_results`` is an operator.add channel the Redis
+    checkpointer restores across turns (#1442 class): a turn-1 failed
+    causal_impact must not turn turn-2's plain value ask into a causal
+    fallback. Fallback detection must be current-dispatch scoped."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    stale = _agent_input(
+        KPI_QUERY,
+        agent_results=[
+            {
+                "agent_name": "causal_impact",
+                "success": False,
+                "result": None,
+                "error": "prior turn's failure",
+            },
+            {"agent_name": "explainer", "success": True, "result": {}},
+        ],
+    )
+    resolved = disp.INPUT_RESOLVERS["explainer"](stale, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["value"] == 12345.0
+    assert len(stub.calls) == 1
+    assert recorder.calls == [], "a stale failure must not summon registry paths"
+
+
+async def test_dispatch_fallback_marks_its_origin(monkeypatch) -> None:
+    """[iter-4 HIGH, prod-shape pin] the fallback dispatch must carry WHICH
+    agent it stands in for, so the resolver never has to scan the accumulated
+    (cross-turn) agent_results channel to reconstruct it."""
+    node = disp.DispatcherNode()
+    captured: Dict[str, Any] = {}
+
+    async def fake_dispatch_agent(dispatch, state):
+        captured["dispatch"] = dispatch
+        return {"agent_name": dispatch["agent_name"], "success": False, "result": None}
+
+    monkeypatch.setattr(node, "_dispatch_agent", fake_dispatch_agent)
+    await node._dispatch_fallback(
+        "explainer", _state(KPI_QUERY), fallback_from="causal_impact"
+    )
+
+    assert captured["dispatch"]["parameters"]["fallback_from"] == "causal_impact"
+
+
+def test_temporal_of_phrase_still_binds_the_value(monkeypatch) -> None:
+    """[iter-4 HIGH] 'end of Q2' / 'as of Q2' are TEMPORAL of-phrases, not
+    governing heads — the widened of-chain must not veto a legitimate value
+    ask over them (the window probe handles the period)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the end of Q2 TRx?"), _dispatch()
+    )
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["value"] == 12345.0
+
+    resolved2 = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("Show me as of Q2 TRx"), _dispatch()
+    )
+    assert isinstance(resolved2, dict), resolved2
+    assert len(stub.calls) == 2
+
+
+def test_share_of_brand_kpi_resolves_the_share_kpi(monkeypatch) -> None:
+    """[iter-4 HIGH] 'the share of Kisqali TRx' is WS3-BI-008 phrasing with the
+    brand riding inside the of-chain — it must resolve TRx Share, not fall to
+    the bare 'trx' alias and die on the 'share' head veto."""
+    result = KPIResult(
+        kpi_id="WS3-BI-008",
+        value=0.341,
+        status=KPIStatus.GOOD,
+        metadata={"context": {"data_through": "2025-04-23"}, "include_synthetic": False},
+    )
+    stub = _install_calculator(monkeypatch, _StubCalculator(result))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the share of Kisqali TRx?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["kpi_id"] == "WS3-BI-008"
+    assert stub.calls[0][0] == "WS3-BI-008"
+    assert any("tracked portfolio" in f for f in payload["key_findings"])
+
+
+def test_multi_kpi_value_ask_fails_closed(monkeypatch) -> None:
+    """[iter-4 HIGH] 'TRx and NRx' names TWO metrics; binding one and
+    presenting it as the whole answer is a wrong answer. Fail closed (the
+    bridge answers multi-KPI asks today) until multi-KPI binding exists.
+    A repeated mention of the SAME KPI ('TRx ... total prescriptions') is
+    not a multi-KPI ask and must still bind."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What are the TRx and NRx for Kisqali?"), _dispatch()
+    )
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+    assert recorder.calls == []
+
+    resolved2 = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the TRx, the total prescriptions, for Kisqali?"),
+        _dispatch(),
+    )
+    assert isinstance(resolved2, dict), resolved2
     assert len(stub.calls) == 1
 
 

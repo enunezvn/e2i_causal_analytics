@@ -1811,13 +1811,21 @@ _OF_HEAD_RE = re.compile(
     r"([\w'-]+)\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$"
 )
 
+# Temporal of-idioms are not governing heads: "as of Q2", "the end of June",
+# "first half of 2026" scope the WINDOW, not the metric — "as of Q2 TRx" is
+# still a value ask, answered with the window probe (codex iter-4).
+_TEMPORAL_OF_HEADS = frozenset({"as", "end", "start", "beginning", "middle", "close", "half"})
+
 _NEXT_TOKEN_RE = re.compile(r"\s*([\w'-]+)")
 
 
 def _kpi_governing_of_head(normalized_query: str, match_start: int) -> Optional[str]:
     """The head noun when the KPI mention is governed by ``<head> of <KPI>``."""
     m = _OF_HEAD_RE.search(normalized_query[:match_start])
-    return m.group(1) if m else None
+    if m is None:
+        return None
+    head = m.group(1)
+    return None if head in _TEMPORAL_OF_HEADS else head
 
 
 def _kpi_right_head(normalized_query: str, match_end: int) -> Optional[str]:
@@ -1863,6 +1871,19 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if _kpi_right_head(normalized_query, match_end) in _CAUSAL_OF_HEADS:
         # "TRx drivers", "NRx determinants" — a right-headed causal compound;
         # a bare value does not answer it.
+        return None
+    masked = (
+        normalized_query[:match_start]
+        + " " * (match_end - match_start)
+        + normalized_query[match_end:]
+    )
+    second = recognize_kpi_span(masked, aliases_only=True)
+    if second is not None and second[0].id != kpi.id:
+        # "TRx and NRx" names TWO metrics — one value presented as the whole
+        # answer is a wrong answer; fail closed (the bridge answers multi-KPI
+        # asks today). A repeated mention of the SAME KPI still binds; the
+        # probe is alias-only because registry NAMES carry brand tokens
+        # ("kisqali" would read as a second metric on every scoped ask).
         return None
 
     brand, region = _extract_brand_region(agent_input)
@@ -1973,17 +1994,16 @@ def _causal_ask_patterns() -> Tuple[re.Pattern[str], ...]:
 
 
 def _is_causal_fallback(agent_input: Dict[str, Any]) -> bool:
-    """True when this dispatch is the explainer standing in for a FAILED
+    """True when THIS dispatch is the explainer standing in for a FAILED
     ``causal_impact`` (its resolver fails closed for every KPI without a frame
-    builder — dispatcher.py:730 — so the fallback is the user's only answer)."""
-    for item in agent_input.get("agent_results") or []:
-        if (
-            isinstance(item, dict)
-            and item.get("agent_name") == "causal_impact"
-            and not item.get("success")
-        ):
-            return True
-    return False
+    builder — dispatcher.py:730 — so the fallback is the user's only answer).
+
+    Detection rides the current dispatch's ``fallback_from`` parameter, stamped
+    by ``_dispatch_fallback`` — never the accumulated ``agent_results`` channel,
+    which the Redis checkpointer restores ACROSS turns (#1442 class): a turn-1
+    causal failure must not turn turn-2's plain value ask into a causal
+    fallback (codex iter-4)."""
+    return (agent_input.get("parameters") or {}).get("fallback_from") == "causal_impact"
 
 
 def _format_causal_path_finding(row: Dict[str, Any]) -> str:
@@ -2644,7 +2664,7 @@ class DispatcherNode:
             # ``[failing, succeeding]`` the interleaved version dispatched the
             # fallback before the sibling success was recorded, so the same
             # group produced different fallback outcomes per ordering).
-            pending_fallbacks: List[str] = []
+            pending_fallbacks: List[Tuple[str, str]] = []
             for dispatch, result in zip(group_dispatches, group_results, strict=False):
                 if isinstance(result, Exception):
                     # Handle unexpected exceptions from asyncio.gather
@@ -2660,7 +2680,7 @@ class DispatcherNode:
                     # Queue fallback if available
                     fallback_agent = dispatch.get("fallback_agent")
                     if fallback_agent:
-                        pending_fallbacks.append(str(fallback_agent))
+                        pending_fallbacks.append((str(fallback_agent), dispatch["agent_name"]))
                 elif isinstance(result, dict) and not result.get("success", True):
                     # AgentResult returned with success=False
                     all_results.append(result)  # type: ignore[arg-type]
@@ -2668,16 +2688,16 @@ class DispatcherNode:
                     # Queue fallback if available
                     fallback_agent2 = dispatch.get("fallback_agent")
                     if fallback_agent2:
-                        pending_fallbacks.append(str(fallback_agent2))
+                        pending_fallbacks.append((str(fallback_agent2), dispatch["agent_name"]))
                 else:
                     # Result is AgentResult (TypedDict cannot use isinstance, check dict)
                     if isinstance(result, dict) and "agent_name" in result:
                         all_results.append(result)
 
             # Fallbacks see the COMPLETE group (plus all earlier groups/turns).
-            for fallback_agent_name in pending_fallbacks:
+            for fallback_agent_name, failed_agent_name in pending_fallbacks:
                 fallback_result = await self._dispatch_fallback(
-                    fallback_agent_name, _state_so_far()
+                    fallback_agent_name, _state_so_far(), fallback_from=failed_agent_name
                 )
                 all_results.append(fallback_result)
 
@@ -3096,12 +3116,23 @@ class DispatcherNode:
         # the contract pass-through fields.
         return agent_input
 
-    async def _dispatch_fallback(self, agent_name: str, state: OrchestratorState) -> AgentResult:
+    async def _dispatch_fallback(
+        self,
+        agent_name: str,
+        state: OrchestratorState,
+        *,
+        fallback_from: Optional[str] = None,
+    ) -> AgentResult:
         """Dispatch to fallback agent.
 
         Args:
             agent_name: Fallback agent name
             state: Current state
+            fallback_from: The FAILED agent this dispatch stands in for —
+                stamped into the dispatch parameters so input resolvers can
+                scope fallback detection to THIS dispatch instead of scanning
+                the accumulated (cross-turn) ``agent_results`` channel
+                (codex iter-4).
 
         Returns:
             Fallback agent result
@@ -3109,7 +3140,7 @@ class DispatcherNode:
         fallback_dispatch = AgentDispatch(
             agent_name=agent_name,
             priority="low",  # Contract: Literal priority type
-            parameters={},
+            parameters={"fallback_from": fallback_from} if fallback_from else {},
             timeout_ms=30000,
             fallback_agent=None,
         )
