@@ -1720,40 +1720,43 @@ class RAGEvaluationPipeline:
         Args:
             report: Evaluation report to check
 
+        An unmeasured aggregate fails CLOSED (#1488). These metrics only became
+        reachable as ``None`` once a NaN'd RAGAS metric stopped being coerced to
+        0.0, and skipping one would report a metric as passing when nothing ever
+        scored it — while the same report carries ``passed_thresholds=False``
+        per sample. The message says the threshold is unverifiable rather than
+        inventing a comparison that never happened.
+
         Returns:
             Tuple of (passed, list of failure messages)
         """
         failures = []
 
-        if report.avg_faithfulness is not None:
-            threshold = self.config.thresholds.get(
-                "faithfulness", DEFAULT_THRESHOLDS["faithfulness"]
-            )
-            if report.avg_faithfulness < threshold:
-                failures.append(f"Faithfulness {report.avg_faithfulness:.3f} < {threshold}")
-
-        if report.avg_answer_relevancy is not None:
-            threshold = self.config.thresholds.get(
-                "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
-            )
-            if report.avg_answer_relevancy < threshold:
-                failures.append(f"Answer Relevancy {report.avg_answer_relevancy:.3f} < {threshold}")
-
-        if report.avg_context_precision is not None:
-            threshold = self.config.thresholds.get(
-                "context_precision", DEFAULT_THRESHOLDS["context_precision"]
-            )
-            if report.avg_context_precision < threshold:
+        for label, key, value in (
+            ("Faithfulness", "faithfulness", report.avg_faithfulness),
+            ("Answer Relevancy", "answer_relevancy", report.avg_answer_relevancy),
+            ("Context Precision", "context_precision", report.avg_context_precision),
+            ("Context Recall", "context_recall", report.avg_context_recall),
+        ):
+            if value is None:
                 failures.append(
-                    f"Context Precision {report.avg_context_precision:.3f} < {threshold}"
+                    f"{label} unmeasured (no sample scored it) - threshold unverifiable"
                 )
+                continue
+            threshold = self.config.thresholds.get(key, DEFAULT_THRESHOLDS[key])
+            if value < threshold:
+                failures.append(f"{label} {value:.3f} < {threshold}")
 
-        if report.avg_context_recall is not None:
-            threshold = self.config.thresholds.get(
-                "context_recall", DEFAULT_THRESHOLDS["context_recall"]
+        # overall_score is deliberately NOT gated on value: no code has ever
+        # compared it against its configured threshold (it is published to
+        # MLflow as a param and nothing more), so enforcing it now would be a
+        # new gate. An absent one is still checked, because it means no sample
+        # was fully judged — which the four checks above miss when different
+        # samples happened to measure different metrics.
+        if report.overall_score is None:
+            failures.append(
+                "Overall Score unmeasured (no sample was fully judged) - threshold unverifiable"
             )
-            if report.avg_context_recall < threshold:
-                failures.append(f"Context Recall {report.avg_context_recall:.3f} < {threshold}")
 
         return len(failures) == 0, failures
 

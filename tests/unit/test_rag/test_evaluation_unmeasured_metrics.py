@@ -228,6 +228,100 @@ class TestAggregationToleratesUnmeasured:
         assert report.overall_score == pytest.approx(0.8)
 
 
+class TestCheckThresholdsFailsClosed:
+    """An unmeasured aggregate must not silently pass the quality gate.
+
+    ``check_thresholds`` guards every metric with ``if report.avg_X is not
+    None``. Those guards were dead code while ``safe_score`` guaranteed floats;
+    making unmeasured metrics reachable turned the latent fail-open live, and
+    for THIS consumer it is a behaviour regression: a NaN'd metric used to
+    become a fabricated 0.0 that failed the gate (wrong, but closed), and would
+    now be None and skipped (silently open). ``scripts/run_ragas_eval.py``
+    exits 0 under ``--fail-on-threshold`` on that path, while the very same
+    report carries ``passed_thresholds=False`` per sample.
+    """
+
+    def _pipeline(self):
+        from src.rag.evaluation import RAGEvaluationPipeline
+
+        with patch("src.rag.evaluation.get_default_evaluation_dataset", return_value=[SAMPLE]):
+            return RAGEvaluationPipeline(enable_opik_tracing=False)
+
+    def _report(self, **overrides: Any):
+        from src.rag.evaluation import EvaluationReport
+
+        fields: dict[str, Any] = {
+            "run_id": "r",
+            "timestamp": "2026-08-05T00:00:00",
+            "total_samples": 1,
+            "passed_samples": 1,
+            "failed_samples": 0,
+            "avg_faithfulness": 0.9,
+            "avg_answer_relevancy": 0.9,
+            "avg_context_precision": 0.9,
+            "avg_context_recall": 0.9,
+            "overall_score": 0.9,
+            "evaluation_time_seconds": 1.0,
+        }
+        fields.update(overrides)
+        return EvaluationReport(**fields)
+
+    def test_all_measured_and_passing_still_passes(self):
+        passed, failures = self._pipeline().check_thresholds(self._report())
+
+        assert (passed, failures) == (True, [])
+
+    def test_all_measured_below_threshold_still_fails_with_the_comparison(self):
+        passed, failures = self._pipeline().check_thresholds(self._report(avg_context_recall=0.10))
+
+        assert passed is False
+        assert any("Context Recall 0.100 <" in f for f in failures)
+
+    def test_unmeasured_metric_fails_closed(self):
+        passed, failures = self._pipeline().check_thresholds(
+            self._report(avg_context_recall=None, overall_score=None)
+        )
+
+        assert passed is False, "an unmeasured metric must not pass the gate"
+        assert any("Context Recall" in f for f in failures)
+
+    def test_unmeasured_message_does_not_fabricate_a_comparison(self):
+        """Report it as unverifiable — never as a number that lost to a threshold."""
+        _passed, failures = self._pipeline().check_thresholds(
+            self._report(avg_faithfulness=None, overall_score=None)
+        )
+
+        message = next(f for f in failures if "Faithfulness" in f)
+        assert "unmeasured" in message.lower()
+        assert "<" not in message, "no comparison happened; do not imply one"
+
+    def test_every_unmeasured_metric_is_named(self):
+        _passed, failures = self._pipeline().check_thresholds(
+            self._report(
+                avg_faithfulness=None,
+                avg_answer_relevancy=None,
+                avg_context_precision=None,
+                avg_context_recall=None,
+                overall_score=None,
+            )
+        )
+
+        joined = " | ".join(failures)
+        for name in ("Faithfulness", "Answer Relevancy", "Context Precision", "Context Recall"):
+            assert name in joined
+
+    def test_unmeasured_overall_score_fails_closed(self):
+        """Catches "no sample was fully judged" even when each metric has data.
+
+        Two half-judged samples can leave all four averages populated (each from
+        the sample that measured it) while no sample produced an overall_score.
+        """
+        passed, failures = self._pipeline().check_thresholds(self._report(overall_score=None))
+
+        assert passed is False
+        assert any("Overall" in f and "unmeasured" in f.lower() for f in failures)
+
+
 def test_safe_score_helper_is_gone():
     """The NaN->0.0 coercion must not survive anywhere in the judged path."""
     import inspect
