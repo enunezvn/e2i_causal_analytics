@@ -71,6 +71,10 @@ x-common-env: &common-env
   # startup problem) — must be forwarded here or the host .env never reaches the
   # containers and the in-code default governs (the OPIK_ENABLED lesson above).
   CHATBOT_STARTUP_WARM_ENABLED: ${CHATBOT_STARTUP_WARM_ENABLED:-true}
+  # #1475 target 3: the warm's two synthetic-LLM legs (classify + RAG
+  # rewriter). Costs ~2 small completions per worker per boot; set false to
+  # keep the construction-only warm. Same forwarding rule as above.
+  CHATBOT_STARTUP_WARM_LLM_ENABLED: ${CHATBOT_STARTUP_WARM_LLM_ENABLED:-true}
   # Routing-label loop (#1341 Phase 1): nightly Celery labeler for
   # classification_logs. Must be forwarded here or host-.env overrides never
   # reach the worker containers and the in-code defaults govern.

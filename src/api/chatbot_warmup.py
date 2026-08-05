@@ -15,9 +15,12 @@ This module pre-builds those singletons in a background task at worker startup.
 
 Honest limits — this is NOT a "warm = fast" guarantee:
 
-* It removes construction, import and first-connection cost only. Each module's
-  first REAL LLM call (classify, rewrite, evidence scoring) still lands in the
-  first user request by design: no synthetic token spend at startup.
+* The construction legs remove construction, import and first-connection cost.
+  The two synthetic-LLM legs (#1475 target 3, flag-gated) additionally prepay
+  the process-shared first-LLM-call machinery with one real classify call and
+  one real rewriter call (~2 small completions per worker per boot). What
+  remains is genuinely unwarmable: novel-query steady-state LLM latency
+  (~1.2-2.4s per call, measured) and multi-hop retrieval chains.
 * It is NOT a readiness gate. A request that races the warm task takes exactly
   today's lazy path — correct, just unimproved.
 * Warm failure is a WARNING and the normal lazy path, never a fabricated
@@ -55,6 +58,7 @@ import os
 import random
 import sys
 import time
+import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -67,6 +71,36 @@ WARM_COMPLETE_MARKER = f"{WARM_LOG_PREFIX} complete"
 # without a spread they build agent registries (CPU) and call the embedding /
 # Supabase endpoints (quota) in lockstep.
 WARM_JITTER_MAX_SECONDS = 5.0
+
+# --- #1475 target 3: synthetic-LLM warm legs -------------------------------
+#
+# The construction legs above leave each worker's FIRST real LLM call to the
+# first user request. Measured (2026-08-05, real calls on the prod box): that
+# first call costs 2.5-3.7s for classify vs a ~1.2-1.5s novel-query steady
+# state, the penalty is process-shared litellm init (after one first call,
+# other signatures sit <=~1s above their own steady state), and it does NOT
+# decay — 120s idle then a novel call was 1183ms, indistinguishable from
+# steady state. Two narrow synthetic calls (classify + the RAG query
+# rewriter) therefore move ~3-6s off the first request, durably. A blanket
+# per-module sweep would buy nothing extra: the remaining first-RAG cost is
+# novel-query steady state and multi-hop chains, which no warm can remove.
+WARM_LLM_ENABLED_ENV = "CHATBOT_STARTUP_WARM_LLM_ENABLED"
+
+# A hung provider call must fail the leg (fail-open), not pin the warm task.
+# wait_for cancels the awaiting task; the worker thread finishes quietly.
+WARM_LLM_TIMEOUT_SECONDS = 30.0
+
+# Recognized-shaped on purpose: "trx" hits the kpi_query pattern, so the warm
+# exercises the path real KPI asks take. #1478 measured generic warm probes
+# landing in the CLARIFICATION/confidence-0.0 fallback — warming the WRONG
+# path. Pinned by test_warm_query_is_recognized_shaped.
+WARM_LLM_QUERY = "What is the TRx trend for Kisqali this quarter?"
+
+# DSPy caches responses by full prompt (disk + memory, shared across
+# processes where the cache dir persists). A cache hit would turn the warm
+# call into a no-op that warms no network path, so every process salts the
+# conversation_context with a fresh token.
+_WARM_LLM_CACHE_BUSTER = uuid.uuid4().hex
 
 _TRUTHY = ("1", "true", "yes", "on")
 
@@ -85,6 +119,21 @@ def chatbot_warm_enabled() -> bool:
     ``CHATBOT_STARTUP_WARM_ENABLED`` always wins, so the warm's own tests opt in.
     """
     explicit = os.getenv(WARM_ENABLED_ENV)
+    if explicit is not None:
+        return explicit.strip().lower() in _TRUTHY
+    return "pytest" not in sys.modules
+
+
+def chatbot_warm_llm_enabled() -> bool:
+    """Whether the synthetic-LLM warm legs run (production default: yes).
+
+    Same shape as ``chatbot_warm_enabled`` and for the same reason, but this
+    flag matters even to tests that opt INTO the parent warm: the #1454 test
+    file sets ``CHATBOT_STARTUP_WARM_ENABLED=true`` and stubs the four
+    construction legs — without a separate pytest-off default here, those
+    tests would fire two real LLM calls per run.
+    """
+    explicit = os.getenv(WARM_LLM_ENABLED_ENV)
     if explicit is not None:
         return explicit.strip().lower() in _TRUTHY
     return "pytest" not in sys.modules
@@ -252,6 +301,62 @@ async def _warm_classify() -> None:
     await asyncio.to_thread(_build_classifier)
 
 
+def _warm_llm_context() -> str:
+    return f"[startup warm {_WARM_LLM_CACHE_BUSTER}]"
+
+
+def _classify_llm_call() -> None:
+    """One real call through the raw classify module (sync — runs off-loop).
+
+    RAW module deliberately: ``classify_intent_dspy`` would push a synthetic
+    row into the intent training-signal buffer that feedback_learner optimizes
+    prompts from. (``classification_logs`` is never at risk either way — only
+    the orchestrator's 4-stage shadow node writes it.)
+
+    ``None`` is a skip, not a failure: it means feature-off or a build failure
+    the ``classify`` construction leg already reported.
+    """
+    from src.api.routes import chatbot_dspy
+
+    classifier = chatbot_dspy._get_dspy_classifier()
+    if classifier is None:
+        return
+    result = classifier(query=WARM_LLM_QUERY, conversation_context=_warm_llm_context())
+    if not str(getattr(result, "intent", "") or "").strip():
+        raise RuntimeError("classify warm call returned no intent")
+
+
+async def _warm_classify_llm() -> None:
+    await asyncio.wait_for(asyncio.to_thread(_classify_llm_call), WARM_LLM_TIMEOUT_SECONDS)
+
+
+def _rag_rewrite_llm_call() -> None:
+    """One real call through the raw RAG query-rewriter module (sync, off-loop).
+
+    Same raw-module reasoning as ``_classify_llm_call`` (the RAG signal
+    collector lives in ``cognitive_rag_retrieve``, above this seam). The
+    evidence scorer and hop decider are deliberately NOT warmed: measured,
+    their first calls after any one first call in the process sit at their
+    own steady state — extra synthetic calls would spend tokens on nothing.
+    """
+    from src.api.routes import chatbot_dspy
+
+    rewriter = chatbot_dspy._get_dspy_query_rewriter()
+    if rewriter is None:
+        return
+    result = rewriter(
+        original_query=WARM_LLM_QUERY,
+        conversation_context=_warm_llm_context(),
+        domain_vocabulary=chatbot_dspy.E2I_DOMAIN_VOCABULARY,
+    )
+    if not str(getattr(result, "rewritten_query", "") or "").strip():
+        raise RuntimeError("rewrite warm call returned no rewritten_query")
+
+
+async def _warm_rag_rewrite_llm() -> None:
+    await asyncio.wait_for(asyncio.to_thread(_rag_rewrite_llm_call), WARM_LLM_TIMEOUT_SECONDS)
+
+
 # =============================================================================
 # Warm routine
 # =============================================================================
@@ -306,12 +411,18 @@ async def warm_chatbot_stack(*, jitter_seconds: float | None = None) -> Dict[str
 
     # Built here (not at module level) so the legs resolve at call time.
     # DSPy config FIRST (owner-thread binding), then measured-value order.
+    # The synthetic-LLM legs run LAST: they consume the singletons the
+    # construction legs build, and a failed/slow provider call must never
+    # delay the construction warm.
     steps: List[Tuple[str, Callable[[], Awaitable[None]]]] = [
         ("dspy_config", _warm_dspy_config),
         ("rag", _warm_rag),
         ("orchestrator", _warm_orchestrator),
         ("classify", _warm_classify),
     ]
+    if chatbot_warm_llm_enabled():
+        steps.append(("classify_llm", _warm_classify_llm))
+        steps.append(("rag_rewrite_llm", _warm_rag_rewrite_llm))
 
     steps_ms: Dict[str, float] = {}
     failed: Dict[str, str] = {}
