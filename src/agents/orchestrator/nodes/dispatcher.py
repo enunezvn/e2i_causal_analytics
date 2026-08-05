@@ -1756,6 +1756,61 @@ def _window_from_query(query: str) -> Optional[Dict[str, str]]:
     return None
 
 
+#: Governing-head guard (codex iter-1): when the KPI mention sits inside a
+#: "<head> of <KPI>" chain, the head noun decides what is actually being asked
+#: about. "the value of TRx" still asks for the value; "the drivers of TRx"
+#: still asks for TRx's causal drivers; but "the cost of TRx" makes TRx a
+#: MODIFIER of a head the platform does not model — answering with a TRx value
+#: or TRx drivers would answer a question the user did not ask, so both
+#: branches fail closed on an unrecognized head. Two whitelists make the
+#: branches self-selecting: "what are the drivers of TRx" skips Branch A
+#: (drivers is not a value-head) and binds registry paths in Branch B.
+_VALUE_OF_HEADS = frozenset(
+    {
+        "value",
+        "values",
+        "level",
+        "levels",
+        "number",
+        "numbers",
+        "count",
+        "counts",
+        "total",
+        "totals",
+        "amount",
+        "figure",
+        "figures",
+        "sum",
+    }
+)
+_CAUSAL_OF_HEADS = frozenset(
+    {
+        "driver",
+        "drivers",
+        "determinant",
+        "determinants",
+        "cause",
+        "causes",
+        "impact",
+        "impacts",
+        "effect",
+        "effects",
+        "influence",
+        "influences",
+        "predictor",
+        "predictors",
+    }
+)
+
+_OF_HEAD_RE = re.compile(r"([\w'-]+)\s+of\s+(?:the\s+|this\s+|our\s+)?$")
+
+
+def _kpi_governing_of_head(normalized_query: str, match_start: int) -> Optional[str]:
+    """The head noun when the KPI mention is governed by ``<head> of <KPI>``."""
+    m = _OF_HEAD_RE.search(normalized_query[:match_start])
+    return m.group(1) if m else None
+
+
 def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Branch A — bind the REAL computed value for a KPI value-lookup ask.
 
@@ -1777,10 +1832,16 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if not KPI_VALUE_LOOKUP_RE.search(query):
         return None
 
-    from src.services.kpi_resolution import recognize_kpi
+    from src.services.kpi_resolution import KPI_SEMANTIC_NOTES, recognize_kpi_span
 
-    kpi = recognize_kpi(query)
-    if kpi is None:
+    match = recognize_kpi_span(query)
+    if match is None:
+        return None
+    kpi, normalized_query, match_start = match
+    of_head = _kpi_governing_of_head(normalized_query, match_start)
+    if of_head is not None and of_head not in _VALUE_OF_HEADS:
+        # "cost of TRx", "drivers of TRx", ... — the KPI is not the asked-about
+        # value; let Branch B (or the fail-closed default) handle it.
         return None
 
     brand, region = _extract_brand_region(agent_input)
@@ -1823,14 +1884,30 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     # deterministic path turns each finding into an Insight and quotes the top
     # ones verbatim in the executive summary, so an empty list renders a
     # "0 key finding(s)" husk with the value nowhere in the narrative.
-    finding = f"{scope}: {formatted_value} ({'; '.join(provenance)})"
+    key_findings = [f"{scope}: {formatted_value} ({'; '.join(provenance)})"]
+    warnings: List[str] = []
+    # Same semantic guard the chat KPI tool attaches (codex iter-1 HIGH): e.g.
+    # WS3-BI-008 "TRx Share" is tracked-portfolio share, NOT competitor market
+    # share — without the note a real number gets narrated as an answer to a
+    # question it does not answer. In key_findings so it is NARRATED, and in
+    # warnings (a first-class context_assembler field) for downstream consumers.
+    semantic_note = KPI_SEMANTIC_NOTES.get(kpi.id)
+    if semantic_note:
+        key_findings.append(semantic_note)
+        warnings.append(semantic_note)
 
     payload: Dict[str, Any] = {
         # context_assembler._extract_context reads "agent" / "analysis_type" /
-        # "key_findings" / "confidence"; every other key lands in data_summary.
+        # "key_findings" / "confidence" / "warnings"; every other key lands in
+        # data_summary.
         "agent": "kpi_calculator",
         "analysis_type": "kpi_lookup",
-        "key_findings": [finding],
+        "key_findings": key_findings,
+        "warnings": warnings,
+        # The registry definition rides along so a definition-seeking reading of
+        # "What is NRx?" is served alongside the value (codex iter-1 MEDIUM;
+        # gold has no bare-definition rows, so the value stays the headline).
+        "definition": kpi.definition,
         "confidence": _KPI_LOOKUP_CONFIDENCE,
         "kpi_id": kpi.id,
         "kpi_name": kpi.name,
@@ -1916,10 +1993,17 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     ):
         return None
 
-    from src.services.kpi_resolution import recognize_kpi
+    from src.services.kpi_resolution import recognize_kpi_span
 
-    kpi = recognize_kpi(query)
-    if kpi is None:
+    match = recognize_kpi_span(query)
+    if match is None:
+        return None
+    kpi, normalized_query, match_start = match
+    of_head = _kpi_governing_of_head(normalized_query, match_start)
+    if of_head is not None and of_head not in _CAUSAL_OF_HEADS:
+        # "what drives the cost of TRx up" (codex iter-1): TRx is a MODIFIER of
+        # a head the registry does not model — binding TRx drivers would answer
+        # a different question. Fail closed instead.
         return None
 
     brand, _region = _extract_brand_region(agent_input)

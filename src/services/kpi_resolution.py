@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -157,15 +157,63 @@ class KpiFrame:
 
 
 # ---------------------------------------------------------------------------
+# KPI semantics (SSOT — moved here from chatbot_tools, #1475)
+# ---------------------------------------------------------------------------
+# Definition clarifications every answering surface MUST carry into the answer.
+# This dict lived in src/api/routes/chatbot_tools.py (which re-exports it); it
+# moved here because the orchestrator's explainer resolver needs the same notes
+# and importing chatbot_tools costs ~30s (it pulls the orchestrator /
+# tool_composer / RAG stacks) — unaffordable inside a sync input resolver.
+#
+# WS3-BI-008 (2026-07-18 session review): the share denominator is every
+# prescription in treatment_events, and ONLY the tracked portfolio brands
+# (Fabhalta / Kisqali / Remibrutinib) exist there — the chatbot presented the
+# figure as "share of the CSU market" and attributed the complement to Xolair/
+# Dupixent, which are not in the data model at all (a fabricated narrative on
+# top of a real number). Attaching the honest basis to every response kills
+# that at the source instead of relying on prompt memory.
+KPI_SEMANTIC_NOTES = {
+    "WS3-BI-008": (
+        "TRx Share is the brand's share of the tracked portfolio's "
+        "prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) "
+        "— NOT market share against external competitors. Competitor brands "
+        "(e.g. Xolair, Dupixent) are not in the data model; never attribute "
+        "the share complement to them."
+    ),
+    # #1360: 'trigger precision' reads like ML-model telemetry — the exact
+    # confusion that routed the bench-0024 ask to health_score. Pin the real
+    # meaning to every answer instead of relying on prompt memory.
+    "WS2-TR-001": (
+        "Trigger Precision is a BUSINESS-program metric over the NBA triggers "
+        "funnel — of accepted triggers with tracked outcomes, the share whose "
+        "patient converted within the 30-day window (definition v2, "
+        "truth-aligned). It is NOT a deployed-ML-model precision metric; "
+        "model telemetry lives with health_score."
+    ),
+    "WS2-TR-009": (
+        "Trigger Funnel Conversion's headline is the ACTIONED share of "
+        "DELIVERED triggers (delivered -> accepted -> actioned); the full "
+        "stage counts ride along as funnel_stages (delivered, viewed, "
+        "accepted, actioned, outcome). The headline stops at actioned by "
+        "design — the outcome stage reflects outcome-TRACKING coverage, not "
+        "effectiveness — and 'viewed' is a delivery-status progression state, "
+        "not a funnel prerequisite for acceptance."
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
-def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
-    """Recognize a defined KPI referenced by ``query``, else ``None``.
+def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int]]:
+    """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
-    Matches the query against KPI-vocabulary aliases first (longest alias wins
-    for specificity), then falls back to a conservative match on the registry's
-    KPI names. Brand/region in the query are ignored here (they are resolved
-    separately and dynamically).
+    Returns ``(kpi, normalized_query, match_start)`` — ``normalized_query`` is
+    the whitespace-collapsed lowercase form the matcher actually ran on, and
+    ``match_start`` is the character offset of the matched alias / name token in
+    it. Callers that must reason about the KPI mention's grammatical position
+    (e.g. the #1475 governing-head guard: "cost of TRx" names TRx as a modifier,
+    not the asked-about metric) use this instead of re-deriving the match.
     """
     if not query:
         return None
@@ -174,10 +222,11 @@ def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
 
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
-        if alias in q:
+        idx = q.find(alias)
+        if idx != -1:
             kpi = registry.get(_ALIASES[alias])
             if kpi is not None:
-                return kpi
+                return kpi, q, idx
 
     # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
     stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
@@ -186,9 +235,24 @@ def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
             str(kpi.name).lower().replace("-", " ").replace("(", " ").replace(")", " ").split()
         ):
             tok = tok.strip()
-            if len(tok) >= 4 and tok not in stop and tok in q:
-                return kpi
+            if len(tok) >= 4 and tok not in stop:
+                idx = q.find(tok)
+                if idx != -1:
+                    return kpi, q, idx
     return None
+
+
+def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
+    """Recognize a defined KPI referenced by ``query``, else ``None``.
+
+    Matches the query against KPI-vocabulary aliases first (longest alias wins
+    for specificity), then falls back to a conservative match on the registry's
+    KPI names. Brand/region in the query are ignored here (they are resolved
+    separately and dynamically). Delegates to :func:`recognize_kpi_span` — one
+    matcher, two views.
+    """
+    match = recognize_kpi_span(query)
+    return match[0] if match is not None else None
 
 
 # ---------------------------------------------------------------------------

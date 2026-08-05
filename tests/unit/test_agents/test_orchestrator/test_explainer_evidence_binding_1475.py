@@ -525,6 +525,191 @@ class _AsyncRecordingQuery(_RecordingQuery):
         return _Res()
 
 
+# --------------------------------------------------------------------------
+# Codex iter-1 revisions — semantic notes, definition carry, governing-head
+# guards (all three scenarios verified against real recognize_kpi first)
+# --------------------------------------------------------------------------
+
+
+def test_market_share_lookup_carries_the_semantic_note(monkeypatch) -> None:
+    """[HIGH] 'market share' resolves to WS3-BI-008 TRx Share — tracked-portfolio
+    share, NOT competitor market share. The chat tool pins that meaning to every
+    answer via KPI_SEMANTIC_NOTES; the bound payload must carry the same note in
+    key_findings (narrated) AND warnings (first-class extractor field), or a
+    real number gets narrated as an answer to a question it does not answer."""
+    from src.services.kpi_resolution import KPI_SEMANTIC_NOTES
+
+    result = KPIResult(
+        kpi_id="WS3-BI-008",
+        value=0.341,
+        status=KPIStatus.GOOD,
+        metadata={"context": {"data_through": "2025-04-23"}, "include_synthetic": False},
+    )
+    _install_calculator(monkeypatch, _StubCalculator(result))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the market share for Kisqali compared to competitors?"),
+        _dispatch(),
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    note = KPI_SEMANTIC_NOTES["WS3-BI-008"]
+    assert "NOT market share against external competitors" in note
+    assert payload["warnings"] == [note]
+    assert any("tracked portfolio" in f for f in payload["key_findings"]), payload["key_findings"]
+
+
+@pytest.mark.asyncio
+async def test_explainer_narrates_the_semantic_note(monkeypatch) -> None:
+    """The note must survive into the user-visible narrative, not just the payload."""
+    from src.agents.explainer import ExplainerAgent
+
+    result = KPIResult(
+        kpi_id="WS3-BI-008",
+        value=0.341,
+        status=KPIStatus.GOOD,
+        metadata={"context": {"data_through": "2025-04-23"}, "include_synthetic": False},
+    )
+    _install_calculator(monkeypatch, _StubCalculator(result))
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the market share for Kisqali compared to competitors?"),
+        _dispatch(),
+    )
+    assert isinstance(resolved, dict), resolved
+
+    output = await ExplainerAgent(use_llm=False).explain(**resolved)
+
+    narrative = f"{output.executive_summary}\n{output.detailed_explanation}"
+    assert "tracked portfolio" in narrative, narrative
+
+
+def test_semantic_notes_ssot_lives_in_kpi_resolution() -> None:
+    """chatbot_tools must re-export the SAME dict object — a fork would let the
+    chat tool and the orchestrator disagree about what a KPI means. (The notes
+    moved to kpi_resolution because importing chatbot_tools costs ~30s — it
+    pulls the orchestrator/tool_composer/RAG stacks — which a sync resolver
+    running inside asyncio.to_thread cannot afford on first call.)"""
+    import ast
+    import pathlib
+
+    from src.services.kpi_resolution import KPI_SEMANTIC_NOTES
+
+    assert set(KPI_SEMANTIC_NOTES) >= {"WS3-BI-008"}
+    # Source-level check instead of importing chatbot_tools (30s): the module
+    # must bind the name FROM kpi_resolution, not define its own dict literal.
+    src_file = (
+        pathlib.Path(__file__).resolve().parents[4] / "src" / "api" / "routes" / "chatbot_tools.py"
+    )
+    tree = ast.parse(src_file.read_text())
+    defines_own = any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(t, ast.Name) and t.id == "KPI_SEMANTIC_NOTES" for t in node.targets
+        )
+        for node in ast.walk(tree)
+    )
+    imports_ssot = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module
+        and "kpi_resolution" in node.module
+        and any(alias.name == "KPI_SEMANTIC_NOTES" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    assert imports_ssot and not defines_own
+
+
+def test_bare_metric_ask_binds_value_with_definition(monkeypatch) -> None:
+    """[MEDIUM-rebuttal] 'What is NRx?' has no gold row; on this analytics
+    platform the value reading is the measured-majority intent (bench-0113 class
+    asks 'what is X' meaning the number). Bind the REAL value — and carry the
+    registry definition so a definition-seeking reader is served too."""
+    result = KPIResult(
+        kpi_id="WS3-BI-006",
+        value=4210.0,
+        status=KPIStatus.GOOD,
+        metadata={"context": {"data_through": "2025-04-23"}, "include_synthetic": False},
+    )
+    _install_calculator(monkeypatch, _StubCalculator(result))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input("What is NRx?"), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["value"] == 4210.0
+    assert payload["definition"], "the registry definition must ride along"
+
+
+def test_kpi_as_modifier_ask_fails_closed(monkeypatch) -> None:
+    """[MEDIUM] 'the cost of TRx' names TRx as a MODIFIER of a head noun the
+    platform does not model (cost). Binding TRx drivers would answer a question
+    the user did not ask — fail closed instead (the bridge handles it)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _failed_causal_impact_input("what drives the cost of TRx up for Kisqali?"),
+        _dispatch(),
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+    assert recorder.calls == []
+
+
+def test_drivers_of_kpi_binds_causal_paths_not_a_value(monkeypatch) -> None:
+    """'drivers of TRx' is a causal frame with TRx as the OUTCOME (gold
+    bench-0113 pins 'what drives this NRX?' -> causal_impact): Branch A's
+    value-head guard must skip it, Branch B must bind registry paths."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What are the drivers of TRx for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert stub.calls == [], "a drivers ask must never bind a bare value"
+    assert recorder.calls, "the registry must have been consulted"
+
+
+def test_value_of_kpi_still_binds_the_value(monkeypatch) -> None:
+    """'the value of TRx' is a value ask — the head guard must whitelist
+    value-heads, not veto every '<head> of <kpi>' construction."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the value of TRx for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["value"] == 12345.0
+    assert len(stub.calls) == 1
+
+
+def test_recognize_kpi_span_is_the_ssot_twin() -> None:
+    """recognize_kpi_span must agree with recognize_kpi on every probe (it IS
+    the same matcher, refactored to expose where the vocabulary hit)."""
+    from src.services.kpi_resolution import recognize_kpi, recognize_kpi_span
+
+    for q in (
+        KPI_QUERY,
+        CAUSAL_QUERY,
+        "What is NRx?",
+        "what drives the cost of TRx up for Kisqali?",
+        "explain the analysis",
+    ):
+        kpi = recognize_kpi(q)
+        span = recognize_kpi_span(q)
+        if kpi is None:
+            assert span is None
+        else:
+            span_kpi, normalized, start = span
+            assert span_kpi.id == kpi.id
+            assert 0 <= start < len(normalized)
+
+
 @pytest.mark.asyncio
 async def test_sync_and_async_causal_path_search_build_the_same_filters() -> None:
     """The sync helper the resolver needs (the dispatcher contract is SYNC —

@@ -1672,41 +1672,11 @@ KPI_REPORTING_WINDOWS = {
 }
 
 # Definition clarifications the synthesizer MUST carry into the answer.
-# WS3-BI-008 (2026-07-18 session review): the share denominator is every
-# prescription in treatment_events, and ONLY the tracked portfolio brands
-# (Fabhalta / Kisqali / Remibrutinib) exist there — the chatbot presented the
-# figure as "share of the CSU market" and attributed the complement to Xolair/
-# Dupixent, which are not in the data model at all (a fabricated narrative on
-# top of a real number). Attaching the honest basis to every response kills
-# that at the source instead of relying on prompt memory.
-KPI_SEMANTIC_NOTES = {
-    "WS3-BI-008": (
-        "TRx Share is the brand's share of the tracked portfolio's "
-        "prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) "
-        "— NOT market share against external competitors. Competitor brands "
-        "(e.g. Xolair, Dupixent) are not in the data model; never attribute "
-        "the share complement to them."
-    ),
-    # #1360: 'trigger precision' reads like ML-model telemetry — the exact
-    # confusion that routed the bench-0024 ask to health_score. Pin the real
-    # meaning to every answer instead of relying on prompt memory.
-    "WS2-TR-001": (
-        "Trigger Precision is a BUSINESS-program metric over the NBA triggers "
-        "funnel — of accepted triggers with tracked outcomes, the share whose "
-        "patient converted within the 30-day window (definition v2, "
-        "truth-aligned). It is NOT a deployed-ML-model precision metric; "
-        "model telemetry lives with health_score."
-    ),
-    "WS2-TR-009": (
-        "Trigger Funnel Conversion's headline is the ACTIONED share of "
-        "DELIVERED triggers (delivered -> accepted -> actioned); the full "
-        "stage counts ride along as funnel_stages (delivered, viewed, "
-        "accepted, actioned, outcome). The headline stops at actioned by "
-        "design — the outcome stage reflects outcome-TRACKING coverage, not "
-        "effectiveness — and 'viewed' is a delivery-status progression state, "
-        "not a funnel prerequisite for acceptance."
-    ),
-}
+# SSOT moved to src/services/kpi_resolution.py (#1475): the orchestrator's
+# explainer resolver binds the same notes, and importing THIS module costs ~30s
+# (orchestrator/tool_composer/RAG stacks) — unaffordable in a sync resolver.
+# Re-exported here so every existing consumer keeps working unchanged.
+from src.services.kpi_resolution import KPI_SEMANTIC_NOTES  # noqa: E402
 
 
 def _kpi_result_to_response(
