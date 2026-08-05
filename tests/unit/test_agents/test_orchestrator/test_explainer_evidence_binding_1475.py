@@ -707,6 +707,73 @@ def test_causal_fallback_never_binds_a_bare_value(monkeypatch) -> None:
     assert recorder.calls and recorder.calls[0]["outcome_term"] == "Conversion Rate"
 
 
+def test_determinants_of_brand_kpi_binds_paths_not_a_value(monkeypatch) -> None:
+    """[iter-3 HIGH] A brand token between 'of' and the KPI must not strip the
+    causal head: 'determinants of Kisqali NRx' is a causal ask ('determinants'
+    is outside the causal_effect lexicon, so it arrives as a DIRECT explanation
+    turn) — binding an NRx value would answer a question the user did not ask."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What are the determinants of Kisqali NRx?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert stub.calls == [], "a determinants ask must never bind a bare value"
+    assert recorder.calls, "the registry must have been consulted"
+
+
+def test_drivers_of_brand_kpi_binds_paths_not_a_value(monkeypatch) -> None:
+    """[iter-3 HIGH, same class] 'drivers of Fabhalta TRx' — routing usually
+    sends this via causal_impact, but the resolver must be safe standalone
+    (DSPy intent is non-deterministic): Branch A must see 'drivers' through
+    the intervening brand token and skip, Branch B must bind paths."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What are the drivers of Fabhalta TRx?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert stub.calls == [], "a drivers ask must never bind a bare value"
+    assert recorder.calls, "the registry must have been consulted"
+
+
+def test_cost_of_brand_kpi_fails_closed(monkeypatch) -> None:
+    """[iter-3, opposite guard] 'the cost of Kisqali TRx' keeps TRx as a
+    MODIFIER of an unmodeled head even with the brand in between — neither a
+    value nor registry paths answer it; fail closed (the bridge handles it)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the cost of Kisqali TRx?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+    assert recorder.calls == []
+
+
+def test_value_of_brand_kpi_still_binds_the_value(monkeypatch) -> None:
+    """[iter-3, opposite guard] 'the value of Kisqali TRx' stays a value ask
+    when the brand rides inside the of-chain — the widened head detector must
+    still whitelist value-heads."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the value of Kisqali TRx?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["value"] == 12345.0
+    assert len(stub.calls) == 1
+
+
 def test_recognize_kpi_span_is_the_ssot_twin() -> None:
     """recognize_kpi_span must agree with recognize_kpi on every probe (it IS
     the same matcher, refactored to expose where the vocabulary hit)."""

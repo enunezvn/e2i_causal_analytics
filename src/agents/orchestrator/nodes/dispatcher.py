@@ -1802,7 +1802,14 @@ _CAUSAL_OF_HEADS = frozenset(
     }
 )
 
-_OF_HEAD_RE = re.compile(r"([\w'-]+)\s+of\s+(?:the\s+|this\s+|our\s+)?$")
+# The of-chain tolerates an article plus up to two intervening tokens so a
+# brand/modifier between "of" and the KPI cannot strip the head (codex iter-3:
+# "determinants of Kisqali NRx" must keep its causal head; "cost of Kisqali
+# TRx" its unmodeled one). Punctuation breaks the chain — "speaking of
+# Kisqali, what is TRx" grows no false head.
+_OF_HEAD_RE = re.compile(
+    r"([\w'-]+)\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$"
+)
 
 _NEXT_TOKEN_RE = re.compile(r"\s*([\w'-]+)")
 
