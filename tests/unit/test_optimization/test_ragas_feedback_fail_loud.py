@@ -296,6 +296,28 @@ class TestUnjudgedMetricsAreRefused:
         with pytest.raises(RAGASFeedbackUnavailableError, match="context_recall"):
             await provider.evaluate(question="q", answer="a", contexts=["c1"])
 
+    async def test_ragas_nan_reaches_the_provider_as_a_refusal(self):
+        """End-to-end through the REAL evaluator with only ragas stubbed.
+
+        ragas emits NaN per metric on metric-level failures. The judged path
+        used to coerce that to 0.0 upstream of every refusal here, so the
+        provider scored a fabricated 0.0 and never saw a problem.
+        """
+        from tests.unit.test_rag.test_evaluation_unmeasured_metrics import (
+            ALL_JUDGED,
+            _components,
+        )
+
+        row = {**ALL_JUDGED, "faithfulness": float("nan")}
+        with patch("src.rag.evaluation._import_ragas_components", return_value=_components(row)):
+            provider = RAGASFeedbackProvider()
+            with pytest.raises(RAGASFeedbackUnavailableError, match="faithfulness"):
+                await provider.evaluate(
+                    question="What caused the TRx drop?",
+                    answer="Payer mix shifted.",
+                    contexts=["Q4 report: payer mix shifted."],
+                )
+
 
 class TestEvaluatorJudgedPathProperties:
     """The public seam on RAGASEvaluator the provider checks (#1488).

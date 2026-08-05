@@ -64,12 +64,17 @@ ScoreWithFeedback = dict[str, Union[float, str]]
 
 
 class RAGEvaluationResult(Protocol):
-    """Protocol for RAG evaluation results from RAGAS or similar."""
+    """Protocol for RAG evaluation results from RAGAS or similar.
 
-    faithfulness: float
-    answer_relevancy: float
-    context_precision: float
-    context_recall: float
+    Optional because a metric ragas could not compute stays ``None`` rather
+    than being coerced to 0.0 (#1488); ``EvaluationResult`` has always declared
+    these Optional.
+    """
+
+    faithfulness: Optional[float]
+    answer_relevancy: Optional[float]
+    context_precision: Optional[float]
+    context_recall: Optional[float]
 
 
 @dataclass

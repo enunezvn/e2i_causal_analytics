@@ -646,17 +646,31 @@ class TestRAGASGEPAOpikIntegration:
         """Test RAGASFeedbackProvider.evaluate() returns proper structure."""
         from src.optimization.gepa.integration.ragas_feedback import (
             RAGASFeedbackProvider,
+            RAGASFeedbackUnavailableError,
         )
 
         provider = RAGASFeedbackProvider()
 
-        # Evaluate a sample
-        result = await provider.evaluate(
-            question="What is the TRx trend for Kisqali?",
-            answer="Kisqali TRx increased 15% in Q4.",
-            contexts=["Q4 report shows 15% TRx growth for Kisqali."],
-            ground_truth="Kisqali TRx grew 15% in Q4.",
-        )
+        # Two outcomes are correct, and no third one is: a judged score, or a
+        # loud refusal. Since #1488 the provider never returns a fabricated
+        # number, so this asserts the invariant rather than "some float came
+        # back" — which used to pass on silently-substituted heuristic scores.
+        #
+        # The refusal branch is reachable in a shared process: ragas's sync
+        # evaluate() raises "asyncio.run() cannot be called from a running event
+        # loop" on a later pytest-asyncio loop, evaluation.py's broad except
+        # routes that to the stamped heuristic fallback, and the provider then
+        # refuses. That degradation is a pre-existing RAGAS/event-loop defect,
+        # NOT a provider bug — it is merely no longer silent.
+        try:
+            result = await provider.evaluate(
+                question="What is the TRx trend for Kisqali?",
+                answer="Kisqali TRx increased 15% in Q4.",
+                contexts=["Q4 report shows 15% TRx growth for Kisqali."],
+                ground_truth="Kisqali TRx grew 15% in Q4.",
+            )
+        except RAGASFeedbackUnavailableError as e:
+            pytest.skip(f"RAGAS judge unavailable in this process: {e}")
 
         # Check result structure
         assert "score" in result

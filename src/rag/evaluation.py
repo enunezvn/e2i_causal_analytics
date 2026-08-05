@@ -1170,56 +1170,54 @@ class RAGASEvaluator:
                 ],
             )
 
-            # Extract scores and handle NaN values
+            # Extract scores. ragas emits NaN for a metric it could not compute
+            # (an exception inside the metric, empty statement/claim extraction).
+            # That is "not measured", NOT "measured 0.0" (#1488): coercing it
+            # produced a plausible number no judge ever returned, indistinguishable
+            # afterwards from a genuinely judged zero. Keep None and say so.
             import math
 
             scores = result.to_pandas().iloc[0].to_dict()
 
-            def safe_score(value: float, default: float = 0.0) -> float:
-                """Convert NaN/None to default value."""
+            def measured(name: str) -> Optional[float]:
+                value = scores.get(name)
                 if value is None or (isinstance(value, float) and math.isnan(value)):
-                    return default
+                    return None
                 return float(value)
 
-            faith = safe_score(scores.get("faithfulness"), 0.0)
-            relevancy = safe_score(scores.get("answer_relevancy"), 0.0)
-            precision = safe_score(scores.get("context_precision"), 0.0)
-            recall = safe_score(scores.get("context_recall"), 0.0)
+            metrics: Dict[str, Optional[float]] = {
+                "faithfulness": measured("faithfulness"),
+                "answer_relevancy": measured("answer_relevancy"),
+                "context_precision": measured("context_precision"),
+                "context_recall": measured("context_recall"),
+            }
+            judged = {name: value for name, value in metrics.items() if value is not None}
+            unmeasured = sorted(name for name, value in metrics.items() if value is None)
 
-            overall = (faith + relevancy + precision + recall) / 4
-
-            # Check thresholds
-            passed = all(
-                [
-                    faith
-                    >= self.config.thresholds.get(
-                        "faithfulness", DEFAULT_THRESHOLDS["faithfulness"]
-                    ),
-                    relevancy
-                    >= self.config.thresholds.get(
-                        "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
-                    ),
-                    precision
-                    >= self.config.thresholds.get(
-                        "context_precision", DEFAULT_THRESHOLDS["context_precision"]
-                    ),
-                    recall
-                    >= self.config.thresholds.get(
-                        "context_recall", DEFAULT_THRESHOLDS["context_recall"]
-                    ),
-                ]
+            # A mean over four metrics is undefined when one never happened, and
+            # thresholds cannot be reported as met for a metric that was not
+            # scored — so both stay conservative rather than assuming a zero.
+            complete = not unmeasured
+            overall = sum(judged.values()) / len(metrics) if complete else None
+            passed = complete and all(
+                value >= self.config.thresholds.get(name, DEFAULT_THRESHOLDS[name])
+                for name, value in judged.items()
             )
+
+            metadata = dict(sample.metadata)
+            if unmeasured:
+                metadata["unmeasured_metrics"] = unmeasured
 
             return EvaluationResult(
                 sample_id=sample_id,
                 query=sample.query,
-                faithfulness=faith,
-                answer_relevancy=relevancy,
-                context_precision=precision,
-                context_recall=recall,
+                faithfulness=metrics["faithfulness"],
+                answer_relevancy=metrics["answer_relevancy"],
+                context_precision=metrics["context_precision"],
+                context_recall=metrics["context_recall"],
                 overall_score=overall,
                 passed_thresholds=passed,
-                metadata=sample.metadata,
+                metadata=metadata,
             )
 
         except ImportError as e:
@@ -1548,30 +1546,19 @@ class RAGEvaluationPipeline:
         # Evaluate all samples with batch tracing
         results = await self.evaluator.evaluate_batch(self.dataset, batch_run_id=run_id)
 
-        # Aggregate metrics
-        valid_results = [r for r in results if r.faithfulness is not None]
+        # Aggregate metrics. Each metric averages over the samples that actually
+        # measured IT: filtering on faithfulness alone used to let a sample with
+        # one unmeasured metric (#1488) through and then raise on the sum,
+        # aborting an entire evaluation run over a single NaN.
+        def average(field: str) -> Optional[float]:
+            values = [value for value in (getattr(r, field) for r in results) if value is not None]
+            return sum(values) / len(values) if values else None
 
-        avg_faith: Optional[float]
-        avg_relevancy: Optional[float]
-        avg_precision: Optional[float]
-        avg_recall: Optional[float]
-        overall: Optional[float]
-
-        if valid_results:
-            # Cast to handle Optional[float] types - we've filtered for non-None
-            avg_faith = sum(cast(float, r.faithfulness) for r in valid_results) / len(valid_results)
-            avg_relevancy = sum(cast(float, r.answer_relevancy) for r in valid_results) / len(
-                valid_results
-            )
-            avg_precision = sum(cast(float, r.context_precision) for r in valid_results) / len(
-                valid_results
-            )
-            avg_recall = sum(cast(float, r.context_recall) for r in valid_results) / len(
-                valid_results
-            )
-            overall = sum(cast(float, r.overall_score) for r in valid_results) / len(valid_results)
-        else:
-            avg_faith = avg_relevancy = avg_precision = avg_recall = overall = None
+        avg_faith = average("faithfulness")
+        avg_relevancy = average("answer_relevancy")
+        avg_precision = average("context_precision")
+        avg_recall = average("context_recall")
+        overall = average("overall_score")
 
         passed_count = sum(1 for r in results if r.passed_thresholds)
 
