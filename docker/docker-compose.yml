@@ -429,6 +429,15 @@ services:
     environment:
       - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
       - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+    # --allowed-hosts: mlflow >=3.15 ships security middleware that 403s any
+    # Host header outside localhost/private-IPs ("Invalid Host header - possible
+    # DNS rebinding attack detected"). App containers reach the server as
+    # http://mlflow:5000 (x-common-env MLFLOW_TRACKING_URI), so the compose DNS
+    # name must be allowed explicitly; setting the flag replaces the built-in
+    # default, so localhost/127.0.0.1 are re-listed for the container
+    # healthcheck and the host-side UI on 127.0.0.1:5000 (#1479). Matching is
+    # EXACT unless the entry has a '*' (fnmatch) and the Host header carries the
+    # port, so each name needs its ':*' wildcard — bare names alone 403'd live.
     command: >
       mlflow server
       --backend-store-uri sqlite:///mlflow/db/mlflow.db
@@ -437,6 +446,7 @@ services:
       --artifacts-destination /mlflow/artifacts
       --host 0.0.0.0
       --port 5000
+      --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/')"]
       interval: 30s

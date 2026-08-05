@@ -28,6 +28,7 @@ the smoke depends on, and run with no Docker daemon required.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from pathlib import Path
 
@@ -976,3 +977,51 @@ def test_base_bentoml_serving_binds_are_read_only():
         assert entry.rstrip().endswith(":ro"), (
             f"bentoml serving bind must be read-only (:ro); got {entry!r}"
         )
+
+
+# =============================================================================
+# #1479 mlflow v3.15 security middleware - cross-container Host header
+# =============================================================================
+def test_mlflow_server_allows_compose_dns_host_header():
+    """mlflow >=3.15 ships security middleware that 403s any Host header outside
+    localhost/private-IPs ("Invalid Host header - possible DNS rebinding attack
+    detected"). Every app container reaches the tracking server as
+    http://mlflow:5000 (x-common-env MLFLOW_TRACKING_URI), so the server command
+    must explicitly allow the compose DNS name — measured live 2026-08-05 right
+    after the #1479 recreate: without --allowed-hosts every cross-container
+    tracking call failed with 403 while the localhost healthcheck stayed green.
+    Setting the flag REPLACES the built-in default (localhost + private IPs),
+    so localhost/127.0.0.1 must be re-listed for the healthcheck + host-side UI.
+
+    Matching semantics (mlflow/server/security_utils.py, is_allowed_host_header):
+    EXACT string equality unless the entry contains '*', then fnmatch. The Host
+    header carries the port ('mlflow:5000'), so a bare 'mlflow' entry never
+    matches — measured live: the first fix attempt with bare names still 403'd.
+    This test replicates the real matcher against the real Host headers."""
+    doc = _load(REPO_ROOT / "docker" / "docker-compose.yml")
+    command = _services(doc)["mlflow"]["command"]
+    assert "--allowed-hosts" in command, (
+        "mlflow server command must set --allowed-hosts (v3.15 middleware 403s "
+        "the compose-DNS Host header 'mlflow:5000' otherwise)"
+    )
+    match = re.search(r"--allowed-hosts\s+(\S+)", command)
+    assert match, f"--allowed-hosts must carry an inline value: {command!r}"
+    hosts = match.group(1).split(",")
+
+    def _allowed(host_header: str) -> bool:
+        return any(
+            fnmatch.fnmatch(host_header, entry) if "*" in entry else host_header == entry
+            for entry in hosts
+        )
+
+    # The three real Host headers this server receives:
+    assert _allowed("mlflow:5000"), (
+        f"app containers send Host 'mlflow:5000' (x-common-env tracking URI) — "
+        f"not matched by --allowed-hosts {hosts}"
+    )
+    assert _allowed("localhost:5000"), (
+        f"container healthcheck sends Host 'localhost:5000' — not matched by {hosts}"
+    )
+    assert _allowed("127.0.0.1:5000"), (
+        f"host-side UI sends Host '127.0.0.1:5000' — not matched by {hosts}"
+    )

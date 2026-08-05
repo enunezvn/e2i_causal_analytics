@@ -1,10 +1,1 @@
-[
-  {
-    "service": "mlflow",
-    "running": "ghcr.io/mlflow/mlflow:v3.1.0",
-    "pinned": "ghcr.io/mlflow/mlflow:v3.15.1",
-    "issue": "#1479",
-    "added": "2026-08-04",
-    "reason": "Known drift: deploy.yml's rollout never recreates mlflow, so the pin bumps from #442 (v3.11.1) and #1477 (v3.15.1) never reached the live server. First boot of v3.15.1 against the existing store runs a ONE-WAY sqlite schema migration on volume e2i_mlflow_db, so the recreate is a deliberate quiet-window step with a DB backup first (issue #1479 tracks it). REMOVE this entry when that recreate lands — it matches only this exact (service, running, pinned) triple, so any further mlflow pin bump fails the check again by design."
-  }
-]
+[]
