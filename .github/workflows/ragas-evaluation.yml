@@ -43,7 +43,7 @@ name: RAGAS Fixture Regression
 # for the investigation: batching + an async client was ~6x faster locally on a
 # higher-tier key but timed out on the CI key). So it no longer runs automatically on
 # every src/rag push/PR. Trigger it on demand from the Actions tab ("Run workflow")
-# when you want a RAG-quality check. The golden set, calibrated thresholds, and judge
+# when you want a fixture judge-drift check. The golden set, calibrated thresholds, and judge
 # config (#358/#491/#496) are unchanged. To restore automatic runs — e.g. on a
 # higher-tier OpenAI key — re-add the push/pull_request triggers below.
 on:

@@ -297,3 +297,170 @@ def test_dormant_regression_job_fails_closed_on_an_unmeasured_metric():
         "the run block must name an unmeasured metric as unverifiable, mirroring "
         "check_thresholds' fail-closed contract"
     )
+
+
+# ---------------------------------------------------------------------------
+# Script surface: user-visible strings (codex iter-7 HIGH)
+# ---------------------------------------------------------------------------
+#
+# The module docstring says "RAGAS FIXTURE regression — judge-drift sentinel",
+# but the argparse description and the run banner still announced a RAG
+# PIPELINE evaluation — and the banner is what CI logs print. Same class as the
+# iter-6 workflow-string fix, one layer down.
+#
+# Its own claim vocabulary, deliberately: the workflow scan looks for
+# "rag quality"/"quality regression", which would never match "RAG pipeline".
+# Force-fitting one vocabulary onto both surfaces is how the first gap
+# survived.
+#
+# AST over call arguments, not a raw-text scan: the module docstring
+# legitimately explains that the script "never invokes the RAG pipeline", and
+# banning that phrase file-wide would forbid the disclaimer. Docstrings are
+# Expr nodes, so walking only Call arguments excludes them structurally.
+
+_SCRIPT_CLAIMS = ("rag pipeline", "rag evaluation pipeline")
+
+
+def _script_user_visible_strings() -> list:
+    """(lineno, text) for every string literal passed as a call argument."""
+    import ast
+
+    tree = ast.parse(EVAL_SCRIPT.read_text())
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                out.append((arg.lineno, arg.value))
+    return out
+
+
+def test_eval_script_user_visible_strings_do_not_claim_pipeline_evaluation():
+    offenders = [
+        f"run_ragas_eval.py:{lineno}: {text!r}"
+        for lineno, text in _script_user_visible_strings()
+        if any(claim in text.lower() for claim in _SCRIPT_CLAIMS)
+    ]
+    assert not offenders, (
+        "the fixture script still presents itself as a RAG pipeline evaluation "
+        "in user-visible output:\n" + "\n".join(offenders)
+    )
+
+
+def test_eval_script_string_scan_is_not_vacuous():
+    """Guard the guard: the scan must actually reach the banner and argparse."""
+    texts = [t for _, t in _script_user_visible_strings()]
+    assert any("Fixture" in t or "fixture" in t for t in texts), (
+        "no fixture-framed user-visible string found — the AST scan found nothing"
+    )
+    assert len(texts) > 10, f"AST scan returned only {len(texts)} strings; parse likely broke"
+
+
+# ---------------------------------------------------------------------------
+# Workflow header comment (codex iter-7 HIGH)
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_header_does_not_instruct_a_rag_quality_check():
+    """A PIN, not a general scan — deliberately.
+
+    Comments are invisible to yaml.safe_load, so the parsed-YAML step scan
+    cannot see this line. A general raw-text comment scan would false-fail on
+    the header's own legitimate disclaimers ("DOES NOT MEASURE PRODUCTION RAG
+    QUALITY"), so this pins the one instruction that told a reader to run the
+    fixture job when they want a quality check.
+    """
+    text = WORKFLOW_PATH.read_text()
+    assert "RAG-quality check" not in text, (
+        "the header still tells readers to run this job for a RAG-quality check; "
+        "it scores a fixture"
+    )
+    assert "fixture judge-drift check" in text
+
+
+# ---------------------------------------------------------------------------
+# Dormant job's inline python: BEHAVIORAL fail-closed test (codex iter-7 LOW)
+# ---------------------------------------------------------------------------
+#
+# The textual `"is not None and" not in code` guard above is formatting-brittle:
+# it misses a wrapped `if (score is not None\n    and score < threshold):`.
+# These run the extracted heredoc for real. The textual guard stays — it
+# documents intent and costs nothing; this is what closes the formatting hole.
+
+
+def _dormant_regression_python() -> str:
+    """Extract the heredoc python from the dormant job's run block.
+
+    After YAML block-scalar dedent the body sits at column 0 between the
+    ``<< 'PYEOF'`` line and the terminating ``PYEOF``.
+    """
+    lines = _dormant_run_block().splitlines()
+    start = next(i for i, line in enumerate(lines) if "<< 'PYEOF'" in line)
+    end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "PYEOF")
+    return "\n".join(lines[start + 1 : end])
+
+
+def _run_dormant_python(tmp_path, report: dict):
+    import json
+    import subprocess
+    import sys
+
+    results = tmp_path / "ragas-results"
+    results.mkdir(exist_ok=True)
+    (results / "evaluation-report.json").write_text(json.dumps(report))
+    return subprocess.run(
+        [sys.executable, "-c", _dormant_regression_python()],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+
+_HEALTHY_REPORT = {
+    "avg_faithfulness": 0.90,
+    "avg_answer_relevancy": 0.90,
+    "avg_context_precision": 0.90,
+    "avg_context_recall": 0.90,
+    "total_samples": 30,
+    "passed_samples": 30,
+}
+
+
+def test_dormant_python_blocks_on_an_unmeasured_metric(tmp_path):
+    """A metric we could not measure makes its threshold unverifiable."""
+    report = dict(_HEALTHY_REPORT, avg_faithfulness=None)
+    proc = _run_dormant_python(tmp_path, report)
+    assert proc.returncode == 1, f"expected block, got {proc.returncode}: {proc.stdout}"
+    assert "unmeasured" in proc.stdout and "unverifiable" in proc.stdout
+
+
+def test_dormant_python_blocks_on_a_missing_metric_key(tmp_path):
+    report = {k: v for k, v in _HEALTHY_REPORT.items() if k != "avg_context_recall"}
+    proc = _run_dormant_python(tmp_path, report)
+    assert proc.returncode == 1
+    assert "context_recall" in proc.stdout
+
+
+def test_dormant_python_passes_a_healthy_report(tmp_path):
+    proc = _run_dormant_python(tmp_path, _HEALTHY_REPORT)
+    assert proc.returncode == 0, f"healthy report must pass: {proc.stdout} {proc.stderr}"
+    assert "thresholds passed" in proc.stdout
+
+
+def test_dormant_python_warns_on_the_all_zero_degenerate_report(tmp_path):
+    """The pre-existing 0.0 fabrication mode still warns rather than failing."""
+    report = dict.fromkeys(
+        ("avg_faithfulness", "avg_answer_relevancy", "avg_context_precision", "avg_context_recall"),
+        0.0,
+    )
+    report.update(total_samples=30, passed_samples=0)
+    proc = _run_dormant_python(tmp_path, report)
+    assert proc.returncode == 0
+    assert "::warning::" in proc.stdout
+
+
+def test_dormant_python_blocks_a_genuine_threshold_regression(tmp_path):
+    proc = _run_dormant_python(tmp_path, dict(_HEALTHY_REPORT, avg_faithfulness=0.10))
+    assert proc.returncode == 1
+    assert "0.100" in proc.stdout

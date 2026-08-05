@@ -78,7 +78,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Run RAGAS evaluation for E2I RAG pipeline")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the RAGAS fixture judge-drift regression (frozen input — "
+            "not production quality; see #1485)"
+        )
+    )
 
     # Dataset options
     parser.add_argument(
@@ -208,7 +213,8 @@ async def main() -> int:
     )
 
     logger.info("=" * 60)
-    logger.info("E2I RAG Evaluation Pipeline")
+    logger.info("RAGAS Fixture Regression / Judge-Drift Sentinel")
+    logger.info("Measures judge drift on a STATIC FIXTURE — not production quality (#1485)")
     logger.info("=" * 60)
     logger.info(f"Thresholds: {thresholds}")
     logger.info(f"MLflow logging: {'Enabled' if not args.no_mlflow else 'Disabled'}")
