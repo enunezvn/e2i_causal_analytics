@@ -1093,3 +1093,68 @@ def test_nginx_mlflow_proxy_forwards_allowed_host_header(conf_name, compose_name
         f"{conf_name}: forwards Host {forwarded!r}, not matched by "
         f"{compose_name}'s --allowed-hosts {_allowed.hosts}"
     )
+
+
+# =============================================================================
+# #1479 mlflow v3.15 security middleware - CORS Origin gate (codex iter-2 MED)
+# =============================================================================
+# The one public browser origin that reaches the /mlflow/ UI through the host
+# nginx proxy (server_name eznomics.site; no www variant is served).
+PUBLIC_MLFLOW_ORIGIN = "https://eznomics.site"
+
+
+def _mlflow_origin_matcher(compose_path):
+    """Build the real should_block_cors_request allowlist predicate from a
+    compose file's mlflow --cors-allowed-origins value
+    (mlflow/server/security_utils.py: EXACT string equality unless the entry
+    contains '*', then fnmatch — same rule as the Host matcher above)."""
+    doc = _load(compose_path)
+    command = _services(doc)["mlflow"]["command"]
+    assert "--cors-allowed-origins" in command, (
+        f"{compose_path.name}: mlflow server command must set "
+        "--cors-allowed-origins (the v3.15 CORS gate 403s every state-changing "
+        "browser request from the public /mlflow/ UI otherwise)"
+    )
+    match = re.search(r"--cors-allowed-origins\s+(\S+)", command)
+    assert match, (
+        f"{compose_path.name}: --cors-allowed-origins must carry an inline value: {command!r}"
+    )
+    origins = match.group(1).split(",")
+
+    def _allowed(origin: str) -> bool:
+        return any(
+            fnmatch.fnmatch(origin, entry) if "*" in entry else origin == entry for entry in origins
+        )
+
+    _allowed.origins = origins  # type: ignore[attr-defined]
+    return _allowed
+
+
+@pytest.mark.parametrize("compose_name", ["docker-compose.yml", "docker-compose.secure.yml"])
+def test_mlflow_cors_allows_public_ui_origin(compose_name):
+    """mlflow >=3.15 runs a SECOND, independent 403 gate besides Host
+    validation: block_cross_origin_state_changes (mlflow/server/security.py)
+    403s every POST/PUT/DELETE/PATCH to /api/ or /ajax-api/ whose Origin header
+    is neither localhost nor in --cors-allowed-origins — and with the flag
+    unset the allowlist is EMPTY, so every non-localhost browser origin is
+    blocked ("Cross-origin request blocked"). MLflow's UI search endpoints
+    (SearchRuns/SearchExperiments/...) are POST, so this breaks interactive
+    browsing, not just writes. Measured live 2026-08-05 through the public
+    proxy right after the Host fix: authenticated POST
+    /ajax-api/2.0/mlflow/experiments/search with 'Origin: https://eznomics.site'
+    -> 403 'Cross-origin request blocked'; the same POST without an Origin
+    header (non-browser client) -> 200 with real data. Compose-internal
+    tracking clients send no Origin header, which is why only the browser UI
+    breaks. The flag wires verbatim into MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
+    (mlflow/cli) and does not touch the Host gate."""
+    _allowed = _mlflow_origin_matcher(REPO_ROOT / "docker" / compose_name)
+    assert "*" not in _allowed.origins, (
+        f"{compose_name}: --cors-allowed-origins must not contain a bare '*' — "
+        "that lets ANY origin drive state-changing requests with the browser's "
+        f"cached basic-auth credentials (CSRF); got {_allowed.origins}"
+    )
+    assert _allowed(PUBLIC_MLFLOW_ORIGIN), (
+        f"{compose_name}: the public UI browser sends Origin "
+        f"'{PUBLIC_MLFLOW_ORIGIN}' on every /ajax-api POST — not matched by "
+        f"--cors-allowed-origins {_allowed.origins}"
+    )

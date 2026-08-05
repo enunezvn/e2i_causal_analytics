@@ -311,6 +311,9 @@ services:
     # --allowed-hosts REPLACES that default — matching is EXACT unless the entry
     # has a '*' (fnmatch) and Host headers carry the port, so every name needs
     # its ':*' wildcard. App services here connect as http://mlflow:5000 (#1479).
+    # --cors-allowed-origins: the separate v3.15 CORS gate 403s state-changing
+    # /ajax-api browser requests (incl. the UI's POST-based search) unless the
+    # public origin is allowlisted; never '*' (CSRF against the UI) (#1479).
     command: >
       mlflow server
       --backend-store-uri sqlite:///mlflow/db/mlflow.db
@@ -318,6 +321,7 @@ services:
       --host 0.0.0.0
       --port 5000
       --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
+      --cors-allowed-origins https://eznomics.site
     networks:
       - monitoring-network
       - app-network

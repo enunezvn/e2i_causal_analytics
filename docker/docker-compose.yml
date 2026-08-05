@@ -438,6 +438,12 @@ services:
     # healthcheck and the host-side UI on 127.0.0.1:5000 (#1479). Matching is
     # EXACT unless the entry has a '*' (fnmatch) and the Host header carries the
     # port, so each name needs its ':*' wildcard — bare names alone 403'd live.
+    # --cors-allowed-origins: a SECOND, independent v3.15 gate 403s every
+    # state-changing /ajax-api request (incl. the UI's POST-based search
+    # endpoints, i.e. all interactive browsing) whose browser Origin is neither
+    # localhost nor allowlisted — so the public /mlflow/ UI origin must be named
+    # explicitly. Keep it narrow: never '*', which would open the basic-auth'd
+    # UI to cross-site request forgery (#1479).
     command: >
       mlflow server
       --backend-store-uri sqlite:///mlflow/db/mlflow.db
@@ -447,6 +453,7 @@ services:
       --host 0.0.0.0
       --port 5000
       --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
+      --cors-allowed-origins https://eznomics.site
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/')"]
       interval: 30s
