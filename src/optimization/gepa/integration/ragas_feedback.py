@@ -152,7 +152,14 @@ class RAGASFeedbackProvider:
         try:
             from src.rag.evaluation import EvaluationSample, get_ragas_evaluator
 
-            evaluator = get_ragas_evaluator()
+            # reset=True because the factory memoizes a module-global instance
+            # whose availability flags are frozen at ITS first construction. A
+            # verdict cached while a key happened to be set would wave through a
+            # provider that then degrades on every example. Safe to replace for
+            # all consumers: RAGASEvaluator assigns nothing outside __init__, so
+            # a fresh instance loses no state and simply re-detects from current
+            # env, and the Opik tracer it picks up is its own module singleton.
+            evaluator = get_ragas_evaluator(reset=True)
         except ImportError as e:
             raise RAGASFeedbackUnavailableError(
                 f"RAGAS evaluator is unavailable ({e}); refusing to produce GEPA "
@@ -312,20 +319,40 @@ class RAGASFeedbackProvider:
             # synthetic scores from judged ones (evaluation.py, "fallback_heuristic").
             # Construction already refuses a statically-unavailable judge; this
             # catches degradation DURING a run (an expired or rate-limited key).
-            evaluation_method = (getattr(result, "metadata", None) or {}).get("evaluation_method")
-            if evaluation_method == "fallback_heuristic":
+            metadata = getattr(result, "metadata", None) or {}
+            if metadata.get("evaluation_method") == "fallback_heuristic":
                 raise RAGASFeedbackUnavailableError(
                     "RAGASEvaluator returned fallback_heuristic scores rather than "
                     "judged ones (the judge degraded mid-run); refusing to feed "
                     "heuristics to GEPA as optimization signal."
                 )
 
-            scores = {
-                "faithfulness": result.faithfulness or 0.0,
-                "answer_relevancy": result.answer_relevancy or 0.0,
-                "context_precision": result.context_precision or 0.0,
-                "context_recall": result.context_recall or 0.0,
+            # evaluate_sample can return early with every metric None and no
+            # heuristic stamp (e.g. an empty answer). "Not measured" is not
+            # "measured zero" — refuse rather than coerce, or the composite
+            # silently reports a judgement that never happened.
+            if metadata.get("error"):
+                raise RAGASFeedbackUnavailableError(
+                    f"RAGASEvaluator returned no judged scores ({metadata['error']}); "
+                    "refusing to report an unmeasured sample as a score."
+                )
+
+            raw: dict[str, Optional[float]] = {
+                "faithfulness": result.faithfulness,
+                "answer_relevancy": result.answer_relevancy,
+                "context_precision": result.context_precision,
+                "context_recall": result.context_recall,
             }
+            unmeasured = sorted(name for name, value in raw.items() if value is None)
+            if unmeasured:
+                raise RAGASFeedbackUnavailableError(
+                    "RAGASEvaluator returned no value for "
+                    + ", ".join(unmeasured)
+                    + "; refusing to score an unmeasured metric as 0.0."
+                )
+
+            # `is not None` (not truthiness) — a judged 0.0 is a real score.
+            scores = {name: value for name, value in raw.items() if value is not None}
         except Exception as e:
             logger.exception(
                 "RAGAS evaluation failed for GEPA feedback; propagating rather "

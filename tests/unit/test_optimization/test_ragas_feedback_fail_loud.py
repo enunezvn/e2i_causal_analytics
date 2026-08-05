@@ -193,6 +193,110 @@ class TestConstructionVerifiesJudgedPath:
         assert provider.enabled is True
 
 
+@pytest.fixture
+def restore_evaluator_singleton():
+    """Rebuild the module-global evaluator under the restored env after a test."""
+    yield
+    from src.rag.evaluation import get_ragas_evaluator
+
+    get_ragas_evaluator(reset=True)
+
+
+class TestConstructionUsesCurrentEnv:
+    """The availability check must read CURRENT env, not a cached singleton.
+
+    ``get_ragas_evaluator`` memoizes a module-global instance whose
+    ``_ragas_available`` / ``_llm_configured`` / ``llm_provider`` are frozen at
+    first construction. Reusing it would let a stale "judgeable" verdict —
+    cached when a key happened to be set — wave through a provider that then
+    degrades on every example (codex iter-2, HIGH).
+    """
+
+    def test_refuses_when_key_removed_after_singleton_cached(
+        self, monkeypatch, restore_evaluator_singleton
+    ):
+        from src.rag.evaluation import get_ragas_evaluator
+
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        cached = get_ragas_evaluator(reset=True)
+        assert cached.can_judge is True
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        # The cached instance still reports the stale verdict — that is the trap.
+        assert get_ragas_evaluator().can_judge is True
+
+        with pytest.raises(RAGASFeedbackUnavailableError, match="no LLM API key"):
+            RAGASFeedbackProvider()
+
+    def test_constructs_when_key_added_after_singleton_cached(
+        self, monkeypatch, restore_evaluator_singleton
+    ):
+        """The other direction: a stale 'blocked' verdict must not veto a good env."""
+        from src.rag.evaluation import get_ragas_evaluator
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        cached = get_ragas_evaluator(reset=True)
+        assert cached.can_judge is False
+
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        provider = RAGASFeedbackProvider()
+        assert provider.enabled is True
+
+
+class TestUnjudgedMetricsAreRefused:
+    """All-``None`` metrics are 'not measured', not 'measured zero'.
+
+    ``evaluate_sample``'s no-answer early return yields every metric ``None``
+    with ``metadata={"error": "No answer provided"}`` and NO
+    ``fallback_heuristic`` stamp, so ``or 0.0`` used to manufacture a 0.0 with
+    no judge having run (codex iter-2, HIGH). The candidate still ends up at
+    dspy's ``failure_score`` 0.0, but the invariant and the log line survive.
+    """
+
+    async def test_error_metadata_is_refused(self):
+        provider = _provider_with(
+            _StubEvaluator(
+                result=_result(
+                    faithfulness=None,
+                    answer_relevancy=None,
+                    context_precision=None,
+                    context_recall=None,
+                    overall_score=None,
+                    metadata={"error": "No answer provided"},
+                )
+            )
+        )
+
+        with pytest.raises(RAGASFeedbackUnavailableError, match="No answer provided"):
+            await provider.evaluate(question="q", answer="", contexts=["c1"])
+
+    async def test_all_none_metrics_refused_even_without_error_metadata(self):
+        provider = _provider_with(
+            _StubEvaluator(
+                result=_result(
+                    faithfulness=None,
+                    answer_relevancy=None,
+                    context_precision=None,
+                    context_recall=None,
+                    overall_score=None,
+                )
+            )
+        )
+
+        with pytest.raises(RAGASFeedbackUnavailableError):
+            await provider.evaluate(question="q", answer="a", contexts=["c1"])
+
+    async def test_partial_none_metric_is_refused_and_named(self):
+        """One unmeasured metric silently dragged the weighted score down."""
+        provider = _provider_with(_StubEvaluator(result=_result(context_recall=None)))
+
+        with pytest.raises(RAGASFeedbackUnavailableError, match="context_recall"):
+            await provider.evaluate(question="q", answer="a", contexts=["c1"])
+
+
 class TestEvaluatorJudgedPathProperties:
     """The public seam on RAGASEvaluator the provider checks (#1488).
 
