@@ -70,23 +70,45 @@ from src.optimization.dspy_lane_ab import (
 # _evaluate_with_ragas computes all four metrics per sample regardless.
 REAL_PIPELINE_METRICS: Tuple[str, ...] = ("faithfulness", "answer_relevancy")
 
-# BASELINE — PENDING. These values are placeholders until the first honest
-# run lands; they have NOT been measured. Do not cite them as a baseline.
-# The calibration procedure is: run scripts/run_real_pipeline_ragas.py at
-# n>=10 against the live pipeline, then set each threshold one judge-noise
-# band below the measured mean and record the run date, n, and deployed SHA
-# here.
+# ===========================================================================
+# BASELINE — MEASURED 2026-08-05, n=15, deployed main 9784abbd
+# ===========================================================================
+# 15 golden questions replayed through POST /api/cognitive/rag (0 errors),
+# judged by the frozen gpt-4o judge via the production RAGASEvaluator:
 #
-# For scale, the repo's own recorded 2026-07-18 run (n=10, baseline
-# openai/gpt-5.6-terra, docs/reports/dspy_lane_ab_20260718.md §3) measured
-# faithfulness 0.690 over 3 context-bearing replays and answer_relevancy
-# 0.401 — against the fixture gate's 0.804. Thresholds here are NOT
-# aspirational quality targets and must not be read as "good"; they exist to
-# catch a REGRESSION from a measured baseline. Raising them is a product
-# decision; lowering them to accommodate a red run is gate-shopping.
+#     retrieval hit      5/15  = 0.333
+#     faithfulness       0.524  (n=5 context-bearing replays; SE 0.195)
+#     answer_relevancy   0.179  (n=15; SE 0.083)
+#
+# Judging wall time 4m25s. Compare the fixture gate's 0.804 answer_relevancy
+# and 1.0-by-construction context metrics — that gap is the whole of #1485.
+# The prior real measurement (2026-07-18, n=10, terra) was faithfulness 0.690
+# over 3 context-bearing replays and answer_relevancy 0.401.
+#
+# HOW TO READ answer_relevancy HERE — it is mostly an ABSTENTION RATE.
+# ragas multiplies the score by zero for any answer its judge calls
+# noncommittal (ragas/metrics/_answer_relevance.py:127,
+# `score = cosine_sim.mean() * int(not all_noncommittal)`). On this run 11 of
+# 15 turns scored EXACTLY 0.000 because the pipeline declined to answer
+# ("I could not verify X from the supplied materials"); the 4 turns that did
+# commit averaged 0.670. So 0.179 ≈ (4/15) × 0.670 — it measures how often
+# the pipeline commits, not how well it words a committed answer. Every one
+# of the 10 zero-retrieval turns abstained, so the binding constraint is
+# RETRIEVAL, not generation. Read a drop here as "the pipeline abstained more
+# often", and check the retrieval hit rate alongside it.
+#
+# Thresholds sit ~1 standard error below the measured means. They are NOT
+# aspirational quality targets and must not be read as "good" — this is the
+# first honest number, deliberately recorded as a floor to regress against.
+# Raising them is a product decision; lowering them to accommodate a red run
+# is gate-shopping. Recalibrate only with a fresh measured run recorded here.
 REAL_PIPELINE_THRESHOLDS: Dict[str, float] = {
-    "faithfulness": 0.50,
-    "answer_relevancy": 0.30,
+    # measured 0.524, SE 0.195 over only 5 context-bearing replays whose
+    # values ranged 0.000-0.929 — a wide spread, so the floor is generous.
+    "faithfulness": 0.35,
+    # measured 0.179, SE 0.083. At this floor, abstention rising from 11/15
+    # to 13/15 (AR ≈ 0.089) blocks.
+    "answer_relevancy": 0.10,
 }
 
 # #1489 step 3 fixes the cadence at n≈10-15 (the CI OpenAI key throughput was
