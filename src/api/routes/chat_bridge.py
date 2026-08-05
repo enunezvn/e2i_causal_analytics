@@ -178,7 +178,22 @@ async def run_conversational_bridge(
         # CopilotKit SDK surface on chatbot_graph import.
         from src.api.routes.copilotkit import _session_id_context, create_e2i_chat_agent
 
-        graph = create_e2i_chat_agent()
+        # #1475: fast tool-selection leg. Measured 2026-08-04 (live probes +
+        # same-box/key/prompt experiments): the bridge's chat leg is purely a
+        # tool router on bridged turns (0 content chars, ~86-token tool call
+        # every run) and sonnet-5 spent 3.1-5.8s on it; haiku-4-5 selected the
+        # IDENTICAL tool with equivalent args on 3/3 real bridged queries in
+        # 1.17-1.33s. Thinking (medium vs none: ~0.5s) and prompt caching
+        # (cache-hit TTFT unchanged) were both measured immaterial. The
+        # synthesize leg — the user-facing prose author — stays on the
+        # standard tier, and the AG-UI brain keeps its defaults (two-brain
+        # separation). Residual tradeoff, stated: a bridged turn that answers
+        # WITHOUT a tool call gets fast-tier prose behind the ungrounded
+        # preamble.
+        graph = create_e2i_chat_agent(
+            chat_llm_tier="fast",
+            chat_llm_reasoning_effort="none",
+        )
         effective_timeout = timeout_s if timeout_s is not None else _bridge_timeout_s()
         # Shadow session: chat_node persists messages keyed on this contextvar
         # (observed in a real local bridge run). Under the real session id a
