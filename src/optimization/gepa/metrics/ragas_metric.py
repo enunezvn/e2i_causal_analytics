@@ -185,6 +185,31 @@ class RagasGEPAMetric:
         self._degraded_examples = 0
         self._degradation_lock = threading.Lock()
 
+        # Judged results, keyed by the judge's own inputs. GEPA re-invokes the
+        # metric OUTSIDE its budget to build the reflective dataset: dspy
+        # gepa.py:510-524 wraps metric_fn in a feedback closure that
+        # gepa_utils.py:268-274 calls once per trajectory per component, every
+        # proposal round, while total_num_evals — the only thing the stop
+        # condition reads — is incremented solely on evaluate paths. Without
+        # this memo a run capped at max_metric_calls=40 quietly spends
+        # 40 + (rounds x minibatch x components) judgements re-scoring inputs it
+        # already scored. Memoizing also makes the re-call return the identical
+        # score, which is what dspy's warn_on_score_mismatch check
+        # (gepa_utils.py:277-281) expects and a nondeterministic LLM judge would
+        # otherwise trip on every round.
+        #
+        # Lifetime is the instance, which is exactly one optimization run: the
+        # nightly leg constructs a fresh metric per run, so nothing has to be
+        # reset between runs.
+        #
+        # A SEPARATE lock from the counter, held only across dict access and
+        # never across the judge call — holding it through _judge would
+        # serialize GEPA's worker threads. Two threads racing the same key can
+        # therefore both judge it once; that is a duplicate call, not a wrong
+        # answer, and it is strictly better than serializing every judgement.
+        self._memo: Dict[Tuple[Any, ...], Tuple[str, Any]] = {}
+        self._memo_lock = threading.Lock()
+
     @property
     def degraded_examples(self) -> int:
         """Examples whose score was lost to judge degradation, not candidate quality."""
@@ -263,9 +288,48 @@ class RagasGEPAMetric:
         import dspy
 
         question, answer, retrieved, reference = self._extract(gold, pred)
-        result = self._judge(question, answer, retrieved, reference)
-        score, feedback = self._compose(result, retrieved, reference)
+        key = (
+            question,
+            answer,
+            tuple(retrieved),
+            tuple(reference) if reference is not None else None,
+        )
+
+        cached = self._memo_get(key)
+        if cached is not None:
+            kind, payload = cached
+            if kind == "refused":
+                raise RagasUnjudgeableExampleError(str(payload))
+            score, feedback = payload
+            # A FRESH Prediction per hit: dspy's feedback path mutates what the
+            # metric returns (gepa.py:526 assigns o["feedback"]), so handing back
+            # a shared object would let one caller corrupt the memo.
+            return dspy.Prediction(score=float(score), feedback=str(feedback))
+
+        # Whether a refusal is cacheable is decided by the SAME rule that decides
+        # whether it counts as degradation: a refusal that did not move the
+        # counter is deterministic (candidate- or dataset-caused) and will repeat
+        # identically, so caching it is free. One that did move the counter is an
+        # environmental failure and must stay retryable.
+        degraded_before = self.degraded_examples
+        try:
+            result = self._judge(question, answer, retrieved, reference)
+            score, feedback = self._compose(result, retrieved, reference)
+        except RagasUnjudgeableExampleError as e:
+            if self.degraded_examples == degraded_before:
+                self._memo_put(key, ("refused", str(e)))
+            raise
+
+        self._memo_put(key, ("ok", (float(score), str(feedback))))
         return dspy.Prediction(score=float(score), feedback=feedback)
+
+    def _memo_get(self, key: Tuple[Any, ...]) -> Optional[Tuple[str, Any]]:
+        with self._memo_lock:
+            return self._memo.get(key)
+
+    def _memo_put(self, key: Tuple[Any, ...], value: Tuple[str, Any]) -> None:
+        with self._memo_lock:
+            self._memo[key] = value
 
     def _extract(
         self, gold: Example, pred: Prediction

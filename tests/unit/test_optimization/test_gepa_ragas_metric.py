@@ -366,6 +366,146 @@ class TestJudgeDegradationIsCounted:
         assert metric.degraded_examples == 0
 
 
+class TestJudgedResultsAreMemoized:
+    """max_metric_calls does NOT cap every judge call (codex iter-2).
+
+    GEPA re-invokes the metric to build its reflective dataset:
+    ``dspy/teleprompt/gepa/gepa.py:510-524`` wraps ``self.metric_fn(...)`` in a
+    feedback closure, called from ``gepa_utils.py:268-274`` once per trajectory
+    per component on every proposal round. Those calls are OUTSIDE the budget —
+    ``total_num_evals`` is incremented only on evaluate paths (gepa
+    core/engine.py:113, reflective_mutation.py:110/151, merge.py:335), and
+    ``make_reflective_dataset`` increments nothing, while the stop condition
+    (utils/stop_condition.py:173) reads only ``total_num_evals``.
+
+    So without a memo, a run capped at 40 metric calls silently spends
+    40 + (rounds x minibatch x components) judgements, on inputs already judged.
+    Memoizing also makes the feedback re-call return the SAME score, which
+    honestly silences dspy's warn_on_score_mismatch path (gepa_utils.py:277-281)
+    instead of it firing constantly on a nondeterministic LLM judge.
+    """
+
+    def _gold_pred(self) -> tuple:
+        return (
+            _example(user_query="why did TRx drop?", evidence_board=["ctx a"]),
+            _prediction(synthesis="TRx fell 12% on payer mix."),
+        )
+
+    def test_identical_inputs_are_judged_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        evaluator = _StubEvaluator(result=_result())
+        metric = _metric(monkeypatch, evaluator)
+        gold, pred = self._gold_pred()
+
+        first = metric(gold, pred, None, None, None)
+        second = metric(gold, pred, None, None, None)
+
+        assert len(evaluator.samples) == 1, (
+            f"judge ran {len(evaluator.samples)}x for identical inputs; each extra run "
+            "is ~4 LLM calls outside max_metric_calls"
+        )
+        assert first.score == second.score
+
+    def test_feedback_shaped_recall_hits_the_memo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The reflection re-call passes pred_name + pred_trace; same example."""
+        evaluator = _StubEvaluator(result=_result())
+        metric = _metric(monkeypatch, evaluator)
+        gold, pred = self._gold_pred()
+
+        scored = metric(gold, pred, None, None, None)
+        # Exactly the shape gepa.py:517-523 passes.
+        feedback = metric(gold, pred, [], "synthesize", [("predictor", {}, pred)])
+
+        assert len(evaluator.samples) == 1
+        assert feedback.score == scored.score, (
+            "a differing score here is what trips dspy's warn_on_score_mismatch"
+        )
+
+    def test_distinct_examples_do_not_collide(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        evaluator = _StubEvaluator(result=_result())
+        metric = _metric(monkeypatch, evaluator)
+
+        metric(
+            _example(user_query="question one", evidence_board=["ctx a"]),
+            _prediction(synthesis="answer one"),
+            None,
+            None,
+            None,
+        )
+        metric(
+            _example(user_query="question two", evidence_board=["ctx b"]),
+            _prediction(synthesis="answer two"),
+            None,
+            None,
+            None,
+        )
+
+        assert len(evaluator.samples) == 2, "distinct examples shared a memo entry"
+
+    def test_environmental_failure_is_not_memoized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A timeout must stay transient — a later call re-attempts the judge."""
+        evaluator = _StubEvaluator(raises=TimeoutError("judge timed out"))
+        metric = _metric(monkeypatch, evaluator)
+        gold, pred = self._gold_pred()
+
+        for _ in range(2):
+            with pytest.raises(TimeoutError):
+                metric(gold, pred, None, None, None)
+
+        assert len(evaluator.samples) == 2, "a transient judge failure was cached"
+
+    def test_heuristic_degradation_is_not_memoized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.optimization.gepa.metrics.ragas_metric import RagasUnjudgeableExampleError
+
+        evaluator = _StubEvaluator(
+            result=_result(metadata={"evaluation_method": "fallback_heuristic"})
+        )
+        metric = _metric(monkeypatch, evaluator)
+        gold, pred = self._gold_pred()
+
+        for _ in range(2):
+            with pytest.raises(RagasUnjudgeableExampleError):
+                metric(gold, pred, None, None, None)
+
+        assert len(evaluator.samples) == 2, "mid-run judge degradation was cached"
+
+    def test_candidate_caused_refusal_is_memoized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Deterministic refusals should not re-bill the judge on every re-call."""
+        from src.optimization.gepa.metrics.ragas_metric import RagasUnjudgeableExampleError
+
+        evaluator = _StubEvaluator(
+            result=_result(
+                faithfulness=None,
+                answer_relevancy=None,
+                context_precision=None,
+                context_recall=None,
+                overall_score=None,
+            )
+        )
+        metric = _metric(monkeypatch, evaluator)
+        gold, pred = self._gold_pred()
+
+        for _ in range(2):
+            with pytest.raises(RagasUnjudgeableExampleError):
+                metric(gold, pred, None, None, None)
+
+        assert len(evaluator.samples) == 1, (
+            "a deterministic refusal re-billed the judge on the reflection re-call"
+        )
+        assert metric.degraded_examples == 0
+
+    def test_memo_hit_returns_a_fresh_prediction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No aliasing: a caller mutating one result must not corrupt the memo."""
+        metric = _metric(monkeypatch, _StubEvaluator(result=_result()))
+        gold, pred = self._gold_pred()
+
+        first = metric(gold, pred, None, None, None)
+        first.score = 0.0
+        second = metric(gold, pred, None, None, None)
+
+        assert second.score != 0.0, "memo handed back an aliased, mutated result"
+        assert first is not second
+
+
 class TestFixtureContaminationGuard:
     """Fixture-derived contexts make precision/recall 1.0 by construction."""
 
