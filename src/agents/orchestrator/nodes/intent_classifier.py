@@ -438,6 +438,46 @@ _TIER_PRE_ANCHOR_COMMERCIAL_VETO = (
 _PATTERN_SCAN_MAX_CHARS = 2000
 
 
+# KPI value lookups → explainer (#1337 gold: kpi_query is the largest gold
+# class, 111/337 rows). Without this pattern these queries fall to the LLM
+# layer, which classifies them prediction@0.85 → prediction_synthesizer fails
+# closed on chat.
+#
+# The {0,3} word-bounded gap keeps causal/forecast asks that merely MENTION a
+# metric ("what is the causal impact of rep visits on TRx") outside the match;
+# "teh" is a recurring real-traffic typo (bench-0083/0100/0114/0117/0126).
+#
+# Whole-query forecast guard (codex iter-1/2/3 MEDIUMs): a query containing ANY
+# prediction lexeme anywhere ("show me the trx forecast", "what is the trx for
+# next quarter expected to be?", "what is the likelihood of TRx growth?") must
+# NOT co-score explanation — (prediction, explanation) is a deliberate
+# MULTI_AGENT_PATTERNS pair, so a spurious match here double-dispatches pure
+# forecast asks. Token-local lookaheads (iter 1/2) could not close the family
+# (punctuation/intervening tokens); the \A-anchored guard scans the whole query
+# instead. Its stem set mirrors the "prediction" INTENT_PATTERNS lexemes
+# (predict|forecast|project, what will|expected, likelihood|probability) —
+# prefix match, no \b, so inflections (predicted/predictive/projections/
+# probabilities) are covered. Excluded queries either match "prediction"
+# directly or fall to the LLM layer, whose menu teaches KPI lookups →
+# explanation.
+#
+# MODULE-LEVEL SSOT (#1475): the orchestrator dispatcher's explainer resolver
+# binds a REAL KPI value for exactly the shape this pattern selects, so both
+# the routing decision and the evidence binding must read ONE pattern —
+# a forked copy would let "routes to explainer" and "explainer can answer it"
+# drift apart. INTENT_PATTERNS["explanation"] references the string constant
+# (the classifier scores with ``re.search(pattern, query, re.IGNORECASE)``);
+# the resolver uses the pre-compiled twin. Identity is pinned by
+# test_explainer_evidence_binding_1475.py.
+KPI_VALUE_LOOKUP_PATTERN = (
+    r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
+    r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
+    r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
+    r"(?:trx|nrx|nbrx|market share|conversion rate)\b"
+)
+KPI_VALUE_LOOKUP_RE = re.compile(KPI_VALUE_LOOKUP_PATTERN, re.IGNORECASE)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -522,33 +562,12 @@ class IntentClassifierNode:
             r"explain|clarify|what does.*mean",
             r"help.*understand",
             r"break down",
-            # KPI value lookups → explainer (#1337 gold: kpi_query is the
-            # largest gold class, 111/337 rows). Without this pattern these
-            # queries fall to the LLM layer, which classifies them
-            # prediction@0.85 → prediction_synthesizer fails closed on chat.
-            # The {0,3} word-bounded gap keeps causal/forecast asks that
-            # merely MENTION a metric ("what is the causal impact of rep
-            # visits on TRx") outside the match; "teh" is a recurring
-            # real-traffic typo (bench-0083/0100/0114/0117/0126).
-            # Whole-query forecast guard (codex iter-1/2/3 MEDIUMs): a query
-            # containing ANY prediction lexeme anywhere ("show me the trx
-            # forecast", "what is the trx for next quarter expected to be?",
-            # "what is the likelihood of TRx growth?") must NOT co-score
-            # explanation — (prediction, explanation) is a deliberate
-            # MULTI_AGENT_PATTERNS pair, so a spurious match here
-            # double-dispatches pure forecast asks. Token-local lookaheads
-            # (iter 1/2) could not close the family (punctuation/intervening
-            # tokens); the \A-anchored guard scans the whole query instead.
-            # Its stem set mirrors the "prediction" INTENT_PATTERNS lexemes
-            # (predict|forecast|project, what will|expected,
-            # likelihood|probability) — prefix match, no \b, so inflections
-            # (predicted/predictive/projections/probabilities) are covered.
-            # Excluded queries either match "prediction" directly or fall to
-            # the LLM layer, whose menu teaches KPI lookups → explanation.
-            r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
-            r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
-            r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
-            r"(?:trx|nrx|nbrx|market share|conversion rate)\b",
+            # KPI value lookups → explainer. The pattern (and the rationale
+            # behind every clause of it) lives at module level as
+            # KPI_VALUE_LOOKUP_PATTERN — the dispatcher's explainer resolver
+            # reads the same constant to decide when it may bind a real KPI
+            # value (#1475), so routing and binding cannot drift apart.
+            KPI_VALUE_LOOKUP_PATTERN,
         ],
         "system_health": [
             r"system.*(health|status)",
