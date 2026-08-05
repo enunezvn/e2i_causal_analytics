@@ -41,8 +41,10 @@ brand/region, missing substrate, or empty results — callers then proceed witho
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from functools import lru_cache
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -95,6 +97,11 @@ _ALIASES: Dict[str, str] = {
     "new prescription": "WS3-BI-006",
     "trx share": "WS3-BI-008",
     "market share": "WS3-BI-008",
+    # Reverse share phrasing (#1475 codex iter-2): "the share of TRx" is
+    # natural WS3-BI-008 language — without these it falls to the bare "trx"
+    # alias and reads as a WS3-BI-005 mention inside a "share of" chain.
+    "share of trx": "WS3-BI-008",
+    "share of total prescriptions": "WS3-BI-008",
     "trx": "WS3-BI-005",
     "total prescription": "WS3-BI-005",
     "return on investment": "WS3-BI-010",
@@ -115,6 +122,19 @@ _ALIASES: Dict[str, str] = {
     "conversion funnel": "WS2-TR-009",
     "trigger funnel": "WS2-TR-009",
 }
+
+# Registry abbreviations that are ordinary English words: admitting them to
+# the strict metric vocabulary would turn everyday chat prose into phantom
+# metric mentions ("access issues ATE into field time" is not a CM-001 ask).
+_ABBREV_BLOCKLIST = frozenset({"ate"})
+
+# Reverse-share phrasing that tolerates a brand/modifier gap between "of" and
+# the metric ("share of Kisqali TRx" -> WS3-BI-008). Mirrors the of-chain
+# tolerance in the dispatcher's governing-head guard; punctuation breaks the
+# chain the same way.
+_REVERSE_SHARE_RE = re.compile(
+    r"\bshare\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}?(?:trx|total\s+prescriptions?)\b"
+)
 
 
 @dataclass
@@ -157,27 +177,88 @@ class KpiFrame:
 
 
 # ---------------------------------------------------------------------------
+# KPI semantics (SSOT — moved here from chatbot_tools, #1475)
+# ---------------------------------------------------------------------------
+# Definition clarifications every answering surface MUST carry into the answer.
+# This dict lived in src/api/routes/chatbot_tools.py (which re-exports it); it
+# moved here because the orchestrator's explainer resolver needs the same notes
+# and importing chatbot_tools costs ~30s (it pulls the orchestrator /
+# tool_composer / RAG stacks) — unaffordable inside a sync input resolver.
+#
+# WS3-BI-008 (2026-07-18 session review): the share denominator is every
+# prescription in treatment_events, and ONLY the tracked portfolio brands
+# (Fabhalta / Kisqali / Remibrutinib) exist there — the chatbot presented the
+# figure as "share of the CSU market" and attributed the complement to Xolair/
+# Dupixent, which are not in the data model at all (a fabricated narrative on
+# top of a real number). Attaching the honest basis to every response kills
+# that at the source instead of relying on prompt memory.
+KPI_SEMANTIC_NOTES = {
+    "WS3-BI-008": (
+        "TRx Share is the brand's share of the tracked portfolio's "
+        "prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) "
+        "— NOT market share against external competitors. Competitor brands "
+        "(e.g. Xolair, Dupixent) are not in the data model; never attribute "
+        "the share complement to them."
+    ),
+    # #1360: 'trigger precision' reads like ML-model telemetry — the exact
+    # confusion that routed the bench-0024 ask to health_score. Pin the real
+    # meaning to every answer instead of relying on prompt memory.
+    "WS2-TR-001": (
+        "Trigger Precision is a BUSINESS-program metric over the NBA triggers "
+        "funnel — of accepted triggers with tracked outcomes, the share whose "
+        "patient converted within the 30-day window (definition v2, "
+        "truth-aligned). It is NOT a deployed-ML-model precision metric; "
+        "model telemetry lives with health_score."
+    ),
+    "WS2-TR-009": (
+        "Trigger Funnel Conversion's headline is the ACTIONED share of "
+        "DELIVERED triggers (delivered -> accepted -> actioned); the full "
+        "stage counts ride along as funnel_stages (delivered, viewed, "
+        "accepted, actioned, outcome). The headline stops at actioned by "
+        "design — the outcome stage reflects outcome-TRACKING coverage, not "
+        "effectiveness — and 'viewed' is a delivery-status progression state, "
+        "not a funnel prerequisite for acceptance."
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
-def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
-    """Recognize a defined KPI referenced by ``query``, else ``None``.
+def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int, int]]:
+    """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
-    Matches the query against KPI-vocabulary aliases first (longest alias wins
-    for specificity), then falls back to a conservative match on the registry's
-    KPI names. Brand/region in the query are ignored here (they are resolved
-    separately and dynamically).
+    Returns ``(kpi, normalized_query, match_start, match_end)`` —
+    ``normalized_query`` is the whitespace-collapsed lowercase form the matcher
+    actually ran on, and ``[match_start, match_end)`` is the span of the matched
+    alias / name token in it. Callers that must reason about the KPI mention's
+    grammatical position (the #1475 governing-head guards: "cost of TRx" names
+    TRx as a modifier; "TRx drivers" names TRx as the outcome of a causal ask)
+    use this instead of re-deriving the match.
     """
     if not query:
         return None
     q = " ".join(str(query).lower().split())
     registry = get_registry()
 
+    # 0) reverse-share phrasing with a brand/modifier gap (#1475 codex iter-4):
+    # "the share of Kisqali TRx" is WS3-BI-008 language, but the contiguous
+    # "share of trx" alias cannot see through the brand token, so the bare
+    # "trx" alias would read it as a WS3-BI-005 mention inside a "share of"
+    # chain and die on the head guard.
+    m = _REVERSE_SHARE_RE.search(q)
+    if m is not None:
+        share_kpi = registry.get("WS3-BI-008")
+        if share_kpi is not None:
+            return share_kpi, q, m.start(), m.end()
+
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
-        if alias in q:
+        idx = q.find(alias)
+        if idx != -1:
             kpi = registry.get(_ALIASES[alias])
             if kpi is not None:
-                return kpi
+                return kpi, q, idx, idx + len(alias)
 
     # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
     stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
@@ -186,9 +267,111 @@ def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
             str(kpi.name).lower().replace("-", " ").replace("(", " ").replace(")", " ").split()
         ):
             tok = tok.strip()
-            if len(tok) >= 4 and tok not in stop and tok in q:
-                return kpi
+            if len(tok) >= 4 and tok not in stop:
+                idx = q.find(tok)
+                if idx != -1:
+                    return kpi, q, idx, idx + len(tok)
     return None
+
+
+@lru_cache(maxsize=1)
+def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
+    """(phrase, kpi_id) pairs of HIGH-PRECISION metric vocabulary: the alias
+    map, full registry names (parentheticals stripped, punctuation
+    normalized), and parenthetical abbreviations ("MAU"). Single name TOKENS
+    are deliberately absent — registry names carry brand and scope tokens
+    ("kisqali", "patients") that mark an ask's SCOPE, not a metric mention.
+    Longest phrase first so "conversion rate" beats "conversion"."""
+    vocab: Dict[str, str] = {}
+    for alias, kpi_id in _ALIASES.items():
+        vocab.setdefault(alias, kpi_id)
+    for kpi in get_registry().get_all():
+        raw_name = str(kpi.name)
+        base = " ".join(
+            re.sub(r"[^a-z0-9']+", " ", re.sub(r"\([^)]*\)", " ", raw_name.lower())).split()
+        )
+        if len(base) >= 4:
+            vocab.setdefault(base, kpi.id)
+        # Parenthetical abbreviations, harvested with CASE intact: only real
+        # initialisms qualify (>=2 uppercase letters — keeps MAU/TTR/NRx,
+        # structurally drops "(Median)"), and common English words are
+        # blocklisted even when upper-cased — "(ATE)" must not make every
+        # "ate" in chat prose a metric mention (codex iter-6).
+        for abbr_raw in re.findall(r"\(([^)]+)\)", raw_name):
+            abbr = " ".join(re.sub(r"[^a-z0-9']+", " ", abbr_raw.lower()).split())
+            if (
+                len(abbr) >= 3
+                and sum(1 for c in abbr_raw if c.isupper()) >= 2
+                and abbr not in _ABBREV_BLOCKLIST
+            ):
+                vocab.setdefault(abbr, kpi.id)
+    return tuple(sorted(vocab.items(), key=lambda kv: len(kv[0]), reverse=True))
+
+
+@lru_cache(maxsize=1)
+def _case_sensitive_metric_abbrevs() -> Tuple[Tuple[str, str], ...]:
+    """Blocklisted common-word initialisms in their ORIGINAL uppercase form —
+    "ATE" in a query is the CM-001 metric even though prose "ate" is not
+    (codex iter-7). Matched case-sensitively against the un-normalized query."""
+    out: List[Tuple[str, str]] = []
+    for kpi in get_registry().get_all():
+        for abbr_raw in re.findall(r"\(([^)]+)\)", str(kpi.name)):
+            token = abbr_raw.strip()
+            lowered = " ".join(re.sub(r"[^a-z0-9']+", " ", token.lower()).split())
+            if lowered in _ABBREV_BLOCKLIST and sum(1 for c in token if c.isupper()) >= 2:
+                out.append((token, kpi.id))
+    return tuple(out)
+
+
+def recognize_distinct_metric(
+    normalized_query: str, *, exclude_id: str, original_query: Optional[str] = None
+) -> Optional[Tuple[KPIMetadata, int, int]]:
+    """A metric mention OTHER than ``exclude_id`` in an (already lowercase,
+    possibly span-masked) query — the dispatcher's multi-KPI vetoes probe
+    with this after masking the first recognized span. Word-boundary matched
+    against the strict vocabulary only; returns ``(kpi, start, end)`` in the
+    given string's coordinates.
+
+    ``original_query`` (case intact) additionally admits the blocklisted
+    common-word initialisms in their uppercase form: "TRx and ATE" names two
+    metrics; "access issues ate into field time" does not. The span is then
+    located via the lowercase occurrence in ``normalized_query`` (a query
+    containing BOTH forms resolves to the first occurrence — the veto errs
+    fail-closed)."""
+    registry = get_registry()
+    for phrase, kpi_id in _strict_metric_vocabulary():
+        if kpi_id == exclude_id:
+            continue
+        m = re.search(rf"(?<![\w'-]){re.escape(phrase)}(?![\w'-])", normalized_query)
+        if m is not None:
+            kpi = registry.get(kpi_id)
+            if kpi is not None:
+                return kpi, m.start(), m.end()
+    if original_query:
+        for abbr_raw, kpi_id in _case_sensitive_metric_abbrevs():
+            if kpi_id == exclude_id:
+                continue
+            if re.search(rf"(?<![\w'-]){re.escape(abbr_raw)}(?![\w'-])", original_query):
+                kpi = registry.get(kpi_id)
+                if kpi is not None:
+                    lowered = abbr_raw.lower()
+                    m = re.search(rf"(?<![\w'-]){re.escape(lowered)}(?![\w'-])", normalized_query)
+                    start, end = (m.start(), m.end()) if m else (0, 0)
+                    return kpi, start, end
+    return None
+
+
+def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
+    """Recognize a defined KPI referenced by ``query``, else ``None``.
+
+    Matches the query against KPI-vocabulary aliases first (longest alias wins
+    for specificity), then falls back to a conservative match on the registry's
+    KPI names. Brand/region in the query are ignored here (they are resolved
+    separately and dynamically). Delegates to :func:`recognize_kpi_span` — one
+    matcher, two views.
+    """
+    match = recognize_kpi_span(query)
+    return match[0] if match is not None else None
 
 
 # ---------------------------------------------------------------------------

@@ -1661,7 +1661,13 @@ def _successful_upstream_results(agent_input: Dict[str, Any]) -> List[Dict[str, 
     agent's REAL name attached (``setdefault`` — never overwriting a result's own
     field) so the narrative can attribute findings to their source agent.
     """
-    raw = agent_input.get("agent_results") or []
+    return _successful_results(agent_input.get("agent_results") or [])
+
+
+def _successful_results(raw: List[Any]) -> List[Dict[str, Any]]:
+    """The extraction shared by the full accumulated list and the
+    current-turn-only list (codex iter-6): successful, non-explainer,
+    non-empty result dicts, source-attributed."""
     upstream: List[Dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict) or not item.get("success"):
@@ -1675,6 +1681,482 @@ def _successful_upstream_results(agent_input: Dict[str, Any]) -> List[Dict[str, 
                 enriched.setdefault("agent_name", item["agent_name"])
             upstream.append(enriched)
     return upstream
+
+
+# --------------------------------------------------------------------------
+# #1475 target-2 — REAL-evidence binding for the explainer's two dead-end
+# query classes.
+#
+# explainer is BOTH the 'explanation'-intent primary (the #1337 gold label for
+# KPI value lookups: 111/337 rows, the largest gold class) AND the universal
+# fallback agent. Both classes arrive with an EMPTY upstream-result list, so
+# every one of them fell straight through to the #883 fail-closed return and
+# /chat/stream's multi-agent path answered nothing (measured 2026-08-05:
+# "Orchestrator complete failure: all agents failed - ['explainer']" and
+# "- ['causal_impact','explainer']", after which the chat bridge answered).
+#
+# The two resolvers below bind evidence that is REAL or nothing at all: the
+# value the KPI engine's vetted registry SQL actually computes, or the curated
+# causal_paths registry rows. #883's contract is untouched — when neither
+# substrate resolves, the same fail-closed return fires.
+# --------------------------------------------------------------------------
+
+#: A vetted-SQL KPI read is deterministic, not an estimate.
+_KPI_LOOKUP_CONFIDENCE = 1.0
+
+#: Registry-read parameters, mirroring ``causal_analysis_tool``'s defaults
+#: (src/api/routes/chatbot_tools.py) so the orchestrator and the chat tool
+#: surface the same paths for the same ask.
+_CAUSAL_PATH_MIN_CONFIDENCE = 0.7
+_CAUSAL_PATH_LIMIT = 15
+#: How many paths become key_findings (the rest ride along in data_summary).
+_CAUSAL_PATH_FINDINGS = 5
+
+#: Longest window phrase (in tokens) offered to the KPI engine's parser.
+_WINDOW_MAX_TOKENS = 4
+
+
+def _format_kpi_value(value: float, kpi: Any) -> str:
+    """Render a KPI value the way the dashboard does.
+
+    Mirrors ``src.insights.home_kpi._fmt_value`` (percent-format KPIs are 0-1
+    ratios shown as NN.N%; everything else as-is plus the unit) rather than
+    importing it: the orchestrator has no other dependency on the insights
+    layer, and that module pulls the DSPy signature stack at import time. This
+    is display formatting only — the bound payload also carries the raw
+    ``value``, so a drift here can never change what is reported.
+    """
+    if getattr(kpi, "value_format", None) == "percent":
+        return f"{value * 100:.1f}%"
+    rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
+    unit = getattr(kpi, "unit", None)
+    return f"{rendered} {unit}".strip() if unit else rendered
+
+
+def _window_from_query(query: str) -> Optional[Dict[str, str]]:
+    """The longest window phrase in ``query`` that the KPI engine's own parser
+    accepts, as its ``{start, end}`` dict — or ``None``.
+
+    The grammar is NOT re-implemented here: candidate token n-grams (longest
+    first) are handed to :func:`src.services.time_window.parse_window`, which
+    stays the sole authority on what a window phrase means. ``parse_window``
+    ``fullmatch``es, so it cannot be pointed at a whole sentence.
+
+    Single tokens are deliberately never tried: a bare 4-digit number parses as
+    a full-year window, so "the top 2000 HCPs" would silently bind calendar-year
+    2000 to the figure. No recognized phrase → ``None`` → the engine's default
+    window, which ``KPIResult.window_status`` then reports honestly as
+    "default" rather than implying the user's period was applied.
+    """
+    from src.services.time_window import WindowParseError, parse_window
+
+    tokens = re.findall(r"[\w'-]+", query.lower())
+    for size in range(min(_WINDOW_MAX_TOKENS, len(tokens)), 1, -1):
+        for start in range(len(tokens) - size + 1):
+            try:
+                window = parse_window(" ".join(tokens[start : start + size]))
+            except WindowParseError:
+                continue
+            if window is not None:
+                return window.as_dict()
+    return None
+
+
+#: Governing-head guard (codex iter-1): when the KPI mention sits inside a
+#: "<head> of <KPI>" chain, the head noun decides what is actually being asked
+#: about. "the value of TRx" still asks for the value; "the drivers of TRx"
+#: still asks for TRx's causal drivers; but "the cost of TRx" makes TRx a
+#: MODIFIER of a head the platform does not model — answering with a TRx value
+#: or TRx drivers would answer a question the user did not ask, so both
+#: branches fail closed on an unrecognized head. Two whitelists make the
+#: branches self-selecting: "what are the drivers of TRx" skips Branch A
+#: (drivers is not a value-head) and binds registry paths in Branch B.
+_VALUE_OF_HEADS = frozenset(
+    {
+        "value",
+        "values",
+        "level",
+        "levels",
+        "number",
+        "numbers",
+        "count",
+        "counts",
+        "total",
+        "totals",
+        "amount",
+        "figure",
+        "figures",
+        "sum",
+    }
+)
+_CAUSAL_OF_HEADS = frozenset(
+    {
+        "driver",
+        "drivers",
+        "determinant",
+        "determinants",
+        "cause",
+        "causes",
+        "impact",
+        "impacts",
+        "effect",
+        "effects",
+        "influence",
+        "influences",
+        "predictor",
+        "predictors",
+    }
+)
+
+# The of-chain tolerates an article plus up to two intervening tokens so a
+# brand/modifier between "of" and the KPI cannot strip the head (codex iter-3:
+# "determinants of Kisqali NRx" must keep its causal head; "cost of Kisqali
+# TRx" its unmodeled one). Punctuation breaks the chain — "speaking of
+# Kisqali, what is TRx" grows no false head.
+_OF_HEAD_RE = re.compile(r"([\w'-]+)\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$")
+
+# Temporal of-idioms are not governing heads: "as of Q2", "the end of June"
+# scope the WINDOW, not the metric — "as of Q2 TRx" is still a value ask,
+# answered with the window probe (codex iter-4). "half" is NOT here: "half of
+# TRx" asks for a transformation the platform does not model, so it must keep
+# its head and fail closed (codex iter-5).
+_TEMPORAL_OF_HEADS = frozenset({"as", "end", "start", "beginning", "middle", "close"})
+
+_NEXT_TOKEN_RE = re.compile(r"\s*([\w'-]+)")
+
+_ON_HEAD_RE = re.compile(r"\b(?:on|upon)\s+(?:(?:the|this|our)\s+)?$")
+
+
+def _directed_outcome(normalized_query: str, match_start: int) -> bool:
+    """True when the mention at ``match_start`` is on-headed — "impact of X
+    on Y" names Y as the OUTCOME of a directed causal ask (codex iter-5)."""
+    return _ON_HEAD_RE.search(normalized_query[:match_start]) is not None
+
+
+def _kpi_governing_of_head(normalized_query: str, match_start: int) -> Optional[str]:
+    """The head noun when the KPI mention is governed by ``<head> of <KPI>``."""
+    m = _OF_HEAD_RE.search(normalized_query[:match_start])
+    if m is None:
+        return None
+    head = m.group(1)
+    return None if head in _TEMPORAL_OF_HEADS else head
+
+
+def _kpi_right_head(normalized_query: str, match_end: int) -> Optional[str]:
+    """The token immediately AFTER the KPI mention (codex iter-2): right-headed
+    causal noun compounds — "TRx drivers", "NRx determinants" — fit the value
+    regex with no of-chain, so Branch A must also look right of the match."""
+    m = _NEXT_TOKEN_RE.match(normalized_query[match_end:])
+    return m.group(1) if m else None
+
+
+def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Branch A — bind the REAL computed value for a KPI value-lookup ask.
+
+    Gated by ``KPI_VALUE_LOOKUP_RE``, the SAME pattern that routes this shape to
+    the explainer in the first place (intent_classifier.py) — including its
+    whole-query forecast veto, so "what is the trx for next quarter expected to
+    be?" can never be answered with a current-period figure.
+
+    Returns ``None`` (→ the caller's fail-closed path) when the query is not a
+    KPI lookup, names no defined KPI, or the engine returns an error / no value.
+    Nothing is ever synthesized: the figure is the KPI registry's own SQL.
+    """
+    query = agent_input.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return None
+
+    from .intent_classifier import KPI_VALUE_LOOKUP_RE
+
+    if not KPI_VALUE_LOOKUP_RE.search(query):
+        return None
+
+    from src.services.kpi_resolution import (
+        KPI_SEMANTIC_NOTES,
+        recognize_distinct_metric,
+        recognize_kpi_span,
+    )
+
+    match = recognize_kpi_span(query)
+    if match is None:
+        return None
+    kpi, normalized_query, match_start, match_end = match
+    of_head = _kpi_governing_of_head(normalized_query, match_start)
+    if of_head is not None and of_head not in _VALUE_OF_HEADS:
+        # "cost of TRx", "drivers of TRx", ... — the KPI is not the asked-about
+        # value; let Branch B (or the fail-closed default) handle it.
+        return None
+    if _kpi_right_head(normalized_query, match_end) in _CAUSAL_OF_HEADS:
+        # "TRx drivers", "NRx determinants" — a right-headed causal compound;
+        # a bare value does not answer it.
+        return None
+    masked = (
+        normalized_query[:match_start]
+        + " " * (match_end - match_start)
+        + normalized_query[match_end:]
+    )
+    if recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query) is not None:
+        # "TRx and NRx" names TWO metrics — one value presented as the whole
+        # answer is a wrong answer; fail closed (the bridge answers multi-KPI
+        # asks today). A repeated mention of the SAME KPI still binds. The
+        # probe uses the STRICT vocabulary (aliases + full registry names +
+        # abbreviations, never single name tokens): registry names carry
+        # brand/scope tokens ("kisqali", "patients") that would read as a
+        # second metric on every scoped ask (codex iter-4/iter-5). The
+        # original query rides along so uppercase "ATE" still counts
+        # (codex iter-7).
+        return None
+
+    brand, region = _extract_brand_region(agent_input)
+    context: Dict[str, Any] = {}
+    if brand:
+        context["brand"] = brand
+    if region:
+        context["region"] = region
+    window = _window_from_query(query)
+    if window is not None:
+        context["window"] = window
+
+    try:
+        from src.api.routes.kpi import get_kpi_calculator
+
+        result = get_kpi_calculator().calculate(kpi.id, context=context)
+    except Exception as e:  # noqa: BLE001 - any engine failure fails closed
+        logger.warning("explainer resolver: KPI %s lookup raised (%s) -> failing closed", kpi.id, e)
+        return None
+
+    if result.error or result.value is None:
+        logger.info(
+            "explainer resolver: KPI %s returned no value (error=%r) -> failing closed",
+            kpi.id,
+            result.error,
+        )
+        return None
+
+    metadata = result.metadata or {}
+    result_context = metadata.get("context") or {}
+    data_through = result_context.get("data_through")
+    window_status = result.window_status
+    scope = " ".join(part for part in (brand, kpi.name) if part)
+    if region:
+        scope = f"{scope} in {region}"
+    provenance = [f"data through {data_through}"] if data_through is not None else []
+    provenance.append(f"window {window_status}")
+    formatted_value = _format_kpi_value(float(result.value), kpi)
+    # key_findings MUST be non-empty and MUST carry the figure: the explainer's
+    # deterministic path turns each finding into an Insight and quotes the top
+    # ones verbatim in the executive summary, so an empty list renders a
+    # "0 key finding(s)" husk with the value nowhere in the narrative.
+    key_findings = [f"{scope}: {formatted_value} ({'; '.join(provenance)})"]
+    warnings: List[str] = []
+    # Same semantic guard the chat KPI tool attaches (codex iter-1 HIGH): e.g.
+    # WS3-BI-008 "TRx Share" is tracked-portfolio share, NOT competitor market
+    # share — without the note a real number gets narrated as an answer to a
+    # question it does not answer. In key_findings so it is NARRATED, and in
+    # warnings (a first-class context_assembler field) for downstream consumers.
+    semantic_note = KPI_SEMANTIC_NOTES.get(kpi.id)
+    if semantic_note:
+        key_findings.append(semantic_note)
+        warnings.append(semantic_note)
+    if brand is None and region is None and window is None:
+        # A bare "What is NRx?" is plausibly a definition ask as much as a
+        # value ask — and data_summary never reaches the narrative (codex
+        # iter-2), so the registry definition must ride in key_findings to be
+        # narrated beside the value. A scoped ask (brand/region/window named)
+        # is unambiguously value-seeking: headline stays value-only.
+        key_findings.append(f"Definition: {kpi.definition}")
+
+    payload: Dict[str, Any] = {
+        # context_assembler._extract_context reads "agent" / "analysis_type" /
+        # "key_findings" / "confidence" / "warnings"; every other key lands in
+        # data_summary.
+        "agent": "kpi_calculator",
+        "analysis_type": "kpi_lookup",
+        "key_findings": key_findings,
+        "warnings": warnings,
+        # The registry definition rides along so a definition-seeking reading of
+        # "What is NRx?" is served alongside the value (codex iter-1 MEDIUM;
+        # gold has no bare-definition rows, so the value stays the headline).
+        "definition": kpi.definition,
+        "confidence": _KPI_LOOKUP_CONFIDENCE,
+        "kpi_id": kpi.id,
+        "kpi_name": kpi.name,
+        "value": result.value,
+        "formatted_value": formatted_value,
+        "status": result.status,
+        "brand": brand,
+        "region": region,
+        "window_requested": result.window_requested,
+        "window_applied": result.window_applied,
+        "window_status": window_status,
+        # Provenance label mirrors the chat KPI tool (#893): a synthetic-sourced
+        # figure is never passed off as real-world data.
+        "data_source": "synthetic" if metadata.get("include_synthetic") else "database",
+    }
+    if data_through is not None:
+        payload["data_through"] = data_through
+    return [payload]
+
+
+@functools.lru_cache(maxsize=1)
+def _causal_ask_patterns() -> Tuple[re.Pattern[str], ...]:
+    """The intent classifier's own ``causal_effect`` lexicon, compiled once.
+
+    Read-only reuse (no routing surface is modified): a query the classifier
+    would call causal is exactly the query for which the curated causal-path
+    registry is the right substrate.
+    """
+    from .intent_classifier import IntentClassifierNode
+
+    return tuple(
+        re.compile(pattern, re.IGNORECASE)
+        for pattern in IntentClassifierNode.INTENT_PATTERNS["causal_effect"]
+    )
+
+
+def _is_causal_fallback(agent_input: Dict[str, Any]) -> bool:
+    """True when THIS dispatch is the explainer standing in for a FAILED
+    ``causal_impact`` (its resolver fails closed for every KPI without a frame
+    builder — dispatcher.py:730 — so the fallback is the user's only answer).
+
+    Detection rides the current dispatch's ``fallback_from`` parameter, stamped
+    by ``_dispatch_fallback`` — never the accumulated ``agent_results`` channel,
+    which the Redis checkpointer restores ACROSS turns (#1442 class): a turn-1
+    causal failure must not turn turn-2's plain value ask into a causal
+    fallback (codex iter-4)."""
+    return (agent_input.get("parameters") or {}).get("fallback_from") == "causal_impact"
+
+
+def _format_causal_path_finding(row: Dict[str, Any]) -> str:
+    """One registry row as a narratable finding (real fields only)."""
+    detail: List[str] = []
+    if row.get("causal_effect_size") is not None:
+        detail.append(f"effect {row['causal_effect_size']}")
+    if row.get("confidence_level") is not None:
+        detail.append(f"confidence {float(row['confidence_level']):.2f}")
+    if row.get("method_used"):
+        detail.append(f"method {row['method_used']}")
+    detail.append(f"validation {row.get('validation_status') or 'unknown'}")
+    cause = row.get("start_node") or "unknown driver"
+    effect = row.get("end_node") or "unknown outcome"
+    return f"{cause} -> {effect} ({'; '.join(detail)})"
+
+
+def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Branch B — bind curated ``causal_paths`` registry rows for a causal ask.
+
+    Fires when the explainer is standing in for a failed ``causal_impact`` OR
+    the query itself is a causal ask, AND the ask names a defined KPI. The
+    outcome term is that KPI's name — the deterministic mirror of what
+    ``causal_analysis_tool`` reduces a chat ask to before querying the same
+    registry with the same token matcher.
+
+    An empty registry result returns ``None`` (→ fail closed): a
+    substrate-coverage gap must never be dressed up as "no drivers exist".
+    """
+    query = agent_input.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return None
+
+    from src.services.kpi_resolution import recognize_distinct_metric, recognize_kpi_span
+
+    match = recognize_kpi_span(query)
+    if match is None:
+        return None
+    kpi, normalized_query, match_start, match_end = match
+    of_head = _kpi_governing_of_head(normalized_query, match_start)
+    right_head = _kpi_right_head(normalized_query, match_end)
+    # A causally-headed KPI mention ("drivers of NRx", "NRx determinants") is a
+    # causal ask in its own right even when the classifier lexicon misses the
+    # head word (codex iter-2: "determinants" is not in causal_effect's regex).
+    causally_headed = of_head in _CAUSAL_OF_HEADS or right_head in _CAUSAL_OF_HEADS
+    if (
+        not _is_causal_fallback(agent_input)
+        and not causally_headed
+        and not any(pattern.search(query) for pattern in _causal_ask_patterns())
+    ):
+        return None
+    if of_head is not None and of_head not in _CAUSAL_OF_HEADS:
+        # "what drives the cost of TRx up" (codex iter-1): TRx is a MODIFIER of
+        # a head the registry does not model — binding TRx drivers would answer
+        # a different question. Fail closed instead.
+        return None
+    masked = (
+        normalized_query[:match_start]
+        + " " * (match_end - match_start)
+        + normalized_query[match_end:]
+    )
+    second = recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query)
+    if second is not None:
+        # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"
+        # grammar identifies the OUTCOME when the ask is directed ("impact of
+        # X on Y" — Y is the outcome, whichever alias is longer); with no
+        # directional grammar ("what drives TRx and NRx") a singleton path
+        # answer chosen by alias order answers neither — fail closed. The
+        # masked probe shares the query's coordinates, so both mentions can
+        # be head-checked in place.
+        second_kpi, second_start, _second_end = second
+        first_directed = _directed_outcome(normalized_query, match_start)
+        second_directed = _directed_outcome(normalized_query, second_start)
+        if second_directed and not first_directed:
+            kpi = second_kpi
+        elif first_directed and not second_directed:
+            pass  # the first mention is the on-headed outcome
+        else:
+            return None
+
+    brand, _region = _extract_brand_region(agent_input)
+    # Provenance gate: the SAME platform switch the KPI tools observe — synthetic
+    # paths surface only in showcase mode, and labeled (#893).
+    from src.kpi.synthetic_mode import kpi_include_synthetic
+
+    include_synthetic = kpi_include_synthetic()
+    try:
+        from src.repositories import causal_path as causal_path_repo
+
+        paths = causal_path_repo.search_paths_for_outcome_sync(
+            kpi.name,
+            brand=brand,
+            min_confidence=_CAUSAL_PATH_MIN_CONFIDENCE,
+            limit=_CAUSAL_PATH_LIMIT,
+            include_synthetic=include_synthetic,
+        )
+    except Exception as e:  # noqa: BLE001 - a registry failure fails closed
+        logger.warning(
+            "explainer resolver: causal-path read for %r raised (%s) -> failing closed",
+            kpi.name,
+            e,
+        )
+        return None
+
+    if not paths:
+        logger.info(
+            "explainer resolver: causal registry models no path for %r -> failing closed",
+            kpi.name,
+        )
+        return None
+
+    payload: Dict[str, Any] = {
+        "agent": "causal_path_registry",
+        "analysis_type": "causal_paths_registry",
+        "key_findings": [_format_causal_path_finding(p) for p in paths[:_CAUSAL_PATH_FINDINGS]],
+        "outcome": kpi.name,
+        "kpi_id": kpi.id,
+        "brand": brand,
+        "paths_found": len(paths),
+        "paths": paths,
+        "min_confidence_applied": _CAUSAL_PATH_MIN_CONFIDENCE,
+        "data_source": "synthetic" if include_synthetic else "database",
+    }
+    # Confidence is the registry's own method-attributed value, not a default.
+    confidences = [
+        float(p["confidence_level"])
+        for p in paths
+        if isinstance(p.get("confidence_level"), (int, float))
+    ]
+    if confidences:
+        payload["confidence"] = max(confidences)
+    return [payload]
 
 
 def _resolve_explainer_input(
@@ -1693,8 +2175,12 @@ def _resolve_explainer_input(
     (2) Otherwise bind the successful upstream results carried in the dispatch
         state — this turn's earlier/sibling agent outputs on the fallback path,
         prior turns' outputs on a resumed conversation state.
-    (3) With neither, fail closed: an explanation of nothing would have to be
-        fabricated.
+    (3) With no upstream at all, resolve the evidence the ASK itself points at
+        (#1475): the KPI engine's computed value for a KPI value lookup, or the
+        curated causal-path registry for a causal ask / a fallback after a
+        failed ``causal_impact``. Both bind REAL data or nothing.
+    (4) With none of those, fail closed: an explanation of nothing would have to
+        be fabricated.
     """
     params = dispatch.get("parameters") or {}
 
@@ -1703,8 +2189,33 @@ def _resolve_explainer_input(
     if isinstance(explicit, list) and explicit and all(isinstance(r, dict) for r in explicit):
         analysis_results: List[Dict[str, Any]] = explicit
     else:
-        # (2) real upstream results from the orchestrator state.
-        analysis_results = _successful_upstream_results(agent_input)
+        # (2a) fresh SAME-TURN upstream results outrank everything
+        # ask-directed: the dispatch plan chose those agents for THIS query
+        # (bench-0143: "total TRx and which region has the largest gap
+        # opportunity?" runs gap_analyzer alongside — its regional answer
+        # must not be shadowed by a bare KPI lookup; codex iter-6). Threaded
+        # under its own key, separate from the cross-turn channel.
+        analysis_results = _successful_results(agent_input.get("current_turn_agent_results") or [])
+        # (2b) an explicit CURRENT-ask value lookup outranks CARRIED upstream
+        # results: the operator.add ``agent_results`` channel carries PRIOR
+        # turns' successes across a checkpointer-resumed conversation (#1442
+        # class), and "What is the TRx?" is never an anaphoric
+        # explain-that-analysis ask (codex iter-5). Anaphora ("explain the
+        # analysis") cannot match the lookup regex, so branch (2c) below
+        # keeps serving it. On a causal-fallback turn the turn IS causal,
+        # whatever the lookup regex thinks — Branch A is skipped outright
+        # (iter-2 self-audit: "impact of TRx on conversion rate" fits the
+        # regex's {0,3} gap).
+        if not analysis_results and not _is_causal_fallback(agent_input):
+            analysis_results = _kpi_lookup_evidence(agent_input) or []
+        if not analysis_results:
+            # (2c) carried upstream results (#883 §3 anaphora).
+            analysis_results = _successful_upstream_results(agent_input)
+
+    if not analysis_results:
+        # (3) ask-directed causal evidence — the curated registry, for causal
+        # fallbacks and causally-shaped direct turns alike.
+        analysis_results = _causal_path_evidence(agent_input) or []
 
     if not analysis_results:
         return NeedsStructuredInput(
@@ -2184,9 +2695,18 @@ class DispatcherNode:
         prior_results: List[AgentResult] = list(state.get("agent_results") or [])
 
         def _state_so_far() -> OrchestratorState:
+            # ``current_turn_agent_results`` carries ONLY this execute()'s
+            # accumulated results, separately from the merged channel view —
+            # the explainer resolver must tell fresh same-turn siblings
+            # (bench-0143's gap_analyzer) from prior turns' carry (codex
+            # iter-6). Dispatch-local: never returned to the reducer.
             return cast(
                 OrchestratorState,
-                {**state, "agent_results": prior_results + all_results},
+                {
+                    **state,
+                    "agent_results": prior_results + all_results,
+                    "current_turn_agent_results": list(all_results),
+                },
             )
 
         # Execute each parallel group sequentially
@@ -2207,7 +2727,7 @@ class DispatcherNode:
             # ``[failing, succeeding]`` the interleaved version dispatched the
             # fallback before the sibling success was recorded, so the same
             # group produced different fallback outcomes per ordering).
-            pending_fallbacks: List[str] = []
+            pending_fallbacks: List[Tuple[str, str]] = []
             for dispatch, result in zip(group_dispatches, group_results, strict=False):
                 if isinstance(result, Exception):
                     # Handle unexpected exceptions from asyncio.gather
@@ -2223,7 +2743,7 @@ class DispatcherNode:
                     # Queue fallback if available
                     fallback_agent = dispatch.get("fallback_agent")
                     if fallback_agent:
-                        pending_fallbacks.append(str(fallback_agent))
+                        pending_fallbacks.append((str(fallback_agent), dispatch["agent_name"]))
                 elif isinstance(result, dict) and not result.get("success", True):
                     # AgentResult returned with success=False
                     all_results.append(result)  # type: ignore[arg-type]
@@ -2231,16 +2751,16 @@ class DispatcherNode:
                     # Queue fallback if available
                     fallback_agent2 = dispatch.get("fallback_agent")
                     if fallback_agent2:
-                        pending_fallbacks.append(str(fallback_agent2))
+                        pending_fallbacks.append((str(fallback_agent2), dispatch["agent_name"]))
                 else:
                     # Result is AgentResult (TypedDict cannot use isinstance, check dict)
                     if isinstance(result, dict) and "agent_name" in result:
                         all_results.append(result)
 
             # Fallbacks see the COMPLETE group (plus all earlier groups/turns).
-            for fallback_agent_name in pending_fallbacks:
+            for fallback_agent_name, failed_agent_name in pending_fallbacks:
                 fallback_result = await self._dispatch_fallback(
-                    fallback_agent_name, _state_so_far()
+                    fallback_agent_name, _state_so_far(), fallback_from=failed_agent_name
                 )
                 all_results.append(fallback_result)
 
@@ -2650,6 +3170,12 @@ class DispatcherNode:
             # see it (the resolver output REPLACES the payload) and run(dict)/
             # input-model agents ignore undeclared keys.
             "agent_results": list(state.get("agent_results") or []),
+            # THIS turn's results only (stamped by execute()'s _state_so_far;
+            # empty on the first group of a turn) — lets the explainer
+            # resolver rank fresh siblings above prior turns' carry.
+            "current_turn_agent_results": list(
+                cast(Dict[str, Any], state).get("current_turn_agent_results") or []
+            ),
         }
 
         # Per-agent input resolution (real cohort/KPI data for tool_composer, the
@@ -2659,12 +3185,23 @@ class DispatcherNode:
         # the contract pass-through fields.
         return agent_input
 
-    async def _dispatch_fallback(self, agent_name: str, state: OrchestratorState) -> AgentResult:
+    async def _dispatch_fallback(
+        self,
+        agent_name: str,
+        state: OrchestratorState,
+        *,
+        fallback_from: Optional[str] = None,
+    ) -> AgentResult:
         """Dispatch to fallback agent.
 
         Args:
             agent_name: Fallback agent name
             state: Current state
+            fallback_from: The FAILED agent this dispatch stands in for —
+                stamped into the dispatch parameters so input resolvers can
+                scope fallback detection to THIS dispatch instead of scanning
+                the accumulated (cross-turn) ``agent_results`` channel
+                (codex iter-4).
 
         Returns:
             Fallback agent result
@@ -2672,7 +3209,7 @@ class DispatcherNode:
         fallback_dispatch = AgentDispatch(
             agent_name=agent_name,
             priority="low",  # Contract: Literal priority type
-            parameters={},
+            parameters={"fallback_from": fallback_from} if fallback_from else {},
             timeout_ms=30000,
             fallback_agent=None,
         )

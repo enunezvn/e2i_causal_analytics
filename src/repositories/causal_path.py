@@ -5,7 +5,7 @@ Handles discovered causal relationships.
 """
 
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from src.repositories.base import BaseRepository
 from src.utils.type_helpers import parse_supabase_rows
@@ -175,6 +175,12 @@ class CausalPathRepository(BaseRepository):
         does not model that outcome (substrate-coverage gap), not "no causal
         drivers exist".
 
+        A SYNC twin of this read — same filters, same token SSOT — lives at
+        :func:`search_paths_for_outcome_sync` for callers that cannot await
+        (the orchestrator's input resolvers run inside ``asyncio.to_thread``).
+        Divergence is guarded by
+        ``test_sync_and_async_causal_path_search_build_the_same_filters``.
+
         Args:
             outcome_term: Free-text KPI/outcome name; tokenized via
                 :func:`outcome_match_tokens` against ``start_node``/``end_node``.
@@ -321,3 +327,53 @@ class CausalPathRepository(BaseRepository):
             .execute()
         )
         return bool(result.data)
+
+
+def search_paths_for_outcome_sync(
+    outcome_term: str,
+    *,
+    client: Any = None,
+    brand: Optional[str] = None,
+    min_confidence: float = 0.0,
+    limit: int = 15,
+    include_synthetic: bool = False,
+) -> List[dict]:
+    """SYNC twin of :meth:`CausalPathRepository.search_paths_for_outcome` (#1475).
+
+    The orchestrator's ``INPUT_RESOLVERS`` are sync by contract — the dispatcher
+    offloads them with ``asyncio.to_thread`` — so the async repository method
+    cannot be called from the explainer resolver that needs this substrate. Both
+    reads build their node filters from the SAME :func:`outcome_match_tokens`
+    and apply the same brand / confidence / provenance predicates in the same
+    order, so a chat answer and an orchestrator answer can never disagree about
+    what the registry models; ``test_explainer_evidence_binding_1475.py`` pins
+    that equivalence.
+
+    ``client`` is a SYNC supabase client. It defaults to the API-layer client
+    (the one ``KPICalculator`` is built with), and a missing/unconfigured client
+    returns ``[]`` — an honest "nothing resolved", never a fabricated path.
+    """
+    if client is None:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        client = get_supabase()
+    if not client:
+        return []
+    tokens = outcome_match_tokens(outcome_term)
+    if not tokens:
+        return []
+
+    query = client.table(CausalPathRepository.table_name).select("*")
+    query = query.or_(
+        ",".join(f"{col}.ilike.%{token}%" for token in tokens for col in ("start_node", "end_node"))
+    )
+    if brand:
+        query = query.ilike("brand", brand)
+    query = query.gte("confidence_level", min_confidence)
+    if not include_synthetic and CausalPathRepository.HAS_PROVENANCE:
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = apply_provenance_filter(query, include_synthetic=False)
+
+    result = query.order("confidence_level", desc=True).limit(limit).execute()
+    return parse_supabase_rows(result.data)
