@@ -21,6 +21,7 @@ These tests pin all three shut. See also
 on the evaluator itself.
 """
 
+import logging
 import sys
 from typing import Any
 from unittest.mock import patch
@@ -58,12 +59,33 @@ class _StubEvaluator:
     """Stands in for ``RAGASEvaluator`` at the provider's seam.
 
     Test-only stub at the evaluator boundary — the production path is never
-    mocked. Either returns ``result`` or raises ``raises``.
+    mocked. Implements the judged-path surface the provider checks at
+    construction, so these tests do not depend on ambient API keys.
     """
 
-    def __init__(self, result: Any = None, raises: BaseException | None = None):
+    def __init__(
+        self,
+        result: Any = None,
+        raises: BaseException | None = None,
+        blockers: tuple[str, ...] = (),
+        dependency_error: BaseException | None = None,
+    ):
         self._result = result
         self._raises = raises
+        self._blockers = blockers
+        self._dependency_error = dependency_error
+
+    @property
+    def judged_path_blockers(self) -> tuple[str, ...]:
+        return self._blockers
+
+    @property
+    def can_judge(self) -> bool:
+        return not self._blockers
+
+    def verify_dependencies(self) -> None:
+        if self._dependency_error is not None:
+            raise self._dependency_error
 
     async def evaluate_sample(self, sample: Any, run_id: Any = None) -> Any:
         if self._raises is not None:
@@ -72,10 +94,13 @@ class _StubEvaluator:
 
 
 def _provider_with(evaluator: _StubEvaluator) -> RAGASFeedbackProvider:
-    """Build a provider, then swap in the stub evaluator."""
-    provider = RAGASFeedbackProvider()
-    provider._ragas_evaluator = evaluator
-    return provider
+    """Build a provider whose evaluator is the stub, from construction on.
+
+    Patches the factory rather than swapping the attribute afterwards, so the
+    construction-time judged-path checks see the stub too.
+    """
+    with patch("src.rag.evaluation.get_ragas_evaluator", return_value=evaluator):
+        return RAGASFeedbackProvider()
 
 
 class TestImportFailureFailsLoud:
@@ -113,6 +138,143 @@ class TestImportFailureFailsLoud:
         silent substitution #1488 removes.
         """
         assert not hasattr(RAGASFeedbackProvider, "_mock_evaluate")
+
+
+class TestConstructionVerifiesJudgedPath:
+    """Importability is not runnability (codex iter-1, HIGH).
+
+    ``RAGASEvaluator`` constructs fine with no LLM key — ``__init__`` only sets
+    flags, and ``_detect_llm_provider`` merely warns and returns "none".
+    ``evaluate_sample`` then routes every sample to the stamped heuristic
+    fallback. Without a construction-time check the keyless nightly env would
+    start GEPA, hit the per-example refusal on every example, and have dspy
+    convert each raise to ``failure_score`` 0.0 — the masquerade again.
+    """
+
+    def test_construction_refuses_when_llm_key_missing(self):
+        evaluator = _StubEvaluator(blockers=("no LLM API key configured",))
+
+        with pytest.raises(RAGASFeedbackUnavailableError, match="no LLM API key"):
+            _provider_with(evaluator)
+
+    def test_construction_refuses_when_ragas_missing(self):
+        evaluator = _StubEvaluator(blockers=("ragas package is not importable",))
+
+        with pytest.raises(RAGASFeedbackUnavailableError, match="ragas package"):
+            _provider_with(evaluator)
+
+    def test_construction_names_every_failing_precondition(self):
+        evaluator = _StubEvaluator(
+            blockers=("ragas package is not importable", "no LLM API key configured")
+        )
+
+        with pytest.raises(RAGASFeedbackUnavailableError) as exc_info:
+            _provider_with(evaluator)
+
+        message = str(exc_info.value)
+        assert "ragas package" in message
+        assert "no LLM API key" in message
+
+    def test_construction_propagates_dependency_break(self):
+        """#491 class: find_spec proves presence, not importability.
+
+        ``_check_ragas`` only calls ``importlib.util.find_spec("ragas")``, so a
+        broken import tree leaves ``_ragas_available`` True. The construction
+        check must run the real import sequence too.
+        """
+        evaluator = _StubEvaluator(dependency_error=RagasDependencyError("simulated #491 break"))
+
+        with pytest.raises(RagasDependencyError, match="simulated #491 break"):
+            _provider_with(evaluator)
+
+    def test_construction_succeeds_when_judge_is_available(self):
+        provider = _provider_with(_StubEvaluator(result=_result()))
+
+        assert provider.enabled is True
+
+
+class TestEvaluatorJudgedPathProperties:
+    """The public seam on RAGASEvaluator the provider checks (#1488).
+
+    Lives with the #1488 tests because the properties exist for this consumer;
+    see also tests/unit/test_rag/test_evaluation_dependency_guard.py.
+    """
+
+    def _evaluator(self, ragas: bool, llm: bool):
+        from src.rag.evaluation import RAGASEvaluator
+
+        evaluator = RAGASEvaluator.__new__(RAGASEvaluator)
+        evaluator._ragas_available = ragas
+        evaluator._llm_configured = llm
+        evaluator.llm_provider = "openai" if llm else "none"
+        return evaluator
+
+    def test_can_judge_true_only_when_both_preconditions_hold(self):
+        assert self._evaluator(ragas=True, llm=True).can_judge is True
+        assert self._evaluator(ragas=False, llm=True).can_judge is False
+        assert self._evaluator(ragas=True, llm=False).can_judge is False
+
+    def test_blockers_empty_when_judgeable(self):
+        assert self._evaluator(ragas=True, llm=True).judged_path_blockers == ()
+
+    def test_blockers_name_the_missing_precondition(self):
+        assert any(
+            "ragas" in b for b in self._evaluator(ragas=False, llm=True).judged_path_blockers
+        )
+        assert any("key" in b for b in self._evaluator(ragas=True, llm=False).judged_path_blockers)
+
+
+class TestFailuresAreLogged:
+    """Removing the blanket handlers removed the module's only failure log.
+
+    Under dspy the propagated exception is swallowed into ``failure_score``, so
+    without a module-owned log line the operator sees nothing at all
+    (codex iter-1, MED). Log and re-raise — never substitute a score.
+    """
+
+    async def test_fallback_heuristic_refusal_is_logged(self, caplog):
+        provider = _provider_with(
+            _StubEvaluator(result=_result(metadata={"evaluation_method": "fallback_heuristic"}))
+        )
+
+        with caplog.at_level(
+            logging.ERROR, logger="src.optimization.gepa.integration.ragas_feedback"
+        ):
+            with pytest.raises(RAGASFeedbackUnavailableError):
+                await provider.evaluate(question="q", answer="a", contexts=["c1"])
+
+        assert any("fallback_heuristic" in r.getMessage() for r in caplog.records)
+
+    async def test_unexpected_exception_is_logged_and_reraised(self, caplog):
+        provider = _provider_with(_StubEvaluator(raises=RuntimeError("judge exploded")))
+
+        with caplog.at_level(
+            logging.ERROR, logger="src.optimization.gepa.integration.ragas_feedback"
+        ):
+            with pytest.raises(RuntimeError, match="judge exploded"):
+                await provider.evaluate(question="q", answer="a", contexts=["c1"])
+
+        assert caplog.records, "evaluation failure must leave a module-owned log record"
+
+    async def test_log_record_names_the_cause_and_carries_traceback(self, caplog):
+        """The record must be diagnosable on its own.
+
+        DSPy discards the exception, so this log line is all the operator gets:
+        it has to name the cause and carry the traceback.
+        """
+        provider = _provider_with(
+            _StubEvaluator(raises=RagasDependencyError("simulated #491 break"))
+        )
+
+        with caplog.at_level(
+            logging.ERROR, logger="src.optimization.gepa.integration.ragas_feedback"
+        ):
+            with pytest.raises(RagasDependencyError):
+                await provider.evaluate(question="q", answer="a", contexts=["c1"])
+
+        named = [r for r in caplog.records if "simulated #491 break" in r.getMessage()]
+        assert named, "log record must name the cause, not just say 'failed'"
+        assert named[0].exc_info is not None, "logger.exception must attach the traceback"
 
 
 class TestDependencyErrorPropagates:

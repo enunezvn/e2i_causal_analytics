@@ -948,6 +948,53 @@ class RAGASEvaluator:
             return bool(os.environ.get("OPENAI_API_KEY"))
         return False
 
+    @property
+    def judged_path_blockers(self) -> tuple[str, ...]:
+        """Preconditions currently forcing :meth:`evaluate_sample` off the real judge.
+
+        Empty means ``evaluate_sample`` will route to ``_evaluate_with_ragas``;
+        otherwise it routes to ``_evaluate_with_fallback``, whose results are
+        stamped ``evaluation_method="fallback_heuristic"``.
+
+        Exposed because constructing this class proves nothing about whether the
+        judge can *run*: ``__init__`` only sets flags, and ``_detect_llm_provider``
+        merely warns and returns "none" when no key is present. Consumers that
+        must not silently consume heuristics — GEPA optimization feedback, see
+        issue #1488 — need to refuse up front rather than per sample.
+        """
+        blockers: List[str] = []
+        if not self._ragas_available:
+            blockers.append("ragas package is not importable (find_spec found no module)")
+        if not self._llm_configured:
+            blockers.append(
+                f"no LLM API key configured for provider {self.llm_provider!r} "
+                "(set OPENAI_API_KEY or ANTHROPIC_API_KEY)"
+            )
+        return tuple(blockers)
+
+    @property
+    def can_judge(self) -> bool:
+        """Whether :meth:`evaluate_sample` will use the real LLM-judged RAGAS path."""
+        return not self.judged_path_blockers
+
+    def verify_dependencies(self) -> None:
+        """Run the real RAGAS import sequence, raising on a #491-class break.
+
+        :attr:`can_judge` deliberately does NOT cover this: ``_check_ragas`` only
+        calls ``importlib.util.find_spec("ragas")``, which proves the package is
+        on disk, not that it imports. The #491 break (ragas 0.4.x importing a
+        symbol modern langchain-community removed) leaves ``find_spec`` happy and
+        surfaces only when ``_evaluate_with_ragas`` runs. Callers that want to
+        fail at wiring time rather than mid-run should call this.
+
+        Cheap and key-free: the imports are cached in ``sys.modules`` after the
+        first call.
+
+        Raises:
+            RagasDependencyError: the RAGAS dependency tree is broken.
+        """
+        _import_ragas_components()
+
     async def evaluate_sample(
         self,
         sample: EvaluationSample,

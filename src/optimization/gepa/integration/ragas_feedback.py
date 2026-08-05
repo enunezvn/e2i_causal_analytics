@@ -136,17 +136,23 @@ class RAGASFeedbackProvider:
     def __post_init__(self) -> None:
         """Initialize the RAGAS evaluator, or refuse to construct.
 
+        Verifies the judge can actually RUN, not merely that it imports.
+        Constructing ``RAGASEvaluator`` proves nothing: it sets availability
+        flags and warns rather than failing, so a keyless environment would
+        yield a provider that routes every sample to the stamped heuristic
+        fallback. That would surface as a per-example refusal, which DSPy
+        converts to ``failure_score`` 0.0 — the very masquerade this module
+        exists to prevent.
+
         Raises:
-            RAGASFeedbackUnavailableError: the evaluator cannot be imported.
-                This is the seam that runs outside DSPy's executor, so raising
-                here aborts the optimization run instead of quietly scoring
-                every candidate with heuristics.
+            RAGASFeedbackUnavailableError: the evaluator cannot be imported, or
+                its judged path is blocked (no LLM key, ragas not installed).
+            RagasDependencyError: the RAGAS dependency tree is broken (#491).
         """
         try:
             from src.rag.evaluation import EvaluationSample, get_ragas_evaluator
 
-            self._ragas_evaluator = get_ragas_evaluator()
-            self._evaluation_sample_class = EvaluationSample
+            evaluator = get_ragas_evaluator()
         except ImportError as e:
             raise RAGASFeedbackUnavailableError(
                 f"RAGAS evaluator is unavailable ({e}); refusing to produce GEPA "
@@ -154,6 +160,21 @@ class RAGASFeedbackProvider:
                 "prompts toward fabricated signal — fix the RAGAS dependency "
                 "tree (see issue #491) instead."
             ) from e
+
+        blockers = evaluator.judged_path_blockers
+        if blockers:
+            raise RAGASFeedbackUnavailableError(
+                "RAGAS judged path is unavailable, so every candidate would be "
+                "scored by heuristics: "
+                + "; ".join(blockers)
+                + ". Refusing to produce GEPA feedback."
+            )
+
+        # find_spec presence != importability; this is the #491 break class.
+        evaluator.verify_dependencies()
+
+        self._ragas_evaluator = evaluator
+        self._evaluation_sample_class = EvaluationSample
         logger.debug("RAGASFeedbackProvider initialized with RAGAS evaluator")
 
     @property
@@ -280,25 +301,39 @@ class RAGASFeedbackProvider:
             retrieved_contexts=contexts,
             metadata=kwargs.get("metadata", {}),
         )
-        result = await self._ragas_evaluator.evaluate_sample(sample, run_id=run_id)
 
-        # RAGASEvaluator stamps its own heuristic path so consumers can tell
-        # synthetic scores from judged ones (evaluation.py, "fallback_heuristic").
-        # Heuristics are not optimization signal — refuse rather than strip the stamp.
-        evaluation_method = (getattr(result, "metadata", None) or {}).get("evaluation_method")
-        if evaluation_method == "fallback_heuristic":
-            raise RAGASFeedbackUnavailableError(
-                "RAGASEvaluator returned fallback_heuristic scores rather than "
-                "judged ones (no LLM key configured, or RAGAS unavailable); "
-                "refusing to feed heuristics to GEPA as optimization signal."
+        # Log-and-reraise: DSPy swallows the propagated exception into
+        # failure_score, so without a module-owned record the operator sees
+        # nothing at all. Never substitute a score.
+        try:
+            result = await self._ragas_evaluator.evaluate_sample(sample, run_id=run_id)
+
+            # RAGASEvaluator stamps its own heuristic path so consumers can tell
+            # synthetic scores from judged ones (evaluation.py, "fallback_heuristic").
+            # Construction already refuses a statically-unavailable judge; this
+            # catches degradation DURING a run (an expired or rate-limited key).
+            evaluation_method = (getattr(result, "metadata", None) or {}).get("evaluation_method")
+            if evaluation_method == "fallback_heuristic":
+                raise RAGASFeedbackUnavailableError(
+                    "RAGASEvaluator returned fallback_heuristic scores rather than "
+                    "judged ones (the judge degraded mid-run); refusing to feed "
+                    "heuristics to GEPA as optimization signal."
+                )
+
+            scores = {
+                "faithfulness": result.faithfulness or 0.0,
+                "answer_relevancy": result.answer_relevancy or 0.0,
+                "context_precision": result.context_precision or 0.0,
+                "context_recall": result.context_recall or 0.0,
+            }
+        except Exception as e:
+            logger.exception(
+                "RAGAS evaluation failed for GEPA feedback; propagating rather "
+                "than scoring it: %s (question=%.80r)",
+                e,
+                question,
             )
-
-        scores = {
-            "faithfulness": result.faithfulness or 0.0,
-            "answer_relevancy": result.answer_relevancy or 0.0,
-            "context_precision": result.context_precision or 0.0,
-            "context_recall": result.context_recall or 0.0,
-        }
+            raise
 
         weighted_score = self._compute_weighted_score(scores)
 
