@@ -66,7 +66,7 @@ def create_gepa_optimizer(
     trainset: list[Example],
     valset: Optional[list[Example]] = None,
     reflection_model: str = "anthropic/claude-sonnet-4-6",
-    auto: str = "medium",
+    auto: Optional[str] = "medium",
     enable_tool_optimization: bool = False,
     log_dir: Optional[str] = None,
     seed: int = 42,
@@ -79,7 +79,9 @@ def create_gepa_optimizer(
         trainset: Training examples for optimization
         valset: Validation examples (uses trainset if None)
         reflection_model: LM for reflection (default: Claude Sonnet)
-        auto: Budget preset ("light", "medium", "heavy")
+        auto: Budget preset ("light", "medium", "heavy"), or None to use an
+            explicit budget passed via **kwargs (e.g. max_metric_calls) —
+            mirrors dspy.GEPA's own Literal[...] | None contract
         enable_tool_optimization: Enable for Hybrid agents with DoWhy/EconML tools
         log_dir: Directory for GEPA logs
         seed: Random seed for reproducibility
