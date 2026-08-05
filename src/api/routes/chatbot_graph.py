@@ -272,6 +272,11 @@ def _build_latency_span_payload(
         if trace_ctx and trace_ctx.orchestrator_untimed_ms is not None
         else None
     )
+    # #1484: retrieve_rag chain-internal attribution. {} when unmeasured.
+    rag_stage_ms = (
+        {stage: round(ms, 1) for stage, ms in trace_ctx.rag_stage_ms.items()} if trace_ctx else {}
+    )
+    rag_meta = dict(trace_ctx.rag_meta) if trace_ctx else {}
     return {
         "request_id": request_id,
         "node_wall_ms": node_wall_ms,
@@ -280,6 +285,8 @@ def _build_latency_span_payload(
         "orchestrator_stage_ms": orchestrator_stage_ms,
         "orchestrator_run_ms": orchestrator_run_ms,
         "orchestrator_untimed_ms": orchestrator_untimed_ms,
+        "rag_stage_ms": rag_stage_ms,
+        "rag_meta": rag_meta,
         "first_request_in_worker": first_request_in_worker,
         "worker_pid": os.getpid(),
     }
@@ -294,7 +301,8 @@ def _log_request_span(payload: Dict[str, Any]) -> None:
     logger.info(
         "[Chatbot] request span: request_id=%s worker_pid=%s first_request_in_worker=%s "
         "total_ms=%.1f untimed_overhead_ms=%.1f node_wall_ms=%s "
-        "orchestrator_run_ms=%s orchestrator_untimed_ms=%s orchestrator_stage_ms=%s",
+        "orchestrator_run_ms=%s orchestrator_untimed_ms=%s orchestrator_stage_ms=%s "
+        "rag_stage_ms=%s rag_meta=%s",
         payload["request_id"],
         payload["worker_pid"],
         payload["first_request_in_worker"],
@@ -304,6 +312,8 @@ def _log_request_span(payload: Dict[str, Any]) -> None:
         payload["orchestrator_run_ms"],
         payload["orchestrator_untimed_ms"],
         json.dumps(payload["orchestrator_stage_ms"], sort_keys=True),
+        json.dumps(payload["rag_stage_ms"], sort_keys=True),
+        json.dumps(payload["rag_meta"], sort_keys=True),
     )
 
 
@@ -1090,11 +1100,16 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     search_keywords = []
     graph_entities = []
     avg_relevance = 0.0
+    # #1484: chain counters for the request span — None until the cognitive
+    # chain succeeds (absence is honest; the basic fallback has no hops).
+    rag_hops = None
+    rag_score_calls = None
 
     async def _execute_cognitive_rag():
         """Execute cognitive RAG pipeline with DSPy query rewriting."""
         nonlocal rag_context, rag_sources, relevance_scores, retrieval_method
         nonlocal rewritten_query, search_keywords, graph_entities, avg_relevance, error
+        nonlocal rag_hops, rag_score_calls
 
         try:
             result = await cognitive_rag_retrieve(
@@ -1113,6 +1128,9 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
             graph_entities = result.graph_entities
             retrieval_method = result.retrieval_method
             avg_relevance = result.avg_relevance_score
+            # #1484: chain counters for the request span
+            rag_hops = result.hop_count
+            rag_score_calls = result.score_calls
 
             # Convert evidence to rag_context format
             rag_context = [
@@ -1193,24 +1211,45 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
 
     # Execute with tracing if available
     if trace_ctx:
-        async with trace_ctx.trace_node("retrieve_rag") as node_span:
-            await _execute_rag()
-            # Log enhanced metrics for cognitive RAG
-            node_span.log_rag_retrieval(
-                result_count=len(rag_context),
-                relevance_scores=relevance_scores,
-                kpi_filter=kpi_name,
-                brand_filter=brand,
-                retrieval_method=retrieval_method,
-            )
-            # Log cognitive RAG specific metrics
-            if retrieval_method == "cognitive":
-                node_span.log_metadata(
+        # #1484: activate a stage-timing ledger around the chain so the legs
+        # inside cognitive_rag_retrieve (rag.rewrite / rag.search / rag.score /
+        # rag.hop_decider) land on this request's span. Contextvar activation —
+        # never a ChatbotState channel (#1442 class); gathered scoring tasks
+        # inherit it via context copy. Mirrors the orchestrator node's #1475
+        # flow: transfer to the trace context in the finally, prefix stripped.
+        _rag_ledger, _rag_token = activate_stage_ledger()
+        try:
+            async with trace_ctx.trace_node("retrieve_rag") as node_span:
+                await _execute_rag()
+                # Log enhanced metrics for cognitive RAG
+                node_span.log_rag_retrieval(
+                    result_count=len(rag_context),
+                    relevance_scores=relevance_scores,
+                    kpi_filter=kpi_name,
+                    brand_filter=brand,
+                    retrieval_method=retrieval_method,
+                )
+                # Log cognitive RAG specific metrics
+                if retrieval_method == "cognitive":
+                    node_span.log_metadata(
+                        {
+                            "rewritten_query": rewritten_query[:100] if rewritten_query else None,
+                            "search_keywords": search_keywords[:5],
+                            "graph_entities": graph_entities[:5],
+                            "avg_relevance_score": avg_relevance,
+                        }
+                    )
+        finally:
+            deactivate_stage_ledger(_rag_token)
+            for _stage, _ms in _rag_ledger.items():
+                if _stage.startswith("rag."):
+                    trace_ctx.record_rag_stage_time(_stage[len("rag.") :], _ms)
+            if rag_hops is not None:
+                trace_ctx.rag_meta.update(
                     {
-                        "rewritten_query": rewritten_query[:100] if rewritten_query else None,
-                        "search_keywords": search_keywords[:5],
-                        "graph_entities": graph_entities[:5],
-                        "avg_relevance_score": avg_relevance,
+                        "hops": rag_hops,
+                        "score_calls": rag_score_calls,
+                        "evidence_kept": len(rag_context),
                     }
                 )
     else:
@@ -2842,6 +2881,14 @@ def _build_chat_mlflow_metrics(
             metrics["orch_untimed_ms"] = round(trace_ctx.orchestrator_untimed_ms, 1)
         for stage, wall_ms in trace_ctx.orchestrator_stage_ms.items():
             metrics[f"orch_{stage.replace('.', '_')}_ms"] = round(wall_ms, 1)
+
+        # #1484: retrieve_rag chain-internal attribution + counters. Keys only
+        # appear when measured — absence is honest, zeros are not.
+        for stage, wall_ms in trace_ctx.rag_stage_ms.items():
+            metrics[f"rag_{stage.replace('.', '_')}_ms"] = round(wall_ms, 1)
+        for meta_key, meta_val in trace_ctx.rag_meta.items():
+            if isinstance(meta_val, (int, float)):
+                metrics[f"rag_{meta_key}"] = float(meta_val)
 
     return metrics
 

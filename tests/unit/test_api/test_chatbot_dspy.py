@@ -1201,9 +1201,11 @@ class TestScoreEvidenceEnsuresDspyConfigured:
         monkeypatch.setattr(chatbot_dspy, "_ensure_dspy_configured", _spy_ensure)
 
         # Double only the true external: the LLM scorer. The unit under test
-        # (score_evidence_dspy) runs its real control flow.
+        # (score_evidence_dspy) runs its real control flow. #1484 moved the
+        # production call to the module's async interface, so the stub exposes
+        # acall.
         class _StubScorer:
-            def __call__(self, **kwargs):
+            async def acall(self, **kwargs):
                 class _R:
                     relevance_score = 0.42
                     key_insight = "stub insight"

@@ -4419,6 +4419,9 @@ async def _stream_chat_response(
             "orchestrator_stage_ms": None,
             "orchestrator_run_ms": None,
             "orchestrator_untimed_ms": None,
+            # #1484: retrieve_rag chain-internal attribution (same span item)
+            "rag_stage_ms": None,
+            "rag_meta": None,
         }
 
         # Stream through chatbot workflow
@@ -4451,6 +4454,9 @@ async def _stream_chat_response(
                     dispatch_info["orchestrator_untimed_ms"] = span_payload.get(
                         "orchestrator_untimed_ms"
                     )
+                    # #1484: retrieve_rag chain-internal attribution
+                    dispatch_info["rag_stage_ms"] = span_payload.get("rag_stage_ms")
+                    dispatch_info["rag_meta"] = span_payload.get("rag_meta")
                     continue
 
                 # Check for node outputs

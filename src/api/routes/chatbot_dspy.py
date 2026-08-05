@@ -16,12 +16,14 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from src.agents.multi_faceted import is_multi_faceted_facet_score
 from src.utils.redaction import redact_query
+from src.utils.stage_timing import record_stage_wall_time
 
 from .chatbot_state import IntentType
 
@@ -1128,6 +1130,22 @@ if DSPY_AVAILABLE:
                 domain_vocabulary=domain_vocabulary,
             )
 
+        async def aforward(
+            self,
+            original_query: str,
+            conversation_context: str = "",
+            domain_vocabulary: str = E2I_DOMAIN_VOCABULARY,
+        ):
+            # #1484: async seam — Module.acall requires aforward; the inner
+            # ChainOfThought.acall rides LM.aforward -> alitellm, so the call
+            # awaits instead of blocking the event loop (measured: the sync
+            # path serialized every RAG LLM call end-to-end).
+            return await self.rewrite.acall(
+                original_query=original_query,
+                conversation_context=conversation_context,
+                domain_vocabulary=domain_vocabulary,
+            )
+
     class ChatbotHopDecider(dspy.Module):
         """DSPy module for multi-hop retrieval decisions."""
 
@@ -1149,6 +1167,21 @@ if DSPY_AVAILABLE:
                 available_memories=available_memories,
             )
 
+        async def aforward(
+            self,
+            investigation_goal: str,
+            current_evidence: str,
+            hop_number: int,
+            available_memories: str,
+        ):
+            # #1484: async seam (see ChatbotQueryRewriter.aforward).
+            return await self.decide.acall(
+                investigation_goal=investigation_goal,
+                current_evidence=current_evidence,
+                hop_number=hop_number,
+                available_memories=available_memories,
+            )
+
     class ChatbotEvidenceScorer(dspy.Module):
         """DSPy module for evidence relevance scoring."""
 
@@ -1163,6 +1196,21 @@ if DSPY_AVAILABLE:
             source_memory: str,
         ):
             return self.score(
+                investigation_goal=investigation_goal,
+                evidence_item=evidence_item,
+                source_memory=source_memory,
+            )
+
+        async def aforward(
+            self,
+            investigation_goal: str,
+            evidence_item: str,
+            source_memory: str,
+        ):
+            # #1484: async seam — this is what makes the _hop gather REAL.
+            # Measured (2026-08-05, same standard-tier model, novel items):
+            # 5 scores 10.0s serial -> 2.6s via Predict.acall.
+            return await self.score.acall(
                 investigation_goal=investigation_goal,
                 evidence_item=evidence_item,
                 source_memory=source_memory,
@@ -1418,10 +1466,17 @@ async def rewrite_query_dspy(
             if brand_context:
                 full_context = f"Brand: {brand_context}\n{conversation_context}"
 
-            result = rewriter(
-                original_query=query,
-                conversation_context=full_context,
-                domain_vocabulary=E2I_DOMAIN_VOCABULARY,
+            # #1484: async interface + fail-open timeout. The sync call
+            # blocked the event loop for the whole 4-5s completion and had
+            # no ceiling; TimeoutError lands in the except below -> the
+            # hardcoded fallback, same as any other rewrite failure.
+            result = await asyncio.wait_for(
+                rewriter.acall(
+                    original_query=query,
+                    conversation_context=full_context,
+                    domain_vocabulary=E2I_DOMAIN_VOCABULARY,
+                ),
+                timeout=_RAG_LLM_TIMEOUT_S,
             )
 
             rewritten_query = str(result.rewritten_query)
@@ -1484,10 +1539,18 @@ async def score_evidence_dspy(
         # that calls _ensure_dspy_configured() before building its module. (F7)
         _ensure_dspy_configured()
         scorer = ChatbotEvidenceScorer()
-        result = scorer(
-            investigation_goal=investigation_goal,
-            evidence_item=evidence_item,
-            source_memory=source_memory,
+        # #1484: async interface + fail-open timeout. The sync call blocked
+        # the event loop inside each gathered coroutine, serializing the
+        # whole scoring batch (measured: 15 calls, zero overlap, ~53% of the
+        # request). acall makes the _hop gather genuinely concurrent;
+        # TimeoutError lands in the except below -> neutral 0.5.
+        result = await asyncio.wait_for(
+            scorer.acall(
+                investigation_goal=investigation_goal,
+                evidence_item=evidence_item,
+                source_memory=source_memory,
+            ),
+            timeout=_RAG_LLM_TIMEOUT_S,
         )
         return (
             _validate_confidence(result.relevance_score),
@@ -1510,6 +1573,10 @@ class CognitiveRAGResult:
     hop_count: int
     avg_relevance_score: float
     retrieval_method: str  # "cognitive" or "basic"
+    # #1484: how many evidence-scoring LLM calls this request actually made
+    # (post dedupe-before-scoring) — the dominant chain cost, surfaced so the
+    # request span can attribute it.
+    score_calls: int = 0
 
 
 # =============================================================================
@@ -1521,6 +1588,17 @@ class CognitiveRAGResult:
 # with NO extra LLM call), then consults the decider for a refined retrieval
 # query, up to CHATBOT_RAG_MAX_HOPS. Live default-on via CHATBOT_RAG_MULTI_HOP.
 _MULTIHOP_MAX_HOPS = int(os.getenv("CHATBOT_RAG_MAX_HOPS", "3"))
+# #1484: fail-open ceiling for every RAG-chain LLM call (rewrite / score /
+# hop decider). The chain previously had NO timeout on any leg — a hung
+# provider call pinned the request. Generous vs the measured steady state
+# (scores 1.1-1.9s, rewrite 4-5s, decider 2.1-2.6s).
+_RAG_LLM_TIMEOUT_S = float(os.getenv("CHATBOT_RAG_LLM_TIMEOUT_S", "20"))
+# #1484: consecutive hops keeping zero NEW evidence before the loop stops.
+# Attribution (2026-08-05, real calls) showed dry queries always running to
+# the 3-hop max, re-retrieving the same rows, and keeping nothing — ~7s of
+# pure waste per request. 2 = hop-1 dry gets ONE decider-refined retry; if
+# that hop is also dry, stop. 0 disables (legacy run-to-max behavior).
+_DRY_HOP_LIMIT = int(os.getenv("CHATBOT_RAG_DRY_HOP_LIMIT", "2"))
 # A hop-1 result with >= N kept rows at >= this avg relevance is "good enough" —
 # stop without paying for a decider LLM call. Mirrors the reward heuristic
 # (RAGTrainingSignal.compute_reward: evidence_count >= 3 and hop_count <= 2).
@@ -1606,16 +1684,27 @@ async def cognitive_rag_retrieve(
     Returns:
         CognitiveRAGResult with rewritten query, evidence, and metadata
     """
-    # Step 1: Rewrite query for better retrieval
+    # Step 1: Rewrite query for better retrieval. #1484: record the leg on
+    # the stage-timing ledger (no-op without an active ledger) — recorded
+    # HERE, around the call, so the request span attributes it even when the
+    # leaf function is patched or falls back.
+    _leg_t0 = time.perf_counter()
     rewritten_query, search_keywords, graph_entities, rewrite_method = await rewrite_query_dspy(
         query=query,
         conversation_context=conversation_context,
         brand_context=brand_context,
     )
+    record_stage_wall_time("rag.rewrite", (time.perf_counter() - _leg_t0) * 1000)
 
     evidence: List[Dict[str, Any]] = []
     hop_count = 1
     relevance_scores: List[float] = []
+    # #1484: rows scored this request — later hops re-retrieve overlapping
+    # rows (measured), and re-scoring an identical row is a full-price LLM
+    # call whenever the in-process cache misses. Key matches the scored
+    # prompt content (the [:500] slice sent to the scorer).
+    scored_keys: set = set()
+    score_calls = 0
 
     # Step 2: Execute retrieval (import here to avoid circular imports)
     try:
@@ -1629,8 +1718,14 @@ async def cognitive_rag_retrieve(
             None so the guard is honored. kpi_name stays None: entities= is the
             primary graph key. F5: score the rows concurrently via asyncio.gather
             (gather preserves arg order, so the kept set/order and the >= 0.3
-            filter are identical to a serial loop).
+            filter are identical to a serial loop). #1484: the gather is only
+            genuinely concurrent now that score_evidence_dspy awaits the
+            scorer's acall — the sync path serialized it (measured: zero
+            overlap across 15 calls). Rows already scored this request are
+            skipped, and both legs record on the stage ledger.
             """
+            nonlocal score_calls
+            _t0 = time.perf_counter()
             results = await hybrid_search(
                 query=search_query,
                 k=k,
@@ -1638,6 +1733,17 @@ async def cognitive_rag_retrieve(
                 kpi_name=None,
                 filters={"brand": brand_context} if brand_context else None,
             )
+            record_stage_wall_time("rag.search", (time.perf_counter() - _t0) * 1000)
+
+            new_rows = []
+            for r in results:
+                row_key = (r.source_id, r.content[:500])
+                if row_key in scored_keys:
+                    continue
+                scored_keys.add(row_key)
+                new_rows.append(r)
+
+            _t0 = time.perf_counter()
             scored = await asyncio.gather(
                 *(
                     score_evidence_dspy(
@@ -1645,12 +1751,15 @@ async def cognitive_rag_retrieve(
                         evidence_item=r.content[:500],
                         source_memory="episodic",
                     )
-                    for r in results
+                    for r in new_rows
                 )
             )
+            record_stage_wall_time("rag.score", (time.perf_counter() - _t0) * 1000)
+            score_calls += len(new_rows)
+
             kept: List[Dict[str, Any]] = []
             scores: List[float] = []
-            for r, (score, insight, _) in zip(results, scored, strict=True):
+            for r, (score, insight, _) in zip(new_rows, scored, strict=True):
                 scores.append(score)
                 if score >= 0.3:  # Minimum relevance threshold
                     kept.append(
@@ -1669,6 +1778,11 @@ async def cognitive_rag_retrieve(
         kept, scores = await _hop(rewritten_query)
         evidence.extend(kept)
         relevance_scores.extend(scores)
+        # #1484: consecutive hops that kept zero NEW evidence. Measured on
+        # dry queries: every hop retrieved near-identical rows, kept nothing,
+        # and the loop still ran to max hops — decider + search + scores for
+        # nothing.
+        dry_streak = 0 if kept else 1
 
         # F6: additional hops, driven by ChatbotHopDecider — but ONLY when hop-1
         # evidence is insufficient (strong evidence stops early with no extra LLM
@@ -1685,26 +1799,46 @@ async def cognitive_rag_retrieve(
                 )
                 if _evidence_sufficient(evidence, avg_so_far):
                     break
+                # #1484: a dry hop gets exactly _DRY_HOP_LIMIT-1 decider-refined
+                # retries; after _DRY_HOP_LIMIT consecutive zero-new-keep hops
+                # the store has demonstrated it holds nothing for this query —
+                # stop before paying another decider + search + scoring round.
+                # 0 disables (legacy run-to-max).
+                if _DRY_HOP_LIMIT > 0 and dry_streak >= _DRY_HOP_LIMIT:
+                    logger.debug(
+                        f"Multi-hop: {dry_streak} consecutive dry hops — stopping at hop {hop_count}"
+                    )
+                    break
+                _leg_t0 = time.perf_counter()
                 try:
-                    decision = decider(
-                        investigation_goal=f"Answer: {query}",
-                        current_evidence=json.dumps(
-                            [
-                                {
-                                    "content": e["content"][:200],
-                                    "relevance": e["relevance_score"],
-                                }
-                                for e in evidence
-                            ]
-                        )[:2000],
-                        hop_number=hop_count,
-                        available_memories=_MULTIHOP_AVAILABLE_MEMORIES,
+                    # #1484: async interface + fail-open timeout (TimeoutError
+                    # lands in the except -> stop hopping, keep what we have).
+                    decision = await asyncio.wait_for(
+                        decider.acall(
+                            investigation_goal=f"Answer: {query}",
+                            current_evidence=json.dumps(
+                                [
+                                    {
+                                        "content": e["content"][:200],
+                                        "relevance": e["relevance_score"],
+                                    }
+                                    for e in evidence
+                                ]
+                            )[:2000],
+                            hop_number=hop_count,
+                            available_memories=_MULTIHOP_AVAILABLE_MEMORIES,
+                        ),
+                        timeout=_RAG_LLM_TIMEOUT_S,
                     )
                 except Exception as hop_err:
                     logger.warning(
                         f"Multi-hop decider failed; stopping at hop {hop_count}: {hop_err}"
                     )
                     break
+                finally:
+                    record_stage_wall_time(
+                        "rag.hop_decider", (time.perf_counter() - _leg_t0) * 1000
+                    )
                 next_memory = str(getattr(decision, "next_memory", "STOP"))
                 confidence = _validate_confidence(getattr(decision, "confidence", 0.0))
                 if not _should_continue_hop(next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS):
@@ -1718,8 +1852,12 @@ async def cognitive_rag_retrieve(
                 queries_used.add(retrieval_query)
                 hop_count += 1
                 more_kept, more_scores = await _hop(retrieval_query)
+                _before = len(evidence)
                 evidence = _dedupe_evidence(evidence + more_kept)
                 relevance_scores.extend(more_scores)
+                # #1484: dry-streak bookkeeping — "dry" means the hop added no
+                # NEW evidence after dedupe (re-kept duplicates don't count).
+                dry_streak = 0 if len(evidence) > _before else dry_streak + 1
 
     except Exception as e:
         logger.error(f"Cognitive RAG retrieval failed: {e}")
@@ -1732,6 +1870,7 @@ async def cognitive_rag_retrieve(
             hop_count=0,
             avg_relevance_score=0.0,
             retrieval_method="failed",
+            score_calls=score_calls,
         )
 
     avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
@@ -1759,6 +1898,7 @@ async def cognitive_rag_retrieve(
         hop_count=hop_count,
         avg_relevance_score=avg_relevance,
         retrieval_method=retrieval_method,
+        score_calls=score_calls,
     )
 
 
