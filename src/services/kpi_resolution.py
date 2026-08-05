@@ -95,6 +95,11 @@ _ALIASES: Dict[str, str] = {
     "new prescription": "WS3-BI-006",
     "trx share": "WS3-BI-008",
     "market share": "WS3-BI-008",
+    # Reverse share phrasing (#1475 codex iter-2): "the share of TRx" is
+    # natural WS3-BI-008 language — without these it falls to the bare "trx"
+    # alias and reads as a WS3-BI-005 mention inside a "share of" chain.
+    "share of trx": "WS3-BI-008",
+    "share of total prescriptions": "WS3-BI-008",
     "trx": "WS3-BI-005",
     "total prescription": "WS3-BI-005",
     "return on investment": "WS3-BI-010",
@@ -205,15 +210,16 @@ KPI_SEMANTIC_NOTES = {
 # ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
-def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int]]:
+def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int, int]]:
     """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
-    Returns ``(kpi, normalized_query, match_start)`` — ``normalized_query`` is
-    the whitespace-collapsed lowercase form the matcher actually ran on, and
-    ``match_start`` is the character offset of the matched alias / name token in
-    it. Callers that must reason about the KPI mention's grammatical position
-    (e.g. the #1475 governing-head guard: "cost of TRx" names TRx as a modifier,
-    not the asked-about metric) use this instead of re-deriving the match.
+    Returns ``(kpi, normalized_query, match_start, match_end)`` —
+    ``normalized_query`` is the whitespace-collapsed lowercase form the matcher
+    actually ran on, and ``[match_start, match_end)`` is the span of the matched
+    alias / name token in it. Callers that must reason about the KPI mention's
+    grammatical position (the #1475 governing-head guards: "cost of TRx" names
+    TRx as a modifier; "TRx drivers" names TRx as the outcome of a causal ask)
+    use this instead of re-deriving the match.
     """
     if not query:
         return None
@@ -226,7 +232,7 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
         if idx != -1:
             kpi = registry.get(_ALIASES[alias])
             if kpi is not None:
-                return kpi, q, idx
+                return kpi, q, idx, idx + len(alias)
 
     # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
     stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
@@ -238,7 +244,7 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
             if len(tok) >= 4 and tok not in stop:
                 idx = q.find(tok)
                 if idx != -1:
-                    return kpi, q, idx
+                    return kpi, q, idx, idx + len(tok)
     return None
 
 

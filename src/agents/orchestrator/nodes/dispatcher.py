@@ -1804,10 +1804,20 @@ _CAUSAL_OF_HEADS = frozenset(
 
 _OF_HEAD_RE = re.compile(r"([\w'-]+)\s+of\s+(?:the\s+|this\s+|our\s+)?$")
 
+_NEXT_TOKEN_RE = re.compile(r"\s*([\w'-]+)")
+
 
 def _kpi_governing_of_head(normalized_query: str, match_start: int) -> Optional[str]:
     """The head noun when the KPI mention is governed by ``<head> of <KPI>``."""
     m = _OF_HEAD_RE.search(normalized_query[:match_start])
+    return m.group(1) if m else None
+
+
+def _kpi_right_head(normalized_query: str, match_end: int) -> Optional[str]:
+    """The token immediately AFTER the KPI mention (codex iter-2): right-headed
+    causal noun compounds — "TRx drivers", "NRx determinants" — fit the value
+    regex with no of-chain, so Branch A must also look right of the match."""
+    m = _NEXT_TOKEN_RE.match(normalized_query[match_end:])
     return m.group(1) if m else None
 
 
@@ -1837,11 +1847,15 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     match = recognize_kpi_span(query)
     if match is None:
         return None
-    kpi, normalized_query, match_start = match
+    kpi, normalized_query, match_start, match_end = match
     of_head = _kpi_governing_of_head(normalized_query, match_start)
     if of_head is not None and of_head not in _VALUE_OF_HEADS:
         # "cost of TRx", "drivers of TRx", ... — the KPI is not the asked-about
         # value; let Branch B (or the fail-closed default) handle it.
+        return None
+    if _kpi_right_head(normalized_query, match_end) in _CAUSAL_OF_HEADS:
+        # "TRx drivers", "NRx determinants" — a right-headed causal compound;
+        # a bare value does not answer it.
         return None
 
     brand, region = _extract_brand_region(agent_input)
@@ -1895,6 +1909,13 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if semantic_note:
         key_findings.append(semantic_note)
         warnings.append(semantic_note)
+    if brand is None and region is None and window is None:
+        # A bare "What is NRx?" is plausibly a definition ask as much as a
+        # value ask — and data_summary never reaches the narrative (codex
+        # iter-2), so the registry definition must ride in key_findings to be
+        # narrated beside the value. A scoped ask (brand/region/window named)
+        # is unambiguously value-seeking: headline stays value-only.
+        key_findings.append(f"Definition: {kpi.definition}")
 
     payload: Dict[str, Any] = {
         # context_assembler._extract_context reads "agent" / "analysis_type" /
@@ -1988,18 +2009,25 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     query = agent_input.get("query")
     if not isinstance(query, str) or not query.strip():
         return None
-    if not _is_causal_fallback(agent_input) and not any(
-        pattern.search(query) for pattern in _causal_ask_patterns()
-    ):
-        return None
 
     from src.services.kpi_resolution import recognize_kpi_span
 
     match = recognize_kpi_span(query)
     if match is None:
         return None
-    kpi, normalized_query, match_start = match
+    kpi, normalized_query, match_start, match_end = match
     of_head = _kpi_governing_of_head(normalized_query, match_start)
+    right_head = _kpi_right_head(normalized_query, match_end)
+    # A causally-headed KPI mention ("drivers of NRx", "NRx determinants") is a
+    # causal ask in its own right even when the classifier lexicon misses the
+    # head word (codex iter-2: "determinants" is not in causal_effect's regex).
+    causally_headed = of_head in _CAUSAL_OF_HEADS or right_head in _CAUSAL_OF_HEADS
+    if (
+        not _is_causal_fallback(agent_input)
+        and not causally_headed
+        and not any(pattern.search(query) for pattern in _causal_ask_patterns())
+    ):
+        return None
     if of_head is not None and of_head not in _CAUSAL_OF_HEADS:
         # "what drives the cost of TRx up" (codex iter-1): TRx is a MODIFIER of
         # a head the registry does not model — binding TRx drivers would answer
@@ -2094,12 +2122,19 @@ def _resolve_explainer_input(
         analysis_results = _successful_upstream_results(agent_input)
 
     if not analysis_results:
-        # (3) ask-directed REAL evidence. KPI lookups first: their gate is the
-        # narrow, forecast-vetoed lookup regex, so a query that matches it is
-        # unambiguously a value question.
-        analysis_results = _kpi_lookup_evidence(agent_input) or []
-    if not analysis_results:
-        analysis_results = _causal_path_evidence(agent_input) or []
+        # (3) ask-directed REAL evidence. On a causal-fallback turn (a failed
+        # causal_impact sibling) the turn IS causal, whatever the lookup regex
+        # thinks — "What is the impact of TRx on conversion rate?" fits the
+        # regex's {0,3} gap via "impact of trx", and a bare value does not
+        # answer a causal ask — so Branch A is skipped outright. Otherwise KPI
+        # lookups first: the narrow, forecast-vetoed lookup regex plus the
+        # head guards make a match an unambiguous value question.
+        if _is_causal_fallback(agent_input):
+            analysis_results = _causal_path_evidence(agent_input) or []
+        else:
+            analysis_results = _kpi_lookup_evidence(agent_input) or []
+            if not analysis_results:
+                analysis_results = _causal_path_evidence(agent_input) or []
 
     if not analysis_results:
         return NeedsStructuredInput(

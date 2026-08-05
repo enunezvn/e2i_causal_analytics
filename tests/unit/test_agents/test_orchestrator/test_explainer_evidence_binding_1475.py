@@ -688,6 +688,25 @@ def test_value_of_kpi_still_binds_the_value(monkeypatch) -> None:
     assert len(stub.calls) == 1
 
 
+def test_causal_fallback_never_binds_a_bare_value(monkeypatch) -> None:
+    """Self-audit hole: 'What is the impact of TRx on conversion rate?' after a
+    failed causal_impact matched Branch A through the lookup regex's {0,3} gap
+    ('impact of trx' fits) and bound a Conversion Rate VALUE — a value does not
+    answer a causal ask. On a causal-fallback turn only Branch B may bind."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _failed_causal_impact_input("What is the impact of TRx on conversion rate?"),
+        _dispatch(),
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert stub.calls == [], "a causal fallback must never bind a bare KPI value"
+    assert recorder.calls and recorder.calls[0]["outcome_term"] == "Conversion Rate"
+
+
 def test_recognize_kpi_span_is_the_ssot_twin() -> None:
     """recognize_kpi_span must agree with recognize_kpi on every probe (it IS
     the same matcher, refactored to expose where the vocabulary hit)."""
@@ -705,9 +724,88 @@ def test_recognize_kpi_span_is_the_ssot_twin() -> None:
         if kpi is None:
             assert span is None
         else:
-            span_kpi, normalized, start = span
+            span_kpi, normalized, start, end = span
             assert span_kpi.id == kpi.id
-            assert 0 <= start < len(normalized)
+            assert 0 <= start < end <= len(normalized)
+
+
+def test_right_headed_causal_ask_binds_paths_not_a_value(monkeypatch) -> None:
+    """[codex iter-2 HIGH] 'What are TRx drivers for Kisqali?' fits the lookup
+    regex ('what are' + 'trx') with no of-chain, so only a RIGHT-context guard
+    stops Branch A from answering a causal ask with a bare value. The realistic
+    route is the causal fallback, but a direct explainer dispatch must hold too."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    for query in ("What are TRx drivers for Kisqali?", "What are the NRx determinants?"):
+        resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+        assert isinstance(resolved, dict), (query, resolved)
+        assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert stub.calls == [], "a drivers/determinants ask must never bind a bare value"
+    assert recorder.calls
+
+
+@pytest.mark.asyncio
+async def test_bare_definition_shape_narrates_the_definition(monkeypatch) -> None:
+    """[codex iter-2 HIGH] data_summary never reaches the narrative — for a BARE
+    'What is NRx?' (no brand/region/window) the registry definition must ride in
+    key_findings so the deterministic path narrates it beside the value."""
+    from src.agents.explainer import ExplainerAgent
+    from src.kpi.registry import get_registry
+
+    result = KPIResult(
+        kpi_id="WS3-BI-006",
+        value=4210.0,
+        status=KPIStatus.GOOD,
+        metadata={"context": {"data_through": "2025-04-23"}, "include_synthetic": False},
+    )
+    _install_calculator(monkeypatch, _StubCalculator(result))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input("What is NRx?"), _dispatch())
+    assert isinstance(resolved, dict), resolved
+    definition = get_registry().get("WS3-BI-006").definition
+    assert any(definition in f for f in resolved["analysis_results"][0]["key_findings"])
+
+    output = await ExplainerAgent(use_llm=False).explain(**resolved)
+    narrative = f"{output.executive_summary}\n{output.detailed_explanation}"
+    assert "4,210" in narrative, narrative
+    assert definition[:40] in narrative, narrative
+
+
+def test_scoped_value_ask_keeps_a_value_only_headline(monkeypatch) -> None:
+    """A brand-scoped ask is unambiguously value-seeking: the definition stays
+    in the payload (data_summary) but OUT of the narrated key_findings."""
+    _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(KPI_QUERY), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["definition"]
+    assert not any(payload["definition"] in f for f in payload["key_findings"])
+
+
+def test_share_of_trx_resolves_the_share_kpi(monkeypatch) -> None:
+    """[codex iter-2 MEDIUM] 'the share of TRx' is natural WS3-BI-008 phrasing —
+    it must resolve TRx Share (with its semantic note), not fall to the bare
+    'trx' alias and die on the head guard."""
+    result = KPIResult(
+        kpi_id="WS3-BI-008",
+        value=0.341,
+        status=KPIStatus.GOOD,
+        metadata={"context": {"data_through": "2025-04-23"}, "include_synthetic": False},
+    )
+    stub = _install_calculator(monkeypatch, _StubCalculator(result))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the share of TRx for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["kpi_id"] == "WS3-BI-008"
+    assert stub.calls[0][0] == "WS3-BI-008"
+    assert any("tracked portfolio" in f for f in payload["key_findings"])
 
 
 @pytest.mark.asyncio
