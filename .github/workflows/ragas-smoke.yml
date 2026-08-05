@@ -1,7 +1,7 @@
 # RAGAS Dependency Smoke Guard
 #
-# Automatic, $0, key-free counterpart to the manual-only "RAGAS Evaluation"
-# workflow (#504). That full gpt-4o eval is throughput-bound on the CI OpenAI
+# Automatic, $0, key-free counterpart to the manual-only "RAGAS Fixture
+# Regression" workflow (#504). That full gpt-4o eval is throughput-bound on the CI OpenAI
 # key, so it runs only on demand — which removed the one automatic signal that
 # the RAGAS dependency tree still *imports*. That import path is exactly what
 # silently broke for 5 days in #491 (ragas 0.4.x importing a Vertex symbol that
@@ -12,7 +12,9 @@
 # `scripts/run_ragas_eval.py --smoke`, which verifies the real import sequence
 # plus golden-set integrity with NO gpt-4o calls and NO OpenAI secret. It is
 # fast (~2-4 min) and spends nothing, so it can gate every PR that touches the
-# RAG eval stack. The full quality eval stays manual (ragas-evaluation.yml).
+# RAG eval stack. The full fixture eval stays manual (ragas-evaluation.yml);
+# production quality is measured separately by scripts/run_real_pipeline_ragas.py
+# (#1485) — the fixture job cannot see it.
 
 name: RAGAS Smoke
 

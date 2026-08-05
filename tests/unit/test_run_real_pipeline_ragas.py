@@ -163,3 +163,30 @@ def test_report_records_failures_when_gates_block():
     )
     assert report["passed"] is False
     assert report["failures"] == ["faithfulness=0.610 < threshold 0.9"]
+
+
+# ---------------------------------------------------------------------------
+# Judge-script output contract (codex iter-1 HIGH)
+# ---------------------------------------------------------------------------
+
+
+def test_judge_script_emits_the_evaluation_method_stamp():
+    """The gate can only refuse heuristic rows if the judge carries the stamp.
+
+    ``scripts/run_dspy_lane_ragas_judge.py`` is SHARED with the DSPy A/B lane,
+    so this is an add-only key. Without it, a mid-run degradation to
+    ``fallback_heuristic`` (src/rag/evaluation.py:1188) is invisible in the
+    block and the gate would pass on numbers no judge produced.
+    """
+    source = driver.JUDGE_SCRIPT.read_text()
+    assert '"evaluation_method"' in source
+    assert "res.metadata" in source
+
+
+def test_driver_gates_retrieval_as_well_as_metrics():
+    """The driver must use the composed verdict, not block gates alone."""
+    source = driver.__file__ and Path(driver.__file__).read_text()
+    assert "check_run_gates" in source, "driver must gate retrieval alongside the judge block"
+    assert "check_real_pipeline_gates(" not in source, (
+        "driver calls the block-only gate; a retrieval collapse would pass green"
+    )

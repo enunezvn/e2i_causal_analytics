@@ -117,6 +117,41 @@ REAL_PIPELINE_THRESHOLDS: Dict[str, float] = {
 # a confident number over 3 replays.
 MIN_REAL_PIPELINE_SAMPLES = 10
 
+# Retrieval-hit floor, measured baseline 5/15 = 0.333 with
+# SE = sqrt(p(1-p)/n) = 0.122, so ~1 SE below is 0.211.
+#
+# Why retrieval needs its own gate: the metric gates cannot see a retrieval
+# collapse. If only 3 of 15 turns retrieve and those 3 are judged well, then
+# answer_relevancy = 3 x 0.670 / 15 = 0.134 (still above its 0.10 floor) and
+# n_faithfulness = 3 (exactly at GATE_RAGAS_MIN_FAITHFULNESS_N). Retrieval
+# would have dropped 40% with every block-level gate green — and since every
+# zero-retrieval turn in the baseline abstained, that is the failure mode this
+# pipeline actually has.
+#
+# 0.21 blocks 3/15 (0.200) and passes 4/15 (0.267).
+MIN_RETRIEVAL_HIT_RATE = 0.21
+
+# RAGASEvaluator._evaluate_with_ragas ends in a broad
+# ``except Exception: return await self._evaluate_with_fallback(...)``
+# (src/rag/evaluation.py:1188), so a quota error, rate limit, or transient API
+# failure DURING judging silently swaps gpt-4o judgments for word-overlap
+# heuristics on that sample. The judge process still exits 0 and the
+# aggregates still reconcile, so without this marker the gate could pass on
+# numbers no judge ever produced — the same masquerade class as the fixture
+# tautology itself.
+#
+# Only the FALLBACK path is stamped (:1270). The judged path returns
+# ``metadata=sample.metadata`` with no positive marker, so a judged row
+# legitimately carries no key and "missing" must mean judged. Requiring a
+# positive marker would be stronger, but it needs a change to the evaluator
+# AND a deploy before this gate could ever pass — the container judges with
+# deployed code, not this worktree. Refusing the known-bad stamp is the
+# contract that works against the code that is actually running.
+#
+# The same vocabulary already distinguishes real from heuristic scores in
+# src/agents/feedback_learner/evaluation/models.py.
+HEURISTIC_EVALUATION_METHOD = "fallback_heuristic"
+
 
 def contexts_from_evidence(evidence: Optional[Iterable[Any]]) -> List[str]:
     """Flatten a cognitive-RAG ``evidence`` list into context strings.
@@ -179,6 +214,85 @@ def summarize_retrieval(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _heuristic_contamination_error(block: Dict[str, Any]) -> Optional[str]:
+    """Refuse a block whose rows were scored by the heuristic fallback.
+
+    See ``HEURISTIC_EVALUATION_METHOD``: a mid-run judge failure degrades that
+    sample to word-overlap scoring without failing the process. A row is
+    accepted when its ``evaluation_method`` is absent or None (the judged path
+    stamps nothing); ANY other value is refused, so a future marker we do not
+    recognise blocks rather than slips through.
+    """
+    rows = block.get("per_sample")
+    if not isinstance(rows, list):
+        return None  # shape problems are already reported by the consistency gate
+    contaminated = [
+        row.get("query_id")
+        for row in rows
+        if isinstance(row, dict) and row.get("evaluation_method") not in (None, "")
+    ]
+    if contaminated:
+        return (
+            f"rows not scored by the gpt-4o judge (evaluation_method set): {contaminated} "
+            f"— a mid-run judge failure degrades samples to {HEURISTIC_EVALUATION_METHOD} "
+            "word-overlap scoring (src/rag/evaluation.py:1188); those numbers are not "
+            "measurements"
+        )
+    return None
+
+
+def check_retrieval_gate(
+    retrieval: Optional[Dict[str, Any]],
+    floor: float = MIN_RETRIEVAL_HIT_RATE,
+) -> Tuple[bool, List[str]]:
+    """Gate the replay's retrieval-hit rate. Returns ``(passed, failures)``.
+
+    This reads the REPLAY summary, not the judge block: the judge only sees
+    samples that survived the adapter's drop-rules, so its denominator excludes
+    errored turns while ``summarize_retrieval`` counts them — a run where half
+    the turns error out must not look like a healthy retrieval rate.
+
+    Missing or malformed data fails closed: "we could not measure retrieval" is
+    not "retrieval is fine".
+    """
+    if not isinstance(retrieval, dict) or not retrieval:
+        return False, [
+            "retrieval summary missing — cannot verify the pipeline retrieved anything; "
+            "the gate fails closed"
+        ]
+    rate = retrieval.get("retrieval_hit_rate")
+    if not _is_finite_number(rate):
+        return False, [f"retrieval_hit_rate={rate!r} is not a finite rate — fails closed"]
+    if float(rate) < floor:
+        return False, [
+            f"retrieval hit rate {float(rate):.3f} < floor {floor} "
+            f"({retrieval.get('n_with_contexts')}/{retrieval.get('n_records')} replays "
+            "retrieved any context) — the metric gates cannot see this on their own"
+        ]
+    return True, []
+
+
+def check_run_gates(
+    block: Optional[Dict[str, Any]],
+    retrieval: Optional[Dict[str, Any]],
+    thresholds: Optional[Dict[str, float]] = None,
+    min_samples: int = MIN_REAL_PIPELINE_SAMPLES,
+    retrieval_floor: float = MIN_RETRIEVAL_HIT_RATE,
+) -> Tuple[bool, List[str]]:
+    """Full verdict for one run: judge-block gates AND the retrieval gate.
+
+    This is what the driver calls. Keeping the retrieval gate out of
+    ``check_real_pipeline_gates`` (which is about the judge's own output) but
+    composing both here means a caller cannot accidentally gate the metrics
+    while ignoring whether the pipeline retrieved anything.
+    """
+    block_passed, failures = check_real_pipeline_gates(
+        block, thresholds=thresholds, min_samples=min_samples
+    )
+    retrieval_passed, retrieval_failures = check_retrieval_gate(retrieval, floor=retrieval_floor)
+    return (block_passed and retrieval_passed), [*failures, *retrieval_failures]
+
+
 def check_real_pipeline_gates(
     block: Optional[Dict[str, Any]],
     thresholds: Optional[Dict[str, float]] = None,
@@ -217,6 +331,10 @@ def check_real_pipeline_gates(
     scoreless = _ragas_scoreless_error(block)
     if scoreless:
         failures.append(f"ragas scoreless rows: {scoreless}")
+
+    contaminated = _heuristic_contamination_error(block)
+    if contaminated:
+        failures.append(contaminated)
 
     n_samples = block.get("n_samples")
     if not isinstance(n_samples, int) or isinstance(n_samples, bool) or n_samples < min_samples:

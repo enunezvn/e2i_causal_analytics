@@ -95,3 +95,47 @@ def test_dormant_regression_job_is_preserved():
     jobs = _load_workflow()["jobs"]
     assert "ragas-regression" in jobs
     assert jobs["ragas-regression"]["if"] == "github.event_name == 'pull_request'"
+
+
+# ---------------------------------------------------------------------------
+# Rename blast radius (codex iter-1 HIGH)
+# ---------------------------------------------------------------------------
+#
+# Renaming the workflow is only half the fix: docs that still describe it as a
+# "RAG quality eval" keep the wrong mental model alive, which is the actual
+# defect in #1485 (a 0.804 fixture number read as production quality).
+
+DOC_PATHS = [
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "docs" / "ONBOARDING.md",
+    REPO_ROOT / "docs" / "LLM_CONFIGURATION.md",
+]
+
+
+def test_no_doc_still_calls_the_fixture_job_a_rag_quality_eval():
+    stale = []
+    for path in DOC_PATHS:
+        if not path.exists():
+            continue
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            lowered = line.lower()
+            if "ragas" not in lowered and "run_ragas_eval" not in lowered:
+                continue
+            if "rag quality eval" in lowered or "quality gate" in lowered:
+                stale.append(f"{path.name}:{lineno}: {line.strip()}")
+    assert not stale, "docs still present the fixture eval as a quality gate:\n" + "\n".join(stale)
+
+
+def test_docs_point_at_the_real_pipeline_gate():
+    """A reader who finds the fixture eval must be able to find the real one."""
+    for path in (REPO_ROOT / "README.md", REPO_ROOT / "docs" / "ONBOARDING.md"):
+        text = path.read_text()
+        assert "run_real_pipeline_ragas.py" in text, (
+            f"{path.name} describes the RAGAS stack without pointing at the real-pipeline gate"
+        )
+
+
+def test_smoke_workflow_header_uses_the_current_name():
+    """ragas-smoke.yml's comments name its counterpart; behaviour untouched."""
+    text = (REPO_ROOT / ".github" / "workflows" / "ragas-smoke.yml").read_text()
+    assert "RAGAS Evaluation" not in text, "stale workflow name in ragas-smoke.yml comments"

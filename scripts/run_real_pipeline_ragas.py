@@ -61,10 +61,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.rag.real_pipeline_eval import (  # noqa: E402
     MIN_REAL_PIPELINE_SAMPLES,
+    MIN_RETRIEVAL_HIT_RATE,
     REAL_PIPELINE_METRICS,
     REAL_PIPELINE_THRESHOLDS,
     build_samples_from_replay,
-    check_real_pipeline_gates,
+    check_run_gates,
     summarize_retrieval,
 )
 
@@ -252,6 +253,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=MIN_REAL_PIPELINE_SAMPLES,
         help=f"Minimum judged samples (default: {MIN_REAL_PIPELINE_SAMPLES})",
     )
+    parser.add_argument(
+        "--retrieval-floor",
+        type=float,
+        default=MIN_RETRIEVAL_HIT_RATE,
+        help=(
+            "Minimum share of replays that must retrieve any context "
+            f"(default: {MIN_RETRIEVAL_HIT_RATE}). The metric gates cannot see a "
+            "retrieval collapse on their own."
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=3600, help="Judge subprocess timeout (s)")
     parser.add_argument("--output", type=Path, default=None, help="Write the JSON report here")
     parser.add_argument(
@@ -303,8 +314,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "faithfulness": args.faithfulness,
         "answer_relevancy": args.answer_relevancy,
     }
-    passed, failures = check_real_pipeline_gates(
-        block, thresholds=thresholds, min_samples=args.min_samples
+    passed, failures = check_run_gates(
+        block,
+        retrieval,
+        thresholds=thresholds,
+        min_samples=args.min_samples,
+        retrieval_floor=args.retrieval_floor,
     )
     report = build_report(block, retrieval, thresholds, passed, failures, meta)
 

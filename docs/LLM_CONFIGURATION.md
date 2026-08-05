@@ -131,9 +131,13 @@ unpriced in the admin view.
 
 ## 5. Other LLM consumers (fixed models, out of factory scope)
 
-- **RAGAS evaluation** (`.github/workflows/ragas-evaluation.yml`): gpt-4o as
-  judge; manual-only in CI (throughput-bound on the CI OpenAI key — see
-  issue #504).
+- **RAGAS fixture regression** (`.github/workflows/ragas-evaluation.yml`):
+  gpt-4o as judge; manual-only in CI (throughput-bound on the CI OpenAI key —
+  see issue #504). Scores a static fixture, so it detects judge-stack drift on
+  frozen input, not production RAG quality (#1485).
+- **RAGAS real-pipeline gate** (`scripts/run_real_pipeline_ragas.py`): the same
+  frozen gpt-4o judge, applied to answers the live pipeline actually generated
+  over contexts it actually retrieved. On-demand only.
 - **Adaptive-validity audit evaluator**: defaults to
   `anthropic/claude-haiku-4-5-20251001` via `ADAPTIVE_VALIDITY_EVALUATOR_MODEL`
   (off by default; see `.env.example` §11).
