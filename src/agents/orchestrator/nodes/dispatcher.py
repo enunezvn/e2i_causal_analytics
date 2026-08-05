@@ -1677,6 +1677,305 @@ def _successful_upstream_results(agent_input: Dict[str, Any]) -> List[Dict[str, 
     return upstream
 
 
+# --------------------------------------------------------------------------
+# #1475 target-2 — REAL-evidence binding for the explainer's two dead-end
+# query classes.
+#
+# explainer is BOTH the 'explanation'-intent primary (the #1337 gold label for
+# KPI value lookups: 111/337 rows, the largest gold class) AND the universal
+# fallback agent. Both classes arrive with an EMPTY upstream-result list, so
+# every one of them fell straight through to the #883 fail-closed return and
+# /chat/stream's multi-agent path answered nothing (measured 2026-08-05:
+# "Orchestrator complete failure: all agents failed - ['explainer']" and
+# "- ['causal_impact','explainer']", after which the chat bridge answered).
+#
+# The two resolvers below bind evidence that is REAL or nothing at all: the
+# value the KPI engine's vetted registry SQL actually computes, or the curated
+# causal_paths registry rows. #883's contract is untouched — when neither
+# substrate resolves, the same fail-closed return fires.
+# --------------------------------------------------------------------------
+
+#: A vetted-SQL KPI read is deterministic, not an estimate.
+_KPI_LOOKUP_CONFIDENCE = 1.0
+
+#: Registry-read parameters, mirroring ``causal_analysis_tool``'s defaults
+#: (src/api/routes/chatbot_tools.py) so the orchestrator and the chat tool
+#: surface the same paths for the same ask.
+_CAUSAL_PATH_MIN_CONFIDENCE = 0.7
+_CAUSAL_PATH_LIMIT = 15
+#: How many paths become key_findings (the rest ride along in data_summary).
+_CAUSAL_PATH_FINDINGS = 5
+
+#: Longest window phrase (in tokens) offered to the KPI engine's parser.
+_WINDOW_MAX_TOKENS = 4
+
+
+def _format_kpi_value(value: float, kpi: Any) -> str:
+    """Render a KPI value the way the dashboard does.
+
+    Mirrors ``src.insights.home_kpi._fmt_value`` (percent-format KPIs are 0-1
+    ratios shown as NN.N%; everything else as-is plus the unit) rather than
+    importing it: the orchestrator has no other dependency on the insights
+    layer, and that module pulls the DSPy signature stack at import time. This
+    is display formatting only — the bound payload also carries the raw
+    ``value``, so a drift here can never change what is reported.
+    """
+    if getattr(kpi, "value_format", None) == "percent":
+        return f"{value * 100:.1f}%"
+    rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
+    unit = getattr(kpi, "unit", None)
+    return f"{rendered} {unit}".strip() if unit else rendered
+
+
+def _window_from_query(query: str) -> Optional[Dict[str, str]]:
+    """The longest window phrase in ``query`` that the KPI engine's own parser
+    accepts, as its ``{start, end}`` dict — or ``None``.
+
+    The grammar is NOT re-implemented here: candidate token n-grams (longest
+    first) are handed to :func:`src.services.time_window.parse_window`, which
+    stays the sole authority on what a window phrase means. ``parse_window``
+    ``fullmatch``es, so it cannot be pointed at a whole sentence.
+
+    Single tokens are deliberately never tried: a bare 4-digit number parses as
+    a full-year window, so "the top 2000 HCPs" would silently bind calendar-year
+    2000 to the figure. No recognized phrase → ``None`` → the engine's default
+    window, which ``KPIResult.window_status`` then reports honestly as
+    "default" rather than implying the user's period was applied.
+    """
+    from src.services.time_window import WindowParseError, parse_window
+
+    tokens = re.findall(r"[\w'-]+", query.lower())
+    for size in range(min(_WINDOW_MAX_TOKENS, len(tokens)), 1, -1):
+        for start in range(len(tokens) - size + 1):
+            try:
+                window = parse_window(" ".join(tokens[start : start + size]))
+            except WindowParseError:
+                continue
+            if window is not None:
+                return window.as_dict()
+    return None
+
+
+def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Branch A — bind the REAL computed value for a KPI value-lookup ask.
+
+    Gated by ``KPI_VALUE_LOOKUP_RE``, the SAME pattern that routes this shape to
+    the explainer in the first place (intent_classifier.py) — including its
+    whole-query forecast veto, so "what is the trx for next quarter expected to
+    be?" can never be answered with a current-period figure.
+
+    Returns ``None`` (→ the caller's fail-closed path) when the query is not a
+    KPI lookup, names no defined KPI, or the engine returns an error / no value.
+    Nothing is ever synthesized: the figure is the KPI registry's own SQL.
+    """
+    query = agent_input.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return None
+
+    from .intent_classifier import KPI_VALUE_LOOKUP_RE
+
+    if not KPI_VALUE_LOOKUP_RE.search(query):
+        return None
+
+    from src.services.kpi_resolution import recognize_kpi
+
+    kpi = recognize_kpi(query)
+    if kpi is None:
+        return None
+
+    brand, region = _extract_brand_region(agent_input)
+    context: Dict[str, Any] = {}
+    if brand:
+        context["brand"] = brand
+    if region:
+        context["region"] = region
+    window = _window_from_query(query)
+    if window is not None:
+        context["window"] = window
+
+    try:
+        from src.api.routes.kpi import get_kpi_calculator
+
+        result = get_kpi_calculator().calculate(kpi.id, context=context)
+    except Exception as e:  # noqa: BLE001 - any engine failure fails closed
+        logger.warning("explainer resolver: KPI %s lookup raised (%s) -> failing closed", kpi.id, e)
+        return None
+
+    if result.error or result.value is None:
+        logger.info(
+            "explainer resolver: KPI %s returned no value (error=%r) -> failing closed",
+            kpi.id,
+            result.error,
+        )
+        return None
+
+    metadata = result.metadata or {}
+    result_context = metadata.get("context") or {}
+    data_through = result_context.get("data_through")
+    window_status = result.window_status
+    scope = " ".join(part for part in (brand, kpi.name) if part)
+    if region:
+        scope = f"{scope} in {region}"
+    provenance = [f"data through {data_through}"] if data_through is not None else []
+    provenance.append(f"window {window_status}")
+    formatted_value = _format_kpi_value(float(result.value), kpi)
+    # key_findings MUST be non-empty and MUST carry the figure: the explainer's
+    # deterministic path turns each finding into an Insight and quotes the top
+    # ones verbatim in the executive summary, so an empty list renders a
+    # "0 key finding(s)" husk with the value nowhere in the narrative.
+    finding = f"{scope}: {formatted_value} ({'; '.join(provenance)})"
+
+    payload: Dict[str, Any] = {
+        # context_assembler._extract_context reads "agent" / "analysis_type" /
+        # "key_findings" / "confidence"; every other key lands in data_summary.
+        "agent": "kpi_calculator",
+        "analysis_type": "kpi_lookup",
+        "key_findings": [finding],
+        "confidence": _KPI_LOOKUP_CONFIDENCE,
+        "kpi_id": kpi.id,
+        "kpi_name": kpi.name,
+        "value": result.value,
+        "formatted_value": formatted_value,
+        "status": result.status,
+        "brand": brand,
+        "region": region,
+        "window_requested": result.window_requested,
+        "window_applied": result.window_applied,
+        "window_status": window_status,
+        # Provenance label mirrors the chat KPI tool (#893): a synthetic-sourced
+        # figure is never passed off as real-world data.
+        "data_source": "synthetic" if metadata.get("include_synthetic") else "database",
+    }
+    if data_through is not None:
+        payload["data_through"] = data_through
+    return [payload]
+
+
+@functools.lru_cache(maxsize=1)
+def _causal_ask_patterns() -> Tuple[re.Pattern[str], ...]:
+    """The intent classifier's own ``causal_effect`` lexicon, compiled once.
+
+    Read-only reuse (no routing surface is modified): a query the classifier
+    would call causal is exactly the query for which the curated causal-path
+    registry is the right substrate.
+    """
+    from .intent_classifier import IntentClassifierNode
+
+    return tuple(
+        re.compile(pattern, re.IGNORECASE)
+        for pattern in IntentClassifierNode.INTENT_PATTERNS["causal_effect"]
+    )
+
+
+def _is_causal_fallback(agent_input: Dict[str, Any]) -> bool:
+    """True when this dispatch is the explainer standing in for a FAILED
+    ``causal_impact`` (its resolver fails closed for every KPI without a frame
+    builder — dispatcher.py:730 — so the fallback is the user's only answer)."""
+    for item in agent_input.get("agent_results") or []:
+        if (
+            isinstance(item, dict)
+            and item.get("agent_name") == "causal_impact"
+            and not item.get("success")
+        ):
+            return True
+    return False
+
+
+def _format_causal_path_finding(row: Dict[str, Any]) -> str:
+    """One registry row as a narratable finding (real fields only)."""
+    detail: List[str] = []
+    if row.get("causal_effect_size") is not None:
+        detail.append(f"effect {row['causal_effect_size']}")
+    if row.get("confidence_level") is not None:
+        detail.append(f"confidence {float(row['confidence_level']):.2f}")
+    if row.get("method_used"):
+        detail.append(f"method {row['method_used']}")
+    detail.append(f"validation {row.get('validation_status') or 'unknown'}")
+    cause = row.get("start_node") or "unknown driver"
+    effect = row.get("end_node") or "unknown outcome"
+    return f"{cause} -> {effect} ({'; '.join(detail)})"
+
+
+def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Branch B — bind curated ``causal_paths`` registry rows for a causal ask.
+
+    Fires when the explainer is standing in for a failed ``causal_impact`` OR
+    the query itself is a causal ask, AND the ask names a defined KPI. The
+    outcome term is that KPI's name — the deterministic mirror of what
+    ``causal_analysis_tool`` reduces a chat ask to before querying the same
+    registry with the same token matcher.
+
+    An empty registry result returns ``None`` (→ fail closed): a
+    substrate-coverage gap must never be dressed up as "no drivers exist".
+    """
+    query = agent_input.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return None
+    if not _is_causal_fallback(agent_input) and not any(
+        pattern.search(query) for pattern in _causal_ask_patterns()
+    ):
+        return None
+
+    from src.services.kpi_resolution import recognize_kpi
+
+    kpi = recognize_kpi(query)
+    if kpi is None:
+        return None
+
+    brand, _region = _extract_brand_region(agent_input)
+    # Provenance gate: the SAME platform switch the KPI tools observe — synthetic
+    # paths surface only in showcase mode, and labeled (#893).
+    from src.kpi.synthetic_mode import kpi_include_synthetic
+
+    include_synthetic = kpi_include_synthetic()
+    try:
+        from src.repositories import causal_path as causal_path_repo
+
+        paths = causal_path_repo.search_paths_for_outcome_sync(
+            kpi.name,
+            brand=brand,
+            min_confidence=_CAUSAL_PATH_MIN_CONFIDENCE,
+            limit=_CAUSAL_PATH_LIMIT,
+            include_synthetic=include_synthetic,
+        )
+    except Exception as e:  # noqa: BLE001 - a registry failure fails closed
+        logger.warning(
+            "explainer resolver: causal-path read for %r raised (%s) -> failing closed",
+            kpi.name,
+            e,
+        )
+        return None
+
+    if not paths:
+        logger.info(
+            "explainer resolver: causal registry models no path for %r -> failing closed",
+            kpi.name,
+        )
+        return None
+
+    payload: Dict[str, Any] = {
+        "agent": "causal_path_registry",
+        "analysis_type": "causal_paths_registry",
+        "key_findings": [_format_causal_path_finding(p) for p in paths[:_CAUSAL_PATH_FINDINGS]],
+        "outcome": kpi.name,
+        "kpi_id": kpi.id,
+        "brand": brand,
+        "paths_found": len(paths),
+        "paths": paths,
+        "min_confidence_applied": _CAUSAL_PATH_MIN_CONFIDENCE,
+        "data_source": "synthetic" if include_synthetic else "database",
+    }
+    # Confidence is the registry's own method-attributed value, not a default.
+    confidences = [
+        float(p["confidence_level"])
+        for p in paths
+        if isinstance(p.get("confidence_level"), (int, float))
+    ]
+    if confidences:
+        payload["confidence"] = max(confidences)
+    return [payload]
+
+
 def _resolve_explainer_input(
     agent_input: Dict[str, Any], dispatch: AgentDispatch
 ) -> Union[Dict[str, Any], NeedsStructuredInput]:
@@ -1693,8 +1992,12 @@ def _resolve_explainer_input(
     (2) Otherwise bind the successful upstream results carried in the dispatch
         state — this turn's earlier/sibling agent outputs on the fallback path,
         prior turns' outputs on a resumed conversation state.
-    (3) With neither, fail closed: an explanation of nothing would have to be
-        fabricated.
+    (3) With no upstream at all, resolve the evidence the ASK itself points at
+        (#1475): the KPI engine's computed value for a KPI value lookup, or the
+        curated causal-path registry for a causal ask / a fallback after a
+        failed ``causal_impact``. Both bind REAL data or nothing.
+    (4) With none of those, fail closed: an explanation of nothing would have to
+        be fabricated.
     """
     params = dispatch.get("parameters") or {}
 
@@ -1705,6 +2008,14 @@ def _resolve_explainer_input(
     else:
         # (2) real upstream results from the orchestrator state.
         analysis_results = _successful_upstream_results(agent_input)
+
+    if not analysis_results:
+        # (3) ask-directed REAL evidence. KPI lookups first: their gate is the
+        # narrow, forecast-vetoed lookup regex, so a query that matches it is
+        # unambiguously a value question.
+        analysis_results = _kpi_lookup_evidence(agent_input) or []
+    if not analysis_results:
+        analysis_results = _causal_path_evidence(agent_input) or []
 
     if not analysis_results:
         return NeedsStructuredInput(
