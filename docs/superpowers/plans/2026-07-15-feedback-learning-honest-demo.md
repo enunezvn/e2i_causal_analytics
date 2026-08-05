@@ -822,6 +822,16 @@ Expected: FAIL at import (`ModuleNotFoundError: No module named 'scripts.replay_
 
 Create `scripts/replay_golden_set.py`:
 
+> **Superseded (2026-08-05, #1485) — do not copy this listing.**
+> The sender contract below is the original 2-tuple `(ok, detail)` that this
+> July plan implemented, preserved here as the record of what was built.
+> #1485 changed `send_chat` / `send_cognitive` to return `(ok, detail, body)`
+> so the response body — the generated answer and the really-retrieved
+> contexts — reaches the real-pipeline RAGAS judge; discarding it was the
+> defect. Both the `def send_chat(...) -> Tuple[bool, str]` signature and the
+> `ok, detail = send_chat(...)` unpack further down this listing are therefore
+> out of date. `scripts/replay_golden_set.py` is canonical.
+
 ```python
 #!/usr/bin/env python3
 """Replay the RAGAS golden QA set through the real chat pipeline.
