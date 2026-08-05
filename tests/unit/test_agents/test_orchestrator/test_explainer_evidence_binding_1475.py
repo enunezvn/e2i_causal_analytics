@@ -893,6 +893,113 @@ def test_multi_kpi_value_ask_fails_closed(monkeypatch) -> None:
     assert len(stub.calls) == 1
 
 
+def test_fresh_value_ask_outranks_stale_upstream_success(monkeypatch) -> None:
+    """[iter-5 HIGH] the accumulated channel carries PRIOR turns' successes:
+    turn-1's gap analysis must not be narrated as the answer to turn-2's
+    'What is the TRx?' — an explicit value ask is never anaphoric."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    stale = _agent_input(
+        KPI_QUERY,
+        agent_results=[
+            {
+                "agent_name": "gap_analyzer",
+                "success": True,
+                "result": {"gaps": ["stale gap"], "summary": "prior turn's analysis"},
+            }
+        ],
+    )
+    resolved = disp.INPUT_RESOLVERS["explainer"](stale, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["value"] == 12345.0
+    assert len(stub.calls) == 1
+
+
+def test_anaphoric_ask_still_binds_upstream_results(monkeypatch) -> None:
+    """[iter-5, opposite guard] 'Explain the analysis' IS anaphoric — the
+    upstream-results substrate (#883 §3) must keep serving it; the value
+    branch must not fire (no KPI mention)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    payload = _agent_input(
+        "Explain the analysis",
+        agent_results=[
+            {
+                "agent_name": "gap_analyzer",
+                "success": True,
+                "result": {"gaps": ["gap A"], "summary": "the gap analysis"},
+            }
+        ],
+    )
+    resolved = disp.INPUT_RESOLVERS["explainer"](payload, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["summary"] == "the gap analysis"
+    assert stub.calls == []
+
+
+def test_half_of_kpi_fails_closed(monkeypatch) -> None:
+    """[iter-5 HIGH] 'half of Kisqali TRx' asks for a TRANSFORMATION the
+    platform does not model — binding the full value would answer a different
+    question. 'half' is not a temporal idiom; fail closed."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is half of Kisqali TRx?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+
+
+def test_second_metric_named_by_registry_name_fails_closed(monkeypatch) -> None:
+    """[iter-5 HIGH] 33 of 45 registry KPIs have no alias — a second metric
+    named by its FULL registry name ('monthly active users' = WS3-BI-001) must
+    still trip the multi-KPI veto, not vanish behind the alias-only probe."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What are the TRx and monthly active users?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+
+
+def test_multi_outcome_causal_ask_fails_closed(monkeypatch) -> None:
+    """[iter-5 HIGH] 'What drives TRx and NRx?' names TWO outcomes with no
+    directional grammar — a singleton path answer chosen by alias order does
+    not answer it. Fail closed (the bridge handles it)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What drives TRx and NRx for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+    assert recorder.calls == []
+
+
+def test_directed_causal_ask_binds_the_on_headed_outcome(monkeypatch) -> None:
+    """[iter-5, direction pin] 'impact of conversion rate on TRx' names two
+    metrics but the 'on <metric>' grammar identifies TRx as the OUTCOME — the
+    resolver must bind TRx paths, not follow alias-length luck to Conversion
+    Rate."""
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _failed_causal_impact_input("What is the impact of conversion rate on TRx?"),
+        _dispatch(),
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert recorder.calls and recorder.calls[0]["outcome_term"] == "Total Prescriptions (TRx)"
+
+
 def test_recognize_kpi_span_is_the_ssot_twin() -> None:
     """recognize_kpi_span must agree with recognize_kpi on every probe (it IS
     the same matcher, refactored to expose where the vocabulary hit)."""

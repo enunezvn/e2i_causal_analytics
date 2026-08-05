@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -219,9 +220,7 @@ KPI_SEMANTIC_NOTES = {
 # ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
-def recognize_kpi_span(
-    query: Optional[str], *, aliases_only: bool = False
-) -> Optional[Tuple[KPIMetadata, str, int, int]]:
+def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int, int]]:
     """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
     Returns ``(kpi, normalized_query, match_start, match_end)`` —
@@ -257,12 +256,6 @@ def recognize_kpi_span(
                 return kpi, q, idx, idx + len(alias)
 
     # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
-    # ``aliases_only`` skips it: registry names carry BRAND tokens ("kisqali"
-    # resolves a brand KPI), so a caller probing for a SECOND metric mention
-    # (the dispatcher's multi-KPI veto) must see only the precise alias
-    # vocabulary — "TRx for Kisqali" names one metric, not two.
-    if aliases_only:
-        return None
     stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
     for kpi in registry.get_all():
         for tok in (
@@ -273,6 +266,50 @@ def recognize_kpi_span(
                 idx = q.find(tok)
                 if idx != -1:
                     return kpi, q, idx, idx + len(tok)
+    return None
+
+
+@lru_cache(maxsize=1)
+def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
+    """(phrase, kpi_id) pairs of HIGH-PRECISION metric vocabulary: the alias
+    map, full registry names (parentheticals stripped, punctuation
+    normalized), and parenthetical abbreviations ("MAU"). Single name TOKENS
+    are deliberately absent — registry names carry brand and scope tokens
+    ("kisqali", "patients") that mark an ask's SCOPE, not a metric mention.
+    Longest phrase first so "conversion rate" beats "conversion"."""
+    vocab: Dict[str, str] = {}
+    for alias, kpi_id in _ALIASES.items():
+        vocab.setdefault(alias, kpi_id)
+    for kpi in get_registry().get_all():
+        name = str(kpi.name).lower()
+        parentheticals = re.findall(r"\(([^)]+)\)", name)
+        base = " ".join(re.sub(r"[^a-z0-9']+", " ", re.sub(r"\([^)]*\)", " ", name)).split())
+        if len(base) >= 4:
+            vocab.setdefault(base, kpi.id)
+        for abbr in parentheticals:
+            abbr = " ".join(re.sub(r"[^a-z0-9']+", " ", abbr).split())
+            if len(abbr) >= 3:
+                vocab.setdefault(abbr, kpi.id)
+    return tuple(sorted(vocab.items(), key=lambda kv: len(kv[0]), reverse=True))
+
+
+def recognize_distinct_metric(
+    normalized_query: str, *, exclude_id: str
+) -> Optional[Tuple[KPIMetadata, int, int]]:
+    """A metric mention OTHER than ``exclude_id`` in an (already lowercase,
+    possibly span-masked) query — the dispatcher's multi-KPI vetoes probe
+    with this after masking the first recognized span. Word-boundary matched
+    against the strict vocabulary only; returns ``(kpi, start, end)`` in the
+    given string's coordinates."""
+    registry = get_registry()
+    for phrase, kpi_id in _strict_metric_vocabulary():
+        if kpi_id == exclude_id:
+            continue
+        m = re.search(rf"(?<![\w'-]){re.escape(phrase)}(?![\w'-])", normalized_query)
+        if m is not None:
+            kpi = registry.get(kpi_id)
+            if kpi is not None:
+                return kpi, m.start(), m.end()
     return None
 
 

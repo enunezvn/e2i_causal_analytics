@@ -1811,12 +1811,22 @@ _OF_HEAD_RE = re.compile(
     r"([\w'-]+)\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$"
 )
 
-# Temporal of-idioms are not governing heads: "as of Q2", "the end of June",
-# "first half of 2026" scope the WINDOW, not the metric — "as of Q2 TRx" is
-# still a value ask, answered with the window probe (codex iter-4).
-_TEMPORAL_OF_HEADS = frozenset({"as", "end", "start", "beginning", "middle", "close", "half"})
+# Temporal of-idioms are not governing heads: "as of Q2", "the end of June"
+# scope the WINDOW, not the metric — "as of Q2 TRx" is still a value ask,
+# answered with the window probe (codex iter-4). "half" is NOT here: "half of
+# TRx" asks for a transformation the platform does not model, so it must keep
+# its head and fail closed (codex iter-5).
+_TEMPORAL_OF_HEADS = frozenset({"as", "end", "start", "beginning", "middle", "close"})
 
 _NEXT_TOKEN_RE = re.compile(r"\s*([\w'-]+)")
+
+_ON_HEAD_RE = re.compile(r"\b(?:on|upon)\s+(?:(?:the|this|our)\s+)?$")
+
+
+def _directed_outcome(normalized_query: str, match_start: int) -> bool:
+    """True when the mention at ``match_start`` is on-headed — "impact of X
+    on Y" names Y as the OUTCOME of a directed causal ask (codex iter-5)."""
+    return _ON_HEAD_RE.search(normalized_query[:match_start]) is not None
 
 
 def _kpi_governing_of_head(normalized_query: str, match_start: int) -> Optional[str]:
@@ -1857,7 +1867,11 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if not KPI_VALUE_LOOKUP_RE.search(query):
         return None
 
-    from src.services.kpi_resolution import KPI_SEMANTIC_NOTES, recognize_kpi_span
+    from src.services.kpi_resolution import (
+        KPI_SEMANTIC_NOTES,
+        recognize_distinct_metric,
+        recognize_kpi_span,
+    )
 
     match = recognize_kpi_span(query)
     if match is None:
@@ -1877,13 +1891,14 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         + " " * (match_end - match_start)
         + normalized_query[match_end:]
     )
-    second = recognize_kpi_span(masked, aliases_only=True)
-    if second is not None and second[0].id != kpi.id:
+    if recognize_distinct_metric(masked, exclude_id=kpi.id) is not None:
         # "TRx and NRx" names TWO metrics — one value presented as the whole
         # answer is a wrong answer; fail closed (the bridge answers multi-KPI
-        # asks today). A repeated mention of the SAME KPI still binds; the
-        # probe is alias-only because registry NAMES carry brand tokens
-        # ("kisqali" would read as a second metric on every scoped ask).
+        # asks today). A repeated mention of the SAME KPI still binds. The
+        # probe uses the STRICT vocabulary (aliases + full registry names +
+        # abbreviations, never single name tokens): registry names carry
+        # brand/scope tokens ("kisqali", "patients") that would read as a
+        # second metric on every scoped ask (codex iter-4/iter-5).
         return None
 
     brand, region = _extract_brand_region(agent_input)
@@ -2037,7 +2052,7 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     if not isinstance(query, str) or not query.strip():
         return None
 
-    from src.services.kpi_resolution import recognize_kpi_span
+    from src.services.kpi_resolution import recognize_distinct_metric, recognize_kpi_span
 
     match = recognize_kpi_span(query)
     if match is None:
@@ -2060,6 +2075,29 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
         # a head the registry does not model — binding TRx drivers would answer
         # a different question. Fail closed instead.
         return None
+    masked = (
+        normalized_query[:match_start]
+        + " " * (match_end - match_start)
+        + normalized_query[match_end:]
+    )
+    second = recognize_distinct_metric(masked, exclude_id=kpi.id)
+    if second is not None:
+        # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"
+        # grammar identifies the OUTCOME when the ask is directed ("impact of
+        # X on Y" — Y is the outcome, whichever alias is longer); with no
+        # directional grammar ("what drives TRx and NRx") a singleton path
+        # answer chosen by alias order answers neither — fail closed. The
+        # masked probe shares the query's coordinates, so both mentions can
+        # be head-checked in place.
+        second_kpi, second_start, _second_end = second
+        first_directed = _directed_outcome(normalized_query, match_start)
+        second_directed = _directed_outcome(normalized_query, second_start)
+        if second_directed and not first_directed:
+            kpi = second_kpi
+        elif first_directed and not second_directed:
+            pass  # the first mention is the on-headed outcome
+        else:
+            return None
 
     brand, _region = _extract_brand_region(agent_input)
     # Provenance gate: the SAME platform switch the KPI tools observe — synthetic
@@ -2145,23 +2183,27 @@ def _resolve_explainer_input(
     if isinstance(explicit, list) and explicit and all(isinstance(r, dict) for r in explicit):
         analysis_results: List[Dict[str, Any]] = explicit
     else:
-        # (2) real upstream results from the orchestrator state.
-        analysis_results = _successful_upstream_results(agent_input)
+        analysis_results = []
+        # (2a) an explicit CURRENT-ask value lookup outranks the accumulated
+        # upstream results: the operator.add ``agent_results`` channel carries
+        # PRIOR turns' successes across a checkpointer-resumed conversation
+        # (#1442 class), and "What is the TRx?" is never an anaphoric
+        # explain-that-analysis ask (codex iter-5). Anaphora ("explain the
+        # analysis") cannot match the lookup regex, so branch (2) below keeps
+        # serving it. On a causal-fallback turn the turn IS causal, whatever
+        # the lookup regex thinks — Branch A is skipped outright (iter-2
+        # self-audit: "impact of TRx on conversion rate" fits the regex's
+        # {0,3} gap).
+        if not _is_causal_fallback(agent_input):
+            analysis_results = _kpi_lookup_evidence(agent_input) or []
+        if not analysis_results:
+            # (2) real upstream results from the orchestrator state.
+            analysis_results = _successful_upstream_results(agent_input)
 
     if not analysis_results:
-        # (3) ask-directed REAL evidence. On a causal-fallback turn (a failed
-        # causal_impact sibling) the turn IS causal, whatever the lookup regex
-        # thinks — "What is the impact of TRx on conversion rate?" fits the
-        # regex's {0,3} gap via "impact of trx", and a bare value does not
-        # answer a causal ask — so Branch A is skipped outright. Otherwise KPI
-        # lookups first: the narrow, forecast-vetoed lookup regex plus the
-        # head guards make a match an unambiguous value question.
-        if _is_causal_fallback(agent_input):
-            analysis_results = _causal_path_evidence(agent_input) or []
-        else:
-            analysis_results = _kpi_lookup_evidence(agent_input) or []
-            if not analysis_results:
-                analysis_results = _causal_path_evidence(agent_input) or []
+        # (3) ask-directed causal evidence — the curated registry, for causal
+        # fallbacks and causally-shaped direct turns alike.
+        analysis_results = _causal_path_evidence(agent_input) or []
 
     if not analysis_results:
         return NeedsStructuredInput(
