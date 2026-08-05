@@ -1661,7 +1661,13 @@ def _successful_upstream_results(agent_input: Dict[str, Any]) -> List[Dict[str, 
     agent's REAL name attached (``setdefault`` — never overwriting a result's own
     field) so the narrative can attribute findings to their source agent.
     """
-    raw = agent_input.get("agent_results") or []
+    return _successful_results(agent_input.get("agent_results") or [])
+
+
+def _successful_results(raw: List[Any]) -> List[Dict[str, Any]]:
+    """The extraction shared by the full accumulated list and the
+    current-turn-only list (codex iter-6): successful, non-explainer,
+    non-empty result dicts, source-attributed."""
     upstream: List[Dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict) or not item.get("success"):
@@ -2183,21 +2189,29 @@ def _resolve_explainer_input(
     if isinstance(explicit, list) and explicit and all(isinstance(r, dict) for r in explicit):
         analysis_results: List[Dict[str, Any]] = explicit
     else:
-        analysis_results = []
-        # (2a) an explicit CURRENT-ask value lookup outranks the accumulated
-        # upstream results: the operator.add ``agent_results`` channel carries
-        # PRIOR turns' successes across a checkpointer-resumed conversation
-        # (#1442 class), and "What is the TRx?" is never an anaphoric
+        # (2a) fresh SAME-TURN upstream results outrank everything
+        # ask-directed: the dispatch plan chose those agents for THIS query
+        # (bench-0143: "total TRx and which region has the largest gap
+        # opportunity?" runs gap_analyzer alongside — its regional answer
+        # must not be shadowed by a bare KPI lookup; codex iter-6). Threaded
+        # under its own key, separate from the cross-turn channel.
+        analysis_results = _successful_results(
+            agent_input.get("current_turn_agent_results") or []
+        )
+        # (2b) an explicit CURRENT-ask value lookup outranks CARRIED upstream
+        # results: the operator.add ``agent_results`` channel carries PRIOR
+        # turns' successes across a checkpointer-resumed conversation (#1442
+        # class), and "What is the TRx?" is never an anaphoric
         # explain-that-analysis ask (codex iter-5). Anaphora ("explain the
-        # analysis") cannot match the lookup regex, so branch (2) below keeps
-        # serving it. On a causal-fallback turn the turn IS causal, whatever
-        # the lookup regex thinks — Branch A is skipped outright (iter-2
-        # self-audit: "impact of TRx on conversion rate" fits the regex's
-        # {0,3} gap).
-        if not _is_causal_fallback(agent_input):
+        # analysis") cannot match the lookup regex, so branch (2c) below
+        # keeps serving it. On a causal-fallback turn the turn IS causal,
+        # whatever the lookup regex thinks — Branch A is skipped outright
+        # (iter-2 self-audit: "impact of TRx on conversion rate" fits the
+        # regex's {0,3} gap).
+        if not analysis_results and not _is_causal_fallback(agent_input):
             analysis_results = _kpi_lookup_evidence(agent_input) or []
         if not analysis_results:
-            # (2) real upstream results from the orchestrator state.
+            # (2c) carried upstream results (#883 §3 anaphora).
             analysis_results = _successful_upstream_results(agent_input)
 
     if not analysis_results:
@@ -2683,9 +2697,18 @@ class DispatcherNode:
         prior_results: List[AgentResult] = list(state.get("agent_results") or [])
 
         def _state_so_far() -> OrchestratorState:
+            # ``current_turn_agent_results`` carries ONLY this execute()'s
+            # accumulated results, separately from the merged channel view —
+            # the explainer resolver must tell fresh same-turn siblings
+            # (bench-0143's gap_analyzer) from prior turns' carry (codex
+            # iter-6). Dispatch-local: never returned to the reducer.
             return cast(
                 OrchestratorState,
-                {**state, "agent_results": prior_results + all_results},
+                {
+                    **state,
+                    "agent_results": prior_results + all_results,
+                    "current_turn_agent_results": list(all_results),
+                },
             )
 
         # Execute each parallel group sequentially
@@ -3149,6 +3172,12 @@ class DispatcherNode:
             # see it (the resolver output REPLACES the payload) and run(dict)/
             # input-model agents ignore undeclared keys.
             "agent_results": list(state.get("agent_results") or []),
+            # THIS turn's results only (stamped by execute()'s _state_so_far;
+            # empty on the first group of a turn) — lets the explainer
+            # resolver rank fresh siblings above prior turns' carry.
+            "current_turn_agent_results": list(
+                cast(Dict[str, Any], state).get("current_turn_agent_results") or []
+            ),
         }
 
         # Per-agent input resolution (real cohort/KPI data for tool_composer, the

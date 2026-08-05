@@ -123,6 +123,11 @@ _ALIASES: Dict[str, str] = {
     "trigger funnel": "WS2-TR-009",
 }
 
+# Registry abbreviations that are ordinary English words: admitting them to
+# the strict metric vocabulary would turn everyday chat prose into phantom
+# metric mentions ("access issues ATE into field time" is not a CM-001 ask).
+_ABBREV_BLOCKLIST = frozenset({"ate"})
+
 # Reverse-share phrasing that tolerates a brand/modifier gap between "of" and
 # the metric ("share of Kisqali TRx" -> WS3-BI-008). Mirrors the of-chain
 # tolerance in the dispatcher's governing-head guard; punctuation breaks the
@@ -281,14 +286,24 @@ def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
     for alias, kpi_id in _ALIASES.items():
         vocab.setdefault(alias, kpi_id)
     for kpi in get_registry().get_all():
-        name = str(kpi.name).lower()
-        parentheticals = re.findall(r"\(([^)]+)\)", name)
-        base = " ".join(re.sub(r"[^a-z0-9']+", " ", re.sub(r"\([^)]*\)", " ", name)).split())
+        raw_name = str(kpi.name)
+        base = " ".join(
+            re.sub(r"[^a-z0-9']+", " ", re.sub(r"\([^)]*\)", " ", raw_name.lower())).split()
+        )
         if len(base) >= 4:
             vocab.setdefault(base, kpi.id)
-        for abbr in parentheticals:
-            abbr = " ".join(re.sub(r"[^a-z0-9']+", " ", abbr).split())
-            if len(abbr) >= 3:
+        # Parenthetical abbreviations, harvested with CASE intact: only real
+        # initialisms qualify (>=2 uppercase letters — keeps MAU/TTR/NRx,
+        # structurally drops "(Median)"), and common English words are
+        # blocklisted even when upper-cased — "(ATE)" must not make every
+        # "ate" in chat prose a metric mention (codex iter-6).
+        for abbr_raw in re.findall(r"\(([^)]+)\)", raw_name):
+            abbr = " ".join(re.sub(r"[^a-z0-9']+", " ", abbr_raw.lower()).split())
+            if (
+                len(abbr) >= 3
+                and sum(1 for c in abbr_raw if c.isupper()) >= 2
+                and abbr not in _ABBREV_BLOCKLIST
+            ):
                 vocab.setdefault(abbr, kpi.id)
     return tuple(sorted(vocab.items(), key=lambda kv: len(kv[0]), reverse=True))
 

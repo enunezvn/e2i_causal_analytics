@@ -983,6 +983,71 @@ def test_multi_outcome_causal_ask_fails_closed(monkeypatch) -> None:
     assert recorder.calls == []
 
 
+def test_same_turn_upstream_success_outranks_value_lookup(monkeypatch) -> None:
+    """[iter-6 HIGH] bench-0143 (gold PARALLEL): 'What is the current total TRx
+    and which region has the largest gap opportunity?' dispatches
+    ['explainer','gap_analyzer'] in ONE turn — the fresh same-turn gap answer
+    must not be shadowed by a bare KPI lookup. Current-turn results ride their
+    own key, separate from the accumulated cross-turn channel."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    fresh = {
+        "agent_name": "gap_analyzer",
+        "success": True,
+        "result": {"gaps": ["west region"], "summary": "this turn's gap analysis"},
+    }
+    payload = _agent_input(
+        "What is the current total TRx and which region has the largest gap opportunity?",
+        agent_results=[fresh],
+    )
+    payload["current_turn_agent_results"] = [fresh]
+    resolved = disp.INPUT_RESOLVERS["explainer"](payload, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["summary"] == "this turn's gap analysis"
+    assert stub.calls == [], "a fresh same-turn sibling result outranks a value bind"
+
+
+def test_prepare_agent_input_threads_current_turn_results(monkeypatch) -> None:
+    """[iter-6 HIGH, prod-shape pin] execute()'s _state_so_far stamps the
+    results accumulated THIS turn under their own key, and
+    _prepare_agent_input must thread it into the agent payload — without it
+    the resolver cannot tell fresh siblings from prior turns' carry."""
+    node = disp.DispatcherNode()
+    fresh = {"agent_name": "gap_analyzer", "success": True, "result": {"gaps": ["g"]}}
+    state = dict(_state(KPI_QUERY))
+    state["agent_results"] = [fresh]
+    state["current_turn_agent_results"] = [fresh]
+
+    agent_input = node._prepare_agent_input(state, _dispatch())  # type: ignore[arg-type]
+
+    assert agent_input["current_turn_agent_results"] == [fresh]
+
+
+def test_common_word_abbreviations_stay_out_of_the_metric_probe(monkeypatch) -> None:
+    """[iter-6 MEDIUM] 'Average Treatment Effect (ATE)' and 'Data Lag
+    (Median)' must not put the English words 'ate'/'median' into the strict
+    vocabulary — 'access issues ate into field time' is not a two-metric ask.
+    Real initialisms (MAU, CATE, NRx) stay."""
+    from src.services.kpi_resolution import _strict_metric_vocabulary
+
+    phrases = {p for p, _ in _strict_metric_vocabulary()}
+    assert "ate" not in phrases
+    assert "median" not in phrases
+    assert {"mau", "cate", "nrx"} <= phrases
+
+    recorder = _install_paths(monkeypatch, [PATH_ROW])
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _failed_causal_impact_input(
+            "What drives TRx for Kisqali, given that access issues ate into field time?"
+        ),
+        _dispatch(),
+    )
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "causal_paths_registry"
+    assert recorder.calls and recorder.calls[0]["outcome_term"] == "Total Prescriptions (TRx)"
+
+
 def test_directed_causal_ask_binds_the_on_headed_outcome(monkeypatch) -> None:
     """[iter-5, direction pin] 'impact of conversion rate on TRx' names two
     metrics but the 'on <metric>' grammar identifies TRx as the OUTCOME — the
