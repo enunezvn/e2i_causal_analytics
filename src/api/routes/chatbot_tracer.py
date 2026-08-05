@@ -468,6 +468,11 @@ class ChatbotTraceContext:
     orchestrator_stage_ms: Dict[str, float] = field(default_factory=dict)
     orchestrator_run_ms: Optional[float] = None
     orchestrator_untimed_ms: Optional[float] = None
+    # #1484: retrieve_rag chain-internal attribution (rewrite / search /
+    # score / hop_decider) + request-level counters (hops, score_calls,
+    # evidence_kept). Empty = unmeasured, an honest absence.
+    rag_stage_ms: Dict[str, float] = field(default_factory=dict)
+    rag_meta: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     _opik_span: Optional[Any] = None
     _tracer: Optional["ChatbotOpikTracer"] = None
@@ -496,6 +501,16 @@ class ChatbotTraceContext:
         All perf_counter, accumulating — mirrors ``record_node_wall_time``.
         """
         self.orchestrator_stage_ms[stage] = self.orchestrator_stage_ms.get(stage, 0.0) + duration_ms
+
+    def record_rag_stage_time(self, stage: str, duration_ms: float) -> None:
+        """Accumulate retrieve_rag chain-leg wall time (#1484).
+
+        Stages are bare leg labels (``rewrite``, ``search``, ``score``,
+        ``hop_decider``) — the ``rag.`` ledger prefix is stripped by the node
+        during transfer. All perf_counter, accumulating across hops — mirrors
+        ``record_orchestrator_stage_time``.
+        """
+        self.rag_stage_ms[stage] = self.rag_stage_ms.get(stage, 0.0) + duration_ms
 
     def record_orchestrator_run(self, run_ms: float, untimed_ms: float) -> None:
         """Record one ``orchestrator.run`` invocation's wall time (#1475).

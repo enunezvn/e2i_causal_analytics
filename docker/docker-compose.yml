@@ -75,6 +75,13 @@ x-common-env: &common-env
   # rewriter). Costs ~2 small completions per worker per boot; set false to
   # keep the construction-only warm. Same forwarding rule as above.
   CHATBOT_STARTUP_WARM_LLM_ENABLED: ${CHATBOT_STARTUP_WARM_LLM_ENABLED:-true}
+  # #1484: retrieve_rag chain knobs. Timeout = fail-open ceiling per chain
+  # LLM call (rewrite/score/hop-decider). Dry-hop limit = consecutive
+  # zero-new-keep hops before the multi-hop loop stops (0 = legacy
+  # run-to-max). Must be forwarded here or host-.env overrides never reach
+  # the containers.
+  CHATBOT_RAG_LLM_TIMEOUT_S: ${CHATBOT_RAG_LLM_TIMEOUT_S:-20}
+  CHATBOT_RAG_DRY_HOP_LIMIT: ${CHATBOT_RAG_DRY_HOP_LIMIT:-2}
   # Routing-label loop (#1341 Phase 1): nightly Celery labeler for
   # classification_logs. Must be forwarded here or host-.env overrides never
   # reach the worker containers and the in-code defaults govern.

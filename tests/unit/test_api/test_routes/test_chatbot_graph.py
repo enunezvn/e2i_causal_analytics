@@ -1083,6 +1083,9 @@ class TestRunChatbot:
             mock_trace_ctx.orchestrator_stage_ms = {}
             mock_trace_ctx.orchestrator_run_ms = None
             mock_trace_ctx.orchestrator_untimed_ms = None
+            # real values, as on the dataclass (#1484)
+            mock_trace_ctx.rag_stage_ms = {}
+            mock_trace_ctx.rag_meta = {}
             mock_tracer.return_value.trace_workflow.return_value = mock_trace_ctx
 
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
@@ -1113,6 +1116,9 @@ class TestRunChatbot:
             mock_trace_ctx.orchestrator_stage_ms = {}
             mock_trace_ctx.orchestrator_run_ms = None
             mock_trace_ctx.orchestrator_untimed_ms = None
+            # real values, as on the dataclass (#1484)
+            mock_trace_ctx.rag_stage_ms = {}
+            mock_trace_ctx.rag_meta = {}
             mock_tracer.return_value.trace_workflow.return_value = mock_trace_ctx
 
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
