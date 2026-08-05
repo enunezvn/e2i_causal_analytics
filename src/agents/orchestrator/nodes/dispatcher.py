@@ -1813,9 +1813,7 @@ _CAUSAL_OF_HEADS = frozenset(
 # "determinants of Kisqali NRx" must keep its causal head; "cost of Kisqali
 # TRx" its unmodeled one). Punctuation breaks the chain — "speaking of
 # Kisqali, what is TRx" grows no false head.
-_OF_HEAD_RE = re.compile(
-    r"([\w'-]+)\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$"
-)
+_OF_HEAD_RE = re.compile(r"([\w'-]+)\s+of\s+(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$")
 
 # Temporal of-idioms are not governing heads: "as of Q2", "the end of June"
 # scope the WINDOW, not the metric — "as of Q2 TRx" is still a value ask,
@@ -2197,9 +2195,7 @@ def _resolve_explainer_input(
         # opportunity?" runs gap_analyzer alongside — its regional answer
         # must not be shadowed by a bare KPI lookup; codex iter-6). Threaded
         # under its own key, separate from the cross-turn channel.
-        analysis_results = _successful_results(
-            agent_input.get("current_turn_agent_results") or []
-        )
+        analysis_results = _successful_results(agent_input.get("current_turn_agent_results") or [])
         # (2b) an explicit CURRENT-ask value lookup outranks CARRIED upstream
         # results: the operator.add ``agent_results`` channel carries PRIOR
         # turns' successes across a checkpointer-resumed conversation (#1442

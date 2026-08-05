@@ -610,9 +610,7 @@ def test_semantic_notes_ssot_lives_in_kpi_resolution() -> None:
     tree = ast.parse(src_file.read_text())
     defines_own = any(
         isinstance(node, ast.Assign)
-        and any(
-            isinstance(t, ast.Name) and t.id == "KPI_SEMANTIC_NOTES" for t in node.targets
-        )
+        and any(isinstance(t, ast.Name) and t.id == "KPI_SEMANTIC_NOTES" for t in node.targets)
         for node in ast.walk(tree)
     )
     imports_ssot = any(
@@ -820,9 +818,7 @@ async def test_dispatch_fallback_marks_its_origin(monkeypatch) -> None:
         return {"agent_name": dispatch["agent_name"], "success": False, "result": None}
 
     monkeypatch.setattr(node, "_dispatch_agent", fake_dispatch_agent)
-    await node._dispatch_fallback(
-        "explainer", _state(KPI_QUERY), fallback_from="causal_impact"
-    )
+    await node._dispatch_fallback("explainer", _state(KPI_QUERY), fallback_from="causal_impact")
 
     assert captured["dispatch"]["parameters"]["fallback_from"] == "causal_impact"
 
@@ -839,9 +835,7 @@ def test_temporal_of_phrase_still_binds_the_value(monkeypatch) -> None:
     assert isinstance(resolved, dict), resolved
     assert resolved["analysis_results"][0]["value"] == 12345.0
 
-    resolved2 = disp.INPUT_RESOLVERS["explainer"](
-        _agent_input("Show me as of Q2 TRx"), _dispatch()
-    )
+    resolved2 = disp.INPUT_RESOLVERS["explainer"](_agent_input("Show me as of Q2 TRx"), _dispatch())
     assert isinstance(resolved2, dict), resolved2
     assert len(stub.calls) == 2
 

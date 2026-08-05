@@ -355,9 +355,7 @@ def recognize_distinct_metric(
                 kpi = registry.get(kpi_id)
                 if kpi is not None:
                     lowered = abbr_raw.lower()
-                    m = re.search(
-                        rf"(?<![\w'-]){re.escape(lowered)}(?![\w'-])", normalized_query
-                    )
+                    m = re.search(rf"(?<![\w'-]){re.escape(lowered)}(?![\w'-])", normalized_query)
                     start, end = (m.start(), m.end()) if m else (0, 0)
                     return kpi, start, end
     return None
