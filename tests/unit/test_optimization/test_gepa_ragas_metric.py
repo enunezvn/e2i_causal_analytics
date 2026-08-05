@@ -151,6 +151,50 @@ class TestReturnShape:
         assert isinstance(sum(coerced), float)
 
 
+class TestRunsInsideRealDspyEvaluate:
+    """The contract that matters is GEPA's, so exercise the real evaluator.
+
+    ``dspy.Evaluate`` with ``failure_score``/``max_errors`` is precisely how
+    ``dspy/teleprompt/gepa/gepa_utils.py`` scores a candidate.
+    """
+
+    def test_metric_scores_a_candidate_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import dspy
+        from dspy.utils.dummies import DummyLM
+
+        class Synthesise(dspy.Signature):
+            user_query: str = dspy.InputField()
+            synthesis: str = dspy.OutputField()
+
+        metric = _metric(monkeypatch, _StubEvaluator(result=_result()))
+        dspy.configure(lm=DummyLM([{"synthesis": "TRx fell 12% on payer mix."}] * 6))
+
+        devset = [
+            dspy.Example(
+                user_query=f"why did TRx drop in region {i}?",
+                evidence_board=[f"Q4 report for region {i}"],
+            ).with_inputs("user_query")
+            for i in range(3)
+        ]
+
+        result = dspy.Evaluate(
+            devset=devset,
+            metric=metric,
+            num_threads=1,
+            return_all_scores=True,
+            failure_score=0.0,
+            max_errors=len(devset) * 100,
+            display_progress=False,
+        )(dspy.Predict(Synthesise))
+
+        scores = [s["score"] if hasattr(s, "score") else s for s in (r[2] for r in result.results)]
+        assert scores == [pytest.approx(0.625)] * 3, (
+            f"expected the judged composite on every example, got {scores}"
+        )
+        # 0.0 here would mean dspy swallowed an exception into failure_score.
+        assert result.score == pytest.approx(62.5)
+
+
 class TestUnmeasuredMetricsAreExcludedNotZeroed:
     """An unmeasured RAGAS metric must never be scored as 0.0."""
 
