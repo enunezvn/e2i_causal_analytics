@@ -24,6 +24,33 @@ logger = logging.getLogger(__name__)
 
 _STATE_PATH = Path("optimized_modules") / ".trigger_state.json"
 
+# --- RAG-prompt optimization leg (#1486) -------------------------------------
+#
+# Path to a replay records file produced by scripts/replay_golden_set.py
+# (--record-out). Records are consumed as PURE JSON; this module imports no
+# replay code. Needs a docker-compose x-common-env entry to reach the worker.
+RAG_RECORDS_PATH_ENV = "DSPY_RAG_RECORDS_PATH"
+
+# Judge budget, in GEPA metric calls. Measured against installed dspy 3.1.0:
+# auto="light" resolves to ~384-396 metric calls almost independently of dataset
+# size (5 examples -> 384, 20 -> 396) because auto_budget is driven by
+# num_candidates=6, not by len(trainset). Each metric call is one RAGAS
+# evaluate_sample = 4 sub-metrics, each at least one judge LLM call, so "light"
+# is 1,500+ judge calls. Against #504's calibration (~96 min for a 30-sample
+# RAGAS eval, where judge throughput was THE binding constraint) that is a
+# many-hour job — unacceptable on a 24h beat. Capping examples does not help;
+# only an explicit max_metric_calls does. Hence the conservative default below.
+RAG_MAX_METRIC_CALLS_ENV = "DSPY_RAG_MAX_METRIC_CALLS"
+_RAG_DEFAULT_MAX_METRIC_CALLS = 40
+
+# Below this many usable examples the leg does nothing. #1485 measured that only
+# 3 of 10 replayed turns retrieved any evidence (a turn that retrieved nothing
+# records an empty contexts list ON PURPOSE), and the RAGAS metric refuses a
+# no-context example — so "not enough usable examples" is the EXPECTED nightly
+# outcome, not an edge case.
+_RAG_MIN_USABLE_EXAMPLES = 5
+_RAG_MAX_EXAMPLES = 20
+
 
 def run_async(coro):
     """Run an async coroutine from sync Celery context (mirrors feedback_loop_tasks)."""
@@ -43,6 +70,247 @@ def run_async(coro):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         return loop.run_until_complete(coro)
+
+
+def _rag_max_metric_calls() -> int:
+    """Judge budget for the RAG leg, env-tunable. See RAG_MAX_METRIC_CALLS_ENV."""
+    raw = os.environ.get(RAG_MAX_METRIC_CALLS_ENV, "").strip()
+    if not raw:
+        return _RAG_DEFAULT_MAX_METRIC_CALLS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer; using default %d",
+            RAG_MAX_METRIC_CALLS_ENV,
+            raw,
+            _RAG_DEFAULT_MAX_METRIC_CALLS,
+        )
+        return _RAG_DEFAULT_MAX_METRIC_CALLS
+    return max(1, value)
+
+
+def _rag_records_fingerprint(path: str) -> str:
+    """Content digest of a records file, for run-once dedup.
+
+    Content rather than mtime: the replay may be re-run and rewrite an identical
+    file, and re-spending the judge budget on identical inputs buys nothing.
+    """
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def load_rag_examples_from_records(path: str) -> List[Any]:
+    """Build dspy Examples from replay records (#1485 shape), as PURE JSON.
+
+    Accepts either the wrapper the replay writes (``{"records": [...]}``) or a
+    bare list. Keeps only turns that can actually be judged: a query, a
+    non-empty answer, at least one retrieved context, and no recorded error.
+    Filtering here rather than in the metric matters — the RAGAS metric REFUSES
+    an unjudgeable example, and a refusal inside GEPA is silently converted to
+    failure_score 0.0, which would fabricate a bad-quality signal.
+
+    ``retrieved_contexts`` is set alongside ``evidence_board`` on purpose: the
+    signature wants an evidence string, while the metric wants the passage list
+    so context_precision is computed per passage rather than over one blob.
+    """
+    import dspy
+
+    raw = json.loads(Path(path).read_text())
+    records = raw.get("records", []) if isinstance(raw, dict) else raw
+
+    examples: List[Any] = []
+    for rec in records:
+        if not isinstance(rec, dict) or rec.get("error"):
+            continue
+        query = (rec.get("query") or "").strip()
+        answer = (rec.get("response_text") or "").strip()
+        contexts = [c for c in (rec.get("contexts") or []) if isinstance(c, str) and c.strip()]
+        if not query or not answer or not contexts:
+            continue
+        examples.append(
+            dspy.Example(
+                user_query=query,
+                # Records carry no investigation goal; the query stands in. This
+                # is an INPUT substitution, not a score, but it does mean the
+                # prompt is tuned against a slightly narrower input distribution
+                # than production sees.
+                investigation_goal=query,
+                evidence_board=json.dumps(contexts),
+                intent=rec.get("detected_intent") or "UNKNOWN",
+                retrieved_contexts=contexts,
+                synthesis=answer,
+            ).with_inputs("user_query", "investigation_goal", "evidence_board", "intent")
+        )
+    return examples
+
+
+async def run_rag_prompt_optimization() -> Dict[str, Any]:
+    """Opportunistically optimize the cognitive-RAG synthesis prompt with RAGAS.
+
+    Normally a no-op: the replay that produces its input is manual-only, so the
+    common nightly outcome is a logged skip costing zero API calls. Every skip
+    path returns BEFORE any metric or optimizer is constructed.
+
+    On success the artifact is saved under
+    :data:`src.rag.cognitive_rag_dspy.OPTIMIZED_SYNTHESIS_AGENT_NAME`, which
+    ``AgentModule`` loads on its next construction — the leg->artifact->runtime
+    chain.
+    """
+    records_path = os.environ.get(RAG_RECORDS_PATH_ENV, "").strip()
+    if not records_path:
+        reason = f"{RAG_RECORDS_PATH_ENV} is not set"
+        logger.info(
+            "RAG prompt optimization skipped: %s. This is the expected steady state — "
+            "the replay is manual-only. To enable: run "
+            "`.venv/bin/python scripts/replay_golden_set.py --record-out <path>` and set "
+            "%s=<path>.",
+            reason,
+            RAG_RECORDS_PATH_ENV,
+        )
+        return {"status": "skipped", "reason": reason}
+
+    if not Path(records_path).exists():
+        reason = f"records file not found: {records_path}"
+        logger.info(
+            "RAG prompt optimization skipped: %s. Regenerate with "
+            "`.venv/bin/python scripts/replay_golden_set.py --record-out %s` (%s).",
+            reason,
+            records_path,
+            RAG_RECORDS_PATH_ENV,
+        )
+        return {"status": "skipped", "reason": reason}
+
+    fingerprint = _rag_records_fingerprint(records_path)
+    state = _load_trigger_state()
+    if state.get("rag_records_fingerprint") == fingerprint:
+        reason = "records already optimized (unchanged since last run)"
+        logger.info(
+            "RAG prompt optimization skipped: %s. Re-run "
+            "scripts/replay_golden_set.py to produce fresh turns (%s).",
+            reason,
+            records_path,
+        )
+        return {"status": "skipped", "reason": reason, "fingerprint": fingerprint}
+
+    raw = json.loads(Path(records_path).read_text())
+    total_records = len(raw.get("records", []) if isinstance(raw, dict) else raw)
+    examples = load_rag_examples_from_records(records_path)
+
+    if len(examples) < _RAG_MIN_USABLE_EXAMPLES:
+        reason = (
+            f"only {len(examples)} usable example(s) of {total_records} record(s); "
+            f"need >= {_RAG_MIN_USABLE_EXAMPLES}"
+        )
+        logger.info(
+            "RAG prompt optimization skipped: %s. Expected — #1485 measured ~3 of 10 "
+            "replayed turns retrieve any evidence, and a turn with no retrieved "
+            "context cannot be judged. Re-run scripts/replay_golden_set.py with more "
+            "queries and point %s at the new file.",
+            reason,
+            RAG_RECORDS_PATH_ENV,
+        )
+        return {
+            "status": "skipped",
+            "reason": reason,
+            "usable_examples": len(examples),
+            "total_records": total_records,
+        }
+
+    examples = examples[:_RAG_MAX_EXAMPLES]
+    split = max(1, int(len(examples) * 0.8))
+    trainset, valset = examples[:split], examples[split:] or examples[:1]
+    budget = _rag_max_metric_calls()
+
+    # Everything below costs real judge calls. Say so before spending them.
+    logger.info(
+        "RAG prompt optimization starting: %d example(s) (%d train / %d val), "
+        "max_metric_calls=%d -> approx %d RAGAS judge calls (4 sub-metrics each). "
+        "Tune with %s.",
+        len(examples),
+        len(trainset),
+        len(valset),
+        budget,
+        budget * 4,
+        RAG_MAX_METRIC_CALLS_ENV,
+    )
+
+    import dspy
+
+    from src.optimization.dspy_lm import ensure_dspy_configured
+    from src.optimization.gepa import create_gepa_optimizer
+    from src.optimization.gepa.metrics import get_metric_for_agent
+    from src.optimization.gepa.versioning import save_optimized_module
+    from src.rag.cognitive_rag_dspy import (
+        OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        EvidenceSynthesisSignature,
+    )
+
+    if not ensure_dspy_configured():
+        reason = "no DSPy LM configured"
+        logger.warning("RAG prompt optimization skipped: %s", reason)
+        return {"status": "skipped", "reason": reason}
+
+    # Raises when the RAGAS judge cannot run (#1486): refusing here, before the
+    # run, is deliberate — a per-example refusal is swallowed by dspy into
+    # failure_score 0.0 and would optimize against fabricated signal. The
+    # caller's guard turns this into a logged per-leg skip.
+    metric = get_metric_for_agent("cognitive_rag")
+
+    # auto=None + max_metric_calls: GEPA asserts exactly one budget is set, and
+    # auto's ~384-396 calls is far beyond what the judge can serve nightly.
+    optimizer = create_gepa_optimizer(
+        metric=metric,
+        trainset=trainset,
+        valset=valset,
+        auto=None,
+        max_metric_calls=budget,
+        seed=42,
+    )
+    module = dspy.ChainOfThought(EvidenceSynthesisSignature)
+    optimized = await asyncio.to_thread(optimizer.compile, module, trainset=trainset, valset=valset)
+
+    info = save_optimized_module(
+        module=optimized,
+        agent_name=OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        metadata={
+            "source_records": records_path,
+            "examples": len(examples),
+            "max_metric_calls": budget,
+        },
+    )
+    state["rag_records_fingerprint"] = fingerprint
+    _save_trigger_state(state)
+
+    logger.info(
+        "RAG prompt optimization complete: saved %s (version %s)",
+        info["path"],
+        info["version_id"],
+    )
+    return {
+        "status": "completed",
+        "examples": len(examples),
+        "total_records": total_records,
+        "max_metric_calls": budget,
+        "artifact": info["path"],
+        "version_id": info["version_id"],
+        "agent_name": OPTIMIZED_SYNTHESIS_AGENT_NAME,
+    }
+
+
+async def _run_rag_leg_guarded() -> Dict[str, Any]:
+    """Run the RAG leg so that no failure can abort the nightly beat.
+
+    Mirrors the per-recipient guard below: one leg failing must not cost the
+    others. This is also where the metric's deliberate construction-time raise
+    on a keyless box becomes a logged skip rather than a failed run.
+    """
+    try:
+        return await run_rag_prompt_optimization()
+    except Exception as e:  # noqa: BLE001 - one leg must not abort the beat
+        logger.error("RAG prompt optimization failed: %s", e, exc_info=True)
+        return {"status": "failed", "reason": str(e)}
 
 
 def _load_trigger_state() -> Dict[str, Any]:
@@ -130,6 +398,10 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     # Install recipient bundles into the live singletons.
     installed = install_all_prompt_bundles()
 
+    # RAG-prompt leg (#1486): normally a zero-cost no-op — see
+    # run_rag_prompt_optimization. Guarded so it can never abort the beat.
+    rag_optimization = await _run_rag_leg_guarded()
+
     mean_reward = (
         sum(float(s.get("reward", 0.0)) for s in signals) / len(signals) if signals else 0.0
     )
@@ -146,6 +418,7 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
         "optimization": optimization,
         "recipient_bundles": recipient_bundles,
         "bundles_installed": installed,
+        "rag_optimization": rag_optimization,
         "task_id": task_id,
     }
 
