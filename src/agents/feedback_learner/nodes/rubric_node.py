@@ -27,6 +27,7 @@ from ..evaluation import (
     RubricEvaluation,
     RubricEvaluator,
 )
+from ..ragas_scoring import RagasBundle, combined_score
 from ..state import FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,8 @@ class RubricNode:
         self,
         evaluation: RubricEvaluation,
         context: EvaluationContext,
-    ) -> None:
+        ragas: Optional[RagasBundle] = None,
+    ) -> Optional[str]:
         """
         Store evaluation results in learning_signals table.
 
@@ -217,12 +219,31 @@ class RubricNode:
         ``signal_details``. Row-lands proof:
         tests/integration/test_rubric_node_signal_883b.py.
 
+        #1487: migration 022 added the RAGAS half of the same payload —
+        ``ragas_scores``, ``ragas_weighted`` and the ``combined_score`` its
+        COMMENT documents as ``(ragas * 0.4) + (rubric_normalised * 0.6)`` —
+        and nothing ever produced one, so all three stayed at their schema
+        defaults. ``ragas`` is that seam. It stays optional because RAGAS
+        judging costs seconds of gpt-4o time per sample and must never run
+        inline (#1484); the producers are offline (#1485's batch eval, a future
+        async scorer), and hooking one up is #1489. With no bundle the payload
+        below is unchanged — the RAGAS keys are not written at all, so absence
+        is represented by absence rather than by a fabricated zero.
+
         Args:
             evaluation: The completed rubric evaluation
             context: The evaluation context
+            ragas: Judged RAGAS metrics for the SAME (query, response) pair,
+                when a producer has them. Only measured metrics are persisted;
+                an all-unmeasured bundle leaves ``ragas_weighted`` and
+                ``combined_score`` NULL.
+
+        Returns:
+            The inserted ``signal_id``, so a caller can link an
+            ``evaluation_results`` row to it, or None when nothing landed.
         """
         if not self.db_client:
-            return
+            return None
 
         try:
             # learning_signals.session_id is uuid-typed; the evaluation
@@ -281,12 +302,34 @@ class RubricNode:
             # whole insert (the exact failure family this fix closes); the
             # agent list is preserved in signal_details.context_summary.
 
-            await self.db_client.table("learning_signals").insert(signal_data).execute()
+            if ragas is not None:
+                # combined_score stays NULL unless BOTH halves are real. The
+                # column's COMMENT documents a two-half blend, so a rubric-only
+                # number there would be 40%-of-zero wearing the name of a
+                # measurement, and no reader could tell afterwards.
+                signal_data["ragas_scores"] = ragas.as_signal_scores()
+                signal_data["ragas_weighted"] = ragas.weighted
+                signal_data["combined_score"] = combined_score(
+                    ragas.weighted, evaluation.weighted_score
+                )
+                # learning_signals has no column for which metrics were judged,
+                # and a NULL cannot say whether the judge failed (#1488) or was
+                # never asked for that metric (#1485).
+                signal_details["ragas_coverage"] = {
+                    **ragas.coverage,
+                    "evaluation_model": ragas.evaluation_model,
+                    "evaluation_method": ragas.evaluation_method,
+                }
+
+            result = await self.db_client.table("learning_signals").insert(signal_data).execute()
 
             logger.debug("Stored rubric evaluation in learning_signals")
+            rows = getattr(result, "data", None) or []
+            return str(rows[0]["signal_id"]) if rows and rows[0].get("signal_id") else None
 
         except Exception as e:
             logger.warning("Failed to store rubric evaluation: %s", e)
+            return None
 
     def _determine_improvement_type(self, evaluation: RubricEvaluation) -> str:
         """Determine the type of improvement needed based on evaluation."""
