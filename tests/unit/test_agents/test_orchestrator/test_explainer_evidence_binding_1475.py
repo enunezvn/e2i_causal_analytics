@@ -1048,6 +1048,21 @@ def test_common_word_abbreviations_stay_out_of_the_metric_probe(monkeypatch) -> 
     assert recorder.calls and recorder.calls[0]["outcome_term"] == "Total Prescriptions (TRx)"
 
 
+def test_uppercase_ate_still_counts_as_a_second_metric(monkeypatch) -> None:
+    """[iter-7 HIGH] blocking prose 'ate' must not erase the METRIC 'ATE':
+    'What are the TRx and ATE for Kisqali?' names two metrics — the
+    case-sensitive form in the ORIGINAL query is the tell. Fail closed like
+    every other multi-metric ask."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What are the TRx and ATE for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+
+
 def test_directed_causal_ask_binds_the_on_headed_outcome(monkeypatch) -> None:
     """[iter-5, direction pin] 'impact of conversion rate on TRx' names two
     metrics but the 'on <metric>' grammar identifies TRx as the OUTCOME — the

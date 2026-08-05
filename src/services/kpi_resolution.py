@@ -308,14 +308,36 @@ def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
     return tuple(sorted(vocab.items(), key=lambda kv: len(kv[0]), reverse=True))
 
 
+@lru_cache(maxsize=1)
+def _case_sensitive_metric_abbrevs() -> Tuple[Tuple[str, str], ...]:
+    """Blocklisted common-word initialisms in their ORIGINAL uppercase form —
+    "ATE" in a query is the CM-001 metric even though prose "ate" is not
+    (codex iter-7). Matched case-sensitively against the un-normalized query."""
+    out: List[Tuple[str, str]] = []
+    for kpi in get_registry().get_all():
+        for abbr_raw in re.findall(r"\(([^)]+)\)", str(kpi.name)):
+            token = abbr_raw.strip()
+            lowered = " ".join(re.sub(r"[^a-z0-9']+", " ", token.lower()).split())
+            if lowered in _ABBREV_BLOCKLIST and sum(1 for c in token if c.isupper()) >= 2:
+                out.append((token, kpi.id))
+    return tuple(out)
+
+
 def recognize_distinct_metric(
-    normalized_query: str, *, exclude_id: str
+    normalized_query: str, *, exclude_id: str, original_query: Optional[str] = None
 ) -> Optional[Tuple[KPIMetadata, int, int]]:
     """A metric mention OTHER than ``exclude_id`` in an (already lowercase,
     possibly span-masked) query — the dispatcher's multi-KPI vetoes probe
     with this after masking the first recognized span. Word-boundary matched
     against the strict vocabulary only; returns ``(kpi, start, end)`` in the
-    given string's coordinates."""
+    given string's coordinates.
+
+    ``original_query`` (case intact) additionally admits the blocklisted
+    common-word initialisms in their uppercase form: "TRx and ATE" names two
+    metrics; "access issues ate into field time" does not. The span is then
+    located via the lowercase occurrence in ``normalized_query`` (a query
+    containing BOTH forms resolves to the first occurrence — the veto errs
+    fail-closed)."""
     registry = get_registry()
     for phrase, kpi_id in _strict_metric_vocabulary():
         if kpi_id == exclude_id:
@@ -325,6 +347,19 @@ def recognize_distinct_metric(
             kpi = registry.get(kpi_id)
             if kpi is not None:
                 return kpi, m.start(), m.end()
+    if original_query:
+        for abbr_raw, kpi_id in _case_sensitive_metric_abbrevs():
+            if kpi_id == exclude_id:
+                continue
+            if re.search(rf"(?<![\w'-]){re.escape(abbr_raw)}(?![\w'-])", original_query):
+                kpi = registry.get(kpi_id)
+                if kpi is not None:
+                    lowered = abbr_raw.lower()
+                    m = re.search(
+                        rf"(?<![\w'-]){re.escape(lowered)}(?![\w'-])", normalized_query
+                    )
+                    start, end = (m.start(), m.end()) if m else (0, 0)
+                    return kpi, start, end
     return None
 
 

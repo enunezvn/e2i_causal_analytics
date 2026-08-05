@@ -1897,14 +1897,16 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         + " " * (match_end - match_start)
         + normalized_query[match_end:]
     )
-    if recognize_distinct_metric(masked, exclude_id=kpi.id) is not None:
+    if recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query) is not None:
         # "TRx and NRx" names TWO metrics — one value presented as the whole
         # answer is a wrong answer; fail closed (the bridge answers multi-KPI
         # asks today). A repeated mention of the SAME KPI still binds. The
         # probe uses the STRICT vocabulary (aliases + full registry names +
         # abbreviations, never single name tokens): registry names carry
         # brand/scope tokens ("kisqali", "patients") that would read as a
-        # second metric on every scoped ask (codex iter-4/iter-5).
+        # second metric on every scoped ask (codex iter-4/iter-5). The
+        # original query rides along so uppercase "ATE" still counts
+        # (codex iter-7).
         return None
 
     brand, region = _extract_brand_region(agent_input)
@@ -2086,7 +2088,7 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
         + " " * (match_end - match_start)
         + normalized_query[match_end:]
     )
-    second = recognize_distinct_metric(masked, exclude_id=kpi.id)
+    second = recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query)
     if second is not None:
         # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"
         # grammar identifies the OUTCOME when the ask is directed ("impact of
