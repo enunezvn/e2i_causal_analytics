@@ -90,15 +90,31 @@ def _rag_max_metric_calls() -> int:
     return max(1, value)
 
 
-def _rag_records_fingerprint(path: str) -> str:
-    """Content digest of a records file, for run-once dedup.
+def _rag_records_fingerprint(path: str, max_metric_calls: int) -> str:
+    """Digest of the records file AND the budget, for run-once dedup.
 
     Content rather than mtime: the replay may be re-run and rewrite an identical
     file, and re-spending the judge budget on identical inputs buys nothing.
+
+    The budget is part of the key because a run can legitimately end without
+    improving on the seed (see run_rag_prompt_optimization). Keying on content
+    alone would then mark those records permanently done, so a later
+    DSPY_RAG_MAX_METRIC_CALLS increase — the one action that could actually find
+    an improvement — would be silently skipped.
     """
     import hashlib
 
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    digest = hashlib.sha256(Path(path).read_bytes())
+    digest.update(f"|max_metric_calls={max_metric_calls}".encode())
+    return digest.hexdigest()
+
+
+def _instructions_of(module: Any) -> Tuple[str, ...]:
+    """Instruction text of every predictor in a DSPy module, in order."""
+    predictors = module.predictors() if hasattr(module, "predictors") else []
+    return tuple(
+        str(getattr(getattr(p, "signature", None), "instructions", "") or "") for p in predictors
+    )
 
 
 def load_rag_examples_from_records(path: str) -> List[Any]:
@@ -164,7 +180,7 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         logger.info(
             "RAG prompt optimization skipped: %s. This is the expected steady state — "
             "the replay is manual-only. To enable: run "
-            "`.venv/bin/python scripts/replay_golden_set.py --record-out <path>` and set "
+            "`.venv/bin/python scripts/replay_golden_set.py --target cognitive --record-out <path>` and set "
             "%s=<path>.",
             reason,
             RAG_RECORDS_PATH_ENV,
@@ -175,21 +191,25 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         reason = f"records file not found: {records_path}"
         logger.info(
             "RAG prompt optimization skipped: %s. Regenerate with "
-            "`.venv/bin/python scripts/replay_golden_set.py --record-out %s` (%s).",
+            "`.venv/bin/python scripts/replay_golden_set.py --target cognitive --record-out %s` (%s).",
             reason,
             records_path,
             RAG_RECORDS_PATH_ENV,
         )
         return {"status": "skipped", "reason": reason}
 
-    fingerprint = _rag_records_fingerprint(records_path)
+    # Budget is resolved before the dedup check because it is part of the key.
+    budget = _rag_max_metric_calls()
+    fingerprint = _rag_records_fingerprint(records_path, budget)
     state = _load_trigger_state()
     if state.get("rag_records_fingerprint") == fingerprint:
-        reason = "records already optimized (unchanged since last run)"
+        reason = "records already optimized at this budget (unchanged since last run)"
         logger.info(
             "RAG prompt optimization skipped: %s. Re-run "
-            "scripts/replay_golden_set.py to produce fresh turns (%s).",
+            "scripts/replay_golden_set.py for fresh turns, or raise %s to search "
+            "harder on the same records (%s).",
             reason,
+            RAG_MAX_METRIC_CALLS_ENV,
             records_path,
         )
         return {"status": "skipped", "reason": reason, "fingerprint": fingerprint}
@@ -221,7 +241,6 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
     examples = examples[:_RAG_MAX_EXAMPLES]
     split = max(1, int(len(examples) * 0.8))
     trainset, valset = examples[:split], examples[split:] or examples[:1]
-    budget = _rag_max_metric_calls()
 
     # Everything below costs real judge calls. Say so before spending them.
     logger.info(
@@ -269,7 +288,44 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         seed=42,
     )
     module = dspy.ChainOfThought(EvidenceSynthesisSignature)
+    seed_instructions = _instructions_of(module)
     optimized = await asyncio.to_thread(optimizer.compile, module, trainset=trainset, valset=valset)
+
+    # A judge that degraded mid-run (heuristic fallback, timeout, rate-limit)
+    # loses those examples to failure_score 0.0, so the winning candidate may
+    # have been selected against noise. Persisting it would ship a prompt chosen
+    # by an outage AND fingerprint the records as done. Neither: fail the leg and
+    # let the next beat retry.
+    degraded = int(getattr(metric, "degraded_examples", 0) or 0)
+    if degraded:
+        reason = f"judge degraded mid-run ({degraded} example(s) unscored by the judge)"
+        logger.error(
+            "RAG prompt optimization discarded: %s. No artifact saved and records "
+            "left un-fingerprinted so the next run retries.",
+            reason,
+        )
+        return {"status": "failed", "reason": reason, "degraded_examples": degraded}
+
+    # GEPA seeds its candidate pool with the base program (dspy gepa.py:553 ->
+    # gepa core/state.py:54) and picks argmax over val_aggregate_scores
+    # (core/result.py:77), where `max` resolves ties to the FIRST index — the
+    # seed. So an exhausted budget hands back the base prompt unchanged. Saving
+    # that as "optimized" would be a lie, and fingerprinting it would silently
+    # skip a later budget increase — the one action that could still help.
+    if _instructions_of(optimized) == seed_instructions:
+        reason = f"budget exhausted without improvement (max_metric_calls={budget})"
+        logger.info(
+            "RAG prompt optimization produced no change: %s. Nothing saved; raise %s "
+            "to search harder on these records.",
+            reason,
+            RAG_MAX_METRIC_CALLS_ENV,
+        )
+        return {
+            "status": "skipped",
+            "reason": reason,
+            "examples": len(examples),
+            "max_metric_calls": budget,
+        }
 
     info = save_optimized_module(
         module=optimized,

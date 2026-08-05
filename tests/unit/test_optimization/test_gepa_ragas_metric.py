@@ -286,6 +286,86 @@ class TestUnmeasuredMetricsAreExcludedNotZeroed:
             )
 
 
+class TestJudgeDegradationIsCounted:
+    """Separate environmental judge failure from candidate-caused unjudgeability.
+
+    Codex iter-1 F2. The raise->failure_score 0.0 inversion is accepted for a
+    candidate that produced an unjudgeable answer — that is signal. It is NOT
+    acceptable for a judge that timed out or fell back to heuristics mid-run:
+    that zeroes a possibly-good candidate, which is noise, and the run would
+    still be saved as a success. Counting degradation lets the caller refuse to
+    persist a run selected on noise.
+    """
+
+    def test_heuristic_stamp_counts_as_degradation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.optimization.gepa.metrics.ragas_metric import RagasUnjudgeableExampleError
+
+        metric = _metric(
+            monkeypatch,
+            _StubEvaluator(result=_result(metadata={"evaluation_method": "fallback_heuristic"})),
+        )
+        assert metric.degraded_examples == 0
+
+        with pytest.raises(RagasUnjudgeableExampleError):
+            metric(
+                _example(user_query="q", evidence_board=["ctx"]),
+                _prediction(synthesis="an answer"),
+                None,
+                None,
+                None,
+            )
+
+        assert metric.degraded_examples == 1
+
+    def test_judge_exception_counts_as_degradation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A timeout or rate-limit is the environment failing, not the candidate."""
+        metric = _metric(monkeypatch, _StubEvaluator(raises=TimeoutError("judge timed out")))
+
+        with pytest.raises(TimeoutError):
+            metric(
+                _example(user_query="q", evidence_board=["ctx"]),
+                _prediction(synthesis="an answer"),
+                None,
+                None,
+                None,
+            )
+
+        assert metric.degraded_examples == 1
+
+    def test_candidate_caused_unjudgeability_is_not_degradation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-RAG-shaped example is a dataset defect, not a judge outage.
+
+        Counting it would make every run look degraded and suppress every save.
+        """
+        from src.optimization.gepa.metrics.ragas_metric import RagasUnjudgeableExampleError
+
+        metric = _metric(monkeypatch, _StubEvaluator(result=_result()))
+
+        with pytest.raises(RagasUnjudgeableExampleError):
+            metric(
+                _example(analysis_results="no retrieval here"),
+                _prediction(executive_summary="a summary"),
+                None,
+                None,
+                None,
+            )
+
+        assert metric.degraded_examples == 0
+
+    def test_a_clean_run_reports_no_degradation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        metric = _metric(monkeypatch, _StubEvaluator(result=_result()))
+        metric(
+            _example(user_query="q", evidence_board=["ctx"]),
+            _prediction(synthesis="an answer"),
+            None,
+            None,
+            None,
+        )
+        assert metric.degraded_examples == 0
+
+
 class TestFixtureContaminationGuard:
     """Fixture-derived contexts make precision/recall 1.0 by construction."""
 

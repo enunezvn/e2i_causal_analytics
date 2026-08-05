@@ -133,6 +133,10 @@ class TestOpportunisticNoOp:
         blob = " ".join(r.message for r in caplog.records)
         assert RAG_RECORDS_PATH_ENV in blob
         assert "replay_golden_set" in blob
+        # Codex iter-1 F5 residual: #1485's parser rejects --record-out unless
+        # --target cognitive accompanies it, so a message an operator can follow
+        # verbatim must name it.
+        assert "--target cognitive" in blob
 
     @pytest.mark.asyncio
     async def test_missing_file_is_a_skip(
@@ -179,6 +183,7 @@ class TestOpportunisticNoOp:
         """
         from src.tasks.dspy_optimization_tasks import (
             RAG_RECORDS_PATH_ENV,
+            _rag_max_metric_calls,
             _rag_records_fingerprint,
             _save_trigger_state,
             run_rag_prompt_optimization,
@@ -189,7 +194,14 @@ class TestOpportunisticNoOp:
         path = _records_file(tmp_path, records)
         monkeypatch.setenv(RAG_RECORDS_PATH_ENV, str(path))
 
-        _save_trigger_state({"rag_records_fingerprint": _rag_records_fingerprint(str(path))})
+        # Fingerprint covers records content AND budget (F4a).
+        _save_trigger_state(
+            {
+                "rag_records_fingerprint": _rag_records_fingerprint(
+                    str(path), _rag_max_metric_calls()
+                )
+            }
+        )
 
         result = await run_rag_prompt_optimization()
         assert result["status"] == "skipped"
@@ -278,6 +290,160 @@ class TestArtifactConsumerChain:
             marker in (getattr(getattr(p, "signature", None), "instructions", "") or "")
             for p in loaded.predictors()
         )
+
+
+class _FakeOptimizer:
+    """Stands in for a compiled GEPA run, without spending a judge call."""
+
+    def __init__(self, instructions: str, degraded: int = 0, metric: Any = None) -> None:
+        self._instructions = instructions
+        self._degraded = degraded
+        self._metric = metric
+
+    def compile(self, module: Any, trainset: Any = None, valset: Any = None) -> Any:
+        import dspy
+
+        from src.rag.cognitive_rag_dspy import EvidenceSynthesisSignature
+
+        if self._metric is not None:
+            self._metric._degraded_examples = self._degraded
+        return dspy.ChainOfThought(EvidenceSynthesisSignature.with_instructions(self._instructions))
+
+
+def _arm_leg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    instructions: str = "AN IMPROVED PROMPT",
+    degraded: int = 0,
+) -> Any:
+    """Point the leg at a usable records file with the judge/optimizer stubbed."""
+    import src.tasks.dspy_optimization_tasks as task_module
+
+    monkeypatch.chdir(tmp_path)
+    records = [_record(f"q{i}", [f"ctx{i}"], f"answer {i}") for i in range(8)]
+    path = _records_file(tmp_path, records)
+    monkeypatch.setenv(task_module.RAG_RECORDS_PATH_ENV, str(path))
+
+    class _Metric:
+        """Callable, so it satisfies GEPA's metric contract if ever constructed."""
+
+        _degraded_examples = 0
+
+        def __call__(self, *a: Any, **k: Any) -> Any:  # pragma: no cover - never scored here
+            raise AssertionError("the stubbed optimizer must not score examples")
+
+        @property
+        def degraded_examples(self) -> int:
+            return self._degraded_examples
+
+    metric = _Metric()
+    monkeypatch.setattr(
+        "src.optimization.gepa.metrics.get_metric_for_agent",
+        lambda *a, **k: metric,
+        raising=True,
+    )
+    # The leg imports create_gepa_optimizer from the PACKAGE, so patch it there —
+    # patching optimizer_setup leaves the already-bound package alias untouched.
+    monkeypatch.setattr(
+        "src.optimization.gepa.create_gepa_optimizer",
+        lambda **k: _FakeOptimizer(instructions, degraded, metric),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "src.optimization.dspy_lm.ensure_dspy_configured", lambda *a, **k: True, raising=True
+    )
+    return path
+
+
+def _artifact_count(tmp_path: Path) -> int:
+    from src.rag.cognitive_rag_dspy import OPTIMIZED_SYNTHESIS_AGENT_NAME
+
+    root = tmp_path / "optimized_modules" / OPTIMIZED_SYNTHESIS_AGENT_NAME
+    return len(list(root.glob("gepa_*.json"))) if root.exists() else 0
+
+
+class TestJudgeDegradationBlocksPersistence:
+    """Codex iter-1 F2: a run selected on noise must not be saved or deduped."""
+
+    @pytest.mark.asyncio
+    async def test_degraded_run_saves_no_artifact_and_no_fingerprint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.tasks.dspy_optimization_tasks as task_module
+
+        _arm_leg(tmp_path, monkeypatch, degraded=3)
+        result = await task_module.run_rag_prompt_optimization()
+
+        assert result["status"] == "failed"
+        assert "degrad" in result["reason"].lower()
+        assert "3" in result["reason"]
+        assert _artifact_count(tmp_path) == 0, "a noise-selected candidate was persisted"
+        assert "rag_records_fingerprint" not in task_module._load_trigger_state(), (
+            "records were marked done despite the judge degrading mid-run"
+        )
+
+    @pytest.mark.asyncio
+    async def test_clean_run_does_save_and_fingerprint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Control: the degradation guard must not block a healthy run."""
+        import src.tasks.dspy_optimization_tasks as task_module
+
+        _arm_leg(tmp_path, monkeypatch, degraded=0)
+        result = await task_module.run_rag_prompt_optimization()
+
+        assert result["status"] == "completed", result
+        assert _artifact_count(tmp_path) == 1
+        assert "rag_records_fingerprint" in task_module._load_trigger_state()
+
+
+class TestBudgetExhaustionIsNotSuccess:
+    """Codex iter-1 F4, confirmed against the gepa source.
+
+    dspy/teleprompt/gepa/gepa.py:553 seeds with the base program; gepa
+    core/state.py:54 makes it candidate 0; core/result.py:77 picks argmax over
+    val_aggregate_scores, and `max` resolves ties to the FIRST index — so when
+    no candidate beats the seed, compile() hands back the seed unchanged
+    (rebuilt at gepa.py:592). Saving that as an optimized artifact and marking
+    the records done would silently skip a later budget increase.
+    """
+
+    @pytest.mark.asyncio
+    async def test_seed_identical_result_is_not_saved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.tasks.dspy_optimization_tasks as task_module
+        from src.rag.cognitive_rag_dspy import EvidenceSynthesisSignature
+
+        seed_instructions = EvidenceSynthesisSignature.instructions
+        _arm_leg(tmp_path, monkeypatch, instructions=seed_instructions)
+
+        result = await task_module.run_rag_prompt_optimization()
+
+        assert result["status"] == "skipped"
+        assert "budget" in result["reason"].lower()
+        assert _artifact_count(tmp_path) == 0, "a baseline-identical artifact was saved"
+
+    @pytest.mark.asyncio
+    async def test_fingerprint_covers_the_budget_so_a_raise_reruns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same records at a HIGHER budget must not be treated as already done."""
+        import src.tasks.dspy_optimization_tasks as task_module
+
+        path = _arm_leg(tmp_path, monkeypatch)
+        monkeypatch.setenv(task_module.RAG_MAX_METRIC_CALLS_ENV, "20")
+        first = await task_module.run_rag_prompt_optimization()
+        assert first["status"] == "completed", first
+
+        # Unchanged budget -> deduped (no nightly re-spend).
+        assert (await task_module.run_rag_prompt_optimization())["status"] == "skipped"
+
+        # Raised budget -> the same records are worth re-running.
+        monkeypatch.setenv(task_module.RAG_MAX_METRIC_CALLS_ENV, "60")
+        assert (await task_module.run_rag_prompt_optimization())["status"] == "completed"
+        assert path.exists()
 
 
 class TestBeatPreservesLegState:

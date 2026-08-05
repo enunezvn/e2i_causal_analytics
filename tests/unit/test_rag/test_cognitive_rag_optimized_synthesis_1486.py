@@ -84,9 +84,15 @@ class TestOptimizedSynthesisLoader:
         until the process restarted.
         """
         import src.rag.cognitive_rag_dspy as module_under_test
-        from src.rag.cognitive_rag_dspy import load_optimized_synthesis_module
+        from src.rag.cognitive_rag_dspy import (
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            load_optimized_synthesis_module,
+        )
 
         monkeypatch.chdir(tmp_path)
+        # An artifact must EXIST for a load to be attempted at all — with none on
+        # disk the loader short-circuits on the signature probe (F3).
+        _write_artifact(tmp_path / "optimized_modules", OPTIMIZED_SYNTHESIS_AGENT_NAME, "present")
         calls = {"n": 0}
 
         def _boom(*args: Any, **kwargs: Any) -> Any:
@@ -98,21 +104,79 @@ class TestOptimizedSynthesisLoader:
         assert load_optimized_synthesis_module() is None
         assert calls["n"] == 2, "a transient error was cached; a later cycle cannot retry"
 
-    def test_intentional_miss_is_not_reprobed(
+    def test_a_first_artifact_is_picked_up_without_a_restart(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from src.rag.cognitive_rag_dspy import load_optimized_synthesis_module
+        """Codex iter-1 F3 — supersedes the earlier cache-the-miss-forever contract.
+
+        A worker that probed before the first nightly success would otherwise
+        serve the base prompt until the process restarted. Nothing invalidates
+        the cache: docker-compose mounts optimized_modules read-only into api
+        (:709) and writable into worker_medium (:843), with no signalling
+        between them. Caching keyed on the artifact's existence+mtime keeps the
+        parse cached while still noticing a new file.
+        """
+        from src.rag.cognitive_rag_dspy import (
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            load_optimized_synthesis_module,
+        )
 
         monkeypatch.chdir(tmp_path)
         assert load_optimized_synthesis_module(reset=True) is None
 
-        # Writing an artifact after the cached miss must NOT be picked up until
-        # reset — proving the miss really was cached rather than re-probed.
-        from src.rag.cognitive_rag_dspy import OPTIMIZED_SYNTHESIS_AGENT_NAME
-
         _write_artifact(tmp_path / "optimized_modules", OPTIMIZED_SYNTHESIS_AGENT_NAME, "later")
-        assert load_optimized_synthesis_module() is None
-        assert load_optimized_synthesis_module(reset=True) is not None
+        assert load_optimized_synthesis_module() is not None, (
+            "a worker that cached the miss serves the base prompt until restart"
+        )
+
+    def test_a_newer_version_supersedes_a_cached_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Holding version N while N+1 sits on disk is the same staleness bug."""
+        from src.rag.cognitive_rag_dspy import (
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            load_optimized_synthesis_module,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        root = tmp_path / "optimized_modules"
+        _write_artifact(root, OPTIMIZED_SYNTHESIS_AGENT_NAME, "VERSION-N")
+        first = load_optimized_synthesis_module(reset=True)
+        assert first is not None
+
+        _write_artifact(root, OPTIMIZED_SYNTHESIS_AGENT_NAME, "VERSION-N-PLUS-1")
+        reloaded = load_optimized_synthesis_module()
+        instructions = [
+            getattr(getattr(p, "signature", None), "instructions", "")
+            for p in reloaded.predictors()
+        ]
+        assert any("VERSION-N-PLUS-1" in (i or "") for i in instructions), instructions
+
+    def test_an_unchanged_artifact_is_not_reparsed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cache must still hold; only existence+mtime is re-checked."""
+        import src.rag.cognitive_rag_dspy as module_under_test
+        from src.rag.cognitive_rag_dspy import (
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            load_optimized_synthesis_module,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        _write_artifact(tmp_path / "optimized_modules", OPTIMIZED_SYNTHESIS_AGENT_NAME, "stable")
+        load_optimized_synthesis_module(reset=True)
+
+        calls = {"n": 0}
+        real = module_under_test._load_optimized_module
+
+        def _counting(*a: Any, **k: Any) -> Any:
+            calls["n"] += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(module_under_test, "_load_optimized_module", _counting, raising=True)
+        for _ in range(3):
+            assert load_optimized_synthesis_module() is not None
+        assert calls["n"] == 0, "an unchanged artifact was re-parsed on every call"
 
     def test_miss_logs_at_info(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

@@ -62,6 +62,7 @@ WHY THE AVAILABILITY GATE IS AT CONSTRUCTION
 import asyncio
 import concurrent.futures
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from dspy import Example, Prediction
@@ -174,6 +175,30 @@ class RagasGEPAMetric:
                 )
         self.config = config
         self._evaluator = evaluator if evaluator is not None else self._resolve_evaluator()
+        # Count of examples the JUDGE failed to score (heuristic fallback mid-run,
+        # timeout, rate-limit) as opposed to examples the CANDIDATE made
+        # unjudgeable. Both raise, and dspy converts either into failure_score
+        # 0.0 — but only the first is noise: it zeroes a possibly-good candidate
+        # for an environmental reason, so a run containing any of it must not be
+        # persisted or deduped as a success. Locked because GEPA evaluates on
+        # worker threads.
+        self._degraded_examples = 0
+        self._degradation_lock = threading.Lock()
+
+    @property
+    def degraded_examples(self) -> int:
+        """Examples whose score was lost to judge degradation, not candidate quality."""
+        with self._degradation_lock:
+            return self._degraded_examples
+
+    def reset_degradation(self) -> None:
+        """Clear the counter so one metric instance can serve several runs."""
+        with self._degradation_lock:
+            self._degraded_examples = 0
+
+    def _record_degradation(self) -> None:
+        with self._degradation_lock:
+            self._degraded_examples += 1
 
     @staticmethod
     def _resolve_evaluator() -> Any:
@@ -300,7 +325,15 @@ class RagasGEPAMetric:
             answer=answer,
             retrieved_contexts=retrieved,
         )
-        return _run_sync(self._evaluator.evaluate_sample(sample))
+        try:
+            return _run_sync(self._evaluator.evaluate_sample(sample))
+        except Exception:
+            # A timeout, rate-limit or transport error is the ENVIRONMENT
+            # failing, not the candidate. dspy will still turn this into
+            # failure_score 0.0, so record it: the caller refuses to persist a
+            # run whose scores are partly noise.
+            self._record_degradation()
+            raise
 
     def _compose(
         self,
@@ -326,6 +359,8 @@ class RagasGEPAMetric:
                 "GEPA as optimization signal."
             )
             logger.error("RAGAS GEPA metric: %s", message)
+            # Judge-caused, not candidate-caused: see _record_degradation.
+            self._record_degradation()
             raise RagasUnjudgeableExampleError(message)
 
         # `is not None` rather than truthiness — a judged 0.0 is a real score.

@@ -25,6 +25,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import dspy
@@ -542,10 +543,39 @@ class VisualizationConfigSignature(dspy.Signature):
 # handshake between the worker that writes and the api that reads.
 OPTIMIZED_SYNTHESIS_AGENT_NAME = "cognitive_rag_synthesis"
 
-# {"attempted": bool, "module": Optional[dspy.Module]}. Module-level rather than
-# per-instance because AgentModule is rebuilt per workflow construction and the
-# probe is a filesystem hit.
-_OPTIMIZED_SYNTHESIS_CACHE: Dict[str, Any] = {"attempted": False, "module": None}
+# Must match load_optimized_module's default, since the signature probe below
+# resolves the same directory the loader will read.
+OPTIMIZED_MODULES_DIR = "./optimized_modules"
+
+# {"attempted": bool, "signature": Optional[tuple], "module": Optional[dspy.Module]}.
+# Module-level rather than per-instance because AgentModule is rebuilt per
+# workflow construction and the load is a parse, not just a stat.
+_OPTIMIZED_SYNTHESIS_CACHE: Dict[str, Any] = {
+    "attempted": False,
+    "signature": None,
+    "module": None,
+}
+
+
+def _artifact_signature() -> Optional[tuple]:
+    """(path, mtime_ns) of the newest saved artifact, or None if there is none.
+
+    Cheap on purpose — one directory glob plus a stat, microseconds against the
+    LLM call that follows. It is what lets a long-lived worker notice an
+    artifact that appeared (or was replaced) after it last looked: nothing else
+    invalidates the cache, because docker-compose mounts optimized_modules
+    read-only into api and writable into worker_medium with no signal between
+    them.
+    """
+    directory = Path(OPTIMIZED_MODULES_DIR) / OPTIMIZED_SYNTHESIS_AGENT_NAME
+    try:
+        versions = sorted(directory.glob("gepa_*.json"), reverse=True)
+        if not versions:
+            return None
+        newest = versions[0]
+        return (str(newest), newest.stat().st_mtime_ns)
+    except OSError:
+        return None
 
 
 def _load_optimized_module() -> Any:
@@ -578,9 +608,26 @@ def load_optimized_synthesis_module(reset: bool = False) -> Optional[Any]:
             caller that has just written a new artifact).
     """
     if reset:
-        _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": False, "module": None})
-    if _OPTIMIZED_SYNTHESIS_CACHE["attempted"]:
+        _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": False, "signature": None, "module": None})
+
+    signature = _artifact_signature()
+    # Keyed on the artifact rather than on "have we looked before". Caching the
+    # bare outcome meant a worker that probed before the first nightly success
+    # served the base prompt until restart, and a worker holding version N never
+    # saw N+1 — with no invalidation path in either direction.
+    if (
+        _OPTIMIZED_SYNTHESIS_CACHE["attempted"]
+        and _OPTIMIZED_SYNTHESIS_CACHE["signature"] == signature
+    ):
         return _OPTIMIZED_SYNTHESIS_CACHE["module"]
+
+    if signature is None:
+        logger.info(
+            "No optimized cognitive-RAG synthesis module saved yet (%s); using base prompt",
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        )
+        _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": True, "signature": None, "module": None})
+        return None
 
     try:
         module = _load_optimized_module()
@@ -589,17 +636,21 @@ def load_optimized_synthesis_module(reset: bool = False) -> Optional[Any]:
             "No optimized cognitive-RAG synthesis module saved yet (%s); using base prompt",
             OPTIMIZED_SYNTHESIS_AGENT_NAME,
         )
-        _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": True, "module": None})
+        _OPTIMIZED_SYNTHESIS_CACHE.update(
+            {"attempted": True, "signature": signature, "module": None}
+        )
         return None
     except Exception as e:  # noqa: BLE001 - transient: do NOT cache, allow retry
         logger.warning("Failed to load optimized synthesis module (will retry next build): %s", e)
+        # Leave `attempted`/`signature` untouched so the next call retries this
+        # same artifact rather than being stranded on the base prompt.
         _OPTIMIZED_SYNTHESIS_CACHE["module"] = None
         return None
 
     logger.info(
         "Loaded optimized cognitive-RAG synthesis module (%s)", OPTIMIZED_SYNTHESIS_AGENT_NAME
     )
-    _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": True, "module": module})
+    _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": True, "signature": signature, "module": module})
     return module
 
 
