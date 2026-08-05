@@ -302,7 +302,12 @@ async def _warm_classify() -> None:
 
 
 def _warm_llm_context() -> str:
-    return f"[startup warm {_WARM_LLM_CACHE_BUSTER}]"
+    # pid at CALL time: under gunicorn --preload the module-level uuid is
+    # imported once in the master and forked into every worker; without the
+    # pid, workers 2..N would cache-hit worker 1's disk-cache entries and
+    # never make a real warm call. uuid(per-boot) + pid(per-worker) stays
+    # unique even when container pids repeat across boots.
+    return f"[startup warm {_WARM_LLM_CACHE_BUSTER} pid={os.getpid()}]"
 
 
 def _classify_llm_call() -> None:

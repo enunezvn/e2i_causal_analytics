@@ -324,3 +324,14 @@ class TestCacheBuster:
     def test_cache_buster_nonempty_hex(self):
         assert len(warmup._WARM_LLM_CACHE_BUSTER) >= 8
         int(warmup._WARM_LLM_CACHE_BUSTER, 16)  # raises if not hex
+
+    def test_context_carries_pid_at_call_time(self, monkeypatch):
+        """Under gunicorn --preload the module (and its uuid) is imported once
+        in the MASTER, then forked — every worker would share one cache-buster
+        and workers 2..N would hit worker 1's disk-cache entries (~4ms no-op)
+        instead of making real warm calls. A pid evaluated at CALL time
+        differs per forked worker, so uuid(per-boot) + pid(per-worker) is
+        unique even when container pids repeat across boots."""
+        monkeypatch.setattr(warmup.os, "getpid", lambda: 424242)
+        assert "424242" in warmup._warm_llm_context()
+        assert warmup._WARM_LLM_CACHE_BUSTER in warmup._warm_llm_context()
