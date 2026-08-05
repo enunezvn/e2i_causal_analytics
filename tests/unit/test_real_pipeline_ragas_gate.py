@@ -418,7 +418,9 @@ def _retrieval(n_with: int, n_records: int = 15, n_errors: int = 0) -> Dict[str,
         "n_records": n_records,
         "n_errors": n_errors,
         "n_with_contexts": n_with,
-        "retrieval_hit_rate": n_with / n_records,
+        # guarded so the helper can build degenerate summaries for the
+        # fail-closed tests without raising while constructing the fixture
+        "retrieval_hit_rate": (n_with / n_records) if n_records else 0.0,
     }
 
 
@@ -505,3 +507,68 @@ def test_run_gates_fail_closed_without_retrieval_data():
     )
     assert not passed
     assert failures
+
+
+# ---------------------------------------------------------------------------
+# check_retrieval_gate input validation (codex iter-2 LOW 1)
+# ---------------------------------------------------------------------------
+#
+# This is the composed gate API and it advertises fail-closed, so an
+# impossible summary must block rather than be taken at face value.
+
+
+def test_retrieval_gate_rejects_an_out_of_range_rate():
+    for bad in (1.2, -0.1):
+        passed, failures = check_retrieval_gate(dict(_retrieval(5), retrieval_hit_rate=bad))
+        assert not passed, f"rate {bad} must block"
+        assert any("rate" in f.lower() for f in failures)
+
+
+def test_retrieval_gate_rejects_a_rate_that_contradicts_its_counts():
+    """A hand-edited or stale summary whose rate no longer describes its counts."""
+    passed, failures = check_retrieval_gate(dict(_retrieval(3), retrieval_hit_rate=0.9))
+    assert not passed
+    assert any("n_with_contexts" in f or "counts" in f.lower() for f in failures)
+
+
+def test_retrieval_gate_rejects_non_positive_or_boolean_counts():
+    for summary in (
+        _retrieval(5, n_records=0),
+        dict(_retrieval(5), n_records=True),
+        dict(_retrieval(5), n_with_contexts=True),
+        dict(_retrieval(5), n_with_contexts=-1),
+        dict(_retrieval(5), n_records="15"),
+    ):
+        passed, _ = check_retrieval_gate(summary)
+        assert not passed, f"must block: {summary!r}"
+
+
+def test_retrieval_gate_rejects_more_hits_than_records():
+    passed, failures = check_retrieval_gate(
+        {"n_records": 5, "n_errors": 0, "n_with_contexts": 9, "retrieval_hit_rate": 9 / 5}
+    )
+    assert not passed
+    assert failures
+
+
+def test_retrieval_gate_accepts_a_consistent_summary():
+    passed, failures = check_retrieval_gate(_retrieval(5))
+    assert passed, failures
+
+
+# ---------------------------------------------------------------------------
+# Heuristic stamp: empty string is NOT judged (codex iter-2 LOW 2)
+# ---------------------------------------------------------------------------
+
+
+def test_empty_string_evaluation_method_is_refused():
+    """No producer emits "". Accepting it contradicted the documented contract.
+
+    The judge emits None or the stamp; pre-#1485 blocks carry no key at all.
+    An unexpected "" means something we do not model wrote that row.
+    """
+    rows = [_judged(f"q{i:02d}") for i in range(1, 10)]
+    rows.append(_judged("q10", evaluation_method=""))
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("q10" in f for f in failures)

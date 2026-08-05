@@ -1265,3 +1265,73 @@ def test_build_ragas_samples_from_e2e_records():
     # ground_truth unused by faithfulness/answer_relevancy; kept explicit-empty
     assert sample["ground_truth"] == ""
     assert sample["metadata"]["query_id"] == "ts-9"
+
+
+# ---------------------------------------------------------------------------
+# ragas[judged] — refuse heuristic-scored rows (#1485 codex iter-2 HIGH)
+# ---------------------------------------------------------------------------
+#
+# RAGASEvaluator._evaluate_with_ragas ends in a broad
+# `except Exception: return await self._evaluate_with_fallback(...)`
+# (src/rag/evaluation.py:1188), so a quota error or rate limit DURING judging
+# degrades that sample to word-overlap heuristics while the judge still exits
+# 0 and the aggregates still reconcile. Verified in the running container: a
+# keyless judge run returned faithfulness 0.125 with self-consistent
+# aggregates and nothing else to distinguish it. The judge script now carries
+# evaluation_method per row; this gate refuses it. Same validity-check family
+# as ragas[consistency] (iter-3) and ragas[fully_scored] (iter-4), and it
+# moves no pre-registered threshold.
+
+
+def test_gate_ragas_judged_refuses_candidate_heuristic_rows():
+    candidate = _candidate()
+    candidate["ragas"]["per_sample"][0]["evaluation_method"] = "fallback_heuristic"
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[consistency]" not in failed  # aggregates still describe the rows
+    assert "ragas[fully_scored]" not in failed  # every row carries a score
+    assert "ragas[judged]" in failed
+    assert result["all_passed"] is False
+
+
+def test_gate_ragas_judged_checks_the_baseline_side_too():
+    """A heuristic-corrupted baseline weakens every floor it defines.
+
+    Same reasoning as the consistency gate's own comment: the baseline is not
+    exempt, because a corrupted-low baseline makes a candidate look better.
+    """
+    baseline = json.loads(json.dumps(BASELINE))
+    baseline["ragas"]["per_sample"][0]["evaluation_method"] = "fallback_heuristic"
+    result = evaluate_gates(baseline, _candidate(), EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[judged]" in failed
+
+
+def test_gate_ragas_judged_passes_when_rows_carry_no_stamp():
+    """The recorded 20260718 blocks predate the stamp — add-only on them.
+
+    _evaluate_with_ragas returns metadata=sample.metadata with no positive
+    marker, so a judged row legitimately has no key.
+    """
+    result = evaluate_gates(BASELINE, _candidate(), EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[judged]" not in failed
+
+
+def test_gate_ragas_judged_passes_on_explicit_none_stamps():
+    """What the post-#1485 judge actually emits for a genuinely judged row."""
+    candidate = _candidate()
+    for row in candidate["ragas"]["per_sample"]:
+        row["evaluation_method"] = None
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[judged]" not in failed
+
+
+def test_gate_ragas_judged_refuses_an_unrecognised_marker():
+    """A future marker we do not know must block rather than slip through."""
+    candidate = _candidate()
+    candidate["ragas"]["per_sample"][0]["evaluation_method"] = "some_future_mode"
+    result = evaluate_gates(BASELINE, candidate, EXPECTED_SIG_SETS, EXPECTED_REPLAY_IDS)
+    failed = {g["name"] for g in result["gates"] if not g["passed"]}
+    assert "ragas[judged]" in failed

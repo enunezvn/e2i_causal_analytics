@@ -56,11 +56,27 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.optimization.dspy_lane_ab import (
     GATE_RAGAS_MIN_FAITHFULNESS_N,
+    HEURISTIC_EVALUATION_METHOD,
     _is_finite_number,
     _ragas_consistency_error,
+    _ragas_heuristic_contamination_error,
     _ragas_scoreless_error,
     build_ragas_samples,
 )
+
+__all__ = [
+    "HEURISTIC_EVALUATION_METHOD",
+    "MIN_REAL_PIPELINE_SAMPLES",
+    "MIN_RETRIEVAL_HIT_RATE",
+    "REAL_PIPELINE_METRICS",
+    "REAL_PIPELINE_THRESHOLDS",
+    "build_samples_from_replay",
+    "check_real_pipeline_gates",
+    "check_retrieval_gate",
+    "check_run_gates",
+    "contexts_from_evidence",
+    "summarize_retrieval",
+]
 
 # The only two metrics the real path can honestly report. context_precision
 # and context_recall need a ground-truth reference the replay deliberately
@@ -131,26 +147,11 @@ MIN_REAL_PIPELINE_SAMPLES = 10
 # 0.21 blocks 3/15 (0.200) and passes 4/15 (0.267).
 MIN_RETRIEVAL_HIT_RATE = 0.21
 
-# RAGASEvaluator._evaluate_with_ragas ends in a broad
-# ``except Exception: return await self._evaluate_with_fallback(...)``
-# (src/rag/evaluation.py:1188), so a quota error, rate limit, or transient API
-# failure DURING judging silently swaps gpt-4o judgments for word-overlap
-# heuristics on that sample. The judge process still exits 0 and the
-# aggregates still reconcile, so without this marker the gate could pass on
-# numbers no judge ever produced — the same masquerade class as the fixture
-# tautology itself.
-#
-# Only the FALLBACK path is stamped (:1270). The judged path returns
-# ``metadata=sample.metadata`` with no positive marker, so a judged row
-# legitimately carries no key and "missing" must mean judged. Requiring a
-# positive marker would be stronger, but it needs a change to the evaluator
-# AND a deploy before this gate could ever pass — the container judges with
-# deployed code, not this worktree. Refusing the known-bad stamp is the
-# contract that works against the code that is actually running.
-#
-# The same vocabulary already distinguishes real from heuristic scores in
-# src/agents/feedback_learner/evaluation/models.py.
-HEURISTIC_EVALUATION_METHOD = "fallback_heuristic"
+# Heuristic-contamination refusal (``_ragas_heuristic_contamination_error``,
+# re-exported above) lives in dspy_lane_ab beside its sibling validity checks:
+# that module is stdlib-only because its source is embedded into the container
+# bundle, and this module already imports from it, so the reverse direction
+# would be circular. The DSPy A/B lane gates on the same predicate.
 
 
 def contexts_from_evidence(evidence: Optional[Iterable[Any]]) -> List[str]:
@@ -214,33 +215,6 @@ def summarize_retrieval(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _heuristic_contamination_error(block: Dict[str, Any]) -> Optional[str]:
-    """Refuse a block whose rows were scored by the heuristic fallback.
-
-    See ``HEURISTIC_EVALUATION_METHOD``: a mid-run judge failure degrades that
-    sample to word-overlap scoring without failing the process. A row is
-    accepted when its ``evaluation_method`` is absent or None (the judged path
-    stamps nothing); ANY other value is refused, so a future marker we do not
-    recognise blocks rather than slips through.
-    """
-    rows = block.get("per_sample")
-    if not isinstance(rows, list):
-        return None  # shape problems are already reported by the consistency gate
-    contaminated = [
-        row.get("query_id")
-        for row in rows
-        if isinstance(row, dict) and row.get("evaluation_method") not in (None, "")
-    ]
-    if contaminated:
-        return (
-            f"rows not scored by the gpt-4o judge (evaluation_method set): {contaminated} "
-            f"— a mid-run judge failure degrades samples to {HEURISTIC_EVALUATION_METHOD} "
-            "word-overlap scoring (src/rag/evaluation.py:1188); those numbers are not "
-            "measurements"
-        )
-    return None
-
-
 def check_retrieval_gate(
     retrieval: Optional[Dict[str, Any]],
     floor: float = MIN_RETRIEVAL_HIT_RATE,
@@ -260,9 +234,41 @@ def check_retrieval_gate(
             "retrieval summary missing — cannot verify the pipeline retrieved anything; "
             "the gate fails closed"
         ]
+
+    def _count(key: str) -> Optional[int]:
+        value = retrieval.get(key)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return None
+        return value
+
+    n_records = _count("n_records")
+    n_with = _count("n_with_contexts")
+    if n_records is None or n_records <= 0:
+        return False, [
+            f"n_records={retrieval.get('n_records')!r} is not a positive integer count "
+            "— fails closed"
+        ]
+    if n_with is None or not (0 <= n_with <= n_records):
+        return False, [
+            f"n_with_contexts={retrieval.get('n_with_contexts')!r} is not an integer within "
+            f"[0, {n_records}] — fails closed"
+        ]
+
     rate = retrieval.get("retrieval_hit_rate")
     if not _is_finite_number(rate):
         return False, [f"retrieval_hit_rate={rate!r} is not a finite rate — fails closed"]
+    if not (0.0 <= float(rate) <= 1.0):
+        return False, [f"retrieval_hit_rate={float(rate)!r} is outside [0, 1] — fails closed"]
+    # A summary whose rate no longer describes its own counts is stale or
+    # hand-edited; the gate reads the rate, so the counts must corroborate it.
+    expected = n_with / n_records
+    if abs(expected - float(rate)) > 1e-6:
+        return False, [
+            f"retrieval_hit_rate={float(rate):.6f} but n_with_contexts/n_records = "
+            f"{n_with}/{n_records} = {expected:.6f} — the summary does not describe "
+            "its own counts; fails closed"
+        ]
+
     if float(rate) < floor:
         return False, [
             f"retrieval hit rate {float(rate):.3f} < floor {floor} "
@@ -332,7 +338,7 @@ def check_real_pipeline_gates(
     if scoreless:
         failures.append(f"ragas scoreless rows: {scoreless}")
 
-    contaminated = _heuristic_contamination_error(block)
+    contaminated = _ragas_heuristic_contamination_error(block)
     if contaminated:
         failures.append(contaminated)
 

@@ -105,24 +105,41 @@ def test_dormant_regression_job_is_preserved():
 # "RAG quality eval" keep the wrong mental model alive, which is the actual
 # defect in #1485 (a 0.804 fixture number read as production quality).
 
-DOC_PATHS = [
-    REPO_ROOT / "README.md",
-    REPO_ROOT / "docs" / "ONBOARDING.md",
-    REPO_ROOT / "docs" / "LLM_CONFIGURATION.md",
-]
+# Every project doc, not a hardcoded list: a NEW docs/*.md describing the
+# fixture eval as a quality gate would escape a fixed set entirely, and the
+# wrong mental model is the actual defect in #1485.
+#
+# docs/reports/ is excluded deliberately: those are dated records of what was
+# believed and measured at the time (e.g. dspy_lane_ab_20260718.md). Rewriting
+# a historical report to match today's naming would falsify the record.
+DOC_EXCLUDED_DIRS = {"reports", "archive", "node_modules"}
+
+
+def _project_docs() -> list:
+    paths = [REPO_ROOT / "README.md", *(REPO_ROOT / "docs").rglob("*.md")]
+    return [
+        p
+        for p in paths
+        if p.exists() and not (DOC_EXCLUDED_DIRS & set(p.relative_to(REPO_ROOT).parts))
+    ]
+
+
+def test_doc_scan_actually_covers_the_known_ragas_docs():
+    """Guard the guard: a glob that silently matches nothing proves nothing."""
+    covered = {p.name for p in _project_docs()}
+    for expected in ("README.md", "ONBOARDING.md", "LLM_CONFIGURATION.md"):
+        assert expected in covered, f"doc scan missed {expected}"
 
 
 def test_no_doc_still_calls_the_fixture_job_a_rag_quality_eval():
     stale = []
-    for path in DOC_PATHS:
-        if not path.exists():
-            continue
+    for path in _project_docs():
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
             lowered = line.lower()
             if "ragas" not in lowered and "run_ragas_eval" not in lowered:
                 continue
             if "rag quality eval" in lowered or "quality gate" in lowered:
-                stale.append(f"{path.name}:{lineno}: {line.strip()}")
+                stale.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
     assert not stale, "docs still present the fixture eval as a quality gate:\n" + "\n".join(stale)
 
 
