@@ -277,6 +277,7 @@ from typing import (
     AsyncGenerator,
     Dict,
     List,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -2871,7 +2872,10 @@ class E2IAgentState(TypedDict, total=False):
     copilotkit: Dict[str, Any]
 
 
-def create_e2i_chat_agent():
+def create_e2i_chat_agent(
+    chat_llm_tier: Literal["fast", "standard", "reasoning"] = "standard",
+    chat_llm_reasoning_effort: str = "medium",
+):
     """
     Create a LangGraph agent for E2I chat with Claude and tool calling.
 
@@ -2879,6 +2883,21 @@ def create_e2i_chat_agent():
     1. Uses Claude with bound E2I tools for data-driven responses
     2. Automatically executes tools when Claude invokes them
     3. Streams responses back to CopilotKit frontend
+
+    Args:
+        chat_llm_tier: llm_factory tier for the CHAT leg only (#1475). The
+            chat leg is the tool-selection round-trip; the synthesize leg
+            (the user-facing prose author) always stays on "standard".
+            Defaults preserve the AG-UI brain byte-for-byte — only the
+            #1336 conversational bridge passes "fast", on measured evidence
+            (2026-08-04, same box/key/prompt/tools): the chat leg emitted
+            0 content chars and only a tool call on every bridged probe,
+            haiku-4-5 selected the identical tool with equivalent args on
+            3/3 real bridged queries at 1.17-1.33s vs sonnet-5's 3.12-5.79s.
+        chat_llm_reasoning_effort: reasoning effort for the chat leg.
+            The bridge passes "none" (thinking measured immaterial for tool
+            selection: medium 2.9-3.2s vs none 2.5-2.6s on sonnet; ignored
+            entirely by models without a thinking control surface).
 
     Returns:
         Compiled LangGraph with chat → tools → chat loop
@@ -2999,14 +3018,19 @@ def create_e2i_chat_agent():
             # 8192 + effort: sonnet-5's adaptive thinking counts against
             # max_tokens; at 2048 a thinking pass can consume the entire budget
             # and stream zero text (2026-07-20 frozen-at-75% incident).
+            # #1475: tier is a graph-construction parameter — "standard" for
+            # the AG-UI brain, "fast" for the bridge's tool-selection leg.
             llm = get_chat_llm(
-                model_tier="standard",
+                model_tier=chat_llm_tier,
                 max_tokens=8192,
                 temperature=0.3,
                 provider="anthropic",
-                reasoning_effort="medium",
+                reasoning_effort=chat_llm_reasoning_effort,
             )
             provider = "anthropic"
+            # #1257 provenance class: configured_model metadata must name the
+            # model that actually ran this leg, never a hardcoded 'standard'.
+            chat_leg_model = f"{provider}:{MODEL_MAPPINGS[provider][chat_llm_tier]}"
             logger.info(f"[CopilotKit] Using {provider} LLM for chat")
 
             # Bind E2I tools to LLM with tool_choice="auto" to encourage tool use.
@@ -3157,7 +3181,7 @@ def create_e2i_chat_agent():
                                     {"name": tc["name"], "args": tc.get("args", {})}
                                     for tc in response.tool_calls  # type: ignore[union-attr]
                                 ],
-                                "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                                "configured_model": chat_leg_model,
                             },
                             run_id=state.get("run_id"),
                         )
@@ -3188,9 +3212,7 @@ def create_e2i_chat_agent():
                         tools_invoked=tool_names,
                         primary_agent="copilotkit",
                         metadata={
-                            "configured_model": (
-                                f"{provider}:{MODEL_MAPPINGS[provider]['standard']}"
-                            ),
+                            "configured_model": chat_leg_model,
                             # Distinguishes this from both a direct answer
                             # (direct_response) and a backend-tool turn
                             # (tools_used), which are the other two shapes a
@@ -3224,7 +3246,7 @@ def create_e2i_chat_agent():
                             agent_name="copilotkit",
                             metadata={
                                 "source": "copilotkit",
-                                "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                                "configured_model": chat_leg_model,
                                 "latency_ms": elapsed_ms,
                             },
                             run_id=state.get("run_id"),
@@ -3255,7 +3277,7 @@ def create_e2i_chat_agent():
                     tools_invoked=[],
                     primary_agent="copilotkit",
                     metadata={
-                        "configured_model": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                        "configured_model": chat_leg_model,
                         "direct_response": True,
                     },
                 )
