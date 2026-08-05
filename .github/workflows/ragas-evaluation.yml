@@ -1,11 +1,40 @@
-# RAGAS Evaluation Workflow
+# RAGAS Fixture Regression — judge-drift sentinel on FROZEN input
 #
-# Runs RAG quality evaluation using RAGAS metrics with OpenAI.
+# ⚠️  THIS JOB DOES NOT MEASURE PRODUCTION RAG QUALITY. It never invokes the
+# RAG pipeline (#1485).
+#
+# scripts/run_ragas_eval.py calls RAGEvaluationPipeline.run_evaluation() with
+# no `rag_pipeline` argument, so src/rag/evaluation.py:1499 skips
+# _generate_answers. Every golden-set sample therefore keeps its HARDCODED
+# `answer`, and its `retrieved_contexts` is byte-identical to its reference
+# `contexts`. Consequently:
+#
+#   * context_precision / context_recall are 1.0-by-construction — "retrieved"
+#     equals "reference" by definition, so they carry no retrieval signal;
+#   * faithfulness / answer_relevancy score the FIXTURE AUTHOR'S PROSE, not the
+#     generator — a generator regression cannot move them.
+#
+# What it IS good for: the input is frozen, so a change in these scores means
+# the JUDGE STACK moved (model, prompt, ragas version, embeddings). That is a
+# real and useful signal — it is just judge drift, not product quality. The
+# #491/#496 threshold calibration is correct *for this fixture*.
+#
+# For actual production quality use the real-pipeline gate, which judges
+# genuinely generated answers over genuinely retrieved contexts:
+#
+#   .venv/bin/python scripts/replay_golden_set.py --limit 12 \
+#       --record-out /tmp/goldset_records.json
+#   .venv/bin/python scripts/run_real_pipeline_ragas.py \
+#       --records /tmp/goldset_records.json --fail-on-threshold
+#
+# That gate runs on demand from a host that can reach the pipeline (GitHub's
+# ubuntu runners cannot), at n≈10-15 per #504's throughput constraint.
+#
 # Uses minimal requirements (requirements-ragas.txt) to avoid dependency conflicts.
 #
 # Required Secret: OPENAI_API_KEY must be configured in repository settings → Secrets and variables → Actions.
 
-name: RAGAS Evaluation
+name: RAGAS Fixture Regression
 
 # MANUAL-ONLY (issue #504). This gpt-4o RAGAS eval is bound by the CI OpenAI key's
 # throughput: a full 30-sample run takes ~96 min, and raising concurrency to cut that
@@ -22,7 +51,7 @@ on:
 
 jobs:
   ragas-evaluation:
-    name: RAG Quality Evaluation
+    name: Fixture Judge-Drift Sentinel
     runs-on: ubuntu-latest
     # Fail-fast guard (#504): real runtime is ~96 min on the CI OpenAI key tier;
     # 150 min is comfortably above that while preventing a hung run from burning
@@ -61,7 +90,7 @@ jobs:
           # Install project in editable mode (without full deps)
           pip install -e . --no-deps
 
-      - name: Run RAGAS evaluation
+      - name: Run RAGAS fixture evaluation (frozen input — not production quality)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -81,7 +110,13 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## RAGAS Evaluation Results" >> $GITHUB_STEP_SUMMARY
+          echo "## RAGAS Fixture Regression (judge-drift sentinel)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Scores a STATIC FIXTURE, not the RAG pipeline (#1485). Context" >> $GITHUB_STEP_SUMMARY
+          echo "> precision/recall are 1.0-by-construction; faithfulness and" >> $GITHUB_STEP_SUMMARY
+          echo "> answer relevancy score the fixture's own prose. A change here means" >> $GITHUB_STEP_SUMMARY
+          echo "> the judge stack drifted. For production quality run" >> $GITHUB_STEP_SUMMARY
+          echo "> \`scripts/run_real_pipeline_ragas.py\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f ragas-results/evaluation-report.json ]; then
             echo "### Metrics" >> $GITHUB_STEP_SUMMARY
@@ -111,8 +146,13 @@ jobs:
             echo "⚠️ Evaluation report not found" >> $GITHUB_STEP_SUMMARY
           fi
 
+  # DORMANT BY DESIGN — not dead code. The workflow is dispatch-only (#504), so
+  # `github.event_name` is never 'pull_request' and this job does not run today.
+  # It exists for the restore path the header describes: re-adding the push /
+  # pull_request triggers on a higher-tier OpenAI key brings it back. Its
+  # thresholds are fixture-calibrated (#491/#496) and stay that way.
   ragas-regression:
-    name: RAG Quality Regression Check
+    name: Fixture Regression Check (dormant — dispatch-only workflow)
     runs-on: ubuntu-latest
     needs: ragas-evaluation
     if: github.event_name == 'pull_request'
