@@ -66,9 +66,10 @@ from __future__ import annotations
 
 import math
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, Optional, Sequence
+from types import MappingProxyType
+from typing import Any, Dict, Mapping, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 # Per-metric weights, transcribed from calculate_combined_score() in
 # database/ml/022_self_improvement_tables.sql. They sum to 1.0, so a COMPLETE
@@ -94,10 +95,17 @@ RUBRIC_SCALE_MAX = 5.0
 # ROUND(v::numeric, 4) in the SQL function.
 _COMBINED_SCORE_QUANTUM = Decimal("0.0001")
 
-# Same vocabulary as src/optimization/dspy_lane_ab.py and
-# src/agents/feedback_learner/evaluation/models.py: a score the LLM judge never
-# actually produced.
+# Same vocabulary as src/optimization/dspy_lane_ab.py: a RAGAS score the LLM
+# judge never actually produced.
 HEURISTIC_EVALUATION_METHOD = "fallback_heuristic"
+
+# This repo has TWO fallback vocabularies and they are near-anagrams: RAGAS
+# stamps "fallback_heuristic" (dspy_lane_ab.py), the rubric evaluator stamps
+# "heuristic_fallback" (evaluation/models.py). Matching either exact string
+# lets the other through, so the refusal keys on the substring they share —
+# no legitimate judged-path label ("llm", "gpt-4o", None) contains it, and a
+# producer inventing a third label is refused without a code change.
+_HEURISTIC_MARKER = "heuristic"
 
 __all__ = [
     "HEURISTIC_EVALUATION_METHOD",
@@ -128,24 +136,36 @@ class RagasBundle(BaseModel):
     Attributes:
         scores: Metric name to judged value in [0, 1]. ``None`` marks a metric
             the judge attempted but could not score (#1488); a metric simply
-            absent from the mapping was never evaluated by this producer.
+            absent from the mapping was never evaluated by this producer. Stored
+            read-only — see the validator.
         unmeasured_metrics: Metric names the judge attempted but could not
             score, mirroring #1488's ``metadata["unmeasured_metrics"]``. A
             ``None`` value in ``scores`` means the same thing; supplying either
-            (or both) is fine.
+            (or both) is fine. Stored as a tuple.
         evaluation_method: ``None`` for the judged path, per the #1485 judge
-            script's convention. ``"fallback_heuristic"`` is refused.
+            script's convention. ANY label containing "heuristic" is refused,
+            case-insensitively — see ``_HEURISTIC_MARKER``.
         evaluation_model: Judge model label, persisted for provenance.
         evaluation_duration_ms: Judge wall time, persisted for provenance.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    scores: Dict[str, Optional[float]] = Field(default_factory=dict)
-    unmeasured_metrics: Sequence[str] = Field(default=())
+    scores: Mapping[str, Optional[float]] = Field(default_factory=dict)
+    unmeasured_metrics: Tuple[str, ...] = Field(default=())
     evaluation_method: Optional[str] = None
     evaluation_model: Optional[str] = None
     evaluation_duration_ms: Optional[int] = None
+
+    @field_serializer("scores")
+    def _serialise_scores(self, value: Mapping[str, Optional[float]]) -> Dict[str, Optional[float]]:
+        """Dump the read-only mapping as a plain dict.
+
+        Pydantic builds the serializer from the annotation and then warns that a
+        mappingproxy "may not be as expected" on every dump — which breaks any
+        caller running under ``-W error`` or a filterwarnings=error suite.
+        """
+        return dict(value)
 
     @model_validator(mode="after")
     def _validate_bundle(self) -> "RagasBundle":
@@ -183,13 +203,21 @@ class RagasBundle(BaseModel):
                 "cannot say whether the judge scored them"
             )
 
-        if self.evaluation_method == HEURISTIC_EVALUATION_METHOD:
+        if self.evaluation_method and _HEURISTIC_MARKER in self.evaluation_method.lower():
             raise ValueError(
-                "refusing a heuristic-scored bundle: word-overlap fallbacks are not "
-                "RAGAS judgments, and evaluation_results has no column that could mark "
-                "the row, so v_ragas_performance_trends would average them in as if a "
+                f"refusing a heuristic-scored bundle (evaluation_method="
+                f"{self.evaluation_method!r}): word-overlap fallbacks are not RAGAS "
+                "judgments, and evaluation_results has no column that could mark the "
+                "row, so v_ragas_performance_trends would average them in as if a "
                 "judge had produced them"
             )
+
+        # frozen=True stops attribute assignment but not item assignment on the
+        # containers this model stores, and a poisoned score would NOT be caught
+        # downstream: `weighted` clamps it to 1.0 (passing the ragas_weighted
+        # CHECK) while `as_signal_scores` carries the raw value into the
+        # ragas_scores JSONB, which has no CHECK at all.
+        object.__setattr__(self, "scores", MappingProxyType(dict(self.scores)))
         return self
 
     @property

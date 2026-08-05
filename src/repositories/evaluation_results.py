@@ -132,7 +132,13 @@ class EvaluationResultsRepository(BaseRepository):
             raise ValueError(
                 "response is empty; the column is NOT NULL and an empty answer was never judged"
             )
-        if ragas is None and rubric is None:
+        # An all-unmeasured bundle is an OBJECT, not a score. Testing presence
+        # alone let a row through whose twelve score columns were every one
+        # NULL; v_ragas_performance_trends.evaluation_count is COUNT(*), so it
+        # inflated the denominator a reader compares the averages against while
+        # contributing to none of them. A rubric half rescues such a row — that
+        # asymmetry is deliberate.
+        if (ragas is None or ragas.weighted is None) and rubric is None:
             raise ValueError(
                 "refusing a row with neither a RAGAS nor a rubric half — it would "
                 "record a query-response pair as evaluated while carrying no score"

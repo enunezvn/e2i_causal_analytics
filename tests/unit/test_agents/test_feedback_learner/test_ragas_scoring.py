@@ -13,6 +13,7 @@ diverge there, deliberately and visibly.
 
 import math
 import re
+import warnings
 from pathlib import Path
 
 import pytest
@@ -179,6 +180,96 @@ class TestBundleValidation:
                 scores={"faithfulness": 0.125},
                 evaluation_method=HEURISTIC_EVALUATION_METHOD,
             )
+
+    def test_rubric_vocabulary_heuristic_is_also_refused(self):
+        """codex iter-1 F1. There are TWO fallback vocabularies in this repo and
+        they are near-anagrams: RAGAS stamps ``fallback_heuristic``, the rubric
+        evaluator stamps ``heuristic_fallback``. Matching one exact string let
+        the other through — exactly the cross-contamination a #1489 hook-up
+        reading the wrong producer's key would commit.
+        """
+        with pytest.raises(ValueError, match="heuristic"):
+            RagasBundle(
+                scores={"faithfulness": 0.5},
+                evaluation_method="heuristic_fallback",
+            )
+
+    def test_future_heuristic_vocabulary_drift_is_refused(self):
+        """An exact-match list has to be updated every time a producer invents a
+        label. No legitimate judged-path label contains the word."""
+        with pytest.raises(ValueError, match="heuristic"):
+            RagasBundle(
+                scores={"faithfulness": 0.5},
+                evaluation_method="ragas_heuristic_v2",
+            )
+
+    def test_heuristic_match_is_case_insensitive(self):
+        with pytest.raises(ValueError, match="heuristic"):
+            RagasBundle(
+                scores={"faithfulness": 0.5},
+                evaluation_method="Fallback_Heuristic",
+            )
+
+    def test_judged_path_labels_are_still_accepted(self):
+        """The refusal must not over-reach: None is the judged path's own label
+        in the #1485 judge script, and 'llm' is the rubric evaluator's."""
+        for method in (None, "llm", "gpt-4o", "ragas"):
+            assert RagasBundle(
+                scores={"faithfulness": 0.5}, evaluation_method=method
+            ).weighted == pytest.approx(0.5)
+
+
+class TestBundleImmutability:
+    """codex iter-1 F3. ``frozen=True`` blocks attribute assignment but NOT item
+    mutation of the containers the model stores.
+
+    The consequence is worse than a rejected insert: ``weighted`` clamps a
+    poisoned 2.0 to 1.0 (passing the ``ragas_weighted`` CHECK) while
+    ``as_signal_scores`` carries the raw 2.0 into the ``ragas_scores`` JSONB,
+    which has no CHECK at all — so ``learning_signals`` would silently accept a
+    fake-perfect row.
+    """
+
+    def test_scores_mapping_cannot_be_mutated_in_place(self):
+        bundle = RagasBundle(scores={"faithfulness": 0.5})
+        with pytest.raises(TypeError):
+            bundle.scores["faithfulness"] = 2.0  # type: ignore[index]
+
+    def test_a_poisoned_score_cannot_reach_the_jsonb_payload(self):
+        """The column-level consequence, stated as its own assertion."""
+        bundle = RagasBundle(scores={"faithfulness": 0.5})
+        with pytest.raises(TypeError):
+            bundle.scores["faithfulness"] = 2.0  # type: ignore[index]
+        assert bundle.as_signal_scores() == {"faithfulness": 0.5}
+        assert bundle.weighted == pytest.approx(0.5)
+
+    def test_unmeasured_metrics_is_stored_as_a_tuple(self):
+        bundle = RagasBundle(scores={"faithfulness": None}, unmeasured_metrics=["faithfulness"])
+        assert isinstance(bundle.unmeasured_metrics, tuple)
+        with pytest.raises(AttributeError):
+            bundle.unmeasured_metrics.append("answer_relevancy")  # type: ignore[attr-defined]
+
+    def test_serialising_the_bundle_stays_warning_free(self):
+        """Making the mapping read-only must not cost a serializer warning on
+        every dump — pydantic builds the serializer for a plain dict and warns
+        that a mappingproxy 'may not be as expected'. A caller running under
+        ``-W error`` or a filterwarnings=error suite would then break on a
+        model_dump this fix had nothing to do with.
+        """
+        bundle = RagasBundle(scores={"faithfulness": 0.8, "answer_relevancy": None})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            dumped = bundle.model_dump()
+            bundle.model_dump_json()
+        assert dumped["scores"] == {"faithfulness": 0.8, "answer_relevancy": None}
+        assert type(dumped["scores"]) is dict
+
+    def test_a_dumped_bundle_round_trips(self):
+        bundle = RagasBundle(
+            scores={"faithfulness": 0.8, "answer_relevancy": None},
+            unmeasured_metrics=["answer_relevancy"],
+        )
+        assert RagasBundle.model_validate(bundle.model_dump()).weighted == bundle.weighted
 
 
 class TestCombinedScore:

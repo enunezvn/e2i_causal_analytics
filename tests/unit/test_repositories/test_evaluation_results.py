@@ -184,7 +184,31 @@ class TestPartialBundles:
         assert row["context_recall"] is None
         assert row["answer_correctness"] is None
 
-    async def test_all_unmeasured_bundle_writes_no_aggregate(self):
+    async def test_all_unmeasured_ragas_without_a_rubric_is_refused(self):
+        """codex iter-1 F2. Object presence is not a score.
+
+        An all-unmeasured bundle with no rubric inserted a row whose 12 score
+        columns were ALL NULL. v_ragas_performance_trends.evaluation_count is
+        COUNT(*), so that row inflates the denominator a reader compares the
+        averages against while contributing to none of them — and nothing on
+        the row records why it is empty.
+        """
+        client = _mock_client()
+        with pytest.raises(ValueError, match="neither|no score"):
+            await EvaluationResultsRepository(client).record_evaluation(
+                query="q",
+                response="a",
+                ragas=RagasBundle(
+                    scores={"faithfulness": None},
+                    unmeasured_metrics=["faithfulness"],
+                ),
+            )
+        client.table.return_value.insert.assert_not_called()
+
+    async def test_all_unmeasured_ragas_with_a_rubric_is_accepted(self):
+        """The asymmetry that must survive the F2 fix: the rubric half carries a
+        real score, so the row is worth keeping even with every metric NULL.
+        """
         client = _mock_client()
         await EvaluationResultsRepository(client).record_evaluation(
             query="q",
@@ -193,8 +217,13 @@ class TestPartialBundles:
                 scores={"faithfulness": None},
                 unmeasured_metrics=["faithfulness"],
             ),
+            rubric=_rubric(),
         )
-        assert _inserted(client)["ragas_aggregate"] is None
+        row = _inserted(client)
+        assert row["ragas_aggregate"] is None
+        assert row["faithfulness"] is None
+        assert row["rubric_aggregate"] == 4.0
+        assert row["causal_validity"] == 4.0
 
     async def test_rubric_only_row_has_no_ragas_columns_set(self):
         client = _mock_client()
