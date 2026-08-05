@@ -109,19 +109,41 @@ def test_dormant_regression_job_is_preserved():
 # fixture eval as a quality gate would escape a fixed set entirely, and the
 # wrong mental model is the actual defect in #1485.
 #
-# docs/reports/ is excluded deliberately: those are dated records of what was
-# believed and measured at the time (e.g. dspy_lane_ab_20260718.md). Rewriting
-# a historical report to match today's naming would falsify the record.
-DOC_EXCLUDED_DIRS = {"reports", "archive", "node_modules"}
+# EXACTLY ONE exclusion, matched by prefix rather than by directory name:
+# docs/reports/ holds dated records of what was believed and measured at the
+# time (e.g. dspy_lane_ab_20260718.md), and rewriting a historical report to
+# match today's naming would falsify the record.
+#
+# The earlier part-name set {"reports", "archive", "node_modules"} silently
+# over-excluded. Measured on this tree: `docs/archive/ragas.md` and
+# `docs/plans/reports/x.md` were both dropped from the scan, while the repo's
+# real directory is docs/Archive (capital A) — so the lowercase entry matched
+# nothing here yet WOULD have hidden docs/Archive on a case-insensitive
+# checkout. A guard whose coverage depends on the developer's filesystem is
+# not a guard.
+#
+# docs/Archive is deliberately NOT excluded. It holds 1 .md with zero RAGAS
+# mentions, so excluding it buys nothing and costs coverage; exclusions should
+# be earned by a demonstrated conflict, not added pre-emptively. If an archived
+# doc ever legitimately needs the same historical-record rationale, add it then
+# — spelled `docs/Archive`, exactly. node_modules is likewise dropped: the glob
+# only matches *.md and there is no node_modules under docs/.
+DOC_SCAN_EXCLUDED_PREFIX = ("docs", "reports")
+
+
+def _is_scanned_doc(path: Path) -> bool:
+    """Whether a doc is in scope for the drift scan.
+
+    Extracted so the exclusion rule can be exercised over CONSTRUCTED paths —
+    the over-exclusion above was invisible to a test that only asserted which
+    real files were included.
+    """
+    return not path.is_relative_to(REPO_ROOT.joinpath(*DOC_SCAN_EXCLUDED_PREFIX))
 
 
 def _project_docs() -> list:
     paths = [REPO_ROOT / "README.md", *(REPO_ROOT / "docs").rglob("*.md")]
-    return [
-        p
-        for p in paths
-        if p.exists() and not (DOC_EXCLUDED_DIRS & set(p.relative_to(REPO_ROOT).parts))
-    ]
+    return [p for p in paths if p.exists() and _is_scanned_doc(p)]
 
 
 def test_doc_scan_actually_covers_the_known_ragas_docs():
@@ -129,6 +151,32 @@ def test_doc_scan_actually_covers_the_known_ragas_docs():
     covered = {p.name for p in _project_docs()}
     for expected in ("README.md", "ONBOARDING.md", "LLM_CONFIGURATION.md"):
         assert expected in covered, f"doc scan missed {expected}"
+
+
+def test_only_docs_reports_is_excluded_from_the_scan():
+    """Over-exclusion is the failure a coverage-only test cannot see."""
+    assert _is_scanned_doc(REPO_ROOT / "docs" / "archive" / "ragas.md"), (
+        "a lowercase docs/archive path must be scanned — excluding it by bare "
+        "directory name is a case-sensitivity trap"
+    )
+    assert _is_scanned_doc(REPO_ROOT / "docs" / "Archive" / "ragas.md")
+    assert _is_scanned_doc(REPO_ROOT / "docs" / "plans" / "reports" / "x.md"), (
+        "only docs/reports/ is a historical record; a nested reports/ dir is not"
+    )
+    assert _is_scanned_doc(REPO_ROOT / "README.md")
+    assert not _is_scanned_doc(REPO_ROOT / "docs" / "reports" / "dspy_lane_ab_20260718.md")
+
+
+def test_nothing_outside_docs_reports_is_excluded_in_practice():
+    """Applies the rule to the REAL tree, so a future glob typo shows up here."""
+    everything = [REPO_ROOT / "README.md", *(REPO_ROOT / "docs").rglob("*.md")]
+    scanned = set(_project_docs())
+    over_excluded = [
+        str(p.relative_to(REPO_ROOT))
+        for p in everything
+        if p.exists() and p not in scanned and _is_scanned_doc(p)
+    ]
+    assert not over_excluded, f"docs dropped from the scan for no stated reason: {over_excluded}"
 
 
 def test_no_doc_still_calls_the_fixture_job_a_rag_quality_eval():
