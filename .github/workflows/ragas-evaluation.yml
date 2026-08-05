@@ -164,9 +164,9 @@ jobs:
           name: ragas-evaluation-results
           path: ragas-results/
 
-      - name: Check for quality regression
+      - name: Check fixture judge-drift regression
         run: |
-          echo "Checking for RAG quality regression..."
+          echo "Checking for fixture judge-drift regression..."
           if [ -f ragas-results/evaluation-report.json ]; then
             python3 << 'PYEOF'
           import json
@@ -202,19 +202,27 @@ jobs:
                     'regression check.'.format(total))
               sys.exit(0)
 
+          # Fail closed on an unmeasured metric. The old `score is not None and
+          # score < threshold` SKIPPED a missing metric and then reported
+          # success, and the all-zero check above only catches the 0.0
+          # fabrication mode — #1488 makes unjudged metrics None/missing
+          # instead, which would dodge both. A metric we could not measure
+          # makes its threshold unverifiable; that must block, never pass.
           failed = []
           for metric, threshold in thresholds.items():
               score = report.get(f'avg_{metric}')
-              if score is not None and score < threshold:
+              if score is None:
+                  failed.append(f'{metric}: unmeasured — threshold unverifiable')
+              elif score < threshold:
                   failed.append(f'{metric}: {score:.3f} < {threshold}')
 
           if failed:
-              print('::error::RAG quality regression detected!')
+              print('::error::Fixture judge-drift regression detected!')
               for f in failed:
                   print(f'  - {f}')
               sys.exit(1)
           else:
-              print('::notice::All RAG quality thresholds passed')
+              print('::notice::All fixture judge-drift thresholds passed')
           PYEOF
           else
             echo "::warning::Evaluation report not found, skipping regression check"

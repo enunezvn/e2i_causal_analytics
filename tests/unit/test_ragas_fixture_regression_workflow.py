@@ -204,3 +204,96 @@ def test_smoke_workflow_header_uses_the_current_name():
     """ragas-smoke.yml's comments name its counterpart; behaviour untouched."""
     text = (REPO_ROOT / ".github" / "workflows" / "ragas-smoke.yml").read_text()
     assert "RAGAS Evaluation" not in text, "stale workflow name in ragas-smoke.yml comments"
+
+
+# ---------------------------------------------------------------------------
+# Rename blast radius, part 2: STEPS and RUN blocks (codex iter-6 HIGH)
+# ---------------------------------------------------------------------------
+#
+# test_no_job_claims_to_evaluate_production_rag_quality reads only job display
+# names, so four strings inside the dormant ragas-regression job survived the
+# rename: a step name, an echo, and two ::error::/::notice:: lines all claiming
+# "RAG quality". On the restore path the header contemplates (re-adding the
+# push/pull_request triggers), PR logs would report RAG-quality pass/fail from
+# the FIXTURE evaluator — the 0.804-reads-as-production defect #1485 exists to
+# fix, printed straight into CI output.
+#
+# Parsed YAML, not a raw-text regex: the header comments legitimately say
+# "DOES NOT MEASURE PRODUCTION RAG QUALITY", and parsing drops comments for
+# free. No framing exemption — these strings land in CI logs where a comment
+# three screens up is not visible, so "RAG quality regression detected!" is
+# wrong regardless of what the file says elsewhere.
+
+_QUALITY_CLAIMS = ("rag quality", "quality regression")
+
+
+def _job_step_strings() -> list:
+    """(job_id, where, text) for every step name and run block in the workflow."""
+    out = []
+    for job_id, job in (_load_workflow().get("jobs") or {}).items():
+        for index, step in enumerate(job.get("steps") or []):
+            if step.get("name"):
+                out.append((job_id, f"step[{index}].name", step["name"]))
+            if step.get("run"):
+                out.append((job_id, f"step[{index}].run", step["run"]))
+    return out
+
+
+def test_no_step_or_run_block_claims_rag_quality():
+    offenders = []
+    for job_id, where, text in _job_step_strings():
+        for lineno, line in enumerate(text.splitlines(), 1):
+            lowered = line.lower()
+            if any(claim in lowered for claim in _QUALITY_CLAIMS):
+                offenders.append(f"{job_id}:{where}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "workflow steps still claim RAG quality; this job scores a static fixture "
+        "and these strings reach CI logs:\n" + "\n".join(offenders)
+    )
+
+
+def test_step_scan_actually_reaches_the_dormant_job():
+    """Guard the guard: the strings at issue live in ragas-regression's run block."""
+    scanned = {job_id for job_id, _, _ in _job_step_strings()}
+    assert "ragas-regression" in scanned, "step scan never reached the dormant job"
+    assert "ragas-evaluation" in scanned
+
+
+# ---------------------------------------------------------------------------
+# Dormant job's threshold loop must fail closed (codex iter-6, LATENT)
+# ---------------------------------------------------------------------------
+#
+# `if score is not None and score < threshold` silently SKIPS a missing metric,
+# then prints "All ... thresholds passed". The all-zero degenerate check only
+# catches `== 0.0`, the OLD fabrication mode. Sibling lane #1488 makes unjudged
+# metrics None/missing rather than 0.0, so post-merge a degenerate report would
+# dodge both and report success on an unverifiable report.
+#
+# UNREACHABLE TODAY (verified, not assumed): the workflow is dispatch-only, the
+# job needs ragas-evaluation, GitHub applies implicit success() to its `if:`,
+# and the eval step runs --fail-on-threshold which post-#1488 fails closed on
+# unmeasured metrics — so any report reaching this job has all four metrics
+# measured. Fixed anyway because it is the same latent-fail-open-goes-live
+# class as check_thresholds, whose dead guards went live when safe_score died.
+
+
+def _dormant_run_block() -> str:
+    job = _load_workflow()["jobs"]["ragas-regression"]
+    return "\n".join(step.get("run", "") for step in job.get("steps") or [])
+
+
+def test_dormant_regression_job_fails_closed_on_an_unmeasured_metric():
+    run = _dormant_run_block()
+    # Comment lines are stripped before the pattern check: the fix documents
+    # the old `score is not None and ...` skip by quoting it, and a guard that
+    # cannot tell a comment from live code would forbid explaining the defect
+    # it exists to prevent.
+    code = "\n".join(line for line in run.splitlines() if not line.strip().startswith("#"))
+    assert "is not None and" not in code, (
+        "the threshold loop still skips a missing metric instead of blocking on it"
+    )
+    lowered = run.lower()
+    assert "unverifiable" in lowered or "unmeasured" in lowered, (
+        "the run block must name an unmeasured metric as unverifiable, mirroring "
+        "check_thresholds' fail-closed contract"
+    )
