@@ -11,12 +11,17 @@ metric to 0 — the exact silent 40%-of-zero blend #1487 forbids. Python must
 diverge there, deliberately and visibly.
 """
 
+import copy
+import json
 import math
+import pickle
 import re
 import warnings
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
+from pydantic import ValidationError
 
 from src.agents.feedback_learner.ragas_scoring import (
     HEURISTIC_EVALUATION_METHOD,
@@ -270,6 +275,84 @@ class TestBundleImmutability:
             unmeasured_metrics=["answer_relevancy"],
         )
         assert RagasBundle.model_validate(bundle.model_dump()).weighted == bundle.weighted
+
+
+class TestBundleCopySemantics:
+    """codex iter-2. Making ``scores`` read-only cost the bundle its copyability.
+
+    ``MappingProxyType`` is not picklable, and pydantic's own ``__deepcopy__``
+    copies ``__dict__`` directly rather than going through serialization — so
+    all three of these worked before the immutability fix and stopped after it.
+    Nothing copies a bundle today, but #1489 hands it to an offline producer,
+    and the failure names ``mappingproxy`` with ``RagasBundle`` nowhere in the
+    message.
+    """
+
+    def _bundle(self) -> RagasBundle:
+        return RagasBundle(
+            scores={"faithfulness": 0.8, "answer_relevancy": None},
+            unmeasured_metrics=["answer_relevancy"],
+            evaluation_model="gpt-4o",
+            evaluation_duration_ms=2650,
+        )
+
+    def test_bundle_survives_deepcopy(self):
+        bundle = self._bundle()
+        assert dict(copy.deepcopy(bundle).scores) == dict(bundle.scores)
+
+    def test_bundle_survives_a_pickle_round_trip(self):
+        bundle = self._bundle()
+        assert dict(pickle.loads(pickle.dumps(bundle)).scores) == dict(bundle.scores)
+
+    def test_bundle_survives_model_copy_deep(self):
+        bundle = self._bundle()
+        assert dict(bundle.model_copy(deep=True).scores) == dict(bundle.scores)
+
+    # --- guards below are green-after, NOT red-first: they pin properties the
+    # --- fix must not lose, rather than behaviour it introduces.
+
+    def test_immutability_survives_both_round_trips(self):
+        """Guard (green-after). A copy that came back mutable would silently
+        undo the F3 fix for every consumer downstream of a copy."""
+        for restored in (
+            copy.deepcopy(self._bundle()),
+            pickle.loads(pickle.dumps(self._bundle())),
+            self._bundle().model_copy(deep=True),
+        ):
+            assert type(restored.scores) is MappingProxyType
+            assert isinstance(restored.unmeasured_metrics, tuple)
+            with pytest.raises(TypeError):
+                restored.scores["faithfulness"] = 2.0  # type: ignore[index]
+
+    def test_equality_holds_across_both_round_trips(self):
+        """Guard (green-after)."""
+        bundle = self._bundle()
+        assert copy.deepcopy(bundle) == bundle
+        assert pickle.loads(pickle.dumps(bundle)) == bundle
+        assert bundle.model_copy(deep=True) == bundle
+
+    def test_a_tampered_payload_is_refused_on_rebuild(self):
+        """Guard (green-after), and the reason this fix routes through
+        ``model_validate`` rather than restoring ``__dict__``: an unpickle
+        cannot smuggle in a bundle the constructor would have refused."""
+        data = self._bundle().model_dump()
+        data["scores"]["faithfulness"] = 2.0
+        with pytest.raises(ValidationError):
+            RagasBundle.model_validate(data)
+
+    def test_the_sanctioned_serialisation_surface_is_json_safe(self):
+        """Guard (green-after). ``json.dumps(bundle.scores)`` is NOT supported —
+        a mappingproxy is not JSON-serialisable. Consumers serialise via
+        ``model_dump``, ``as_signal_scores`` or ``measured``, all of which hand
+        back a plain dict; those are the surfaces the writers actually use.
+        """
+        bundle = self._bundle()
+        assert json.loads(json.dumps(bundle.as_signal_scores())) == {"faithfulness": 0.8}
+        assert json.loads(json.dumps(bundle.measured)) == {"faithfulness": 0.8}
+        assert json.loads(json.dumps(bundle.model_dump()))["scores"] == {
+            "faithfulness": 0.8,
+            "answer_relevancy": None,
+        }
 
 
 class TestCombinedScore:

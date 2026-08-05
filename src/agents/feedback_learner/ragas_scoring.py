@@ -64,6 +64,7 @@ two from drifting. Do not call the SQL function on a partial row.
 
 from __future__ import annotations
 
+import copy
 import math
 from decimal import ROUND_HALF_UP, Decimal
 from types import MappingProxyType
@@ -137,7 +138,10 @@ class RagasBundle(BaseModel):
         scores: Metric name to judged value in [0, 1]. ``None`` marks a metric
             the judge attempted but could not score (#1488); a metric simply
             absent from the mapping was never evaluated by this producer. Stored
-            read-only — see the validator.
+            read-only — see the validator. ``json.dumps(bundle.scores)`` is NOT
+            supported (a mappingproxy is not JSON-serialisable); serialise via
+            ``model_dump()``, :meth:`as_signal_scores` or :attr:`measured`, each
+            of which hands back a plain dict.
         unmeasured_metrics: Metric names the judge attempted but could not
             score, mirroring #1488's ``metadata["unmeasured_metrics"]``. A
             ``None`` value in ``scores`` means the same thing; supplying either
@@ -267,6 +271,28 @@ class RagasBundle(BaseModel):
             "measured_weight": sum(RAGAS_METRIC_WEIGHTS[name] for name in measured),
         }
 
+    def __reduce__(self) -> Any:
+        """Pickle through serialization, because ``MappingProxyType`` cannot be
+        pickled directly (codex iter-2).
+
+        Routing via :func:`_rebuild_bundle` means an unpickled bundle is
+        RE-VALIDATED: a tampered payload cannot restore a bundle the constructor
+        would have refused, which restoring ``__dict__`` wholesale would allow.
+        """
+        return (_rebuild_bundle, (self.model_dump(),))
+
+    def __deepcopy__(self, memo: Optional[Dict[int, Any]] = None) -> "RagasBundle":
+        """Deep-copy through serialization.
+
+        ``__reduce__`` alone is not enough: pydantic's ``BaseModel`` defines its
+        own ``__deepcopy__`` that copies ``__dict__`` directly, so it wins over
+        the reduce protocol and hits the proxy anyway.
+        """
+        result = _rebuild_bundle(copy.deepcopy(self.model_dump(), memo))
+        if memo is not None:
+            memo[id(self)] = result
+        return result
+
     def as_signal_scores(self) -> Dict[str, float]:
         """Payload for ``learning_signals.ragas_scores`` (JSONB).
 
@@ -275,6 +301,16 @@ class RagasBundle(BaseModel):
         ``calculate_combined_score()`` read out of the JSONB.
         """
         return dict(self.measured)
+
+
+def _rebuild_bundle(data: Dict[str, Any]) -> RagasBundle:
+    """Reconstruct a bundle from a dumped payload (pickle/deepcopy entry point).
+
+    Module-level because ``__reduce__`` resolves it by qualified name at
+    unpickle time. Deliberately goes through ``model_validate`` so every
+    reconstruction re-runs the full validator.
+    """
+    return RagasBundle.model_validate(data)
 
 
 def combined_score(
