@@ -3,10 +3,15 @@
 Before this, the leg had exactly one feedstock: a JSON file named by
 ``DSPY_RAG_RECORDS_PATH`` and produced by a MANUAL ``scripts/replay_golden_set.py``
 run. So the "nightly" GEPA cycle could never consume fresh records unattended —
-its steady state was a permanent skip. Live traffic already writes the same
-judgeable triple to ``learning_signals`` (``training_input`` = the user query,
-``training_output`` = the answer, ``retrieved_chunks`` = the evidence), so the
-DB is the unattended source the file source could never be.
+its steady state was a permanent skip. Live traffic writes the same judgeable
+triple to ``learning_signals``, so the DB is the unattended source the file
+source could never be — but only two thirds of it are written TODAY:
+``training_input`` (the user query) and ``training_output`` (the answer) are
+populated on 3,523 of 3,959 live rows, while ``retrieved_chunks`` has no
+producer on this branch and arrives with #1489 deferral 1 on the sibling
+``fix/1489-d1-ragas-producer``. That is why the DB tests below construct rows
+with evidence rather than reading any, and why the real-DB test asserts today's
+zero rather than a future non-zero.
 
 The two are unified here behind ``load_rag_examples`` so both emit the IDENTICAL
 ``dspy.Example`` shape — the property that makes them interchangeable to GEPA,
@@ -420,11 +425,13 @@ class TestDbSource:
     def test_chunk_dicts_and_bare_strings_both_read(self) -> None:
         """Tolerant on read, by evidence, not by hedging.
 
-        The #1489 producer writes ``{"content": ...}`` dicts
-        (src/rag/retrieved_chunks.py) but migration 022 put no shape constraint
-        on the JSONB column, and the replay path's own contexts are bare
-        strings. A reader that understood only one shape would silently drop
-        every row written by the other producer.
+        Migration 022 put no shape constraint on the JSONB column, and the two
+        writers that will reach it differ: the replay path's contexts are bare
+        strings, while #1489 deferral 1's producer writes ``{"content": ...}``
+        dicts (``src/rag/retrieved_chunks.py`` — NOT on this branch; it lands
+        with the sibling ``fix/1489-d1-ragas-producer``). A reader that
+        understood only one shape would silently drop every row written by the
+        other producer.
         """
         import asyncio
 
