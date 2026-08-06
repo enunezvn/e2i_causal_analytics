@@ -131,6 +131,23 @@ def judged_turns(
             "read as a successful one"
         )
 
+    # A block whose own n_samples disagrees with its row count is PARTIAL: the
+    # judge was killed or its output was cut mid-run. The rows that did arrive
+    # look perfectly valid one at a time, and evaluation_results has no run id
+    # or run-status column that could mark them as coming from an incomplete
+    # run — so they would enter v_ragas_performance_trends as if the run had
+    # finished. Persisting a bad MEASUREMENT is the point of this module;
+    # persisting a partial RUN as a whole one is not. Absence of n_samples is
+    # not a truncation claim (a caller may assemble a block by hand), so the
+    # guard keys on disagreement.
+    claimed = block.get("n_samples")
+    if isinstance(claimed, int) and not isinstance(claimed, bool) and claimed != len(rows):
+        raise RagasPersistenceError(
+            f"judge block claims n_samples={claimed} but carries {len(rows)} per_sample "
+            "rows — the output is truncated or partially merged, and nothing in "
+            "evaluation_results could mark its rows as coming from an incomplete run"
+        )
+
     index = _index_records(records)
     turns: List[JudgedTurn] = []
     for row in rows:

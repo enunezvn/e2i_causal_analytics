@@ -221,6 +221,36 @@ class TestJudgedTurns:
         turn = judged_turns(_block([_row("q01", None, 0.5)]), [_record("q01", ["ctx"])])[0]
         assert turn.bundle.coverage["unmeasured"] == ["faithfulness"]
 
+    def test_a_truncated_block_raises(self):
+        """A block whose own ``n_samples`` exceeds its row count is PARTIAL —
+        the judge was killed or the output was cut mid-run. The rows that did
+        arrive look perfectly valid individually, and ``evaluation_results``
+        has no run id or run status column that could mark them as coming from
+        an incomplete run, so they would enter the trend view as if the run had
+        finished. Persisting a bad MEASUREMENT is right (that is the
+        regression signal); persisting a partial RUN as a whole one is not.
+        (codex iter-3 HIGH, reproduced: a block claiming n_samples=10 with 5
+        rows produced 5 turns.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        block = _block([_row(f"q{i:02d}", 0.9, 0.5) for i in range(1, 6)])
+        block["n_samples"] = 10
+
+        with pytest.raises(RagasPersistenceError, match="n_samples"):
+            judged_turns(block, [_record(f"q{i:02d}", ["ctx"]) for i in range(1, 11)])
+
+    def test_a_block_without_n_samples_is_still_accepted(self):
+        """``n_samples`` is the judge's own bookkeeping; a caller assembling a
+        block by hand need not supply it, and absence is not a truncation
+        claim. The guard must key on DISAGREEMENT, not on presence."""
+        from src.rag.ragas_persistence import judged_turns
+
+        block = _block([_row("q01", 0.9, 0.5)])
+        del block["n_samples"]
+
+        assert len(judged_turns(block, [_record("q01", ["ctx"])])) == 1
+
     def test_malformed_block_raises(self):
         from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
 

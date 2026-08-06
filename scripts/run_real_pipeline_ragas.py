@@ -60,6 +60,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.optimization.dspy_lane_ab import _ragas_consistency_error  # noqa: E402
 from src.rag.ragas_persistence import (  # noqa: E402
     RagasPersistenceError,
     judged_turns,
@@ -268,9 +269,27 @@ def persist_run(
     (an unjoinable sample, a heuristic-contaminated one) costs no DB
     connection and writes nothing.
 
+    Persistence deliberately survives a FAILING verdict — a regression has to
+    reach the trend view or the view cannot show one. It does NOT survive a
+    block that cannot be reconciled against its own rows: stale, hand-edited
+    or partially merged output is untrustworthy as a whole rather than merely
+    low-scoring, and ``evaluation_results`` has no run-status column that
+    could mark such rows afterwards. That reconciliation is
+    ``_ragas_consistency_error``, the same helper the gate uses — reused
+    rather than reimplemented so the two cannot drift.
+
     Raises:
-        RagasPersistenceError: Any turn could not be persisted faithfully.
+        RagasPersistenceError: The block is inconsistent, or any turn could
+            not be persisted faithfully.
     """
+    inconsistent = _ragas_consistency_error(block)
+    if inconsistent:
+        raise RagasPersistenceError(
+            f"refusing to persist an inconsistent judge block ({inconsistent}); its "
+            "aggregates no longer describe its own rows, so the run is untrustworthy "
+            "as a whole rather than merely low-scoring"
+        )
+
     turns = judged_turns(block, records, judge_model=JUDGE_MODEL)
 
     async def _run() -> Dict[str, Any]:

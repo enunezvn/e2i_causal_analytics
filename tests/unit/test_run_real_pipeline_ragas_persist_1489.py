@@ -269,6 +269,26 @@ def test_a_blocked_run_still_exits_1_with_fail_on_threshold(wired, tmp_path):
     assert repo.record_evaluation.await_count == 10
 
 
+def test_an_inconsistent_block_is_refused_at_persist_time(wired, tmp_path, monkeypatch):
+    """A block whose aggregates no longer describe its own rows is stale,
+    hand-edited or partially merged — structurally untrustworthy rather than
+    merely low-scoring. Persisting a bad measurement is right; persisting one
+    whose provenance cannot be reconciled is not, and evaluation_results has
+    no run-status column that could mark it afterwards. (codex iter-3.)"""
+    records_path, _, repo = wired
+    block = json.loads(json.dumps(_BLOCK))
+    # Aggregates kept, rows halved: the judge was cut off mid-run.
+    block["per_sample"] = block["per_sample"][:5]
+    monkeypatch.setattr(
+        driver, "run_judge", lambda samples, mode, container, model_label, timeout: block
+    )
+
+    rc = driver.main(["--records", str(records_path), "--judge-mode", "local"])
+
+    assert rc == 1
+    repo.record_evaluation.assert_not_awaited()
+
+
 def test_heuristic_contamination_is_still_refused_at_persist_time(wired, tmp_path, monkeypatch):
     """Persisting regardless of the verdict must not let word-overlap scores
     into the table — evaluation_results has no column that could mark them."""
