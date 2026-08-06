@@ -7,11 +7,34 @@ read the live ``business_metrics`` fact table. Shard 02 stamps synthetic rows wi
 never surfaces synthetic KPI prose. These tests assert the ``.eq('is_synthetic',
 False)`` predicate is appended to the source query, using a fluent fake that records
 every ``.eq`` call (no DB, no mock of the unit under test).
+
+Env isolation (#1495): ``apply_provenance_filter`` is deliberately gated on
+``E2I_INCLUDE_SYNTHETIC`` (WS-SYNTH showcase instances include synthetic KPI prose
+so the corpus isn't empty), and that var IS set on showcase/dev hosts (this repo's
+``.env`` plus the find_dotenv walk-up class, PR #1414). The real-mode tests below
+therefore pin real mode explicitly via an autouse ``delenv``, and a companion test
+pins the showcase branch (filter skipped) so both sides of the gate stay covered.
 """
 
 from typing import Any
 
+import pytest
+
 from src.rag import corpus_ingestion as ci
+
+
+@pytest.fixture(autouse=True)
+def _pin_real_mode_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin real mode for every test in this module regardless of host env.
+
+    Without this, any host exporting ``E2I_INCLUDE_SYNTHETIC`` (showcase/dev
+    boxes) makes production legitimately skip the filter and the four
+    real-mode tests fail for an environmental — not functional — reason.
+    Showcase-mode tests re-set the var explicitly with ``monkeypatch.setenv``
+    (the shared per-test monkeypatch applies the delenv first, then the
+    test-body setenv, so both compose deterministically).
+    """
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
 
 
 class _RecordingQuery:
@@ -89,3 +112,21 @@ def test_existing_corpus_descriptions_excludes_synthetic() -> None:
     assert ("is_synthetic", False) in calls
     # the agent_name filter must still be present (real reader, not vacuous).
     assert ("agent_name", "corpus_ingestion") in calls
+
+
+def test_fetch_brand_rows_showcase_mode_skips_synthetic_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Characterization of the OTHER side of the gate (#1495, WS-SYNTH).
+
+    On a showcase instance (``E2I_INCLUDE_SYNTHETIC=true``)
+    ``apply_provenance_filter`` must SKIP the ``.eq('is_synthetic', False)``
+    predicate so synthetic KPI prose can populate the corpus. The brand
+    predicate must still be present — proof the reader actually ran and the
+    absence assertion is not vacuous.
+    """
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    calls: list[tuple[Any, ...]] = []
+    ci._fetch_brand_rows(_RecordingClient(calls), "Kisqali", 50, latest_per_combo=False)
+    assert ("brand", "Kisqali") in calls
+    assert ("is_synthetic", False) not in calls
