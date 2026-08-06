@@ -1,4 +1,13 @@
-"""SSOT provenance helper: default-exclude predicate + covariate drop-list."""
+"""SSOT provenance helper: default-exclude predicate + covariate drop-list.
+
+Env isolation (#1497, same class as #1495): ``apply_provenance_filter`` is
+deliberately gated on ``E2I_INCLUDE_SYNTHETIC`` (WS-SYNTH showcase instances
+skip the predicate), and that var IS set on showcase/dev hosts (this repo's
+``.env`` plus the find_dotenv walk-up class, PR #1414). Real-mode tests below
+therefore pin real mode via an autouse ``delenv``; the WS-SYNTH tests re-set
+the var explicitly with ``monkeypatch.setenv`` in the test body, which runs
+after the autouse setup, so both sides of the gate stay covered.
+"""
 
 from unittest.mock import MagicMock
 
@@ -10,6 +19,21 @@ from src.repositories.provenance import (
     apply_provenance_filter,
     drop_provenance_cols,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pin_real_mode_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin real mode for every test in this module regardless of host env.
+
+    Without this, any host exporting ``E2I_INCLUDE_SYNTHETIC`` (showcase/dev
+    boxes) makes production legitimately skip the filter and
+    ``test_apply_filter_default_excludes`` fails for an environmental — not
+    functional — reason (and ``test_apply_filter_opt_in_is_noop`` passes
+    vacuously). Showcase-mode tests re-set the var explicitly with
+    ``monkeypatch.setenv`` (the shared per-test monkeypatch applies the delenv
+    first, then the test-body setenv, so both compose deterministically).
+    """
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
 
 
 @pytest.mark.unit

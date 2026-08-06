@@ -10,6 +10,13 @@ These tests pin the ``.eq("is_synthetic", False)`` predicate per read path via
 recording supabase-style query builders (mirrors
 ``test_causal_path_provenance.py``). The faithful live-DB proofs live in
 ``tests/integration/test_has_provenance_family_894.py``.
+
+Env isolation (#1497, same class as #1495): ``apply_provenance_filter`` is
+deliberately gated on ``E2I_INCLUDE_SYNTHETIC`` (WS-SYNTH showcase instances
+skip the predicate), and that var IS set on showcase/dev hosts (this repo's
+``.env`` plus the find_dotenv walk-up class, PR #1414). Every test here
+exercises the kwarg-driven opt-in/real-mode contract — none reads the ambient
+env — so an autouse ``delenv`` pins real mode for the whole module.
 """
 
 from __future__ import annotations
@@ -20,6 +27,20 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pin_real_mode_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin real mode for every test in this module regardless of host env.
+
+    Without this, any host exporting ``E2I_INCLUDE_SYNTHETIC`` (showcase/dev
+    boxes) makes production legitimately skip the filter and every
+    ``*_excludes_synthetic`` pin here (49 tests) fails for an environmental —
+    not functional — reason (and the ``*_opt_in`` absence assertions pass
+    vacuously).
+    """
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+
 
 # =============================================================================
 # Recording query builders (sync + async execute variants: the A/B-side repos
