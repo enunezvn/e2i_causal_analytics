@@ -9,13 +9,20 @@ the same silent-no-op class as ``OPIK_ENABLED`` / ``OPENAI_API_KEY`` /
 ``LLM_MODEL``, each of which carries the same warning in the compose file.
 
 ``DSPY_RAG_RECORDS_PATH`` also has a trap the other flags do not: it names a
-*filesystem path*, and it is resolved inside the container. Every data volume in
-this compose is a **named docker volume**, not a host bind mount, so a host path
-(the natural thing for an operator to write, since the replay that produces the
-file runs on the host) resolves to "records file not found" and the leg skips
-forever while looking configured. The compose comment has to say so — hence the
-comment-content assertions here, which are unusual but deliberate: the
-documentation IS the mitigation for a trap the schema cannot express.
+*filesystem path*, and it is resolved inside the container. Every volume on the
+services that merge ``x-common-env`` is a **named docker volume**, not a host
+bind mount, so a host path (the natural thing for an operator to write, since
+the replay that produces the file runs on the host) resolves to "records file
+not found" and the leg skips forever while looking configured. Other services in
+that file — bentoml, feast, prometheus — DO bind-mount host paths, which is why
+the claim is scoped rather than global; an earlier version of this docstring and
+of the compose comment said "every data volume in this file", which was simply
+false and which the tests below now prove both ways.
+
+The compose comment has to say so — hence the comment-content assertions here,
+which are unusual but deliberate: the documentation IS the mitigation for a trap
+the schema cannot express, and a test that pins a wrong claim launders it into
+an invariant.
 """
 
 from __future__ import annotations

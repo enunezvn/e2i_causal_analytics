@@ -103,18 +103,28 @@ FEEDSTOCK_TABLE = "learning_signals"
 # because the usable rows could then be sitting just past the boundary.
 DB_ROW_CAP = 500
 
-# Ceiling on ONE turn's total judged text (query + answer + every context).
-# DB_ROW_CAP bounds how MANY turns are read; nothing bounded how big one is, and
-# the DB source's feedstock is uncurated live traffic rather than a curated
-# golden set. Every character here is sent to the gpt-4o judge on every metric
-# call for every GEPA candidate, so a single pathological answer is a cost and
-# timeout risk the DSPY_RAG_MAX_METRIC_CALLS budget cannot see.
+# Ceiling on ONE example's stored text (query + answer + every context).
+# DB_ROW_CAP bounds how MANY turns are read; nothing bounded how big one is.
 #
-# 50k chars is roughly 12k tokens — far above any real answer (the producer
+# What this does and does not bound, precisely — the first version of this
+# comment got it wrong. Reading the metric (ragas_metric._extract): the judged
+# QUESTION comes from the gold example and the judged CONTEXTS fall back to it,
+# so the cap does bound those. The judged ANSWER does NOT come from here — it is
+# `_field(pred, ...)`, the candidate's freshly generated synthesis — so nothing
+# in this module can bound the answer the judge actually reads. The stored
+# answer is still capped because it rides the example into GEPA's reflective
+# payload, which is its own token cost.
+#
+# 50k chars is roughly 12k tokens — far above any real turn (the #1489 producer
 # already caps each stored chunk at 4,000 chars) while keeping a full 20-example
 # pass bounded. An oversized turn is DROPPED, never truncated: a shortened
 # answer judged against full contexts scores badly for a reason unrelated to the
 # prompt, which is the same fabricated-signal harm as reading a synthetic query.
+#
+# Applied to BOTH sources. A turn kept or dropped purely by which backing
+# supplied it would break the one property that makes this a seam rather than
+# two providers sharing a name — and the file source, being authoritative, is
+# the path an operator is more likely to point at deliberately.
 MAX_TURN_CHARS = 50_000
 
 SOURCE_FILE = "file"
@@ -221,6 +231,14 @@ def _examples(turns: Sequence[_Turn]) -> Tuple[Any, ...]:
     return tuple(_example_from_turn(t) for t in turns)
 
 
+def _oversized(query: str, answer: str, contexts: Sequence[str]) -> bool:
+    """Whether one turn exceeds :data:`MAX_TURN_CHARS` of stored text.
+
+    Shared by both sources on purpose — see the constant's comment.
+    """
+    return len(query) + len(answer) + sum(len(c) for c in contexts) > MAX_TURN_CHARS
+
+
 def _turn_digest(turn: _Turn) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -247,6 +265,16 @@ def _turns_from_records(records: Iterable[Any]) -> List[_Turn]:
         answer = (rec.get("response_text") or "").strip()
         contexts = [c for c in (rec.get("contexts") or []) if isinstance(c, str) and c.strip()]
         if not query or not answer or not contexts:
+            continue
+        if _oversized(query, answer, contexts):
+            # Same ceiling the DB source applies. Skipped silently like every
+            # other filter on this path; the leg's "N usable of M records"
+            # already surfaces the loss.
+            logger.warning(
+                "Replay record for %r skipped: larger than %d chars of stored text.",
+                query[:80],
+                MAX_TURN_CHARS,
+            )
             continue
         turns.append(
             _Turn(
@@ -389,8 +417,8 @@ def _turns_from_rows(rows: Iterable[Dict[str, Any]]) -> Tuple[List[_Turn], Dict[
         if not contexts:
             _drop("no readable evidence text in retrieved_chunks")
             continue
-        if len(query) + len(answer) + sum(len(c) for c in contexts) > MAX_TURN_CHARS:
-            _drop(f"turn larger than {MAX_TURN_CHARS} chars of judged text")
+        if _oversized(query, answer, contexts):
+            _drop(f"turn larger than {MAX_TURN_CHARS} chars of stored text")
             continue
         turns.append(_Turn(query=query, answer=answer, contexts=tuple(contexts)))
     return turns, drops

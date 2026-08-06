@@ -185,6 +185,34 @@ class TestBothSourcesEmitOneShape:
         assert f.inputs().toDict() == d.inputs().toDict()
         assert f.toDict() == d.toDict()
 
+    def test_the_size_cap_applies_to_both_sources(self, tmp_path: Path) -> None:
+        """A turn kept or dropped purely by backing source breaks the seam.
+
+        MAX_TURN_CHARS was first enforced only on the DB path, so an oversized
+        replay record survived while the identical DB row was dropped — and the
+        file source is the AUTHORITATIVE one, so the bypass was on the path more
+        likely to be used deliberately. The cap is about bounding what one
+        example costs downstream, which does not depend on where the row came
+        from.
+        """
+        import asyncio
+
+        from src.tasks import rag_example_sources as mod
+
+        huge = "x" * (mod.MAX_TURN_CHARS + 1)
+        file_batch = mod.records_batch(
+            str(_records_file(tmp_path, [_record("q", huge, ["ctx"]), _record("ok", "a", ["c"])]))
+        )
+        db = asyncio.run(
+            mod.db_batch(
+                client=_FakeClient(
+                    [_row("q", huge, [{"content": "ctx"}]), _row("ok", "a", [{"content": "c"}])]
+                )
+            )
+        )
+        assert [e.user_query for e in file_batch.examples] == ["ok"]
+        assert [e.user_query for e in db.examples] == ["ok"]
+
     def test_intent_is_the_one_field_the_db_cannot_supply(self, tmp_path: Path) -> None:
         """Records keep their routing label; DB turns honestly say UNKNOWN.
 
