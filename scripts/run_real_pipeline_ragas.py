@@ -434,11 +434,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("GATES PASSED")
 
     # #1489: land the judged samples in the schema #1487 built for them.
-    # Only on a PASSING run — a blocked run's numbers are precisely the ones
-    # not to write into v_ragas_performance_trends as if they were healthy
-    # measurements, and the gate has already said they cannot carry a verdict.
+    #
+    # Regardless of the VERDICT. Persisting only passing runs would make
+    # v_ragas_performance_trends survivorship-biased — a "daily RAGAS metric
+    # trends for monitoring" view that can only ever contain runs which
+    # already cleared the thresholds is structurally incapable of showing a
+    # decline, which is the one thing it exists to show. A faithfulness of
+    # 0.12 IS the measurement; the gate's job is to say so loudly and set the
+    # exit code, not to keep the number out of the table.
+    #
+    # Trustworthiness is enforced ROW-WISE instead, which is where it belongs:
+    # judged_turns refuses heuristic-contaminated samples, unjoinable
+    # provenance and malformed blocks, and a turn with no measured metric is
+    # skipped and counted. A judge that crashed never reaches here at all
+    # (JudgeOutputError, above).
     persistence_failed = False
-    if args.persist and passed:
+    if args.persist:
         try:
             report["persistence"] = persist_run(block, records, args.persist_signals)
         except RagasPersistenceError as exc:

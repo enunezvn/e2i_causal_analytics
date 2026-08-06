@@ -208,9 +208,49 @@ def test_the_report_records_what_was_persisted(wired, tmp_path):
     assert persistence["skipped_unscored"] == []
 
 
-def test_persist_is_skipped_when_the_gates_block(wired, tmp_path, capsys):
-    """A blocked run's numbers are exactly the ones not to write into the
-    trend view as if they were healthy measurements."""
+def test_a_threshold_failure_is_still_persisted(wired, tmp_path, capsys):
+    """A regression must reach the trend view, not vanish from it.
+
+    Persistence was originally gated on the run's verdict, on the reasoning
+    that a blocked run's numbers should not enter v_ragas_performance_trends
+    "as if they were healthy measurements". That was wrong, and codex iter-2
+    named why: a view that only ever contains PASSING runs is
+    survivorship-biased and structurally incapable of showing a decline —
+    which is the one thing "daily RAGAS metric trends for monitoring" exists
+    to show. A low faithfulness IS the measurement.
+
+    The verdict still governs the exit code and the report; it no longer
+    filters the database. Rows whose scores are not trustworthy are refused
+    row-wise instead, by judged_turns (heuristic contamination, unjoinable
+    provenance, missing metric keys) and by the no-measured-half skip.
+    """
+    records_path, _, repo = wired
+    out = tmp_path / "report.json"
+
+    rc = driver.main(
+        [
+            "--records",
+            str(records_path),
+            "--judge-mode",
+            "local",
+            "--faithfulness",
+            "0.99",
+            "--output",
+            str(out),
+        ]
+    )
+
+    printed = capsys.readouterr().out
+    assert "GATES BLOCKED" in printed
+    assert repo.record_evaluation.await_count == 10
+    report = json.loads(out.read_text())
+    assert report["passed"] is False
+    assert report["persistence"]["evaluation_results_written"] == 10
+    assert rc == 0  # no --fail-on-threshold
+
+
+def test_a_blocked_run_still_exits_1_with_fail_on_threshold(wired, tmp_path):
+    """Persisting a regression must not soften the gate that reports it."""
     records_path, _, repo = wired
 
     rc = driver.main(
@@ -221,24 +261,45 @@ def test_persist_is_skipped_when_the_gates_block(wired, tmp_path, capsys):
             "local",
             "--faithfulness",
             "0.99",
+            "--fail-on-threshold",
         ]
     )
 
+    assert rc == 1
+    assert repo.record_evaluation.await_count == 10
+
+
+def test_heuristic_contamination_is_still_refused_at_persist_time(wired, tmp_path, monkeypatch):
+    """Persisting regardless of the verdict must not let word-overlap scores
+    into the table — evaluation_results has no column that could mark them."""
+    records_path, _, repo = wired
+    block = json.loads(json.dumps(_BLOCK))
+    block["per_sample"][0]["evaluation_method"] = "fallback_heuristic"
+    monkeypatch.setattr(
+        driver, "run_judge", lambda samples, mode, container, model_label, timeout: block
+    )
+
+    rc = driver.main(["--records", str(records_path), "--judge-mode", "local"])
+
+    assert rc == 1
     repo.record_evaluation.assert_not_awaited()
-    assert "GATES BLOCKED" in capsys.readouterr().out
-    assert rc == 0  # no --fail-on-threshold
 
 
-def test_a_scoreless_row_blocks_the_gate_and_nothing_is_persisted(wired, tmp_path, monkeypatch):
-    """#1488's fail-closed guard is upstream of persistence and stays that way.
+def test_a_scoreless_row_blocks_the_gate_but_the_scored_rows_persist(wired, tmp_path, monkeypatch):
+    """#1488's fail-closed guard stays intact, and the valid rows still land.
 
     A row the judge covered but never scored BLOCKS the run
-    (``_ragas_scoreless_error``), so the persist step is never reached — the
-    partial numbers never enter v_ragas_performance_trends. Measured, not
-    assumed: this test was originally written expecting the persist step to
-    skip-and-count that row, and the guard fired first. That makes
-    ``skipped_unscored`` defence-in-depth on the module rather than a path the
-    default driver run can take."""
+    (``_ragas_scoreless_error``) — unchanged, that guard is deliberate shipped
+    behaviour. What changed is that blocking the VERDICT no longer blocks the
+    DATABASE: the nine rows the judge did score are real measurements and are
+    recorded, while the scoreless one is skipped and NAMED in the summary
+    rather than quietly contributing nothing.
+
+    Persisting it would be the actual harm — ``record_evaluation`` refuses a
+    row with no measured half because ``v_ragas_performance_trends
+    .evaluation_count`` is COUNT(*), so such a row inflates the denominator a
+    reader compares the averages against while contributing to none of them.
+    """
     records_path, _, repo = wired
     block = json.loads(json.dumps(_BLOCK))
     block["per_sample"][9]["answer_relevancy"] = None
@@ -249,11 +310,13 @@ def test_a_scoreless_row_blocks_the_gate_and_nothing_is_persisted(wired, tmp_pat
 
     driver.main(["--records", str(records_path), "--judge-mode", "local", "--output", str(out)])
 
-    repo.record_evaluation.assert_not_awaited()
     report = json.loads(out.read_text())
     assert report["passed"] is False
     assert any("scoreless" in f for f in report["failures"])
-    assert "persistence" not in report
+
+    assert repo.record_evaluation.await_count == 9
+    assert report["persistence"]["evaluation_results_written"] == 9
+    assert report["persistence"]["skipped_unscored"] == ["q10"]
 
 
 def test_persist_does_not_run_the_rubric_judge_by_default(wired, tmp_path):
