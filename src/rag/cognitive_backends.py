@@ -514,6 +514,15 @@ class SignalCollector:
                     training_input=str(signal.get("input", "")),
                     training_output=str(signal.get("output", "")),
                     signal_details={**signal, "domain_signal": "dspy_signal"},
+                    # #1489 deferral 1: the Reflector attaches the turn's real
+                    # evidence to its ``agent`` signal only, so these are None
+                    # on the other two and record_learning_signal strips them,
+                    # leaving those rows' columns at the '[]' schema default.
+                    # A zero-retrieval agent turn still writes [] — "measured,
+                    # and it was empty" is the pipeline's commonest outcome
+                    # (hit rate 3/10) and must not read as "never written".
+                    retrieved_chunks=signal.get("retrieved_chunks"),
+                    retrieval_scores=signal.get("retrieval_scores"),
                 )
 
                 # cycle_id maps onto learning_signals.cycle_id, a NULLABLE UUID

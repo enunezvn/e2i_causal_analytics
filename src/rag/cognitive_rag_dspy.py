@@ -111,6 +111,37 @@ class Evidence:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+# Per-chunk cap for learning_signals.retrieved_chunks (#1489). Retrieval
+# chunks are normally hundreds to a couple of thousand characters, so this cap
+# is not reached on real traffic; it exists so one pathological evidence item
+# cannot write an unbounded JSONB blob on a live turn. A cut chunk is MARKED
+# (``truncated``) rather than silently shortened — an unmarked cut would
+# understate what the answer was grounded in, and faithfulness is judged
+# against exactly this text.
+MAX_CHUNK_CONTENT_CHARS = 4000
+
+
+def _chunks_from_evidence(evidence_board: List["Evidence"]) -> List[Dict[str, Any]]:
+    """Evidence the turn really retrieved, as the retrieved_chunks payload.
+
+    Every evidence item produces exactly one chunk: dropping any would
+    misreport what retrieval returned, and the parallel ``retrieval_scores``
+    array is index-aligned with this list.
+    """
+    chunks: List[Dict[str, Any]] = []
+    for item in evidence_board:
+        content = str(item.content)
+        chunk: Dict[str, Any] = {
+            "content": content[:MAX_CHUNK_CONTENT_CHARS],
+            "source": item.source.value,
+            "hop": item.hop_number,
+        }
+        if len(content) > MAX_CHUNK_CONTENT_CHARS:
+            chunk["truncated"] = True
+        chunks.append(chunk)
+    return chunks
+
+
 @dataclass
 class CognitiveState:
     """State passed through the 4-phase cognitive cycle."""
@@ -1069,7 +1100,18 @@ class ReflectorModule(dspy.Module):
             }
         )
 
-        # Signal for Agent/Synthesis optimization
+        # Signal for Agent/Synthesis optimization.
+        #
+        # #1489 deferral 1: this is the ONLY signal that carries the turn's
+        # retrieved evidence. database/ml/022 added learning_signals
+        # .retrieved_chunks / .retrieval_scores "for RAGAS evaluation" and
+        # never got a producer (3,959 rows, 0 populated, measured 2026-08-06);
+        # the evidence has always been right here in state.evidence_board.
+        # Attaching it to the summarizer/investigator signals too would store
+        # one turn's retrieval three times and make any per-row count of
+        # retrieved chunks read 3x the truth — and it is THIS row whose
+        # ``response`` those chunks grounded, so it is the row a RAGAS judge
+        # scores. No LLM call is added: the evidence is already in the state.
         signals.append(
             {
                 "type": "agent",
@@ -1077,6 +1119,8 @@ class ReflectorModule(dspy.Module):
                 "response": state.response[:500] if state.response else "",
                 "reward": agent_reward,
                 "feedback": {"user_feedback": user_feedback} if user_feedback else None,
+                "retrieved_chunks": _chunks_from_evidence(state.evidence_board),
+                "retrieval_scores": [float(e.relevance_score) for e in state.evidence_board],
                 "metadata": {
                     "routed_agents": state.routed_agents,
                     "has_visualization": bool(state.visualization_config),

@@ -97,6 +97,17 @@ class LearningSignalInput:
     dspy_metric_value: Optional[float] = None
     training_input: Optional[str] = None
     training_output: Optional[str] = None
+    # RAGAS substrate (#1489 deferral 1). database/ml/022 added
+    # learning_signals.retrieved_chunks / .retrieval_scores "for RAGAS
+    # evaluation" and this dataclass had no field for either, so no caller
+    # could reach the columns — measured live 2026-08-06: 3,959 rows, 0 with a
+    # non-default value. Both stay None by default and record_learning_signal
+    # strips None, so a signal with no retrieval leaves the columns at their
+    # '[]' schema default rather than writing a NULL an array reader would
+    # break on. Index-aligned: retrieval_scores[i] describes
+    # retrieved_chunks[i].
+    retrieved_chunks: Optional[List[Dict[str, Any]]] = None
+    retrieval_scores: Optional[List[float]] = None
 
 
 # ============================================================================
@@ -551,6 +562,12 @@ async def record_learning_signal(
         "dspy_metric_value": signal.dspy_metric_value,
         "training_input": signal.training_input,
         "training_output": signal.training_output,
+        # RAGAS substrate (#1489). Raw structures, never json.dumps — a
+        # pre-dumped string is double-encoded by postgrest into a JSON string
+        # scalar, the same writer bug migration 073 had to repair for
+        # episodic_memories (#883).
+        "retrieved_chunks": signal.retrieved_chunks,
+        "retrieval_scores": signal.retrieval_scores,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
