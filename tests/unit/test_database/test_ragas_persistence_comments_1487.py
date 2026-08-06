@@ -31,15 +31,21 @@ class TestMigrationIsSafe:
     def test_migration_file_exists(self):
         assert MIGRATION_PATH.exists(), f"Migration file not found: {MIGRATION_PATH}"
 
-    def test_number_is_the_next_free_one_in_the_directory(self):
-        """A duplicate number applies in an ambiguous order."""
+    def test_number_is_unique_in_the_directory(self):
+        """A duplicate number applies in an ambiguous order.
+
+        This asserted ``max(numbers) == 33`` while 33 was the newest migration.
+        That could only ever hold until the next one landed (#1489's 034), and
+        being the highest number was never the property worth pinning — being
+        unambiguously ordered is. The directory does contain legitimately
+        duplicated numbers (012, 014), so this is deliberately scoped to 33.
+        """
         numbers = [
             int(match.group(1))
             for path in DATABASE_ML.glob("*.sql")
             if (match := re.match(r"(\d+)_", path.name))
         ]
         assert numbers.count(33) == 1
-        assert max(numbers) == 33
 
     def test_is_comment_only(self):
         """A clarification migration must not be able to change structure or
