@@ -27,6 +27,18 @@ from src.rag.types import ExtractedEntities
 
 logger = logging.getLogger(__name__)
 
+# Region aliases for NLP matching. Module-level (hoisted from
+# EntityVocabulary.from_default, #1501) so other layers — e.g. the chat KPI
+# tool's region_type normalization in src/api/routes/chatbot_tools.py — can
+# reuse the SAME table instead of hand-copying it. Keys are the canonical
+# region_type enum labels; values are the phrasings entity extraction accepts.
+REGION_ALIASES: Dict[str, List[str]] = {
+    "northeast": ["northeast", "ne", "north east", "new england"],
+    "south": ["south", "southeast", "se", "southwest", "sw", "southern"],
+    "midwest": ["midwest", "mw", "mid west", "central"],
+    "west": ["west", "pacific", "northwest", "nw", "western"],
+}
+
 
 @dataclass
 class EntityVocabulary:
@@ -79,16 +91,12 @@ class EntityVocabulary:
         for brand in canonical_brands:
             brands[brand] = brand_aliases.get(brand, [brand.lower()])
 
-        # Region aliases for NLP matching
-        region_aliases = {
-            "northeast": ["northeast", "ne", "north east", "new england"],
-            "south": ["south", "southeast", "se", "southwest", "sw", "southern"],
-            "midwest": ["midwest", "mw", "mid west", "central"],
-            "west": ["west", "pacific", "northwest", "nw", "western"],
-        }
+        # Region aliases for NLP matching (module-level REGION_ALIASES, #1501);
+        # list() copies keep each vocabulary instance's lists independently
+        # mutable, exactly as the previous per-call literals were.
         regions = {}
         for region in canonical_regions:
-            regions[region] = region_aliases.get(region, [region.lower()])
+            regions[region] = list(REGION_ALIASES.get(region, [region.lower()]))
 
         return cls(
             brands=brands,
