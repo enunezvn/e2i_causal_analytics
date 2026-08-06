@@ -268,8 +268,22 @@ def records_batch(path: str) -> RagExampleBatch:
             f"Regenerate it with `.venv/bin/python scripts/replay_golden_set.py "
             f"--target cognitive --record-out {path}` ({RAG_RECORDS_PATH_ENV}).",
         )
-    raw_bytes = file_path.read_bytes()
-    records = _records_of(json.loads(raw_bytes))
+    try:
+        raw_bytes = file_path.read_bytes()
+        parsed = json.loads(raw_bytes)
+    except (OSError, ValueError) as exc:
+        # A file that exists but cannot be read or parsed is the SAME situation
+        # as a missing one: the configured source could not be read at all. The
+        # beat's blanket guard would otherwise turn a truncated replay write
+        # into a leg FAILURE whose reason is a parser traceback, which tells an
+        # operator nothing about which file to regenerate. (ValueError covers
+        # JSONDecodeError; OSError covers permissions and a vanished file.)
+        raise RagExampleSourceUnavailable(
+            f"records file could not be read: {path} ({type(exc).__name__}: {exc})",
+            f"Regenerate it with `.venv/bin/python scripts/replay_golden_set.py "
+            f"--target cognitive --record-out {path}` ({RAG_RECORDS_PATH_ENV}).",
+        ) from exc
+    records = _records_of(parsed)
     return RagExampleBatch(
         examples=_examples(_turns_from_records(records)),
         total_records=len(records),

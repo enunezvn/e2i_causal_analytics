@@ -226,6 +226,65 @@ class TestBothSourcesEmitOneShape:
 # --------------------------------------------------------------------------
 # Source selection
 # --------------------------------------------------------------------------
+class TestUnreadableRecordsFiles:
+    """A file that cannot be parsed is an unavailable SOURCE, not a crash.
+
+    ``RagExampleSourceUnavailable`` is the contract for "could not read it at
+    all", and the leg turns it into a logged skip naming the remedy. A raw
+    ``JSONDecodeError`` escaping instead gets caught by the beat's blanket
+    guard and reported as a leg FAILURE with a parser traceback for a reason —
+    same non-abort outcome, but an operator reading it learns nothing about
+    which file to regenerate.
+    """
+
+    def test_corrupt_json_is_an_unavailable_source(self, tmp_path: Path) -> None:
+        from src.tasks.rag_example_sources import RagExampleSourceUnavailable, records_batch
+
+        path = tmp_path / "records.json"
+        path.write_text("{not json")
+        with pytest.raises(RagExampleSourceUnavailable) as exc:
+            records_batch(str(path))
+        assert str(path) in str(exc.value)
+        assert "replay_golden_set" in str(exc.value), "the remedy must name the regenerator"
+
+    def test_the_leg_reports_a_corrupt_file_as_a_skip_with_a_remedy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        import src.tasks.dspy_optimization_tasks as task_module
+        from src.tasks import rag_example_sources as mod
+
+        monkeypatch.chdir(tmp_path)
+        path = tmp_path / "records.json"
+        path.write_text('{"records": [')
+        monkeypatch.setenv(mod.RAG_RECORDS_PATH_ENV, str(path))
+
+        with caplog.at_level(logging.INFO, logger="src.tasks.dspy_optimization_tasks"):
+            result = asyncio_run(task_module.run_rag_prompt_optimization())
+
+        assert result["status"] == "skipped", result
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "replay_golden_set" in blob, blob
+
+    def test_valid_json_that_is_not_records_reads_as_zero_not_a_crash(self, tmp_path: Path) -> None:
+        """A bare scalar or a wrong-typed ``records`` key is honestly empty."""
+        from src.tasks.rag_example_sources import records_batch
+
+        for body in ("42", '"hello"', "null", "{}", '{"records": 7}'):
+            path = tmp_path / "r.json"
+            path.write_text(body)
+            batch = records_batch(str(path))
+            assert batch.examples == (), body
+            assert batch.total_records == 0, body
+
+
+def asyncio_run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
 class TestSourcePrecedence:
     def test_explicit_file_path_wins_over_the_db(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
