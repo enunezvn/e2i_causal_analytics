@@ -28,7 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
-def _record(query_id: str, contexts: Optional[List[str]] = None, **over: Any) -> Dict[str, Any]:
+def _record(query_id: str, contexts: Any = ("ctx",), **over: Any) -> Dict[str, Any]:
     base: Dict[str, Any] = {
         "query_id": query_id,
         "query": f"question {query_id}",
@@ -128,7 +128,7 @@ class TestJudgedTurns:
         """
         from src.rag.ragas_persistence import judged_turns
 
-        turn = judged_turns(_block([_row("q01", 0.0, 0.35, n_contexts=0)]), [_record("q01")])[0]
+        turn = judged_turns(_block([_row("q01", 0.0, 0.35, n_contexts=0)]), [_record("q01", [])])[0]
 
         assert turn.bundle.measured == {"answer_relevancy": 0.35}
         assert turn.bundle.coverage["unmeasured"] == ["faithfulness"]
@@ -140,9 +140,28 @@ class TestJudgedTurns:
         from src.rag.ragas_persistence import judged_turns
 
         turn = judged_turns(
-            _block([_row("q01", 0.61, 0.35, n_contexts=2)]), [_record("q01", ["ctx"])]
+            _block([_row("q01", 0.61, 0.35, n_contexts=2)]), [_record("q01", ["a", "b"])]
         )[0]
         assert turn.bundle.measured["faithfulness"] == pytest.approx(0.61)
+
+    def test_a_context_count_disagreement_raises(self):
+        """The judge's ``n_contexts`` and the record's ``contexts`` describe the
+        SAME retrieval and cannot disagree in a genuine run — the adapter builds
+        the judge sample straight from ``record["contexts"]``. A disagreement
+        means the block and the records file come from DIFFERENT runs, and this
+        module's whole provenance claim is that the join proves they do not.
+
+        It is not cosmetic: the persisted row would carry the record's contexts
+        while its faithfulness was judged against a different retrieval, and the
+        zero-context NULL rule would fire off the wrong one. Reproduced before
+        fixing (judge n_contexts=1 vs record contexts=[]): the turn was accepted
+        with empty contexts and faithfulness silently nulled.
+        (codex iter-6 MED.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        with pytest.raises(RagasPersistenceError, match="n_contexts"):
+            judged_turns(_block([_row("q01", 0.9, 0.5, n_contexts=1)]), [_record("q01", [])])
 
     def test_a_missing_n_contexts_falls_back_to_the_record(self):
         """Provenance, not the judge's bookkeeping, decides whether the turn
@@ -152,7 +171,7 @@ class TestJudgedTurns:
 
         row = _row("q01", 0.9, 0.35)
         row.pop("n_contexts")
-        turn = judged_turns(_block([row]), [_record("q01")])[0]
+        turn = judged_turns(_block([row]), [_record("q01", [])])[0]
 
         assert turn.contexts == ()
         assert turn.bundle.coverage["unmeasured"] == ["faithfulness"]
@@ -162,7 +181,7 @@ class TestJudgedTurns:
         anything would score the answer against evidence it never saw."""
         from src.rag.ragas_persistence import judged_turns
 
-        turn = judged_turns(_block([_row("q01", None, 0.0, n_contexts=0)]), [_record("q01")])[0]
+        turn = judged_turns(_block([_row("q01", None, 0.0, n_contexts=0)]), [_record("q01", [])])[0]
         assert turn.contexts == ()
 
     def test_unjoinable_per_sample_row_raises(self):

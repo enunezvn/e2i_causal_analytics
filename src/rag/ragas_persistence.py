@@ -208,6 +208,27 @@ def judged_turns(
 
         contexts = tuple(str(c) for c in (record.get("contexts") or []))
 
+        # The judge's n_contexts and the record's contexts describe the SAME
+        # retrieval: build_ragas_samples feeds the judge straight from
+        # record["contexts"], so in a genuine run they cannot disagree. A
+        # disagreement means the block and the records file are from DIFFERENT
+        # runs — and this module's whole provenance claim is that the join
+        # proves they are not. Not cosmetic: the row would carry one
+        # retrieval's contexts while its faithfulness was judged against
+        # another, and the zero-context NULL rule would fire off the wrong one.
+        judged_context_count = row.get("n_contexts")
+        if (
+            isinstance(judged_context_count, int)
+            and not isinstance(judged_context_count, bool)
+            and judged_context_count != len(contexts)
+        ):
+            raise RagasPersistenceError(
+                f"sample {query_id!r} was judged over n_contexts={judged_context_count} but its "
+                f"replay record carries {len(contexts)} contexts — the judge block and the "
+                "records file describe different runs, so the join cannot establish what was "
+                "actually scored"
+            )
+
         # An ABSENT key is not a None one. Migration 033 keeps them apart —
         # absent means "this producer never asks for that metric", None means
         # "the judge tried and could not score it" (#1488) — and only the
