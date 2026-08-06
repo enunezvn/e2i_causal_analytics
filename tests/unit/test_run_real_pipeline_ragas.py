@@ -260,3 +260,29 @@ def test_report_records_the_floors_that_produced_the_verdict():
     )
     assert report["thresholds"]["retrieval_hit_rate"] == 0.21
     assert report["thresholds"]["answer_relevancy_hit_conditioned"] == 0.20
+
+
+def test_report_thresholds_do_not_leak_back_into_the_metric_gate():
+    """The report's ``thresholds`` records every floor that produced the verdict,
+    including two the metric gate does not accept. Pinning the two properties
+    that make merging them safe: the caller's dict is not mutated, and feeding
+    the enriched dict back to the gate fails LOUDLY rather than silently
+    gating on the wrong set (codex iter-1 MEDIUM follow-up).
+    """
+    from src.rag.real_pipeline_eval import check_real_pipeline_gates
+
+    thresholds = {"faithfulness": 0.35, "answer_relevancy": 0.04}
+    report = driver.build_report(
+        block=_BLOCK,
+        retrieval={"n_records": 10, "n_errors": 0, "n_with_contexts": 4, "retrieval_hit_rate": 0.4},
+        thresholds=thresholds,
+        passed=True,
+        failures=[],
+        meta={},
+        retrieval_floor=0.21,
+        hit_conditioned_floor=0.20,
+    )
+    assert thresholds == {"faithfulness": 0.35, "answer_relevancy": 0.04}, "caller's dict mutated"
+
+    with pytest.raises(ValueError, match="unsupported gate metrics"):
+        check_real_pipeline_gates(_BLOCK, thresholds=report["thresholds"])
