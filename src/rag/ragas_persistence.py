@@ -146,6 +146,26 @@ def judged_turns(
             )
         query_id: str = raw_id
 
+        contexts = tuple(str(c) for c in (record.get("contexts") or []))
+
+        scores: Dict[str, Optional[float]] = {metric: row.get(metric) for metric in JUDGED_METRICS}
+        # Faithfulness measures the answer AGAINST ITS CONTEXTS. On a turn that
+        # retrieved none, ragas still emits a number (NaN coerced to 0.0, and
+        # sometimes 1.0 for a vacuous answer) and the judge script excludes
+        # exactly those rows from its own aggregate: "on a run that retrieved
+        # no evidence the score is an artifact ... so it averages only over
+        # samples with contexts". evaluation_results.faithfulness has no such
+        # filter and v_ragas_performance_trends AVG()s the column, so
+        # persisting the artifact would reintroduce one layer down what the
+        # judge guards against upstream. MEASURED on the real #1489 close-out
+        # run (7 of 10 turns zero-context): the judge reports 1.000 over its 3
+        # context-bearing rows; averaging every row gives 0.286 — the view
+        # would understate faithfulness by 0.71 and look perfectly healthy.
+        # None here is #1488's "attempted, not scorable", which persists as SQL
+        # NULL — never as a judged 0.0 (migration 033).
+        if not contexts:
+            scores["faithfulness"] = None
+
         # RagasBundle refuses any label containing "heuristic": a quota error
         # mid-run degrades a sample to word-overlap scoring while the process
         # still exits 0, and evaluation_results has no column that could mark
@@ -153,7 +173,7 @@ def judged_turns(
         # sample was contaminated.
         try:
             bundle = RagasBundle(
-                scores={metric: row.get(metric) for metric in JUDGED_METRICS},
+                scores=scores,
                 evaluation_method=row.get("evaluation_method"),
                 evaluation_model=judge_model,
             )
@@ -167,8 +187,9 @@ def judged_turns(
                 response=str(record.get("response_text") or ""),
                 # The replay's own contexts, never a reference stand-in: a
                 # zero-retrieval turn recorded [] and that zero IS the
-                # measurement (#1485).
-                contexts=tuple(str(c) for c in (record.get("contexts") or [])),
+                # measurement (#1485). The RECORD is the authority on what was
+                # retrieved, not the judge block's n_contexts bookkeeping.
+                contexts=contexts,
                 bundle=bundle,
                 conversation_id=record.get("conversation_id"),
             )

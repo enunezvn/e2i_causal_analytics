@@ -86,7 +86,10 @@ class TestJudgedTurns:
         None (asked and failed) — migration 033 documents the difference."""
         from src.rag.ragas_persistence import judged_turns
 
-        bundle = judged_turns(_block([_row("q01", 0.9, 0.5)]), [_record("q01")])[0].bundle
+        # Context-bearing, so faithfulness is a real measurement here (a
+        # zero-retrieval row's faithfulness is an artifact — see
+        # test_faithfulness_on_a_zero_context_row_is_unmeasured_not_a_score).
+        bundle = judged_turns(_block([_row("q01", 0.9, 0.5)]), [_record("q01", ["ctx"])])[0].bundle
         coverage = bundle.coverage
 
         assert set(coverage["measured"]) == {"faithfulness", "answer_relevancy"}
@@ -106,6 +109,53 @@ class TestJudgedTurns:
 
         assert bundle.measured == {"answer_relevancy": 0.5}
         assert bundle.coverage["unmeasured"] == ["faithfulness"]
+
+    def test_faithfulness_on_a_zero_context_row_is_unmeasured_not_a_score(self):
+        """A zero-retrieval row's faithfulness is an ARTIFACT, not a judgment.
+
+        ``run_dspy_lane_ragas_judge.py`` says so and acts on it: "on a run that
+        retrieved no evidence the score is an artifact (NaN->0), so it averages
+        only over samples with contexts" — its aggregate uses ``with_ctx``.
+        ``evaluation_results.faithfulness`` has no such filter and
+        ``v_ragas_performance_trends`` AVG()s the column directly, so persisting
+        the artifact reintroduces one layer down exactly what the judge guards
+        against upstream.
+
+        MEASURED on the real #1489 close-out run (n=10, 7 zero-context): the
+        judge reports faithfulness 1.000 over its 3 context-bearing rows, while
+        averaging every row including the artifacts gives 0.286 — the view
+        would understate faithfulness by 0.71 while looking perfectly healthy.
+        """
+        from src.rag.ragas_persistence import judged_turns
+
+        turn = judged_turns(_block([_row("q01", 0.0, 0.35, n_contexts=0)]), [_record("q01")])[0]
+
+        assert turn.bundle.measured == {"answer_relevancy": 0.35}
+        assert turn.bundle.coverage["unmeasured"] == ["faithfulness"]
+        # answer_relevancy compares the answer to the QUERY and needs no
+        # contexts, so it stays a real measurement on a zero-retrieval turn.
+        assert turn.bundle.weighted == pytest.approx(0.35)
+
+    def test_faithfulness_on_a_context_bearing_row_is_kept(self):
+        from src.rag.ragas_persistence import judged_turns
+
+        turn = judged_turns(
+            _block([_row("q01", 0.61, 0.35, n_contexts=2)]), [_record("q01", ["ctx"])]
+        )[0]
+        assert turn.bundle.measured["faithfulness"] == pytest.approx(0.61)
+
+    def test_a_missing_n_contexts_falls_back_to_the_record(self):
+        """Provenance, not the judge's bookkeeping, decides whether the turn
+        retrieved anything — an older block without ``n_contexts`` must not
+        silently promote artifacts back into the column."""
+        from src.rag.ragas_persistence import judged_turns
+
+        row = _row("q01", 0.9, 0.35)
+        row.pop("n_contexts")
+        turn = judged_turns(_block([row]), [_record("q01")])[0]
+
+        assert turn.contexts == ()
+        assert turn.bundle.coverage["unmeasured"] == ["faithfulness"]
 
     def test_zero_retrieval_turn_keeps_its_empty_contexts(self):
         """7 of 10 turns retrieve nothing. [] is the measurement; substituting
