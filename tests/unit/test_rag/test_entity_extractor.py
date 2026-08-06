@@ -9,7 +9,7 @@ All tests use vocabulary-based matching with no medical NER.
 
 import pytest
 
-from src.rag.entity_extractor import EntityExtractor, EntityVocabulary
+from src.rag.entity_extractor import REGION_ALIASES, EntityExtractor, EntityVocabulary
 
 # ============================================================================
 # Fixtures
@@ -406,6 +406,53 @@ class TestEntityVocabulary:
         assert "TestBrand" in custom_vocabulary.brands
         assert "AnotherBrand" in custom_vocabulary.brands
         assert len(custom_vocabulary.brands) == 2
+
+    def test_default_regions_are_built_from_the_shared_alias_table(self):
+        """from_default() must source region aliases from REGION_ALIASES (#1505).
+
+        The chat KPI tool's region_type normalization resolves exactly the
+        phrasings this vocabulary recognizes (#1501/#1504). Before this pin the
+        coupling was only observable from the consumer's tests, so a local
+        re-literalisation here would have decoupled the two surfaces silently.
+        """
+        vocab = EntityVocabulary.from_default()
+
+        for region, aliases in vocab.regions.items():
+            assert aliases == REGION_ALIASES[region], region
+            # list() copies, not the shared object: each vocabulary instance
+            # keeps independently mutable alias lists.
+            assert aliases is not REGION_ALIASES[region], region
+
+    def test_default_regions_cover_every_alias_table_entry(self):
+        """No alias-table region may be dropped on the way into the vocabulary."""
+        vocab = EntityVocabulary.from_default()
+        assert set(REGION_ALIASES) <= set(vocab.regions)
+
+    def test_alias_table_is_the_shared_owner(self):
+        """REGION_ALIASES is re-exported from the shared enum-label module."""
+        from src.services import enum_labels
+
+        assert REGION_ALIASES is enum_labels.REGION_ALIASES
+
+    def test_registry_unavailable_fallback_follows_the_shared_label_set(self, monkeypatch):
+        """The VocabularyRegistry-unavailable fallback must not hand-copy the
+        region labels (#1505) — a copy here would silently stop tracking the
+        region_type enum the rest of the platform resolves against."""
+        from src.ontology import VocabularyRegistry
+        from src.rag import entity_extractor as ee
+
+        def _unavailable():
+            raise RuntimeError("VocabularyRegistry unavailable")
+
+        monkeypatch.setattr(VocabularyRegistry, "load", staticmethod(_unavailable))
+        monkeypatch.setattr(ee, "REGION_ENUM_LABELS", ("northeast", "sentinelregion"))
+
+        vocab = EntityVocabulary.from_default()
+
+        assert set(vocab.regions) == {"northeast", "sentinelregion"}
+        # A label with no alias-table entry still gets a usable single alias.
+        assert vocab.regions["sentinelregion"] == ["sentinelregion"]
+        assert vocab.regions["northeast"] == REGION_ALIASES["northeast"]
 
 
 # ============================================================================

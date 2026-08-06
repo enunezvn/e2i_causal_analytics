@@ -49,6 +49,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from src.services.enum_labels import resolve_brand_label, resolve_region_label
+
 logger = logging.getLogger(__name__)
 
 # Canonical cohort source. ``patient_journeys`` carries ``brand`` (brand_type),
@@ -56,34 +58,29 @@ logger = logging.getLogger(__name__)
 # treatment_initiated, disease_severity, academic_hcp, age_at_diagnosis).
 CANONICAL_COHORT_TABLE = "patient_journeys"
 
-# brand_type enum (database/core/e2i_ml_complete_v3_schema.sql). Lowercase key ->
-# canonical DB spelling. Drift mode is fail-closed: a newly-added brand resolves
-# to None until added here, never a wrong/fabricated cohort.
-_BRAND_CANONICAL = {
-    b.lower(): b for b in ("Remibrutinib", "Fabhalta", "Kisqali", "competitor", "other")
-}
-
-# region_type enum: US census regions, lowercase. NOTE this is NOT "US/EU/APAC".
-_REGION_CANONICAL = {r.lower(): r for r in ("northeast", "south", "midwest", "west")}
-
 # PostgREST imposes a configured max row count per request (default 1000). When a
 # canonical-table query returns at least this many rows without an explicit
 # ``limit``, the cohort may have been silently truncated to a sample.
 _POSTGREST_DEFAULT_MAX_ROWS = 1000
 
-
-def _normalize_brand(brand: Optional[str]) -> Optional[str]:
-    """Map a brand string to its canonical ``brand_type`` spelling, else None."""
-    if not brand:
-        return None
-    return _BRAND_CANONICAL.get(brand.strip().lower())
+# brand_type / region_type labels and resolvers are shared with the chat KPI
+# tool (src.services.enum_labels, #1505) so an enum change lands in one place.
+# Drift mode stays fail-closed: a newly-added brand resolves to None until added
+# to the shared label set, never a wrong/fabricated cohort.
+_normalize_brand = resolve_brand_label
 
 
 def _normalize_region(region: Optional[str]) -> Optional[str]:
-    """Map a region string to its canonical ``region_type`` spelling, else None."""
-    if not region:
-        return None
-    return _REGION_CANONICAL.get(region.strip().lower())
+    """Map a region string to its canonical ``region_type`` label, else None.
+
+    STRICT by design: the chat KPI tool additionally accepts the platform's
+    region synonyms ("NE", "North East", "central"), but this service fails
+    closed on anything that is not a real label so an ambiguous phrase can
+    never resolve to a wrong population. Widening it is a product decision
+    about this service's contract, not a consequence of sharing the resolver
+    (#1505) — hence the explicit ``allow_synonyms=False``.
+    """
+    return resolve_region_label(region, allow_synonyms=False)
 
 
 def _load_tier0_agent() -> Any:

@@ -16,7 +16,6 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 import asyncio
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -35,7 +34,6 @@ from src.api.routes.chatbot_dspy import (
 from src.api.routes.cognitive import get_orchestrator
 from src.kpi.synthetic_mode import kpi_include_synthetic
 from src.memory.services.factories import get_async_supabase_client
-from src.rag.entity_extractor import REGION_ALIASES
 from src.rag.retriever import hybrid_search
 from src.repositories import (
     AgentActivityRepository,
@@ -51,6 +49,12 @@ from src.repositories.chatbot_message import (
     get_chatbot_message_repository,
 )
 from src.services import cohort_resolution, kpi_resolution
+from src.services.enum_labels import (
+    BRAND_ENUM_LABELS,
+    REGION_ENUM_LABELS,
+    resolve_brand_label,
+    resolve_region_label,
+)
 from src.utils.llm_factory import get_chat_llm
 from src.utils.redaction import redact_query
 
@@ -382,72 +386,25 @@ def _normalize_metric_name(kpi_name: str) -> str:
 
 
 # business_metrics.region / business_metrics.brand are Postgres ENUM columns
-# (region_type, brand_type). Labels verified against
-# database/core/e2i_ml_complete_v3_schema.sql (no later migration ALTERs
-# either enum) and the prod DB (#1501: SELECT enum_range(NULL::region_type)).
-# Enums in this project are append-only and never renamed (migration 033), so
-# an input that maps to no label here means "no row can ever hold it".
-_REGION_ENUM_LABELS = ("northeast", "south", "midwest", "west")
-_BRAND_ENUM_LABELS = ("Remibrutinib", "Fabhalta", "Kisqali", "competitor", "other")
-_BRAND_LABEL_BY_CASEFOLD = {label.casefold(): label for label in _BRAND_ENUM_LABELS}
-
-
-def _fold_region_key(value: str) -> str:
-    """Casefold and REMOVE separators (spaces/hyphens/underscores).
-
-    region_type labels are single concatenated words ("northeast"), so an
-    underscore fold can never match — "North East" must become "northeast",
-    not "north_east".
-    """
-    return re.sub(r"[\s_-]+", "", value.strip().casefold())
-
-
-def _build_region_alias_map() -> Dict[str, str]:
-    """folded alias -> region_type enum label, from the shared NLP table.
-
-    Sourced from src.rag.entity_extractor.REGION_ALIASES so the KPI tool
-    accepts exactly the phrasings the platform's entity extraction recognizes
-    ("NE", "new england", "central", "Pacific", ...) — one table, not a
-    hand-copied fourth implementation. Only aliases whose canonical key is a
-    verified enum label are admitted, so a future vocabulary edit can never
-    push a non-label value into the enum cast.
-    """
-    mapping: Dict[str, str] = {}
-    for label, aliases in REGION_ALIASES.items():
-        if label not in _REGION_ENUM_LABELS:
-            continue
-        for alias in (label, *aliases):
-            mapping[_fold_region_key(alias)] = label
-    return mapping
-
-
-_REGION_LABEL_BY_ALIAS = _build_region_alias_map()
+# (region_type, brand_type). The labels, the platform's region synonym table
+# and the resolvers all live in src.services.enum_labels (#1505) — cohort
+# resolution shares them, so an enum change lands in one place.
+#
+# This surface asks for the SYNONYM-TOLERANT contract: an LLM tool call
+# naturally produces display and colloquial forms ("Northeast", "North East",
+# "NE", "the Pacific"), and unlike metric_name (plain text, mismatch = 0 rows)
+# a non-label string in an enum cast raises 22P02 and fails the ENTIRE KPI
+# query (#1501). An input that maps to no label means "no row can ever hold
+# it"; the caller returns the 0-row result the filter implies instead of
+# erroring.
 
 
 def _normalize_region(region: str) -> Optional[str]:
-    """Map a display-form region or synonym to its region_type enum label.
-
-    business_metrics.region is the lowercase Postgres enum region_type while
-    LLM tool calls pass display forms ("Northeast", "North East") or the
-    platform's region synonyms ("NE", "new england") — unlike metric_name
-    (plain text, mismatch = 0 rows), a non-label string in the enum cast
-    raises 22P02 and fails the ENTIRE KPI query (#1501). Returns None when
-    the input maps to no label; the caller then returns the 0-row result the
-    filter implies (matching _normalize_metric_name's unknown-value outcome)
-    instead of erroring.
-    """
-    return _REGION_LABEL_BY_ALIAS.get(_fold_region_key(region))
+    """Map a display-form region or synonym to its region_type enum label."""
+    return resolve_region_label(region, allow_synonyms=True)
 
 
-def _normalize_brand(brand: str) -> Optional[str]:
-    """Map any casing of a brand ("kisqali") to its brand_type enum label.
-
-    Same 22P02 class as _normalize_region: brand_type labels are mixed-case
-    ("Kisqali", "competitor"), so the display form happens to match today but
-    any other casing fails the whole query. Returns the REAL label, or None
-    when unmappable.
-    """
-    return _BRAND_LABEL_BY_CASEFOLD.get(brand.strip().casefold())
+_normalize_brand = resolve_brand_label
 
 
 async def _query_kpis(
@@ -472,7 +429,7 @@ async def _query_kpis(
             if normalized_brand is None:
                 unmatched.append(
                     f"brand {brand!r} does not match any known brand "
-                    f"({', '.join(sorted(_BRAND_ENUM_LABELS))})"
+                    f"({', '.join(sorted(BRAND_ENUM_LABELS))})"
                 )
             else:
                 filters["brand"] = normalized_brand
@@ -481,7 +438,7 @@ async def _query_kpis(
             if normalized_region is None:
                 unmatched.append(
                     f"region {region!r} does not match any known region "
-                    f"({', '.join(_REGION_ENUM_LABELS)})"
+                    f"({', '.join(REGION_ENUM_LABELS)})"
                 )
             else:
                 filters["region"] = normalized_region
