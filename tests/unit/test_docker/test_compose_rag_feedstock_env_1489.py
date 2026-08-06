@@ -60,6 +60,17 @@ def _declared_leg_env_vars() -> list[str]:
     first version of this test).
 
     Deriving from the modules turns a one-off fix into a guard for the class.
+
+    Known limits, stated so nobody reads this as broader than it is: it sees
+    only names bound to an UPPERCASE module constant and prefixed ``DSPY_RAG_``.
+    Env names read as string literals are invisible to it —
+    ``dspy_optimization_tasks`` has three (``DSPY_MIN_SIGNALS``,
+    ``DSPY_LEARN_FOCUS_AGENTS``, ``DSPY_LEARN_WINDOW_HOURS``), and all three are
+    ALSO absent from x-common-env. That is the same silent-no-op class, but it
+    belongs to the feedback-learner legs rather than the RAG leg #1489 deferral
+    2 names, and forwarding ``DSPY_MIN_SIGNALS`` would change when the nightly
+    optimization triggers — a behavioral change that needs its own decision, not
+    a drive-by. Reported, deliberately not fixed here.
     """
     from src.tasks import dspy_optimization_tasks as leg
     from src.tasks import rag_example_sources as sources

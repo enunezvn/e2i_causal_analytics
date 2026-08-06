@@ -61,6 +61,7 @@ class _FakeTable:
 
     def order(self, col: str, desc: bool = False):
         self._order = (col, desc)
+        self._log["order"] = (col, desc)
         return self
 
     def limit(self, n: int):
@@ -399,6 +400,16 @@ class TestDbSource:
     def test_the_read_is_bounded_and_ordered_newest_first(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Bounded AND newest-first, both asserted on the OUTPUT.
+
+        Ordering is not cosmetic: the window is capped at ``DB_ROW_CAP``, so an
+        unordered read would keep an arbitrary 500 candidate rows instead of the
+        most recent ones, and the prompt would be tuned on whatever Postgres
+        happened to return. Rows are fed oldest-first here so a missing
+        ``.order(..., desc=True)`` leaves them in that order and fails — an
+        earlier version of this test asserted only the logged chain and passed
+        with the ordering deleted.
+        """
         import asyncio
 
         from src.tasks import rag_example_sources as mod
@@ -406,10 +417,12 @@ class TestDbSource:
         client = _FakeClient(
             [_row(f"q{i}", created_at=f"2026-08-0{i}T00:00:00+00:00") for i in (1, 2, 3)]
         )
-        asyncio.run(mod.db_batch(client=client))
+        batch = asyncio.run(mod.db_batch(client=client))
         assert client.log["table"] == mod.FEEDSTOCK_TABLE
         assert client.log["limit"] == mod.DB_ROW_CAP
         assert client.log.get("gte"), "the read must be bounded by a created_at cutoff"
+        assert client.log.get("order") == ("created_at", True), client.log.get("order")
+        assert [e.user_query for e in batch.examples] == ["q3", "q2", "q1"]
 
     def test_chunkless_rows_are_narrowed_out_before_the_row_cap(self) -> None:
         """Measured 2026-08-06: the window came back 499 of 500 rows, ALL of them
