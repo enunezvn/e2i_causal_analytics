@@ -192,6 +192,35 @@ class TestJudgedTurns:
                 [_record("q01")],
             )
 
+    def test_a_metric_key_the_judge_never_emitted_raises(self):
+        """An ABSENT key is not the same as a None one, and this module claims
+        to keep them apart (migration 033: absent = "this producer never asks",
+        None = "the judge tried and failed"). ``row.get(metric)`` collapsed the
+        first into the second, so a malformed or foreign block would persist
+        ``ragas_coverage.unmeasured=['answer_relevancy']`` — a judge
+        malfunction that never happened.
+
+        The real-pipeline judge sets BOTH keys unconditionally
+        (run_dspy_lane_ragas_judge.py), so a missing one means the block did
+        not come from it. Fail loud, as this function does for every other
+        provenance failure. (codex iter-1 MED, reproduced.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        row = _row("q01", 0.9, 0.5)
+        del row["answer_relevancy"]
+
+        with pytest.raises(RagasPersistenceError, match="answer_relevancy"):
+            judged_turns(_block([row]), [_record("q01", ["ctx"])])
+
+    def test_an_explicitly_null_metric_is_still_accepted(self):
+        """The guard above must not swallow #1488's real case: the judge
+        emitted the key and its value was None because it could not score it."""
+        from src.rag.ragas_persistence import judged_turns
+
+        turn = judged_turns(_block([_row("q01", None, 0.5)]), [_record("q01", ["ctx"])])[0]
+        assert turn.bundle.coverage["unmeasured"] == ["faithfulness"]
+
     def test_malformed_block_raises(self):
         from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
 
@@ -303,6 +332,38 @@ class TestPersistJudgedTurns:
         assert repo.record_evaluation.await_count == 2
         assert "q01" in str(exc.value)
         assert exc.value.summary["evaluation_results_written"] == 1
+
+    async def test_a_vanished_learning_signal_fails_the_turn(self):
+        """``--persist-signals`` must not exit 0 having written no signals.
+
+        ``_store_evaluation`` catches every insert error and returns None
+        (deliberately, for the graph path), so ``evaluate_and_store`` can come
+        back empty on a real DB failure. Counting only successes let the run
+        report success with ``learning_signals_written == 0`` while writing
+        evaluation_results rows whose ``learning_signal_id`` is NULL — which
+        afterwards is indistinguishable from a deliberate RAGAS-only row. That
+        is precisely the "the writer exists and nothing lands" failure #1487
+        was filed about and #1489 exists to close. (codex iter-1 HIGH,
+        reproduced: summary came back
+        {"evaluation_results_written": 1, "learning_signals_written": 0}.)
+        """
+        from src.rag.ragas_persistence import (
+            RagasPersistenceError,
+            judged_turns,
+            persist_judged_turns,
+        )
+
+        repo = _repo()
+        node = MagicMock()
+        node.evaluate_and_store = AsyncMock(return_value=None)
+        turns = judged_turns(_block([_row("q01", 0.9, 0.5)]), [_record("q01", ["ctx"])])
+
+        with pytest.raises(RagasPersistenceError, match="q01"):
+            await persist_judged_turns(turns, eval_repo=repo, rubric_node=node)
+
+        # The unlinked evaluation_results row is NOT written: a half-persisted
+        # turn must not leave a row that reads as a complete RAGAS-only one.
+        repo.record_evaluation.assert_not_awaited()
 
     async def test_with_a_rubric_node_both_halves_land_and_are_linked(self):
         """The learning_signals row carries ragas_scores + retrieved_chunks and

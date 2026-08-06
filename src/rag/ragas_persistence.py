@@ -148,7 +148,22 @@ def judged_turns(
 
         contexts = tuple(str(c) for c in (record.get("contexts") or []))
 
-        scores: Dict[str, Optional[float]] = {metric: row.get(metric) for metric in JUDGED_METRICS}
+        # An ABSENT key is not a None one. Migration 033 keeps them apart —
+        # absent means "this producer never asks for that metric", None means
+        # "the judge tried and could not score it" (#1488) — and only the
+        # second is a malfunction worth investigating. The real-pipeline judge
+        # sets both keys unconditionally, so a missing one means this block did
+        # not come from it, and quietly reading it as None would record a judge
+        # failure that never happened.
+        missing = [metric for metric in JUDGED_METRICS if metric not in row]
+        if missing:
+            raise RagasPersistenceError(
+                f"sample {query_id!r} is missing judged metric key(s) {missing}; the "
+                "real-pipeline judge always emits them, so this block is malformed or "
+                "from another producer. Reading an absent key as None would record a "
+                "judge malfunction that never happened"
+            )
+        scores: Dict[str, Optional[float]] = {metric: row[metric] for metric in JUDGED_METRICS}
         # Faithfulness measures the answer AGAINST ITS CONTEXTS. On a turn that
         # retrieved none, ragas still emits a number (NaN coerced to 0.0, and
         # sometimes 1.0 for a vacuous answer) and the judge script excludes
@@ -259,8 +274,21 @@ async def persist_judged_turns(
                     ),
                     ragas=turn.bundle,
                 )
-                if signal_id:
-                    summary["learning_signals_written"] += 1
+                # ``_store_evaluation`` catches every insert error and returns
+                # None — deliberate on the graph path, silent here. Counting
+                # only successes let a --persist-signals run exit 0 with
+                # learning_signals_written == 0 while writing evaluation_results
+                # rows whose learning_signal_id is NULL, which afterwards reads
+                # exactly like a deliberate RAGAS-only row. The caller asked for
+                # both halves linked; half of that is a failure, and the
+                # evaluation_results row is NOT written for this turn.
+                if not signal_id:
+                    raise RuntimeError(
+                        "rubric_node.evaluate_and_store persisted no learning_signals "
+                        "row (the insert was swallowed); refusing to write an "
+                        "evaluation_results row that would look RAGAS-only afterwards"
+                    )
+                summary["learning_signals_written"] += 1
 
             await eval_repo.record_evaluation(
                 query=turn.query,
