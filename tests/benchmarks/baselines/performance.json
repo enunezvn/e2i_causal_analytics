@@ -10,7 +10,23 @@
   "_blessed_on": "2026-05-21",
   "_blessed_by_issue": 403,
   "_blessed_in_pr_branch": "feat/403-perf-baseline-rebless",
-  "_methodology": "Each of the 3 CI workflow_dispatch runs above ran scripts/run_benchmarks.sh against the in-memory _FakeSupabaseGraph (cascade) + reference BM25 builder (bm25). Per-run median_ms is captured in test-results/measurements-*.json artifacts on each run; the baseline mean_ms below is the median-of-medians across the 3 runs (median across runs = primary statistic; stdev across runs reported in _observed_variance_pct). Tolerance band derivation (codex iter-2 closure of M1): relative band = 10% safety floor (~5-7x observed stdev), absolute band = ~2x observed full-timing range rounded up to nearest 5ms (min 5ms floor); the comparison helper uses max(rel_band, abs_band) so each box's effective band is also tracked explicitly in _effective_band_pct for review-time honesty.",
+  "_methodology": "Each of the 3 CI workflow_dispatch runs above ran scripts/run_benchmarks.sh against the in-memory _FakeSupabaseGraph (cascade) + reference BM25 builder (bm25). Per-run median_ms is captured in test-results/measurements-*.json artifacts on each run; the baseline mean_ms below is the median-of-medians across the 3 runs (median across runs = primary statistic; stdev across runs reported in _observed_variance_pct). Tolerance band derivation (codex iter-2 closure of M1): relative band = 10% safety floor (~5-7x observed stdev), absolute band = ~2x observed full-timing range rounded up to nearest 5ms (min 5ms floor); the comparison helper uses max(rel_band, abs_band) so each box's effective band is also tracked explicitly in _effective_band_pct for review-time honesty. 2026-08-06 amendment (issue #1502): the bm25 absolute bands were re-derived from a fleet-aware 9-run sample (see _bm25_band_recalibration) because the original 3 blessing runs landed on similar hardware and under-sampled GitHub-hosted-runner fleet variance; mean_ms values were NOT re-blessed (the fleet sample's med-of-meds sat within 1.1% of every blessed center).",
+  "_bm25_band_recalibration": {
+    "_on": "2026-08-06",
+    "_by_issue": 1502,
+    "_ci_runs": [
+      "31059008024",
+      "31061762460",
+      "31063489593",
+      "31064637897",
+      "31064642677",
+      "31065113224",
+      "31065118685",
+      "31065590281",
+      "31065595212"
+    ],
+    "_method": "9 CI runs on identical code/corpus/baseline (3 organic runs from the 2026-08-06 incident window + 6 workflow_dispatch runs on main in 3 waves of 2 over ~30min) sampled distinct runner hardware: one uniformly ~9% slower machine (31059008024), one with a size-dependent +12.8% elevation at 10k only (31063489593, the spurious-REGRESSION run), and one uniformly ~20-23% FASTER machine (31065595212). Because the comparison gate is one-sided (observed <= baseline auto-passes as improvement), the fast-machine outlier widens the raw min-max range in a direction that can never fail the gate; the band is therefore derived from the failure-relevant spread instead: abs band = 2x the max observed run-median elevation above the blessed center, rounded up to nearest 5ms, min 5ms floor. NOTE the input statistic CHANGED from #403: #403 doubled the TWO-SIDED full timing range; this recalibration doubles the ONE-SIDED elevation above the blessed center — the correct statistic for a one-sided gate, since a fast outlier can never fail it. Only the 2x coefficient and the round-up-to-5ms/min-5ms-floor rounding are retained from #403. Per-slice: 1k max elevation +1.59ms -> 2x=3.2 -> 5ms floor (unchanged); 5k +9.78ms -> 2x=19.6 -> 20ms; 10k +28.45ms -> 2x=56.9 -> 60ms. Cross-run stdev of run medians was 8.3-9.1% on all three slices (vs 1.4-1.9% in the 3-run blessing) — fleet variance, not code, dominates. Re-bless/re-derive procedure: >=6 workflow_dispatch runs dispatched in waves spread over hours (ideally days) so distinct runner hardware classes are sampled; 3 back-to-back runs are NOT a sufficient sample."
+  },
   "cascade_5hop_bfs": {
     "_target_ms": 500.0,
     "_target_rationale": "Issue #391 PERFORMANCE box 1: '< 500ms for 5-hop BFS'. Synthetic graph shape may not match production graph; tolerance band is relative to blessed baseline, not the absolute target.",
@@ -56,25 +72,28 @@
     "tolerance_pct": 10.0,
     "tolerance_abs_ms": 5.0,
     "_observed_variance_pct": 1.42,
+    "_fleet_variance_pct": 8.46,
     "_effective_band_pct": 23.7,
-    "_tolerance_rationale": "10% relative OR 5ms absolute (whichever wider). Comparison helper takes max(rel, abs) so effective band is 5ms = 23.7% of baseline. The small-baseline absolute-floor consequence is unavoidable: at a 21ms baseline, 10% relative is just 2.11ms which equals only ~1x observed range — too tight to clear routine CI jitter. 5ms absolute floor = ~2.5x observed range (2.01ms) = ~16.7x observed stdev/med (1.42%); narrowed from the pre-#403 50ms placeholder (237% effective — was effectively unbounded). If the 23.7% effective band proves too loose in practice, the principled tightening is to add more replicate runs and re-derive stdev from a larger sample, not to lower the abs floor below the observed range."
+    "_tolerance_rationale": "10% relative OR 5ms absolute (whichever wider). Comparison helper takes max(rel, abs) so effective band is 5ms = 23.7% of baseline. Re-verified against the 2026-08-06 fleet-aware 9-run sample (issue #1502, see _bm25_band_recalibration): max observed run-median elevation above the blessed center was +1.59ms (run 31059008024, the uniformly-slow machine); 2x that = 3.2ms, still under the 5ms min floor, so the band is UNCHANGED — at 1k the working set fits runner caches and fleet hardware differences barely register. Fleet cross-run stdev 8.46% is dominated by one uniformly-fast machine on the auto-pass side of the one-sided gate."
   },
   "bm25_build_5k": {
     "_ci_observation": "3 CI runs produced per-run median_ms [107.94, 111.19, 111.10]; med-of-meds=111.10ms, stdev across runs=1.85ms (1.66%), range across 9 individual timings=6.33ms (106.80–113.14).",
     "mean_ms": 111.10,
     "tolerance_pct": 10.0,
-    "tolerance_abs_ms": 15.0,
+    "tolerance_abs_ms": 20.0,
     "_observed_variance_pct": 1.66,
-    "_effective_band_pct": 13.5,
-    "_tolerance_rationale": "10% relative OR 15ms absolute (whichever wider). Comparison helper takes max(rel, abs) so effective band is 15ms = 13.5% of baseline (rel band 11.11ms is just under the abs floor). Absolute band 15ms = ~2.4x observed full-timing range (6.33ms across 9 samples in 3 runs); narrowed from the pre-#403 100ms placeholder (90% effective) per codex iter-2 M1."
+    "_fleet_variance_pct": 8.28,
+    "_effective_band_pct": 18.0,
+    "_tolerance_rationale": "10% relative OR 20ms absolute (whichever wider). Comparison helper takes max(rel, abs) so effective band is 20ms = 18.0% of baseline (rel band 11.11ms is dominated by the abs floor). Widened from 15ms on 2026-08-06 (issue #1502, see _bm25_band_recalibration): the fleet-aware 9-run sample put the max run-median elevation above the blessed center at +9.78ms (run 31059008024, uniformly ~9% slower machine — it cleared the old 15ms band by only 5.2ms); abs band = 2x that elevation = 19.6ms, rounded up to nearest 5ms = 20ms. This widening (13.5%->18.0% effective) makes 5k the bm25 box's TIGHTEST slice and therefore sets the box's minimum-detectable uniform-regression floor at ~18.0% (previously ~11.3%, set by the old 10k band) — see bm25_build_10k._tolerance_rationale for the quantified detection-power tradeoff. The 3-run blessing stdev of 1.66% under-sampled fleet variance (9-run cross-run stdev 8.28%)."
   },
   "bm25_build_10k": {
     "_ci_observation": "3 CI runs produced per-run median_ms [224.85, 222.14, 216.50]; med-of-meds=222.14ms, stdev across runs=4.26ms (1.92%), range across 9 individual timings=12.21ms (215.35–227.56).",
     "mean_ms": 222.14,
     "tolerance_pct": 10.0,
-    "tolerance_abs_ms": 25.0,
+    "tolerance_abs_ms": 60.0,
     "_observed_variance_pct": 1.92,
-    "_effective_band_pct": 11.3,
-    "_tolerance_rationale": "10% relative OR 25ms absolute (whichever wider). Comparison helper takes max(rel, abs) so effective band is 25ms = 11.3% of baseline (rel band 22.21ms is just under the abs floor). Absolute band 25ms = ~2x observed full-timing range (12.21ms); narrowed from the pre-#403 200ms placeholder (90% effective) per codex iter-2 M1."
+    "_fleet_variance_pct": 9.13,
+    "_effective_band_pct": 27.0,
+    "_tolerance_rationale": "10% relative OR 60ms absolute (whichever wider). Comparison helper takes max(rel, abs) so effective band is 60ms = 27.0% of baseline (rel band 22.21ms is dominated by the abs floor). Widened from 25ms on 2026-08-06 (issue #1502, see _bm25_band_recalibration): the old 25ms band (11.3% effective) was tighter than GitHub-runner fleet variance at the 10k working-set size — run 31063489593 hit +28.45ms (+12.8%, a size-dependent cache/bandwidth signature: its 1k/5k slices sat AT baseline) on identical code, a spurious REGRESSION. Fleet-aware 9-run sample: max run-median elevation above the blessed center = +28.45ms; abs band = 2x that elevation = 56.9ms, rounded up to nearest 5ms = 60ms. The 10k slice is the most hardware-sensitive (largest working set spills runner caches), so it carries the widest effective band. DETECTION-POWER COST, quantified: this recalibration raises the bm25 box's minimum-detectable UNIFORM-regression floor from ~11.3% (old tightest slice: 10k at 25ms/222.14ms) to ~18.0% (new tightest slice: 5k at 20ms/111.10ms) — BOTH wide slices loosened, 5k 13.5%->18.0% and 10k 11.3%->27.0% effective. Concretely: a real uniform ~12.8% slowdown (the same magnitude as the #1502 incident) now PASSES all three slices (deltas 2.70/14.22/28.43ms vs bands 5/20/60ms); under the old bands it failed at 10k (28.43 > 25). That tradeoff is correct per the #1502 diagnosis: observed fleet noise reaches +12.8% at 10k on identical code, so a signal at that magnitude was indistinguishable from hardware variance — the old band was flagging runners, not code. The 3-run blessing stdev of 1.92% under-sampled fleet variance (9-run cross-run stdev 9.13%)."
   }
 }

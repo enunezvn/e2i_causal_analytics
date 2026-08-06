@@ -18,15 +18,21 @@ name: Performance Benchmarks
 # deterministic embedder + the real hybrid_*_search SQL fns, no
 # Supabase/OpenAI) — see each entry's _ci_observation in the baseline JSON.
 #
-# Re-bless methodology (issue #403): trigger ≥3 workflow_dispatch runs
-# on a rebless branch, download the performance-benchmark-results
+# Re-bless methodology (issue #403, fleet-aware per issue #1502):
+# trigger ≥6 workflow_dispatch runs in waves of 2 spread over hours
+# (ideally days) so distinct runner hardware classes are sampled — 3
+# back-to-back runs can all land on similar hardware and under-state
+# fleet variance ~5x. Download the performance-benchmark-results
 # artifact from each (contains measurements.json — each record carries
 # `runs[]` raw per-iteration timings plus a primary scalar identified by
 # `statistic` ∈ {"median","p50","p95"} and stored in `value_ms`). For
 # the cascade + bm25 boxes (statistic="median"), take median-of-value_ms
 # across runs. For the hybrid p95 box (GH #414), take median-of-value_ms
 # across runs where statistic="p95". Refresh the baseline JSON's
-# _ci_observation + _blessed_from_ci_runs fields with the result.
+# _ci_observation + run-id list fields with the result, and re-derive
+# each abs band ONE-SIDED (the gate auto-passes improvements): 2x the
+# max run-median elevation above the new center, min 5ms, rounded up
+# to the nearest 5ms.
 
 on:
   push:
@@ -187,7 +193,7 @@ jobs:
             echo "|-----|--------|-----------|"
             echo "| 1. Cascade 5-hop BFS | < 500ms | 10% rel OR 45ms abs |"
             echo "| 2. HybridRetriever p50 / p95 | < 200ms / < 500ms | 50% rel OR 8ms / 12ms abs (local-substrate fixed-threshold ~3x guard; GH #414) |"
-            echo "| 3. BM25 build 1k / 5k / 10k | curve (no absolute target) | 10% rel OR 5/15/25ms abs |"
+            echo "| 3. BM25 build 1k / 5k / 10k | curve (no absolute target) | 10% rel OR 5/20/60ms abs (fleet-aware per GH #1502) |"
             echo "| 4. Postgres slow log | config-only (see config/postgres_slow_log.md) | n/a — operational gate |"
             echo
             echo "Improvements (observed < baseline) always pass; the PR body"
@@ -196,10 +202,14 @@ jobs:
             echo "Baseline strategy: ci-blessed-median for all 6 boxes — cascade +"
             echo "bm25 × 3 (issue #403) and the 2 HybridRetriever baselines against"
             echo "the local pgvector substrate (issue #414; no Supabase/OpenAI)."
-            echo "To re-bless, trigger ≥3 workflow_dispatch runs on a rebless"
-            echo "branch and consume the performance-benchmark-results artifact's"
+            echo "To re-bless, trigger ≥6 workflow_dispatch runs in waves of 2"
+            echo "spread over hours/days (fleet-aware per GH #1502 — 3"
+            echo "back-to-back runs can all land on similar hardware) and"
+            echo "consume the performance-benchmark-results artifact's"
             echo "measurements.json — each record carries runs[] raw timings"
             echo "plus a (statistic, value_ms) primary-scalar tuple. For median"
             echo "boxes take median-of-value_ms across runs; for p95 boxes (GH"
             echo "#414) take median-of-value_ms where statistic=\"p95\"."
+            echo "Re-derive abs bands one-sided: 2x the max run-median"
+            echo "elevation above the new center, min 5ms, rounded up to 5ms."
           } >> "$GITHUB_STEP_SUMMARY"
