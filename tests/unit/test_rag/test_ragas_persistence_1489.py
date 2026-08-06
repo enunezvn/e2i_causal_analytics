@@ -340,6 +340,38 @@ class TestJudgedTurns:
 
         assert len(judged_turns(block, [_record("q01", ["ctx"])])) == 1
 
+    def test_an_unrecognised_evaluation_method_raises(self):
+        """The judged path stamps NOTHING, so any marker at all means the row
+        did not come from the gpt-4o judge.
+
+        ``_ragas_heuristic_contamination_error`` says exactly this: "an absent
+        or None value means judged. ANY other value is refused, so an
+        unrecognised future marker blocks rather than slips through."
+        ``RagasBundle`` only refuses labels containing "heuristic", which was
+        enough while the gate was persistence's backstop — until iter-2 made
+        persistence run regardless of the verdict and removed that backstop.
+        A row stamped "some_future_mode" was gate-blocked and persisted anyway,
+        into a table with no column that could mark it. (codex iter-8 HIGH,
+        reproduced.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        with pytest.raises(RagasPersistenceError, match="some_future_mode"):
+            judged_turns(
+                _block([_row("q01", 0.9, 0.5, evaluation_method="some_future_mode")]),
+                [_record("q01", ["ctx"])],
+            )
+
+    def test_an_absent_evaluation_method_is_accepted(self):
+        """Blocks recorded before the judge carried the stamp have no such key;
+        the guard must be add-only on them, exactly as the gate's is."""
+        from src.rag.ragas_persistence import judged_turns
+
+        row = _row("q01", 0.9, 0.5)
+        del row["evaluation_method"]
+
+        assert len(judged_turns(_block([row]), [_record("q01", ["ctx"])])) == 1
+
     def test_malformed_block_raises(self):
         from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
 

@@ -269,11 +269,25 @@ def judged_turns(
         if not contexts:
             scores["faithfulness"] = None
 
-        # RagasBundle refuses any label containing "heuristic": a quota error
-        # mid-run degrades a sample to word-overlap scoring while the process
-        # still exits 0, and evaluation_results has no column that could mark
-        # such a row. Re-raise as this module's error so the caller sees which
-        # sample was contaminated.
+        # The judged path stamps NOTHING — "an absent or None value means
+        # judged. ANY other value is refused, so an unrecognised future marker
+        # blocks rather than slips through" (_ragas_heuristic_contamination_
+        # error). RagasBundle only refuses labels containing "heuristic", which
+        # sufficed while the GATE was persistence's backstop; making
+        # persistence independent of the verdict removed that backstop, so this
+        # path has to apply the gate's own predicate. evaluation_results has no
+        # column that could mark such a row afterwards.
+        method = row.get("evaluation_method")
+        if method is not None:
+            raise RagasPersistenceError(
+                f"sample {query_id!r} carries evaluation_method={method!r}; the gpt-4o judged "
+                "path stamps nothing, so any marker means these numbers were not produced by "
+                "the judge, and no column in evaluation_results could say so"
+            )
+
+        # RagasBundle applies the same refusal from the other direction (any
+        # label containing "heuristic"). Re-raise as this module's error so the
+        # caller sees which sample was contaminated.
         try:
             bundle = RagasBundle(
                 scores=scores,
