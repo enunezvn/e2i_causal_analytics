@@ -639,6 +639,51 @@ class TestDbSource:
             "row is not an object",
         }, drops
 
+    def test_an_oversized_turn_is_dropped_not_truncated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The row cap bounds COUNT; nothing bounded the payload.
+
+        The file source's feedstock is a curated golden set, so its turns are
+        sized by whoever wrote the replay. The DB source's is uncurated live
+        traffic, where one pathological answer can be megabytes — and every
+        character is sent to the gpt-4o judge, on every metric call, for every
+        GEPA candidate. That is a cost and timeout risk the budget knob cannot
+        see.
+
+        DROPPED, never truncated: a shortened answer judged against full
+        contexts scores badly for a reason that has nothing to do with the
+        prompt, which is the same fabricated-signal harm as reading a synthetic
+        query. Losing the turn is honest; keeping a distorted one is not.
+        """
+        import asyncio
+        import logging
+
+        from src.tasks import rag_example_sources as mod
+
+        huge = "x" * (mod.MAX_TURN_CHARS + 1)
+        rows = [_row("q", huge, [{"content": "ctx"}]), _row("ok", "answer", [{"content": "ctx"}])]
+        with caplog.at_level(logging.WARNING, logger="src.tasks.rag_example_sources"):
+            batch = asyncio.run(mod.db_batch(client=_FakeClient(rows)))
+
+        assert [e.user_query for e in batch.examples] == ["ok"]
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "large" in blob.lower() or "size" in blob.lower(), blob
+
+    def test_a_turn_at_the_size_limit_is_kept(self) -> None:
+        """Control: the cap must not quietly eat ordinary long answers."""
+        import asyncio
+
+        from src.tasks import rag_example_sources as mod
+
+        # Comfortably under the cap once query + contexts are counted too.
+        answer = "x" * (mod.MAX_TURN_CHARS - 1000)
+        batch = asyncio.run(
+            mod.db_batch(client=_FakeClient([_row("q", answer, [{"content": "ctx"}])]))
+        )
+        assert len(batch.examples) == 1
+        assert batch.examples[0].synthesis == answer, "the kept turn must be intact, not trimmed"
+
     def test_no_diagnosis_when_there_were_no_candidates_at_all(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

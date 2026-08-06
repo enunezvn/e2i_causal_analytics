@@ -100,11 +100,14 @@ x-common-env: &common-env
   # be a second, silently-diverging source of truth for a knob that costs real
   # gpt-4o judge calls.
   #
-  # DSPY_RAG_RECORDS_PATH is resolved INSIDE the container. Every data volume in
-  # this file is a named docker volume, never a host bind mount, so a host path
-  # — the natural thing to write, since scripts/replay_golden_set.py runs on the
-  # host — resolves to "records file not found" and the leg skips forever while
-  # looking configured. Use a container path under one of the named volumes this
+  # DSPY_RAG_RECORDS_PATH is resolved INSIDE the container. Every volume on the
+  # services that merge this anchor (api, worker_light/medium/heavy) is a named
+  # docker volume, never a host bind mount — so a host path, the natural thing to
+  # write since scripts/replay_golden_set.py runs on the host, resolves to
+  # "records file not found" and the leg skips forever while looking configured.
+  # (Other services in this file DO bind-mount host paths — bentoml, feast,
+  # prometheus — which is exactly why the distinction is worth stating here
+  # rather than assumed.) Use a container path under one of the named volumes this
   # service mounts read-write (worker_medium has seven; /app/optimized_modules
   # is the natural pick because this leg already writes its artifacts and
   # .trigger_state.json there). Leaving it unset is the supported steady state

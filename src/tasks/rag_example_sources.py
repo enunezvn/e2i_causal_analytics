@@ -103,6 +103,20 @@ FEEDSTOCK_TABLE = "learning_signals"
 # because the usable rows could then be sitting just past the boundary.
 DB_ROW_CAP = 500
 
+# Ceiling on ONE turn's total judged text (query + answer + every context).
+# DB_ROW_CAP bounds how MANY turns are read; nothing bounded how big one is, and
+# the DB source's feedstock is uncurated live traffic rather than a curated
+# golden set. Every character here is sent to the gpt-4o judge on every metric
+# call for every GEPA candidate, so a single pathological answer is a cost and
+# timeout risk the DSPY_RAG_MAX_METRIC_CALLS budget cannot see.
+#
+# 50k chars is roughly 12k tokens — far above any real answer (the producer
+# already caps each stored chunk at 4,000 chars) while keeping a full 20-example
+# pass bounded. An oversized turn is DROPPED, never truncated: a shortened
+# answer judged against full contexts scores badly for a reason unrelated to the
+# prompt, which is the same fabricated-signal harm as reading a synthetic query.
+MAX_TURN_CHARS = 50_000
+
 SOURCE_FILE = "file"
 SOURCE_DB = "db"
 
@@ -374,6 +388,9 @@ def _turns_from_rows(rows: Iterable[Dict[str, Any]]) -> Tuple[List[_Turn], Dict[
         contexts = _context_texts(row.get("retrieved_chunks"))
         if not contexts:
             _drop("no readable evidence text in retrieved_chunks")
+            continue
+        if len(query) + len(answer) + sum(len(c) for c in contexts) > MAX_TURN_CHARS:
+            _drop(f"turn larger than {MAX_TURN_CHARS} chars of judged text")
             continue
         turns.append(_Turn(query=query, answer=answer, contexts=tuple(contexts)))
     return turns, drops

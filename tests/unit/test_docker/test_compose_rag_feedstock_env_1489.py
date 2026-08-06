@@ -245,11 +245,18 @@ def test_the_suggested_records_directory_is_actually_mounted_read_write() -> Non
     )
 
 
-def test_no_host_bind_mount_exists_to_make_a_host_path_work() -> None:
-    """Pins the premise the comment above rests on.
+def test_no_host_bind_mount_on_the_services_that_run_the_leg() -> None:
+    """Pins the premise the comment above rests on — at the comment's scope.
 
-    If someone later adds a host bind mount for a data root, this test fails and
-    forces the comment to be revisited rather than left stale and wrong.
+    An earlier version of the comment claimed EVERY volume in the file was a
+    named volume. That is false (see the companion test below), and this test
+    did not catch it because it only ever looked at the four anchor services —
+    the same shape of mistake as the vacuous guards found earlier in this lane:
+    a test that passes while the prose it defends overclaims.
+
+    The claim and the check are now the same scope. If someone bind-mounts a
+    host path onto one of these services, the comment's advice stops holding and
+    this fails.
     """
     compose = _load_compose()
     for service in _SERVICES_NEEDING_ENV:
@@ -262,3 +269,29 @@ def test_no_host_bind_mount_exists_to_make_a_host_path_work() -> None:
                 f"{service} bind-mounts host path {source!r}; the "
                 f"{_RECORDS_PATH_VAR} container-path comment may now be stale."
             )
+
+
+def test_other_services_really_do_bind_mount_host_paths() -> None:
+    """The reason the comment has to be scoped rather than global.
+
+    Keeps the narrowing honest: if these bind mounts ever disappear, the
+    parenthetical naming them becomes wrong and should be removed.
+    """
+    compose = _load_compose()
+    binds = {
+        service: [
+            m
+            for m in (body or {}).get("volumes") or []
+            if isinstance(m, str) and m.split(":", 1)[0].startswith((".", "/", "~"))
+        ]
+        for service, body in (compose.get("services") or {}).items()
+    }
+    with_binds = {s: m for s, m in binds.items() if m}
+    assert with_binds, (
+        "no service bind-mounts a host path any more; the compose comment's "
+        "parenthetical about bentoml/feast/prometheus is now stale"
+    )
+    assert not (set(with_binds) & set(_SERVICES_NEEDING_ENV)), (
+        f"a leg-running service gained a host bind mount: "
+        f"{set(with_binds) & set(_SERVICES_NEEDING_ENV)}"
+    )
