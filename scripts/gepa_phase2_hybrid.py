@@ -245,7 +245,7 @@ async def optimize_agent(
             agent_name=agent_name,
             trainset=trainset,
             valset=valset,
-            budget=budget,
+            auto=budget,  # 'auto' is GEPA's budget-preset parameter
             seed=seed,
         )
 
@@ -260,14 +260,18 @@ async def optimize_agent(
         if hasattr(optimizer, "best_score"):
             results["best_score"] = optimizer.best_score
 
-        # Save optimized module
-        version_id = await save_optimized_module(
+        # Save optimized module (sync saver; the run details ride `metadata`)
+        save_info = save_optimized_module(
+            optimized,
             agent_name=agent_name,
-            optimized_module=optimized,
-            budget=budget,
-            score=results.get("best_score", 0.0),
+            metadata={
+                "budget": budget,
+                "score": results.get("best_score", 0.0),
+                "elapsed_seconds": elapsed,
+            },
         )
-        results["version_id"] = version_id
+        results["version_id"] = save_info["version_id"]
+        results["artifact"] = save_info["path"]
 
         return results
 
