@@ -405,3 +405,51 @@ class TestArtifactRootMatchesComposeWiring:
         assert path.parent.parent.name == "optimized_modules"
         assert json.loads(path.read_text())["agent_name"] == OPTIMIZED_SYNTHESIS_AGENT_NAME
         assert load_optimized_synthesis_module(reset=True) is not None
+
+
+class TestProbeImportFailureFailsSoft1496:
+    """The reload probe must not widen its exception surface (#1496 iter-1 HIGH).
+
+    _artifact_signature() defers the versioning import, which pulls the whole
+    gepa package chain on first touch. The probe is a documented fail-soft seam
+    — AgentModule construction calls it on every workflow build with no catch
+    above it — so an import failure must degrade to the base prompt, loudly,
+    never break user-facing RAG construction. (_load_optimized_module's twin
+    import is different: it runs inside the caller's transient-failure
+    ``except Exception`` block.)
+    """
+
+    def test_gepa_import_failure_degrades_to_base_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import sys
+
+        from src.rag.cognitive_rag_dspy import load_optimized_synthesis_module
+
+        monkeypatch.chdir(tmp_path)
+        # Poison the entry so the probe's deferred import raises ImportError
+        # even though the package imported fine earlier in this process.
+        monkeypatch.setitem(sys.modules, "src.optimization.gepa.versioning", None)
+
+        with caplog.at_level("WARNING", logger="src.rag.cognitive_rag_dspy"):
+            assert load_optimized_synthesis_module(reset=True) is None
+        # Loud degradation, not the cached-miss INFO line: the 2026-06-08
+        # incident was six weeks of silent base-prompt fallback.
+        assert any(
+            r.levelname == "WARNING" and "import" in r.message.lower() for r in caplog.records
+        ), [r.message for r in caplog.records]
+
+    def test_gepa_import_failure_never_breaks_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+
+        from src.rag.cognitive_rag_dspy import AgentModule, load_optimized_synthesis_module
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setitem(sys.modules, "src.optimization.gepa.versioning", None)
+
+        load_optimized_synthesis_module(reset=True)
+        agent = AgentModule(agent_registry={})
+        assert agent.synthesize is not None
+        assert hasattr(agent.synthesize, "predictors")

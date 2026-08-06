@@ -575,15 +575,29 @@ def _artifact_signature() -> Optional[tuple]:
     loader actually parses. Import deferred like _load_optimized_module's: the
     gepa package costs ~1s the first time it is pulled into a process, and a
     module-level import would put that on every importer of this module.
-    """
-    from src.optimization.gepa.versioning import newest_saved_artifact
 
+    The import lives INSIDE the try: this probe is a fail-soft seam
+    (AgentModule construction calls it on every workflow build with no catch
+    above it), so a gepa import failure must degrade to the base prompt — with
+    a WARNING, not the cached-miss INFO line — never break RAG construction.
+    _load_optimized_module's twin import needs no such guard because it runs
+    inside the caller's transient-failure ``except Exception`` block.
+    """
     directory = Path(OPTIMIZED_MODULES_DIR) / OPTIMIZED_SYNTHESIS_AGENT_NAME
     try:
+        from src.optimization.gepa.versioning import newest_saved_artifact
+
         newest = newest_saved_artifact(directory)
         if newest is None:
             return None
         return (str(newest), newest.stat().st_mtime_ns)
+    except ImportError as e:
+        logger.warning(
+            "Cannot resolve optimized synthesis artifacts (gepa import failed); "
+            "using base prompt: %s",
+            e,
+        )
+        return None
     except OSError:
         return None
 
