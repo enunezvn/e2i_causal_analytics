@@ -8,6 +8,7 @@ Tests the GEPA optimizer factory, versioning, and A/B testing infrastructure:
 Version: 4.3
 """
 
+import json
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -406,6 +407,145 @@ class TestVersioning:
 
         # Should load the later version (sorted by filename)
         assert loaded_module is not None
+
+    def test_load_latest_resolves_v10_over_v9(self, mock_module, temp_output_dir):
+        """#1496: newest-version resolution must sort the gepa_v<n> suffix numerically.
+
+        Lexicographic name order inverts at v10 ("gepa_v10..." < "gepa_v2...", and
+        "gepa_v9..." greatest of all), so after the 10th save a name sort resolves
+        a stale artifact as "newest" forever.
+        """
+        from src.optimization.gepa.versioning import (
+            load_optimized_module,
+            save_optimized_module,
+        )
+
+        for n in range(1, 11):
+            save_optimized_module(
+                module=mock_module,
+                agent_name="test_agent",
+                version_id=f"gepa_v{n}_test_agent_202512{n:02d}_100000",
+                output_dir=temp_output_dir,
+            )
+
+        mock_cls = MagicMock()
+        mock_cls.return_value = MagicMock()
+        _, metadata = load_optimized_module(
+            module_cls=mock_cls,
+            agent_name="test_agent",
+            input_dir=temp_output_dir,
+        )
+
+        assert metadata["version_id"] == "gepa_v10_test_agent_20251210_100000"
+
+    def test_load_latest_equal_versions_fall_back_to_save_time_order(
+        self, mock_module, temp_output_dir
+    ):
+        """generate_version_id emits v1 for every save today; the tie-break must
+        keep resolving equal version numbers by the zero-padded timestamp in the
+        name, exactly as the pre-#1496 name sort did."""
+        from src.optimization.gepa.versioning import (
+            load_optimized_module,
+            save_optimized_module,
+        )
+
+        for ts in ("20251201_100000", "20251202_100000"):
+            save_optimized_module(
+                module=mock_module,
+                agent_name="test_agent",
+                version_id=f"gepa_v1_test_agent_{ts}",
+                output_dir=temp_output_dir,
+            )
+
+        mock_cls = MagicMock()
+        mock_cls.return_value = MagicMock()
+        _, metadata = load_optimized_module(
+            module_cls=mock_cls,
+            agent_name="test_agent",
+            input_dir=temp_output_dir,
+        )
+
+        assert metadata["version_id"] == "gepa_v1_test_agent_20251202_100000"
+
+    def test_load_latest_never_resolves_a_name_without_a_version(
+        self, mock_module, temp_output_dir
+    ):
+        """A gepa_*.json name the saver could not have produced (no parseable
+        gepa_v<n> prefix — e.g. a hand-made copy) must not win "newest", even
+        when it lexicographically outranks every real version."""
+        from src.optimization.gepa.versioning import (
+            load_optimized_module,
+            save_optimized_module,
+        )
+
+        save_optimized_module(
+            module=mock_module,
+            agent_name="test_agent",
+            version_id="gepa_v2_test_agent_20251202_100000",
+            output_dir=temp_output_dir,
+        )
+        # Lexicographically greater than any gepa_v* name; valid JSON so that a
+        # wrong SELECTION fails the assert below rather than erroring earlier.
+        straggler = Path(temp_output_dir) / "test_agent" / "gepa_zzz_manual_copy.json"
+        straggler.write_text(
+            json.dumps(
+                {
+                    "version_id": "gepa_zzz_manual_copy",
+                    "created_at": "2025-12-03T10:00:00",
+                    "instruction_hash": "0" * 64,
+                    "module_state": {},
+                    "metadata": {},
+                }
+            )
+        )
+
+        mock_cls = MagicMock()
+        mock_cls.return_value = MagicMock()
+        _, metadata = load_optimized_module(
+            module_cls=mock_cls,
+            agent_name="test_agent",
+            input_dir=temp_output_dir,
+        )
+
+        assert metadata["version_id"] == "gepa_v2_test_agent_20251202_100000"
+
+    def test_load_latest_all_versionless_names_is_deterministic_not_a_crash(self, temp_output_dir):
+        """With ONLY unversioned names on disk the loader must still resolve
+        deterministically (name order among themselves) instead of raising."""
+        from src.optimization.gepa.versioning import load_optimized_module
+
+        agent_dir = Path(temp_output_dir) / "test_agent"
+        agent_dir.mkdir(parents=True)
+        for name in ("gepa_alpha.json", "gepa_beta.json"):
+            (agent_dir / name).write_text(
+                json.dumps(
+                    {
+                        "version_id": name.removesuffix(".json"),
+                        "created_at": "2025-12-01T10:00:00",
+                        "instruction_hash": "0" * 64,
+                        "module_state": {},
+                        "metadata": {},
+                    }
+                )
+            )
+
+        mock_cls = MagicMock()
+        mock_cls.return_value = MagicMock()
+        _, metadata = load_optimized_module(
+            module_cls=mock_cls,
+            agent_name="test_agent",
+            input_dir=temp_output_dir,
+        )
+
+        assert metadata["version_id"] == "gepa_beta"
+
+    def test_artifact_sort_key_orders_versions_numerically(self):
+        """The shared ordering key both resolution sites use (#1496)."""
+        from src.optimization.gepa.versioning import gepa_artifact_sort_key
+
+        names = [Path(f"gepa_v{n}_agent_20251201_100000.json") for n in (10, 2, 1, 11, 9)]
+        ordered = [p.name.split("_")[1] for p in sorted(names, key=gepa_artifact_sort_key)]
+        assert ordered == ["v1", "v2", "v9", "v10", "v11"]
 
     def test_rollback_to_version(self, mock_module, temp_output_dir):
         """Test rolling back to a previous version."""

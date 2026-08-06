@@ -25,7 +25,9 @@ import pytest
 pytestmark = pytest.mark.xdist_group(name="gepa_metrics")
 
 
-def _write_artifact(root: Path, agent_name: str, instructions: str) -> Path:
+def _write_artifact(
+    root: Path, agent_name: str, instructions: str, version_id: str | None = None
+) -> Path:
     """Write an artifact in the exact shape save_optimized_module produces.
 
     Built by calling the real saver rather than hand-rolling JSON, so this test
@@ -40,6 +42,7 @@ def _write_artifact(root: Path, agent_name: str, instructions: str) -> Path:
     info = save_optimized_module(
         module=module,
         agent_name=agent_name,
+        version_id=version_id,
         output_dir=str(root),
         metadata={"source": "test"},
     )
@@ -258,6 +261,128 @@ class TestAgentModuleUsesTheLoadedPrompt:
         assert agent.synthesize is not None
 
 
+class TestNewestResolutionIsNumeric1496:
+    """Newest-artifact resolution must sort the gepa_v<n> suffix numerically (#1496).
+
+    Two independent sites resolve "newest": versioning.load_optimized_module
+    (what gets parsed) and _artifact_signature here (what keys the module-reload
+    cache). Lexicographic name order inverts at v10 ("gepa_v10..." < "gepa_v2...",
+    with "gepa_v9..." greatest of all), pinning both to a stale artifact after
+    the 10th save. Because the two sites are consistent-together today, fixing
+    only ONE desynchronizes the reload cache from what the loader parses —
+    worse than both being wrong together — so the agreement test below is a
+    desync guard: it goes red if the two ever rank the same directory
+    differently.
+    """
+
+    def _write_versions(self, tmp_path: Path, upto: int = 10) -> None:
+        from src.rag.cognitive_rag_dspy import OPTIMIZED_SYNTHESIS_AGENT_NAME
+
+        root = tmp_path / "optimized_modules"
+        for n in range(1, upto + 1):
+            _write_artifact(
+                root,
+                OPTIMIZED_SYNTHESIS_AGENT_NAME,
+                f"VERSION-{n}",
+                version_id=(f"gepa_v{n}_{OPTIMIZED_SYNTHESIS_AGENT_NAME}_202512{n:02d}_100000"),
+            )
+
+    def test_signature_probe_resolves_v10_not_v9(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cache key must track the artifact a numeric sort calls newest."""
+        from src.rag.cognitive_rag_dspy import _artifact_signature
+
+        monkeypatch.chdir(tmp_path)
+        self._write_versions(tmp_path)
+
+        signature = _artifact_signature()
+        assert signature is not None
+        assert Path(signature[0]).name.startswith("gepa_v10_"), signature[0]
+
+    def test_loader_and_signature_probe_agree_on_newest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DESYNC GUARD: both resolution sites must rank the same directory
+        identically. Exercised on an adversarial set (the v9/v10 boundary plus
+        an unversioned straggler) so that changing the ordering in only one of
+        versioning.py / cognitive_rag_dspy.py fails here."""
+        import dspy
+
+        from src.optimization.gepa.versioning import load_optimized_module
+        from src.rag.cognitive_rag_dspy import (
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            EvidenceSynthesisSignature,
+            _artifact_signature,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        self._write_versions(tmp_path)
+        # An unversioned name that lexicographically outranks every real
+        # version; valid JSON so a wrong selection fails the assert, not earlier.
+        straggler = (
+            tmp_path
+            / "optimized_modules"
+            / OPTIMIZED_SYNTHESIS_AGENT_NAME
+            / "gepa_zzz_manual_copy.json"
+        )
+        straggler.write_text(
+            json.dumps(
+                {
+                    "version_id": "gepa_zzz_manual_copy",
+                    "created_at": "2025-12-03T10:00:00",
+                    "instruction_hash": "0" * 64,
+                    "module_state": {},
+                    "metadata": {},
+                }
+            )
+        )
+
+        signature = _artifact_signature()
+        assert signature is not None
+
+        _, metadata = load_optimized_module(
+            lambda: dspy.ChainOfThought(EvidenceSynthesisSignature),
+            agent_name=OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        )
+        assert metadata["source_path"] == signature[0], (
+            "the reload-cache key and the loader disagree on which artifact is "
+            "newest — the cache will either thrash or pin a stale module"
+        )
+
+    def test_v10_supersedes_a_cached_v9_module(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: a worker holding v9 must serve v10 once it lands.
+
+        Under the lexicographic sort the probe keeps resolving v9 as newest
+        (path and mtime unchanged), so the cache never invalidates and the
+        stale module is served forever — the #1496 failure mode.
+        """
+        from src.rag.cognitive_rag_dspy import (
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            load_optimized_synthesis_module,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        self._write_versions(tmp_path, upto=9)
+        assert load_optimized_synthesis_module(reset=True) is not None
+
+        _write_artifact(
+            tmp_path / "optimized_modules",
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+            "VERSION-10-NEWEST",
+            version_id=(f"gepa_v10_{OPTIMIZED_SYNTHESIS_AGENT_NAME}_20251210_100000"),
+        )
+        reloaded = load_optimized_synthesis_module()
+        assert reloaded is not None
+        instructions = [
+            getattr(getattr(p, "signature", None), "instructions", "")
+            for p in reloaded.predictors()
+        ]
+        assert any("VERSION-10-NEWEST" in (i or "") for i in instructions), instructions
+
+
 class TestArtifactRootMatchesComposeWiring:
     def test_loader_reads_the_root_compose_mounts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -280,3 +405,51 @@ class TestArtifactRootMatchesComposeWiring:
         assert path.parent.parent.name == "optimized_modules"
         assert json.loads(path.read_text())["agent_name"] == OPTIMIZED_SYNTHESIS_AGENT_NAME
         assert load_optimized_synthesis_module(reset=True) is not None
+
+
+class TestProbeImportFailureFailsSoft1496:
+    """The reload probe must not widen its exception surface (#1496 iter-1 HIGH).
+
+    _artifact_signature() defers the versioning import, which pulls the whole
+    gepa package chain on first touch. The probe is a documented fail-soft seam
+    — AgentModule construction calls it on every workflow build with no catch
+    above it — so an import failure must degrade to the base prompt, loudly,
+    never break user-facing RAG construction. (_load_optimized_module's twin
+    import is different: it runs inside the caller's transient-failure
+    ``except Exception`` block.)
+    """
+
+    def test_gepa_import_failure_degrades_to_base_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import sys
+
+        from src.rag.cognitive_rag_dspy import load_optimized_synthesis_module
+
+        monkeypatch.chdir(tmp_path)
+        # Poison the entry so the probe's deferred import raises ImportError
+        # even though the package imported fine earlier in this process.
+        monkeypatch.setitem(sys.modules, "src.optimization.gepa.versioning", None)
+
+        with caplog.at_level("WARNING", logger="src.rag.cognitive_rag_dspy"):
+            assert load_optimized_synthesis_module(reset=True) is None
+        # Loud degradation, not the cached-miss INFO line: the 2026-06-08
+        # incident was six weeks of silent base-prompt fallback.
+        assert any(
+            r.levelname == "WARNING" and "import" in r.message.lower() for r in caplog.records
+        ), [r.message for r in caplog.records]
+
+    def test_gepa_import_failure_never_breaks_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+
+        from src.rag.cognitive_rag_dspy import AgentModule, load_optimized_synthesis_module
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setitem(sys.modules, "src.optimization.gepa.versioning", None)
+
+        load_optimized_synthesis_module(reset=True)
+        agent = AgentModule(agent_registry={})
+        assert agent.synthesize is not None
+        assert hasattr(agent.synthesize, "predictors")
