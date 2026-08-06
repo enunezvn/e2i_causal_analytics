@@ -14,17 +14,27 @@ Why a second source rather than a scheduled replay
 --------------------------------------------------
 Re-running the replay nightly would spend retrieval + generation + judge calls
 on 30 golden questions every night, which is exactly what #504 concluded not to
-automate. It is also unnecessary: live traffic ALREADY writes the judgeable
-triple to ``learning_signals`` on every cognitive turn —
+automate. It is also unnecessary: live traffic writes the judgeable triple to
+``learning_signals``, at no collection cost, so the cadence deferral 2 asks for
+is "read what traffic already wrote" rather than a new schedule.
 
-* ``training_input``  -> the user's query,
-* ``training_output`` -> the answer that was served,
-* ``retrieved_chunks``-> the evidence it was grounded in (#1489 deferral 1).
+Two of the three columns are populated TODAY; the third is not, and the
+difference matters enough to state exactly rather than round off:
 
-Measured on the live DB 2026-08-06: 3,523 of 3,959 rows already carry a real
-query and answer, spanning 2026-06-10..2026-08-06. That is a continuously
-refreshed feedstock that costs nothing to collect, so the cadence deferral 2
-asks for is "read what live traffic already wrote", not a new schedule.
+* ``training_input``  -> the user's query — **written today**,
+* ``training_output`` -> the answer that was served — **written today**
+  (measured on the live DB 2026-08-06: 3,523 of 3,959 rows carry both, spanning
+  2026-06-10..2026-08-06),
+* ``retrieved_chunks``-> the evidence it was grounded in — **NO producer on
+  this branch**. Migration 022 added the column "for RAGAS evaluation" and
+  nothing has ever written it (non-default on 0 of those 3,959 rows, same
+  measurement). The producer is #1489 deferral 1, on the sibling branch
+  ``fix/1489-d1-ragas-producer``.
+
+So this source yields ZERO examples until that lands, which is precisely why it
+is safe to ship now and why it is default-OFF: the leg's min-examples gate
+returns before constructing a metric or an optimizer, at zero API cost. The
+real-DB test pins that current state rather than asserting a future one.
 
 Which source is authoritative
 -----------------------------
@@ -362,13 +372,15 @@ def _db_lookback_days() -> int:
 def _context_texts(chunks: Any) -> List[str]:
     """Passage text out of ``retrieved_chunks``, tolerant of both writers' shapes.
 
-    #1489's producer writes ``{"content": ...}`` dicts
-    (``src/rag/retrieved_chunks.py``, whose docstring makes ``content`` the key
-    every producer sets), but migration 022 put NO shape constraint on the JSONB
-    column and the replay path's own contexts are bare strings. A reader that
-    understood only one shape would silently drop every row the other wrote —
-    and a silently short context list is judged as if retrieval had returned
-    less than it did.
+    Migration 022 put NO shape constraint on the JSONB column, and the two
+    shapes that will reach it differ: the replay path's contexts are bare
+    strings, while #1489 deferral 1's producer writes ``{"content": ...}`` dicts
+    (``src/rag/retrieved_chunks.py`` — NOT on this branch; it arrives with the
+    sibling ``fix/1489-d1-ragas-producer``, whose module docstring makes
+    ``content`` the key every producer sets). A reader that understood only one
+    shape would silently drop every row the other wrote, and a silently short
+    context list is judged as if retrieval had returned less than it did — so
+    this is tolerant by evidence about both writers, not by hedging.
     """
     if not isinstance(chunks, list):
         return []

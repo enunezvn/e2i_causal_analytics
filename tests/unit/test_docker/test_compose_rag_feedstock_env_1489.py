@@ -212,9 +212,11 @@ def test_scheduler_is_excluded_by_design_not_by_oversight() -> None:
 def test_records_path_entry_warns_that_the_path_is_container_side() -> None:
     """The host-path trap must be documented where an operator will read it.
 
-    Not a style check: every volume in this file is a named docker volume, so a
-    host path silently becomes a permanent skip. Nothing in the YAML schema can
-    express that, so the comment is the only place the mitigation can live.
+    Not a style check: every volume on the services that run the leg is a named
+    docker volume (other services in the file DO bind-mount host paths — see the
+    two companion tests below), so a host path silently becomes a permanent
+    skip. Nothing in the YAML schema can express that, so the comment is the
+    only place the mitigation can live.
     """
     text = _COMPOSE_PATH.read_text()
     anchor = text.index("x-common-env:")
