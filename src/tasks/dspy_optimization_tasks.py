@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+from src.tasks import rag_example_sources as rag_sources
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -26,10 +27,18 @@ _STATE_PATH = Path("optimized_modules") / ".trigger_state.json"
 
 # --- RAG-prompt optimization leg (#1486) -------------------------------------
 #
-# Path to a replay records file produced by scripts/replay_golden_set.py
-# (--record-out). Records are consumed as PURE JSON; this module imports no
-# replay code. Needs a docker-compose x-common-env entry to reach the worker.
-RAG_RECORDS_PATH_ENV = "DSPY_RAG_RECORDS_PATH"
+# Feedstock resolution lives in src/tasks/rag_example_sources (#1489 deferral 5):
+# one seam over the replay-file source this leg shipped with and the
+# live-traffic source that lets the nightly cycle run unattended. Re-exported
+# here because that is where #1486 put the surface, and the leg's tests and any
+# operator tooling import it from this module.
+#
+# Both env knobs now have docker-compose x-common-env entries (#1489 deferral 2);
+# before that the host .env never reached the worker and the in-code defaults
+# governed no matter what an operator set.
+RAG_RECORDS_PATH_ENV = rag_sources.RAG_RECORDS_PATH_ENV
+RagExampleSourceUnavailable = rag_sources.RagExampleSourceUnavailable
+load_rag_examples_from_records = rag_sources.load_rag_examples_from_records
 
 # Judge budget, in GEPA metric calls. Measured against installed dspy 3.1.0:
 # auto="light" resolves to ~384-396 metric calls almost independently of dataset
@@ -101,12 +110,14 @@ def _rag_records_fingerprint(path: str, max_metric_calls: int) -> str:
     alone would then mark those records permanently done, so a later
     DSPY_RAG_MAX_METRIC_CALLS increase — the one action that could actually find
     an improvement — would be silently skipped.
-    """
-    import hashlib
 
-    digest = hashlib.sha256(Path(path).read_bytes())
-    digest.update(f"|max_metric_calls={max_metric_calls}".encode())
-    return digest.hexdigest()
+    The leg itself now fingerprints whichever source it read
+    (``RagExampleBatch.fingerprint``); this stays as the file-path form #1486
+    shipped. Both produce the SAME digest for the same file, so the
+    ``.trigger_state.json`` entries already on the production volume remain
+    valid across this refactor rather than triggering a full re-spend.
+    """
+    return rag_sources.records_batch(path).fingerprint(max_metric_calls)
 
 
 def _instructions_of(module: Any) -> Tuple[str, ...]:
@@ -115,51 +126,6 @@ def _instructions_of(module: Any) -> Tuple[str, ...]:
     return tuple(
         str(getattr(getattr(p, "signature", None), "instructions", "") or "") for p in predictors
     )
-
-
-def load_rag_examples_from_records(path: str) -> List[Any]:
-    """Build dspy Examples from replay records (#1485 shape), as PURE JSON.
-
-    Accepts either the wrapper the replay writes (``{"records": [...]}``) or a
-    bare list. Keeps only turns that can actually be judged: a query, a
-    non-empty answer, at least one retrieved context, and no recorded error.
-    Filtering here rather than in the metric matters — the RAGAS metric REFUSES
-    an unjudgeable example, and a refusal inside GEPA is silently converted to
-    failure_score 0.0, which would fabricate a bad-quality signal.
-
-    ``retrieved_contexts`` is set alongside ``evidence_board`` on purpose: the
-    signature wants an evidence string, while the metric wants the passage list
-    so context_precision is computed per passage rather than over one blob.
-    """
-    import dspy
-
-    raw = json.loads(Path(path).read_text())
-    records = raw.get("records", []) if isinstance(raw, dict) else raw
-
-    examples: List[Any] = []
-    for rec in records:
-        if not isinstance(rec, dict) or rec.get("error"):
-            continue
-        query = (rec.get("query") or "").strip()
-        answer = (rec.get("response_text") or "").strip()
-        contexts = [c for c in (rec.get("contexts") or []) if isinstance(c, str) and c.strip()]
-        if not query or not answer or not contexts:
-            continue
-        examples.append(
-            dspy.Example(
-                user_query=query,
-                # Records carry no investigation goal; the query stands in. This
-                # is an INPUT substitution, not a score, but it does mean the
-                # prompt is tuned against a slightly narrower input distribution
-                # than production sees.
-                investigation_goal=query,
-                evidence_board=json.dumps(contexts),
-                intent=rec.get("detected_intent") or "UNKNOWN",
-                retrieved_contexts=contexts,
-                synthesis=answer,
-            ).with_inputs("user_query", "investigation_goal", "evidence_board", "intent")
-        )
-    return examples
 
 
 async def run_rag_prompt_optimization() -> Dict[str, Any]:
@@ -174,33 +140,30 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
     ``AgentModule`` loads on its next construction — the leg->artifact->runtime
     chain.
     """
-    records_path = os.environ.get(RAG_RECORDS_PATH_ENV, "").strip()
-    if not records_path:
-        reason = f"{RAG_RECORDS_PATH_ENV} is not set"
-        logger.info(
-            "RAG prompt optimization skipped: %s. This is the expected steady state — "
-            "the replay is manual-only. To enable: run "
-            "`.venv/bin/python scripts/replay_golden_set.py --target cognitive --record-out <path>` and set "
-            "%s=<path>.",
-            reason,
-            RAG_RECORDS_PATH_ENV,
-        )
-        return {"status": "skipped", "reason": reason}
-
-    if not Path(records_path).exists():
-        reason = f"records file not found: {records_path}"
-        logger.info(
-            "RAG prompt optimization skipped: %s. Regenerate with "
-            "`.venv/bin/python scripts/replay_golden_set.py --target cognitive --record-out %s` (%s).",
-            reason,
-            records_path,
-            RAG_RECORDS_PATH_ENV,
-        )
-        return {"status": "skipped", "reason": reason}
-
     # Budget is resolved before the dedup check because it is part of the key.
     budget = _rag_max_metric_calls()
-    fingerprint = _rag_records_fingerprint(records_path, budget)
+
+    # #1489 deferral 5: one seam over the replay-file feedstock and the
+    # live-traffic one. An unavailable source is a SKIP, not a failure — nothing
+    # is fingerprinted, so the next beat retries. Reading costs no API calls
+    # either way (a file read, or one bounded read-only select).
+    try:
+        batch = await rag_sources.load_rag_examples()
+    except rag_sources.RagExampleSourceUnavailable as exc:
+        logger.info(
+            "RAG prompt optimization skipped: %s. %s",
+            exc.reason,
+            exc.remedy
+            or (
+                "This is the expected steady state — the replay "
+                "(`.venv/bin/python scripts/replay_golden_set.py --target cognitive "
+                "--record-out <path>`) is manual-only."
+            ),
+        )
+        return {"status": "skipped", "reason": exc.reason}
+
+    records_path = batch.origin
+    fingerprint = batch.fingerprint(budget)
     state = _load_trigger_state()
     if state.get("rag_records_fingerprint") == fingerprint:
         reason = "records already optimized at this budget (unchanged since last run)"
@@ -214,9 +177,8 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         )
         return {"status": "skipped", "reason": reason, "fingerprint": fingerprint}
 
-    raw = json.loads(Path(records_path).read_text())
-    total_records = len(raw.get("records", []) if isinstance(raw, dict) else raw)
-    examples = load_rag_examples_from_records(records_path)
+    total_records = batch.total_records
+    examples = list(batch.examples)
 
     if len(examples) < _RAG_MIN_USABLE_EXAMPLES:
         reason = (
@@ -224,18 +186,22 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
             f"need >= {_RAG_MIN_USABLE_EXAMPLES}"
         )
         logger.info(
-            "RAG prompt optimization skipped: %s. Expected — #1485 measured ~3 of 10 "
-            "replayed turns retrieve any evidence, and a turn with no retrieved "
-            "context cannot be judged. Re-run scripts/replay_golden_set.py with more "
-            "queries and point %s at the new file.",
+            "RAG prompt optimization skipped: %s (source: %s). Expected — #1485 "
+            "measured ~3 of 10 replayed turns retrieve any evidence, and a turn with "
+            "no retrieved context cannot be judged. Re-run "
+            "scripts/replay_golden_set.py with more queries and point %s at the new "
+            "file, or let live traffic accumulate turns (%s).",
             reason,
+            records_path,
             RAG_RECORDS_PATH_ENV,
+            rag_sources.RAG_DB_FEEDSTOCK_ENV,
         )
         return {
             "status": "skipped",
             "reason": reason,
             "usable_examples": len(examples),
             "total_records": total_records,
+            "source": batch.source,
         }
 
     examples = examples[:_RAG_MAX_EXAMPLES]
@@ -344,6 +310,10 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         agent_name=OPTIMIZED_SYNTHESIS_AGENT_NAME,
         metadata={
             "source_records": records_path,
+            # Which feedstock produced this prompt. Without it a saved artifact
+            # cannot be told apart from one tuned on the golden set, and the two
+            # are tuned against different input distributions.
+            "source": batch.source,
             "examples": len(examples),
             "max_metric_calls": budget,
         },
@@ -368,6 +338,7 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         "artifact": info["path"],
         "version_id": info["version_id"],
         "agent_name": OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        "source": batch.source,
     }
 
 

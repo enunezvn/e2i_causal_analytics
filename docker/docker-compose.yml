@@ -89,6 +89,27 @@ x-common-env: &common-env
   ROUTING_LABEL_JUDGE_CAP: ${ROUTING_LABEL_JUDGE_CAP:-50}
   ROUTING_LABEL_JUDGE_MODEL: ${ROUTING_LABEL_JUDGE_MODEL:-claude-haiku-4-5-20251001}
   ROUTING_LABEL_LOOKBACK_DAYS: ${ROUTING_LABEL_LOOKBACK_DAYS:-30}
+  # RAG-prompt GEPA leg (#1486), run by the nightly
+  # dspy-prompt-optimization-daily beat on the analytics queue (worker_medium).
+  # src/tasks/dspy_optimization_tasks reads both from os.environ, so without
+  # these entries the host .env never reached the containers and the in-code
+  # defaults governed unconditionally — the leg could not be enabled from the
+  # outside at all (the OPIK_ENABLED lesson above). Both default to EMPTY on
+  # purpose: the in-code defaults are the SSOT (unset path = skip;
+  # _RAG_DEFAULT_MAX_METRIC_CALLS = 40), and a compose-side budget default would
+  # be a second, silently-diverging source of truth for a knob that costs real
+  # gpt-4o judge calls.
+  #
+  # DSPY_RAG_RECORDS_PATH is resolved INSIDE the container. Every data volume in
+  # this file is a named docker volume, never a host bind mount, so a host path
+  # — the natural thing to write, since scripts/replay_golden_set.py runs on the
+  # host — resolves to "records file not found" and the leg skips forever while
+  # looking configured. Use a container path under a volume this service mounts
+  # read-write; on worker_medium that is /app/optimized_modules. Leaving it
+  # unset is the supported steady state (#1489 deferral 5 adds the DB-sourced
+  # feedstock that needs no file at all).
+  DSPY_RAG_RECORDS_PATH: ${DSPY_RAG_RECORDS_PATH:-}
+  DSPY_RAG_MAX_METRIC_CALLS: ${DSPY_RAG_MAX_METRIC_CALLS:-}
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
