@@ -146,6 +146,22 @@ def _python_combined(scores: dict, rubric_total: Optional[float]) -> Optional[fl
     return combined_score(bundle.weighted, rubric_total)
 
 
+def _insert_rubric_signal(db: str, **columns: str) -> str:
+    """A learning_signals row in the shape rubric_node.py::_store_evaluation writes.
+
+    ``signal_details.domain_signal = 'rubric_evaluation'`` is load-bearing:
+    learning_signals is shared with producers that store a 0..1 reward in
+    signal_value (src/api/routes/copilotkit.py, src/memory/procedural_memory.py),
+    and the function refuses rows that are not rubric evaluations.
+    """
+    signal_id = str(uuid.uuid4())
+    details = columns.pop("signal_details", '\'{"domain_signal": "rubric_evaluation"}\'::jsonb')
+    names = ", ".join(["signal_id", "signal_details", *columns])
+    values = ", ".join([f"'{signal_id}'", details, *columns.values()])
+    _psql(db, f"INSERT INTO learning_signals ({names}) VALUES ({values});", tuples_only=False)
+    return signal_id
+
+
 class TestSqlAgreesWithPythonSourceOfTruth:
     """The whole point of the fix: one blend, two implementations, same number."""
 
@@ -231,12 +247,7 @@ class TestPartialBundleNoLongerMisroutes:
         0.45 after COALESCE, landing under the 0.7 retrieval threshold, so the
         row was routed to 'retrieval' — tune k, chunks, RRF weights — for a
         retrieval that had served it perfectly."""
-        signal_id = str(uuid.uuid4())
-        _psql(
-            scratch_db,
-            f"INSERT INTO learning_signals (signal_id) VALUES ('{signal_id}');",
-            tuples_only=False,
-        )
+        signal_id = _insert_rubric_signal(scratch_db)
         _psql(
             scratch_db,
             "SELECT update_learning_signal_evaluation("
@@ -260,16 +271,18 @@ class TestNoStaleCompanionComponents:
         signal_value still read 4.0 while rubric_total read 2.0, and
         ragas_coverage.measured still named two metrics after the stored bundle
         had been replaced by a one-metric one."""
-        signal_id = str(uuid.uuid4())
-        _psql(
+        signal_id = _insert_rubric_signal(
             scratch_db,
-            "INSERT INTO learning_signals (signal_id, signal_value, signal_details, "
-            "ragas_scores, ragas_weighted, rubric_total, combined_score) VALUES ("
-            f"'{signal_id}', 4.0, "
-            '\'{"ragas_coverage": {"measured": ["faithfulness", "answer_relevancy"], '
-            '"evaluation_model": "gpt-4o"}}\'::jsonb, '
-            '\'{"faithfulness":0.524,"answer_relevancy":0.179}\'::jsonb, 0.3707, 4.0, 0.5983);',
-            tuples_only=False,
+            signal_details=(
+                '\'{"domain_signal": "rubric_evaluation", "ragas_coverage": '
+                '{"measured": ["faithfulness", "answer_relevancy"], '
+                '"evaluation_model": "gpt-4o"}}\'::jsonb'
+            ),
+            signal_value="4.0",
+            ragas_scores='\'{"faithfulness":0.524,"answer_relevancy":0.179}\'::jsonb',
+            ragas_weighted="0.3707",
+            rubric_total="4.0",
+            combined_score="0.5983",
         )
         _psql(
             scratch_db,
@@ -290,3 +303,93 @@ class TestNoStaleCompanionComponents:
         assert measured == ["faithfulness"], (
             f"ragas_coverage still describes a bundle the row no longer holds: {measured}"
         )
+
+    def test_coverage_keeps_the_attempted_versus_never_asked_distinction(self, scratch_db):
+        """Migration 033 states that ``signal_details.ragas_coverage`` is where
+        "attempted-and-failed versus never-requested" is recorded — a NULL score
+        column cannot say which. SQL can derive both: a key present with a JSON
+        null is #1488's judge-tried-and-failed, an absent key is #1485's
+        producer-never-asks. Writing only ``measured`` would destroy exactly the
+        distinction the migration promises (codex iter-1 HIGH).
+        """
+        signal_id = _insert_rubric_signal(scratch_db)
+        _psql(
+            scratch_db,
+            "SELECT update_learning_signal_evaluation("
+            f"'{signal_id}'::uuid, "
+            "'{\"faithfulness\":0.90,\"answer_relevancy\":null}'::jsonb, '{}'::jsonb, 4.0);",
+        )
+        coverage = json.loads(
+            _psql(
+                scratch_db,
+                "SELECT signal_details->'ragas_coverage' FROM learning_signals "
+                f"WHERE signal_id = '{signal_id}';",
+            )
+        )
+        assert coverage["measured"] == ["faithfulness"]
+        assert coverage["unmeasured"] == ["answer_relevancy"], "judge-tried-and-failed lost"
+        assert coverage["not_evaluated"] == [
+            "answer_correctness",
+            "context_precision",
+            "context_recall",
+        ], "never-requested lost"
+        assert coverage["measured_weight"] == pytest.approx(0.25)
+
+    def test_coverage_matches_the_python_counterpart(self, scratch_db):
+        """The same four keys RagasBundle.coverage produces, same values."""
+        scores = {"faithfulness": 0.9, "answer_relevancy": None}
+        signal_id = _insert_rubric_signal(scratch_db)
+        _psql(
+            scratch_db,
+            "SELECT update_learning_signal_evaluation("
+            f"'{signal_id}'::uuid, '{json.dumps(scores)}'::jsonb, '{{}}'::jsonb, 4.0);",
+        )
+        sql_coverage = json.loads(
+            _psql(
+                scratch_db,
+                "SELECT signal_details->'ragas_coverage' FROM learning_signals "
+                f"WHERE signal_id = '{signal_id}';",
+            )
+        )
+        python_coverage = RagasBundle(scores=scores).coverage
+        for key in ("measured", "unmeasured", "not_evaluated"):
+            assert sql_coverage[key] == python_coverage[key], key
+        assert sql_coverage["measured_weight"] == pytest.approx(python_coverage["measured_weight"])
+
+
+class TestRefusesRowsItDoesNotOwn:
+    """learning_signals is shared. Other producers write signal_type='rating'
+    rows whose signal_value is a 0..1 reward (src/api/routes/copilotkit.py,
+    src/memory/procedural_memory.py), not a 1-5 rubric total. Since the function
+    now writes signal_value, a wrong signal_id would silently rewrite another
+    producer's row on a different scale (codex iter-1 MEDIUM)."""
+
+    def test_refuses_a_non_rubric_signal(self, scratch_db):
+        signal_id = str(uuid.uuid4())
+        _psql(
+            scratch_db,
+            "INSERT INTO learning_signals (signal_id, signal_value, signal_details) VALUES "
+            f"('{signal_id}', 0.82, '{{\"domain_signal\": \"copilot_reward\"}}'::jsonb);",
+            tuples_only=False,
+        )
+        with pytest.raises(AssertionError, match="not a rubric-evaluation"):
+            _psql(
+                scratch_db,
+                "SELECT update_learning_signal_evaluation("
+                f"'{signal_id}'::uuid, '{{\"faithfulness\":0.9}}'::jsonb, '{{}}'::jsonb, 4.0);",
+            )
+        assert float(
+            _psql(
+                scratch_db,
+                f"SELECT signal_value FROM learning_signals WHERE signal_id = '{signal_id}';",
+            )
+        ) == pytest.approx(0.82), "the other producer's reward was overwritten"
+
+    def test_refuses_an_unknown_signal_id(self, scratch_db):
+        """A silent zero-row UPDATE reads as success to every caller."""
+        with pytest.raises(AssertionError, match="not a rubric-evaluation"):
+            _psql(
+                scratch_db,
+                "SELECT update_learning_signal_evaluation("
+                f"'{uuid.uuid4()}'::uuid, '{{\"faithfulness\":0.9}}'::jsonb, '{{}}'::jsonb, 4.0);",
+            )

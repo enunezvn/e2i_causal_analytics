@@ -74,6 +74,35 @@
 
 
 -- ----------------------------------------------------------------------------
+-- Migration 033's column COMMENTs, corrected
+-- ----------------------------------------------------------------------------
+-- 033 stays applied — the deploy runs both files — and it described these
+-- columns by contrasting them with the OLD arithmetic. After this migration
+-- those contrasts are false, and a false COMMENT points a SQL-side reader at
+-- exactly the behaviour that was just removed.
+
+COMMENT ON COLUMN learning_signals.ragas_weighted IS
+    'Weighted RAGAS aggregate over the MEASURED metrics only, renormalised by the '
+    'weight that was measured. NULL when no metric was measured. #1489 UPDATE: '
+    'migration 033 described this as explicitly NOT what calculate_combined_score() '
+    'and update_learning_signal_evaluation() compute — that contrast is obsolete. '
+    'Both now compute exactly this value via ragas_weighted_measured(), so the SQL '
+    'and Python paths agree by construction. A complete five-metric bundle gives the '
+    'identical value either way (the weights sum to 1); a partial one is scored on '
+    'what was judged instead of penalised for what was not. Python source of truth: '
+    'src/agents/feedback_learner/ragas_scoring.py.';
+
+COMMENT ON COLUMN learning_signals.combined_score IS
+    'Combined RAGAS + Rubric score: (ragas_weighted * 0.4) + (rubric_normalised * 0.6), '
+    'where rubric_normalised = (rubric_total - 1) / 4. Written ONLY when both halves '
+    'are real; a rubric-only or RAGAS-only row leaves this NULL rather than publishing '
+    'a fraction of a half that does not exist. #1489 UPDATE: this was true of the '
+    'Python writers only — calculate_combined_score() published 0.40 for a RAGAS-only '
+    'row and 0.60 for a rubric-only one. It now returns NULL in both cases, so the '
+    'column means the same thing whichever path wrote it.';
+
+
+-- ----------------------------------------------------------------------------
 -- The weights, defined ONCE
 -- ----------------------------------------------------------------------------
 -- 022 copy-pasted the weighted-sum expression into both calculate_combined_score
@@ -261,8 +290,30 @@ DECLARE
     v_ragas_weighted    FLOAT;
     v_rubric_normalized FLOAT;
     v_combined_score    FLOAT;
+    v_bundle            JSONB := COALESCE(p_ragas_scores, '{}'::jsonb);
     v_measured          TEXT[];
+    v_unmeasured        TEXT[];
+    v_not_evaluated     TEXT[];
+    v_measured_weight   FLOAT;
 BEGIN
+    -- learning_signals is SHARED. Other producers write signal_type='rating'
+    -- rows whose signal_value is a 0..1 reward, not a 1-5 rubric total
+    -- (src/api/routes/copilotkit.py, src/memory/procedural_memory.py). This
+    -- function writes signal_value, rubric_total and the RAGAS columns, so on
+    -- the wrong row it would silently rewrite another producer's signal on a
+    -- different scale. It also used to be a silent no-op on an unknown id.
+    IF NOT EXISTS (
+        SELECT 1 FROM learning_signals
+         WHERE signal_id = p_signal_id
+           AND signal_details->>'domain_signal' = 'rubric_evaluation'
+    ) THEN
+        RAISE EXCEPTION
+            'update_learning_signal_evaluation: signal_id % is not a rubric-evaluation '
+            'learning signal (missing or signal_details.domain_signal <> ''rubric_evaluation''); '
+            'refusing rather than rewriting another producer''s row', p_signal_id
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
     v_ragas_weighted := ragas_weighted_measured(p_ragas_scores);
     v_rubric_normalized := CASE
         WHEN p_rubric_total IS NULL THEN NULL
@@ -270,13 +321,26 @@ BEGIN
     END;
     v_combined_score := calculate_combined_score(p_ragas_scores, p_rubric_total);
 
-    -- Which metrics the bundle being STORED actually carries. Restricted to the
-    -- weighted metrics, so coverage can never claim a metric that contributed
-    -- nothing to ragas_weighted.
-    SELECT COALESCE(array_agg(w.metric ORDER BY w.metric), ARRAY[]::text[])
-      INTO v_measured
-      FROM ragas_metric_weights() AS w
-     WHERE NULLIF(COALESCE(p_ragas_scores, '{}'::jsonb)->>w.metric, '') IS NOT NULL;
+    -- Coverage for the bundle being STORED, in the same four-key shape
+    -- RagasBundle.coverage produces. Migration 033 promises this is where
+    -- "attempted-and-failed versus never-requested" is recorded, and both are
+    -- derivable here: a key present with a JSON null is #1488's judge tried and
+    -- failed; an absent key is #1485's producer never asks. Restricted to the
+    -- weighted metrics, so coverage can never name a metric that contributed
+    -- nothing to ragas_weighted. The `measured` predicate is deliberately the
+    -- same one ragas_weighted_measured() uses.
+    SELECT
+        COALESCE(array_agg(w.metric ORDER BY w.metric)
+                 FILTER (WHERE NULLIF(v_bundle->>w.metric, '') IS NOT NULL), ARRAY[]::text[]),
+        COALESCE(array_agg(w.metric ORDER BY w.metric)
+                 FILTER (WHERE v_bundle ? w.metric
+                           AND NULLIF(v_bundle->>w.metric, '') IS NULL), ARRAY[]::text[]),
+        COALESCE(array_agg(w.metric ORDER BY w.metric)
+                 FILTER (WHERE NOT (v_bundle ? w.metric)), ARRAY[]::text[]),
+        COALESCE(SUM(w.weight)
+                 FILTER (WHERE NULLIF(v_bundle->>w.metric, '') IS NOT NULL), 0)
+      INTO v_measured, v_unmeasured, v_not_evaluated, v_measured_weight
+      FROM ragas_metric_weights() AS w;
 
     UPDATE learning_signals SET
         ragas_scores = COALESCE(p_ragas_scores, '{}'::jsonb),
@@ -296,12 +360,15 @@ BEGIN
         -- no longer holds. The judge-provenance keys the Python writer records
         -- (evaluation_model, evaluation_method) are deliberately not carried
         -- over: this function was not told them, and keeping the old ones would
-        -- attribute the new scores to the previous judge.
+        -- attribute the new scores to the previous judge. `source` says so.
         signal_details = jsonb_set(
             COALESCE(signal_details, '{}'::jsonb),
             '{ragas_coverage}',
             jsonb_build_object(
                 'measured', to_jsonb(v_measured),
+                'unmeasured', to_jsonb(v_unmeasured),
+                'not_evaluated', to_jsonb(v_not_evaluated),
+                'measured_weight', v_measured_weight,
                 'source', 'update_learning_signal_evaluation'
             ),
             true

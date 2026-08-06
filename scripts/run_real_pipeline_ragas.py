@@ -155,6 +155,8 @@ def build_report(
     passed: bool,
     failures: Sequence[str],
     meta: Dict[str, Any],
+    retrieval_floor: float = MIN_RETRIEVAL_HIT_RATE,
+    hit_conditioned_floor: float = MIN_HIT_CONDITIONED_RELEVANCY,
 ) -> Dict[str, Any]:
     """Assemble the run report. Only real-path metrics are ever reported."""
     # answer_relevancy is the PRODUCT of the retrieval hit rate and the quality
@@ -173,7 +175,13 @@ def build_report(
             **{m: block.get(m) for m in REAL_PIPELINE_METRICS},
             "answer_relevancy_hit_conditioned": conditioned,
         },
-        "thresholds": dict(thresholds),
+        # Every floor that produced the verdict, so a saved artifact can be
+        # read on its own — the CLI can override any of them.
+        "thresholds": {
+            **thresholds,
+            "retrieval_hit_rate": retrieval_floor,
+            "answer_relevancy_hit_conditioned": hit_conditioned_floor,
+        },
         "retrieval": retrieval,
         "passed": passed,
         "failures": list(failures),
@@ -343,7 +351,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         retrieval_floor=args.retrieval_floor,
         hit_conditioned_floor=args.hit_conditioned_relevancy,
     )
-    report = build_report(block, retrieval, thresholds, passed, failures, meta)
+    report = build_report(
+        block,
+        retrieval,
+        thresholds,
+        passed,
+        failures,
+        meta,
+        retrieval_floor=args.retrieval_floor,
+        hit_conditioned_floor=args.hit_conditioned_relevancy,
+    )
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

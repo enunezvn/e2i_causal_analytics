@@ -242,3 +242,21 @@ def test_hit_conditioned_floor_is_a_cli_flag_defaulting_to_the_measured_constant
 
     args = driver.parse_args(["--records", "r.json", "--hit-conditioned-relevancy", "0.4"])
     assert args.hit_conditioned_relevancy == 0.4
+
+
+def test_report_records_the_floors_that_produced_the_verdict():
+    """A saved report must be re-readable on its own. Without the retrieval and
+    hit-conditioned floors, a passing artifact cannot be distinguished from one
+    produced with CLI overrides (codex iter-1 MEDIUM)."""
+    report = driver.build_report(
+        block=_BLOCK,
+        retrieval={"n_records": 10, "n_errors": 0, "n_with_contexts": 4, "retrieval_hit_rate": 0.4},
+        thresholds={"faithfulness": 0.50, "answer_relevancy": 0.04},
+        passed=True,
+        failures=[],
+        meta={},
+        retrieval_floor=0.21,
+        hit_conditioned_floor=0.20,
+    )
+    assert report["thresholds"]["retrieval_hit_rate"] == 0.21
+    assert report["thresholds"]["answer_relevancy_hit_conditioned"] == 0.20

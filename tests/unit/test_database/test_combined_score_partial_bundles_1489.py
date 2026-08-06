@@ -225,3 +225,41 @@ class TestMigrationDocumentsWhy:
 
     def test_names_the_python_source_of_truth(self, migration_sql: str):
         assert "ragas_scoring.py" in migration_sql
+
+
+class TestSupersededCommentsAreCorrected:
+    """Migration 033's COMMENTs stay applied — the deploy runs both files. Any
+    of them that describes the OLD arithmetic now misdirects a SQL-side reader
+    to exactly the behaviour 034 removed (codex iter-1 HIGH)."""
+
+    def test_ragas_weighted_column_comment_no_longer_contradicts_the_functions(
+        self, migration_sql: str
+    ):
+        """033 says ragas_weighted is 'NOT the COALESCE-to-zero sum that
+        calculate_combined_score() and update_learning_signal_evaluation()
+        compute'. After 034 both compute exactly this value."""
+        superseded = (DATABASE_ML / "033_ragas_persistence_semantics.sql").read_text()
+        assert "NOT the COALESCE-to-zero sum" in superseded, (
+            "033 changed shape; re-check what this migration must re-comment"
+        )
+        assert "COMMENT ON COLUMN learning_signals.ragas_weighted" in migration_sql
+
+    def test_recomments_every_column_033_described_in_terms_of_the_old_maths(
+        self, migration_sql: str
+    ):
+        assert "COMMENT ON COLUMN learning_signals.combined_score" in migration_sql
+
+
+class TestCoverageIsDerivedNotDiscarded:
+    def test_update_records_all_four_coverage_keys(self, migration_sql: str):
+        """RagasBundle.coverage carries measured / unmeasured / not_evaluated /
+        measured_weight, and 033 promises ragas_coverage keeps the
+        attempted-versus-never-asked distinction. All four are derivable in SQL."""
+        body = _function_body(migration_sql, "update_learning_signal_evaluation")
+        for key in ("measured", "unmeasured", "not_evaluated", "measured_weight"):
+            assert f"'{key}'" in body, f"coverage key {key} is not written"
+
+    def test_update_refuses_rows_it_does_not_own(self, migration_sql: str):
+        body = _function_body(migration_sql, "update_learning_signal_evaluation")
+        assert "RAISE EXCEPTION" in body
+        assert "rubric_evaluation" in body
