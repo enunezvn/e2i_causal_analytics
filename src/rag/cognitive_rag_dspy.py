@@ -25,6 +25,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import dspy
@@ -529,6 +530,130 @@ class VisualizationConfigSignature(dspy.Signature):
     highlights: list = dspy.OutputField(desc="Key data points to highlight")
 
 
+# Agent name under which the optimized synthesis prompt is BOTH saved by the
+# nightly RAG leg (src/tasks/dspy_optimization_tasks.py) and loaded here. It is
+# one constant imported by both sides on purpose: a save-name literal and a
+# load-name literal that can drift is how the 2026-06-08 artifact sat unshipped
+# for six weeks while everyone believed the tuned module was live
+# (docs/reports/dspy_lane_ab_20260718.md section 7).
+#
+# Resolves under ./optimized_modules/<name>/ — CWD-relative, matching the
+# /app/optimized_modules named volume that
+# tests/integration/test_optimized_artifacts_compose_wiring.py pins as the
+# handshake between the worker that writes and the api that reads.
+OPTIMIZED_SYNTHESIS_AGENT_NAME = "cognitive_rag_synthesis"
+
+# Must match load_optimized_module's default, since the signature probe below
+# resolves the same directory the loader will read.
+OPTIMIZED_MODULES_DIR = "./optimized_modules"
+
+# {"attempted": bool, "signature": Optional[tuple], "module": Optional[dspy.Module]}.
+# Module-level rather than per-instance because AgentModule is rebuilt per
+# workflow construction and the load is a parse, not just a stat.
+_OPTIMIZED_SYNTHESIS_CACHE: Dict[str, Any] = {
+    "attempted": False,
+    "signature": None,
+    "module": None,
+}
+
+
+def _artifact_signature() -> Optional[tuple]:
+    """(path, mtime_ns) of the newest saved artifact, or None if there is none.
+
+    Cheap on purpose — one directory glob plus a stat, microseconds against the
+    LLM call that follows. It is what lets a long-lived worker notice an
+    artifact that appeared (or was replaced) after it last looked: nothing else
+    invalidates the cache, because docker-compose mounts optimized_modules
+    read-only into api and writable into worker_medium with no signal between
+    them.
+    """
+    directory = Path(OPTIMIZED_MODULES_DIR) / OPTIMIZED_SYNTHESIS_AGENT_NAME
+    try:
+        versions = sorted(directory.glob("gepa_*.json"), reverse=True)
+        if not versions:
+            return None
+        newest = versions[0]
+        return (str(newest), newest.stat().st_mtime_ns)
+    except OSError:
+        return None
+
+
+def _load_optimized_module() -> Any:
+    """Load the saved synthesis module. Separate seam so tests can drive failures."""
+    from src.optimization.gepa.versioning import load_optimized_module
+
+    module, _meta = load_optimized_module(
+        lambda: dspy.ChainOfThought(EvidenceSynthesisSignature),
+        agent_name=OPTIMIZED_SYNTHESIS_AGENT_NAME,
+    )
+    return module
+
+
+def load_optimized_synthesis_module(reset: bool = False) -> Optional[Any]:
+    """Return the GEPA-optimized synthesis module, or None to use the base prompt.
+
+    Mirrors ``pattern_analyzer._load_optimized_pattern_module`` deliberately:
+
+    - An intentional miss (no artifact saved yet -> FileNotFoundError) is CACHED,
+      so a cold install does not stat the filesystem on every workflow build.
+    - A transient failure (corrupt read, import race) is NOT cached, so a later
+      cycle retries once the condition clears. Caching it would strand the
+      runtime on the base prompt until the process restarted.
+    - The miss logs at INFO, not DEBUG: prod ran on the silent fallback for six
+      weeks believing the tuned module was live. This is quiet in volume because
+      the miss is cached.
+
+    Args:
+        reset: Re-probe even if a previous outcome was cached (tests, and any
+            caller that has just written a new artifact).
+    """
+    if reset:
+        _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": False, "signature": None, "module": None})
+
+    signature = _artifact_signature()
+    # Keyed on the artifact rather than on "have we looked before". Caching the
+    # bare outcome meant a worker that probed before the first nightly success
+    # served the base prompt until restart, and a worker holding version N never
+    # saw N+1 — with no invalidation path in either direction.
+    if (
+        _OPTIMIZED_SYNTHESIS_CACHE["attempted"]
+        and _OPTIMIZED_SYNTHESIS_CACHE["signature"] == signature
+    ):
+        return _OPTIMIZED_SYNTHESIS_CACHE["module"]
+
+    if signature is None:
+        logger.info(
+            "No optimized cognitive-RAG synthesis module saved yet (%s); using base prompt",
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        )
+        _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": True, "signature": None, "module": None})
+        return None
+
+    try:
+        module = _load_optimized_module()
+    except FileNotFoundError:
+        logger.info(
+            "No optimized cognitive-RAG synthesis module saved yet (%s); using base prompt",
+            OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        )
+        _OPTIMIZED_SYNTHESIS_CACHE.update(
+            {"attempted": True, "signature": signature, "module": None}
+        )
+        return None
+    except Exception as e:  # noqa: BLE001 - transient: do NOT cache, allow retry
+        logger.warning("Failed to load optimized synthesis module (will retry next build): %s", e)
+        # Leave `attempted`/`signature` untouched so the next call retries this
+        # same artifact rather than being stranded on the base prompt.
+        _OPTIMIZED_SYNTHESIS_CACHE["module"] = None
+        return None
+
+    logger.info(
+        "Loaded optimized cognitive-RAG synthesis module (%s)", OPTIMIZED_SYNTHESIS_AGENT_NAME
+    )
+    _OPTIMIZED_SYNTHESIS_CACHE.update({"attempted": True, "signature": signature, "module": module})
+    return module
+
+
 class AgentModule(dspy.Module):
     """
     DSPy module for Phase 3: Agent Node.
@@ -537,7 +662,12 @@ class AgentModule(dspy.Module):
 
     def __init__(self, agent_registry: Dict[str, Any]):
         super().__init__()
-        self.synthesize = dspy.ChainOfThought(EvidenceSynthesisSignature)
+        # Consume the nightly leg's artifact when one exists (#1486). Falling
+        # back to the base signature keeps a cold install and a corrupt artifact
+        # both serving traffic on the shipped prompt.
+        self.synthesize = load_optimized_synthesis_module() or dspy.ChainOfThought(
+            EvidenceSynthesisSignature
+        )
         self.route = dspy.Predict(AgentRoutingSignature)
         self.visualize = dspy.Predict(VisualizationConfigSignature)
         self.agent_registry = agent_registry
