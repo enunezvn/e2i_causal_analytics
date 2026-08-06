@@ -626,6 +626,72 @@ class TestQueryKpisEnumNormalization:
             assert call_kwargs["filters"]["region"] == label, display
 
     @pytest.mark.asyncio
+    async def test_region_synonyms_resolve_via_entity_extractor_aliases(self):
+        """Separator variants and the platform's own region synonyms
+        (src/rag/entity_extractor REGION_ALIASES) must resolve: region_type
+        labels are single concatenated words, so "North East" must fold to
+        "northeast" (not "north_east"), and phrasings entity extraction
+        recognizes ("NE", "new england", "central", "Pacific") must reach
+        the DB as the real enum label instead of silently 0-rowing."""
+        for supplied, label in [
+            ("North East", "northeast"),
+            ("north-east", "northeast"),
+            ("NE", "northeast"),
+            ("new england", "northeast"),
+            ("mid west", "midwest"),
+            ("central", "midwest"),
+            ("Pacific", "west"),
+        ]:
+            with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+                mock_repo = AsyncMock()
+                mock_repo.query_metrics.return_value = []
+                mock_client.return_value = MagicMock()
+
+                with patch(
+                    "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                    return_value=mock_repo,
+                ):
+                    await _query_kpis(
+                        brand=None,
+                        region=supplied,
+                        kpi_name=None,
+                        since=datetime.now(timezone.utc),
+                        limit=5,
+                    )
+
+            mock_repo.query_metrics.assert_called_once()
+            call_kwargs = mock_repo.query_metrics.call_args[1]
+            assert call_kwargs["filters"]["region"] == label, supplied
+
+    @pytest.mark.asyncio
+    async def test_still_unknown_region_hits_zero_row_note_path(self):
+        """A value no alias covers ("atlantis") keeps the honest 0-row+note
+        behavior — synonym resolution must not weaken the unknown guard."""
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.query_metrics.return_value = [{"metric_name": "trx", "value": 1}]
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_kpis(
+                    brand=None,
+                    region="atlantis",
+                    kpi_name="TRx",
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                )
+
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["data"] == []
+        mock_repo.query_metrics.assert_not_called()
+        assert "atlantis" in result["note"]
+        assert "northeast" in result["note"]
+
+    @pytest.mark.asyncio
     async def test_brand_casing_resolves_to_enum_label(self):
         """Sibling defect: brand_type labels are mixed-case, so "kisqali"
         22P02s today exactly like "Northeast" does — any casing must resolve
