@@ -136,14 +136,15 @@ def judged_turns(
     for row in rows:
         if not isinstance(row, dict):
             raise RagasPersistenceError(f"per_sample row is {type(row).__name__}, expected object")
-        query_id = row.get("query_id")
-        record = index.get(query_id) if isinstance(query_id, str) else None
-        if record is None:
+        raw_id = row.get("query_id")
+        record = index.get(raw_id) if isinstance(raw_id, str) else None
+        if not isinstance(raw_id, str) or record is None:
             raise RagasPersistenceError(
-                f"judged sample {query_id!r} has no replay record; the scores carry "
+                f"judged sample {raw_id!r} has no replay record; the scores carry "
                 "no query text of their own, so persisting one against a guessed "
                 f"record would misattribute a judgment (records: {sorted(index)})"
             )
+        query_id: str = raw_id
 
         # RagasBundle refuses any label containing "heuristic": a quota error
         # mid-run degrades a sample to word-overlap scoring while the process
