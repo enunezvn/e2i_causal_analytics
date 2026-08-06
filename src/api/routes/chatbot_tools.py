@@ -379,6 +379,43 @@ def _normalize_metric_name(kpi_name: str) -> str:
     return kpi_name.strip().lower().replace("-", "_").replace(" ", "_")
 
 
+# business_metrics.region / business_metrics.brand are Postgres ENUM columns
+# (region_type, brand_type). Labels verified against
+# database/core/e2i_ml_complete_v3_schema.sql (no later migration ALTERs
+# either enum) and the prod DB (#1501: SELECT enum_range(NULL::region_type)).
+# Enums in this project are append-only and never renamed (migration 033), so
+# an input that maps to no label here means "no row can ever hold it".
+_REGION_ENUM_LABELS = ("northeast", "south", "midwest", "west")
+_BRAND_ENUM_LABELS = ("Remibrutinib", "Fabhalta", "Kisqali", "competitor", "other")
+_BRAND_LABEL_BY_CASEFOLD = {label.casefold(): label for label in _BRAND_ENUM_LABELS}
+
+
+def _normalize_region(region: str) -> Optional[str]:
+    """Map a display-form region ("Northeast") to its region_type enum label.
+
+    business_metrics.region is the lowercase Postgres enum region_type while
+    LLM tool calls pass display forms ("Northeast") — unlike metric_name
+    (plain text, mismatch = 0 rows), a non-label string in the enum cast
+    raises 22P02 and fails the ENTIRE KPI query (#1501). Returns None when
+    the input maps to no label; the caller then returns the 0-row result the
+    filter implies (matching _normalize_metric_name's unknown-value outcome)
+    instead of erroring.
+    """
+    normalized = region.strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized if normalized in _REGION_ENUM_LABELS else None
+
+
+def _normalize_brand(brand: str) -> Optional[str]:
+    """Map any casing of a brand ("kisqali") to its brand_type enum label.
+
+    Same 22P02 class as _normalize_region: brand_type labels are mixed-case
+    ("Kisqali", "competitor"), so the display form happens to match today but
+    any other casing fails the whole query. Returns the REAL label, or None
+    when unmappable.
+    """
+    return _BRAND_LABEL_BY_CASEFOLD.get(brand.strip().casefold())
+
+
 async def _query_kpis(
     brand: Optional[str],
     region: Optional[str],
@@ -394,19 +431,57 @@ async def _query_kpis(
     honestly either way (kpi_calculate_tool precedent).
     """
     try:
-        client = await get_async_supabase_client()
-        repo = BusinessMetricRepository(client)
-
-        filters = {}
+        filters: Dict[str, Any] = {}
+        unmatched: List[str] = []
         if brand:
-            filters["brand"] = brand
+            normalized_brand = _normalize_brand(brand)
+            if normalized_brand is None:
+                unmatched.append(
+                    f"brand {brand!r} does not match any known brand "
+                    f"({', '.join(sorted(_BRAND_ENUM_LABELS))})"
+                )
+            else:
+                filters["brand"] = normalized_brand
         if region:
-            filters["region"] = region
+            normalized_region = _normalize_region(region)
+            if normalized_region is None:
+                unmatched.append(
+                    f"region {region!r} does not match any known region "
+                    f"({', '.join(_REGION_ENUM_LABELS)})"
+                )
+            else:
+                filters["region"] = normalized_region
         if kpi_name:
             # business_metrics uses 'metric_name' column, not 'kpi_name'
             filters["metric_name"] = _normalize_metric_name(kpi_name)
 
         window_start = since.date().isoformat()
+
+        if unmatched:
+            # brand/region are enum columns: an unmappable value can never
+            # match a row, and passing it through would 22P02 the entire
+            # query (#1501). Return the 0-row result the filter implies —
+            # the same outcome _normalize_metric_name's passthrough has on
+            # the plain-text metric_name column — with an honest note.
+            requested = dict(filters)
+            if brand and "brand" not in filters:
+                requested["brand"] = brand
+            if region and "region" not in filters:
+                requested["region"] = region
+            return {
+                "success": True,
+                "query_type": "kpi",
+                "count": 0,
+                "data": [],
+                "filters_applied": requested,
+                "window_start": window_start,
+                "data_source": "synthetic" if kpi_include_synthetic() else "database",
+                "note": "; ".join(unmatched) + "; returned 0 rows",
+            }
+
+        client = await get_async_supabase_client()
+        repo = BusinessMetricRepository(client)
+
         metrics = await repo.query_metrics(
             filters=filters,
             since=window_start,

@@ -432,7 +432,7 @@ class TestQueryKpis:
             ):
                 result = await _query_kpis(
                     brand="Kisqali",
-                    region="US",
+                    region="Northeast",
                     kpi_name="TRx",
                     since=datetime.now(timezone.utc),
                     limit=10,
@@ -459,7 +459,7 @@ class TestQueryKpis:
             ):
                 result = await _query_kpis(
                     brand="Fabhalta",
-                    region="EU",
+                    region="Midwest",
                     kpi_name="TRx",
                     since=since,
                     limit=5,
@@ -468,7 +468,8 @@ class TestQueryKpis:
         mock_repo.query_metrics.assert_called_once()
         call_kwargs = mock_repo.query_metrics.call_args[1]
         assert call_kwargs["filters"]["brand"] == "Fabhalta"
-        assert call_kwargs["filters"]["region"] == "EU"
+        # #1501: region resolves to the region_type enum label
+        assert call_kwargs["filters"]["region"] == "midwest"
         assert call_kwargs["filters"]["metric_name"] == "trx"
         assert call_kwargs["since"] == "2026-04-08"
         assert call_kwargs["limit"] == 5
@@ -551,6 +552,166 @@ class TestQueryKpis:
         assert result["success"] is False
         assert "error" in result
         assert "Database connection failed" in result["error"]
+
+
+class TestQueryKpisEnumNormalization:
+    """#1501: business_metrics.region/.brand are Postgres ENUM columns.
+
+    region_type labels are lowercase (northeast, south, midwest, west) and
+    brand_type labels are mixed-case (Remibrutinib, Fabhalta, Kisqali,
+    competitor, other). LLM tool calls pass display forms ("Northeast",
+    "kisqali") — unlike metric_name (plain text, mismatch = 0 rows), passing
+    a non-label string into an enum cast raises 22P02 and fails the ENTIRE
+    KPI query. The helper must resolve values case-insensitively to the real
+    enum labels, and an unmappable value must yield the 0-row result the
+    filter implies (the same outcome _normalize_metric_name's passthrough
+    has on the text column) — never a failed query.
+    """
+
+    @pytest.mark.asyncio
+    async def test_display_case_region_resolves_to_enum_label(self):
+        """The live #1501 repro: "Northeast" must reach the DB as "northeast"."""
+        mock_rows = [{"metric_name": "trx", "value": 100, "region": "northeast"}]
+
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.query_metrics.return_value = mock_rows
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_kpis(
+                    brand="Kisqali",
+                    region="Northeast",
+                    kpi_name="TRx",
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                )
+
+        call_kwargs = mock_repo.query_metrics.call_args[1]
+        assert call_kwargs["filters"]["region"] == "northeast"
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["filters_applied"]["region"] == "northeast"
+
+    @pytest.mark.asyncio
+    async def test_region_display_variants_resolve(self):
+        """Every region_type label resolves from its display/cased forms."""
+        for display, label in [
+            ("Northeast", "northeast"),
+            ("West", "west"),
+            ("  MIDWEST ", "midwest"),
+            ("South", "south"),
+        ]:
+            with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+                mock_repo = AsyncMock()
+                mock_repo.query_metrics.return_value = []
+                mock_client.return_value = MagicMock()
+
+                with patch(
+                    "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                    return_value=mock_repo,
+                ):
+                    await _query_kpis(
+                        brand=None,
+                        region=display,
+                        kpi_name=None,
+                        since=datetime.now(timezone.utc),
+                        limit=5,
+                    )
+
+            call_kwargs = mock_repo.query_metrics.call_args[1]
+            assert call_kwargs["filters"]["region"] == label, display
+
+    @pytest.mark.asyncio
+    async def test_brand_casing_resolves_to_enum_label(self):
+        """Sibling defect: brand_type labels are mixed-case, so "kisqali"
+        22P02s today exactly like "Northeast" does — any casing must resolve
+        to the REAL enum label."""
+        for supplied, label in [
+            ("kisqali", "Kisqali"),
+            ("KISQALI", "Kisqali"),
+            ("fabhalta", "Fabhalta"),
+            ("remibrutinib", "Remibrutinib"),
+            ("Competitor", "competitor"),
+        ]:
+            with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+                mock_repo = AsyncMock()
+                mock_repo.query_metrics.return_value = []
+                mock_client.return_value = MagicMock()
+
+                with patch(
+                    "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                    return_value=mock_repo,
+                ):
+                    await _query_kpis(
+                        brand=supplied,
+                        region=None,
+                        kpi_name=None,
+                        since=datetime.now(timezone.utc),
+                        limit=5,
+                    )
+
+            call_kwargs = mock_repo.query_metrics.call_args[1]
+            assert call_kwargs["filters"]["brand"] == label, supplied
+
+    @pytest.mark.asyncio
+    async def test_unknown_region_returns_zero_rows_not_error(self):
+        """An unmappable region ("EU") can never match a row of an enum
+        column — the helper must return the 0-row result the filter implies
+        (success=True, honest note), never pass it through to a 22P02."""
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.query_metrics.return_value = [{"metric_name": "trx", "value": 1}]
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_kpis(
+                    brand="Kisqali",
+                    region="EU",
+                    kpi_name="TRx",
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                )
+
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["data"] == []
+        mock_repo.query_metrics.assert_not_called()
+        assert "EU" in result["note"]
+        assert "northeast" in result["note"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_brand_returns_zero_rows_not_error(self):
+        """Same unmappable policy for the brand enum ("Ozempic")."""
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.query_metrics.return_value = [{"metric_name": "trx", "value": 1}]
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_kpis(
+                    brand="Ozempic",
+                    region="Northeast",
+                    kpi_name="TRx",
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                )
+
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["data"] == []
+        mock_repo.query_metrics.assert_not_called()
+        assert "Ozempic" in result["note"]
+        assert "Kisqali" in result["note"]
 
 
 # =============================================================================
