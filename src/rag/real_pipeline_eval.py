@@ -167,15 +167,14 @@ REAL_PIPELINE_METRICS: Tuple[str, ...] = ("faithfulness", "answer_relevancy")
 # kept only as a total-collapse backstop pinned below their product so it can
 # never contradict them.
 #
-# THE TRADEOFF, STATED PLAINLY: at today's ~0.30 hit rate this is LOOSER on
-# generation than the entangled aggregate was (implied 0.333 vs the new fixed
-# 0.20). That is deliberate. 0.333 was never a calibrated generation floor —
-# it was an artifact of the hit rate, it moved every run, and at n_hit=3 it
-# false-blocked a healthy run ~25% of the time. 0.20 is what the module's own
-# convention (~1 SE below the measured mean, as faithfulness 0.524/SE 0.195 ->
-# 0.35 was set) yields on the most recent baseline: 0.4667 - 0.260 = 0.207.
-# The gate is weaker at today's hit rate, stronger above 0.50, and — unlike
-# the product — it means the same thing from one run to the next.
+# THE TRADEOFF, STATED PLAINLY: decoupling buys stability (a floor that means
+# the same thing every run) and it must not be paid for with detection.
+# MIN_HIT_CONDITIONED_RELEVANCY is therefore set at 0.34 — just above the
+# strictest floor the aggregate ever implied at the measured hit rate
+# (0.10/0.30 = 0.333) and stricter than it at every higher hit rate. The cost
+# is a ~26% false-block rate at n_hit=3, which is the same cost the superseded
+# gate was already paying at today's hit rate. See the constant for the full
+# derivation and for why an earlier 0.20 revision of this lane was wrong.
 #
 # NOTE for anyone re-reading #1489's close-out: its deferral 7 asked to
 # "recalibrate the 0.3 answer_relevancy gate to the measured baseline". That
@@ -268,27 +267,40 @@ MIN_RETRIEVAL_HIT_RATE = 0.21
 # Measured: 0.4667 (n_hit=3, deployed) and 0.5360 (n_hit=5, pre-deploy);
 # pooled 0.510 over 8 hit rows, SE 0.118.
 #
-# DETECTION POWER, STATED HONESTLY — this floor is weak, and the reason is
-# worth reading before anyone "tightens" it:
+# WHY 0.34 — it is calibrated to LOSE NO DETECTION relative to the gate it
+# replaces. The superseded aggregate floor of 0.10 implied a hit-conditioned
+# floor of 0.10/hit_rate: 0.333 at the measured 0.30 hit rate, 0.250 at 0.40,
+# 0.167 at 0.60. 0.34 therefore sits just above the strictest value that gate
+# ever implied at the measured operating point, and is strictly stricter at
+# every higher hit rate — where the implied floor decayed toward zero.
+# Independently, the module's own convention (~1 SE below the measured mean, as
+# faithfulness 0.524/SE 0.195 -> 0.35 was set) applied to the POOLED baseline
+# gives 0.510 - 0.118 = 0.392, so 0.34 is below that too. Both baselines pass
+# it (0.4667 and 0.5360).
 #
-#   * It blocks a sustained fall below 0.20, i.e. a ~61% relative regression
-#     from the pooled 0.510 baseline. It does NOT detect a 30% regression
-#     (0.510 -> 0.357 passes). The two factor gates together therefore catch a
-#     retrieval collapse (sharply, via MIN_RETRIEVAL_HIT_RATE) and only a
-#     severe generation collapse.
-#   * It cannot be tightened at today's hit rate. The denominator is the hit
-#     count: at n_hit=3 the run-level SE is 0.260 (from the deployed run's own
-#     0.90/0.50/0.00), so even this floor false-blocks a healthy run ~12% of
-#     the time, and a floor near the baseline would false-block most runs. A
-#     tighter floor needs a bigger denominator, not more nerve.
-#   * Its power therefore GROWS with the retrieval hit rate. That is the same
-#     conclusion #1489 reached from the other direction: the hit rate, not the
-#     judge thresholds, is the binding constraint. Recalibrate this upward when
-#     the hit rate improves — and record the run here when you do.
+# DETECTION POWER, STATED HONESTLY:
+#
+#   * It blocks a sustained fall below 0.34 — a ~33% relative regression from
+#     the pooled 0.510 baseline. It does NOT detect a 20% one (0.510 -> 0.408
+#     passes).
+#   * The cost is the false-block rate, and it is NOT new. At n_hit=3 the
+#     run-level SE is 0.260 (from the deployed run's own 0.90/0.50/0.00), so a
+#     run whose true quality is 0.510 reads below 0.34 about 26% of the time.
+#     The superseded gate was already paying that: at hit 0.30 its implied
+#     0.333 floor carried the same ~25%. The difference is that this floor
+#     means the same thing every run instead of sliding with the hit rate.
+#   * An earlier revision of this lane set 0.20 and documented the resulting
+#     loss of detection as an accepted tradeoff. That was wrong: it bought a
+#     ~13-point reduction in a false-block rate the shipped gate already paid,
+#     with a real regression the old gate caught. Do not re-loosen it on that
+#     argument.
+#   * Its power still GROWS with the hit count — #1489's own conclusion that
+#     the hit rate, not the judge thresholds, is the binding constraint.
+#     Recalibrate when the hit rate improves, and record the run above.
 #
 # The eval is manual-only (since #504, CI OpenAI key throughput), so a false
 # block costs a re-run and a look at the per-sample rows, not a red CI.
-MIN_HIT_CONDITIONED_RELEVANCY = 0.20
+MIN_HIT_CONDITIONED_RELEVANCY = 0.34
 
 # Heuristic-contamination refusal (``_ragas_heuristic_contamination_error``,
 # re-exported above) lives in dspy_lane_ab beside its sibling validity checks:

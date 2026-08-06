@@ -393,3 +393,49 @@ class TestRefusesRowsItDoesNotOwn:
                 "SELECT update_learning_signal_evaluation("
                 f"'{uuid.uuid4()}'::uuid, '{{\"faithfulness\":0.9}}'::jsonb, '{{}}'::jsonb, 4.0);",
             )
+
+
+class TestStoredBundleMatchesTheDocumentedContract:
+    def test_ragas_scores_stores_only_measured_metrics(self, scratch_db):
+        """Migration 033 says learning_signals.ragas_scores "Contains ONLY
+        metrics the judge actually scored: an absent key means the metric was
+        not measured", and Python's ``as_signal_scores()`` returns
+        ``dict(self.measured)``. Persisting the caller's bundle verbatim keeps
+        JSON-null keys, which reads as "present but unknown" — a third state
+        neither contract allows. ``ragas_coverage.unmeasured`` already records
+        which metrics the judge tried and failed, so stripping loses nothing
+        (codex iter-2 HIGH).
+        """
+        scores = {"faithfulness": 0.9, "answer_relevancy": None}
+        signal_id = _insert_rubric_signal(scratch_db)
+        _psql(
+            scratch_db,
+            "SELECT update_learning_signal_evaluation("
+            f"'{signal_id}'::uuid, '{json.dumps(scores)}'::jsonb, '{{}}'::jsonb, 4.0);",
+        )
+        stored = json.loads(
+            _psql(
+                scratch_db,
+                f"SELECT ragas_scores FROM learning_signals WHERE signal_id = '{signal_id}';",
+            )
+        )
+        assert stored == {"faithfulness": 0.9}, f"null-valued key persisted: {stored}"
+        assert stored == RagasBundle(scores=scores).as_signal_scores()
+
+    def test_an_all_unmeasured_bundle_stores_an_empty_object(self, scratch_db):
+        """033: "Empty {} means no RAGAS bundle was available at all"."""
+        signal_id = _insert_rubric_signal(scratch_db)
+        _psql(
+            scratch_db,
+            "SELECT update_learning_signal_evaluation("
+            f"'{signal_id}'::uuid, '{{\"faithfulness\":null}}'::jsonb, '{{}}'::jsonb, 4.0);",
+        )
+        stored, coverage = _psql(
+            scratch_db,
+            "SELECT ragas_scores, signal_details->'ragas_coverage' FROM learning_signals "
+            f"WHERE signal_id = '{signal_id}';",
+        ).split("|")
+        assert json.loads(stored) == {}
+        assert json.loads(coverage)["unmeasured"] == ["faithfulness"], (
+            "stripping must not lose the record that the judge tried and failed"
+        )

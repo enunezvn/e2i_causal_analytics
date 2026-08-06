@@ -108,7 +108,15 @@ def _baseline_block(baseline: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# The recorded baselines
+# The recorded baselines — PROVENANCE checks, not validation
+# ---------------------------------------------------------------------------
+#
+# Read these for what they are (codex iter-2): the per-row scores in
+# RAGAS_MEASURED_BASELINES are DERIVED from the recorded aggregates, not from a
+# re-run of the gpt-4o judge, so asserting the factors multiply back to the
+# aggregate checks the derivation's arithmetic and that the recorded numbers
+# have not been edited apart. They say nothing about whether the judge's scores
+# were right. Re-deriving a baseline is a judge run, not a test.
 # ---------------------------------------------------------------------------
 
 
@@ -122,7 +130,12 @@ def test_two_baselines_are_recorded_machine_readably():
 
 @pytest.mark.parametrize("baseline", RAGAS_MEASURED_BASELINES, ids=lambda b: b["label"])
 def test_recorded_aggregate_is_the_product_of_the_two_factors(baseline):
-    """The confound, stated as an identity and checked against the real runs."""
+    """The confound, stated as an identity and checked against the real runs.
+
+    Provenance, not validation: the hit-row scores were derived FROM the
+    recorded aggregate, so this pins that the derivation is self-consistent and
+    that no one has since edited one number without the others.
+    """
     hit_rate = baseline["n_hit"] / baseline["n_samples"]
     conditioned = baseline["answer_relevancy_hit_conditioned"]
     assert hit_rate == pytest.approx(baseline["retrieval_hit_rate"], abs=5e-4)
@@ -217,24 +230,42 @@ def test_gate_blocks_the_collapse_the_aggregate_waves_through():
     assert any("hit-conditioned" in f for f in failures), failures
 
 
-def test_the_new_floor_is_looser_at_todays_hit_rate():
-    """The honest cost of decoupling, pinned so it cannot be forgotten.
+def test_the_floor_is_no_weaker_than_the_gate_it_replaces():
+    """Decoupling must not BUY the stability with detection.
 
-    At the baselines' ~0.30 hit rate the aggregate floor implied a conditioned
-    floor of 0.10/0.30 = 0.333; the fixed floor is 0.20. A run at 0.25
-    conditioned relevancy — a 51% regression from the pooled 0.510 baseline —
-    would have been blocked by the old entangled gate and passes now.
+    The superseded aggregate floor implied a hit-conditioned floor of
+    ``0.10 / hit_rate`` — strictest exactly where the hit rate is lowest. At the
+    measured baseline hit rate (0.30) it implied 0.333. A fixed floor at or
+    above that is no weaker at today's operating point, and strictly stronger
+    everywhere above it, where the implied floor decays toward zero.
+
+    An earlier revision of this lane set the floor to 0.20 and documented the
+    resulting loss as an accepted tradeoff; codex iteration 2 flagged it HIGH
+    (a regression the old gate caught that neither new gate caught), and it was
+    a real loss taken for a ~13-point reduction in false-block rate that the
+    shipped gate was already paying anyway.
     """
-    implied_old_floor = _SUPERSEDED_AGGREGATE_FLOOR / 0.30
-    assert implied_old_floor > MIN_HIT_CONDITIONED_RELEVANCY
+    assert MIN_HIT_CONDITIONED_RELEVANCY >= _SUPERSEDED_AGGREGATE_FLOOR / 0.30
 
+    for hit_rate in (0.40, 0.50, 0.60, 0.70):
+        assert MIN_HIT_CONDITIONED_RELEVANCY > _SUPERSEDED_AGGREGATE_FLOOR / hit_rate, (
+            f"weaker than the superseded gate at hit rate {hit_rate}"
+        )
+
+
+def test_blocks_the_regression_the_superseded_gate_caught_at_todays_hit_rate():
+    """The concrete case codex iteration 2 named: hit rate unchanged at 3/10,
+    hit-conditioned relevancy down to 0.25 (a 51% fall from the pooled 0.510
+    baseline). The old aggregate blocked it at 0.075 < 0.10; the decomposition
+    must block it too."""
     rows = _rows([0.25] * 3 + [0.0] * 7, [2] * 3 + [0] * 7)
     block = _block(rows)
     assert block["answer_relevancy"] == pytest.approx(0.075)
     assert block["answer_relevancy"] < _SUPERSEDED_AGGREGATE_FLOOR, "old gate blocked this"
 
-    passed, _ = check_hit_conditioned_relevancy_gate(block)
-    assert passed, "documented tradeoff: the decoupled floor lets this through"
+    passed, failures = check_hit_conditioned_relevancy_gate(block)
+    assert not passed, "the decomposition must not lose what the aggregate caught"
+    assert any("hit-conditioned" in f for f in failures), failures
 
 
 def test_gate_fails_closed_when_it_cannot_measure():

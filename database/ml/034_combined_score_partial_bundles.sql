@@ -295,6 +295,7 @@ DECLARE
     v_unmeasured        TEXT[];
     v_not_evaluated     TEXT[];
     v_measured_weight   FLOAT;
+    v_stored_scores     JSONB;
 BEGIN
     -- learning_signals is SHARED. Other producers write signal_type='rating'
     -- rows whose signal_value is a 0..1 reward, not a 1-5 rubric total
@@ -329,6 +330,20 @@ BEGIN
     -- weighted metrics, so coverage can never name a metric that contributed
     -- nothing to ragas_weighted. The `measured` predicate is deliberately the
     -- same one ragas_weighted_measured() uses.
+    --
+    -- TWO LIMITS, both deliberate:
+    --   * `unmeasured` here is derivable ONLY from a JSON null or an empty
+    --     string. Python's RagasBundle also unions an explicit
+    --     `unmeasured_metrics` tuple the producer passes in; this function is
+    --     never given that tuple, so a metric the producer declared unmeasured
+    --     WITHOUT putting a null-valued key in the bundle lands in
+    --     `not_evaluated` here where Python would say `unmeasured`. The Python
+    --     writer remains the richer path; `source` records which one wrote this.
+    --   * the split is exhaustive over absent / JSON-null-or-empty / readable.
+    --     A key holding a bool, array, object or non-numeric string counts as
+    --     readable here, but ragas_weighted_measured() has already cast it to
+    --     float and RAISED, so the transaction aborts and no such coverage is
+    --     ever persisted. Verified on PostgreSQL 15.8 across all eight shapes.
     SELECT
         COALESCE(array_agg(w.metric ORDER BY w.metric)
                  FILTER (WHERE NULLIF(v_bundle->>w.metric, '') IS NOT NULL), ARRAY[]::text[]),
@@ -342,8 +357,22 @@ BEGIN
       INTO v_measured, v_unmeasured, v_not_evaluated, v_measured_weight
       FROM ragas_metric_weights() AS w;
 
+    -- ragas_scores stores the MEASURED subset only. Migration 033: "Contains
+    -- ONLY metrics the judge actually scored: an absent key means the metric
+    -- was not measured, never a judged 0.0 ... Empty {} means no RAGAS bundle
+    -- was available at all." Python's RagasBundle.as_signal_scores() returns
+    -- dict(self.measured) for the same reason. Persisting the caller's bundle
+    -- verbatim would keep JSON-null keys, i.e. a "present but unknown" third
+    -- state neither contract allows — and nothing is lost by stripping them,
+    -- because ragas_coverage.unmeasured above records exactly which metrics the
+    -- judge tried and failed on.
+    SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb)
+      INTO v_stored_scores
+      FROM jsonb_each(v_bundle)
+     WHERE key = ANY (v_measured);
+
     UPDATE learning_signals SET
-        ragas_scores = COALESCE(p_ragas_scores, '{}'::jsonb),
+        ragas_scores = v_stored_scores,
         ragas_weighted = v_ragas_weighted,
         rubric_scores = COALESCE(p_rubric_scores, '{}'::jsonb),
         rubric_total = p_rubric_total,
