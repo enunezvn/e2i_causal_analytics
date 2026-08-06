@@ -66,15 +66,19 @@ from src.optimization.dspy_lane_ab import (
 
 __all__ = [
     "HEURISTIC_EVALUATION_METHOD",
+    "MIN_HIT_CONDITIONED_RELEVANCY",
     "MIN_REAL_PIPELINE_SAMPLES",
     "MIN_RETRIEVAL_HIT_RATE",
+    "RAGAS_MEASURED_BASELINES",
     "REAL_PIPELINE_METRICS",
     "REAL_PIPELINE_THRESHOLDS",
     "build_samples_from_replay",
+    "check_hit_conditioned_relevancy_gate",
     "check_real_pipeline_gates",
     "check_retrieval_gate",
     "check_run_gates",
     "contexts_from_evidence",
+    "hit_conditioned_relevancy",
     "summarize_retrieval",
 ]
 
@@ -118,13 +122,124 @@ REAL_PIPELINE_METRICS: Tuple[str, ...] = ("faithfulness", "answer_relevancy")
 # first honest number, deliberately recorded as a floor to regress against.
 # Raising them is a product decision; lowering them to accommodate a red run
 # is gate-shopping. Recalibrate only with a fresh measured run recorded here.
+# ===========================================================================
+# BASELINE 2 — MEASURED 2026-08-06, n=10, deployed dfd4a7a6 (#1489 close-out)
+# ===========================================================================
+# The same golden replay against the deployed stack, judged by the same frozen
+# gpt-4o judge in the production container:
+#
+#     retrieval hit      3/10  = 0.300
+#     faithfulness       1.000  (on the context rows the judge scored finitely)
+#     answer_relevancy   0.140  (n=10)
+#
+# The #1488 fail-closed guard flagged q07/q08 as blocking (no finite
+# faithfulness) — the hardening working on real traffic, not a regression.
+#
+# WHAT THE TWO BASELINES TOGETHER SHOWED, AND WHY THE GATE CHANGED (#1489)
+# -----------------------------------------------------------------------
+# answer_relevancy as reported is an aggregate over ALL rows, and every
+# zero-retrieval row scores 0.0 — ragas zeroes a noncommittal answer, and every
+# zero-retrieval turn in both baselines abstained. So it factorises exactly:
+#
+#     aggregate_relevancy = retrieval_hit_rate x hit_conditioned_relevancy
+#
+#     deployed   0.300  x 0.4667 = 0.1400   recorded 0.140
+#     pre-deploy 0.3333 x 0.5360 = 0.1787   recorded 0.179
+#
+# One factor already has its own gate (MIN_RETRIEVAL_HIT_RATE). Gating the
+# PRODUCT too means the generation half is judged through a moving lens: the
+# aggregate floor 0.10 implied a hit-conditioned floor of 0.10/hit_rate, which
+# is 0.333 at today's 0.30 hit rate but only 0.167 at 0.60. So:
+#
+#   * a run at the legal minimum hit rate (0.21) carrying the deployed
+#     baseline's OWN generation quality (0.4667) computes 0.0980 and was
+#     BLOCKED — the two gates that shipped together were not mutually
+#     consistent; and
+#   * once the hit rate exceeds 0.50 the implied floor drops below 0.20, so a
+#     severe generation collapse starts passing BECAUSE retrieval improved.
+#     At hit 0.30 -> 0.60 with hit-conditioned relevancy falling 0.510 -> 0.18,
+#     the aggregate is 0.108 and passes the 0.10 floor while answers on rows
+#     that did retrieve got 65% worse. Improving the hit rate is the project's
+#     stated next move, so this window is about to open.
+#
+# So the gate now rides the two factors separately: MIN_RETRIEVAL_HIT_RATE for
+# retrieval, MIN_HIT_CONDITIONED_RELEVANCY for generation, with the aggregate
+# kept only as a total-collapse backstop pinned below their product so it can
+# never contradict them.
+#
+# THE TRADEOFF, STATED PLAINLY: at today's ~0.30 hit rate this is LOOSER on
+# generation than the entangled aggregate was (implied 0.333 vs the new fixed
+# 0.20). That is deliberate. 0.333 was never a calibrated generation floor —
+# it was an artifact of the hit rate, it moved every run, and at n_hit=3 it
+# false-blocked a healthy run ~25% of the time. 0.20 is what the module's own
+# convention (~1 SE below the measured mean, as faithfulness 0.524/SE 0.195 ->
+# 0.35 was set) yields on the most recent baseline: 0.4667 - 0.260 = 0.207.
+# The gate is weaker at today's hit rate, stronger above 0.50, and — unlike
+# the product — it means the same thing from one run to the next.
+#
+# NOTE for anyone re-reading #1489's close-out: its deferral 7 asked to
+# "recalibrate the 0.3 answer_relevancy gate to the measured baseline". That
+# had already happened — commit 6709d42e replaced the aspirational 0.30 with
+# the 0.10 measured floor and added the retrieval gate on 2026-08-05, the day
+# before the close-out was written. Both recorded baselines pass the gate that
+# actually ships. The confound above is the defect that remained.
+
+# The two measured runs the floors below are calibrated from, machine-readable
+# so a future recalibration argues with data rather than re-deriving it from
+# prose. hit_row_relevancy_scores is what makes the aggregate reproducible.
+RAGAS_MEASURED_BASELINES: Tuple[Dict[str, Any], ...] = (
+    {
+        "label": "pre-deploy-20260805",
+        "measured_on": "2026-08-05",
+        "deployed_sha": "9784abbd",
+        "n_samples": 15,
+        "n_hit": 5,
+        "retrieval_hit_rate": 0.3333,
+        "faithfulness": 0.524,
+        "answer_relevancy": 0.179,
+        "answer_relevancy_hit_conditioned": 0.5360,
+        "hit_row_relevancy_scores": (0.670, 0.670, 0.670, 0.670, 0.0),
+        "_method": (
+            "11 of 15 turns scored exactly 0.000 and the 4 that committed averaged "
+            "0.670; every zero-retrieval turn abstained, so all 4 committers are hit "
+            "rows and the 5th hit row scored 0.0. Individual hit-row scores were not "
+            "recorded separately, so the four are carried at their recorded mean — "
+            "which reproduces the recorded aggregate 4 x 0.670 / 15 = 0.1787."
+        ),
+    },
+    {
+        "label": "deployed-20260806",
+        "measured_on": "2026-08-06",
+        "deployed_sha": "dfd4a7a6",
+        "n_samples": 10,
+        "n_hit": 3,
+        "retrieval_hit_rate": 0.300,
+        "faithfulness": 1.000,
+        "answer_relevancy": 0.140,
+        "answer_relevancy_hit_conditioned": 0.4667,
+        "hit_row_relevancy_scores": (0.90, 0.50, 0.0),
+        "_method": (
+            "#1489's close-out recorded q07=0.90, q08=0.50 and aggregate 0.140 over "
+            "n=10. 0.140 x 10 = 1.40 = 0.90 + 0.50, so the third hit row (q03) scored "
+            "0.0 and every zero-retrieval row scored 0.0 — as the close-out states. "
+            "Derived from the recorded aggregate, not from a re-run of the judge."
+        ),
+    },
+)
+
 REAL_PIPELINE_THRESHOLDS: Dict[str, float] = {
     # measured 0.524, SE 0.195 over only 5 context-bearing replays whose
     # values ranged 0.000-0.929 — a wide spread, so the floor is generous.
     "faithfulness": 0.35,
-    # measured 0.179, SE 0.083. At this floor, abstention rising from 11/15
-    # to 13/15 (AR ≈ 0.089) blocks.
-    "answer_relevancy": 0.10,
+    # TOTAL-COLLAPSE BACKSTOP ONLY (#1489). This was 0.10, ~1 SE below the
+    # pre-deploy aggregate — but the aggregate is the product of two factors
+    # now gated separately, and at 0.10 it BLOCKED a run passing both of them
+    # (hit 0.21 x conditioned 0.4667 = 0.0980). Pinned at or below
+    # MIN_RETRIEVAL_HIT_RATE x MIN_HIT_CONDITIONED_RELEVANCY = 0.21 x 0.20 =
+    # 0.042 so it can never contradict them, while still refusing a run whose
+    # relevancy has gone to nothing. Detection power is deliberately delegated
+    # to the two factor gates; a test pins the inequality.
+    "answer_relevancy": 0.04,
 }
 
 # #1489 step 3 fixes the cadence at n≈10-15 (the CI OpenAI key throughput was
@@ -146,6 +261,34 @@ MIN_REAL_PIPELINE_SAMPLES = 10
 #
 # 0.21 blocks 3/15 (0.200) and passes 4/15 (0.267).
 MIN_RETRIEVAL_HIT_RATE = 0.21
+
+# Generation quality on the rows that DID retrieve — the other factor of the
+# aggregate, and the only one the retrieval gate cannot see.
+#
+# Measured: 0.4667 (n_hit=3, deployed) and 0.5360 (n_hit=5, pre-deploy);
+# pooled 0.510 over 8 hit rows, SE 0.118.
+#
+# DETECTION POWER, STATED HONESTLY — this floor is weak, and the reason is
+# worth reading before anyone "tightens" it:
+#
+#   * It blocks a sustained fall below 0.20, i.e. a ~61% relative regression
+#     from the pooled 0.510 baseline. It does NOT detect a 30% regression
+#     (0.510 -> 0.357 passes). The two factor gates together therefore catch a
+#     retrieval collapse (sharply, via MIN_RETRIEVAL_HIT_RATE) and only a
+#     severe generation collapse.
+#   * It cannot be tightened at today's hit rate. The denominator is the hit
+#     count: at n_hit=3 the run-level SE is 0.260 (from the deployed run's own
+#     0.90/0.50/0.00), so even this floor false-blocks a healthy run ~12% of
+#     the time, and a floor near the baseline would false-block most runs. A
+#     tighter floor needs a bigger denominator, not more nerve.
+#   * Its power therefore GROWS with the retrieval hit rate. That is the same
+#     conclusion #1489 reached from the other direction: the hit rate, not the
+#     judge thresholds, is the binding constraint. Recalibrate this upward when
+#     the hit rate improves — and record the run here when you do.
+#
+# The eval is manual-only (since #504, CI OpenAI key throughput), so a false
+# block costs a re-run and a look at the per-sample rows, not a red CI.
+MIN_HIT_CONDITIONED_RELEVANCY = 0.20
 
 # Heuristic-contamination refusal (``_ragas_heuristic_contamination_error``,
 # re-exported above) lives in dspy_lane_ab beside its sibling validity checks:
@@ -278,25 +421,98 @@ def check_retrieval_gate(
     return True, []
 
 
+def hit_conditioned_relevancy(
+    block: Optional[Dict[str, Any]],
+) -> Tuple[Optional[float], int]:
+    """Mean ``answer_relevancy`` over the CONTEXT-BEARING rows, and that count.
+
+    The reported aggregate averages over every row, and a zero-retrieval row
+    scores 0.0 by construction (ragas zeroes a noncommittal answer, and every
+    zero-retrieval turn in both measured baselines abstained). That makes the
+    aggregate the product of two factors — see the baseline block above — and
+    this is the factor the retrieval gate cannot see: how good the answers were
+    on the turns that actually had evidence to work from.
+
+    A hit row judged 0.0 is a real measurement and counts; it is precisely the
+    generation failure this metric exists to expose. Returns ``(None, 0)`` when
+    there is nothing to measure, so the caller decides what that means.
+    """
+    if not isinstance(block, dict):
+        return None, 0
+    rows = block.get("per_sample")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return None, 0
+
+    scores: List[float] = []
+    for row in rows:
+        n_ctx = row.get("n_contexts")
+        if not isinstance(n_ctx, int) or isinstance(n_ctx, bool) or n_ctx <= 0:
+            continue
+        value = row.get("answer_relevancy")
+        if not _is_finite_number(value):
+            # A hit row the judge never scored would silently shrink the
+            # denominator; refuse the whole measurement instead.
+            return None, 0
+        scores.append(float(value))
+
+    if not scores:
+        return None, 0
+    return (sum(scores) / len(scores)), len(scores)
+
+
+def check_hit_conditioned_relevancy_gate(
+    block: Optional[Dict[str, Any]],
+    floor: float = MIN_HIT_CONDITIONED_RELEVANCY,
+) -> Tuple[bool, List[str]]:
+    """Gate generation quality on the retrieved rows. Returns ``(passed, failures)``.
+
+    Fails closed: a block whose hit rows cannot be read is not a passing run.
+    See ``MIN_HIT_CONDITIONED_RELEVANCY`` for what this floor can and cannot
+    detect — it is deliberately weak, and deliberately documented as such.
+    """
+    value, n_hit = hit_conditioned_relevancy(block)
+    if value is None:
+        return False, [
+            "hit-conditioned answer_relevancy could not be measured (no context-bearing "
+            "row carrying a finite score) — the gate fails closed"
+        ]
+    if value < floor:
+        return False, [
+            f"hit-conditioned answer_relevancy {value:.3f} < floor {floor} over {n_hit} "
+            "context-bearing rows — answers on the turns that DID retrieve got worse; "
+            "the aggregate cannot see this when the hit rate moves"
+        ]
+    return True, []
+
+
 def check_run_gates(
     block: Optional[Dict[str, Any]],
     retrieval: Optional[Dict[str, Any]],
     thresholds: Optional[Dict[str, float]] = None,
     min_samples: int = MIN_REAL_PIPELINE_SAMPLES,
     retrieval_floor: float = MIN_RETRIEVAL_HIT_RATE,
+    hit_conditioned_floor: float = MIN_HIT_CONDITIONED_RELEVANCY,
 ) -> Tuple[bool, List[str]]:
-    """Full verdict for one run: judge-block gates AND the retrieval gate.
+    """Full verdict for one run: judge-block gates, retrieval, and generation.
 
     This is what the driver calls. Keeping the retrieval gate out of
     ``check_real_pipeline_gates`` (which is about the judge's own output) but
-    composing both here means a caller cannot accidentally gate the metrics
-    while ignoring whether the pipeline retrieved anything.
+    composing them here means a caller cannot accidentally gate the metrics
+    while ignoring whether the pipeline retrieved anything — and, since #1489,
+    cannot gate the aggregate while ignoring whether the answers on the rows it
+    did retrieve were any good.
     """
     block_passed, failures = check_real_pipeline_gates(
         block, thresholds=thresholds, min_samples=min_samples
     )
     retrieval_passed, retrieval_failures = check_retrieval_gate(retrieval, floor=retrieval_floor)
-    return (block_passed and retrieval_passed), [*failures, *retrieval_failures]
+    relevancy_passed, relevancy_failures = check_hit_conditioned_relevancy_gate(
+        block, floor=hit_conditioned_floor
+    )
+    return (
+        (block_passed and retrieval_passed and relevancy_passed),
+        [*failures, *retrieval_failures, *relevancy_failures],
+    )
 
 
 def check_real_pipeline_gates(
