@@ -390,6 +390,27 @@ async def db_batch(client: Optional[Any] = None) -> RagExampleBatch:
     rows = list(getattr(result, "data", None) or [])
     turns = _turns_from_rows(rows)
 
+    if rows and not turns:
+        # Every row here carried evidence (the narrowing guaranteed it) and none
+        # was usable, which means the text was missing — a different fact from
+        # "no traffic yet" and one an operator cannot infer from a zero.
+        #
+        # Measured 2026-08-06: the only signal that carries retrieved_chunks is
+        # the cognitive Reflector's `agent` signal, whose dict keys its content
+        # as query/response, while SignalCollector reads signal["input"] /
+        # ["output"] — so training_input/training_output persist EMPTY (133 of
+        # 356 agent rows today). Refusing such rows is deliberate: that signal's
+        # `query` is a synthetic descriptor ("Intent: X, Evidence: N items"),
+        # not the user's question, so reading it would hand GEPA a fabricated
+        # prompt to optimize against.
+        logger.warning(
+            "RAG feedstock: %d row(s) carry retrieved_chunks but none has usable "
+            "text — training_input/training_output are empty or blank on all of "
+            "them. The evidence producer and the query/answer writer are not "
+            "populating the same row; no examples can be built until they do.",
+            len(rows),
+        )
+
     if len(rows) >= DB_ROW_CAP:
         # Newest-first, so a full window means usable rows may sit just past the
         # boundary. Say so rather than reporting a confident shortfall.

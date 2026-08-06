@@ -432,6 +432,57 @@ class TestDbSource:
         assert batch.total_records == 1
         assert [e.user_query for e in batch.examples] == ["kept"]
 
+    def test_evidence_bearing_rows_with_no_text_are_diagnosed_loudly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The measured cross-lane dead-end must not present as a quiet zero.
+
+        Measured 2026-08-06 against the live DB and the parallel producer
+        branch: the ONLY signal that will carry ``retrieved_chunks`` is the
+        cognitive Reflector's ``agent`` signal, whose dict uses the keys
+        ``query``/``response`` — but ``SignalCollector`` reads
+        ``signal.get("input")``/``("output")``, so ``training_input`` and
+        ``training_output`` land EMPTY (133 of 356 agent rows, and all 133
+        summarizer + 133 investigator rows, are empty today).
+
+        So after both lanes merge this reader can see candidate rows and still
+        produce nothing. Refusing them is correct — the Reflector's ``query`` is
+        a synthetic descriptor ("Intent: X, Evidence: N items"), not the user's
+        question, so reading it would feed GEPA a fabricated prompt. But a
+        silent zero would look like "no traffic yet" instead of "the writer is
+        not persisting the text", so the reason has to be in the log.
+        """
+        import asyncio
+        import logging
+
+        from src.tasks.rag_example_sources import db_batch
+
+        rows = [_row("", "", [{"content": "real evidence"}]) for _ in range(3)]
+        with caplog.at_level(logging.WARNING, logger="src.tasks.rag_example_sources"):
+            batch = asyncio.run(db_batch(client=_FakeClient(rows)))
+
+        assert batch.examples == ()
+        assert batch.total_records == 3
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "training_input" in blob and "training_output" in blob, blob
+        assert "3" in blob, blob
+
+    def test_no_diagnosis_when_there_were_no_candidates_at_all(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Control: an empty window is the ordinary state, not a defect."""
+        import asyncio
+        import logging
+
+        from src.tasks.rag_example_sources import db_batch
+
+        with caplog.at_level(logging.WARNING, logger="src.tasks.rag_example_sources"):
+            batch = asyncio.run(db_batch(client=_FakeClient([])))
+
+        assert batch.examples == ()
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "training_input" not in blob, f"warned about an empty window: {blob}"
+
     def test_lookback_window_is_env_tunable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import asyncio
 

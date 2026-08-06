@@ -48,6 +48,33 @@ _RECORDS_PATH_VAR = "DSPY_RAG_RECORDS_PATH"
 _MAX_METRIC_CALLS_VAR = "DSPY_RAG_MAX_METRIC_CALLS"
 
 
+def _declared_leg_env_vars() -> list[str]:
+    """Every env name the RAG leg reads, DERIVED from the code that reads it.
+
+    Not a hardcoded list on purpose. This exact defect is what #1489 deferral 2
+    is: a flag the code reads that compose never forwards, so the host .env is
+    silently inert and the in-code default governs. Writing the names out by
+    hand reproduces the bug the moment someone adds the next flag — as happened
+    in this very lane, where the two knobs the deferral named were wired and the
+    two NEW ones the DB source introduced were not (caught by codex, not by the
+    first version of this test).
+
+    Deriving from the modules turns a one-off fix into a guard for the class.
+    """
+    from src.tasks import dspy_optimization_tasks as leg
+    from src.tasks import rag_example_sources as sources
+
+    names: set[str] = set()
+    for module in (sources, leg):
+        for attr in dir(module):
+            if not attr.isupper():
+                continue
+            value = getattr(module, attr)
+            if isinstance(value, str) and value.startswith("DSPY_RAG_"):
+                names.add(value)
+    return sorted(names)
+
+
 def _load_compose() -> dict[str, Any]:
     return cast(dict[str, Any], yaml.safe_load(_COMPOSE_PATH.read_text()))
 
@@ -61,31 +88,44 @@ def _service_env(compose: dict[str, Any], service: str) -> dict[str, Any]:
     return cast(dict[str, Any], env)
 
 
-@pytest.mark.parametrize("var", [_RECORDS_PATH_VAR, _MAX_METRIC_CALLS_VAR])
-def test_leg_env_is_declared_in_the_shared_anchor(var: str) -> None:
-    """Both knobs live in x-common-env, not on one service."""
-    compose = _load_compose()
-    common = compose.get("x-common-env") or {}
-    assert var in common, (
-        f"{var} missing from x-common-env. src/tasks/dspy_optimization_tasks reads it "
-        f"from os.environ; without a passthrough entry the host .env value never "
-        f"reaches the containers and the in-code default governs (the OPIK_ENABLED lesson)."
+def test_every_env_the_leg_reads_is_declared_in_the_shared_anchor() -> None:
+    """EVERY DSPY_RAG_* knob the code reads, not just the two #1489 named.
+
+    Asserted as one set rather than parametrized so the failure message lists
+    what is missing, which is the actionable part.
+    """
+    common = _load_compose().get("x-common-env") or {}
+    declared = _declared_leg_env_vars()
+    missing = [name for name in declared if name not in common]
+    assert not missing, (
+        f"{missing} read by the RAG leg but missing from x-common-env. Without a "
+        f"passthrough entry the host .env value never reaches the containers and "
+        f"the in-code default governs (the OPIK_ENABLED lesson) — which is exactly "
+        f"the defect #1489 deferral 2 exists to fix. Declared knobs: {declared}"
     )
 
 
-@pytest.mark.parametrize("var", [_RECORDS_PATH_VAR, _MAX_METRIC_CALLS_VAR])
+def test_the_derivation_actually_finds_the_known_knobs() -> None:
+    """Guards the guard: a derivation that found nothing would pass vacuously."""
+    declared = _declared_leg_env_vars()
+    assert _RECORDS_PATH_VAR in declared
+    assert _MAX_METRIC_CALLS_VAR in declared
+    assert len(declared) >= 4, f"expected the DB-source knobs too; got {declared}"
+
+
 @pytest.mark.parametrize("service", _SERVICES_NEEDING_ENV)
-def test_leg_env_reaches_every_service_that_merges_the_anchor(service: str, var: str) -> None:
-    """The anchor merge must actually land the key on the beat's worker."""
+def test_leg_env_reaches_every_service_that_merges_the_anchor(service: str) -> None:
+    """The anchor merge must actually land every knob on the beat's worker."""
     compose = _load_compose()
     env = _service_env(compose, service)
-    assert var in env, (
-        f"{var} does not reach {service}. Expected via the <<: *common-env merge; "
+    missing = [name for name in _declared_leg_env_vars() if name not in env]
+    assert not missing, (
+        f"{missing} do not reach {service}. Expected via the <<: *common-env merge; "
         f"got keys: {sorted(env)[:12]}..."
     )
 
 
-@pytest.mark.parametrize("var", [_RECORDS_PATH_VAR, _MAX_METRIC_CALLS_VAR])
+@pytest.mark.parametrize("var", _declared_leg_env_vars())
 def test_leg_env_is_a_passthrough_not_a_hardcoded_value(var: str) -> None:
     """Both must interpolate the host .env, and neither may bake a default in.
 

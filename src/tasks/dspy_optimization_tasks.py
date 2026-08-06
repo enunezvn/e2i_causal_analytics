@@ -37,7 +37,6 @@ _STATE_PATH = Path("optimized_modules") / ".trigger_state.json"
 # before that the host .env never reached the worker and the in-code defaults
 # governed no matter what an operator set.
 RAG_RECORDS_PATH_ENV = rag_sources.RAG_RECORDS_PATH_ENV
-RagExampleSourceUnavailable = rag_sources.RagExampleSourceUnavailable
 load_rag_examples_from_records = rag_sources.load_rag_examples_from_records
 
 # Judge budget, in GEPA metric calls. Measured against installed dspy 3.1.0:

@@ -110,6 +110,15 @@ x-common-env: &common-env
   # feedstock that needs no file at all).
   DSPY_RAG_RECORDS_PATH: ${DSPY_RAG_RECORDS_PATH:-}
   DSPY_RAG_MAX_METRIC_CALLS: ${DSPY_RAG_MAX_METRIC_CALLS:-}
+  # #1489 deferral 5: the live-traffic feedstock, which needs no records file
+  # and is therefore the only way the nightly cycle runs UNATTENDED. Default
+  # OFF — turning it on flips the leg from never-runs to runs-whenever-traffic-
+  # supplies-judgeable-turns, which spends the judge budget above, so it is an
+  # operator's cost decision rather than a deploy side effect. Parsed
+  # fail-closed in code ("false"/"0"/"no"/anything unrecognized stays off).
+  # Lookback bounds the read window in days (default 30).
+  DSPY_RAG_DB_FEEDSTOCK_ENABLED: ${DSPY_RAG_DB_FEEDSTOCK_ENABLED:-}
+  DSPY_RAG_DB_LOOKBACK_DAYS: ${DSPY_RAG_DB_LOOKBACK_DAYS:-}
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
