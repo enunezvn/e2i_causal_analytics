@@ -467,6 +467,106 @@ class TestDbSource:
         assert "training_input" in blob and "training_output" in blob, blob
         assert "3" in blob, blob
 
+    def test_the_diagnosis_names_the_real_reason_not_a_guessed_one(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A confident wrong diagnosis is worse than a vague one.
+
+        A row can be unusable because its TEXT is blank or because its
+        EVIDENCE could not be read (a chunk dict with no ``content`` key passes
+        the server-side non-empty-array narrowing but yields no passage). Those
+        need different fixes in different files, so the warning must count what
+        actually happened rather than assert the first cause.
+        """
+        import asyncio
+        import logging
+
+        from src.tasks.rag_example_sources import db_batch
+
+        rows = [
+            _row("", "", [{"content": "evidence"}]),
+            _row("q", "a", [{"text": "wrong key"}]),
+            _row("q2", "a2", [{"source": "kg"}]),
+        ]
+        with caplog.at_level(logging.WARNING, logger="src.tasks.rag_example_sources"):
+            batch = asyncio.run(db_batch(client=_FakeClient(rows)))
+
+        assert batch.examples == ()
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "1" in blob and "2" in blob, (
+            f"expected a 1-blank-text / 2-bad-evidence split: {blob}"
+        )
+        assert "evidence" in blob.lower(), blob
+
+    def test_partial_loss_is_still_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        """One usable row must not silence the diagnosis for the other forty.
+
+        Firing only when NOTHING is usable hides the common real case: the
+        feedstock is quietly a fraction of the traffic that carried evidence.
+        """
+        import asyncio
+        import logging
+
+        from src.tasks.rag_example_sources import db_batch
+
+        rows = [_row("good", "answer", [{"content": "ctx"}])] + [
+            _row("", "", [{"content": "ctx"}]) for _ in range(4)
+        ]
+        with caplog.at_level(logging.WARNING, logger="src.tasks.rag_example_sources"):
+            batch = asyncio.run(db_batch(client=_FakeClient(rows)))
+
+        assert [e.user_query for e in batch.examples] == ["good"]
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "4" in blob, f"the 4 dropped rows must be reported: {blob}"
+
+    def test_every_row_is_either_a_turn_or_exactly_one_recorded_drop(self) -> None:
+        """The accounting invariant the diagnosis rests on.
+
+        If a row could vanish without being counted, or be counted twice, the
+        breakdown in the warning would be arithmetic that does not add up — and
+        an operator would size the problem wrongly. Swept over the product of
+        blank/whitespace/None text and ten evidence shapes, plus non-object
+        rows.
+        """
+        import itertools
+
+        from src.tasks.rag_example_sources import _turns_from_rows
+
+        chunk_shapes: List[Any] = [
+            None,
+            [],
+            "notalist",
+            [{"content": "c"}],
+            [{"content": "  "}],
+            [{"text": "c"}],
+            ["bare"],
+            [{"content": "c"}, 17],
+            [None],
+            [{"source": "kg"}, {"content": "ok"}],
+        ]
+        texts: List[Any] = ["q", "", "   ", None]
+        rows: List[Any] = [
+            {"training_input": q, "training_output": a, "retrieved_chunks": ch}
+            for q, a, ch in itertools.product(texts, texts, chunk_shapes)
+        ]
+        rows += ["not a dict", None, 42, {"training_input": "q", "training_output": "a"}]
+
+        turns, drops = _turns_from_rows(rows)
+
+        assert len(turns) + sum(drops.values()) == len(rows)
+        assert all(
+            t.query.strip()
+            and t.answer.strip()
+            and t.contexts
+            and all(c.strip() for c in t.contexts)
+            for t in turns
+        ), "a turn escaped with blank content"
+        assert set(drops) <= {
+            "blank training_input/training_output",
+            "no readable evidence text in retrieved_chunks",
+            "row is not an object",
+        }, drops
+
     def test_no_diagnosis_when_there_were_no_candidates_at_all(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -569,7 +669,16 @@ class TestFingerprints:
         assert one.fingerprint(40) != two.fingerprint(40)
 
     def test_sources_do_not_collide_on_identical_content(self, tmp_path: Path) -> None:
-        """Same turns from a different source is a different measurement."""
+        """Same turns from a different source is a different measurement.
+
+        Two assertions, because they cover different things. The digests differ
+        today for a STRUCTURAL reason — file material is raw JSON bytes, DB
+        material is a concatenation of hex digests, and valid JSON can never be
+        pure hex — so the inequality alone would still hold with the ``db:``
+        namespace removed (verified by mutation: dropping the prefix left this
+        test green). The namespace is defence against a future change to either
+        material's format, so it is asserted directly rather than inferred.
+        """
         import asyncio
 
         from src.tasks.rag_example_sources import db_batch, records_batch
@@ -578,6 +687,10 @@ class TestFingerprints:
         file_batch = records_batch(str(_records_file(tmp_path, [_record(q, a, [c])])))
         db = asyncio.run(db_batch(client=_FakeClient([_row(q, a, [{"content": c}])])))
         assert file_batch.fingerprint(40) != db.fingerprint(40)
+        assert db.fingerprint_material.startswith(b"db:"), (
+            "the DB digest must be namespaced by source, so the two materials "
+            "cannot collide even if their formats converge later"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -758,6 +871,11 @@ class TestTheLegActuallyUsesTheDbSource:
         # the honest diagnosis, and it is the one an operator needs today.
         assert result["total_records"] == 0
         assert result["source"] == "db"
+        # ...but a bare "0 record(s)" reads as "no traffic at all", which is a
+        # DIFFERENT and wrong diagnosis — there were 40 recent training rows,
+        # none carrying evidence. The reported reason and payload must say which.
+        assert "candidate" in result["reason"], result["reason"]
+        assert "learning_signals" in result["origin"], result
         assert not (tmp_path / "optimized_modules").exists() or not list(
             (tmp_path / "optimized_modules").glob("*/gepa_*.json")
         )

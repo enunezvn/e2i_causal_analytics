@@ -180,9 +180,13 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
     examples = list(batch.examples)
 
     if len(examples) < _RAG_MIN_USABLE_EXAMPLES:
+        # The noun is source-aware: the DB window is pre-narrowed to rows that
+        # carry evidence, so a bare "0 record(s)" there would read as "no
+        # traffic" when the truth is "recent traffic carried no evidence" — a
+        # different diagnosis pointing at a different missing component.
         reason = (
-            f"only {len(examples)} usable example(s) of {total_records} record(s); "
-            f"need >= {_RAG_MIN_USABLE_EXAMPLES}"
+            f"only {len(examples)} usable example(s) of {total_records} "
+            f"{batch.record_noun}(s); need >= {_RAG_MIN_USABLE_EXAMPLES}"
         )
         logger.info(
             "RAG prompt optimization skipped: %s (source: %s). Expected — #1485 "
@@ -201,6 +205,9 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
             "usable_examples": len(examples),
             "total_records": total_records,
             "source": batch.source,
+            # What was actually read. Without it the caller sees a bare zero and
+            # cannot tell an empty window from an absent feedstock.
+            "origin": records_path,
         }
 
     examples = examples[:_RAG_MAX_EXAMPLES]

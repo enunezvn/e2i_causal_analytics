@@ -152,6 +152,18 @@ class RagExampleBatch:
     origin: str
     fingerprint_material: bytes
 
+    @property
+    def record_noun(self) -> str:
+        """What ``total_records`` counts, in words, for this source.
+
+        Not cosmetic. The DB window is pre-narrowed to rows that carry evidence,
+        so "0 records" there means "no recent turn carried evidence" — NOT "no
+        traffic", which is what an unqualified zero reads as and which would
+        send an operator to look for a dead pipeline instead of a missing
+        producer. The file source really does count every record in the file.
+        """
+        return "candidate row" if self.source == SOURCE_DB else "record"
+
     def fingerprint(self, max_metric_calls: int) -> str:
         """Digest of the feedstock AND the budget, for run-once dedup.
 
@@ -321,18 +333,36 @@ def _context_texts(chunks: Any) -> List[str]:
     return texts
 
 
-def _turns_from_rows(rows: Iterable[Dict[str, Any]]) -> List[_Turn]:
+def _turns_from_rows(rows: Iterable[Dict[str, Any]]) -> Tuple[List[_Turn], Dict[str, int]]:
+    """Judgeable turns, plus a COUNT of why each unusable row was dropped.
+
+    The reasons are returned rather than inferred by the caller because they
+    need different fixes in different files — blank ``training_input`` /
+    ``training_output`` is a writer problem, evidence that yields no passage is
+    a chunk-shape problem — and a diagnosis that guessed between them would send
+    an operator to the wrong module.
+    """
     turns: List[_Turn] = []
+    drops: Dict[str, int] = {}
+
+    def _drop(reason: str) -> None:
+        drops[reason] = drops.get(reason, 0) + 1
+
     for row in rows:
         if not isinstance(row, dict):
+            _drop("row is not an object")
             continue
         query = str(row.get("training_input") or "").strip()
         answer = str(row.get("training_output") or "").strip()
+        if not query or not answer:
+            _drop("blank training_input/training_output")
+            continue
         contexts = _context_texts(row.get("retrieved_chunks"))
-        if not query or not answer or not contexts:
+        if not contexts:
+            _drop("no readable evidence text in retrieved_chunks")
             continue
         turns.append(_Turn(query=query, answer=answer, contexts=tuple(contexts)))
-    return turns
+    return turns, drops
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -388,27 +418,34 @@ async def db_batch(client: Optional[Any] = None) -> RagExampleBatch:
 
     result = await _maybe_await(query.execute())
     rows = list(getattr(result, "data", None) or [])
-    turns = _turns_from_rows(rows)
+    turns, drops = _turns_from_rows(rows)
 
-    if rows and not turns:
-        # Every row here carried evidence (the narrowing guaranteed it) and none
-        # was usable, which means the text was missing — a different fact from
-        # "no traffic yet" and one an operator cannot infer from a zero.
+    if drops:
+        # Reported whenever ANY candidate row was dropped, not only when the
+        # batch is empty: one usable row among forty dropped ones would
+        # otherwise look like a healthy feedstock while the leg trains on a
+        # sliver of the traffic that actually carried evidence.
         #
-        # Measured 2026-08-06: the only signal that carries retrieved_chunks is
-        # the cognitive Reflector's `agent` signal, whose dict keys its content
-        # as query/response, while SignalCollector reads signal["input"] /
-        # ["output"] — so training_input/training_output persist EMPTY (133 of
-        # 356 agent rows today). Refusing such rows is deliberate: that signal's
-        # `query` is a synthetic descriptor ("Intent: X, Evidence: N items"),
-        # not the user's question, so reading it would hand GEPA a fabricated
-        # prompt to optimize against.
+        # Counts, never a guessed cause. Measured 2026-08-06: the only signal
+        # that will carry retrieved_chunks is the cognitive Reflector's `agent`
+        # signal, whose dict keys its content as query/response, while
+        # SignalCollector reads signal["input"]/["output"] — so
+        # training_input/training_output persist EMPTY on 133 of 356 agent rows
+        # today. That is the cause we EXPECT to dominate, but it is not the only
+        # one, so the breakdown is measured rather than asserted.
+        #
+        # Refusing such rows is deliberate: that signal's `query` is a synthetic
+        # descriptor ("Intent: X, Evidence: N items"), not the user's question,
+        # so reading it would hand GEPA a fabricated prompt to optimize against.
         logger.warning(
-            "RAG feedstock: %d row(s) carry retrieved_chunks but none has usable "
-            "text — training_input/training_output are empty or blank on all of "
-            "them. The evidence producer and the query/answer writer are not "
-            "populating the same row; no examples can be built until they do.",
+            "RAG feedstock: %d of %d candidate row(s) unusable (%s); %d judgeable "
+            "turn(s) kept. Each reason has a different fix — blank text is a "
+            "writer that is not persisting the turn, unreadable evidence is a "
+            "chunk-shape mismatch.",
+            sum(drops.values()),
             len(rows),
+            "; ".join(f"{count} {reason}" for reason, count in sorted(drops.items())),
+            len(turns),
         )
 
     if len(rows) >= DB_ROW_CAP:
