@@ -9,15 +9,22 @@ growth is a curve, not a step function (per issue #391, Box 3 statement
 **Tolerance bands** (codified in
 ``tests/benchmarks/baselines/performance.json``; re-stated here so the
 test docstring carries the same numbers as the JSON, per codex iter-0 L1):
-- bm25_build_1k:  10% relative OR 20ms absolute (whichever wider).
-- bm25_build_5k:  10% relative OR 30ms absolute (whichever wider).
-- bm25_build_10k: 10% relative OR 50ms absolute (whichever wider).
+- bm25_build_1k:  10% relative OR 5ms absolute (whichever wider).
+- bm25_build_5k:  10% relative OR 20ms absolute (whichever wider).
+- bm25_build_10k: 10% relative OR 60ms absolute (whichever wider).
 Absolute floors widen with N because total work is ~5x / ~10x the 1k
-slice. Relative-vs-absolute policy is `max(rel, abs)` — see
-``_within_tolerance`` for rationale. Bands were narrowed from the pre-
-#403 placeholder defaults (20% rel; 50/100/200ms abs) to honestly
-reflect observed CI variance (per-run-median stdev ~1.4-1.9% across
-3 workflow_dispatch runs).
+slice, and super-linearly so because the larger working sets are more
+sensitive to runner-hardware differences (cache size / memory
+bandwidth). Relative-vs-absolute policy is `max(rel, abs)` — see
+``_within_tolerance`` for rationale. Bands were re-derived on
+2026-08-06 (issue #1502) from a fleet-aware 9-run CI sample after the
+original 3-run blessing (per-run-median stdev 1.4-1.9%) proved to have
+landed on similar hardware: cross-runner stdev is really ~8-9%, and one
+runner elevated ONLY the 10k slice by +12.8% on identical code. Since
+the gate is one-sided (observed <= baseline auto-passes), each abs
+floor = 2x the max observed run-median elevation above the blessed
+center, rounded up to nearest 5ms (min 5ms) — see
+``_bm25_band_recalibration`` in the baseline JSON.
 
 **Reference implementation**: a pure-Python BM25 indexer
 (``_build_reference_bm25``) that:
@@ -38,10 +45,15 @@ skips on ``requires_supabase``.
 baselines for all three slices were blessed from 3 CI
 workflow_dispatch runs on ``feat/403-perf-baseline-rebless`` (see
 ``_blessed_from_ci_runs`` in the baseline JSON); med-of-meds across
-the 3 runs = 21.07/111.10/222.14ms (1k/5k/10k), stdev across runs
-1.4–1.9%. To re-bless: trigger ≥3 workflow_dispatch runs on the
-rebless branch, download artifacts, take median-of-medians per slice,
-update the baseline JSON + ``_blessed_from_ci_runs`` list.
+the 3 runs = 21.07/111.10/222.14ms (1k/5k/10k). To re-bless
+(fleet-aware, per issue #1502): trigger ≥6 workflow_dispatch runs in
+waves of 2 spread over hours (ideally days) so distinct
+GitHub-hosted-runner hardware classes are sampled — 3 back-to-back
+runs can all land on similar hardware and under-state fleet variance
+by ~5x. Download artifacts, take median-of-medians per slice, update
+the baseline JSON + run-id lists; re-derive each abs band as 2x the
+max run-median elevation above the new center (min 5ms, rounded up to
+nearest 5ms).
 
 **Why a curve not a point**: a single-point measurement masks
 super-linear scaling — if the index-build complexity drifted from
@@ -321,14 +333,19 @@ def test_bm25_rebuild_time_against_baseline(slice_n: int, baseline_key: str) -> 
     tolerance band.
 
     **Re-blessing the baseline**: if the measurement legitimately shifts
-    (e.g., after a tokenizer refactor), trigger ≥3 workflow_dispatch
-    runs of ``.github/workflows/benchmarks.yml`` on the rebless branch,
+    (e.g., after a tokenizer refactor), trigger ≥6 workflow_dispatch
+    runs of ``.github/workflows/benchmarks.yml`` in waves of 2 spread
+    over hours (ideally days) so distinct runner hardware classes are
+    sampled (fleet-aware methodology, issue #1502 — 3 back-to-back runs
+    under-sampled fleet variance ~5x and produced a spurious REGRESSION),
     download artifacts, take median-of-medians per slice, update
     ``tests/benchmarks/baselines/performance.json`` in the same PR with
-    the new ``mean_ms`` + refreshed ``_ci_observation`` +
-    ``_blessed_from_ci_runs`` list. Do NOT loosen tolerances to mask a
-    regression at any slice — observed stdev should drive the band, not
-    arbitrary safety factors (issue #403 methodology).
+    the new ``mean_ms`` + refreshed ``_ci_observation`` + run-id lists,
+    and re-derive each abs band as 2x the max run-median elevation above
+    the new center (min 5ms, rounded up to nearest 5ms). Do NOT loosen
+    tolerances to mask a regression at any slice — observed fleet
+    variance should drive the band, not arbitrary safety factors
+    (issue #403 methodology, fleet-aware per #1502).
     """
     corpus = _load_synthetic_corpus(_CORPUS_FILE)
     slice_corpus = _slice_corpus(corpus, slice_n)
