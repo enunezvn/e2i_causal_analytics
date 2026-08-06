@@ -163,6 +163,18 @@ class TestJudgedTurns:
         with pytest.raises(RagasPersistenceError, match="n_contexts"):
             judged_turns(_block([_row("q01", 0.9, 0.5, n_contexts=1)]), [_record("q01", [])])
 
+    def test_a_non_integer_n_contexts_raises(self):
+        """Same policy as ``n_samples``: a present-but-unusable claim is a
+        claim, not an absence. Treating ``n_contexts="1"`` as absent reopened
+        the iter-6 provenance hole for any block that does not also trigger
+        aggregate reconciliation — the row would describe one retrieval while
+        carrying a score from an unverifiable one. (codex iter-7 MED.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        with pytest.raises(RagasPersistenceError, match="n_contexts"):
+            judged_turns(_block([_row("q01", 0.9, 0.5, n_contexts="1")]), [_record("q01", [])])
+
     def test_a_missing_n_contexts_falls_back_to_the_record(self):
         """Provenance, not the judge's bookkeeping, decides whether the turn
         retrieved anything — an older block without ``n_contexts`` must not

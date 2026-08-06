@@ -216,18 +216,25 @@ def judged_turns(
         # proves they are not. Not cosmetic: the row would carry one
         # retrieval's contexts while its faithfulness was judged against
         # another, and the zero-context NULL rule would fire off the wrong one.
-        judged_context_count = row.get("n_contexts")
-        if (
-            isinstance(judged_context_count, int)
-            and not isinstance(judged_context_count, bool)
-            and judged_context_count != len(contexts)
-        ):
-            raise RagasPersistenceError(
-                f"sample {query_id!r} was judged over n_contexts={judged_context_count} but its "
-                f"replay record carries {len(contexts)} contexts — the judge block and the "
-                "records file describe different runs, so the join cannot establish what was "
-                "actually scored"
-            )
+        # Present-but-unusable is a claim, not an absence — the same policy the
+        # n_samples guard applies, and for the same reason: treating it as
+        # absent reopens the hole for any block that does not also trigger
+        # aggregate reconciliation.
+        if "n_contexts" in row:
+            judged_context_count = row["n_contexts"]
+            if not isinstance(judged_context_count, int) or isinstance(judged_context_count, bool):
+                raise RagasPersistenceError(
+                    f"sample {query_id!r} declares a non-integer n_contexts "
+                    f"({judged_context_count!r}); a retrieval count that cannot be compared to "
+                    "the record's contexts cannot corroborate what was scored"
+                )
+            if judged_context_count != len(contexts):
+                raise RagasPersistenceError(
+                    f"sample {query_id!r} was judged over n_contexts={judged_context_count} but "
+                    f"its replay record carries {len(contexts)} contexts — the judge block and "
+                    "the records file describe different runs, so the join cannot establish what "
+                    "was actually scored"
+                )
 
         # An ABSENT key is not a None one. Migration 033 keeps them apart —
         # absent means "this producer never asks for that metric", None means
