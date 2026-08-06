@@ -339,6 +339,11 @@ BEGIN
     --     WITHOUT putting a null-valued key in the bundle lands in
     --     `not_evaluated` here where Python would say `unmeasured`. The Python
     --     writer remains the richer path; `source` records which one wrote this.
+    --   * these arrays are MEMBERSHIP records, not positional. They are ordered
+    --     alphabetically here; Python's `measured` follows whatever order the
+    --     producer passed the scores in (its `unmeasured`/`not_evaluated` are
+    --     sorted, so those match). Do not "fix" the order to match — compare
+    --     them as sets.
     --   * the split is exhaustive over absent / JSON-null-or-empty / readable.
     --     A key holding a bool, array, object or non-numeric string counts as
     --     readable here, but ragas_weighted_measured() has already cast it to

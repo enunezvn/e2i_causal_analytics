@@ -336,8 +336,21 @@ class TestNoStaleCompanionComponents:
         assert coverage["measured_weight"] == pytest.approx(0.25)
 
     def test_coverage_matches_the_python_counterpart(self, scratch_db):
-        """The same four keys RagasBundle.coverage produces, same values."""
-        scores = {"faithfulness": 0.9, "answer_relevancy": None}
+        """The same four keys RagasBundle.coverage produces, same values.
+
+        ``measured`` is compared as a SET, deliberately. Python builds it from
+        ``dict(self.measured)``, so its order is whatever order the PRODUCER
+        happened to pass the scores in; SQL orders alphabetically. Measured:
+        a bundle passing faithfulness before answer_relevancy gives Python
+        ``['faithfulness', 'answer_relevancy']`` and SQL the reverse. Both name
+        the same metrics, and no consumer reads these positionally — coverage is
+        a membership record. ``unmeasured`` and ``not_evaluated`` ARE compared
+        as ordered lists, because Python ``sorted()``s both and SQL matches.
+
+        The two-metric case below is load-bearing: with a single measured metric
+        this test passes whatever the ordering rule is (codex iter-3 caveat).
+        """
+        scores = {"faithfulness": 0.9, "answer_relevancy": 0.5, "context_recall": None}
         signal_id = _insert_rubric_signal(scratch_db)
         _psql(
             scratch_db,
@@ -352,7 +365,11 @@ class TestNoStaleCompanionComponents:
             )
         )
         python_coverage = RagasBundle(scores=scores).coverage
-        for key in ("measured", "unmeasured", "not_evaluated"):
+
+        assert set(sql_coverage["measured"]) == set(python_coverage["measured"])
+        assert len(sql_coverage["measured"]) == len(python_coverage["measured"]), "duplicate keys"
+        assert len(python_coverage["measured"]) > 1, "the ordering case must be exercised"
+        for key in ("unmeasured", "not_evaluated"):
             assert sql_coverage[key] == python_coverage[key], key
         assert sql_coverage["measured_weight"] == pytest.approx(python_coverage["measured_weight"])
 
