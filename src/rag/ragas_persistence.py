@@ -61,6 +61,15 @@ __all__ = [
 # the judge tried them and failed.
 JUDGED_METRICS: Tuple[str, ...] = ("faithfulness", "answer_relevancy")
 
+# Run-level bookkeeping a judge block may report. Their presence is what makes
+# a block reconcilable against its own rows; a block carrying none of them
+# asserts nothing that could be contradicted.
+_AGGREGATE_CLAIM_KEYS: Tuple[str, ...] = (
+    "n_faithfulness",
+    "faithfulness",
+    "answer_relevancy",
+)
+
 
 class RagasPersistenceError(RuntimeError):
     """A judged run could not be persisted faithfully.
@@ -147,6 +156,29 @@ def judged_turns(
             "rows — the output is truncated or partially merged, and nothing in "
             "evaluation_results could mark its rows as coming from an incomplete run"
         )
+
+    # The row count can match while the NUMBERS do not. A block whose reported
+    # aggregates no longer describe its own rows is stale, hand-edited or
+    # partially merged, and reconciling them is exactly what the gate's
+    # _ragas_consistency_error does — reused rather than reimplemented so the
+    # two cannot drift. It lives HERE rather than only in the driver because
+    # judged_turns and persist_judged_turns are the documented public flow, and
+    # a guard the public flow walks past is not a guard (codex iter-4).
+    #
+    # Only a block that MAKES aggregate claims is reconciled: a caller
+    # assembling one by hand declares none, so there is nothing to contradict.
+    # Same principle as the n_samples check above — key on disagreement, not on
+    # presence.
+    if any(key in block for key in _AGGREGATE_CLAIM_KEYS):
+        from src.optimization.dspy_lane_ab import _ragas_consistency_error
+
+        inconsistent = _ragas_consistency_error(block)
+        if inconsistent:
+            raise RagasPersistenceError(
+                f"judge block is internally inconsistent ({inconsistent}); its aggregates "
+                "no longer describe its own rows, so the run is untrustworthy as a whole "
+                "rather than merely low-scoring"
+            )
 
     index = _index_records(records)
     turns: List[JudgedTurn] = []

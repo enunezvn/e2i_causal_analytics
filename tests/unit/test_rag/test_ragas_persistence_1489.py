@@ -240,6 +240,49 @@ class TestJudgedTurns:
         with pytest.raises(RagasPersistenceError, match="n_samples"):
             judged_turns(block, [_record(f"q{i:02d}", ["ctx"]) for i in range(1, 11)])
 
+    def test_a_stale_aggregate_block_raises(self):
+        """A block whose reported aggregates no longer describe its own rows is
+        stale, hand-edited or partially merged.
+
+        The row count can match while the numbers do not, so the n_samples
+        guard alone is not enough. This check lived only in the script's
+        ``persist_run``, which the documented module flow
+        (``judged_turns`` -> ``persist_judged_turns``, both exported) walked
+        straight past — reproduced: a block reporting answer_relevancy 0.99
+        over rows recomputing to 0.50 wrote 2 rows through the module.
+        (codex iter-4 HIGH.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        rows = [_row("q01", 0.5, 0.0), _row("q02", 0.5, 1.0)]
+        block = _block(rows)
+        block.update({"n_faithfulness": 2, "faithfulness": 0.5, "answer_relevancy": 0.99})
+
+        with pytest.raises(RagasPersistenceError, match="answer_relevancy"):
+            judged_turns(block, [_record("q01", ["c"]), _record("q02", ["c"])])
+
+    def test_a_consistent_full_block_is_accepted(self):
+        """The guard must not refuse a real judge block. Aggregates computed
+        the way the judge computes them (faithfulness over context-bearing
+        rows, answer_relevancy over all rows) reconcile and pass."""
+        from src.rag.ragas_persistence import judged_turns
+
+        rows = [_row("q01", 0.5, 0.0), _row("q02", 0.5, 1.0)]
+        block = _block(rows)
+        block.update({"n_faithfulness": 2, "faithfulness": 0.5, "answer_relevancy": 0.5})
+
+        assert len(judged_turns(block, [_record("q01", ["c"]), _record("q02", ["c"])])) == 2
+
+    def test_a_block_making_no_aggregate_claims_is_not_reconciled(self):
+        """A caller assembling a block by hand declares no aggregates, so there
+        is nothing to contradict. The guard keys on DISAGREEMENT, not on
+        presence — the same principle as the n_samples check."""
+        from src.rag.ragas_persistence import judged_turns
+
+        block = _block([_row("q01", 0.9, 0.5)])
+        assert "faithfulness" not in block
+        assert len(judged_turns(block, [_record("q01", ["ctx"])])) == 1
+
     def test_a_block_without_n_samples_is_still_accepted(self):
         """``n_samples`` is the judge's own bookkeeping; a caller assembling a
         block by hand need not supply it, and absence is not a truncation
