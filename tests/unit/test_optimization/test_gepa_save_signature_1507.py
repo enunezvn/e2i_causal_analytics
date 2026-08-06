@@ -141,7 +141,15 @@ def test_gepa_probe_still_binds_fallback_names_when_ragas_is_missing(monkeypatch
     asserts it is non-None when ``GEPA_AVAILABLE`` — i.e. it relies on the name
     being bound to None in the unavailable case. Dropping the ``= None``
     fallbacks turns that import into an ImportError under exactly the partial
-    install (GEPA present, ragas missing) the probe exists to detect.
+    install (GEPA present, ragas missing) that the probe exists to detect.
+
+    Re-importing under a blocking meta-path finder needs BOTH bindings undone
+    afterwards: ``import_module`` publishes the new module to ``sys.modules``
+    *and* rebinds it as an attribute of the parent package. Restoring only
+    ``sys.modules`` leaves the reloaded object reachable as
+    ``src.rag.cognitive_rag_dspy``, which strands a later test that patches
+    module globals — measured, it broke
+    ``test_cognitive_rag_optimized_synthesis_1486.py::test_miss_is_cached_but_transient_failure_is_not``.
     """
     import importlib
     import sys
@@ -150,6 +158,7 @@ def test_gepa_probe_still_binds_fallback_names_when_ragas_is_missing(monkeypatch
 
     blocked = "src.optimization.gepa.integration.ragas_feedback"
     target = "src.rag.cognitive_rag_dspy"
+    parent, _, leaf = target.rpartition(".")
 
     class _BlockRagasFeedback:
         def find_spec(self, name, path=None, target=None):
@@ -157,11 +166,16 @@ def test_gepa_probe_still_binds_fallback_names_when_ragas_is_missing(monkeypatch
                 raise ImportError(f"blocked for test: {name}")
             return None
 
+    original = importlib.import_module(target)
+    # Both handles monkeypatch will restore on teardown.
+    monkeypatch.setitem(sys.modules, target, original)
+    monkeypatch.setattr(sys.modules[parent], leaf, original, raising=False)
     monkeypatch.delitem(sys.modules, blocked, raising=False)
-    monkeypatch.delitem(sys.modules, target, raising=False)
+    monkeypatch.delitem(sys.modules, target)
     monkeypatch.setattr(sys, "meta_path", [_BlockRagasFeedback(), *sys.meta_path])
 
     module = importlib.import_module(target)
+    assert module is not original, "module was served from cache; the probe never re-ran"
 
     assert module.GEPA_AVAILABLE is False
     # Bound, not merely absent — `from ... import create_ragas_metric` must work.
