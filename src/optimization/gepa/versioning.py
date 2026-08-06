@@ -11,9 +11,55 @@ Integrates with:
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+# Saved artifact names start ``gepa_v{n}_...`` (see generate_version_id).
+_GEPA_VERSION_RE = re.compile(r"^gepa_v(\d+)")
+
+
+def gepa_artifact_sort_key(path: Path) -> tuple[int, str]:
+    """Ordering key for saved GEPA artifact files, oldest first.
+
+    Primary key: the integer after the leading ``gepa_v``, compared numerically.
+    Lexicographic name order inverts at v10 (``"gepa_v10..." < "gepa_v2..."``,
+    with ``"gepa_v9..."`` greatest of all), which pinned newest-artifact
+    resolution to a stale version forever after the 10th save (#1496).
+
+    Tie-break: the full file name. Within one agent's directory the name embeds
+    a zero-padded ``YYYYMMDD_HHMMSS`` timestamp, so equal version numbers keep
+    resolving by save time — which is what today's always-``v1``
+    generate_version_id relies on.
+
+    A name with no parseable ``gepa_v<n>`` prefix sorts below every well-formed
+    version (as version ``-1``): a file the saver could not have produced must
+    never win "newest" (lexicographically, e.g. ``gepa_zzz...`` used to outrank
+    every real version), but its presence must not crash resolution either.
+
+    Every site that resolves "newest artifact" MUST order with this key — the
+    cognitive-RAG module-reload probe (``_artifact_signature`` in
+    src/rag/cognitive_rag_dspy.py) keys its cache on the newest artifact's path
+    and desynchronizes from this loader if the two ever rank names differently.
+    Both call :func:`newest_saved_artifact` so they cannot drift.
+    """
+    match = _GEPA_VERSION_RE.match(path.name)
+    version = int(match.group(1)) if match else -1
+    return (version, path.name)
+
+
+def newest_saved_artifact(directory: Path) -> Optional[Path]:
+    """The newest ``gepa_*.json`` artifact in ``directory``, or None if none.
+
+    The single shared resolver for "which saved version is current":
+    :func:`load_optimized_module` below and the cognitive-RAG reload probe both
+    call this, so they cannot disagree on which artifact is newest (#1496).
+    """
+    versions = list(directory.glob("gepa_*.json"))
+    if not versions:
+        return None
+    return max(versions, key=gepa_artifact_sort_key)
 
 
 def generate_version_id(agent_name: str, timestamp: Optional[datetime] = None) -> str:
@@ -146,11 +192,12 @@ def load_optimized_module(
 
     # Find version to load
     if version_id is None:
-        # Load latest version
-        versions = sorted(input_path.glob("gepa_*.json"), reverse=True)
-        if not versions:
+        # Load latest version — numeric on the gepa_v<n> suffix (#1496): a
+        # plain name sort inverts at v10 and resolves a stale artifact forever.
+        load_path_or_none = newest_saved_artifact(input_path)
+        if load_path_or_none is None:
             raise FileNotFoundError(f"No saved versions for agent: {agent_name}")
-        load_path = versions[0]
+        load_path = load_path_or_none
     else:
         load_path = input_path / f"{version_id}.json"
         if not load_path.exists():
@@ -288,6 +335,8 @@ def compare_versions(
 
 
 __all__ = [
+    "gepa_artifact_sort_key",
+    "newest_saved_artifact",
     "generate_version_id",
     "compute_instruction_hash",
     "save_optimized_module",

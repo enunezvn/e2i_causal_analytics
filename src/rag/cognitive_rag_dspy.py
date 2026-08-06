@@ -566,13 +566,23 @@ def _artifact_signature() -> Optional[tuple]:
     invalidates the cache, because docker-compose mounts optimized_modules
     read-only into api and writable into worker_medium with no signal between
     them.
+
+    "Newest" MUST come from versioning.newest_saved_artifact — the same
+    resolver load_optimized_module uses — because this signature decides
+    whether the cached module is stale. When the two sites ranked names
+    independently they both inverted lexicographically at gepa_v10 (#1496),
+    and fixing either one alone desynchronizes the cache key from what the
+    loader actually parses. Import deferred like _load_optimized_module's: the
+    gepa package costs ~1s the first time it is pulled into a process, and a
+    module-level import would put that on every importer of this module.
     """
+    from src.optimization.gepa.versioning import newest_saved_artifact
+
     directory = Path(OPTIMIZED_MODULES_DIR) / OPTIMIZED_SYNTHESIS_AGENT_NAME
     try:
-        versions = sorted(directory.glob("gepa_*.json"), reverse=True)
-        if not versions:
+        newest = newest_saved_artifact(directory)
+        if newest is None:
             return None
-        newest = versions[0]
         return (str(newest), newest.stat().st_mtime_ns)
     except OSError:
         return None
