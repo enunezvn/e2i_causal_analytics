@@ -646,17 +646,31 @@ class TestRAGASGEPAOpikIntegration:
         """Test RAGASFeedbackProvider.evaluate() returns proper structure."""
         from src.optimization.gepa.integration.ragas_feedback import (
             RAGASFeedbackProvider,
+            RAGASFeedbackUnavailableError,
         )
 
         provider = RAGASFeedbackProvider()
 
-        # Evaluate a sample
-        result = await provider.evaluate(
-            question="What is the TRx trend for Kisqali?",
-            answer="Kisqali TRx increased 15% in Q4.",
-            contexts=["Q4 report shows 15% TRx growth for Kisqali."],
-            ground_truth="Kisqali TRx grew 15% in Q4.",
-        )
+        # Two outcomes are correct, and no third one is: a judged score, or a
+        # loud refusal. Since #1488 the provider never returns a fabricated
+        # number, so this asserts the invariant rather than "some float came
+        # back" — which used to pass on silently-substituted heuristic scores.
+        #
+        # The refusal branch is reachable in a shared process: ragas's sync
+        # evaluate() raises "asyncio.run() cannot be called from a running event
+        # loop" on a later pytest-asyncio loop, evaluation.py's broad except
+        # routes that to the stamped heuristic fallback, and the provider then
+        # refuses. That degradation is a pre-existing RAGAS/event-loop defect,
+        # NOT a provider bug — it is merely no longer silent.
+        try:
+            result = await provider.evaluate(
+                question="What is the TRx trend for Kisqali?",
+                answer="Kisqali TRx increased 15% in Q4.",
+                contexts=["Q4 report shows 15% TRx growth for Kisqali."],
+                ground_truth="Kisqali TRx grew 15% in Q4.",
+            )
+        except RAGASFeedbackUnavailableError as e:
+            pytest.skip(f"RAGAS judge unavailable in this process: {e}")
 
         # Check result structure
         assert "score" in result
@@ -665,19 +679,40 @@ class TestRAGASGEPAOpikIntegration:
         assert 0.0 <= result["score"] <= 1.0
         assert isinstance(result["feedback"], str)
 
-    # Marked slow (#481): same RAGAS-evaluator code path as the sibling
-    # test above; observed ~30s on the CI runner.
-    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_ragas_feedback_provider_evaluate_with_run_id(self):
-        """Test RAGASFeedbackProvider.evaluate() accepts run_id for tracing."""
+        """Test RAGASFeedbackProvider.evaluate() forwards run_id for tracing.
+
+        Stubs the evaluator seam rather than driving the real judge a second
+        time in-process. The sibling test above still covers the real RAGAS
+        path end-to-end; this one asserts the run_id passthrough it is named
+        for, deterministically. See #1488: a second in-process evaluation was
+        degrading to stamped heuristic scores, which the provider used to
+        consume as if judged.
+        """
         from src.optimization.gepa.integration.ragas_feedback import (
             RAGASFeedbackProvider,
         )
+        from src.rag.evaluation import EvaluationResult
+
+        seen = {}
+
+        class _Evaluator:
+            async def evaluate_sample(self, sample, run_id=None):
+                seen["run_id"] = run_id
+                return EvaluationResult(
+                    sample_id="s1",
+                    query=sample.query,
+                    faithfulness=0.8,
+                    answer_relevancy=0.8,
+                    context_precision=0.8,
+                    context_recall=0.8,
+                    overall_score=0.8,
+                )
 
         provider = RAGASFeedbackProvider()
+        provider._ragas_evaluator = _Evaluator()
 
-        # Evaluate with run_id (for Opik tracing)
         result = await provider.evaluate(
             question="What is the TRx trend for Kisqali?",
             answer="Kisqali TRx increased 15% in Q4.",
@@ -686,6 +721,7 @@ class TestRAGASGEPAOpikIntegration:
             run_id="test_ragas_opik_integration_001",
         )
 
+        assert seen["run_id"] == "test_ragas_opik_integration_001"
         assert "score" in result
         assert "feedback" in result
 
@@ -748,16 +784,40 @@ class TestRAGASGEPAOpikIntegration:
 
     @pytest.mark.asyncio
     async def test_ragas_metric_function_call(self):
-        """Test RAGAS metric function can be called with example/pred."""
+        """Test RAGAS metric function can be called with example/pred.
+
+        Covers the field-extraction plumbing, with the evaluator stubbed. Since
+        #1488 the metric no longer swallows exceptions into ``{"score": 0.0}``,
+        so ``example.answer`` must be a real string — a bare MagicMock now
+        fails EvaluationSample validation instead of being laundered into a
+        fabricated zero.
+        """
         from src.optimization.gepa.integration.ragas_feedback import (
+            RAGASFeedbackProvider,
             create_ragas_metric,
         )
+        from src.rag.evaluation import EvaluationResult
 
-        metric = create_ragas_metric(agent_name="test_agent")
+        class _Evaluator:
+            async def evaluate_sample(self, sample, run_id=None):
+                return EvaluationResult(
+                    sample_id="s1",
+                    query=sample.query,
+                    faithfulness=0.8,
+                    answer_relevancy=0.8,
+                    context_precision=0.8,
+                    context_recall=0.8,
+                    overall_score=0.8,
+                )
+
+        provider = RAGASFeedbackProvider()
+        provider._ragas_evaluator = _Evaluator()
+        metric = create_ragas_metric(provider=provider, agent_name="test_agent")
 
         # Create mock example and prediction
         example = MagicMock()
         example.question = "What is the TRx trend?"
+        example.answer = "TRx grew 15% in Q4."
 
         pred = MagicMock()
         pred.answer = "TRx increased by 15%."

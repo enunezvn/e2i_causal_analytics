@@ -442,6 +442,10 @@ class TestRAGEvaluationPipeline:
             avg_answer_relevancy=0.85,
             avg_context_precision=0.80,
             avg_context_recall=0.75,
+            # #1488: an absent overall_score means no sample was fully judged,
+            # which now fails closed — so a "everything passes" report must
+            # carry one.
+            overall_score=0.83,
             thresholds=sample_evaluation_config.thresholds,
             evaluation_time_seconds=1.0,
         )
@@ -464,6 +468,7 @@ class TestRAGEvaluationPipeline:
             avg_answer_relevancy=0.85,
             avg_context_precision=0.80,
             avg_context_recall=0.75,
+            overall_score=0.72,  # #1488: measured, so only faithfulness fails
             thresholds=sample_evaluation_config.thresholds,
             evaluation_time_seconds=1.0,
         )

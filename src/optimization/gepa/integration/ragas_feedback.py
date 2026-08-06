@@ -22,6 +22,23 @@ Usage:
     # Get GEPA-compatible metric
     metric = create_ragas_metric(provider, agent_name="cognitive_rag")
 
+Failure contract (issue #1488):
+    A score from this module always means "the RAGAS judge ran and returned
+    this number". Evaluation failures are never represented as a score — they
+    raise (``RagasDependencyError`` propagates; everything else surfaces as
+    ``RAGASFeedbackUnavailableError`` or the original exception). This mirrors
+    the #491 discipline in :mod:`src.rag.evaluation`, where heuristic fallbacks
+    are kept outside the broad ``except`` because they "look like real
+    (failing) RAG metrics and masquerade as a quality regression".
+
+    The load-bearing seam is *construction*, not per-example evaluation.
+    Measured against dspy 3.1.0: a metric that raises inside
+    ``dspy.Evaluate`` is caught by ``ParallelExecutor`` and converted to
+    ``failure_score`` (0.0) for that example, so a per-example raise cannot
+    abort a GEPA run. Building the provider/metric happens outside that
+    executor, so raising there does abort — which is why an unavailable
+    evaluator fails at ``__post_init__`` rather than at first use.
+
 Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
@@ -33,17 +50,31 @@ from typing import Any, Callable, Coroutine, Optional, Protocol, Union
 logger = logging.getLogger(__name__)
 
 
+class RAGASFeedbackUnavailableError(RuntimeError):
+    """Raised when RAGAS-backed GEPA feedback cannot be produced for real.
+
+    Mirrors the #491 discipline of :class:`src.rag.evaluation.RagasDependencyError`
+    one layer up: rather than substituting heuristics or a 0.0, refuse to
+    produce optimization signal that GEPA cannot tell apart from a judged score.
+    """
+
+
 # Type alias for GEPA's expected feedback format
 ScoreWithFeedback = dict[str, Union[float, str]]
 
 
 class RAGEvaluationResult(Protocol):
-    """Protocol for RAG evaluation results from RAGAS or similar."""
+    """Protocol for RAG evaluation results from RAGAS or similar.
 
-    faithfulness: float
-    answer_relevancy: float
-    context_precision: float
-    context_recall: float
+    Optional because a metric ragas could not compute stays ``None`` rather
+    than being coerced to 0.0 (#1488); ``EvaluationResult`` has always declared
+    these Optional.
+    """
+
+    faithfulness: Optional[float]
+    answer_relevancy: Optional[float]
+    context_precision: Optional[float]
+    context_recall: Optional[float]
 
 
 @dataclass
@@ -108,21 +139,63 @@ class RAGASFeedbackProvider:
     _evaluation_sample_class: Any = None
 
     def __post_init__(self) -> None:
-        """Initialize RAGAS evaluator if available."""
+        """Initialize the RAGAS evaluator, or refuse to construct.
+
+        Verifies the judge can actually RUN, not merely that it imports.
+        Constructing ``RAGASEvaluator`` proves nothing: it sets availability
+        flags and warns rather than failing, so a keyless environment would
+        yield a provider that routes every sample to the stamped heuristic
+        fallback. That would surface as a per-example refusal, which DSPy
+        converts to ``failure_score`` 0.0 — the very masquerade this module
+        exists to prevent.
+
+        Raises:
+            RAGASFeedbackUnavailableError: the evaluator cannot be imported, or
+                its judged path is blocked (no LLM key, ragas not installed).
+            RagasDependencyError: the RAGAS dependency tree is broken (#491).
+        """
         try:
             from src.rag.evaluation import EvaluationSample, get_ragas_evaluator
 
-            self._ragas_evaluator = get_ragas_evaluator()
-            self._evaluation_sample_class = EvaluationSample
-            logger.debug("RAGASFeedbackProvider initialized with RAGAS evaluator")
+            # reset=True because the factory memoizes a module-global instance
+            # whose availability flags are frozen at ITS first construction. A
+            # verdict cached while a key happened to be set would wave through a
+            # provider that then degrades on every example. Safe to replace for
+            # all consumers: RAGASEvaluator assigns nothing outside __init__, so
+            # a fresh instance loses no state and simply re-detects from current
+            # env, and the Opik tracer it picks up is its own module singleton.
+            evaluator = get_ragas_evaluator(reset=True)
         except ImportError as e:
-            logger.warning(f"RAGAS evaluator not available ({e}), using mock evaluation")
-            self._ragas_evaluator = None
-            self._evaluation_sample_class = None
+            raise RAGASFeedbackUnavailableError(
+                f"RAGAS evaluator is unavailable ({e}); refusing to produce GEPA "
+                "feedback. Optimizing against substitute scores would evolve "
+                "prompts toward fabricated signal — fix the RAGAS dependency "
+                "tree (see issue #491) instead."
+            ) from e
+
+        blockers = evaluator.judged_path_blockers
+        if blockers:
+            raise RAGASFeedbackUnavailableError(
+                "RAGAS judged path is unavailable, so every candidate would be "
+                "scored by heuristics: "
+                + "; ".join(blockers)
+                + ". Refusing to produce GEPA feedback."
+            )
+
+        # find_spec presence != importability; this is the #491 break class.
+        evaluator.verify_dependencies()
+
+        self._ragas_evaluator = evaluator
+        self._evaluation_sample_class = EvaluationSample
+        logger.debug("RAGASFeedbackProvider initialized with RAGAS evaluator")
 
     @property
     def enabled(self) -> bool:
-        """Check if RAGAS evaluation is available."""
+        """Whether RAGAS evaluation is available.
+
+        Always ``True`` for a successfully constructed provider — construction
+        raises otherwise (#1488). Retained for API compatibility.
+        """
         return self._ragas_evaluator is not None
 
     def _get_feedback_text(self, score: float, metric_name: str) -> str:
@@ -220,107 +293,103 @@ class RAGASFeedbackProvider:
 
         Returns:
             ScoreWithFeedback dict with 'score' and 'feedback' keys
+
+        Raises:
+            RagasDependencyError: the RAGAS dependency tree is broken (#491).
+                Propagated deliberately — collapsing it to 0.0 would reach GEPA
+                as "this candidate scored zero".
+            RAGASFeedbackUnavailableError: the evaluator produced heuristic
+                rather than judged scores.
         """
-        try:
-            if self._ragas_evaluator and self._evaluation_sample_class:
-                # Use real RAGAS evaluation via RAGASEvaluator
-                sample = self._evaluation_sample_class(
-                    query=question,
-                    ground_truth=ground_truth or answer,
-                    answer=answer,
-                    retrieved_contexts=contexts,
-                    metadata=kwargs.get("metadata", {}),
-                )
-                result = await self._ragas_evaluator.evaluate_sample(
-                    sample,
-                    run_id=run_id,
-                )
-                scores = {
-                    "faithfulness": result.faithfulness or 0.0,
-                    "answer_relevancy": result.answer_relevancy or 0.0,
-                    "context_precision": result.context_precision or 0.0,
-                    "context_recall": result.context_recall or 0.0,
-                }
-            else:
-                # Mock evaluation for testing
-                scores = self._mock_evaluate(question, answer, contexts)
-
-            # Compute weighted score
-            weighted_score = self._compute_weighted_score(scores)
-
-            # Generate feedback text
-            feedback = self.config.feedback_template.format(
-                faithfulness=scores.get("faithfulness", 0),
-                faithfulness_feedback=self._get_feedback_text(
-                    scores.get("faithfulness", 0), "faithfulness"
-                ),
-                answer_relevancy=scores.get("answer_relevancy", 0),
-                relevancy_feedback=self._get_feedback_text(
-                    scores.get("answer_relevancy", 0), "relevancy"
-                ),
-                context_precision=scores.get("context_precision", 0),
-                precision_feedback=self._get_feedback_text(
-                    scores.get("context_precision", 0), "precision"
-                ),
-                context_recall=scores.get("context_recall", 0),
-                recall_feedback=self._get_feedback_text(scores.get("context_recall", 0), "recall"),
-                overall_feedback=self._generate_overall_feedback(weighted_score, scores),
+        if not (self._ragas_evaluator and self._evaluation_sample_class):
+            raise RAGASFeedbackUnavailableError(
+                "RAGASFeedbackProvider has no evaluator; cannot produce GEPA feedback."
             )
 
-            return {
-                "score": weighted_score,
-                "feedback": feedback,
-            }
+        sample = self._evaluation_sample_class(
+            query=question,
+            ground_truth=ground_truth or answer,
+            answer=answer,
+            retrieved_contexts=contexts,
+            metadata=kwargs.get("metadata", {}),
+        )
 
+        # Log-and-reraise: DSPy swallows the propagated exception into
+        # failure_score, so without a module-owned record the operator sees
+        # nothing at all. Never substitute a score.
+        try:
+            result = await self._ragas_evaluator.evaluate_sample(sample, run_id=run_id)
+
+            # RAGASEvaluator stamps its own heuristic path so consumers can tell
+            # synthetic scores from judged ones (evaluation.py, "fallback_heuristic").
+            # Construction already refuses a statically-unavailable judge; this
+            # catches degradation DURING a run (an expired or rate-limited key).
+            metadata = getattr(result, "metadata", None) or {}
+            if metadata.get("evaluation_method") == "fallback_heuristic":
+                raise RAGASFeedbackUnavailableError(
+                    "RAGASEvaluator returned fallback_heuristic scores rather than "
+                    "judged ones (the judge degraded mid-run); refusing to feed "
+                    "heuristics to GEPA as optimization signal."
+                )
+
+            # evaluate_sample can return early with every metric None and no
+            # heuristic stamp (e.g. an empty answer). "Not measured" is not
+            # "measured zero" — refuse rather than coerce, or the composite
+            # silently reports a judgement that never happened.
+            if metadata.get("error"):
+                raise RAGASFeedbackUnavailableError(
+                    f"RAGASEvaluator returned no judged scores ({metadata['error']}); "
+                    "refusing to report an unmeasured sample as a score."
+                )
+
+            raw: dict[str, Optional[float]] = {
+                "faithfulness": result.faithfulness,
+                "answer_relevancy": result.answer_relevancy,
+                "context_precision": result.context_precision,
+                "context_recall": result.context_recall,
+            }
+            unmeasured = sorted(name for name, value in raw.items() if value is None)
+            if unmeasured:
+                raise RAGASFeedbackUnavailableError(
+                    "RAGASEvaluator returned no value for "
+                    + ", ".join(unmeasured)
+                    + "; refusing to score an unmeasured metric as 0.0."
+                )
+
+            # `is not None` (not truthiness) — a judged 0.0 is a real score.
+            scores = {name: value for name, value in raw.items() if value is not None}
         except Exception as e:
-            logger.error(f"RAGAS evaluation failed: {e}")
-            return {
-                "score": 0.0,
-                "feedback": f"Evaluation failed: {str(e)}",
-            }
+            logger.exception(
+                "RAGAS evaluation failed for GEPA feedback; propagating rather "
+                "than scoring it: %s (question=%.80r)",
+                e,
+                question,
+            )
+            raise
 
-    def _mock_evaluate(
-        self,
-        question: str,
-        answer: str,
-        contexts: list[str],
-    ) -> dict[str, float]:
-        """Mock RAGAS evaluation for testing.
+        weighted_score = self._compute_weighted_score(scores)
 
-        Uses simple heuristics to generate plausible scores.
-
-        Args:
-            question: The user question
-            answer: The generated answer
-            contexts: Retrieved context documents
-
-        Returns:
-            Dictionary of metric scores
-        """
-        # Simple heuristics for mock evaluation
-        answer_len = len(answer)
-        context_len = sum(len(c) for c in contexts)
-        question_words = set(question.lower().split())
-        answer_words = set(answer.lower().split())
-
-        # Faithfulness: higher if answer is shorter relative to context
-        faithfulness = min(1.0, context_len / (answer_len + 1) * 0.1)
-
-        # Relevancy: higher if answer words overlap with question
-        overlap = len(question_words & answer_words) / len(question_words) if question_words else 0
-        relevancy = min(1.0, overlap * 2)
-
-        # Precision: higher if contexts are not too long
-        precision = min(1.0, 1000 / (context_len / len(contexts) + 1)) if contexts else 0.5
-
-        # Recall: higher if more contexts retrieved
-        recall = min(1.0, len(contexts) / 3)
+        feedback = self.config.feedback_template.format(
+            faithfulness=scores.get("faithfulness", 0),
+            faithfulness_feedback=self._get_feedback_text(
+                scores.get("faithfulness", 0), "faithfulness"
+            ),
+            answer_relevancy=scores.get("answer_relevancy", 0),
+            relevancy_feedback=self._get_feedback_text(
+                scores.get("answer_relevancy", 0), "relevancy"
+            ),
+            context_precision=scores.get("context_precision", 0),
+            precision_feedback=self._get_feedback_text(
+                scores.get("context_precision", 0), "precision"
+            ),
+            context_recall=scores.get("context_recall", 0),
+            recall_feedback=self._get_feedback_text(scores.get("context_recall", 0), "recall"),
+            overall_feedback=self._generate_overall_feedback(weighted_score, scores),
+        )
 
         return {
-            "faithfulness": max(0.3, min(0.9, faithfulness + 0.4)),
-            "answer_relevancy": max(0.3, min(0.9, relevancy + 0.3)),
-            "context_precision": max(0.3, min(0.9, precision + 0.3)),
-            "context_recall": max(0.3, min(0.9, recall + 0.3)),
+            "score": weighted_score,
+            "feedback": feedback,
         }
 
     async def evaluate_batch(
@@ -389,40 +458,36 @@ def create_ragas_metric(
 
         Returns:
             ScoreWithFeedback dict
+
+        Raises:
+            Exception: evaluation failures propagate rather than becoming 0.0,
+                so a returned score always means the judge ran (#1488).
         """
-        try:
-            # Extract fields from example and prediction
-            question = getattr(example, "question", str(example))
-            answer = getattr(pred, "answer", str(pred))
-            contexts = getattr(pred, "contexts", [])
-            ground_truth = getattr(example, "answer", None)
+        # Extract fields from example and prediction
+        question = getattr(example, "question", str(example))
+        answer = getattr(pred, "answer", str(pred))
+        contexts = getattr(pred, "contexts", [])
+        ground_truth = getattr(example, "answer", None)
 
-            # Handle different input formats
-            if isinstance(example, dict):
-                question = example.get("question", question)
-                ground_truth = example.get("answer", ground_truth)
+        # Handle different input formats
+        if isinstance(example, dict):
+            question = example.get("question", question)
+            ground_truth = example.get("answer", ground_truth)
 
-            if isinstance(pred, dict):
-                answer = pred.get("answer", answer)
-                contexts = pred.get("contexts", contexts)
+        if isinstance(pred, dict):
+            answer = pred.get("answer", answer)
+            contexts = pred.get("contexts", contexts)
 
-            # Ensure contexts is a list of strings
-            if isinstance(contexts, str):
-                contexts = [contexts]
+        # Ensure contexts is a list of strings
+        if isinstance(contexts, str):
+            contexts = [contexts]
 
-            return await provider.evaluate(
-                question=question,
-                answer=answer,
-                contexts=contexts,
-                ground_truth=ground_truth,
-            )
-
-        except Exception as e:
-            logger.error(f"RAGAS metric evaluation failed: {e}")
-            return {
-                "score": 0.0,
-                "feedback": f"Metric evaluation failed for {agent_name}: {str(e)}",
-            }
+        return await provider.evaluate(
+            question=question,
+            answer=answer,
+            contexts=contexts,
+            ground_truth=ground_truth,
+        )
 
     # Set function metadata for GEPA
     ragas_metric.__name__ = f"ragas_metric_{agent_name}"
@@ -434,6 +499,7 @@ def create_ragas_metric(
 __all__ = [
     "RAGASFeedbackConfig",
     "RAGASFeedbackProvider",
+    "RAGASFeedbackUnavailableError",
     "RAGEvaluationResult",
     "ScoreWithFeedback",
     "create_ragas_metric",

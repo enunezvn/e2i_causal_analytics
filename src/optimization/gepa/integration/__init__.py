@@ -21,6 +21,7 @@ from src.optimization.gepa.integration.opik_integration import (
 )
 from src.optimization.gepa.integration.ragas_feedback import (
     RAGASFeedbackProvider,
+    RAGASFeedbackUnavailableError,
     create_ragas_metric,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "trace_optimization",
     # RAGAS
     "RAGASFeedbackProvider",
+    "RAGASFeedbackUnavailableError",
     "create_ragas_metric",
 ]

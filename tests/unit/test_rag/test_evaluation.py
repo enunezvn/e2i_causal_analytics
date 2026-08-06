@@ -816,5 +816,11 @@ class TestEdgeCases:
             evaluation_time_seconds=0.0,
         )
 
+        # #1488: an unmeasured metric fails CLOSED. Skipping it used to report
+        # the gate as passing when nothing had scored the metric at all — and
+        # since a NaN'd RAGAS metric now stays None instead of being coerced to
+        # a fabricated 0.0, that fail-open became reachable.
         passed, failures = pipeline.check_thresholds(report)
-        assert len(failures) == 0  # No failures if scores are None
+        assert passed is False
+        assert failures
+        assert all("unverifiable" in f for f in failures)
