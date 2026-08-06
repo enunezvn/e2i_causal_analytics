@@ -39,17 +39,23 @@ logger = logging.getLogger(__name__)
 # optimizer backs that cycle, so the probe imports exactly what the removed
 # in-module path depended on — a partial install (GEPA present, ragas missing)
 # must still report unavailable.
+#
+# The `= None` fallbacks are the module's import contract, not decoration:
+# consumers import these names unconditionally and branch on GEPA_AVAILABLE
+# afterwards (test_gepa_integration.py::test_cognitive_rag_optimizer_gepa_imports),
+# so leaving them unbound turns the unavailable case into an ImportError at the
+# import site instead of the None it is written against.
 try:
-    from src.optimization.gepa import create_gepa_optimizer  # noqa: F401
-    from src.optimization.gepa.integration.ragas_feedback import (  # noqa: F401
-        create_ragas_metric,
-    )
+    from src.optimization.gepa import create_gepa_optimizer
+    from src.optimization.gepa.integration.ragas_feedback import create_ragas_metric
 
     GEPA_AVAILABLE = True
     logger.info("GEPA optimizer available for Cognitive RAG")
 except ImportError:
     GEPA_AVAILABLE = False
     logger.info("GEPA not available for Cognitive RAG")
+    create_gepa_optimizer = None  # type: ignore[assignment]
+    create_ragas_metric = None  # type: ignore[assignment]
 
 # =============================================================================
 # 1. MEMORY TYPES & HOP DEFINITIONS

@@ -133,6 +133,42 @@ def test_cognitive_rag_optimizer_drops_the_legacy_entry_point() -> None:
         assert hasattr(CognitiveRAGOptimizer, kept)
 
 
+def test_gepa_probe_still_binds_fallback_names_when_ragas_is_missing(monkeypatch) -> None:
+    """Removing the legacy path must not shrink the module's import surface.
+
+    ``tests/integration/test_gepa_integration.py::test_cognitive_rag_optimizer_gepa_imports``
+    imports ``create_ragas_metric`` from this module *unconditionally* and only
+    asserts it is non-None when ``GEPA_AVAILABLE`` — i.e. it relies on the name
+    being bound to None in the unavailable case. Dropping the ``= None``
+    fallbacks turns that import into an ImportError under exactly the partial
+    install (GEPA present, ragas missing) the probe exists to detect.
+    """
+    import importlib
+    import sys
+
+    pytest.importorskip("dspy")
+
+    blocked = "src.optimization.gepa.integration.ragas_feedback"
+    target = "src.rag.cognitive_rag_dspy"
+
+    class _BlockRagasFeedback:
+        def find_spec(self, name, path=None, target=None):
+            if name == blocked:
+                raise ImportError(f"blocked for test: {name}")
+            return None
+
+    monkeypatch.delitem(sys.modules, blocked, raising=False)
+    monkeypatch.delitem(sys.modules, target, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_BlockRagasFeedback(), *sys.meta_path])
+
+    module = importlib.import_module(target)
+
+    assert module.GEPA_AVAILABLE is False
+    # Bound, not merely absent — `from ... import create_ragas_metric` must work.
+    assert module.create_ragas_metric is None
+    assert module.create_gepa_optimizer is None
+
+
 def test_create_optimizer_for_agent_honours_a_caller_budget() -> None:
     """``--budget`` must reach GEPA, so the phase-2 script can reach its save.
 
