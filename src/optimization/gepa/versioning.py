@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Any, Optional
@@ -207,9 +208,12 @@ def save_optimized_module(
         # and replace only on success; a failed replace leaves the prior
         # artifact intact byte-for-byte. The temp name does not match the
         # resolver's ``gepa_*.json`` glob, so even a crash-orphaned temp is
-        # inert to resolution.
+        # inert to resolution. It must also be unique PER CALL, not per PID:
+        # two concurrent same-process savers sharing one temp inode would let
+        # the loser's still-open fd keep writing into the file the winner's
+        # os.replace already published — corrupt JSON behind an ok return.
         save_path = output_path / f"{version_id}.json"
-        tmp_path = output_path / f"{version_id}.json.tmp.{os.getpid()}"
+        tmp_path = output_path / f"{version_id}.json.tmp.{os.getpid()}.{uuid.uuid4().hex}"
         try:
             with open(tmp_path, "w") as f:
                 json.dump(_build_save_data(version_id), f, indent=2, default=str)

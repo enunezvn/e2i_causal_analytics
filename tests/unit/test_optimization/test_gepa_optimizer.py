@@ -869,6 +869,45 @@ class TestVersioning:
         assert artifact.read_bytes() == original
         assert [p.name for p in artifact.parent.iterdir()] == [artifact.name]
 
+    def test_explicit_resave_temp_path_unique_per_call(
+        self, mock_module, temp_output_dir, monkeypatch
+    ):
+        """#1500 iter-5: the explicit-id temp name must be unique PER CALL.
+
+        A temp name unique only by PID is shared by two concurrent savers of
+        the same version_id in one process: both open the same temp inode,
+        the winner's os.replace publishes that inode at the final path, and
+        the loser's still-open fd keeps writing into the now-published file —
+        corrupt JSON behind a save that returned ok. Per-call uniqueness
+        gives each saver its own inode, so whichever complete replace lands
+        last publishes valid JSON.
+        """
+        from src.optimization.gepa import versioning
+
+        replaced_sources: list[str] = []
+        real_replace = versioning.os.replace
+
+        def _recording_replace(src, dst):
+            replaced_sources.append(str(src))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(versioning.os, "replace", _recording_replace)
+
+        vid = "gepa_v5_test_agent_20251201_100000"
+        for _ in range(2):
+            versioning.save_optimized_module(
+                module=mock_module,
+                agent_name="test_agent",
+                version_id=vid,
+                output_dir=temp_output_dir,
+            )
+
+        assert len(replaced_sources) == 2
+        # Same PID, same version_id — the temp paths must still differ.
+        assert replaced_sources[0] != replaced_sources[1]
+        # And stay inert to the resolver's gepa_*.json glob.
+        assert not any(src.endswith(".json") for src in replaced_sources)
+
 
 class TestGEPAABTest:
     """Test GEPAABTest class for A/B testing optimized modules."""
