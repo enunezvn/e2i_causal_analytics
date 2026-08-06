@@ -283,6 +283,21 @@ class TestJudgedTurns:
         assert "faithfulness" not in block
         assert len(judged_turns(block, [_record("q01", ["ctx"])])) == 1
 
+    def test_a_non_integer_n_samples_raises(self):
+        """A present-but-unusable count is a malformed run-level claim, not an
+        absent one. Skipping it because it failed an isinstance check let a
+        block claiming ``n_samples="10"`` with one row through — the very
+        partial-run case the count guard exists to catch, wearing the wrong
+        type. (codex iter-5 MED, reproduced.)
+        """
+        from src.rag.ragas_persistence import RagasPersistenceError, judged_turns
+
+        block = _block([_row("q01", 0.9, 0.5)])
+        block["n_samples"] = "10"
+
+        with pytest.raises(RagasPersistenceError, match="n_samples"):
+            judged_turns(block, [_record("q01", ["ctx"])])
+
     def test_a_block_without_n_samples_is_still_accepted(self):
         """``n_samples`` is the judge's own bookkeeping; a caller assembling a
         block by hand need not supply it, and absence is not a truncation

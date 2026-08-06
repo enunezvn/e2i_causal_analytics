@@ -149,13 +149,24 @@ def judged_turns(
     # persisting a partial RUN as a whole one is not. Absence of n_samples is
     # not a truncation claim (a caller may assemble a block by hand), so the
     # guard keys on disagreement.
-    claimed = block.get("n_samples")
-    if isinstance(claimed, int) and not isinstance(claimed, bool) and claimed != len(rows):
-        raise RagasPersistenceError(
-            f"judge block claims n_samples={claimed} but carries {len(rows)} per_sample "
-            "rows — the output is truncated or partially merged, and nothing in "
-            "evaluation_results could mark its rows as coming from an incomplete run"
-        )
+    if "n_samples" in block:
+        claimed = block["n_samples"]
+        # A present-but-unusable count is a MALFORMED claim, not an absent one.
+        # Skipping it on a failed isinstance check would let a block claiming
+        # n_samples="10" with one row through — the exact partial-run case this
+        # guard exists to catch, wearing the wrong type.
+        if not isinstance(claimed, int) or isinstance(claimed, bool):
+            raise RagasPersistenceError(
+                f"judge block declares a non-integer n_samples ({claimed!r}); a run-level "
+                "count that cannot be compared to the row count cannot establish that the "
+                "block is complete"
+            )
+        if claimed != len(rows):
+            raise RagasPersistenceError(
+                f"judge block claims n_samples={claimed} but carries {len(rows)} per_sample "
+                "rows — the output is truncated or partially merged, and nothing in "
+                "evaluation_results could mark its rows as coming from an incomplete run"
+            )
 
     # The row count can match while the NUMBERS do not. A block whose reported
     # aggregates no longer describe its own rows is stale, hand-edited or
