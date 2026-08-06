@@ -1,8 +1,32 @@
 #!/usr/bin/env python3
 """
-RAGAS Evaluation Script for E2I RAG Pipeline.
+RAGAS FIXTURE regression — judge-drift sentinel on frozen input.
 
-Run RAG quality evaluation and optionally fail CI on threshold violations.
+WHAT THIS DOES NOT MEASURE (#1485): production RAG quality. This script never
+invokes the RAG pipeline. ``run_evaluation()`` is called below with no
+``rag_pipeline`` argument, so ``src/rag/evaluation.py:1499`` skips
+``_generate_answers`` and the frozen gpt-4o judge scores the golden set's
+HARDCODED answers over ``retrieved_contexts`` that are byte-identical to the
+reference ``contexts``. Therefore:
+
+  * context_precision / context_recall are 1.0-by-construction ("retrieved"
+    equals "reference" by definition) and carry no retrieval signal;
+  * faithfulness / answer_relevancy score the fixture author's prose — a
+    generator regression cannot move them.
+
+What it IS: the input is frozen, so a score change means the JUDGE STACK
+drifted (model, prompt, ragas version, embeddings). Useful, and the #491/#496
+thresholds are correctly calibrated for this fixture — just do not read these
+numbers as product quality. The recorded gap is large: this job reports 0.804
+answer_relevancy while the real pipeline measured 0.401 on 2026-07-18.
+
+For production quality use the real-pipeline gate, which judges genuinely
+generated answers over genuinely retrieved contexts::
+
+    .venv/bin/python scripts/replay_golden_set.py --limit 12 \\
+        --record-out /tmp/goldset_records.json
+    .venv/bin/python scripts/run_real_pipeline_ragas.py \\
+        --records /tmp/goldset_records.json --fail-on-threshold
 
 Usage:
     # Run evaluation with default settings
@@ -54,7 +78,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Run RAGAS evaluation for E2I RAG pipeline")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the RAGAS fixture judge-drift regression (frozen input — "
+            "not production quality; see #1485)"
+        )
+    )
 
     # Dataset options
     parser.add_argument(
@@ -184,7 +213,8 @@ async def main() -> int:
     )
 
     logger.info("=" * 60)
-    logger.info("E2I RAG Evaluation Pipeline")
+    logger.info("RAGAS Fixture Regression / Judge-Drift Sentinel")
+    logger.info("Measures judge drift on a STATIC FIXTURE — not production quality (#1485)")
     logger.info("=" * 60)
     logger.info(f"Thresholds: {thresholds}")
     logger.info(f"MLflow logging: {'Enabled' if not args.no_mlflow else 'Disabled'}")

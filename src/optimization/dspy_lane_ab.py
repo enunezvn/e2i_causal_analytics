@@ -45,6 +45,13 @@ GATE_RAGAS_MIN_FAITHFULNESS_N = 3
 
 _EPS = 1e-9
 
+# The stamp RAGASEvaluator._evaluate_with_fallback writes into result metadata
+# (src/rag/evaluation.py:1270) when a sample was scored by word-overlap
+# heuristics instead of the gpt-4o judge. See
+# _ragas_heuristic_contamination_error. The same vocabulary distinguishes real
+# from heuristic scores in src/agents/feedback_learner/evaluation/models.py.
+HEURISTIC_EVALUATION_METHOD = "fallback_heuristic"
+
 # Float slack when recomputing a judge aggregate from its own per_sample rows
 # (same values, same summation order as the judge script - anything beyond
 # repr/JSON round-trip noise means the aggregate does not describe the rows).
@@ -302,6 +309,49 @@ def _ragas_scoreless_error(block: Dict[str, Any]) -> Optional[str]:
     ]
     if rel_scoreless:
         return f"rows without a finite answer_relevancy score: {rel_scoreless}"
+    return None
+
+
+def _ragas_heuristic_contamination_error(block: Dict[str, Any]) -> Optional[str]:
+    """A row the judge did not actually judge is not a measurement (#1485).
+
+    ``RAGASEvaluator._evaluate_with_ragas`` ends in a broad
+    ``except Exception: return await self._evaluate_with_fallback(...)``
+    (src/rag/evaluation.py:1188), so a quota error, rate limit, or transient
+    API failure DURING judging silently swaps gpt-4o judgments for
+    word-overlap heuristics on that sample. The judge process still exits 0
+    and the aggregates still reconcile against their rows, so neither
+    ``_ragas_consistency_error`` nor ``_ragas_scoreless_error`` can see it.
+    Confirmed against the running container: a keyless judge run returned
+    faithfulness 0.125 with perfectly self-consistent aggregates.
+
+    Only the FALLBACK path is stamped (``evaluation_method="fallback_heuristic"``
+    at :1270); the judged path returns ``metadata=sample.metadata`` with no
+    positive marker, so an absent or None value means judged. ANY other value
+    is refused, so an unrecognised future marker blocks rather than slips
+    through. Blocks recorded before the judge carried the stamp (the 20260718
+    run) have no such key, making this add-only on them.
+
+    This lives here rather than in ``src/rag/real_pipeline_eval.py`` because
+    this module is deliberately stdlib-only — its source is embedded into the
+    container bundle by ``emit_container_script`` — and real_pipeline_eval
+    already imports from it, so the reverse direction would be circular.
+    """
+    rows = block.get("per_sample")
+    if not isinstance(rows, list):
+        return None  # shape problems are reported by the consistency gate
+    contaminated = [
+        row.get("query_id")
+        for row in rows
+        if isinstance(row, dict) and row.get("evaluation_method") is not None
+    ]
+    if contaminated:
+        return (
+            f"rows not scored by the gpt-4o judge (evaluation_method set): {contaminated} "
+            f"— a mid-run judge failure degrades samples to {HEURISTIC_EVALUATION_METHOD} "
+            "word-overlap scoring (src/rag/evaluation.py:1188); those numbers are not "
+            "measurements"
+        )
     return None
 
 
@@ -690,6 +740,20 @@ def evaluate_gates(
                 "ragas[fully_scored]",
                 b_sc is None and c_sc is None,
                 f"baseline: {b_sc or 'OK'}; candidate: {c_sc or 'OK'}",
+            )
+        )
+        # Scored is not the same as JUDGED: a mid-run judge failure degrades a
+        # sample to word-overlap heuristics that reconcile and are fully
+        # scored, so the two gates above both pass on it (#1485). Refuse rows
+        # the judge did not actually judge, both sides — a heuristic-corrupted
+        # baseline weakens every floor below, exactly as for consistency.
+        b_hb = _ragas_heuristic_contamination_error(b_ragas)
+        c_hb = _ragas_heuristic_contamination_error(c_ragas)
+        gates.append(
+            _gate(
+                "ragas[judged]",
+                b_hb is None and c_hb is None,
+                f"baseline: {b_hb or 'OK'}; candidate: {c_hb or 'OK'}",
             )
         )
         for metric in ("faithfulness", "answer_relevancy"):

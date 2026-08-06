@@ -45,6 +45,17 @@ def main() -> None:
                     "n_contexts": len(sample.retrieved_contexts),
                     "faithfulness": res.faithfulness,
                     "answer_relevancy": res.answer_relevancy,
+                    # ADD-ONLY (#1485). _evaluate_with_ragas ends in a broad
+                    # `except Exception: return await self._evaluate_with_fallback(...)`
+                    # (src/rag/evaluation.py:1188), so a quota error or rate
+                    # limit mid-run silently degrades a sample to word-overlap
+                    # heuristics while the process still exits 0. The fallback
+                    # stamps evaluation_method="fallback_heuristic" (:1270);
+                    # without carrying it out here, no consumer can tell a
+                    # judged score from a heuristic one. The judged path stamps
+                    # nothing, so None means judged. Consumers that do not read
+                    # this key are unaffected.
+                    "evaluation_method": (res.metadata or {}).get("evaluation_method"),
                 }
             )
             print(f"[{i + 1}/{len(samples)}] judged", file=sys.stderr)

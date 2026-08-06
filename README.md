@@ -236,10 +236,27 @@ All workflows live in `.github/workflows/` and run on GitHub Actions. The main o
 | Deploy | `deploy.yml` | Push to main (path-filtered) | CI image build+push to GHCR, then gated droplet deploy with auto-rollback |
 | Security | `security.yml` | Push/PR + daily cron | Bandit, pip-audit, Semgrep, secrets scan |
 | Verify OpenAPI Types | `verify-types.yml` | Push/PR (path-filtered) | Regenerates the OpenAPI spec, Spectral lint, frontend type-drift check |
-| RAGAS Evaluation | `ragas-evaluation.yml` | **Manual only** | RAG quality eval (gpt-4o judge; CI-key throughput-bound, see #504) |
+| RAGAS Fixture Regression | `ragas-evaluation.yml` | **Manual only** | Judge-drift sentinel on FROZEN input — scores a static fixture, **not** production quality (#1485). gpt-4o judge; CI-key throughput-bound, see #504 |
 | Synthetic Benchmarks | `synthetic-benchmarks.yml` | Push/PR | Causal engine benchmark suite |
 
 Plus specialized guard workflows (feature contract, lifecycle state, RPC DDL, methodology sign-off, lockfile resolution, slow tests, retrieval benchmarks).
+
+> **Measuring real RAG quality.** `ragas-evaluation.yml` never invokes the RAG
+> pipeline — it judges the golden set's hardcoded answers over contexts that are
+> byte-identical to the reference, so its context metrics are 1.0-by-construction
+> and its faithfulness/answer-relevancy score the fixture's own prose (#1485). It
+> is useful only as a judge-drift signal on frozen input. For production quality,
+> replay through the live pipeline and judge the real output:
+>
+> ```bash
+> .venv/bin/python scripts/replay_golden_set.py --limit 12 \
+>     --record-out /tmp/goldset_records.json
+> .venv/bin/python scripts/run_real_pipeline_ragas.py \
+>     --records /tmp/goldset_records.json --fail-on-threshold
+> ```
+>
+> Run it on a host that can reach the pipeline (GitHub's runners cannot), at
+> n≈10–15 per the #504 throughput constraint.
 
 ## Operational Scripts
 

@@ -435,9 +435,27 @@ make clean          # Remove build artifacts
 | **E2E (Backend)** | pytest | `tests/e2e/` | Sequential | ~15 min |
 | **E2E (Frontend)** | Playwright | `frontend/e2e/` | 4 shards | ~10 min |
 | **Synthetic** | pytest | `tests/synthetic/` | Sequential | ~5 min |
-| **RAGAS** | OpenAI + RAGAS | `scripts/run_ragas_eval.py` | Sequential | ~10 min |
+| **RAGAS (fixture)** | OpenAI + RAGAS | `scripts/run_ragas_eval.py` | Sequential | ~10 min |
+| **RAGAS (real pipeline)** | Live API + OpenAI | `scripts/run_real_pipeline_ragas.py` | Sequential | ~20 min |
 | **Tier 0** | Custom runner | `scripts/run_tier0_test.py` | Sequential | ~20 min |
 | **Tier 1-5** | Custom runner | `scripts/run_tier1_5_test.py` | Sequential | ~15 min |
+
+> **The two RAGAS runs measure different things (#1485).**
+> `run_ragas_eval.py` never invokes the RAG pipeline — it scores the golden
+> set's hardcoded answers over contexts byte-identical to the reference, so its
+> context metrics are 1.0-by-construction and its faithfulness/answer-relevancy
+> score the fixture's own prose. Treat it as a judge-drift sentinel on frozen
+> input, **not** a quality gate.
+> `run_real_pipeline_ragas.py` judges what the pipeline actually generated over
+> what it actually retrieved. It needs a host that can reach the live API, and
+> runs at n≈10–15 on demand (#504 throughput constraint):
+>
+> ```bash
+> .venv/bin/python scripts/replay_golden_set.py --limit 12 \
+>     --record-out /tmp/goldset_records.json
+> .venv/bin/python scripts/run_real_pipeline_ragas.py \
+>     --records /tmp/goldset_records.json --fail-on-threshold
+> ```
 
 ### Running Tests
 

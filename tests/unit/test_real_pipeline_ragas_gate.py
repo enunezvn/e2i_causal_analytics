@@ -1,0 +1,574 @@
+"""Contract tests for the real-pipeline RAGAS gate (#1485).
+
+The fixture eval (``scripts/run_ragas_eval.py``) never invokes the RAG
+pipeline: ``run_evaluation()`` is called with no ``rag_pipeline``, so every
+sample keeps its hardcoded ``answer`` and a ``retrieved_contexts`` that is
+byte-identical to its reference ``contexts``. These tests pin the REAL path
+instead — replay records carrying genuinely generated answers and genuinely
+retrieved contexts, judged by the frozen gpt-4o judge, gated fail-closed.
+
+The single most load-bearing behaviour here is
+``test_adapter_never_emits_reference_contexts``: ``RAGASEvaluator.
+evaluate_sample`` (src/rag/evaluation.py:982) silently substitutes
+``sample.contexts`` whenever ``retrieved_contexts`` is empty, so a replay that
+retrieved NOTHING would otherwise be scored against curated reference
+evidence and score well. That is precisely the tautology #1485 is about, and
+it must be impossible to reintroduce through this adapter.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+import pytest
+
+from src.rag.real_pipeline_eval import (
+    MIN_RETRIEVAL_HIT_RATE,
+    REAL_PIPELINE_THRESHOLDS,
+    build_samples_from_replay,
+    check_real_pipeline_gates,
+    check_retrieval_gate,
+    check_run_gates,
+    contexts_from_evidence,
+    summarize_retrieval,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _record(
+    query_id: str = "q01",
+    query: str = "Why did Kisqali TRx move in the Northeast?",
+    response_text: str = "Kisqali TRx rose 12% on oncologist engagement.",
+    contexts: Optional[List[str]] = None,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One replay record in the shape ``replay_golden_set.py --record-out`` writes."""
+    return {
+        "query_id": query_id,
+        "query": query,
+        "model": "cognitive",
+        "conversation_id": f"goldset-replay-20260805-{query_id}",
+        "response_text": response_text,
+        "contexts": ["Northeast TRx up 12% QoQ."] if contexts is None else contexts,
+        "evidence_count": 1 if contexts is None else len(contexts),
+        "hop_count": 2,
+        "answer_chars": len(response_text),
+        "latency_s": 17.4,
+        "error": error,
+    }
+
+
+def _block(
+    per_sample: Optional[List[Dict[str, Any]]] = None,
+    **overrides: Any,
+) -> Dict[str, Any]:
+    """A judge-output block whose aggregates genuinely describe its rows.
+
+    Mirrors ``scripts/run_dspy_lane_ragas_judge.py``: ``n_samples`` counts all
+    rows, ``n_faithfulness`` counts context-bearing rows, ``faithfulness``
+    averages over context-bearing rows only, ``answer_relevancy`` over all.
+    """
+    if per_sample is None:
+        per_sample = [
+            {"query_id": f"q{i:02d}", "n_contexts": 2, "faithfulness": 0.8, "answer_relevancy": 0.5}
+            for i in range(1, 11)
+        ]
+    ctx_rows = [r for r in per_sample if r.get("n_contexts", 0) > 0]
+
+    def _mean(rows: List[Dict[str, Any]], key: str) -> Optional[float]:
+        vals = [r[key] for r in rows if r.get(key) is not None]
+        return (sum(vals) / len(vals)) if vals else None
+
+    block = {
+        "model": "cognitive",
+        "n_samples": len(per_sample),
+        "n_faithfulness": len(ctx_rows),
+        "faithfulness": _mean(ctx_rows, "faithfulness"),
+        "answer_relevancy": _mean(per_sample, "answer_relevancy"),
+        "per_sample": per_sample,
+    }
+    block.update(overrides)
+    return block
+
+
+# Thresholds used by the logic tests. Deliberately explicit rather than the
+# module constant: these tests pin gate BEHAVIOUR, and must not start passing
+# or failing because a measured baseline was recalibrated.
+_TEST_THRESHOLDS = {"faithfulness": 0.60, "answer_relevancy": 0.30}
+
+
+# ---------------------------------------------------------------------------
+# contexts_from_evidence
+# ---------------------------------------------------------------------------
+
+
+def test_contexts_from_evidence_extracts_content_field():
+    evidence = [{"content": "Northeast TRx up 12%.", "source": "agent_activities"}]
+    assert contexts_from_evidence(evidence) == ["Northeast TRx up 12%."]
+
+
+def test_contexts_from_evidence_handles_non_dict_and_missing_content():
+    """Never drop evidence silently: a shape we don't recognise still becomes text."""
+    assert contexts_from_evidence(["raw string"]) == ["raw string"]
+    out = contexts_from_evidence([{"source": "kg", "score": 0.4}])
+    assert len(out) == 1 and "kg" in out[0]
+
+
+def test_contexts_from_evidence_on_empty_is_empty():
+    assert contexts_from_evidence(None) == []
+    assert contexts_from_evidence([]) == []
+
+
+# ---------------------------------------------------------------------------
+# build_samples_from_replay
+# ---------------------------------------------------------------------------
+
+
+def test_adapter_emits_judge_sample_shape():
+    """Samples must construct as EvaluationSample — the judge does exactly this."""
+    from src.rag.evaluation import EvaluationSample
+
+    samples = build_samples_from_replay([_record()])
+    assert len(samples) == 1
+    sample = EvaluationSample(**samples[0])
+    assert sample.query == "Why did Kisqali TRx move in the Northeast?"
+    assert sample.answer == "Kisqali TRx rose 12% on oncologist engagement."
+    assert sample.retrieved_contexts == ["Northeast TRx up 12% QoQ."]
+
+
+def test_adapter_never_emits_reference_contexts():
+    """THE fail-open guard (src/rag/evaluation.py:982).
+
+    ``evaluate_sample`` substitutes ``sample.contexts`` for an empty
+    ``retrieved_contexts``. If the adapter ever populated ``contexts`` with
+    curated reference evidence, a zero-retrieval replay would be judged
+    against a perfect reference and score high — reintroducing the exact
+    tautology #1485 exists to remove.
+    """
+    from src.rag.evaluation import EvaluationSample
+
+    zero_retrieval = _record(contexts=[])
+    samples = build_samples_from_replay([zero_retrieval])
+    assert len(samples) == 1
+    assert not samples[0].get("contexts"), (
+        "adapter emitted reference contexts; a zero-retrieval replay would be "
+        "silently scored against them by evaluate_sample()"
+    )
+    sample = EvaluationSample(**samples[0])
+    assert sample.contexts == []
+    assert sample.retrieved_contexts == []
+
+
+def test_adapter_drops_errored_and_empty_answer_records():
+    """Judging an error string scores the failure mode, not the answer."""
+    records = [
+        _record(query_id="q01"),
+        _record(query_id="q02", error="CognitiveSearchError: boom"),
+        _record(query_id="q03", response_text=""),
+    ]
+    samples = build_samples_from_replay(records)
+    assert [s["metadata"]["query_id"] for s in samples] == ["q01"]
+
+
+def test_adapter_preserves_multiple_real_contexts_in_order():
+    ctxs = ["ctx one", "ctx two", "ctx three"]
+    samples = build_samples_from_replay([_record(contexts=ctxs)])
+    assert samples[0]["retrieved_contexts"] == ctxs
+
+
+def test_adapter_does_not_fabricate_ground_truth():
+    """faithfulness/answer_relevancy do not use it; inventing one is fabrication."""
+    samples = build_samples_from_replay([_record()])
+    assert samples[0]["ground_truth"] == ""
+
+
+# ---------------------------------------------------------------------------
+# summarize_retrieval
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_retrieval_reports_hit_rate():
+    """Retrieval-hit rate is the headline #1485 number (3/10 on 2026-07-18)."""
+    records = [
+        _record(query_id="q01", contexts=["a"]),
+        _record(query_id="q02", contexts=[]),
+        _record(query_id="q03", contexts=[]),
+        _record(query_id="q04", error="boom", contexts=[]),
+    ]
+    summary = summarize_retrieval(records)
+    assert summary["n_records"] == 4
+    assert summary["n_errors"] == 1
+    assert summary["n_with_contexts"] == 1
+    assert summary["retrieval_hit_rate"] == pytest.approx(0.25)
+
+
+# ---------------------------------------------------------------------------
+# check_real_pipeline_gates — happy path and threshold behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_gates_pass_when_metrics_clear_thresholds():
+    passed, failures = check_real_pipeline_gates(_block(), thresholds=_TEST_THRESHOLDS)
+    assert passed, failures
+    assert failures == []
+
+
+def test_gates_fail_when_answer_relevancy_below_threshold():
+    rows = [
+        {"query_id": f"q{i:02d}", "n_contexts": 2, "faithfulness": 0.8, "answer_relevancy": 0.10}
+        for i in range(1, 11)
+    ]
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("answer_relevancy" in f for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# check_real_pipeline_gates — fail-closed behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_gates_fail_closed_on_missing_metric():
+    """A missing metric must BLOCK, never silently skip its gate."""
+    block = _block()
+    del block["answer_relevancy"]
+    passed, failures = check_real_pipeline_gates(block, thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("answer_relevancy" in f for f in failures)
+
+
+def test_gates_fail_closed_on_none_metric():
+    passed, failures = check_real_pipeline_gates(
+        _block(faithfulness=None), thresholds=_TEST_THRESHOLDS
+    )
+    assert not passed
+    assert any("faithfulness" in f for f in failures)
+
+
+def test_gates_fail_closed_on_empty_judge_output():
+    passed, failures = check_real_pipeline_gates({}, thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert failures
+
+
+def test_gates_fail_closed_on_aggregate_per_sample_mismatch():
+    """A hand-edited or stale aggregate that no longer describes its rows."""
+    block = _block()
+    block["answer_relevancy"] = 0.99
+    passed, failures = check_real_pipeline_gates(block, thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("recompute" in f or "consistency" in f.lower() for f in failures)
+
+
+def test_gates_fail_closed_on_scoreless_rows():
+    """A context-bearing row the judge never scored is a hole in the mean."""
+    rows = [
+        {"query_id": f"q{i:02d}", "n_contexts": 2, "faithfulness": 0.8, "answer_relevancy": 0.5}
+        for i in range(1, 10)
+    ]
+    rows.append({"query_id": "q10", "n_contexts": 2, "faithfulness": None, "answer_relevancy": 0.5})
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("scoreless" in f.lower() or "finite" in f.lower() for f in failures)
+
+
+def test_gates_fail_closed_below_faithfulness_denominator_floor():
+    """A faithfulness mean over 1-2 context-bearing replays is noise, not signal."""
+    rows = [
+        {"query_id": "q01", "n_contexts": 2, "faithfulness": 0.9, "answer_relevancy": 0.5},
+        {"query_id": "q02", "n_contexts": 2, "faithfulness": 0.9, "answer_relevancy": 0.5},
+    ] + [
+        {"query_id": f"q{i:02d}", "n_contexts": 0, "faithfulness": None, "answer_relevancy": 0.5}
+        for i in range(3, 11)
+    ]
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any(
+        "faithfulness" in f and ("denominator" in f or "n_faithfulness" in f) for f in failures
+    )
+
+
+def test_gates_fail_closed_below_minimum_sample_count():
+    """#1489 fixes the cadence at n>=10; a 3-sample run cannot carry the verdict."""
+    rows = [
+        {"query_id": f"q{i:02d}", "n_contexts": 2, "faithfulness": 0.8, "answer_relevancy": 0.5}
+        for i in range(1, 4)
+    ]
+    passed, failures = check_real_pipeline_gates(
+        _block(rows), thresholds=_TEST_THRESHOLDS, min_samples=10
+    )
+    assert not passed
+    assert any("n_samples" in f or "samples" in f for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# Metric split (#1485 step 2)
+# ---------------------------------------------------------------------------
+
+
+def test_only_real_path_metrics_are_gated():
+    """context_precision/recall need a ground truth the replay does not fabricate.
+
+    They must never gate the real path, even when a judge block carries them.
+    """
+    block = _block(context_precision=0.0, context_recall=0.0)
+    passed, failures = check_real_pipeline_gates(block, thresholds=_TEST_THRESHOLDS)
+    assert passed, failures
+    assert not any("context_" in f for f in failures)
+
+
+def test_default_thresholds_cover_exactly_the_real_path_metrics():
+    assert set(REAL_PIPELINE_THRESHOLDS) == {"faithfulness", "answer_relevancy"}
+    for name, value in REAL_PIPELINE_THRESHOLDS.items():
+        assert 0.0 <= value <= 1.0, f"{name} threshold out of range: {value}"
+
+
+def test_context_thresholds_are_rejected_rather_than_silently_ignored():
+    """Passing a context metric in is a caller error, not a no-op."""
+    with pytest.raises(ValueError, match="context"):
+        check_real_pipeline_gates(_block(), thresholds={"context_precision": 0.8})
+
+
+# ---------------------------------------------------------------------------
+# Heuristic-contamination gate (codex iter-1 HIGH)
+# ---------------------------------------------------------------------------
+#
+# RAGASEvaluator._evaluate_with_ragas ends in a broad
+# ``except Exception: return await self._evaluate_with_fallback(...)``
+# (src/rag/evaluation.py:1188). So a quota error, rate limit, or transient API
+# failure DURING judging silently swaps gpt-4o judgments for word-overlap
+# heuristics (:1191) on that sample. The judge exits 0, the aggregates
+# reconcile, and the gate could pass on numbers no judge produced. The
+# fallback stamps ``evaluation_method="fallback_heuristic"`` (:1270); the gate
+# must refuse any row carrying it.
+
+
+def _judged(query_id: str, **overrides: Any) -> Dict[str, Any]:
+    row = {
+        "query_id": query_id,
+        "n_contexts": 2,
+        "faithfulness": 0.8,
+        "answer_relevancy": 0.5,
+        "evaluation_method": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_gates_fail_closed_on_a_single_heuristic_contaminated_row():
+    rows = [_judged(f"q{i:02d}") for i in range(1, 10)]
+    rows.append(_judged("q10", evaluation_method="fallback_heuristic"))
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("fallback_heuristic" in f or "heuristic" in f.lower() for f in failures)
+    assert any("q10" in f for f in failures)
+
+
+def test_gates_pass_when_every_row_was_judged():
+    rows = [_judged(f"q{i:02d}") for i in range(1, 11)]
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert passed, failures
+
+
+def test_missing_evaluation_method_is_treated_as_judged():
+    """The shipped evaluator stamps ONLY the fallback path.
+
+    ``_evaluate_with_ragas`` returns ``metadata=sample.metadata`` with no
+    positive marker, so a judged row legitimately has no key. Requiring a
+    positive marker would need an evaluator change plus a deploy before this
+    gate could ever pass; refusing the known-bad stamp is the contract that
+    works against the shipped code.
+    """
+    rows = [
+        {"query_id": f"q{i:02d}", "n_contexts": 2, "faithfulness": 0.8, "answer_relevancy": 0.5}
+        for i in range(1, 11)
+    ]
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert passed, failures
+
+
+def test_heuristic_row_blocks_even_when_all_metrics_look_healthy():
+    """The masquerade: contaminated numbers that clear every threshold."""
+    rows = [_judged(f"q{i:02d}", faithfulness=0.95, answer_relevancy=0.9) for i in range(1, 10)]
+    rows.append(
+        _judged(
+            "q10", faithfulness=0.95, answer_relevancy=0.9, evaluation_method="fallback_heuristic"
+        )
+    )
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("heuristic" in f.lower() for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# Retrieval-hit-rate gate (codex iter-1 MED)
+# ---------------------------------------------------------------------------
+#
+# Measured baseline 5/15 = 0.333. Without a retrieval gate this run passes
+# green: 15 samples, only 3 retrieve, those 3 score well -> AR = 3*0.670/15 =
+# 0.134 >= 0.10 and n_faithfulness = 3 >= the floor of 3. Retrieval drops 40%
+# and nothing blocks.
+
+
+def _retrieval(n_with: int, n_records: int = 15, n_errors: int = 0) -> Dict[str, Any]:
+    return {
+        "n_records": n_records,
+        "n_errors": n_errors,
+        "n_with_contexts": n_with,
+        # guarded so the helper can build degenerate summaries for the
+        # fail-closed tests without raising while constructing the fixture
+        "retrieval_hit_rate": (n_with / n_records) if n_records else 0.0,
+    }
+
+
+def test_retrieval_gate_passes_at_the_measured_baseline():
+    passed, failures = check_retrieval_gate(_retrieval(5))
+    assert passed, failures
+
+
+def test_retrieval_gate_blocks_a_materially_worse_run():
+    """3/15 = 0.200 is below the 0.21 floor (baseline 0.333 minus ~1 SE)."""
+    passed, failures = check_retrieval_gate(_retrieval(3))
+    assert not passed
+    assert any("retrieval" in f.lower() for f in failures)
+
+
+def test_retrieval_gate_passes_just_above_the_floor():
+    passed, failures = check_retrieval_gate(_retrieval(4))
+    assert passed, failures
+
+
+def test_retrieval_gate_fails_closed_on_missing_summary():
+    for missing in (None, {}, {"n_records": 15}):
+        passed, failures = check_retrieval_gate(missing)
+        assert not passed, f"missing retrieval data must block, got pass for {missing!r}"
+        assert failures
+
+
+def test_retrieval_gate_fails_closed_on_non_finite_rate():
+    passed, failures = check_retrieval_gate(dict(_retrieval(5), retrieval_hit_rate="0.33"))
+    assert not passed
+
+
+def test_retrieval_floor_is_calibrated_below_the_measured_baseline():
+    assert 0.0 < MIN_RETRIEVAL_HIT_RATE < (5 / 15), (
+        "the floor must sit below the measured 0.333 baseline or the baseline run blocks"
+    )
+
+
+# ---------------------------------------------------------------------------
+# check_run_gates — the composition the driver uses
+# ---------------------------------------------------------------------------
+
+
+def test_run_gates_pass_on_the_measured_baseline_shape():
+    passed, failures = check_run_gates(
+        _block([_judged(f"q{i:02d}") for i in range(1, 16)]),
+        _retrieval(5),
+        thresholds=_TEST_THRESHOLDS,
+    )
+    assert passed, failures
+
+
+def test_run_gates_block_when_retrieval_regresses_though_metrics_pass():
+    """The exact scenario the retrieval gate exists for.
+
+    Only 3 of 15 retrieve; those 3 are judged well, so faithfulness clears its
+    threshold, answer_relevancy clears 0.10, and n_faithfulness hits the floor
+    of 3 exactly. Block-level gates alone see nothing wrong.
+    """
+    rows = [_judged(f"q{i:02d}", faithfulness=0.8, answer_relevancy=0.670) for i in range(1, 4)]
+    rows += [
+        _judged(f"q{i:02d}", n_contexts=0, faithfulness=None, answer_relevancy=0.0)
+        for i in range(4, 16)
+    ]
+    block = _block(rows)
+    assert block["n_faithfulness"] == 3
+    assert block["answer_relevancy"] == pytest.approx(0.134, abs=0.005)
+
+    block_passed, _ = check_real_pipeline_gates(
+        block, thresholds={"faithfulness": 0.35, "answer_relevancy": 0.10}
+    )
+    assert block_passed, "precondition: block-level gates alone do NOT catch this"
+
+    passed, failures = check_run_gates(
+        block, _retrieval(3), thresholds={"faithfulness": 0.35, "answer_relevancy": 0.10}
+    )
+    assert not passed
+    assert any("retrieval" in f.lower() for f in failures)
+
+
+def test_run_gates_fail_closed_without_retrieval_data():
+    passed, failures = check_run_gates(
+        _block([_judged(f"q{i:02d}") for i in range(1, 11)]), None, thresholds=_TEST_THRESHOLDS
+    )
+    assert not passed
+    assert failures
+
+
+# ---------------------------------------------------------------------------
+# check_retrieval_gate input validation (codex iter-2 LOW 1)
+# ---------------------------------------------------------------------------
+#
+# This is the composed gate API and it advertises fail-closed, so an
+# impossible summary must block rather than be taken at face value.
+
+
+def test_retrieval_gate_rejects_an_out_of_range_rate():
+    for bad in (1.2, -0.1):
+        passed, failures = check_retrieval_gate(dict(_retrieval(5), retrieval_hit_rate=bad))
+        assert not passed, f"rate {bad} must block"
+        assert any("rate" in f.lower() for f in failures)
+
+
+def test_retrieval_gate_rejects_a_rate_that_contradicts_its_counts():
+    """A hand-edited or stale summary whose rate no longer describes its counts."""
+    passed, failures = check_retrieval_gate(dict(_retrieval(3), retrieval_hit_rate=0.9))
+    assert not passed
+    assert any("n_with_contexts" in f or "counts" in f.lower() for f in failures)
+
+
+def test_retrieval_gate_rejects_non_positive_or_boolean_counts():
+    for summary in (
+        _retrieval(5, n_records=0),
+        dict(_retrieval(5), n_records=True),
+        dict(_retrieval(5), n_with_contexts=True),
+        dict(_retrieval(5), n_with_contexts=-1),
+        dict(_retrieval(5), n_records="15"),
+    ):
+        passed, _ = check_retrieval_gate(summary)
+        assert not passed, f"must block: {summary!r}"
+
+
+def test_retrieval_gate_rejects_more_hits_than_records():
+    passed, failures = check_retrieval_gate(
+        {"n_records": 5, "n_errors": 0, "n_with_contexts": 9, "retrieval_hit_rate": 9 / 5}
+    )
+    assert not passed
+    assert failures
+
+
+def test_retrieval_gate_accepts_a_consistent_summary():
+    passed, failures = check_retrieval_gate(_retrieval(5))
+    assert passed, failures
+
+
+# ---------------------------------------------------------------------------
+# Heuristic stamp: empty string is NOT judged (codex iter-2 LOW 2)
+# ---------------------------------------------------------------------------
+
+
+def test_empty_string_evaluation_method_is_refused():
+    """No producer emits "". Accepting it contradicted the documented contract.
+
+    The judge emits None or the stamp; pre-#1485 blocks carry no key at all.
+    An unexpected "" means something we do not model wrote that row.
+    """
+    rows = [_judged(f"q{i:02d}") for i in range(1, 10)]
+    rows.append(_judged("q10", evaluation_method=""))
+    passed, failures = check_real_pipeline_gates(_block(rows), thresholds=_TEST_THRESHOLDS)
+    assert not passed
+    assert any("q10" in f for f in failures)
