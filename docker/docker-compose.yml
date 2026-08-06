@@ -104,10 +104,11 @@ x-common-env: &common-env
   # this file is a named docker volume, never a host bind mount, so a host path
   # — the natural thing to write, since scripts/replay_golden_set.py runs on the
   # host — resolves to "records file not found" and the leg skips forever while
-  # looking configured. Use a container path under a volume this service mounts
-  # read-write; on worker_medium that is /app/optimized_modules. Leaving it
-  # unset is the supported steady state (#1489 deferral 5 adds the DB-sourced
-  # feedstock that needs no file at all).
+  # looking configured. Use a container path under one of the named volumes this
+  # service mounts read-write (worker_medium has seven; /app/optimized_modules
+  # is the natural pick because this leg already writes its artifacts and
+  # .trigger_state.json there). Leaving it unset is the supported steady state
+  # (#1489 deferral 5 adds the DB-sourced feedstock that needs no file at all).
   DSPY_RAG_RECORDS_PATH: ${DSPY_RAG_RECORDS_PATH:-}
   DSPY_RAG_MAX_METRIC_CALLS: ${DSPY_RAG_MAX_METRIC_CALLS:-}
   # #1489 deferral 5: the live-traffic feedstock, which needs no records file

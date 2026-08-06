@@ -224,6 +224,27 @@ def test_records_path_entry_warns_that_the_path_is_container_side() -> None:
     )
 
 
+def test_the_suggested_records_directory_is_actually_mounted_read_write() -> None:
+    """The comment tells an operator where to put the file; that must be true.
+
+    An earlier version said /app/optimized_modules was worker_medium's ONE
+    writable shared location. It has seven. The advice was still right — that
+    volume already holds this leg's artifacts and .trigger_state.json — but the
+    reason given was false, and a comment a test asserts on has to be accurate
+    or the test launders a wrong claim into an invariant.
+    """
+    compose = _load_compose()
+    body = (compose.get("services", {}) or {}).get(_ANALYTICS_QUEUE_EXECUTOR) or {}
+    writable = [
+        m for m in (body.get("volumes") or []) if isinstance(m, str) and not m.endswith(":ro")
+    ]
+    targets = [m.split(":", 1)[1] for m in writable if ":" in m]
+    assert "/app/optimized_modules" in targets, (
+        f"the compose comment points operators at /app/optimized_modules, but "
+        f"{_ANALYTICS_QUEUE_EXECUTOR} does not mount it read-write. Writable: {targets}"
+    )
+
+
 def test_no_host_bind_mount_exists_to_make_a_host_path_work() -> None:
     """Pins the premise the comment above rests on.
 
