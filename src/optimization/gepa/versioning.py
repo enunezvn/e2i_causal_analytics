@@ -11,27 +11,34 @@ Integrates with:
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import IO, Any, Optional
 
 # Saved artifact names start ``gepa_v{n}_...`` (see generate_version_id).
 _GEPA_VERSION_RE = re.compile(r"^gepa_v(\d+)")
+
+# How many version increments an auto-named save attempts when losing the
+# creation race to concurrent saves before failing loudly (#1500).
+_VERSION_COLLISION_RETRIES = 16
 
 
 def gepa_artifact_sort_key(path: Path) -> tuple[int, str]:
     """Ordering key for saved GEPA artifact files, oldest first.
 
-    Primary key: the integer after the leading ``gepa_v``, compared numerically.
-    Lexicographic name order inverts at v10 (``"gepa_v10..." < "gepa_v2..."``,
-    with ``"gepa_v9..."`` greatest of all), which pinned newest-artifact
-    resolution to a stale version forever after the 10th save (#1496).
+    Primary key: the integer after the leading ``gepa_v``, compared
+    numerically — the highest lineage version wins "newest", regardless of the
+    timestamps embedded in the names. Lexicographic name order inverts at v10
+    (``"gepa_v10..." < "gepa_v2..."``, with ``"gepa_v9..."`` greatest of all),
+    which pinned newest-artifact resolution to a stale version forever after
+    the 10th save (#1496).
 
-    Tie-break: the full file name. Within one agent's directory the name embeds
-    a zero-padded ``YYYYMMDD_HHMMSS`` timestamp, so equal version numbers keep
-    resolving by save time — which is what today's always-``v1``
-    generate_version_id relies on.
+    Tie-break, only within one version: the full file name. Within one agent's
+    directory the name embeds a zero-padded ``YYYYMMDD_HHMMSS`` timestamp, so
+    equal lineage versions resolve by save time — which is what every artifact
+    saved before #1500 (when generate_version_id hardcoded ``v1``) relies on.
 
     A name with no parseable ``gepa_v<n>`` prefix sorts below every well-formed
     version (as version ``-1``): a file the saver could not have produced must
@@ -52,6 +59,10 @@ def gepa_artifact_sort_key(path: Path) -> tuple[int, str]:
 def newest_saved_artifact(directory: Path) -> Optional[Path]:
     """The newest ``gepa_*.json`` artifact in ``directory``, or None if none.
 
+    "Newest" means the highest lineage version (the ``gepa_v<n>`` number); the
+    timestamp embedded in the name is only the tie-break within a version —
+    see :func:`gepa_artifact_sort_key`.
+
     The single shared resolver for "which saved version is current":
     :func:`load_optimized_module` below and the cognitive-RAG reload probe both
     call this, so they cannot disagree on which artifact is newest (#1496).
@@ -62,7 +73,35 @@ def newest_saved_artifact(directory: Path) -> Optional[Path]:
     return max(versions, key=gepa_artifact_sort_key)
 
 
-def generate_version_id(agent_name: str, timestamp: Optional[datetime] = None) -> str:
+def next_artifact_version(directory: Path) -> int:
+    """The version number the next artifact saved into ``directory`` should get.
+
+    One more than the highest parseable ``gepa_v<n>`` among the ``gepa_*.json``
+    files already there; 1 when the directory does not exist, is empty, or
+    holds only names without a version (which :func:`gepa_artifact_sort_key`
+    ranks as -1 — they must not drag the next real version to 0).
+
+    ``v<n>`` records optimization lineage (the DB schema's ab_test_variant enum
+    and the domain vocabulary both define ``gepa_v2`` as "Second GEPA
+    iteration"), so every save of a re-optimized module advances it (#1500).
+    Before #1500 generate_version_id hardcoded ``v1``, which also meant two
+    saves within one second collided on the same file name.
+    """
+    if not directory.exists():
+        return 1
+    versions = [
+        int(match.group(1))
+        for path in directory.glob("gepa_*.json")
+        if (match := _GEPA_VERSION_RE.match(path.name))
+    ]
+    return max(versions) + 1 if versions else 1
+
+
+def generate_version_id(
+    agent_name: str,
+    timestamp: Optional[datetime] = None,
+    version: int = 1,
+) -> str:
     """Generate a unique version ID for an optimized module.
 
     Format: gepa_v{n}_{agent}_{timestamp}
@@ -70,13 +109,16 @@ def generate_version_id(agent_name: str, timestamp: Optional[datetime] = None) -
     Args:
         agent_name: Name of the agent
         timestamp: Optional timestamp (defaults to now)
+        version: The ``v<n>`` lineage number (defaults to 1 — correct when no
+            prior artifact exists; save_optimized_module passes
+            :func:`next_artifact_version` so re-optimizations increment, #1500)
 
     Returns:
         Version ID string
     """
     ts = timestamp or datetime.now()
     ts_str = ts.strftime("%Y%m%d_%H%M%S")
-    return f"gepa_v1_{agent_name}_{ts_str}"
+    return f"gepa_v{version}_{agent_name}_{ts_str}"
 
 
 def compute_instruction_hash(instruction: str) -> str:
@@ -108,17 +150,16 @@ def save_optimized_module(
     Args:
         module: Optimized DSPy module
         agent_name: Name of the agent
-        version_id: Optional version ID (auto-generated if None)
+        version_id: Optional version ID. When None, one is minted with the
+            next lineage version for this agent's directory and the file is
+            created exclusively — concurrent saves that mint the same name
+            advance to the next version instead of overwriting (#1500).
         output_dir: Directory to save modules
         metadata: Additional metadata to save
 
     Returns:
         Dict with save info (path, version_id, instruction_hash)
     """
-    # Generate version ID if not provided
-    if version_id is None:
-        version_id = generate_version_id(agent_name)
-
     # Create output directory
     output_path = Path(output_dir) / agent_name
     output_path.mkdir(parents=True, exist_ok=True)
@@ -142,6 +183,42 @@ def save_optimized_module(
     instruction_text = "\n---\n".join(instructions)
     instruction_hash = compute_instruction_hash(instruction_text)
 
+    # Resolve the target file. Auto-generated names must be created
+    # exclusively (O_CREAT | O_EXCL): next_artifact_version's directory scan
+    # and the write are not one atomic step, so a concurrent save for the same
+    # agent can observe the same on-disk max and mint the identical
+    # ``gepa_v{n}_{agent}_{ts}`` name in the same second. Losing that creation
+    # race advances to the next version — it never overwrites (#1500).
+    if version_id is not None:
+        # An explicit version_id is the caller's namespace: the caller owns
+        # collision semantics, and re-saving the same id replaces the file.
+        save_path = output_path / f"{version_id}.json"
+        artifact_file: IO[str] = open(save_path, "w")
+    else:
+        version = next_artifact_version(output_path)
+        ts = datetime.now()
+        reserved: Optional[IO[str]] = None
+        for offset in range(_VERSION_COLLISION_RETRIES):
+            candidate = generate_version_id(agent_name, timestamp=ts, version=version + offset)
+            candidate_path = output_path / f"{candidate}.json"
+            try:
+                fd = os.open(candidate_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                # A concurrent save (or a file the scan predates) holds this
+                # name — advance the lineage version and try again.
+                continue
+            version_id = candidate
+            save_path = candidate_path
+            reserved = os.fdopen(fd, "w")
+            break
+        if reserved is None:
+            raise FileExistsError(
+                f"Could not reserve an artifact name for agent {agent_name!r}: versions "
+                f"v{version}..v{version + _VERSION_COLLISION_RETRIES - 1} were all taken "
+                "by concurrent saves"
+            )
+        artifact_file = reserved
+
     # Build save data
     save_data = {
         "version_id": version_id,
@@ -154,9 +231,8 @@ def save_optimized_module(
     }
 
     # Save to file
-    save_path = output_path / f"{version_id}.json"
-    with open(save_path, "w") as f:
-        json.dump(save_data, f, indent=2, default=str)
+    with artifact_file:
+        json.dump(save_data, artifact_file, indent=2, default=str)
 
     return {
         "path": str(save_path),
@@ -192,8 +268,9 @@ def load_optimized_module(
 
     # Find version to load
     if version_id is None:
-        # Load latest version — numeric on the gepa_v<n> suffix (#1496): a
-        # plain name sort inverts at v10 and resolves a stale artifact forever.
+        # Load latest = highest lineage version, timestamp tie-break within a
+        # version (#1496): a plain name sort inverts at v10 and resolves a
+        # stale artifact forever.
         load_path_or_none = newest_saved_artifact(input_path)
         if load_path_or_none is None:
             raise FileNotFoundError(f"No saved versions for agent: {agent_name}")
@@ -337,6 +414,7 @@ def compare_versions(
 __all__ = [
     "gepa_artifact_sort_key",
     "newest_saved_artifact",
+    "next_artifact_version",
     "generate_version_id",
     "compute_instruction_hash",
     "save_optimized_module",

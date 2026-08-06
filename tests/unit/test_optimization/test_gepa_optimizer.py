@@ -10,6 +10,7 @@ Version: 4.3
 
 import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
@@ -597,6 +598,159 @@ class TestVersioning:
 
         assert len(versions) == 2
         assert all("version_id" in v for v in versions)
+
+    # -- #1500: auto-generated version ids must increment per save -----------
+
+    def test_generate_version_id_takes_explicit_version(self):
+        """#1500: the v<n> component is a parameter, defaulting to 1.
+
+        The default pins the pure-function contract that
+        scripts/gepa_integration_test.py asserts (``gepa_v1_`` with no
+        directory in sight): with no prior artifacts the first version IS 1.
+        """
+        from src.optimization.gepa.versioning import generate_version_id
+
+        assert generate_version_id("test_agent").startswith("gepa_v1_test_agent_")
+        assert generate_version_id("test_agent", version=7).startswith("gepa_v7_test_agent_")
+
+    def test_next_artifact_version_scans_directory(self, tmp_path):
+        """#1500: next version = max parsed gepa_v<n> on disk + 1.
+
+        A missing directory, an empty one, or one holding only names without a
+        parseable version (which gepa_artifact_sort_key ranks as -1) all mean
+        the next save is the first real version: 1.
+        """
+        from src.optimization.gepa.versioning import next_artifact_version
+
+        assert next_artifact_version(tmp_path / "never_saved") == 1
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        assert next_artifact_version(agent_dir) == 1
+
+        (agent_dir / "gepa_zzz_manual_copy.json").write_text("{}")
+        assert next_artifact_version(agent_dir) == 1
+
+        (agent_dir / "gepa_v3_agent_20251201_100000.json").write_text("{}")
+        assert next_artifact_version(agent_dir) == 4
+
+    def test_auto_version_increments_across_saves(self, mock_module, temp_output_dir):
+        """#1500: generate_version_id hardcoded ``gepa_v1_`` for every save.
+
+        Auto-named saves must mint v1 then v2 — under the hardcoded prefix two
+        saves in the same second even collided on one filename, silently
+        overwriting the first artifact. Latest-resolution must pick the v2.
+        """
+        from src.optimization.gepa.versioning import (
+            load_optimized_module,
+            save_optimized_module,
+        )
+
+        first = save_optimized_module(
+            module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+        )
+        second = save_optimized_module(
+            module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+        )
+
+        assert first["version_id"].startswith("gepa_v1_test_agent_")
+        assert second["version_id"].startswith("gepa_v2_test_agent_")
+        agent_dir = Path(temp_output_dir) / "test_agent"
+        assert len(list(agent_dir.glob("gepa_*.json"))) == 2
+
+        mock_cls = MagicMock()
+        mock_cls.return_value = MagicMock()
+        _, metadata = load_optimized_module(
+            module_cls=mock_cls, agent_name="test_agent", input_dir=temp_output_dir
+        )
+        assert metadata["version_id"] == second["version_id"]
+
+    def test_auto_version_outranks_legacy_v1_with_later_timestamp(
+        self, mock_module, temp_output_dir
+    ):
+        """#1500 backward compat with hardcoded-era artifacts already on disk.
+
+        Every pre-#1500 artifact is named ``gepa_v1_...``. A new auto save must
+        scan them, mint v2, and win "newest" even against a legacy v1 whose
+        embedded timestamp is LATER — the numeric version outranks the
+        timestamp tie-break in gepa_artifact_sort_key (#1496).
+        """
+        from src.optimization.gepa.versioning import (
+            newest_saved_artifact,
+            save_optimized_module,
+        )
+
+        # A legacy artifact exactly as the hardcoded-era saver named it, with a
+        # far-future timestamp in the name.
+        save_optimized_module(
+            module=mock_module,
+            agent_name="test_agent",
+            version_id="gepa_v1_test_agent_21001231_235959",
+            output_dir=temp_output_dir,
+        )
+
+        info = save_optimized_module(
+            module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+        )
+
+        assert info["version_id"].startswith("gepa_v2_test_agent_")
+        newest = newest_saved_artifact(Path(temp_output_dir) / "test_agent")
+        assert newest is not None
+        assert newest.name == f"{info['version_id']}.json"
+
+    def test_auto_save_never_overwrites_a_colliding_artifact(
+        self, mock_module, temp_output_dir, monkeypatch
+    ):
+        """#1500 iter-2: scan-then-write is a TOCTOU window, not a lock.
+
+        Two concurrent saves for one agent can both observe the same on-disk
+        max version, mint the identical ``gepa_v{n}_{agent}_{ts}`` name in the
+        same second, and the second plain ``open(..., "w")`` clobbers the
+        first — the original silent-overwrite mode, just narrowed.
+
+        Deterministic reproduction of that race (no flaky threads): freeze the
+        timestamp and pin the directory scan to a stale version, so this save
+        mints exactly the name a "concurrent" saver already wrote. The save
+        must leave that artifact untouched and land on the next version.
+        """
+        from src.optimization.gepa import versioning
+
+        frozen = datetime(2025, 12, 1, 10, 0, 0)
+
+        class _FrozenDatetime:
+            @staticmethod
+            def now() -> datetime:
+                return frozen
+
+        monkeypatch.setattr(versioning, "datetime", _FrozenDatetime)
+        # The stale scan: the concurrent saver's v1 already exists on disk,
+        # but this saver's scan predates it and still reports 1 as next.
+        monkeypatch.setattr(versioning, "next_artifact_version", lambda directory: 1)
+
+        agent_dir = Path(temp_output_dir) / "test_agent"
+        agent_dir.mkdir(parents=True)
+        collider = agent_dir / "gepa_v1_test_agent_20251201_100000.json"
+        sentinel = json.dumps(
+            {
+                "version_id": "gepa_v1_test_agent_20251201_100000",
+                "created_at": "2025-12-01T10:00:00",
+                "instruction_hash": "0" * 64,
+                "module_state": {},
+                "metadata": {"writer": "concurrent-saver"},
+            }
+        )
+        collider.write_text(sentinel)
+
+        info = versioning.save_optimized_module(
+            module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+        )
+
+        # The concurrent saver's artifact survives byte-for-byte...
+        assert collider.read_text() == sentinel
+        # ...and this save advanced past the occupied name instead.
+        assert info["version_id"] == "gepa_v2_test_agent_20251201_100000"
+        assert (agent_dir / "gepa_v2_test_agent_20251201_100000.json").exists()
+        assert len(list(agent_dir.glob("gepa_*.json"))) == 2
 
 
 class TestGEPAABTest:
