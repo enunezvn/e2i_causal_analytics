@@ -795,6 +795,80 @@ class TestVersioning:
         assert newest is not None
         assert newest.name == f"{good['version_id']}.json"
 
+    def test_failed_fdopen_leaves_no_orphan_reservation(
+        self, mock_module, temp_output_dir, monkeypatch
+    ):
+        """#1500 iter-4: cleanup must start the moment the reservation exists.
+
+        The iter-3 handler wrapped only json.dump, but os.fdopen (and the
+        save_data construction) run AFTER os.open(O_CREAT | O_EXCL) has
+        already created the file — a failure there left a 0-byte orphan that
+        filename-only newest resolution served as permanent "newest" (same
+        poisoned-newest class as the mid-dump case).
+        """
+        from src.optimization.gepa import versioning
+
+        good = versioning.save_optimized_module(
+            module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+        )
+        agent_dir = Path(temp_output_dir) / "test_agent"
+
+        def _explode(fd, *args, **kwargs):
+            raise RuntimeError("fdopen failure after reservation")
+
+        monkeypatch.setattr(versioning.os, "fdopen", _explode)
+
+        with pytest.raises(RuntimeError, match="fdopen failure after reservation"):
+            versioning.save_optimized_module(
+                module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+            )
+
+        # No orphan reservation: only the good artifact remains, and it is
+        # still what "newest" resolves to.
+        assert [p.name for p in agent_dir.glob("gepa_*.json")] == [f"{good['version_id']}.json"]
+        newest = versioning.newest_saved_artifact(agent_dir)
+        assert newest is not None
+        assert newest.name == f"{good['version_id']}.json"
+
+    def test_failed_explicit_resave_preserves_prior_artifact(self, mock_module, temp_output_dir):
+        """#1500 iter-4: an explicit-id replace must be atomic.
+
+        The explicit branch used open(path, "w"), which TRUNCATES on open: a
+        dump that died mid-stream destroyed the caller's prior artifact AND
+        left invalid JSON that filename-only newest resolution served as
+        "newest". The replace must dump to a same-directory temp and
+        os.replace only on success — a failed replace leaves the prior
+        artifact byte-for-byte and no temp file behind.
+        """
+        from src.optimization.gepa.versioning import save_optimized_module
+
+        class _ExplodesOnStr:
+            def __str__(self) -> str:
+                raise RuntimeError("mid-dump failure during replace")
+
+        vid = "gepa_v5_test_agent_20251201_100000"
+        save_optimized_module(
+            module=mock_module,
+            agent_name="test_agent",
+            version_id=vid,
+            output_dir=temp_output_dir,
+        )
+        artifact = Path(temp_output_dir) / "test_agent" / f"{vid}.json"
+        original = artifact.read_bytes()
+
+        with pytest.raises(RuntimeError, match="mid-dump failure during replace"):
+            save_optimized_module(
+                module=mock_module,
+                agent_name="test_agent",
+                version_id=vid,
+                output_dir=temp_output_dir,
+                metadata={"bad": _ExplodesOnStr()},
+            )
+
+        # Prior artifact intact byte-for-byte, and no temp litter either.
+        assert artifact.read_bytes() == original
+        assert [p.name for p in artifact.parent.iterdir()] == [artifact.name]
+
 
 class TestGEPAABTest:
     """Test GEPAABTest class for A/B testing optimized modules."""

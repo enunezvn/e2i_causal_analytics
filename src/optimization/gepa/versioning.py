@@ -154,7 +154,9 @@ def save_optimized_module(
         version_id: Optional version ID. When None, one is minted with the
             next lineage version for this agent's directory and the file is
             created exclusively — concurrent saves that mint the same name
-            advance to the next version instead of overwriting (#1500).
+            advance to the next version instead of overwriting (#1500). When
+            given, re-saving the same id replaces the existing artifact —
+            atomically, so a failed replace leaves the prior artifact intact.
         output_dir: Directory to save modules
         metadata: Additional metadata to save
 
@@ -184,73 +186,87 @@ def save_optimized_module(
     instruction_text = "\n---\n".join(instructions)
     instruction_hash = compute_instruction_hash(instruction_text)
 
-    # Resolve the target file. Auto-generated names must be created
-    # exclusively (O_CREAT | O_EXCL): next_artifact_version's directory scan
-    # and the write are not one atomic step, so a concurrent save for the same
-    # agent can observe the same on-disk max and mint the identical
-    # ``gepa_v{n}_{agent}_{ts}`` name in the same second. Losing that creation
-    # race advances to the next version — it never overwrites (#1500).
-    # The auto branch reassigns version_id below; remember which branch owns
-    # failure cleanup before it does.
-    auto_named = version_id is None
+    def _build_save_data(vid: str) -> dict[str, Any]:
+        return {
+            "version_id": vid,
+            "agent_name": agent_name,
+            "created_at": datetime.now().isoformat(),
+            "instruction_hash": instruction_hash,
+            "instructions": instructions,
+            "module_state": module_state,
+            "metadata": metadata or {},
+        }
+
     if version_id is not None:
         # An explicit version_id is the caller's namespace: the caller owns
-        # collision semantics, and re-saving the same id replaces the file.
+        # collision semantics, and re-saving the same id replaces the file —
+        # atomically. open(path, "w") would truncate on open, so a dump dying
+        # mid-stream destroyed the prior artifact AND left invalid JSON that
+        # newest_saved_artifact (filename-only) served as "newest". Dump to a
+        # same-directory temp (os.replace atomicity requires one filesystem)
+        # and replace only on success; a failed replace leaves the prior
+        # artifact intact byte-for-byte. The temp name does not match the
+        # resolver's ``gepa_*.json`` glob, so even a crash-orphaned temp is
+        # inert to resolution.
         save_path = output_path / f"{version_id}.json"
-        artifact_file: IO[str] = open(save_path, "w")
+        tmp_path = output_path / f"{version_id}.json.tmp.{os.getpid()}"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(_build_save_data(version_id), f, indent=2, default=str)
+            os.replace(tmp_path, save_path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp_path)
+            raise
     else:
+        # Auto-generated names must be created exclusively (O_CREAT | O_EXCL):
+        # next_artifact_version's directory scan and the write are not one
+        # atomic step, so a concurrent save for the same agent can observe the
+        # same on-disk max and mint the identical ``gepa_v{n}_{agent}_{ts}``
+        # name in the same second. Losing that creation race advances to the
+        # next version — it never overwrites (#1500).
         version = next_artifact_version(output_path)
         ts = datetime.now()
-        reserved: Optional[IO[str]] = None
         for offset in range(_VERSION_COLLISION_RETRIES):
             candidate = generate_version_id(agent_name, timestamp=ts, version=version + offset)
             candidate_path = output_path / f"{candidate}.json"
             try:
                 fd = os.open(candidate_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                # A concurrent save (or a file the scan predates) holds this
-                # name — advance the lineage version and try again.
+                # The retry signal — no file was created on this failure. A
+                # concurrent save (or a file the scan predates) holds this
+                # name: advance the lineage version and try again.
                 continue
+            # From here the reservation exists on disk. ANY failure before a
+            # complete dump — fdopen, payload construction, serialization —
+            # must unlink it: newest_saved_artifact resolves by filename
+            # alone, so a leftover empty/partial file would become the
+            # permanent "newest" (JSONDecodeError on direct loads; the
+            # cognitive-RAG fail-soft wrapper silently pinned to the base
+            # prompt on every retry).
+            try:
+                try:
+                    artifact_file: IO[str] = os.fdopen(fd, "w")
+                except BaseException:
+                    # fdopen failed, so the raw fd is still ours to close.
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    raise
+                with artifact_file:
+                    json.dump(_build_save_data(candidate), artifact_file, indent=2, default=str)
+            except BaseException:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(candidate_path)
+                raise
             version_id = candidate
             save_path = candidate_path
-            reserved = os.fdopen(fd, "w")
             break
-        if reserved is None:
+        else:
             raise FileExistsError(
                 f"Could not reserve an artifact name for agent {agent_name!r}: versions "
                 f"v{version}..v{version + _VERSION_COLLISION_RETRIES - 1} were all taken "
                 "by concurrent saves"
             )
-        artifact_file = reserved
-
-    # Build save data
-    save_data = {
-        "version_id": version_id,
-        "agent_name": agent_name,
-        "created_at": datetime.now().isoformat(),
-        "instruction_hash": instruction_hash,
-        "instructions": instructions,
-        "module_state": module_state,
-        "metadata": metadata or {},
-    }
-
-    # Save to file. For auto-named saves the file was reserved with O_EXCL
-    # above, and json.dump streams into it: an exception mid-serialization (a
-    # value str() cannot render past ``default=str``, disk full) would
-    # otherwise flush-and-close a PARTIAL file — which newest_saved_artifact,
-    # resolving by filename alone, would then serve as the permanent "newest"
-    # (JSONDecodeError on direct loads; the cognitive-RAG fail-soft wrapper
-    # silently pinned to the base prompt). Unlink the reservation and let the
-    # original exception fly. Explicit version_id keeps its caller-owned
-    # replace semantics — no cleanup there.
-    try:
-        with artifact_file:
-            json.dump(save_data, artifact_file, indent=2, default=str)
-    except BaseException:
-        if auto_named:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(save_path)
-        raise
 
     return {
         "path": str(save_path),
