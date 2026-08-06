@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import dspy
 from dspy.teleprompt import MIPROv2
 
+from src.rag.retrieved_chunks import chunk_payload
+
 logger = logging.getLogger(__name__)
 
 # Conditional GEPA import
@@ -111,35 +113,19 @@ class Evidence:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-# Per-chunk cap for learning_signals.retrieved_chunks (#1489). Retrieval
-# chunks are normally hundreds to a couple of thousand characters, so this cap
-# is not reached on real traffic; it exists so one pathological evidence item
-# cannot write an unbounded JSONB blob on a live turn. A cut chunk is MARKED
-# (``truncated``) rather than silently shortened — an unmarked cut would
-# understate what the answer was grounded in, and faithfulness is judged
-# against exactly this text.
-MAX_CHUNK_CONTENT_CHARS = 4000
-
-
 def _chunks_from_evidence(evidence_board: List["Evidence"]) -> List[Dict[str, Any]]:
     """Evidence the turn really retrieved, as the retrieved_chunks payload.
 
     Every evidence item produces exactly one chunk: dropping any would
     misreport what retrieval returned, and the parallel ``retrieval_scores``
-    array is index-aligned with this list.
+    array is index-aligned with this list. The cap and the truncation marker
+    live in ``src.rag.retrieved_chunks`` so this producer and the rubric-node
+    one cannot drift on the shape of a shared column.
     """
-    chunks: List[Dict[str, Any]] = []
-    for item in evidence_board:
-        content = str(item.content)
-        chunk: Dict[str, Any] = {
-            "content": content[:MAX_CHUNK_CONTENT_CHARS],
-            "source": item.source.value,
-            "hop": item.hop_number,
-        }
-        if len(content) > MAX_CHUNK_CONTENT_CHARS:
-            chunk["truncated"] = True
-        chunks.append(chunk)
-    return chunks
+    return [
+        chunk_payload(item.content, source=item.source.value, hop=item.hop_number)
+        for item in evidence_board
+    ]
 
 
 @dataclass

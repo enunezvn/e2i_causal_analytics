@@ -140,7 +140,7 @@ def test_oversized_chunk_content_is_capped_and_marked():
     turn. The cap is per-chunk and marked, so a reader can tell a truncated
     chunk from a short one — an unmarked cut would silently understate what
     the answer was grounded in."""
-    from src.rag.cognitive_rag_dspy import MAX_CHUNK_CONTENT_CHARS
+    from src.rag.retrieved_chunks import MAX_CHUNK_CONTENT_CHARS
 
     state = _state_with_evidence([_evidence("x" * (MAX_CHUNK_CONTENT_CHARS + 500), 0.7)])
     signals = _reflector()._collect_training_signals(state, user_feedback=None)
@@ -164,8 +164,29 @@ def test_short_chunk_is_not_marked_truncated():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def real_learning_signal_input(monkeypatch):
+    """Undo a co-located module's import-time sys.modules stubbing.
+
+    ``test_cognitive_backends.py`` replaces ``src.memory.procedural_memory``
+    with a MagicMock while it imports ``cognitive_backends``, then restores
+    sys.modules — but ``cognitive_backends.LearningSignalInput`` stays bound to
+    the mock for the rest of the process. Its comment says nothing leaks "under
+    pytest-xdist loadscope"; this repo's lanes run ``-n 0``, where it does. Without
+    this fixture these two tests pass alone and fail in a full run, which is a
+    guard that guards nothing.
+    """
+    from src.memory.procedural_memory import LearningSignalInput
+    from src.rag import cognitive_backends
+
+    monkeypatch.setattr(cognitive_backends, "LearningSignalInput", LearningSignalInput)
+    return LearningSignalInput
+
+
 @pytest.mark.asyncio
-async def test_signal_collector_passes_chunks_into_learning_signal_input(monkeypatch):
+async def test_signal_collector_passes_chunks_into_learning_signal_input(
+    monkeypatch, real_learning_signal_input
+):
     """RED: ``SignalCollector.collect`` built ``LearningSignalInput`` from four
     keys only, so a chunk payload on the signal dict was dropped on the floor
     between the Reflector and the writer."""
@@ -199,7 +220,9 @@ async def test_signal_collector_passes_chunks_into_learning_signal_input(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_signal_collector_omits_chunks_when_the_signal_has_none(monkeypatch):
+async def test_signal_collector_omits_chunks_when_the_signal_has_none(
+    monkeypatch, real_learning_signal_input
+):
     """The summarizer/investigator signals carry no chunks; the writer strips
     None, leaving the column at its '[]' default rather than writing a null."""
     from src.rag import cognitive_backends
