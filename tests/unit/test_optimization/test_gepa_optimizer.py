@@ -752,6 +752,49 @@ class TestVersioning:
         assert (agent_dir / "gepa_v2_test_agent_20251201_100000.json").exists()
         assert len(list(agent_dir.glob("gepa_*.json"))) == 2
 
+    def test_failed_auto_save_leaves_no_partial_artifact(self, mock_module, temp_output_dir):
+        """#1500 iter-3: a dump failure must not leave the reserved file behind.
+
+        json.dump streams into the exclusively-created file, so an exception
+        mid-serialization (a value str() cannot render past ``default=str``,
+        disk full) used to flush-and-close a PARTIAL file — and because
+        newest_saved_artifact resolves by filename alone, that corrupt
+        artifact became the permanent "newest": a direct
+        load_optimized_module(version_id=None) raises JSONDecodeError, and the
+        cognitive-RAG fail-soft wrapper silently pins the base prompt on every
+        retry. The reservation must be unlinked and the original exception
+        re-raised.
+        """
+        from src.optimization.gepa.versioning import (
+            newest_saved_artifact,
+            save_optimized_module,
+        )
+
+        class _ExplodesOnStr:
+            def __str__(self) -> str:
+                raise RuntimeError("mid-dump serialization failure")
+
+        # A good artifact that must still be "newest" after the failed save.
+        good = save_optimized_module(
+            module=mock_module, agent_name="test_agent", output_dir=temp_output_dir
+        )
+        agent_dir = Path(temp_output_dir) / "test_agent"
+
+        with pytest.raises(RuntimeError, match="mid-dump serialization failure"):
+            save_optimized_module(
+                module=mock_module,
+                agent_name="test_agent",
+                output_dir=temp_output_dir,
+                metadata={"bad": _ExplodesOnStr()},
+            )
+
+        # The failed save's reservation is gone: only the good artifact
+        # remains, and it is still what "newest" resolves to.
+        assert [p.name for p in agent_dir.glob("gepa_*.json")] == [f"{good['version_id']}.json"]
+        newest = newest_saved_artifact(agent_dir)
+        assert newest is not None
+        assert newest.name == f"{good['version_id']}.json"
+
 
 class TestGEPAABTest:
     """Test GEPAABTest class for A/B testing optimized modules."""

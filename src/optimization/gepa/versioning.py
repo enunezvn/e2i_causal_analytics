@@ -9,6 +9,7 @@ Integrates with:
 - Local file system for module persistence
 """
 
+import contextlib
 import hashlib
 import json
 import os
@@ -189,6 +190,9 @@ def save_optimized_module(
     # agent can observe the same on-disk max and mint the identical
     # ``gepa_v{n}_{agent}_{ts}`` name in the same second. Losing that creation
     # race advances to the next version — it never overwrites (#1500).
+    # The auto branch reassigns version_id below; remember which branch owns
+    # failure cleanup before it does.
+    auto_named = version_id is None
     if version_id is not None:
         # An explicit version_id is the caller's namespace: the caller owns
         # collision semantics, and re-saving the same id replaces the file.
@@ -230,9 +234,23 @@ def save_optimized_module(
         "metadata": metadata or {},
     }
 
-    # Save to file
-    with artifact_file:
-        json.dump(save_data, artifact_file, indent=2, default=str)
+    # Save to file. For auto-named saves the file was reserved with O_EXCL
+    # above, and json.dump streams into it: an exception mid-serialization (a
+    # value str() cannot render past ``default=str``, disk full) would
+    # otherwise flush-and-close a PARTIAL file — which newest_saved_artifact,
+    # resolving by filename alone, would then serve as the permanent "newest"
+    # (JSONDecodeError on direct loads; the cognitive-RAG fail-soft wrapper
+    # silently pinned to the base prompt). Unlink the reservation and let the
+    # original exception fly. Explicit version_id keeps its caller-owned
+    # replace semantics — no cleanup there.
+    try:
+        with artifact_file:
+            json.dump(save_data, artifact_file, indent=2, default=str)
+    except BaseException:
+        if auto_named:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(save_path)
+        raise
 
     return {
         "path": str(save_path),
