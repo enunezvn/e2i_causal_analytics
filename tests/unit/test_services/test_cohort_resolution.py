@@ -100,6 +100,54 @@ def test_unrecognized_brand_returns_none_without_db_call():
     assert fake.recorder["table"] is None
 
 
+# ---------------------------------------------------------------------------
+# #1505 consolidation guardrails
+#
+# The brand/region resolvers now live in src/services/enum_labels.py, shared
+# with the chat KPI tool. That tool resolves the platform's region SYNONYMS
+# ("NE", "North East", "central"); this service must NOT inherit them by
+# accident. Widening what a cohort query accepts is a product decision about a
+# fail-closed contract, so it stays strict until asked for — these tests are
+# the alarm that would fire if consolidation loosened it silently.
+# ---------------------------------------------------------------------------
+
+
+def test_region_synonyms_still_fail_closed():
+    for synonym in ("NE", "new england", "central", "Pacific", "southern", "nw"):
+        fake = _FakeSupabase(_rows(3))
+        frame = resolve_cohort_frame("Kisqali", synonym, supabase_client=fake)
+        assert frame is None, synonym
+        assert fake.recorder["table"] is None, synonym
+
+
+def test_region_separator_variants_still_fail_closed():
+    for variant in ("North East", "north-east", "mid west", "north_east"):
+        fake = _FakeSupabase(_rows(3))
+        frame = resolve_cohort_frame("Kisqali", variant, supabase_client=fake)
+        assert frame is None, variant
+        assert fake.recorder["table"] is None, variant
+
+
+def test_brand_aliases_fail_closed():
+    # "remi" is an entity-extraction alias, not a brand_type label.
+    for alias in ("remi", "btk inhibitor", "ribociclib"):
+        fake = _FakeSupabase(_rows(3))
+        frame = resolve_cohort_frame(alias, "northeast", supabase_client=fake)
+        assert frame is None, alias
+        assert fake.recorder["table"] is None, alias
+
+
+def test_resolvers_are_the_shared_ones_in_strict_mode():
+    from src.services import enum_labels
+
+    assert cohort_resolution._normalize_brand is enum_labels.resolve_brand_label
+    # No second copy of the label tables may survive the consolidation.
+    assert not hasattr(cohort_resolution, "_BRAND_CANONICAL")
+    assert not hasattr(cohort_resolution, "_REGION_CANONICAL")
+    for label in enum_labels.REGION_ENUM_LABELS:
+        assert cohort_resolution._normalize_region(label.title()) == label
+
+
 def test_empty_result_returns_none():
     fake = _FakeSupabase([])
     frame = resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)

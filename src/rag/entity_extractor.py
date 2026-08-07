@@ -25,19 +25,17 @@ from typing import Any, Dict, List, Optional
 from src.rag.exceptions import EntityExtractionError
 from src.rag.types import ExtractedEntities
 
+# Region aliases for NLP matching, re-exported from the shared enum-label
+# module (#1505). The table moved OUT of this module because cohort resolution
+# needs it too and cannot afford this package's import weight (measured:
+# importing src.rag.entity_extractor costs src.services +7741 modules / +16.9 s
+# via src/rag/__init__; the reverse edge is +0). Entity extraction and the chat
+# KPI tool's region_type normalization therefore read one table, not two.
+from src.services.enum_labels import REGION_ALIASES, REGION_ENUM_LABELS
+
 logger = logging.getLogger(__name__)
 
-# Region aliases for NLP matching. Module-level (hoisted from
-# EntityVocabulary.from_default, #1501) so other layers — e.g. the chat KPI
-# tool's region_type normalization in src/api/routes/chatbot_tools.py — can
-# reuse the SAME table instead of hand-copying it. Keys are the canonical
-# region_type enum labels; values are the phrasings entity extraction accepts.
-REGION_ALIASES: Dict[str, List[str]] = {
-    "northeast": ["northeast", "ne", "north east", "new england"],
-    "south": ["south", "southeast", "se", "southwest", "sw", "southern"],
-    "midwest": ["midwest", "mw", "mid west", "central"],
-    "west": ["west", "pacific", "northwest", "nw", "western"],
-}
+__all__ = ["REGION_ALIASES", "REGION_ENUM_LABELS", "EntityExtractor", "EntityVocabulary"]
 
 
 @dataclass
@@ -75,9 +73,13 @@ class EntityVocabulary:
             vocab.get_journey_stages()
             vocab.get_hcp_segments()
         except Exception:
-            # Fallback if VocabularyRegistry unavailable
+            # Fallback if VocabularyRegistry unavailable. Regions come from the
+            # shared region_type label set (#1505) rather than a hand-copied
+            # literal. Brands stay a narrower literal ON PURPOSE: brand_type
+            # also carries "competitor" and "other", and admitting those as
+            # extraction tokens would match those common words in any query.
             canonical_brands = ["Remibrutinib", "Fabhalta", "Kisqali"]
-            canonical_regions = ["northeast", "south", "midwest", "west"]
+            canonical_regions = list(REGION_ENUM_LABELS)
 
         # Build brands with extraction-friendly aliases
         # Canonical names from VocabularyRegistry, aliases for NLP matching
