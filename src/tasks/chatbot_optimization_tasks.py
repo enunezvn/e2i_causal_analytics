@@ -83,10 +83,17 @@ STALE_HOURS_ENV = "CHATBOT_OPT_STALE_HOURS"
 _DEFAULT_STALE_HOURS = 168  # 7 days: a 4-module burst at 1 execution/day fits
 
 # 'processing' rows older than this are treated as orphaned by a dead worker
-# and returned to 'pending'. Must comfortably exceed the longest plausible GEPA
-# run so a live run is never yanked from under its worker.
+# and returned to 'pending'. Safety anchor (codex iter-1 MEDIUM): re-pending a
+# STILL-RUNNING job would allow double execution, but celery kills every task
+# at task_time_limit=7200 (2h hard limit, src/workers/celery_app.py) — so a
+# 'processing' row older than the floor below CANNOT belong to a live run on
+# this deployment. The floor (3h > the 2h hard limit; pinned against
+# celery_app.conf by a unit test) keeps that guarantee even if an operator
+# sets a tiny value; the 12h default adds comfortable margin. This anchoring
+# is why no ownership-token/heartbeat lease machinery is needed here.
 ZOMBIE_HOURS_ENV = "CHATBOT_OPT_ZOMBIE_HOURS"
 _DEFAULT_ZOMBIE_HOURS = 12
+_ZOMBIE_HOURS_FLOOR = 3
 
 # Producer threshold, passed through to submit_signals_for_optimization.
 MIN_SIGNALS_ENV = "CHATBOT_OPT_MIN_SIGNALS"
@@ -121,11 +128,27 @@ def _stale_hours() -> int:
 
 
 def _zombie_hours() -> int:
-    return _int_env(ZOMBIE_HOURS_ENV, _DEFAULT_ZOMBIE_HOURS, floor=1)
+    return _int_env(ZOMBIE_HOURS_ENV, _DEFAULT_ZOMBIE_HOURS, floor=_ZOMBIE_HOURS_FLOOR)
 
 
 def _min_signals() -> int:
     return _int_env(MIN_SIGNALS_ENV, _DEFAULT_MIN_SIGNALS, floor=1)
+
+
+def _service_key_configured() -> bool:
+    """Whether a service-role key is available to the client factory.
+
+    codex iter-1 HIGH: ``get_async_supabase_service_client`` silently falls
+    back to the ANON key when neither service-key env var is set — and 035's
+    RLS grants queue writes to service_role ONLY, so under an anon client the
+    CAS claim would no-op and every cycle would report 'completed' with
+    nothing executed, indistinguishable from an empty queue. The drainer
+    refuses to run instead (a LOUD failed cycle). The env names mirror the
+    factory's own selection order.
+    """
+    return bool(
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
+    )
 
 
 async def _get_client() -> Optional[Any]:
@@ -210,7 +233,9 @@ async def _produce_requests(client: Any) -> Optional[Dict[str, Any]]:
     # Function-local: the routes module imports dspy at module top.
     from src.api.routes.chatbot_dspy import submit_signals_for_optimization
 
-    produced = await submit_signals_for_optimization(min_signals=_min_signals())
+    produced = cast(
+        Dict[str, Any], await submit_signals_for_optimization(min_signals=_min_signals())
+    )
     logger.info("chatbot optimization drainer: producer result %s", produced)
     return produced
 
@@ -292,6 +317,16 @@ async def _drain_cycle(force: bool = False) -> Dict[str, Any]:
         )
         logger.info("chatbot optimization drain skipped: %s", reason)
         return {"status": "skipped", "reason": reason}
+
+    if not _service_key_configured():
+        reason = (
+            "no service-role key configured (SUPABASE_SERVICE_ROLE_KEY / "
+            "SUPABASE_SERVICE_KEY): 035's RLS grants queue writes to service_role "
+            "only, so an anon-key client would silently no-op the claim and report "
+            "empty cycles — refusing to run"
+        )
+        logger.error("chatbot optimization drain failed: %s", reason)
+        return {"status": "failed", "reason": reason}
 
     client = await _get_client()
     if client is None:

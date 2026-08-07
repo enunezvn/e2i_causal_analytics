@@ -43,7 +43,13 @@ FACTORY = "src.memory.services.factories.get_async_supabase_service_client"
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    """Start every test from the shipped default: gate unset (fail-closed)."""
+    """Start every test from the shipped default: gate unset (fail-closed).
+
+    A dummy service key is set because the drainer refuses to run without one
+    (codex iter-1 HIGH: an anon-key client would silently no-op the CAS claim
+    under 035's RLS); the DB itself is always a fake here, so the value is
+    never used as a credential.
+    """
     for var in (
         drain_mod.DRAIN_ENABLED_ENV,
         drain_mod.DRAIN_MAX_PER_CYCLE_ENV,
@@ -52,6 +58,7 @@ def _clean_env(monkeypatch):
         drain_mod.MIN_SIGNALS_ENV,
     ):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-service-key-not-a-credential")
     yield
 
 
@@ -439,3 +446,44 @@ class TestCeleryWiring:
             result = await drain_mod._drain_cycle()
         assert result["status"] == "failed"
         assert "database" in result["reason"].lower()
+
+
+# =============================================================================
+# Silent-degradation guards (codex iter-1)
+# =============================================================================
+
+
+class TestSilentDegradationGuards:
+    @pytest.mark.asyncio
+    async def test_missing_service_key_fails_the_cycle_loudly(self, monkeypatch):
+        """codex iter-1 HIGH: the client factory silently falls back to the
+        ANON key, and 035's RLS grants queue writes to service_role ONLY — an
+        anon client would no-op the CAS claim and every cycle would report
+        'completed' with nothing executed. No service key => a LOUD failed
+        cycle before any client is even built."""
+        _enable(monkeypatch)
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        factory = AsyncMock(side_effect=AssertionError("client built without a service key"))
+        with patch(FACTORY, new=factory):
+            result = await drain_mod._drain_cycle()
+        assert result["status"] == "failed"
+        assert "service" in result["reason"].lower()
+        factory.assert_not_awaited()
+
+    def test_zombie_floor_exceeds_celery_hard_time_limit(self, monkeypatch):
+        """codex iter-1 MEDIUM: re-pending a STILL-RUNNING GEPA job would allow
+        double execution. On this deployment that cannot happen because celery
+        kills every task at task_time_limit=7200 (2h) — but only while the
+        zombie cutoff stays ABOVE that limit. Pin the floor (3h > 2h hard
+        limit) so an operator setting a tiny value cannot re-open the race."""
+        monkeypatch.setenv(drain_mod.ZOMBIE_HOURS_ENV, "1")
+        assert drain_mod._zombie_hours() == 3
+
+        from src.workers.celery_app import celery_app
+
+        hard_limit_hours = celery_app.conf.task_time_limit / 3600
+        assert drain_mod._ZOMBIE_HOURS_FLOOR > hard_limit_hours, (
+            "zombie floor must exceed the celery hard time limit, or a live "
+            "run could be re-pended and double-executed"
+        )
