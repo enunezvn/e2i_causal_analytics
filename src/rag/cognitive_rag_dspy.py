@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 import dspy
 
+from src.rag.retrieved_chunks import chunk_payload
+
 logger = logging.getLogger(__name__)
 
 # GEPA availability probe. Nothing in this module runs an optimization any more:
@@ -112,6 +114,21 @@ class Evidence:
     content: str
     relevance_score: float
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def _chunks_from_evidence(evidence_board: List["Evidence"]) -> List[Dict[str, Any]]:
+    """Evidence the turn really retrieved, as the retrieved_chunks payload.
+
+    Every evidence item produces exactly one chunk: dropping any would
+    misreport what retrieval returned, and the parallel ``retrieval_scores``
+    array is index-aligned with this list. The cap and the truncation marker
+    live in ``src.rag.retrieved_chunks`` so this producer and the rubric-node
+    one cannot drift on the shape of a shared column.
+    """
+    return [
+        chunk_payload(item.content, source=item.source.value, hop=item.hop_number)
+        for item in evidence_board
+    ]
 
 
 @dataclass
@@ -1072,7 +1089,18 @@ class ReflectorModule(dspy.Module):
             }
         )
 
-        # Signal for Agent/Synthesis optimization
+        # Signal for Agent/Synthesis optimization.
+        #
+        # #1489 deferral 1: this is the ONLY signal that carries the turn's
+        # retrieved evidence. database/ml/022 added learning_signals
+        # .retrieved_chunks / .retrieval_scores "for RAGAS evaluation" and
+        # never got a producer (3,959 rows, 0 populated, measured 2026-08-06);
+        # the evidence has always been right here in state.evidence_board.
+        # Attaching it to the summarizer/investigator signals too would store
+        # one turn's retrieval three times and make any per-row count of
+        # retrieved chunks read 3x the truth — and it is THIS row whose
+        # ``response`` those chunks grounded, so it is the row a RAGAS judge
+        # scores. No LLM call is added: the evidence is already in the state.
         signals.append(
             {
                 "type": "agent",
@@ -1080,6 +1108,8 @@ class ReflectorModule(dspy.Module):
                 "response": state.response[:500] if state.response else "",
                 "reward": agent_reward,
                 "feedback": {"user_feedback": user_feedback} if user_feedback else None,
+                "retrieved_chunks": _chunks_from_evidence(state.evidence_board),
+                "retrieval_scores": [float(e.relevance_score) for e in state.evidence_board],
                 "metadata": {
                     "routed_agents": state.routed_agents,
                     "has_visualization": bool(state.visualization_config),

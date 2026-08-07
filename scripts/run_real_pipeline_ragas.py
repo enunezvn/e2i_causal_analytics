@@ -46,6 +46,7 @@ for a box that has ragas and OPENAI_API_KEY locally.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -59,6 +60,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.rag.ragas_persistence import (  # noqa: E402
+    RagasPersistenceError,
+    judged_turns,
+    persist_judged_turns,
+)
 from src.rag.real_pipeline_eval import (  # noqa: E402
     MIN_HIT_CONDITIONED_RELEVANCY,
     MIN_REAL_PIPELINE_SAMPLES,
@@ -235,6 +241,69 @@ def run_judge(
     return parse_judge_output(proc.stdout)
 
 
+async def _build_writers(persist_signals: bool) -> Tuple[Any, Any]:
+    """The #1487 writers, both of which shipped with no caller.
+
+    One async seam rather than two sync factories because
+    ``get_async_supabase_client`` is a COROUTINE and both writers share the
+    client it returns. Imports are local: this script is also read by
+    ``--dry-run``-style invocations that never persist, and the feedback
+    learner package is heavy.
+
+    Returns:
+        ``(evaluation_results_repository, rubric_node_or_None)``. The rubric
+        node is built only for ``--persist-signals`` — it JUDGES, one Anthropic
+        call per sample, on top of the gpt-4o judging already done.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.evaluation_results import get_evaluation_results_repository
+
+    client = await get_async_supabase_client()
+    eval_repo = get_evaluation_results_repository(supabase_client=client)
+
+    rubric_node = None
+    if persist_signals:
+        from src.agents.feedback_learner.nodes.rubric_node import RubricNode
+
+        rubric_node = RubricNode(db_client=client)
+    return eval_repo, rubric_node
+
+
+def _write_report(path: Path, report: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        json.dump(report, fh, indent=2)
+
+
+def persist_run(
+    block: Dict[str, Any],
+    records: Sequence[Dict[str, Any]],
+    persist_signals: bool,
+) -> Dict[str, Any]:
+    """Write this run's judged samples into the self-improvement schema.
+
+    The join is done BEFORE any writer is built, so a provenance failure
+    (an unjoinable sample, a heuristic-contaminated one) costs no DB
+    connection and writes nothing.
+
+    Persistence deliberately survives a FAILING verdict — a regression has to
+    reach the trend view or the view cannot show one. It does NOT survive a
+    block that cannot be reconciled against its own rows; ``judged_turns``
+    enforces that for every caller, not just this one.
+
+    Raises:
+        RagasPersistenceError: The block is inconsistent, or any turn could
+            not be persisted faithfully.
+    """
+    turns = judged_turns(block, records, judge_model=JUDGE_MODEL)
+
+    async def _run() -> Dict[str, Any]:
+        eval_repo, rubric_node = await _build_writers(persist_signals)
+        return await persist_judged_turns(turns, eval_repo=eval_repo, rubric_node=rubric_node)
+
+    return asyncio.run(_run())
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -296,6 +365,25 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None, help="Write the JSON report here")
     parser.add_argument(
         "--fail-on-threshold", action="store_true", help="Exit 1 when the gates block"
+    )
+    parser.add_argument(
+        "--no-persist",
+        dest="persist",
+        action="store_false",
+        help=(
+            "Do NOT write the judged samples to evaluation_results. Persistence is "
+            "on by default (#1489): the schema exists to hold exactly these numbers, "
+            "and a default-off flag is how #1487's writers ended up with no callers."
+        ),
+    )
+    parser.add_argument(
+        "--persist-signals",
+        action="store_true",
+        help=(
+            "Also write a learning_signals row per sample carrying ragas_scores + "
+            "retrieved_chunks. Opt-in because it runs the RUBRIC judge (one "
+            "Anthropic call per sample) on top of the gpt-4o judging already done."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -362,10 +450,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         hit_conditioned_floor=args.hit_conditioned_relevancy,
     )
 
+    # Write the report BEFORE touching the database. This file is the durable
+    # record of several minutes of gpt-4o judging; the rows are derived from
+    # it. A DB outage must cost the rows, never the run.
     if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w") as fh:
-            json.dump(report, fh, indent=2)
+        _write_report(args.output, report)
         logger.info("report -> %s", args.output)
 
     print("-" * 64)
@@ -397,6 +486,49 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         print("GATES PASSED")
 
+    # #1489: land the judged samples in the schema #1487 built for them.
+    #
+    # Regardless of the VERDICT. Persisting only passing runs would make
+    # v_ragas_performance_trends survivorship-biased — a "daily RAGAS metric
+    # trends for monitoring" view that can only ever contain runs which
+    # already cleared the thresholds is structurally incapable of showing a
+    # decline, which is the one thing it exists to show. A faithfulness of
+    # 0.12 IS the measurement; the gate's job is to say so loudly and set the
+    # exit code, not to keep the number out of the table.
+    #
+    # Trustworthiness is enforced ROW-WISE instead, which is where it belongs:
+    # judged_turns refuses heuristic-contaminated samples, unjoinable
+    # provenance and malformed blocks, and a turn with no measured metric is
+    # skipped and counted. A judge that crashed never reaches here at all
+    # (JudgeOutputError, above).
+    persistence_failed = False
+    if args.persist:
+        try:
+            report["persistence"] = persist_run(block, records, args.persist_signals)
+        except RagasPersistenceError as exc:
+            persistence_failed = True
+            report["persistence"] = {**exc.summary, "error": str(exc)}
+            print(f"PERSISTENCE FAILED: {exc}")
+        except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
+            persistence_failed = True
+            report["persistence"] = {"error": f"{type(exc).__name__}: {exc}"}
+            print(f"PERSISTENCE FAILED: {type(exc).__name__}: {exc}")
+        else:
+            written = report["persistence"]
+            print(
+                f"persisted: {written['evaluation_results_written']} evaluation_results, "
+                f"{written['learning_signals_written']} learning_signals"
+                + (
+                    f", {len(written['skipped_unscored'])} skipped (no measured metric)"
+                    if written["skipped_unscored"]
+                    else ""
+                )
+            )
+        if args.output:
+            _write_report(args.output, report)
+
+    if persistence_failed:
+        return 1
     if not passed and args.fail_on_threshold:
         return 1
     return 0

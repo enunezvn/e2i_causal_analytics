@@ -32,6 +32,13 @@ from ..state import FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
 
+# This repo has TWO near-anagram fallback vocabularies — the rubric evaluator
+# stamps "heuristic_fallback", RAGAS stamps "fallback_heuristic" — so matching
+# either exact string lets the other through. Key on the substring they share,
+# exactly as ``ragas_scoring`` does; no judged-path label ("llm", None)
+# contains it.
+_HEURISTIC_MARKER = "heuristic"
+
 
 class RubricNode:
     """
@@ -302,6 +309,22 @@ class RubricNode:
             # whole insert (the exact failure family this fix closes); the
             # agent list is preserved in signal_details.context_summary.
 
+            # #1489: the evidence the answer was grounded in. Migration 022
+            # added ``retrieved_chunks`` "for RAGAS evaluation" and it had no
+            # producer on any path, so a row could carry a faithfulness score
+            # with no record of what it was faithful TO. Written only when the
+            # context actually carries contexts — absence keeps the column at
+            # its '[]' default rather than publishing an empty list that would
+            # read as a measured zero-retrieval turn. Shape is shared with the
+            # cognitive Reflector's producer (src/rag/retrieved_chunks.py).
+            if context.retrieved_contexts:
+                # Imported here, not at module top: ``src.rag`` package init
+                # eagerly loads DSPy (~714 MB), and this module sits on the
+                # health_score fast path where that import is forbidden.
+                from src.rag.retrieved_chunks import chunks_from_texts
+
+                signal_data["retrieved_chunks"] = chunks_from_texts(context.retrieved_contexts)
+
             if ragas is not None:
                 # combined_score stays NULL unless BOTH halves are real. The
                 # column's COMMENT documents a two-half blend, so a rubric-only
@@ -330,6 +353,54 @@ class RubricNode:
         except Exception as e:
             logger.warning("Failed to store rubric evaluation: %s", e)
             return None
+
+    async def evaluate_and_store(
+        self,
+        context: EvaluationContext,
+        ragas: Optional[RagasBundle] = None,
+    ) -> Optional[str]:
+        """Judge one (query, response) pair and persist it. The producer seam.
+
+        #1487 added the ``ragas=`` parameter to ``_store_evaluation`` and made
+        it return the inserted ``signal_id`` "so a caller can link an
+        ``evaluation_results`` row to it" — but left both reachable only from
+        inside this class, so the offline producer #1489 wires had no public
+        way in. Reaching into ``_store_evaluation`` from a batch script would
+        couple it to a private method; this is that method's public face.
+
+        Unlike :meth:`execute` (a graph node on the batch learning cycle) this
+        is called by offline evaluation producers, and it is fail-LOUD about a
+        heuristic rubric where ``execute`` is not. That divergence is
+        deliberate: ``execute`` persists the ``evaluation_method`` marker so a
+        consumer can filter #471's neutral 3.0s afterwards, but a producer
+        blending them into ``combined_score`` leaves no such escape — the
+        column documents a two-half measurement and no column beside it could
+        say one half was a word-overlap fallback. The same call
+        ``EvaluationResultsRepository`` makes for ``rubric_aggregate``.
+
+        Args:
+            context: The pair to judge. ``retrieved_contexts`` (when set) is
+                persisted as ``retrieved_chunks`` on the same row.
+            ragas: Already-judged RAGAS metrics for the SAME pair. RAGAS
+                judging is never done here — it costs seconds of gpt-4o time
+                per sample and must not run inline (#1484).
+
+        Returns:
+            The inserted ``signal_id``, or None when no client is wired or
+            nothing landed.
+
+        Raises:
+            ValueError: The rubric came from the heuristic fallback.
+        """
+        evaluation = await self.evaluator.evaluate(context)
+        if _HEURISTIC_MARKER in (evaluation.evaluation_method or "").lower():
+            raise ValueError(
+                "refusing to persist a heuristic-scored rubric (#471): the "
+                f"fallback stamped evaluation_method={evaluation.evaluation_method!r} "
+                "and emits neutral 3.0 scores indistinguishable from judged 3.0s, "
+                "which combined_score would then blend as if a judge had produced them"
+            )
+        return await self._store_evaluation(evaluation, context, ragas=ragas)
 
     def _determine_improvement_type(self, evaluation: RubricEvaluation) -> str:
         """Determine the type of improvement needed based on evaluation."""
