@@ -60,12 +60,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.rag.real_pipeline_eval import (  # noqa: E402
+    MIN_HIT_CONDITIONED_RELEVANCY,
     MIN_REAL_PIPELINE_SAMPLES,
     MIN_RETRIEVAL_HIT_RATE,
     REAL_PIPELINE_METRICS,
     REAL_PIPELINE_THRESHOLDS,
     build_samples_from_replay,
     check_run_gates,
+    hit_conditioned_relevancy,
     summarize_retrieval,
 )
 
@@ -153,8 +155,14 @@ def build_report(
     passed: bool,
     failures: Sequence[str],
     meta: Dict[str, Any],
+    retrieval_floor: float = MIN_RETRIEVAL_HIT_RATE,
+    hit_conditioned_floor: float = MIN_HIT_CONDITIONED_RELEVANCY,
 ) -> Dict[str, Any]:
     """Assemble the run report. Only real-path metrics are ever reported."""
+    # answer_relevancy is the PRODUCT of the retrieval hit rate and the quality
+    # of answers on rows that retrieved (#1489). A report carrying only the
+    # product cannot tell a reader which factor moved, so both are recorded.
+    conditioned, n_conditioned = hit_conditioned_relevancy(block)
     return {
         "kind": "real_pipeline_ragas",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -162,8 +170,18 @@ def build_report(
         "replay": meta,
         "n_samples": block.get("n_samples"),
         "n_faithfulness": block.get("n_faithfulness"),
-        "metrics": {m: block.get(m) for m in REAL_PIPELINE_METRICS},
-        "thresholds": dict(thresholds),
+        "n_hit_conditioned": n_conditioned,
+        "metrics": {
+            **{m: block.get(m) for m in REAL_PIPELINE_METRICS},
+            "answer_relevancy_hit_conditioned": conditioned,
+        },
+        # Every floor that produced the verdict, so a saved artifact can be
+        # read on its own — the CLI can override any of them.
+        "thresholds": {
+            **thresholds,
+            "retrieval_hit_rate": retrieval_floor,
+            "answer_relevancy_hit_conditioned": hit_conditioned_floor,
+        },
         "retrieval": retrieval,
         "passed": passed,
         "failures": list(failures),
@@ -263,6 +281,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "retrieval collapse on their own."
         ),
     )
+    parser.add_argument(
+        "--hit-conditioned-relevancy",
+        type=float,
+        default=MIN_HIT_CONDITIONED_RELEVANCY,
+        help=(
+            "Minimum mean answer_relevancy over the rows that DID retrieve "
+            f"(default: {MIN_HIT_CONDITIONED_RELEVANCY}). The aggregate is this "
+            "times the hit rate, so gating only the aggregate lets a generation "
+            "collapse be paid for by a retrieval gain."
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=3600, help="Judge subprocess timeout (s)")
     parser.add_argument("--output", type=Path, default=None, help="Write the JSON report here")
     parser.add_argument(
@@ -320,8 +349,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         thresholds=thresholds,
         min_samples=args.min_samples,
         retrieval_floor=args.retrieval_floor,
+        hit_conditioned_floor=args.hit_conditioned_relevancy,
     )
-    report = build_report(block, retrieval, thresholds, passed, failures, meta)
+    report = build_report(
+        block,
+        retrieval,
+        thresholds,
+        passed,
+        failures,
+        meta,
+        retrieval_floor=args.retrieval_floor,
+        hit_conditioned_floor=args.hit_conditioned_relevancy,
+    )
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -341,7 +380,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         value = block.get(metric)
         shown = f"{value:.3f}" if isinstance(value, (int, float)) else str(value)
         extra = f"  (n={block.get('n_faithfulness')})" if metric == "faithfulness" else ""
+        if metric == "answer_relevancy":
+            extra = "  (aggregate; backstop only — read the line below)"
         print(f"  {metric:<18} {shown}   threshold {thresholds[metric]}{extra}")
+    conditioned, n_conditioned = hit_conditioned_relevancy(block)
+    shown = f"{conditioned:.3f}" if conditioned is not None else "unmeasured"
+    print(
+        f"  {'  ↳ on hit rows':<18} {shown}   threshold {args.hit_conditioned_relevancy}"
+        f"  (n={n_conditioned})"
+    )
     print("-" * 64)
     if failures:
         print("GATES BLOCKED:")

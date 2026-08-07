@@ -32,30 +32,50 @@ from src.agents.feedback_learner.ragas_scoring import (
     combined_score,
 )
 
-MIGRATION_PATH = (
-    Path(__file__).parent.parent.parent.parent.parent
-    / "database"
-    / "ml"
-    / "022_self_improvement_tables.sql"
-)
+DATABASE_ML = Path(__file__).parent.parent.parent.parent.parent / "database" / "ml"
 
 
-def _sql_function_body() -> str:
-    sql = MIGRATION_PATH.read_text()
-    start = sql.index("CREATE OR REPLACE FUNCTION calculate_combined_score")
-    end = sql.index("$$ LANGUAGE plpgsql IMMUTABLE;", start)
+def _newest_migration_defining(symbol: str) -> Path:
+    """The highest-numbered migration that (re)defines ``symbol``.
+
+    The deploy applies ``database/ml`` in numeric order, so the LAST definition
+    is the one that ends up in the database — pinning a fixed filename pins a
+    definition that may already have been superseded.
+
+    This helper exists because that is exactly what happened: #1489's migration
+    034 replaced ``calculate_combined_score``'s COALESCE-to-zero arithmetic with
+    a renormalising version, and this file went on parsing 022. Proven by
+    mutation — setting 034's faithfulness weight to 0.99 left all 40 tests here
+    green while the deployed function disagreed with Python.
+    """
+    candidates = [
+        path
+        for path in DATABASE_ML.glob("*.sql")
+        if re.match(r"\d+_", path.name)
+        and f"CREATE OR REPLACE FUNCTION {symbol}" in path.read_text()
+    ]
+    assert candidates, f"no migration defines {symbol}"
+    return max(candidates, key=lambda p: (int(re.match(r"(\d+)_", p.name).group(1)), p.name))
+
+
+def _sql_function_body(symbol: str = "calculate_combined_score") -> str:
+    sql = _newest_migration_defining(symbol).read_text()
+    start = sql.index(f"CREATE OR REPLACE FUNCTION {symbol}")
+    end = sql.index("$$ LANGUAGE", start)
     return sql[start:end]
 
 
 class TestWeightsPinnedToMigrationSql:
     def test_metric_weights_match_sql_function(self):
-        """Python's per-metric weights ARE the migration's, parsed from it."""
-        body = _sql_function_body()
+        """Python's per-metric weights ARE the migration's, parsed from it.
+
+        Since #1489's 034 the weights have a single SQL-side definition
+        (``ragas_metric_weights``) that every other function selects from,
+        instead of the expression 022 copy-pasted into two function bodies.
+        """
+        body = _sql_function_body("ragas_metric_weights")
         sql_weights = {
-            name: float(weight)
-            for name, weight in re.findall(
-                r"p_ragas_scores->>'(\w+)'\)::float,\s*0\)\s*\*\s*([\d.]+)", body
-            )
+            name: float(weight) for name, weight in re.findall(r"\('(\w+)',\s*([\d.]+)\)", body)
         }
         assert sql_weights, "failed to parse metric weights out of the migration SQL"
         assert RAGAS_METRIC_WEIGHTS == sql_weights

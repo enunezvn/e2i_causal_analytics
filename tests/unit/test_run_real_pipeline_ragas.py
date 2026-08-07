@@ -148,7 +148,16 @@ def test_report_never_claims_context_metrics():
         failures=[],
         meta={},
     )
-    assert set(report["metrics"]) == {"faithfulness", "answer_relevancy"}
+    # #1489 added answer_relevancy_hit_conditioned — the other factor of the
+    # aggregate, derived from the block's own rows. Asserted explicitly rather
+    # than by a key count, and paired with a rule that states the actual
+    # intent: no context metric may ever appear, whatever else does.
+    assert set(report["metrics"]) == {
+        "faithfulness",
+        "answer_relevancy",
+        "answer_relevancy_hit_conditioned",
+    }
+    assert not [m for m in report["metrics"] if m.startswith("context_")]
     assert "context_precision" not in report["thresholds"]
 
 
@@ -190,3 +199,90 @@ def test_driver_gates_retrieval_as_well_as_metrics():
     assert "check_real_pipeline_gates(" not in source, (
         "driver calls the block-only gate; a retrieval collapse would pass green"
     )
+
+
+# ---------------------------------------------------------------------------
+# Hit-conditioned relevancy surfaced by the driver (#1489 deferral 7)
+# ---------------------------------------------------------------------------
+
+
+def test_report_carries_the_hit_conditioned_relevancy_and_its_denominator():
+    """The aggregate is the product of the hit rate and this number; a report
+    that shows only the product cannot tell a reader which factor moved."""
+    block = dict(
+        _BLOCK,
+        per_sample=[
+            {"query_id": "q01", "n_contexts": 2, "faithfulness": 0.6, "answer_relevancy": 0.9},
+            {"query_id": "q02", "n_contexts": 2, "faithfulness": 0.6, "answer_relevancy": 0.5},
+            {"query_id": "q03", "n_contexts": 0, "faithfulness": None, "answer_relevancy": 0.0},
+        ],
+    )
+    report = driver.build_report(
+        block=block,
+        retrieval={
+            "n_records": 3,
+            "n_errors": 0,
+            "n_with_contexts": 2,
+            "retrieval_hit_rate": 2 / 3,
+        },
+        thresholds={"faithfulness": 0.50, "answer_relevancy": 0.04},
+        passed=True,
+        failures=[],
+        meta={},
+    )
+    assert report["metrics"]["answer_relevancy_hit_conditioned"] == pytest.approx(0.70)
+    assert report["n_hit_conditioned"] == 2
+
+
+def test_hit_conditioned_floor_is_a_cli_flag_defaulting_to_the_measured_constant():
+    from src.rag.real_pipeline_eval import MIN_HIT_CONDITIONED_RELEVANCY
+
+    args = driver.parse_args(["--records", "r.json"])
+    assert args.hit_conditioned_relevancy == MIN_HIT_CONDITIONED_RELEVANCY
+
+    args = driver.parse_args(["--records", "r.json", "--hit-conditioned-relevancy", "0.4"])
+    assert args.hit_conditioned_relevancy == 0.4
+
+
+def test_report_records_the_floors_that_produced_the_verdict():
+    """A saved report must be re-readable on its own. Without the retrieval and
+    hit-conditioned floors, a passing artifact cannot be distinguished from one
+    produced with CLI overrides (codex iter-1 MEDIUM)."""
+    report = driver.build_report(
+        block=_BLOCK,
+        retrieval={"n_records": 10, "n_errors": 0, "n_with_contexts": 4, "retrieval_hit_rate": 0.4},
+        thresholds={"faithfulness": 0.50, "answer_relevancy": 0.04},
+        passed=True,
+        failures=[],
+        meta={},
+        retrieval_floor=0.21,
+        hit_conditioned_floor=0.20,
+    )
+    assert report["thresholds"]["retrieval_hit_rate"] == 0.21
+    assert report["thresholds"]["answer_relevancy_hit_conditioned"] == 0.20
+
+
+def test_report_thresholds_do_not_leak_back_into_the_metric_gate():
+    """The report's ``thresholds`` records every floor that produced the verdict,
+    including two the metric gate does not accept. Pinning the two properties
+    that make merging them safe: the caller's dict is not mutated, and feeding
+    the enriched dict back to the gate fails LOUDLY rather than silently
+    gating on the wrong set (codex iter-1 MEDIUM follow-up).
+    """
+    from src.rag.real_pipeline_eval import check_real_pipeline_gates
+
+    thresholds = {"faithfulness": 0.35, "answer_relevancy": 0.04}
+    report = driver.build_report(
+        block=_BLOCK,
+        retrieval={"n_records": 10, "n_errors": 0, "n_with_contexts": 4, "retrieval_hit_rate": 0.4},
+        thresholds=thresholds,
+        passed=True,
+        failures=[],
+        meta={},
+        retrieval_floor=0.21,
+        hit_conditioned_floor=0.20,
+    )
+    assert thresholds == {"faithfulness": 0.35, "answer_relevancy": 0.04}, "caller's dict mutated"
+
+    with pytest.raises(ValueError, match="unsupported gate metrics"):
+        check_real_pipeline_gates(_BLOCK, thresholds=report["thresholds"])
