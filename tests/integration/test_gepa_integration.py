@@ -746,28 +746,26 @@ class TestRAGASGEPAOpikIntegration:
         assert callable(metric)
         assert "cognitive_rag_summarizer" in metric.__name__
 
-    def test_cognitive_rag_optimizer_has_phase_weights(self):
-        """Test CognitiveRAGOptimizer has _get_phase_weights method."""
+    def test_phase_weights_helper_retired_1516(self):
+        """``_get_phase_weights`` is retired (#1516) — guard against resurrection.
+
+        The helper's per-phase RAGAS weight table only ever fed
+        ``optimize_phase``, which had zero callers from its introduction
+        (0e7ae110, 2026-01) to its removal (#1510), so phase-differentiated
+        weighting never influenced any run. The nightly GEPA RAG leg
+        (``run_rag_prompt_optimization``) optimizes exactly one phase — the
+        synthesis prompt — leaving a per-phase table nothing to differentiate.
+        Metric weights live in ``RAGASFeedbackConfig`` (flat, GEPA training
+        metric) and ``ragas_metric_weights()`` / ``RAGAS_METRIC_WEIGHTS``
+        (migration 034, learning-signal scoring); any future recalibration
+        should derive weights from measurement (#1485), not resurrect the
+        2026-01 hand-authored priors this helper carried.
+        """
         from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer
 
         optimizer = CognitiveRAGOptimizer(feedback_learner=MagicMock())
 
-        assert hasattr(optimizer, "_get_phase_weights")
-
-        # Test all phases have weights
-        for phase in ["summarizer", "investigator", "agent"]:
-            weights = optimizer._get_phase_weights(phase)
-            assert weights is not None, f"No weights for {phase}"
-            assert sum(weights.values()) == pytest.approx(1.0)
-            assert all(
-                k in weights
-                for k in [
-                    "faithfulness",
-                    "answer_relevancy",
-                    "context_precision",
-                    "context_recall",
-                ]
-            )
+        assert not hasattr(optimizer, "_get_phase_weights")
 
     def test_cognitive_rag_optimizer_gepa_imports(self):
         """Test CognitiveRAGOptimizer GEPA imports work correctly."""
