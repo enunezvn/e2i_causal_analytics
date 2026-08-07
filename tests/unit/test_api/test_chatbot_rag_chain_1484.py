@@ -157,6 +157,10 @@ async def test_hop_decider_uses_async_module_interface(monkeypatch):
     monkeypatch.setattr(cd, "rewrite_query_dspy", fake_rewrite)
     monkeypatch.setattr(cd, "score_evidence_dspy", fake_score)
     monkeypatch.setattr(cd, "_get_dspy_hop_decider", lambda: _StubDecider())
+    # #1518: this test pins the decider's ASYNC interface; the empty-board
+    # skip would bypass the decider entirely on this dry scenario, so pin the
+    # legacy path explicitly (still live for non-empty boards / knob=false).
+    monkeypatch.setattr(cd, "_SKIP_EMPTY_DECIDER", False)
     import src.rag.retriever as rt
 
     monkeypatch.setattr(rt, "hybrid_search", fake_hybrid_search)
@@ -268,8 +272,12 @@ async def test_rows_already_scored_are_not_rescored_on_later_hops(monkeypatch):
 
 async def test_two_consecutive_dry_hops_stop_the_loop(monkeypatch):
     """Hop 1 kept nothing -> ONE refinement chance; if that hop also keeps
-    nothing new, stop — never pay the second decider + third hop."""
+    nothing new, stop — never pay the second decider + third hop.
+
+    #1518: pins the LLM-decider refinement path (knob=false); the default
+    empty-board skip variant is covered in test_chatbot_rag_chain_1518.py."""
     _, decider_calls, hop_queries = _dry_loop_fixtures(monkeypatch, lambda hop: _rows(5))
+    monkeypatch.setattr(cd, "_SKIP_EMPTY_DECIDER", False)
     result = await cd.cognitive_rag_retrieve(query="q", enable_multi_hop=True, collect_signal=False)
     assert decider_calls["n"] == 1, (
         f"expected exactly one decider call after a dry hop-1, got {decider_calls['n']}"
@@ -279,7 +287,10 @@ async def test_two_consecutive_dry_hops_stop_the_loop(monkeypatch):
 
 
 async def test_dry_hop_limit_zero_disables_early_exit(monkeypatch):
+    # #1518: legacy run-to-max means the LLM decider fires each hop — pin the
+    # knob=false path (the default skip variant lives in the 1518 file).
     _, decider_calls, hop_queries = _dry_loop_fixtures(monkeypatch, lambda hop: _rows(5))
+    monkeypatch.setattr(cd, "_SKIP_EMPTY_DECIDER", False)
     monkeypatch.setattr(cd, "_DRY_HOP_LIMIT", 0, raising=False)
     result = await cd.cognitive_rag_retrieve(query="q", enable_multi_hop=True, collect_signal=False)
     # legacy behavior: decider fires until max hops
