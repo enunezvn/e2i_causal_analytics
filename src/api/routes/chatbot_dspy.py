@@ -3735,13 +3735,19 @@ class ChatbotOptimizer:
                 # Get best score
                 self._best_score = getattr(optimizer, "best_score", 0.0)
 
-                # Save optimized module
-                version_id = await save_optimized_module(  # type: ignore[call-arg,misc]
+                # Save optimized module. The saver is sync and returns a dict —
+                # the run details GEPA produced ride `metadata`, which is what
+                # gets persisted alongside the module state.
+                save_info = save_optimized_module(
+                    optimized_module,
                     agent_name=f"chatbot_{module_name}",
-                    optimized_module=optimized_module,
-                    budget=budget,
-                    score=self._best_score,
+                    metadata={
+                        "module_name": module_name,
+                        "budget": budget,
+                        "score": self._best_score,
+                    },
                 )
+                version_id = save_info["version_id"]
 
                 logger.info(
                     f"Completed GEPA optimization for {module_name}: "

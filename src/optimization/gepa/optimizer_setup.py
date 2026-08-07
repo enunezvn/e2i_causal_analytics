@@ -147,7 +147,9 @@ def create_optimizer_for_agent(
         trainset: Training examples
         valset: Validation examples (uses trainset if None)
         log_dir: Directory for GEPA logs
-        **kwargs: Additional GEPA parameters
+        **kwargs: Additional GEPA parameters. Pass ``auto`` to override the
+            agent's registry budget (``auto=None`` selects an explicit budget
+            such as ``max_metric_calls``).
 
     Returns:
         Configured GEPA optimizer for the agent
@@ -163,8 +165,17 @@ def create_optimizer_for_agent(
     # Get metric instance for agent
     metric = get_metric_for_agent(agent_name)
 
-    # Get budget for agent
-    budget = AGENT_BUDGETS.get(agent_name, "light")
+    # Get budget for agent. A caller-supplied `auto` wins over the registry
+    # default — popping it is what makes an override expressible at all: left in
+    # kwargs it collides with the `auto=budget` below ("multiple values for
+    # keyword argument 'auto'"), and the other spelling callers reached for,
+    # `budget=`, rides kwargs down into GEPA(), which has no such parameter and
+    # no **kwargs. Both raised TypeError, so scripts/gepa_phase2_hybrid.py's
+    # --budget flag could never be honoured (#1507).
+    if "auto" in kwargs:
+        budget = kwargs.pop("auto")
+    else:
+        budget = AGENT_BUDGETS.get(agent_name, "light")
 
     # Hybrid agents get tool optimization
     enable_tools = agent_name in [

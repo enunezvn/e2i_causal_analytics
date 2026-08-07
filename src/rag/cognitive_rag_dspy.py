@@ -26,32 +26,35 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 import dspy
-from dspy.teleprompt import MIPROv2
 
 logger = logging.getLogger(__name__)
 
-# Conditional GEPA import
+# GEPA availability probe. Nothing in this module runs an optimization any more:
+# the RAGAS-driven GEPA cycle for cognitive RAG lives in
+# src.tasks.dspy_optimization_tasks.run_dspy_rag_optimization (#1486), on the
+# nightly beat. CognitiveRAGOptimizer.optimizer_type still reports which
+# optimizer backs that cycle, so the probe imports exactly what the removed
+# in-module path depended on — a partial install (GEPA present, ragas missing)
+# must still report unavailable.
+#
+# The `= None` fallbacks are the module's import contract, not decoration:
+# consumers import these names unconditionally and branch on GEPA_AVAILABLE
+# afterwards (test_gepa_integration.py::test_cognitive_rag_optimizer_gepa_imports),
+# so leaving them unbound turns the unavailable case into an ImportError at the
+# import site instead of the None it is written against.
 try:
-    from src.optimization.gepa import (
-        create_gepa_optimizer,
-        save_optimized_module,
-    )
-    from src.optimization.gepa.integration.ragas_feedback import (
-        RAGASFeedbackProvider,
-        create_ragas_metric,
-    )
+    from src.optimization.gepa import create_gepa_optimizer
+    from src.optimization.gepa.integration.ragas_feedback import create_ragas_metric
 
     GEPA_AVAILABLE = True
-    logger.info("GEPA optimizer loaded for Cognitive RAG")
+    logger.info("GEPA optimizer available for Cognitive RAG")
 except ImportError:
     GEPA_AVAILABLE = False
-    logger.info("GEPA not available - using MIPROv2 optimizer")
+    logger.info("GEPA not available for Cognitive RAG")
     create_gepa_optimizer = None  # type: ignore[assignment]
-    save_optimized_module = None  # type: ignore[assignment]
-    RAGASFeedbackProvider = None  # type: ignore[assignment, misc]
     create_ragas_metric = None  # type: ignore[assignment]
 
 # =============================================================================
@@ -1198,15 +1201,20 @@ OptimizerType = Literal["miprov2", "gepa"]
 
 
 class CognitiveRAGOptimizer:
-    """
-    Optimizer specifically for the 4-phase cognitive RAG system.
-    Defines metrics and optimization strategies for each phase.
+    """Phase-level quality metrics for the 4-phase cognitive RAG system.
 
-    GEPA Migration (v4.3):
-    - Added GEPA as primary optimizer (10%+ improvement over MIPROv2)
-    - Supports optimizer_type="gepa" (default) or "miprov2" (legacy)
-    - Integrates RAGAS feedback for RAG-specific quality evaluation
-    - Falls back to MIPROv2 if GEPA is not available
+    This class defines *how a phase is scored*; it no longer runs optimization.
+    Its ``optimize_phase`` entry point (GEPA, falling back to MIPROv2) was the
+    scaffold for feeding RAGAS scores into prompt evolution, and it never had a
+    caller — no route, no beat task, no script (#1486). That functionality now
+    runs for real from ``src.tasks.dspy_optimization_tasks.run_dspy_rag_optimization``
+    on the nightly beat, so the unwired duplicate was removed (#1507): keeping a
+    second GEPA entry point that no one triggered — and that raised TypeError at
+    both its optimizer construction and its save — was the maintenance hazard
+    #1486 named.
+
+    ``optimizer_type`` reports which optimizer backs the wired cycle; it no
+    longer selects a code path here.
     """
 
     def __init__(
@@ -1311,156 +1319,6 @@ class CognitiveRAGOptimizer:
             score += 0.3
 
         return score
-
-    async def optimize_phase(
-        self,
-        phase: Literal["summarizer", "investigator", "agent"],
-        training_signals: List[Dict],
-        budget: Union[int, str] = "medium",
-    ) -> dspy.Module:
-        """
-        Run optimization for a specific phase.
-
-        Args:
-            phase: Which RAG phase to optimize (summarizer, investigator, agent)
-            training_signals: Training signals collected from the Reflector
-            budget: GEPA budget preset ("light", "medium", "heavy") or MIPROv2 trials count
-
-        Returns:
-            Optimized DSPy module for the phase
-        """
-        if self.optimizer_type == "gepa":
-            return await self._optimize_with_gepa(phase, training_signals, budget)
-        else:
-            return await self._optimize_with_miprov2(phase, training_signals, budget)
-
-    async def _optimize_with_gepa(
-        self,
-        phase: Literal["summarizer", "investigator", "agent"],
-        training_signals: List[Dict],
-        budget: Union[int, str] = "medium",
-    ) -> dspy.Module:
-        """
-        Run GEPA optimization for a specific RAG phase.
-
-        GEPA provides 10%+ improvement over MIPROv2 with:
-        - Reflective evolution with rich textual feedback
-        - RAGAS-based quality evaluation for RAG components
-        - Better generalization through diverse candidate sampling
-        """
-        modules = {
-            "summarizer": SummarizerModule,
-            "investigator": InvestigatorModule,
-            "agent": AgentModule,
-        }
-
-        # Convert signals to DSPy examples
-        trainset = self._signals_to_examples(training_signals, phase)
-
-        if not trainset:
-            logger.warning(f"No training examples for {phase}, skipping optimization")
-            return modules[phase]()
-
-        # Split into train/val (80/20)
-        split_idx = int(len(trainset) * 0.8)
-        train_examples = trainset[:split_idx] if split_idx > 0 else trainset
-        val_examples = trainset[split_idx:] if split_idx < len(trainset) else trainset[-2:]
-
-        # Create RAGAS-based metric for RAG evaluation
-        # Uses correct signature: create_ragas_metric(provider, agent_name, weights)
-        phase_weights = self._get_phase_weights(phase)
-        ragas_metric = create_ragas_metric(
-            agent_name=f"cognitive_rag_{phase}",
-            weights=phase_weights,
-        )
-
-        # Convert budget string to GEPA format if needed
-        budget_preset = budget if isinstance(budget, str) else "medium"
-
-        # Create GEPA optimizer
-        optimizer = create_gepa_optimizer(
-            metric=ragas_metric,  # type: ignore[arg-type]
-            trainset=train_examples,
-            valset=val_examples,
-            budget=budget_preset,
-            enable_tool_optimization=False,  # RAG doesn't use external tools
-            seed=42,
-        )
-
-        # Get module to optimize
-        module_class = modules[phase]
-        module = module_class() if phase == "summarizer" else module_class({})
-
-        # Run optimization
-        logger.info(f"Starting GEPA optimization for {phase} with {len(train_examples)} examples")
-        optimized = optimizer.compile(module, trainset=train_examples)
-
-        # Save optimized module if successful
-        if optimized and hasattr(optimizer, "best_score"):
-            try:
-                version_id = await save_optimized_module(  # type: ignore[call-arg, misc]
-                    agent_name=f"cognitive_rag_{phase}",
-                    optimized_module=optimized,
-                    budget=budget_preset,
-                    score=optimizer.best_score,
-                )
-                logger.info(f"Saved optimized {phase} module: {version_id}")
-            except Exception as e:
-                logger.warning(f"Could not save optimized module: {e}")
-
-        return optimized
-
-    async def _optimize_with_miprov2(
-        self,
-        phase: Literal["summarizer", "investigator", "agent"],
-        training_signals: List[Dict],
-        budget: Union[int, str] = 50,
-    ) -> dspy.Module:
-        """Run legacy MIPROv2 optimization for a specific phase."""
-        modules = {
-            "summarizer": SummarizerModule,
-            "investigator": InvestigatorModule,
-            "agent": AgentModule,
-        }
-
-        metrics = {
-            "summarizer": self.summarizer_metric,
-            "investigator": self.investigator_metric,
-            "agent": self.agent_metric,
-        }
-
-        # Convert signals to DSPy examples
-        trainset = self._signals_to_examples(training_signals, phase)
-
-        if not trainset:
-            logger.warning(f"No training examples for {phase}, skipping optimization")
-            return modules[phase]()
-
-        # Convert budget string to int if needed
-        num_trials = budget if isinstance(budget, int) else 50
-
-        optimizer = MIPROv2(
-            metric=metrics[phase],
-            auto=None,  # Disable auto mode to allow manual configuration
-            num_candidates=10,
-            max_bootstrapped_demos=4,
-            num_threads=4,
-        )
-
-        module_class = modules[phase]
-        module = module_class() if phase == "summarizer" else module_class({})
-        optimized = optimizer.compile(module, trainset=trainset, num_trials=num_trials)
-
-        return optimized
-
-    def _get_phase_metric(self, phase: str):
-        """Get the metric function for a phase."""
-        metrics = {
-            "summarizer": self.summarizer_metric,
-            "investigator": self.investigator_metric,
-            "agent": self.agent_metric,
-        }
-        return metrics.get(phase, self.summarizer_metric)
 
     def _get_phase_weights(self, phase: str) -> Optional[dict[str, float]]:
         """Get RAGAS metric weights optimized for a specific RAG phase.
