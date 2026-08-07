@@ -21,8 +21,6 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from src.rag.retrieved_chunks import chunks_from_texts
-
 from ..evaluation import (
     EvaluationContext,
     ImprovementDecision,
@@ -320,6 +318,11 @@ class RubricNode:
             # read as a measured zero-retrieval turn. Shape is shared with the
             # cognitive Reflector's producer (src/rag/retrieved_chunks.py).
             if context.retrieved_contexts:
+                # Imported here, not at module top: ``src.rag`` package init
+                # eagerly loads DSPy (~714 MB), and this module sits on the
+                # health_score fast path where that import is forbidden.
+                from src.rag.retrieved_chunks import chunks_from_texts
+
                 signal_data["retrieved_chunks"] = chunks_from_texts(context.retrieved_contexts)
 
             if ragas is not None:
