@@ -726,25 +726,32 @@ class TestRAGASGEPAOpikIntegration:
         assert "feedback" in result
 
     def test_create_ragas_metric_with_agent_name(self):
-        """Test create_ragas_metric with correct parameters."""
+        """Test create_ragas_metric's agent_name and weights plumbing.
+
+        Targets the canonical ``cognitive_rag`` agent name: the per-phase
+        idiom this test used to mimic (``cognitive_rag_summarizer`` plus
+        summarizer-shaped weights) belonged to the retired ``optimize_phase``
+        path (#1510/#1516) and no longer names anything that runs. The
+        ``weights=`` parameter itself remains a live part of the kept factory,
+        so a custom (non-phase) weight dict still covers that branch.
+        """
         from src.optimization.gepa.integration.ragas_feedback import (
             create_ragas_metric,
         )
 
-        # Use correct signature: agent_name and optional weights
         metric = create_ragas_metric(
-            agent_name="cognitive_rag_summarizer",
+            agent_name="cognitive_rag",
             weights={
-                "faithfulness": 0.2,
-                "answer_relevancy": 0.4,
+                "faithfulness": 0.4,
+                "answer_relevancy": 0.3,
                 "context_precision": 0.2,
-                "context_recall": 0.2,
+                "context_recall": 0.1,
             },
         )
 
         assert metric is not None
         assert callable(metric)
-        assert "cognitive_rag_summarizer" in metric.__name__
+        assert "cognitive_rag" in metric.__name__
 
     def test_phase_weights_helper_retired_1516(self):
         """``_get_phase_weights`` is retired (#1516) — guard against resurrection.
