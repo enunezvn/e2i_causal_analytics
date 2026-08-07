@@ -186,6 +186,12 @@ celery_app.conf.task_routes = {
     # the persisted signals and gates on GEPAOptimizationTrigger.
     "src.tasks.run_feedback_learning_cycle": {"queue": "analytics"},
     "src.tasks.run_dspy_prompt_optimization": {"queue": "analytics"},
+    # Chatbot optimization queue drainer (#1515). The beat entry already pins
+    # the queue via options.queue; this route covers the documented manual
+    # trigger (`celery call src.tasks.drain_chatbot_optimization_queue`,
+    # force=True) which would otherwise land on the default queue and run the
+    # LLM-expensive GEPA executor on worker_light (codex #1515 iter-2 LOW).
+    "src.tasks.drain_chatbot_optimization_queue": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
     # adherence, territory rollup). Beat schedules already pin these to
@@ -403,6 +409,21 @@ celery_app.conf.beat_schedule = {
     "routing-label-nightly": {
         "task": "src.tasks.run_routing_label_cycle",
         "schedule": crontab(hour=4, minute=30),
+        "options": {"queue": "analytics"},
+    },
+    # Chatbot DSPy optimization queue drainer (#1515) — nightly. Polls the 035
+    # chatbot_optimization_requests table (get_next_optimization_request),
+    # claims via compare-and-set, executes ChatbotOptimizer.optimize_module
+    # (GEPA — the path #1507 fixed) and closes out via
+    # update_optimization_request_status. Fail-closed cost gate: the task is a
+    # logged no-op unless CHATBOT_OPT_DRAIN_ENABLED is set (#1513 precedent),
+    # and even then executes at most CHATBOT_OPT_DRAIN_MAX_PER_CYCLE (default
+    # 1) GEPA runs per tick. Fixed wall-clock slot for the same reason as
+    # routing-label-nightly: stay off the 02:00 backup, Mon-03:00 reseed and
+    # 04:30 labeler windows.
+    "chatbot-optimization-drain": {
+        "task": "src.tasks.drain_chatbot_optimization_queue",
+        "schedule": crontab(hour=5, minute=30),
         "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------

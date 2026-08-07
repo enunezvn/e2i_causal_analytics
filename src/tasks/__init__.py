@@ -35,6 +35,13 @@ from src.tasks.ab_testing_tasks import (
     srm_detection_sweep,
 )
 
+# Chatbot DSPy optimization queue drainer (#1515): importing the module fires
+# the @celery_app.task decorator so the "chatbot-optimization-drain" beat
+# entry is discoverable by the Celery worker + beat. Without this line the
+# beat entry would dead-letter. Fail-closed: the task itself is a logged no-op
+# unless CHATBOT_OPT_DRAIN_ENABLED is set.
+from src.tasks.chatbot_optimization_tasks import drain_chatbot_optimization_queue
+
 # Operational KPI corpus sync (audit F3b): importing the module registers the
 # Celery task so the worker discovers it for the beat schedule. sync_chunk_corpus
 # (#1373) syncs the chat-RAG chunk substrate (text-embedding-3-small).
@@ -150,6 +157,8 @@ __all__ = [
     "run_dspy_prompt_optimization",
     # Routing-label loop (#1341 Phase 1)
     "run_routing_label_cycle",
+    # Chatbot DSPy optimization queue drainer (#1515)
+    "drain_chatbot_optimization_queue",
     # NPPES NPI taxonomy cache (issue #154)
     "refresh_npi_taxonomy_cache",
     # Risk-score prediction DB writes (issue #173)

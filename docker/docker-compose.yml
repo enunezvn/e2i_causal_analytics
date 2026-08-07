@@ -123,6 +123,20 @@ x-common-env: &common-env
   # Lookback bounds the read window in days (default 30).
   DSPY_RAG_DB_FEEDSTOCK_ENABLED: ${DSPY_RAG_DB_FEEDSTOCK_ENABLED:-}
   DSPY_RAG_DB_LOOKBACK_DAYS: ${DSPY_RAG_DB_LOOKBACK_DAYS:-}
+  # Chatbot DSPy optimization queue drainer (#1515), nightly beat
+  # "chatbot-optimization-drain" on the analytics queue. Same contract as the
+  # RAG-leg knobs above: src/tasks/chatbot_optimization_tasks reads os.environ,
+  # so without these entries host-.env values never reach the worker containers
+  # and the in-code defaults govern unconditionally. All default EMPTY on
+  # purpose — the in-code defaults are the SSOT (gate unset = drain skipped;
+  # 1 GEPA execution/cycle; stale 168h; zombie 12h; producer min 50 signals).
+  # Enabling the gate spends real GEPA/LLM budget: operator cost decision,
+  # parsed fail-closed in code.
+  CHATBOT_OPT_DRAIN_ENABLED: ${CHATBOT_OPT_DRAIN_ENABLED:-}
+  CHATBOT_OPT_DRAIN_MAX_PER_CYCLE: ${CHATBOT_OPT_DRAIN_MAX_PER_CYCLE:-}
+  CHATBOT_OPT_STALE_HOURS: ${CHATBOT_OPT_STALE_HOURS:-}
+  CHATBOT_OPT_ZOMBIE_HOURS: ${CHATBOT_OPT_ZOMBIE_HOURS:-}
+  CHATBOT_OPT_MIN_SIGNALS: ${CHATBOT_OPT_MIN_SIGNALS:-}
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

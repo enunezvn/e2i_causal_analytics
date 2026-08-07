@@ -3647,18 +3647,71 @@ class ChatbotOptimizer:
             logger.warning(f"Failed to persist optimization request: {e}")
             return False
 
+    @staticmethod
+    def _request_from_row(row: Dict[str, Any]) -> ChatbotOptimizationRequest:
+        """Map a chatbot_optimization_requests table row onto the dataclass."""
+        created_raw = row.get("created_at")
+        try:
+            created_at = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            created_at = datetime.utcnow()
+        return ChatbotOptimizationRequest(
+            request_id=row["request_id"],
+            module_name=row["module_name"],
+            signal_count=int(row.get("signal_count") or 0),
+            min_reward=float(row.get("min_reward") or 0.5),
+            budget=row.get("budget") or "light",
+            priority=int(row.get("priority") or 1),
+            created_at=created_at,
+            status=row.get("status") or "pending",
+        )
+
     async def get_pending_requests(
         self,
         module_name: Optional[str] = None,
     ) -> List[ChatbotOptimizationRequest]:
-        """Get pending optimization requests.
+        """Get pending optimization requests from the 035 queue table.
+
+        #1515: this used to read only the in-process ``_pending_requests``
+        list, so a worker restart lost the queue and the drainer
+        (src/tasks/chatbot_optimization_tasks.py) had nothing durable to poll.
+        The ``chatbot_optimization_requests`` table is the source of truth;
+        the in-memory list remains ONLY as a fallback when no DB client can be
+        built (mirrors ``get_training_signals``' fallback discipline).
 
         Args:
-            module_name: Filter by module name (optional)
+            module_name: Filter by module name (optional; pushed into the query)
 
         Returns:
             List of pending requests
         """
+        client = None
+        try:
+            from src.memory.services.factories import get_async_supabase_service_client
+
+            client = await get_async_supabase_service_client()
+        except Exception as e:
+            logger.warning(f"No DB client for pending optimization requests: {e}")
+
+        if client is not None:
+            try:
+                query = (
+                    client.table("chatbot_optimization_requests")
+                    .select("*")
+                    .eq("status", "pending")
+                )
+                if module_name:
+                    query = query.eq("module_name", module_name)
+                result = (
+                    await query.order("priority", desc=True)
+                    .order("created_at", desc=False)
+                    .execute()
+                )
+                return [self._request_from_row(row) for row in (result.data or [])]
+            except Exception as e:
+                logger.warning(f"Failed to read pending optimization requests from DB: {e}")
+
+        # In-memory fallback (no DB client) — process-local, NOT restart-durable.
         requests = [r for r in self._pending_requests if r.status == "pending"]
         if module_name:
             requests = [r for r in requests if r.module_name == module_name]
@@ -4005,6 +4058,13 @@ async def submit_signals_for_optimization(
 
     This function checks if enough high-quality signals have been collected
     and queues optimization requests for each chatbot module.
+
+    Routing (#1515): called by the queue drainer
+    (src/tasks/chatbot_optimization_tasks.py, beat entry
+    "chatbot-optimization-drain") once per cycle while the queue is idle, so
+    signals -> requests -> GEPA execution is a closed loop. Migration 035
+    scaffolded the queue for exactly this producer (see its header comment);
+    PR #1510 recorded the pipeline as scaffolded-but-incomplete.
 
     Args:
         min_signals: Minimum signals required to trigger optimization
