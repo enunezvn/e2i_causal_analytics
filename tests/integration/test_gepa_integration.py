@@ -726,48 +726,53 @@ class TestRAGASGEPAOpikIntegration:
         assert "feedback" in result
 
     def test_create_ragas_metric_with_agent_name(self):
-        """Test create_ragas_metric with correct parameters."""
+        """Test create_ragas_metric's agent_name and weights plumbing.
+
+        Targets the canonical ``cognitive_rag`` agent name: the per-phase
+        idiom this test used to mimic (``cognitive_rag_summarizer`` plus
+        summarizer-shaped weights) belonged to the retired ``optimize_phase``
+        path (#1510/#1516) and no longer names anything that runs. The
+        ``weights=`` parameter itself remains a live part of the kept factory,
+        so a custom (non-phase) weight dict still covers that branch.
+        """
         from src.optimization.gepa.integration.ragas_feedback import (
             create_ragas_metric,
         )
 
-        # Use correct signature: agent_name and optional weights
         metric = create_ragas_metric(
-            agent_name="cognitive_rag_summarizer",
+            agent_name="cognitive_rag",
             weights={
-                "faithfulness": 0.2,
-                "answer_relevancy": 0.4,
+                "faithfulness": 0.4,
+                "answer_relevancy": 0.3,
                 "context_precision": 0.2,
-                "context_recall": 0.2,
+                "context_recall": 0.1,
             },
         )
 
         assert metric is not None
         assert callable(metric)
-        assert "cognitive_rag_summarizer" in metric.__name__
+        assert "cognitive_rag" in metric.__name__
 
-    def test_cognitive_rag_optimizer_has_phase_weights(self):
-        """Test CognitiveRAGOptimizer has _get_phase_weights method."""
+    def test_phase_weights_helper_retired_1516(self):
+        """``_get_phase_weights`` is retired (#1516) — guard against resurrection.
+
+        The helper's per-phase RAGAS weight table only ever fed
+        ``optimize_phase``, which had zero callers from its introduction
+        (0e7ae110, 2026-01) to its removal (#1510), so phase-differentiated
+        weighting never influenced any run. The nightly GEPA RAG leg
+        (``run_rag_prompt_optimization``) optimizes exactly one phase — the
+        synthesis prompt — leaving a per-phase table nothing to differentiate.
+        Metric weights live in ``RAGASFeedbackConfig`` (flat, GEPA training
+        metric) and ``ragas_metric_weights()`` / ``RAGAS_METRIC_WEIGHTS``
+        (migration 034, learning-signal scoring); any future recalibration
+        should derive weights from measurement (#1485), not resurrect the
+        2026-01 hand-authored priors this helper carried.
+        """
         from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer
 
         optimizer = CognitiveRAGOptimizer(feedback_learner=MagicMock())
 
-        assert hasattr(optimizer, "_get_phase_weights")
-
-        # Test all phases have weights
-        for phase in ["summarizer", "investigator", "agent"]:
-            weights = optimizer._get_phase_weights(phase)
-            assert weights is not None, f"No weights for {phase}"
-            assert sum(weights.values()) == pytest.approx(1.0)
-            assert all(
-                k in weights
-                for k in [
-                    "faithfulness",
-                    "answer_relevancy",
-                    "context_precision",
-                    "context_recall",
-                ]
-            )
+        assert not hasattr(optimizer, "_get_phase_weights")
 
     def test_cognitive_rag_optimizer_gepa_imports(self):
         """Test CognitiveRAGOptimizer GEPA imports work correctly."""

@@ -1245,6 +1245,15 @@ class CognitiveRAGOptimizer:
 
     ``optimizer_type`` reports which optimizer backs the wired cycle; it no
     longer selects a code path here.
+
+    ``_get_phase_weights`` — the per-phase RAGAS weight table that only
+    ``optimize_phase`` ever consumed — was retired with it (#1516): the wired
+    nightly leg optimizes exactly one phase (the synthesis prompt), so a
+    per-phase table had nothing left to differentiate, and its 2026-01
+    hand-authored weights were never validated against a run. Metric weights
+    live in ``RAGASFeedbackConfig`` (GEPA training metric) and migration 034's
+    ``ragas_metric_weights()`` (learning-signal scoring); recalibration, if it
+    happens, should come from measurement (#1485), not from that table.
     """
 
     def __init__(
@@ -1349,42 +1358,6 @@ class CognitiveRAGOptimizer:
             score += 0.3
 
         return score
-
-    def _get_phase_weights(self, phase: str) -> Optional[dict[str, float]]:
-        """Get RAGAS metric weights optimized for a specific RAG phase.
-
-        Different phases have different priorities:
-        - Summarizer: Focus on relevancy (query understanding)
-        - Investigator: Focus on precision and faithfulness (retrieval quality)
-        - Agent: Balanced focus on all metrics (synthesis quality)
-
-        Args:
-            phase: The RAG phase name
-
-        Returns:
-            Dict of weights or None for default equal weights
-        """
-        weights = {
-            "summarizer": {
-                "faithfulness": 0.15,
-                "answer_relevancy": 0.45,
-                "context_precision": 0.25,
-                "context_recall": 0.15,
-            },
-            "investigator": {
-                "faithfulness": 0.30,
-                "answer_relevancy": 0.15,
-                "context_precision": 0.35,
-                "context_recall": 0.20,
-            },
-            "agent": {
-                "faithfulness": 0.30,
-                "answer_relevancy": 0.30,
-                "context_precision": 0.20,
-                "context_recall": 0.20,
-            },
-        }
-        return weights.get(phase)  # None for unknown phases uses default
 
     def _signals_to_examples(self, signals: List[Dict], phase: str) -> List[dspy.Example]:
         """Convert training signals to DSPy Examples."""
