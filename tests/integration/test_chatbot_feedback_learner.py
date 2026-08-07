@@ -517,7 +517,16 @@ class TestChatbotOptimizer:
 
     @pytest.mark.asyncio
     async def test_get_pending_requests(self):
-        """Test retrieving pending requests."""
+        """Test the in-memory FALLBACK path of get_pending_requests.
+
+        #1515: the method now reads the chatbot_optimization_requests table
+        (worker-restart durable); process memory is served ONLY when no DB
+        client can be built, so the factory is forced unavailable here. The
+        table-backed path is covered by
+        tests/unit/test_tasks/test_chatbot_get_pending_requests_1515.py and,
+        against the live DB, tests/integration/
+        test_chatbot_optimization_queue_db.py.
+        """
         optimizer = ChatbotOptimizer()
 
         # Add some pending requests
@@ -537,14 +546,18 @@ class TestChatbotOptimizer:
         )
         optimizer._pending_requests = [request1, request2]
 
-        # Get all pending
-        all_pending = await optimizer.get_pending_requests()
-        assert len(all_pending) == 2
+        with patch(
+            "src.memory.services.factories.get_async_supabase_service_client",
+            new=AsyncMock(side_effect=RuntimeError("DB unavailable in this test")),
+        ):
+            # Get all pending
+            all_pending = await optimizer.get_pending_requests()
+            assert len(all_pending) == 2
 
-        # Filter by module
-        intent_pending = await optimizer.get_pending_requests("intent_classifier")
-        assert len(intent_pending) == 1
-        assert intent_pending[0].module_name == "intent_classifier"
+            # Filter by module
+            intent_pending = await optimizer.get_pending_requests("intent_classifier")
+            assert len(intent_pending) == 1
+            assert intent_pending[0].module_name == "intent_classifier"
 
     @pytest.mark.asyncio
     async def test_optimize_module_insufficient_signals(self):
