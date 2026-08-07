@@ -143,7 +143,12 @@ class TestDrainCycle:
         assert row["optimized_score"] == 0.91
         assert result["status"] == "completed"
         assert result["executed"] == [
-            {"request_id": "req_a", "module_name": "agent_router", "status": "completed"}
+            {
+                "request_id": "req_a",
+                "module_name": "agent_router",
+                "status": "completed",
+                "close_out": True,
+            }
         ]
 
     @pytest.mark.asyncio
@@ -431,6 +436,11 @@ class TestCeleryWiring:
         assert entry is not None, "beat entry 'chatbot-optimization-drain' missing"
         assert entry["task"] == "src.tasks.drain_chatbot_optimization_queue"
         assert entry["options"]["queue"] == "analytics"
+        # codex iter-2 LOW: a manual `celery call` (force=True) without an
+        # explicit queue must not land the GEPA executor on worker_light.
+        assert celery_app.conf.task_routes["src.tasks.drain_chatbot_optimization_queue"] == {
+            "queue": "analytics"
+        }
 
     def test_task_returns_failed_dict_instead_of_raising(self, monkeypatch):
         _enable(monkeypatch)
@@ -470,6 +480,52 @@ class TestSilentDegradationGuards:
         assert result["status"] == "failed"
         assert "service" in result["reason"].lower()
         factory.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_close_out_failure_is_retried_then_reported_not_swallowed(self, monkeypatch):
+        """codex iter-2 HIGH: after a SUCCESSFUL GEPA run, an unguarded
+        close-out that raises would abort the cycle with the row stuck in
+        'processing' — zombie recovery would later re-pend it and RE-EXECUTE
+        work whose optimized module was already saved. The close-out must be
+        retried in-process (never re-running GEPA), and a final failure must
+        be reported, not swallowed into an aborted cycle."""
+        _enable(monkeypatch)
+        monkeypatch.setattr(drain_mod, "_CLOSE_OUT_RETRY_DELAY_S", 0.0)
+        db = FakeQueueDB(rows=[make_request_row("req_a")], fail_status_rpc_times=99)
+        executor = _ok_executor()
+        with patch(FACTORY, new=AsyncMock(return_value=db)):
+            with patch.object(drain_mod, "_execute_request", executor):
+                with patch.object(drain_mod, "_produce_requests", AsyncMock(return_value=None)):
+                    result = await drain_mod._drain_cycle()
+
+        # The cycle survives and reports the truth.
+        assert result["status"] == "completed"
+        (entry,) = result["executed"]
+        assert entry["status"] == "completed"
+        assert entry["close_out"] is False
+        # Bounded retries, all against the RPC — and GEPA ran exactly ONCE.
+        attempts = [1 for fn, _ in db.rpc_calls if fn == "update_optimization_request_status"]
+        assert len(attempts) == drain_mod._CLOSE_OUT_ATTEMPTS
+        assert executor.await_count == 1
+        # The row stays 'processing'; zombie recovery is the documented
+        # at-least-once backstop for this window.
+        assert db.row("req_a")["status"] == "processing"
+
+    @pytest.mark.asyncio
+    async def test_close_out_transient_failure_recovers_on_retry(self, monkeypatch):
+        _enable(monkeypatch)
+        monkeypatch.setattr(drain_mod, "_CLOSE_OUT_RETRY_DELAY_S", 0.0)
+        db = FakeQueueDB(rows=[make_request_row("req_a")], fail_status_rpc_times=1)
+        executor = _ok_executor(0.8)
+        with patch(FACTORY, new=AsyncMock(return_value=db)):
+            with patch.object(drain_mod, "_execute_request", executor):
+                with patch.object(drain_mod, "_produce_requests", AsyncMock(return_value=None)):
+                    result = await drain_mod._drain_cycle()
+
+        assert db.row("req_a")["status"] == "completed"
+        (entry,) = result["executed"]
+        assert entry["close_out"] is True
+        assert executor.await_count == 1
 
     def test_zombie_floor_exceeds_celery_hard_time_limit(self, monkeypatch):
         """codex iter-1 MEDIUM: re-pending a STILL-RUNNING GEPA job would allow

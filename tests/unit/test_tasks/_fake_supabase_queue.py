@@ -157,12 +157,17 @@ class FakeQueueDB:
         self,
         rows: Optional[List[Dict[str, Any]]] = None,
         race_first_peek: bool = False,
+        fail_status_rpc_times: int = 0,
     ) -> None:
         self.rows: List[Dict[str, Any]] = [dict(r) for r in (rows or [])]
         self.rpc_calls: List[Tuple[str, Dict[str, Any]]] = []
         self.table_ops: List[Dict[str, Any]] = []
         self._race_first_peek = race_first_peek
         self._peeked = False
+        # Simulates transient DB trouble on the close-out RPC: the first N
+        # update_optimization_request_status calls raise (after being recorded
+        # in rpc_calls), then the RPC behaves normally.
+        self._fail_status_rpc_times = fail_status_rpc_times
 
     # -- client surface ------------------------------------------------------
     def rpc(self, fn: str, params: Optional[Dict[str, Any]] = None) -> _FakeRpcCall:
@@ -217,6 +222,9 @@ class FakeQueueDB:
             return FakeResult([snapshot])
 
         if fn == "update_optimization_request_status":
+            if self._fail_status_rpc_times > 0:
+                self._fail_status_rpc_times -= 1
+                raise RuntimeError("simulated transient close-out failure")
             row = self.row(params["p_request_id"])
             if row is None:
                 return FakeResult(False)

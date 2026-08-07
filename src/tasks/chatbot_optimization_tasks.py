@@ -56,6 +56,7 @@ containers and the in-code defaults govern unconditionally).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -98,6 +99,18 @@ _ZOMBIE_HOURS_FLOOR = 3
 # Producer threshold, passed through to submit_signals_for_optimization.
 MIN_SIGNALS_ENV = "CHATBOT_OPT_MIN_SIGNALS"
 _DEFAULT_MIN_SIGNALS = 50
+
+# Close-out retry budget (codex iter-2 HIGH): after a GEPA execution, a
+# close-out that fails must NOT abort the cycle and leave the row silently
+# stuck in 'processing' — zombie recovery would later re-pend it and RE-EXECUTE
+# work whose optimized module was already saved. The terminal status is known
+# in-process at that moment, so it is retried here (never re-running GEPA); if
+# all attempts fail the failure is logged loudly and reported in the cycle
+# result (executed[..]["close_out"] == False). Residual window: the queue is
+# at-least-once — a close-out lost to a sustained DB outage means one bounded
+# re-execution after the zombie cutoff, capped by the per-cycle bound.
+_CLOSE_OUT_ATTEMPTS = 3
+_CLOSE_OUT_RETRY_DELAY_S = 1.0
 
 _TRUTHY = ("1", "true", "yes")
 
@@ -289,6 +302,53 @@ async def _close_out(
     return bool(result.data)
 
 
+async def _close_out_with_retry(
+    client: Any,
+    request_id: str,
+    status: str,
+    **kwargs: Any,
+) -> bool:
+    """Bounded in-process retry around :func:`_close_out` (codex iter-2 HIGH).
+
+    Returns True once the terminal status is persisted; False after the last
+    attempt, with a loud error log naming the consequence (row remains
+    'processing'; zombie recovery is the at-least-once backstop). NEVER
+    re-runs the executor.
+    """
+    for attempt in range(1, _CLOSE_OUT_ATTEMPTS + 1):
+        try:
+            if await _close_out(client, request_id, status, **kwargs):
+                return True
+            logger.warning(
+                "close-out for %s -> %s matched no row (attempt %d/%d)",
+                request_id,
+                status,
+                attempt,
+                _CLOSE_OUT_ATTEMPTS,
+            )
+        except Exception as e:  # noqa: BLE001 - close-out trouble must not abort the cycle
+            logger.warning(
+                "close-out for %s -> %s raised (attempt %d/%d): %s",
+                request_id,
+                status,
+                attempt,
+                _CLOSE_OUT_ATTEMPTS,
+                e,
+            )
+        if attempt < _CLOSE_OUT_ATTEMPTS:
+            await asyncio.sleep(_CLOSE_OUT_RETRY_DELAY_S)
+    logger.error(
+        "close-out FAILED for %s after %d attempts: the row remains 'processing' and "
+        "zombie recovery will re-pend it after %dh — the executor may re-run this "
+        "request once (at-least-once queue semantics; execution result was %s)",
+        request_id,
+        _CLOSE_OUT_ATTEMPTS,
+        _zombie_hours(),
+        status,
+    )
+    return False
+
+
 async def _execute_request(row: Dict[str, Any]) -> Dict[str, Any]:
     """Run the REAL executor seam for one claimed request. LLM-expensive:
     everything upstream (gate, per-cycle bound, claim) exists to bound how
@@ -368,18 +428,19 @@ async def _drain_cycle(force: bool = False) -> Dict[str, Any]:
             result = await _execute_request(row)
         except Exception as e:  # noqa: BLE001 - one request must not abort the cycle
             logger.error("optimization execution failed for %s: %s", request_id, e, exc_info=True)
-            await _close_out(client, request_id, "failed", error_message=str(e))
+            closed = await _close_out_with_retry(client, request_id, "failed", error_message=str(e))
             executed.append(
                 {
                     "request_id": request_id,
                     "module_name": row["module_name"],
                     "status": "failed",
+                    "close_out": closed,
                 }
             )
             continue
 
         if result.get("success"):
-            await _close_out(
+            closed = await _close_out_with_retry(
                 client,
                 request_id,
                 "completed",
@@ -387,7 +448,7 @@ async def _drain_cycle(force: bool = False) -> Dict[str, Any]:
             )
             outcome = "completed"
         else:
-            await _close_out(
+            closed = await _close_out_with_retry(
                 client,
                 request_id,
                 "failed",
@@ -399,6 +460,7 @@ async def _drain_cycle(force: bool = False) -> Dict[str, Any]:
                 "request_id": request_id,
                 "module_name": row["module_name"],
                 "status": outcome,
+                "close_out": closed,
             }
         )
 

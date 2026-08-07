@@ -195,6 +195,7 @@ async def test_full_drain_cycle_completes_request_against_real_db(db, monkeypatc
         "request_id": rid,
         "module_name": "synthesizer",
         "status": "completed",
+        "close_out": True,
     } in result["executed"]
     fake_optimize.assert_awaited_once_with("synthesizer", budget="light", min_reward=0.55)
     producer.assert_not_awaited()

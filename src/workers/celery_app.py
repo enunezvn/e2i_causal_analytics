@@ -186,6 +186,12 @@ celery_app.conf.task_routes = {
     # the persisted signals and gates on GEPAOptimizationTrigger.
     "src.tasks.run_feedback_learning_cycle": {"queue": "analytics"},
     "src.tasks.run_dspy_prompt_optimization": {"queue": "analytics"},
+    # Chatbot optimization queue drainer (#1515). The beat entry already pins
+    # the queue via options.queue; this route covers the documented manual
+    # trigger (`celery call src.tasks.drain_chatbot_optimization_queue`,
+    # force=True) which would otherwise land on the default queue and run the
+    # LLM-expensive GEPA executor on worker_light (codex #1515 iter-2 LOW).
+    "src.tasks.drain_chatbot_optimization_queue": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
     # adherence, territory rollup). Beat schedules already pin these to
