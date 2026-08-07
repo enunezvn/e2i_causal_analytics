@@ -985,14 +985,43 @@ class TestHardcodedQueryRewriting:
         assert entities == []
 
     def test_rewrite_multiple_entities(self):
-        """Test extraction of multiple E2I entities."""
+        """Test extraction of multiple E2I entities.
+
+        #1517: "southeast" is a REGION_ALIASES synonym of the canonical
+        region_type label "south" — the knowledge graph stores only
+        Northeast/South/Midwest/West, so a "Southeast" entity quietly missed.
+        """
         query = "Compare Kisqali TRx in Northeast vs Southeast for Q2"
         rewritten, keywords, entities = rewrite_query_hardcoded(query)
 
         assert "Kisqali" in entities
         assert "Northeast" in entities
-        assert "Southeast" in entities
+        assert "South" in entities
+        assert "Southeast" not in entities
         assert "trx" in keywords
+        assert "south" in keywords
+        assert "southeast" not in keywords
+
+    def test_rewrite_south_region_is_recognized(self):
+        """#1517: "south" was missing from the hardcoded region list entirely,
+        so the canonical region named in the ask produced no region entity."""
+        query = "Why did Fabhalta NRx drop in the South last quarter?"
+        rewritten, keywords, entities = rewrite_query_hardcoded(query)
+
+        assert "south" in keywords
+        assert "South" in entities
+
+    def test_rewrite_emits_only_canonical_region_labels(self):
+        """#1517: every region entity the rewriter emits must be a canonical
+        region_type label (title-cased, as the graph stores node names)."""
+        from src.services.enum_labels import REGION_ENUM_LABELS
+
+        canonical_titles = {label.title() for label in REGION_ENUM_LABELS}
+        for phrase in ("Southwest", "southeast", "New England", "the Pacific"):
+            _, keywords, entities = rewrite_query_hardcoded(f"Show TRx in {phrase}")
+            assert entities, phrase
+            for entity in entities:
+                assert entity in canonical_titles, (phrase, entity)
 
 
 class TestE2IDomainVocabulary:
@@ -1005,10 +1034,19 @@ class TestE2IDomainVocabulary:
         assert "Fabhalta" in E2I_DOMAIN_VOCABULARY
 
     def test_vocabulary_contains_regions(self):
-        """Test vocabulary contains regions."""
+        """Test vocabulary lists the canonical region_type labels (#1517).
+
+        The vocabulary is the DSPy rewriter's region ground truth; a non-label
+        in it ("Southeast", "Southwest") teaches the LLM to emit graph entities
+        the knowledge graph does not store (Regions are
+        Northeast/South/Midwest/West), so graph lookups quietly missed.
+        """
         assert "Northeast" in E2I_DOMAIN_VOCABULARY
-        assert "Southeast" in E2I_DOMAIN_VOCABULARY
+        assert "South" in E2I_DOMAIN_VOCABULARY
         assert "Midwest" in E2I_DOMAIN_VOCABULARY
+        assert "West" in E2I_DOMAIN_VOCABULARY
+        assert "Southeast" not in E2I_DOMAIN_VOCABULARY
+        assert "Southwest" not in E2I_DOMAIN_VOCABULARY
 
     def test_vocabulary_contains_kpis(self):
         """Test vocabulary contains KPIs."""

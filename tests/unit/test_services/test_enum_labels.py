@@ -155,6 +155,27 @@ class TestResolveBrand:
         assert enum_labels.resolve_brand_label("Kis qali") is None
 
 
+class TestBrandBucketLabels:
+    """#1517 item 3: "competitor" / "other" are aggregation buckets on the
+    ``brand_type`` enum (added for DB enum sync), not named products. Entity
+    extraction must not treat these ordinary English words as brand tokens,
+    while the enum-resolution path keeps accepting them."""
+
+    def test_buckets_are_a_subset_of_the_enum_labels(self):
+        assert set(enum_labels.BRAND_BUCKET_LABELS) <= set(enum_labels.BRAND_ENUM_LABELS)
+
+    def test_buckets_exclude_every_named_product(self):
+        products = set(enum_labels.BRAND_ENUM_LABELS) - set(enum_labels.BRAND_BUCKET_LABELS)
+        assert products == {"Remibrutinib", "Fabhalta", "Kisqali"}
+
+    def test_buckets_still_resolve_on_the_enum_path(self):
+        for bucket in enum_labels.BRAND_BUCKET_LABELS:
+            assert enum_labels.resolve_brand_label(bucket.title()) == bucket
+
+    def test_buckets_are_an_immutable_tuple(self):
+        assert isinstance(enum_labels.BRAND_BUCKET_LABELS, tuple)
+
+
 class TestCasefoldSemantics:
     """The resolvers use ``casefold()`` (Python's caseless-matching operation),
     while cohort_resolution previously used ``lower()``.

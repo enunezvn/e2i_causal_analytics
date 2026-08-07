@@ -31,7 +31,12 @@ from src.rag.types import ExtractedEntities
 # importing src.rag.entity_extractor costs src.services +7741 modules / +16.9 s
 # via src/rag/__init__; the reverse edge is +0). Entity extraction and the chat
 # KPI tool's region_type normalization therefore read one table, not two.
-from src.services.enum_labels import REGION_ALIASES, REGION_ENUM_LABELS
+from src.services.enum_labels import (
+    BRAND_BUCKET_LABELS,
+    BRAND_ENUM_LABELS,
+    REGION_ALIASES,
+    REGION_ENUM_LABELS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +78,20 @@ class EntityVocabulary:
             vocab.get_journey_stages()
             vocab.get_hcp_segments()
         except Exception:
-            # Fallback if VocabularyRegistry unavailable. Regions come from the
-            # shared region_type label set (#1505) rather than a hand-copied
-            # literal. Brands stay a narrower literal ON PURPOSE: brand_type
-            # also carries "competitor" and "other", and admitting those as
-            # extraction tokens would match those common words in any query.
-            canonical_brands = ["Remibrutinib", "Fabhalta", "Kisqali"]
+            # Fallback if VocabularyRegistry unavailable. Both sets come from
+            # the shared enum-label module (#1505) rather than hand-copied
+            # literals.
+            canonical_brands = list(BRAND_ENUM_LABELS)
             canonical_regions = list(REGION_ENUM_LABELS)
+
+        # brand_type also carries the aggregation buckets "competitor" and
+        # "other" (added for DB enum sync, commit 9564740d). They are NOT
+        # extraction tokens (#1517): both are common English words, and the
+        # graph backend matches extracted brands case-insensitively against
+        # Brand nodes (a `competitor` node exists), so extracting them would
+        # scope search to a bucket the user never named — "what other factors
+        # drove TRx" must not become a brand-filtered query.
+        canonical_brands = [b for b in canonical_brands if b not in BRAND_BUCKET_LABELS]
 
         # Build brands with extraction-friendly aliases
         # Canonical names from VocabularyRegistry, aliases for NLP matching
@@ -233,19 +245,32 @@ class EntityExtractor:
         """Parse YAML config into EntityVocabulary."""
         vocab = EntityVocabulary()
 
-        # Parse brands
+        # Parse brands. The bucket labels ("competitor"/"other") are skipped
+        # for the same reason ``from_default`` skips them (#1517): the standard
+        # domain_vocabulary.yaml lists them for DB enum sync, and admitting
+        # them here would make the YAML path extract those common English
+        # words as brand entities. A caller that genuinely wants bucket
+        # extraction can pass an explicit ``EntityVocabulary``.
         if "brands" in config:
             brands_data = config["brands"]
             if isinstance(brands_data, dict) and "values" in brands_data:
                 for brand in brands_data["values"]:
+                    if brand in BRAND_BUCKET_LABELS:
+                        continue
                     vocab.brands[brand] = [brand.lower()]
 
-        # Parse regions
+        # Parse regions. A canonical region_type label keeps the SHARED alias
+        # table (#1517): the YAML path previously attached only
+        # ``[region.lower()]``, so a config-loaded extractor silently rejected
+        # "New England"/"NE"/"central" that the default path accepts. Unknown
+        # custom regions keep the single lowercase alias.
         if "regions" in config:
             regions_data = config["regions"]
             if isinstance(regions_data, dict) and "values" in regions_data:
                 for region in regions_data["values"]:
-                    vocab.regions[region] = [region.lower()]
+                    vocab.regions[region] = list(
+                        REGION_ALIASES.get(region.casefold(), [region.lower()])
+                    )
 
         # Parse time periods
         if "time_periods" in config:

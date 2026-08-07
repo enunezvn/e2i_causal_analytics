@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from src.agents.multi_faceted import is_multi_faceted_facet_score
+from src.services.enum_labels import REGION_ALIASES
 from src.utils.redaction import redact_query
 from src.utils.stage_timing import record_stage_wall_time
 
@@ -1036,7 +1037,7 @@ CHATBOT_COGNITIVE_RAG_ENABLED = os.getenv("CHATBOT_COGNITIVE_RAG", "true").lower
 # E2I domain vocabulary for query rewriting
 E2I_DOMAIN_VOCABULARY = """
 Brands: Kisqali, Remibrutinib, Fabhalta
-Regions: Northeast, Southeast, Midwest, West, Southwest
+Regions: Northeast, South, Midwest, West
 KPIs: TRx, NRx, Market Share, Conversion Rate, Volume, Growth Rate
 HCP Types: Oncologist, Rheumatologist, Dermatologist, Hematologist
 Patient Stages: Diagnosis, Treatment, Maintenance, Follow-up
@@ -1355,12 +1356,18 @@ def rewrite_query_hardcoded(
         if kpi in query_lower:
             keywords.append(kpi)
 
-    # Region extraction
-    regions = ["northeast", "southeast", "midwest", "west", "southwest"]
-    for region in regions:
-        if region in query_lower:
-            keywords.append(region)
-            entities.append(region.title())
+    # Region extraction — alias phrasings from the shared region_type table
+    # (#1517). Only canonical enum labels are emitted: the knowledge graph
+    # stores Regions Northeast/South/Midwest/West (title-cased names), so the
+    # old hardcoded list's "southeast"/"southwest" (defined synonyms of
+    # "south") fed graph lookups that quietly missed, and "south" itself was
+    # absent from the list entirely.
+    for region_label, aliases in REGION_ALIASES.items():
+        for alias in dict.fromkeys((region_label, *aliases)):
+            if re.search(rf"\b{re.escape(alias)}\b", query_lower):
+                keywords.append(region_label)
+                entities.append(region_label.title())
+                break
 
     # Time extraction
     times = ["mtd", "qtd", "ytd", "last quarter", "last month", "q1", "q2", "q3", "q4"]

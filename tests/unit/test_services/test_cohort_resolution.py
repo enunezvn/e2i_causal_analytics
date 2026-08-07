@@ -101,31 +101,62 @@ def test_unrecognized_brand_returns_none_without_db_call():
 
 
 # ---------------------------------------------------------------------------
-# #1505 consolidation guardrails
+# #1505 consolidation guardrails → #1517 product decision
 #
-# The brand/region resolvers now live in src/services/enum_labels.py, shared
-# with the chat KPI tool. That tool resolves the platform's region SYNONYMS
-# ("NE", "North East", "central"); this service must NOT inherit them by
-# accident. Widening what a cohort query accepts is a product decision about a
-# fail-closed contract, so it stays strict until asked for — these tests are
-# the alarm that would fire if consolidation loosened it silently.
+# The brand/region resolvers live in src/services/enum_labels.py, shared with
+# the chat KPI tool. #1505 kept this service strict (allow_synonyms=False) so
+# consolidation could not widen a fail-closed contract as a side effect; the
+# tests below were the alarm for that. #1517 then made the widening an explicit
+# product decision: every production consumer feeding this service (the
+# tool_composer chat tool, the cohort_builder composable tool, the orchestrator
+# dispatcher) passes chat/LLM-derived or frontend-typed region strings — the
+# exact input domain the chat KPI tool already resolves WITH the platform
+# synonym table. No consumer passes market/territory identifiers that an alias
+# could falsely match. The same ask ("conversion in the Pacific") must not get
+# KPI numbers from one chat tool and a fail-closed cohort from the other.
 # ---------------------------------------------------------------------------
 
 
-def test_region_synonyms_still_fail_closed():
-    for synonym in ("NE", "new england", "central", "Pacific", "southern", "nw"):
+def test_region_synonyms_resolve_to_canonical_labels():
+    # #1517: platform synonyms resolve to their region_type label and FILTER
+    # the query — identical semantics to the chat KPI tool on the same input.
+    for synonym, expected in (
+        ("NE", "northeast"),
+        ("new england", "northeast"),
+        ("central", "midwest"),
+        ("Pacific", "west"),
+        ("southern", "south"),
+        ("nw", "west"),
+        ("Southeast", "south"),
+        ("southwest", "south"),
+    ):
         fake = _FakeSupabase(_rows(3))
         frame = resolve_cohort_frame("Kisqali", synonym, supabase_client=fake)
-        assert frame is None, synonym
-        assert fake.recorder["table"] is None, synonym
+        assert isinstance(frame, pd.DataFrame), synonym
+        assert ("geographic_region", expected) in fake.recorder["eq"], synonym
 
 
-def test_region_separator_variants_still_fail_closed():
-    for variant in ("North East", "north-east", "mid west", "north_east"):
+def test_region_separator_variants_resolve():
+    for variant, expected in (
+        ("North East", "northeast"),
+        ("north-east", "northeast"),
+        ("mid west", "midwest"),
+        ("north_east", "northeast"),
+    ):
         fake = _FakeSupabase(_rows(3))
         frame = resolve_cohort_frame("Kisqali", variant, supabase_client=fake)
-        assert frame is None, variant
-        assert fake.recorder["table"] is None, variant
+        assert isinstance(frame, pd.DataFrame), variant
+        assert ("geographic_region", expected) in fake.recorder["eq"], variant
+
+
+def test_non_synonym_regions_still_fail_closed():
+    # The synonym table is closed: anything outside it (market names, typos)
+    # still fails closed WITHOUT a query — never a silently-wrong population.
+    for garbage in ("US", "EU", "APAC", "atlantis", "emea"):
+        fake = _FakeSupabase(_rows(3))
+        frame = resolve_cohort_frame("Kisqali", garbage, supabase_client=fake)
+        assert frame is None, garbage
+        assert fake.recorder["table"] is None, garbage
 
 
 def test_brand_aliases_fail_closed():
@@ -137,7 +168,7 @@ def test_brand_aliases_fail_closed():
         assert fake.recorder["table"] is None, alias
 
 
-def test_resolvers_are_the_shared_ones_in_strict_mode():
+def test_resolvers_are_the_shared_ones():
     from src.services import enum_labels
 
     assert cohort_resolution._normalize_brand is enum_labels.resolve_brand_label
@@ -146,6 +177,9 @@ def test_resolvers_are_the_shared_ones_in_strict_mode():
     assert not hasattr(cohort_resolution, "_REGION_CANONICAL")
     for label in enum_labels.REGION_ENUM_LABELS:
         assert cohort_resolution._normalize_region(label.title()) == label
+    # #1517: _normalize_region resolves via the SHARED synonym table — a value
+    # only the alias table knows must land on its canonical label.
+    assert cohort_resolution._normalize_region("new england") == "northeast"
 
 
 def test_empty_result_returns_none():

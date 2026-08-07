@@ -475,3 +475,113 @@ class TestErrorHandling:
             extractor.extract(None)  # type: ignore
         except (TypeError, AttributeError):
             pass  # Expected behavior
+
+
+# ============================================================================
+# Brand bucket labels (#1517 item 3)
+# ============================================================================
+
+
+class TestBrandBucketLabelsNotExtracted:
+    """``brand_type`` carries two aggregation buckets — "competitor" and
+    "other" — added to the vocabulary for DB enum sync (get_enum_values), not
+    for NLP. They are ordinary English words: extracting them as brand entities
+    scopes graph search / analytics to a bucket the user never named (the
+    knowledge graph HAS a ``competitor`` Brand node, matched case-insensitively
+    by the graph backend). The registry-unavailable fallback already excluded
+    them ON PURPOSE (#1509); the primary VocabularyRegistry path must agree.
+    """
+
+    def test_default_vocabulary_excludes_bucket_labels(self):
+        from src.services.enum_labels import BRAND_BUCKET_LABELS
+
+        vocab = EntityVocabulary.from_default()
+        for bucket in BRAND_BUCKET_LABELS:
+            assert bucket not in vocab.brands, bucket
+
+    def test_common_words_are_not_extracted_as_brands(self, extractor):
+        entities = extractor.extract("How does Kisqali compare to competitor brands?")
+        assert entities.brands == ["Kisqali"]
+
+        entities = extractor.extract("What other factors drove TRx in the West?")
+        assert entities.brands == []
+
+    def test_product_brands_still_extracted(self, extractor):
+        entities = extractor.extract("Compare Kisqali, Fabhalta and Remibrutinib")
+        assert entities.brands == ["Fabhalta", "Kisqali", "Remibrutinib"]
+
+    def test_bucket_labels_are_real_enum_labels(self):
+        # The buckets stay valid brand_type labels (the enum-resolution path is
+        # untouched); they are only excluded from EXTRACTION.
+        from src.services.enum_labels import (
+            BRAND_BUCKET_LABELS,
+            BRAND_ENUM_LABELS,
+            resolve_brand_label,
+        )
+
+        assert set(BRAND_BUCKET_LABELS) <= set(BRAND_ENUM_LABELS)
+        for bucket in BRAND_BUCKET_LABELS:
+            assert resolve_brand_label(bucket.upper()) == bucket
+
+    def test_registry_fallback_excludes_buckets_via_shared_constant(self, monkeypatch):
+        from src.ontology import VocabularyRegistry
+        from src.services.enum_labels import BRAND_BUCKET_LABELS
+
+        def _unavailable():
+            raise RuntimeError("VocabularyRegistry unavailable")
+
+        monkeypatch.setattr(VocabularyRegistry, "load", staticmethod(_unavailable))
+        vocab = EntityVocabulary.from_default()
+        assert set(vocab.brands) == {"Remibrutinib", "Fabhalta", "Kisqali"}
+        for bucket in BRAND_BUCKET_LABELS:
+            assert bucket not in vocab.brands, bucket
+
+
+# ============================================================================
+# YAML config path keeps the shared region alias table (#1517 item 5)
+# ============================================================================
+
+
+class TestParseConfigRegionAliases:
+    """``_parse_config`` (the YAML config path) previously attached only
+    ``[region.lower()]`` as each region's alias list, silently dropping
+    REGION_ALIASES — a config-loaded extractor rejected "New England", "NE",
+    "central" that the default-path extractor accepts. For canonical
+    ``region_type`` labels the YAML path must yield the same alias set as the
+    default path; unknown custom regions keep the single-alias behavior.
+    """
+
+    _CONFIG = {
+        "regions": {
+            "description": "US geographic regions",
+            "values": ["northeast", "south", "midwest", "west"],
+        }
+    }
+
+    def test_canonical_regions_get_the_shared_alias_table(self, extractor):
+        vocab = extractor._parse_config(self._CONFIG)
+        for region in self._CONFIG["regions"]["values"]:
+            assert vocab.regions[region] == REGION_ALIASES[region], region
+            # A copy, not the shared list object.
+            assert vocab.regions[region] is not REGION_ALIASES[region], region
+
+    def test_config_loaded_extractor_matches_alias_phrasings(self, extractor):
+        vocab = extractor._parse_config(self._CONFIG)
+        config_extractor = EntityExtractor(vocabulary=vocab)
+        entities = config_extractor.extract("How is TRx doing in New England?")
+        assert entities.regions == ["northeast"]
+
+    def test_unknown_custom_region_keeps_single_alias(self, extractor):
+        vocab = extractor._parse_config({"regions": {"values": ["EMEA"]}})
+        assert vocab.regions["EMEA"] == ["emea"]
+
+    def test_yaml_brands_skip_bucket_labels(self, extractor):
+        # The standard domain_vocabulary.yaml lists the buckets in
+        # brands.values (DB enum sync); the YAML path must not turn them into
+        # extraction tokens any more than the default path does (#1517).
+        vocab = extractor._parse_config(
+            {"brands": {"values": ["Remibrutinib", "Fabhalta", "Kisqali", "competitor", "other"]}}
+        )
+        assert "competitor" not in vocab.brands
+        assert "other" not in vocab.brands
+        assert "Kisqali" in vocab.brands

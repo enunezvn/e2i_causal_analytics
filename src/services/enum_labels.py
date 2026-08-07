@@ -32,11 +32,15 @@ step instead, so drift fails a test rather than a production query.
 Two modes, never a default
 --------------------------
 ``resolve_region_label`` takes a REQUIRED ``allow_synonyms`` keyword. The chat
-KPI tool passes ``True`` (an LLM emits "Northeast", "NE", "the Pacific");
-cohort resolution passes ``False`` — its fail-closed contract deliberately
-accepts only real labels, and widening it is a product decision, not a
-refactoring side effect. Omitting the keyword is a ``TypeError``, so the
-question can never be answered by accident.
+KPI tool passes ``True`` (an LLM emits "Northeast", "NE", "the Pacific").
+Cohort resolution passed ``False`` through #1505 so that consolidation could
+not widen a fail-closed contract as a side effect; #1517 then made the
+widening an explicit product decision (every consumer feeding it passes
+chat/LLM-derived or frontend-typed strings — the same input domain the KPI
+tool resolves with synonyms), so it now passes ``True`` too. The keyword stays
+REQUIRED with no default: a future call site with a different input domain
+(e.g. DB-sourced territory names) must answer the question itself — omitting
+the keyword is a ``TypeError``, so it can never be answered by accident.
 
 Home chosen by measurement, not taste (#1505): importing
 ``src.rag.entity_extractor`` (the previous owner of the alias table) costs
@@ -68,6 +72,16 @@ BRAND_ENUM_LABELS: Tuple[str, ...] = (
     "competitor",
     "other",
 )
+
+#: ``brand_type`` labels that are aggregation BUCKETS, not named products.
+#: They were added to the vocabulary/enum for DB sync ("resolve ENUM sync
+#: issues", commit 9564740d) — valid enum values for storage and groupby, but
+#: ordinary English words in chat text. NLP brand extraction
+#: (:mod:`src.rag.entity_extractor`) excludes them (#1517): extracting
+#: "competitor"/"other" from a phrase like "what other factors…" would scope
+#: graph search or analytics to a bucket the user never named. The
+#: enum-resolution path (:func:`resolve_brand_label`) accepts them unchanged.
+BRAND_BUCKET_LABELS: Tuple[str, ...] = ("competitor", "other")
 
 #: Region phrasings the platform's NLP layer recognizes, keyed by enum label.
 #: Owned here and re-exported by :mod:`src.rag.entity_extractor` (which feeds
@@ -131,14 +145,15 @@ def resolve_region_label(region: Optional[str], *, allow_synonyms: bool) -> Opti
     """Resolve a region string to its ``region_type`` label, else ``None``.
 
     ``allow_synonyms=False`` (strict): only a real label, in any casing, with
-    surrounding whitespace stripped. This is cohort resolution's fail-closed
-    contract — "NE" and "North East" do NOT resolve.
+    surrounding whitespace stripped — "NE" and "North East" do NOT resolve.
+    For callers whose inputs are already canonical (or must be).
 
     ``allow_synonyms=True``: additionally accepts separator variants and every
     phrasing the platform's entity extraction recognizes ("NE", "new england",
-    "central", "Pacific"). This is the chat KPI tool's contract: an LLM tool
-    call naturally produces display and colloquial forms, and an unresolved
-    value there would 22P02 the entire query (#1501).
+    "central", "Pacific"). This is the contract of both wired consumers — the
+    chat KPI tool (#1501) and, since #1517, cohort resolution — because their
+    inputs are chat/LLM-derived forms, and an unresolved value would either
+    22P02 the query or fail-close a resolvable ask.
 
     ``allow_synonyms`` is keyword-only and has NO default: each call site must
     state which contract it wants.
