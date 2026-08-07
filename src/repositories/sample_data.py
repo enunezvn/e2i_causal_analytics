@@ -19,12 +19,19 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from src.services.enum_labels import REGION_ENUM_LABELS
+
 logger = logging.getLogger(__name__)
 
 
 # E2I Brand and Region Enums
 BRANDS = ["Remibrutinib", "Fabhalta", "Kisqali"]
-REGIONS = ["US", "EU", "APAC", "LATAM", "JP"]
+# region_type labels from the shared enum-label module (#1517). This list
+# previously drifted to ["US", "EU", "APAC", "LATAM", "JP"] — values the
+# production region_type enum can never accept and BusinessMetricsSchema
+# (pandera) rejects, contradicting this module's "match production table
+# schemas" purpose. Sourced (not hand-copied) so it cannot drift again.
+REGIONS = list(REGION_ENUM_LABELS)
 
 # KPI Names (subset of the defined KPIs)
 KPIS = [
@@ -597,9 +604,9 @@ class SampleDataGenerator:
         # Valid journey statuses per Pandera schema
         # E2I_JOURNEY_STATUSES = ["active", "stable", "transitioning", "completed"]
 
-        # Valid regions per Pandera schema (lowercase)
-        # E2I_REGIONS = ["northeast", "south", "midwest", "west"]
-        valid_regions = ["northeast", "south", "midwest", "west"]
+        # Valid regions per Pandera schema — the shared region_type labels
+        # (#1517: sourced from enum_labels, not a second hand copy).
+        valid_regions = list(REGION_ENUM_LABELS)
 
         data = []
         for _ in range(n_patients):

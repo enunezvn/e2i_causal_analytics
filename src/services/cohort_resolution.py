@@ -28,8 +28,9 @@ This service NEVER fabricates a synthetic cohort. It returns ``None`` (fail
 closed) when:
 
 * an explicit ``data_source`` yields nothing,
-* a supplied brand/region is not a recognized enum member (so we do not silently
-  return a wrong-population cohort), or
+* a supplied brand/region is not a recognized enum member (for regions: a
+  label or a platform-synonym of one, #1517 — so we do not silently return a
+  wrong-population cohort), or
 * the canonical query returns zero rows.
 
 Callers then honestly proceed without ``estimation_data`` and the composable
@@ -73,14 +74,25 @@ _normalize_brand = resolve_brand_label
 def _normalize_region(region: Optional[str]) -> Optional[str]:
     """Map a region string to its canonical ``region_type`` label, else None.
 
-    STRICT by design: the chat KPI tool additionally accepts the platform's
-    region synonyms ("NE", "North East", "central"), but this service fails
-    closed on anything that is not a real label so an ambiguous phrase can
-    never resolve to a wrong population. Widening it is a product decision
-    about this service's contract, not a consequence of sharing the resolver
-    (#1505) — hence the explicit ``allow_synonyms=False``.
+    Synonym-tolerant since #1517 (a deliberate product decision, NOT a
+    consolidation side effect — #1505 kept this strict until it was decided).
+    Evidence behind the flip: every production consumer feeding this service
+    passes chat/LLM-derived or frontend-typed region strings —
+
+    * ``chatbot_tools.tool_composer_tool`` / ``cohort_builder`` (tool
+      registrations): LLM tool-call / planner arguments from chat text,
+    * the orchestrator dispatcher (``_extract_brand_region``): NLP entity
+      extractions, frontend ``user_context`` (typed to the four canonical
+      labels), or ``query_entities.region_from_text`` (canonical only).
+
+    No consumer passes market/territory identifiers a ``REGION_ALIASES``
+    entry could falsely match, and the chat KPI tool already resolves the
+    SAME chat strings with synonyms — strict mode here meant "conversion in
+    the Pacific" got KPI numbers from one tool and a fail-closed cohort from
+    the other. Anything outside the alias table ("US", "EMEA", typos) still
+    fails closed; the service never guesses.
     """
-    return resolve_region_label(region, allow_synonyms=False)
+    return resolve_region_label(region, allow_synonyms=True)
 
 
 def _load_tier0_agent() -> Any:
