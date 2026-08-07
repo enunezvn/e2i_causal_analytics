@@ -82,6 +82,12 @@ x-common-env: &common-env
   # the containers.
   CHATBOT_RAG_LLM_TIMEOUT_S: ${CHATBOT_RAG_LLM_TIMEOUT_S:-20}
   CHATBOT_RAG_DRY_HOP_LIMIT: ${CHATBOT_RAG_DRY_HOP_LIMIT:-2}
+  # #1518: rewrite CoT knob (empty = Predict-only, measured median -1602ms at
+  # the chain head; "true" restores ChainOfThought) and empty-board decider
+  # skip (empty/true = skip the decider LLM call when hop-1 kept nothing,
+  # measured -1.9-3.7s on dry paths; "false" restores the LLM decider).
+  CHATBOT_RAG_REWRITE_COT: ${CHATBOT_RAG_REWRITE_COT:-}
+  CHATBOT_RAG_SKIP_EMPTY_DECIDER: ${CHATBOT_RAG_SKIP_EMPTY_DECIDER:-}
   # Routing-label loop (#1341 Phase 1): nightly Celery labeler for
   # classification_logs. Must be forwarded here or host-.env overrides never
   # reach the worker containers and the in-code defaults govern.

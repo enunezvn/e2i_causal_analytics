@@ -1046,6 +1046,19 @@ Time References: MTD, QTD, YTD, Last Quarter, Last Month, Last Week
 # Memory types for multi-hop retrieval
 MEMORY_TYPES = ["episodic", "semantic", "procedural"]
 
+# #1518: the rewriter is Predict-only by default. Measured (2026-08-07, real
+# LLM openai/gpt-5.6-terra, n=8 novel pharma queries, interleaved order, cache
+# off): CoT 4311-7537ms median 5133 vs Predict 2631-4650ms median 3425 —
+# Predict faster 8/8 (delta 568-3521ms, median 1602ms) with 0/8 quality
+# regressions (no domain term present in CoT's rewritten/keywords/entities
+# outputs was dropped by Predict). The CoT reasoning field is pure latency at
+# the chain head. Set CHATBOT_RAG_REWRITE_COT=true to restore ChainOfThought.
+_RAG_REWRITE_USE_COT = os.getenv("CHATBOT_RAG_REWRITE_COT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 
 if DSPY_AVAILABLE:
 
@@ -1116,7 +1129,14 @@ if DSPY_AVAILABLE:
 
         def __init__(self):
             super().__init__()
-            self.rewrite = dspy.ChainOfThought(QueryRewriteSignature)
+            # #1518: Predict by default (see _RAG_REWRITE_USE_COT above) —
+            # the CoT reasoning tokens cost a measured median +1602ms at the
+            # chain head with no retrieval-term quality gain.
+            self.rewrite = (
+                dspy.ChainOfThought(QueryRewriteSignature)
+                if _RAG_REWRITE_USE_COT
+                else dspy.Predict(QueryRewriteSignature)
+            )
 
         def forward(
             self,
@@ -1608,6 +1628,20 @@ _MULTIHOP_SUFFICIENT_AVG_RELEVANCE = 0.6
 # (low = sufficient). Continue only when the decider is at least this confident.
 _MULTIHOP_CONTINUE_CONFIDENCE = 0.5
 _MULTIHOP_AVAILABLE_MEMORIES = "episodic, semantic, procedural"
+# #1518: skip the decider LLM call when the evidence board is EMPTY. Measured
+# (2026-08-07, real calls): 8/8 empty-board decider calls said
+# continue->episodic at confidence >= 0.92, so the 1.9-3.7s (median ~3.3s)
+# call carries information only in its refined retrieval_query — and the
+# original user query retrieved within 2 new-rows of the LLM-refined query
+# over 6 goals (24 vs 26, chain dedupe keys). The skip keeps the dry-limit /
+# max-hop economics identical and records a near-zero rag.hop_decider stage
+# (the live-verification signal). Set CHATBOT_RAG_SKIP_EMPTY_DECIDER=false
+# to restore the legacy LLM decider on empty boards.
+_SKIP_EMPTY_DECIDER = os.getenv("CHATBOT_RAG_SKIP_EMPTY_DECIDER", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 
 def _evidence_sufficient(evidence: List[Dict[str, Any]], avg_relevance: float) -> bool:
@@ -1627,6 +1661,26 @@ def _should_continue_hop(
     if (next_memory or "").strip().upper() == "STOP":
         return False
     return confidence >= _MULTIHOP_CONTINUE_CONFIDENCE
+
+
+def _empty_board_hop_query(
+    original_query: str,
+    search_keywords: List[str],
+    queries_used: set,
+) -> Optional[str]:
+    """#1518: heuristic refinement query for an EMPTY evidence board.
+
+    Hop 1 already searched the rewritten query; the measured-best cheap retry
+    is the ORIGINAL user query (24 new-rows vs the LLM decider's 26 over 6
+    goals, never worse by >1 per goal), falling back to a keywords join (21).
+    Returns None when every candidate has already been used — the caller must
+    stop the loop rather than re-run a hop query.
+    """
+    keywords_join = ", ".join(k.strip() for k in search_keywords if k.strip())
+    for candidate in (original_query.strip(), keywords_join):
+        if candidate and candidate not in queries_used:
+            return candidate
+    return None
 
 
 def _dedupe_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1810,45 +1864,63 @@ async def cognitive_rag_retrieve(
                     )
                     break
                 _leg_t0 = time.perf_counter()
-                try:
-                    # #1484: async interface + fail-open timeout (TimeoutError
-                    # lands in the except -> stop hopping, keep what we have).
-                    decision = await asyncio.wait_for(
-                        decider.acall(
-                            investigation_goal=f"Answer: {query}",
-                            current_evidence=json.dumps(
-                                [
-                                    {
-                                        "content": e["content"][:200],
-                                        "relevance": e["relevance_score"],
-                                    }
-                                    for e in evidence
-                                ]
-                            )[:2000],
-                            hop_number=hop_count,
-                            available_memories=_MULTIHOP_AVAILABLE_MEMORIES,
-                        ),
-                        timeout=_RAG_LLM_TIMEOUT_S,
-                    )
-                except Exception as hop_err:
-                    logger.warning(
-                        f"Multi-hop decider failed; stopping at hop {hop_count}: {hop_err}"
-                    )
-                    break
-                finally:
+                if _SKIP_EMPTY_DECIDER and not evidence:
+                    # #1518: empty-board short-circuit (see _SKIP_EMPTY_DECIDER
+                    # above). The board the decider would see is "[]"; measured
+                    # 8/8 such calls said continue->episodic, so the only
+                    # information the 1.9-3.7s LLM call adds is its refined
+                    # query — replaced by the measured-comparable heuristic.
+                    # Dry-limit and max-hops still bound the loop; the stage is
+                    # recorded so the near-zero rag.hop_decider leg stays
+                    # observable on the SSE/INFO/MLflow surfaces.
+                    retrieval_query = _empty_board_hop_query(query, search_keywords, queries_used)
                     record_stage_wall_time(
                         "rag.hop_decider", (time.perf_counter() - _leg_t0) * 1000
                     )
-                next_memory = str(getattr(decision, "next_memory", "STOP"))
-                confidence = _validate_confidence(getattr(decision, "confidence", 0.0))
-                if not _should_continue_hop(next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS):
-                    break
-                retrieval_query = str(getattr(decision, "retrieval_query", "") or "").strip()
-                # A blank or already-tried query yields no new evidence — treat it
-                # as STOP rather than re-running + re-scoring the same rows on every
-                # remaining hop (codex LOW).
-                if not retrieval_query or retrieval_query in queries_used:
-                    break
+                    if retrieval_query is None:
+                        break
+                else:
+                    try:
+                        # #1484: async interface + fail-open timeout (TimeoutError
+                        # lands in the except -> stop hopping, keep what we have).
+                        decision = await asyncio.wait_for(
+                            decider.acall(
+                                investigation_goal=f"Answer: {query}",
+                                current_evidence=json.dumps(
+                                    [
+                                        {
+                                            "content": e["content"][:200],
+                                            "relevance": e["relevance_score"],
+                                        }
+                                        for e in evidence
+                                    ]
+                                )[:2000],
+                                hop_number=hop_count,
+                                available_memories=_MULTIHOP_AVAILABLE_MEMORIES,
+                            ),
+                            timeout=_RAG_LLM_TIMEOUT_S,
+                        )
+                    except Exception as hop_err:
+                        logger.warning(
+                            f"Multi-hop decider failed; stopping at hop {hop_count}: {hop_err}"
+                        )
+                        break
+                    finally:
+                        record_stage_wall_time(
+                            "rag.hop_decider", (time.perf_counter() - _leg_t0) * 1000
+                        )
+                    next_memory = str(getattr(decision, "next_memory", "STOP"))
+                    confidence = _validate_confidence(getattr(decision, "confidence", 0.0))
+                    if not _should_continue_hop(
+                        next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS
+                    ):
+                        break
+                    retrieval_query = str(getattr(decision, "retrieval_query", "") or "").strip()
+                    # A blank or already-tried query yields no new evidence — treat it
+                    # as STOP rather than re-running + re-scoring the same rows on every
+                    # remaining hop (codex LOW).
+                    if not retrieval_query or retrieval_query in queries_used:
+                        break
                 queries_used.add(retrieval_query)
                 hop_count += 1
                 more_kept, more_scores = await _hop(retrieval_query)
