@@ -89,6 +89,40 @@ x-common-env: &common-env
   ROUTING_LABEL_JUDGE_CAP: ${ROUTING_LABEL_JUDGE_CAP:-50}
   ROUTING_LABEL_JUDGE_MODEL: ${ROUTING_LABEL_JUDGE_MODEL:-claude-haiku-4-5-20251001}
   ROUTING_LABEL_LOOKBACK_DAYS: ${ROUTING_LABEL_LOOKBACK_DAYS:-30}
+  # RAG-prompt GEPA leg (#1486), run by the nightly
+  # dspy-prompt-optimization-daily beat on the analytics queue (worker_medium).
+  # src/tasks/dspy_optimization_tasks reads both from os.environ, so without
+  # these entries the host .env never reached the containers and the in-code
+  # defaults governed unconditionally — the leg could not be enabled from the
+  # outside at all (the OPIK_ENABLED lesson above). Both default to EMPTY on
+  # purpose: the in-code defaults are the SSOT (unset path = skip;
+  # _RAG_DEFAULT_MAX_METRIC_CALLS = 40), and a compose-side budget default would
+  # be a second, silently-diverging source of truth for a knob that costs real
+  # gpt-4o judge calls.
+  #
+  # DSPY_RAG_RECORDS_PATH is resolved INSIDE the container. Every volume on the
+  # services that merge this anchor (api, worker_light/medium/heavy) is a named
+  # docker volume, never a host bind mount — so a host path, the natural thing to
+  # write since scripts/replay_golden_set.py runs on the host, resolves to
+  # "records file not found" and the leg skips forever while looking configured.
+  # (Other services in this file DO bind-mount host paths — bentoml, feast,
+  # prometheus — which is exactly why the distinction is worth stating here
+  # rather than assumed.) Use a container path under one of the named volumes this
+  # service mounts read-write (worker_medium has seven; /app/optimized_modules
+  # is the natural pick because this leg already writes its artifacts and
+  # .trigger_state.json there). Leaving it unset is the supported steady state
+  # (#1489 deferral 5 adds the DB-sourced feedstock that needs no file at all).
+  DSPY_RAG_RECORDS_PATH: ${DSPY_RAG_RECORDS_PATH:-}
+  DSPY_RAG_MAX_METRIC_CALLS: ${DSPY_RAG_MAX_METRIC_CALLS:-}
+  # #1489 deferral 5: the live-traffic feedstock, which needs no records file
+  # and is therefore the only way the nightly cycle runs UNATTENDED. Default
+  # OFF — turning it on flips the leg from never-runs to runs-whenever-traffic-
+  # supplies-judgeable-turns, which spends the judge budget above, so it is an
+  # operator's cost decision rather than a deploy side effect. Parsed
+  # fail-closed in code ("false"/"0"/"no"/anything unrecognized stays off).
+  # Lookback bounds the read window in days (default 30).
+  DSPY_RAG_DB_FEEDSTOCK_ENABLED: ${DSPY_RAG_DB_FEEDSTOCK_ENABLED:-}
+  DSPY_RAG_DB_LOOKBACK_DAYS: ${DSPY_RAG_DB_LOOKBACK_DAYS:-}
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
