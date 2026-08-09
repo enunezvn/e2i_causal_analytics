@@ -13,14 +13,14 @@ Additionally handles:
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 from ..state import GapAnalyzerState, PrioritizedOpportunity
 
 logger = logging.getLogger(__name__)
 
 
-def _format_uncertainty_clause(roi_estimate: Dict[str, Any]) -> str:
+def _format_uncertainty_clause(roi_estimate: Mapping[str, Any]) -> str:
     """Render the Monte Carlo uncertainty band for an ROI estimate.
 
     ``ROICalculationService`` runs a 1,000-simulation bootstrap per gap and the
