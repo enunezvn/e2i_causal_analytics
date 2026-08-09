@@ -699,3 +699,82 @@ class TestGapAnalyzerErrorHandling:
 
         # The agent should handle errors gracefully
         assert hasattr(agent, "_build_error_output")
+
+
+class TestFormatterSurfacesMonteCarloUncertainty:
+    """The ROI Monte Carlo band was computed per gap and then dropped at the
+    formatting boundary -- the narrative reported only a point estimate, so the
+    1,000-simulation interval never reached chat. These pin it to the output.
+
+    Scale contract: the simulated samples are (value-cost)/cost * risk_multiplier
+    (roi_calculation.py:1020), so the band brackets risk_adjusted_roi, NOT the
+    expected_roi the sentence leads with. The two must stay distinguishable or a
+    risk-assessed opportunity would print a headline outside its own interval.
+    """
+
+    @staticmethod
+    def _opportunity(*, expected_roi=4.0, risk_adjusted_roi=2.4, ci=True):
+        roi_estimate = {
+            "expected_roi": expected_roi,
+            "risk_adjusted_roi": risk_adjusted_roi,
+            "estimated_revenue_impact": 1_250_000.0,
+        }
+        if ci:
+            roi_estimate["confidence_interval"] = {
+                "lower_bound": 1.1,
+                "upper_bound": 4.0,
+                "probability_positive": 0.78,
+            }
+        else:
+            roi_estimate["confidence_interval"] = None
+        return {
+            "gap": {"metric": "TRx", "segment": "region", "segment_value": "Northeast"},
+            "roi_estimate": roi_estimate,
+        }
+
+    def test_executive_summary_reports_the_interval(self):
+        from src.agents.gap_analyzer.nodes.formatter import FormatterNode
+
+        opp = self._opportunity()
+        summary = FormatterNode()._generate_executive_summary(
+            prioritized_opportunities=[opp],
+            quick_wins=[],
+            strategic_bets=[],
+            total_addressable_value=1_250_000.0,
+            total_gap_value=800.0,
+            segments_analyzed=3,
+        )
+        assert "95% CI 1.1x-4.0x" in summary
+        assert "P(ROI>1x)=78%" in summary
+        # The risk-adjusted midpoint is named, so the band is never read as
+        # bracketing the 4.0x headline.
+        assert "risk-adjusted 2.4x" in summary
+        assert "4.0x ROI" in summary
+
+    def test_key_insight_reports_the_interval(self):
+        from src.agents.gap_analyzer.nodes.formatter import FormatterNode
+
+        insights = FormatterNode()._extract_key_insights(
+            prioritized_opportunities=[self._opportunity()],
+            quick_wins=[],
+            strategic_bets=[],
+        )
+        assert "95% CI 1.1x-4.0x" in insights[0]
+
+    def test_absent_interval_reads_as_silence_not_a_fabricated_range(self):
+        """A missing CI must omit the clause entirely -- never a default band."""
+        from src.agents.gap_analyzer.nodes.formatter import FormatterNode
+
+        fmt = FormatterNode()
+        opp = self._opportunity(ci=False)
+        summary = fmt._generate_executive_summary(
+            prioritized_opportunities=[opp],
+            quick_wins=[],
+            strategic_bets=[],
+            total_addressable_value=1_250_000.0,
+            total_gap_value=800.0,
+            segments_analyzed=3,
+        )
+        assert "CI" not in summary
+        assert "risk-adjusted" not in summary
+        assert "4.0x ROI." in summary  # the point estimate still reports

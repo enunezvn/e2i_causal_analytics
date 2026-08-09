@@ -20,6 +20,47 @@ from ..state import GapAnalyzerState, PrioritizedOpportunity
 logger = logging.getLogger(__name__)
 
 
+def _format_uncertainty_clause(roi_estimate: Dict[str, Any]) -> str:
+    """Render the Monte Carlo uncertainty band for an ROI estimate.
+
+    ``ROICalculationService`` runs a 1,000-simulation bootstrap per gap and the
+    result rides on ``roi_estimate["confidence_interval"]``, but the narrative
+    historically reported only the ``expected_roi`` point estimate — the band was
+    computed and then dropped at this boundary. This helper surfaces it.
+
+    SCALE WARNING (the reason this is a helper and not an f-string at the call
+    site): the simulated samples are
+    ``(value - cost) / cost * risk_multiplier`` (``roi_calculation.py:1020``),
+    so the interval brackets ``risk_adjusted_roi`` — NOT the ``expected_roi``
+    that the surrounding sentence prints. Splicing the band onto ``expected_roi``
+    would let the headline number sit outside its own stated interval whenever a
+    risk assessment is non-default. We therefore name the risk-adjusted midpoint
+    explicitly alongside the bounds.
+
+    ``probability_positive`` is ``P(ROI > 1.0)`` on the net-return scale
+    (``compute_confidence_interval``), i.e. "returns more than double the
+    outlay" — it is NOT a break-even probability (break-even is ROI > 0). It is
+    reported with that literal meaning.
+
+    Returns an empty string when no interval is present, so an absent CI reads
+    as silence rather than a fabricated range.
+    """
+    ci = roi_estimate.get("confidence_interval")
+    if not ci:
+        return ""
+
+    lower = ci.get("lower_bound")
+    upper = ci.get("upper_bound")
+    if lower is None or upper is None:
+        return ""
+
+    clause = f" (risk-adjusted {roi_estimate.get('risk_adjusted_roi', 0.0):.1f}x, 95% CI {lower:.1f}x-{upper:.1f}x"
+    prob_positive = ci.get("probability_positive")
+    if prob_positive is not None:
+        clause += f"; P(ROI>1x)={prob_positive:.0%}"
+    return clause + ")"
+
+
 class FormatterNode:
     """Format gap analyzer output for consumption."""
 
@@ -348,7 +389,8 @@ class FormatterNode:
 
         summary += (
             f"Top opportunity: Close {top_metric} gap in {top_segment} "
-            f"for ${top_revenue:,.0f} annual impact at {top_roi:.1f}x ROI."
+            f"for ${top_revenue:,.0f} annual impact at {top_roi:.1f}x ROI"
+            f"{_format_uncertainty_clause(top_opp['roi_estimate'])}."
         )
 
         return summary
@@ -390,6 +432,7 @@ class FormatterNode:
             f"Highest ROI opportunity: {top_opp['gap']['metric']} in "
             f"{top_opp['gap']['segment_value']} ({top_opp['gap']['segment']}) "
             f"at {top_opp['roi_estimate']['expected_roi']:.1f}x ROI"
+            f"{_format_uncertainty_clause(top_opp['roi_estimate'])}"
         )
 
         # Insight 2: Segment concentration

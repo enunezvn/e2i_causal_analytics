@@ -360,3 +360,93 @@ def test_propensity_estimator_computes_real_scores():
 
 def test_module_imports_cleanly():
     assert Path(tr.__file__).exists()
+
+
+# ============================================================================
+# roi_estimator uncertainty: MEASURED from entity spread, never a constant band.
+#
+# The interval was previously a hardcoded +/-25% of the opportunity value. That
+# is information-free -- it moves with the point estimate and with nothing else,
+# so two gaps with wildly different entity spreads reported identically-shaped
+# "confidence intervals". These tests pin the replacement to real data.
+# ============================================================================
+
+
+def test_roi_estimator_interval_responds_to_entity_spread():
+    """Same gap and same investment, different interior spread -> different band.
+
+    This is the property the +/-25% constant could never satisfy: both cases below
+    have gap=100 and 4 entities, so the point ROI is identical, but the tight
+    cluster is far less sensitive to dropping one entity than the case where a
+    single entity creates the whole spread.
+    """
+    tight = roi_estimator(
+        gap_analysis={"gap": 100.0, "entity_values": {"a": 0.0, "b": 49.0, "c": 51.0, "d": 100.0}},
+        investment=1000.0,
+    )
+    fragile = roi_estimator(
+        gap_analysis={"gap": 100.0, "entity_values": {"a": 0.0, "b": 1.0, "c": 2.0, "d": 100.0}},
+        investment=1000.0,
+    )
+
+    tight_ci = _dump(tight)["confidence_interval"]
+    fragile_ci = _dump(fragile)["confidence_interval"]
+
+    assert len(tight_ci) == 2 and len(fragile_ci) == 2
+    assert _dump(tight)["estimated_roi"] == _dump(fragile)["estimated_roi"]
+    # The fragile set collapses much further when its outlier is dropped.
+    assert fragile_ci[0] < tight_ci[0]
+    # And the bands are genuinely different -- not a fixed ratio of the estimate.
+    assert tight_ci != fragile_ci
+
+
+def test_roi_estimator_interval_is_not_a_fixed_ratio_of_the_estimate():
+    """Guards the specific regression: a band that is always estimate*(1-+0.25)."""
+    out = _dump(
+        roi_estimator(
+            gap_analysis={
+                "gap": 100.0,
+                "entity_values": {"a": 0.0, "b": 1.0, "c": 2.0, "d": 100.0},
+            },
+            investment=1000.0,
+        )
+    )
+    roi = out["estimated_roi"]
+    lo, hi = out["confidence_interval"]
+    assert not (lo == pytest.approx(roi * 0.75) and hi == pytest.approx(roi * 1.25))
+
+
+def test_roi_estimator_omits_interval_when_spread_unmeasurable():
+    """n<3 entities -> no honest range exists; omit rather than substitute one."""
+    out = _dump(
+        roi_estimator(
+            gap_analysis={"gap": 100.0, "entity_values": {"a": 50.0, "b": 150.0}},
+            investment=1000.0,
+        )
+    )
+    assert out["confidence_interval"] == []
+    assert any("fewer than 3" in a for a in out["assumptions"])
+
+
+def test_roi_estimator_discloses_band_is_not_a_confidence_interval():
+    """The field is named confidence_interval; assumptions must not let that stand
+    as an unqualified claim of coverage."""
+    out = _dump(
+        roi_estimator(
+            gap_analysis={
+                "gap": 100.0,
+                "entity_values": {"a": 0.0, "b": 40.0, "c": 60.0, "d": 100.0},
+            },
+            investment=1000.0,
+        )
+    )
+    joined = " ".join(out["assumptions"]).lower()
+    assert "leave-one-out" in joined
+    assert "not a sampling confidence interval" in joined
+
+
+def test_roi_estimator_no_hardcoded_band_constant_remains():
+    """Source-level guard: the 0.25 band constant must be gone."""
+    src = inspect.getsource(tr.roi_estimator)
+    assert "0.25" not in src
+    assert "25%" not in src

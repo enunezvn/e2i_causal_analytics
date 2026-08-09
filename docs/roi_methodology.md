@@ -220,20 +220,37 @@ years. Single-year initiatives should use `calculate_roi()` and ignore NPV.
   (`gap_analyzer/state.py:47`) carrying `confidence_interval`, attribution, and risk fields.
 - **Gaps API / frontend** — `src/api/routes/gaps.py:195` exposes `confidence_interval` through
   to `frontend/src/types/gaps.ts`.
-- **Chat** — the Monte Carlo CI is computed but **not currently rendered**. The narrative
-  in `gap_analyzer/nodes/formatter.py` reports a point ROI (`"…at {top_roi:.1f}x ROI"`);
-  `confidence_interval` does not appear in the formatter, prioritizer, or agent output
-  construction, so it is dropped at the formatting boundary. Surfacing it in chat is a
-  rendering change, not a new calculation.
+- **Chat** — the narrative in `gap_analyzer/nodes/formatter.py` renders the band via
+  `_format_uncertainty_clause`, e.g.
+  `"…at 4.0x ROI (risk-adjusted 2.4x, 95% CI 1.1x-4.0x; P(ROI>1x)=78%)"`.
+
+  **Scale contract.** The simulated samples are
+  `(value − cost)/cost × risk_multiplier` (§4), so the interval brackets
+  `risk_adjusted_roi` — *not* the `expected_roi` the sentence leads with. The two are
+  printed as separate, labelled quantities; splicing the band onto `expected_roi` would
+  let the headline fall outside its own interval whenever a risk assessment is
+  non-default. `P(ROI > 1x)` is reported with its literal meaning (returns more than
+  double the outlay) and is **not** a break-even probability — break-even on this scale
+  is ROI > 0. When no interval is present the clause is omitted entirely, so an absent
+  CI reads as silence rather than a default band.
 
 ## 12. Known gaps
 
-1. **Chat drops the CI** (§11) — the most visible gap; the number exists and is discarded.
-2. **`tool_composer.roi_estimator`** (`tool_registrations.py:1663`) is a separate, much
-   simpler estimator that reports a fixed ±25% band as `confidence_interval`. It does not
-   use this methodology. The band is a hardcoded assumption, not measured dispersion, even
-   though its `assumptions` list discloses this.
-3. **Unit-economics constants (§3) are unvalidated assumptions.** Only `TRX_LIFT` accepts a
+1. **Unit-economics constants (§3) are unvalidated assumptions.** Only `TRX_LIFT` accepts a
    brand-scoped override; the other six are flat platform-wide.
-4. **σ = 15% default uncertainty (§4) is itself an assumption**, applied uniformly across
+2. **σ = 15% default uncertainty (§4) is itself an assumption**, applied uniformly across
    drivers of very different measurement quality.
+3. **`tool_composer.roi_estimator`** (`tool_registrations.py`) remains a separate, much
+   simpler estimator that does **not** use this methodology. Its range is now measured
+   (a leave-one-out sensitivity band over `entity_values`, `[]` when fewer than 3 entity
+   values make it unmeasurable) rather than a fixed ±25%, but it is a sensitivity band,
+   not a sampling CI, and the field is still named `confidence_interval`. Consumers must
+   read its `assumptions`. Renaming the field is the open follow-up.
+4. **Observed-ROI intervals are still unavailable** (§8). Conditioning the KPI query by
+   brand / region / metric_name is the path, and it needs a look at real row counts per
+   slice before it is worth building.
+
+### Closed
+
+- ~~Chat drops the CI~~ — the band now renders in the gap_analyzer narrative (§11).
+- ~~`roi_estimator` reports a hardcoded ±25% band~~ — replaced with measured dispersion.
