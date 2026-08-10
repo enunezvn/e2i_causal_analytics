@@ -1586,6 +1586,41 @@ def _resolve_grouping_column(
     return None
 
 
+def _gap_leave_one_out_bounds(entity_values: Any) -> Optional[Tuple[float, float]]:
+    """Leave-one-out sensitivity bounds for a max-minus-min gap statistic.
+
+    The gap driving ``roi_estimator`` is ``max(entity_values) - min(entity_values)``
+    — a statistic determined entirely by two extreme entities. Its real fragility
+    is therefore "does this opportunity vanish if one entity is dropped?", and
+    that is what this measures: recompute the gap over each leave-one-out subset
+    and return ``(min, max)`` of those recomputed gaps.
+
+    Why not a bootstrap: resampling with replacement to bracket an extremum is
+    known to be inconsistent (a resample can only ever reproduce or shrink the
+    observed range, never exceed it), so a bootstrap "CI" on max-minus-min is
+    biased low by construction. The jackknife makes no distributional claim — it
+    reports the observed sensitivity of the statistic to single entities, which
+    is a question the data can actually answer.
+
+    Returns ``None`` when fewer than 3 entity values are present: at n=2 every
+    leave-one-out subset is a single entity and the gap is undefined, so there is
+    no honest range to report and the caller must omit the interval rather than
+    substitute a constant.
+    """
+    if not isinstance(entity_values, dict) or len(entity_values) < 3:
+        return None
+
+    values = [float(v) for v in entity_values.values() if isinstance(v, (int, float))]
+    if len(values) < 3 or not all(math.isfinite(v) for v in values):
+        return None
+
+    loo_gaps = []
+    for i in range(len(values)):
+        subset = values[:i] + values[i + 1 :]
+        loo_gaps.append(max(subset) - min(subset))
+    return min(loo_gaps), max(loo_gaps)
+
+
 @composable_tool(
     name="roi_estimator",
     description="Estimate ROI of closing identified performance gaps",
@@ -1615,9 +1650,12 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     - ``estimated_roi`` = ``opportunity_value`` / ``investment``.
     - ``payback_months`` = ``investment`` / (``opportunity_value`` / 12) when
       the opportunity is positive (annualised), else ``inf``.
-    - ``confidence_interval`` brackets ROI by a documented +/-25% uncertainty
-      band on the opportunity value (the gap is a point estimate; we expose a
-      relative band rather than a fabricated interval).
+    - ``confidence_interval`` is MEASURED from the entity spread, not asserted:
+      a leave-one-out sensitivity band over ``entity_values`` (see
+      :func:`_gap_leave_one_out_bounds`). It is ``[]`` when fewer than 3 entity
+      values make the gap's sensitivity unmeasurable — an omitted range rather
+      than a constant. Consumers must read ``assumptions`` for its meaning: it
+      is a sensitivity band, NOT a sampling confidence interval.
 
     Fail-closed: no ``gap`` in ``gap_analysis``, or non-positive ``investment``
     -> ``RuntimeError`` (an ROI is undefined without a real gap or a real
@@ -1660,18 +1698,42 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     else:
         payback_months = float("inf")
 
-    band = 0.25  # documented +/-25% relative uncertainty on the opportunity.
-    ci_lower = (opportunity_value * (1.0 - band)) / float(investment)
-    ci_upper = (opportunity_value * (1.0 + band)) / float(investment)
+    assumptions = [
+        f"Opportunity value = gap ({gap:.4g}) x n_entities ({n_entities}) "
+        f"x value_per_unit ({float(value_per_unit):.4g}).",
+        "ROI = opportunity_value / investment.",
+    ]
+
+    # Uncertainty is MEASURED from the entity spread the gap was derived from,
+    # never asserted as a constant: a fixed band carries no information about
+    # this gap and reads as a confidence interval to downstream consumers.
+    bounds = _gap_leave_one_out_bounds(entity_values)
+    if bounds is None:
+        confidence_interval: List[float] = []
+        assumptions.append(
+            "No uncertainty range reported: fewer than 3 usable entity values, so "
+            "the gap's sensitivity to individual entities is not measurable. An "
+            "interval is omitted rather than assumed."
+        )
+    else:
+        low_gap, high_gap = bounds
+        confidence_interval = [
+            (low_gap * n_entities * float(value_per_unit)) / float(investment),
+            (high_gap * n_entities * float(value_per_unit)) / float(investment),
+        ]
+        assumptions.append(
+            f"Range is a leave-one-out sensitivity band over {n_entities} entity "
+            f"values (gap recomputed with each entity dropped: {low_gap:.4g} to "
+            f"{high_gap:.4g}), holding n_entities fixed. It measures how far the "
+            "gap depends on any single entity — it is NOT a sampling confidence "
+            "interval and carries no coverage guarantee."
+        )
+
     return ROIEstimate(
         estimated_roi=float(estimated_roi),
         payback_months=float(payback_months),
-        confidence_interval=[float(ci_lower), float(ci_upper)],
-        assumptions=[
-            f"Opportunity value = gap ({gap:.4g}) x n_entities ({n_entities}) "
-            f"x value_per_unit ({float(value_per_unit):.4g}).",
-            "ROI = opportunity_value / investment; +/-25% band on opportunity.",
-        ],
+        confidence_interval=[float(x) for x in confidence_interval],
+        assumptions=assumptions,
     )
 
 
