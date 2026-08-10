@@ -149,3 +149,40 @@ def test_calculated_roi_result_speaks_no_interval_language_regression_1527(calc,
     dumped = json.dumps(band).lower()
     for forbidden in ("confidence_interval", "ci_lower", "ci_upper", "95%", "confidence"):
         assert forbidden not in dumped, f"band payload contains forbidden term {forbidden!r}"
+
+
+def test_shared_context_batch_does_not_leak_band_across_kpis_live(calc, monkeypatch):
+    """Codex iter-1 finding 1, run against the LIVE DB (no mocks): two ROI-
+    family calculations sharing one caller context — the band must appear only
+    on the WS3-BI-010 result's metadata, the other KPI's metadata must not
+    inherit it, and the caller's own dict must stay unmutated (it previously
+    received the band BY REFERENCE and leaked it into every later result and
+    cache key).
+
+    The shared context must be NON-empty — ``calculate()``'s ``context or {}``
+    accidentally isolates an empty dict, so the faithful repro is the
+    insights_strategic shape: a brand-scoped batch context."""
+    monkeypatch.setenv("E2I_KPI_INCLUDE_SYNTHETIC", "1")
+    registry = get_registry()
+    roi_kpi = registry.get("WS3-BI-010")
+    trx_kpi = registry.get("WS3-BI-005")
+    assert roi_kpi is not None and trx_kpi is not None
+
+    from src.kpi.calculator import KPICalculator
+
+    engine = KPICalculator(registry=registry)
+    engine.register_calculator(roi_kpi.workstream, calc)
+
+    shared_context: dict = {"brand": "Kisqali"}
+    batch = engine.calculate_batch(
+        kpi_ids=["WS3-BI-010", "WS3-BI-005"], use_cache=False, context=shared_context
+    )
+    by_id = {r.kpi_id: r for r in batch.results}
+    roi_result, trx_result = by_id["WS3-BI-010"], by_id["WS3-BI-005"]
+    assert roi_result.error is None
+
+    roi_ctx = roi_result.metadata.get("context") or {}
+    trx_ctx = trx_result.metadata.get("context") or {}
+    assert roi_ctx.get("temporal_variability_band") is not None
+    assert "temporal_variability_band" not in trx_ctx
+    assert "temporal_variability_band" not in shared_context

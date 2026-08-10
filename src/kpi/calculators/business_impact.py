@@ -606,6 +606,10 @@ class BusinessImpactCalculator(KPICalculatorBase):
         contract via ``_execute_query``), and omitting the band on error is
         honest absence — nothing downstream renders a fabricated range.
         """
+        # A reused context must never carry a previous calculation's band
+        # forward: clear first, set only on success — a stale range beside a
+        # fresh headline is the plausible-but-wrong shape #1527 rejected.
+        context.pop("temporal_variability_band", None)
         try:
             rows = self._execute_query(
                 "business_impact_roi_temporal_band",

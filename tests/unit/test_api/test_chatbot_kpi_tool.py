@@ -510,6 +510,26 @@ def test_kpi_result_to_response_surfaces_roi_temporal_band():
 
 
 @pytest.mark.unit
+def test_kpi_result_to_response_band_only_for_roi_kpi():
+    """Codex iter-1 finding 2 (2026-08-10): the band is an ROI-only estimand.
+    A non-ROI result whose metadata context carries the key (e.g. a cached
+    entry polluted by the pre-fix shared-context leak) must NOT present an
+    ROI band beside a TRx/NRx figure — the mapper gates on the KPI id."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-005")
+    assert kpi is not None
+    result = KPIResult(
+        kpi_id="WS3-BI-005",
+        value=125000.0,
+        status=KPIStatus.INFORMATIONAL,
+        metadata={"context": {"temporal_variability_band": {"min_n": 6, "slices": []}}},
+    )
+    resp = _kpi_result_to_response(kpi, result)
+    assert "temporal_variability_band" not in resp
+
+
+@pytest.mark.unit
 def test_kpi_result_to_response_band_absent_when_not_stashed():
     """Honest absence: no band in the calculator context (agent_activities
     fallback answered, band query failed, or real-mode zero slices) -> no
