@@ -39,7 +39,7 @@ _SYNTHETIC_SUFFIX = "_include_synthetic"
 #: ``src/api/routes/copilotkit.py``).
 _TRUTHY = ("1", "true", "yes")
 
-#: The 42 base ``kpi_query_registry`` ids that have an
+#: The 43 base ``kpi_query_registry`` ids that have an
 #: ``{id}_include_synthetic`` twin: 36 sourced verbatim from
 #: ``database/migrations/066_kpi_query_synthetic_exclusion.sql``, plus
 #: ``business_impact_patient_touch_rate`` from
@@ -53,7 +53,10 @@ _TRUTHY = ("1", "true", "yes")
 #: /data-quality read honest-empty on a synthetic-gold instance), plus
 #: ``business_impact_roi_temporal_band`` from
 #: ``database/migrations/124_kpi_roi_temporal_band.sql`` (#1532 — the WS3-BI-010
-#: per-slice trailing-12-month temporal-variability band). The twins are
+#: per-slice trailing-12-month temporal-variability band), plus
+#: ``business_impact_roi_business_metrics_scoped`` from
+#: ``database/migrations/125_kpi_roi_headline_scoping.sql`` (#1534 — the
+#: brand/region-scoped ROI headline). The twins are
 #: the synthetic-taggable statements; everything else in the registry is not
 #: synthetic-gated. This literal is kept in lock-step with the migrations by
 #: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 + 085 + 095 +
@@ -76,6 +79,7 @@ SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
         "business_impact_patient_touch_rate",
         "business_impact_roi_agent_activities",
         "business_impact_roi_business_metrics",
+        "business_impact_roi_business_metrics_scoped",
         "business_impact_roi_temporal_band",
         "business_impact_trx",
         "business_impact_trx_share",
