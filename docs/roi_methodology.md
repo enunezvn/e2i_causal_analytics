@@ -241,11 +241,13 @@ years. Single-year initiatives should use `calculate_roi()` and ignore NPV.
 2. **σ = 15% default uncertainty (§4) is itself an assumption**, applied uniformly across
    drivers of very different measurement quality.
 3. **`tool_composer.roi_estimator`** (`tool_registrations.py`) remains a separate, much
-   simpler estimator that does **not** use this methodology. Its range is now measured
+   simpler estimator that does **not** use this methodology. Its range is measured
    (a leave-one-out sensitivity band over `entity_values`, `[]` when fewer than 3 entity
-   values make it unmeasurable) rather than a fixed ±25%, but it is a sensitivity band,
-   not a sampling CI, and the field is still named `confidence_interval`. Consumers must
-   read its `assumptions`. Renaming the field is the open follow-up.
+   values make it unmeasurable) rather than a fixed ±25%, and the field carrying it is
+   named `sensitivity_band` (renamed from `confidence_interval`, issue #1526) — it is a
+   sensitivity band, not a sampling CI, and `assumptions` spells out the semantics.
+   Note the deliberate contrast: `gap_analyzer`'s `ROIEstimate.confidence_interval`
+   genuinely is a bootstrap CI and keeps its name.
 4. **Observed-ROI intervals are still unavailable** (§8). Conditioning the KPI query by
    brand / region / metric_name is the path, and it needs a look at real row counts per
    slice before it is worth building.
@@ -254,3 +256,4 @@ years. Single-year initiatives should use `calculate_roi()` and ignore NPV.
 
 - ~~Chat drops the CI~~ — the band now renders in the gap_analyzer narrative (§11).
 - ~~`roi_estimator` reports a hardcoded ±25% band~~ — replaced with measured dispersion.
+- ~~`roi_estimator`'s band is named `confidence_interval`~~ — renamed `sensitivity_band` (#1526).
