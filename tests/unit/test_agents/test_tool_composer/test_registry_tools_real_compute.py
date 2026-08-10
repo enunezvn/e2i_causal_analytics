@@ -368,7 +368,10 @@ def test_module_imports_cleanly():
 # The interval was previously a hardcoded +/-25% of the opportunity value. That
 # is information-free -- it moves with the point estimate and with nothing else,
 # so two gaps with wildly different entity spreads reported identically-shaped
-# "confidence intervals". These tests pin the replacement to real data.
+# "confidence intervals". These tests pin the replacement to real data. The
+# field carrying the band is `sensitivity_band` (renamed from
+# `confidence_interval` in issue #1526 -- it is a leave-one-out sensitivity
+# band, not a sampling CI).
 # ============================================================================
 
 
@@ -389,15 +392,15 @@ def test_roi_estimator_interval_responds_to_entity_spread():
         investment=1000.0,
     )
 
-    tight_ci = _dump(tight)["confidence_interval"]
-    fragile_ci = _dump(fragile)["confidence_interval"]
+    tight_band = _dump(tight)["sensitivity_band"]
+    fragile_band = _dump(fragile)["sensitivity_band"]
 
-    assert len(tight_ci) == 2 and len(fragile_ci) == 2
+    assert len(tight_band) == 2 and len(fragile_band) == 2
     assert _dump(tight)["estimated_roi"] == _dump(fragile)["estimated_roi"]
     # The fragile set collapses much further when its outlier is dropped.
-    assert fragile_ci[0] < tight_ci[0]
+    assert fragile_band[0] < tight_band[0]
     # And the bands are genuinely different -- not a fixed ratio of the estimate.
-    assert tight_ci != fragile_ci
+    assert tight_band != fragile_band
 
 
 def test_roi_estimator_interval_is_not_a_fixed_ratio_of_the_estimate():
@@ -412,7 +415,7 @@ def test_roi_estimator_interval_is_not_a_fixed_ratio_of_the_estimate():
         )
     )
     roi = out["estimated_roi"]
-    lo, hi = out["confidence_interval"]
+    lo, hi = out["sensitivity_band"]
     assert not (lo == pytest.approx(roi * 0.75) and hi == pytest.approx(roi * 1.25))
 
 
@@ -424,13 +427,14 @@ def test_roi_estimator_omits_interval_when_spread_unmeasurable():
             investment=1000.0,
         )
     )
-    assert out["confidence_interval"] == []
+    assert out["sensitivity_band"] == []
     assert any("fewer than 3" in a for a in out["assumptions"])
 
 
 def test_roi_estimator_discloses_band_is_not_a_confidence_interval():
-    """The field is named confidence_interval; assumptions must not let that stand
-    as an unqualified claim of coverage."""
+    """The field is named sensitivity_band (issue #1526 rename); assumptions must
+    still spell out the semantics -- leave-one-out, no coverage guarantee -- so a
+    consumer who never reads the schema docstring cannot mistake it for a CI."""
     out = _dump(
         roi_estimator(
             gap_analysis={

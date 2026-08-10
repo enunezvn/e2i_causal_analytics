@@ -138,11 +138,17 @@ class SegmentRanking(BaseModel):
 
 
 class ROIEstimate(BaseModel):
-    """Output from ROI estimation (consumes a gap-analysis result)."""
+    """Output from ROI estimation (consumes a gap-analysis result).
+
+    ``sensitivity_band`` is a leave-one-out sensitivity band over the entity
+    values the gap was derived from -- NOT a sampling confidence interval
+    (renamed from ``confidence_interval`` in issue #1526; the identically named
+    field on ``gap_analyzer``'s ``ROIEstimate`` genuinely is a bootstrap CI).
+    """
 
     estimated_roi: float
     payback_months: float
-    confidence_interval: List[float]
+    sensitivity_band: List[float]
     assumptions: List[str]
 
 
@@ -1650,12 +1656,12 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     - ``estimated_roi`` = ``opportunity_value`` / ``investment``.
     - ``payback_months`` = ``investment`` / (``opportunity_value`` / 12) when
       the opportunity is positive (annualised), else ``inf``.
-    - ``confidence_interval`` is MEASURED from the entity spread, not asserted:
+    - ``sensitivity_band`` is MEASURED from the entity spread, not asserted:
       a leave-one-out sensitivity band over ``entity_values`` (see
       :func:`_gap_leave_one_out_bounds`). It is ``[]`` when fewer than 3 entity
       values make the gap's sensitivity unmeasurable — an omitted range rather
-      than a constant. Consumers must read ``assumptions`` for its meaning: it
-      is a sensitivity band, NOT a sampling confidence interval.
+      than a constant. The name states what it is: a sensitivity band, NOT a
+      sampling confidence interval; ``assumptions`` spells out the semantics.
 
     Fail-closed: no ``gap`` in ``gap_analysis``, or non-positive ``investment``
     -> ``RuntimeError`` (an ROI is undefined without a real gap or a real
@@ -1709,7 +1715,7 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     # this gap and reads as a confidence interval to downstream consumers.
     bounds = _gap_leave_one_out_bounds(entity_values)
     if bounds is None:
-        confidence_interval: List[float] = []
+        sensitivity_band: List[float] = []
         assumptions.append(
             "No uncertainty range reported: fewer than 3 usable entity values, so "
             "the gap's sensitivity to individual entities is not measurable. An "
@@ -1717,7 +1723,7 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
         )
     else:
         low_gap, high_gap = bounds
-        confidence_interval = [
+        sensitivity_band = [
             (low_gap * n_entities * float(value_per_unit)) / float(investment),
             (high_gap * n_entities * float(value_per_unit)) / float(investment),
         ]
@@ -1732,7 +1738,7 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     return ROIEstimate(
         estimated_roi=float(estimated_roi),
         payback_months=float(payback_months),
-        confidence_interval=[float(x) for x in confidence_interval],
+        sensitivity_band=[float(x) for x in sensitivity_band],
         assumptions=assumptions,
     )
 
