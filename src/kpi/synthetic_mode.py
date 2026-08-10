@@ -19,8 +19,9 @@ synthetic data —
   ``data_source="synthetic"`` provenance so the UI badges the figures rather than
   passing them off as real-world data.
 
-Only the 41 query_ids that touch synthetic-taggable business tables HAVE a twin
-(see :data:`SYNTHETIC_TWINNED_QUERY_IDS`, sourced from migrations 066/085/095). Every
+Only the 43 query_ids that touch synthetic-taggable business tables HAVE a twin
+(see :data:`SYNTHETIC_TWINNED_QUERY_IDS`, sourced from migrations
+066/085/095/124/125). Every
 other registry statement reads a non-taggable view / reference / ops table and
 is therefore NOT synthetic-gated — its base id is already correct.
 :func:`resolve_kpi_query_id` swaps to the twin ONLY when one exists; otherwise it

@@ -2034,6 +2034,26 @@ async def kpi_calculate_tool(
             "hint": "Try 'last 3 months', 'Q1 2025', or '2025-01-01 to 2025-03-31'.",
         }
 
+    # Brand is an enum column and the input schema promises case-insensitivity:
+    # resolve 'kisqali' to its real label before it reaches any calculator
+    # (the scoped ROI query matches brand::text = $1 exactly — migration 125),
+    # and fail fast with the known-brand list on an unmappable value (the
+    # _query_kpis #1501 precedent) instead of a misleading no-rows error.
+    if brand:
+        normalized_brand = _normalize_brand(brand)
+        if normalized_brand is None:
+            return {
+                "success": False,
+                "query_type": "kpi_calculate",
+                "kpi_id": kpi.id,
+                "kpi_name": kpi.name,
+                "error": (
+                    f"brand {brand!r} does not match any known brand "
+                    f"({', '.join(sorted(BRAND_ENUM_LABELS))})"
+                ),
+            }
+        brand = normalized_brand
+
     context: Dict[str, Any] = {}
     if brand:
         context["brand"] = brand
