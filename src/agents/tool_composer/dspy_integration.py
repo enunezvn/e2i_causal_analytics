@@ -73,7 +73,7 @@ class CompositionTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting:
         - execution_success: 0.30 (tools succeeded / planned)
@@ -439,7 +439,7 @@ class ToolComposerDSPyIntegration:
         """
         Request prompt optimization from feedback_learner.
 
-        Routes to feedback_learner for actual MIPROv2 optimization.
+        Routes to feedback_learner for actual GEPA/MIPROv2 optimization.
         """
         request = {
             "request_id": f"tc_opt_{signature_name}_{datetime.now(timezone.utc).isoformat()}",

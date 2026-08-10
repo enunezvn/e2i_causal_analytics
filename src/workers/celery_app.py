@@ -381,7 +381,7 @@ celery_app.conf.beat_schedule = {
     # to process user feedback and persist a training signal to
     # dspy_agent_training_signals (finalize-node persistence). The daily
     # optimize beat below READS those signals and gates on GEPAOptimizationTrigger
-    # before running MIPROv2. This entry must run BEFORE the optimize beat so
+    # before running GEPA (MIPROv2 fallback). This entry must run BEFORE the optimize beat so
     # there are fresh signals to evaluate; the 6h cadence satisfies that
     # regardless of beat restart timing.
     "feedback-learning-cycle": {

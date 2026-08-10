@@ -1,7 +1,8 @@
-"""GEPA (Generative Evolutionary Prompting with AI) Optimizer.
+"""GEPA (Genetic-Pareto) Optimizer.
 
 GEPA is DSPy's state-of-the-art prompt optimizer that uses reflective evolution
-to improve agent instructions. It provides 10%+ improvement over MIPROv2.
+to improve agent instructions. The GEPA paper reports 10+ percentage-point gains
+over MIPROv2 (Agrawal et al., 2025, arXiv:2507.19457).
 
 Key Features:
     - Reflective evolution with rich textual feedback

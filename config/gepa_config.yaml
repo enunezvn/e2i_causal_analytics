@@ -3,7 +3,7 @@
 # ==============================================================================
 # Version: 4.2
 # Date: December 2025
-# Description: Configuration for GEPA (Generative Evolutionary Prompting with AI)
+# Description: Configuration for GEPA (Genetic-Pareto)
 # ==============================================================================
 
 # Default reflection model for GEPA evolution

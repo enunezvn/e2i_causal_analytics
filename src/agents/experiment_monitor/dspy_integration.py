@@ -29,7 +29,7 @@ class ExperimentMonitorPrompts:
     """
     Optimized prompt templates for experiment monitoring.
 
-    These prompts are consumed from feedback_learner after MIPROv2 optimization.
+    These prompts are consumed from feedback_learner after GEPA/MIPROv2 optimization.
     The Experiment Monitor agent uses these templates for generating
     human-readable alert messages and summaries.
     """

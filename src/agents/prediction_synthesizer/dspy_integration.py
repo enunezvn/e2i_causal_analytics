@@ -74,7 +74,7 @@ class PredictionSynthesisTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting:
         - model_success_rate: 0.25 (models succeeded / requested)

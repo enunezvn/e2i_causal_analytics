@@ -3,8 +3,8 @@
 This module provides factory functions to create configured GEPA optimizers
 for different agent types in the E2I 21-agent 6-tier architecture.
 
-GEPA (Generative Evolutionary Prompting with AI) provides:
-- 10%+ performance improvement over MIPROv2
+GEPA (Genetic-Pareto) provides:
+- 10+ percentage-point gains over MIPROv2 (Agrawal et al., 2025, arXiv:2507.19457)
 - Reflective evolution with rich textual feedback
 - Joint tool optimization for DoWhy/EconML tools
 - Pareto frontier for multi-objective KPI optimization

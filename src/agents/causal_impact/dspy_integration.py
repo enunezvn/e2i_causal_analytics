@@ -90,7 +90,7 @@ class CausalAnalysisTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting (V4.2 Updated):
         - refutation_robustness: 0.28 (passed / total)

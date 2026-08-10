@@ -268,7 +268,7 @@ async def _cognitive_context_enricher(
 
 async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLearnerState:
     """
-    Finalize training signal for MIPROv2 optimization.
+    Finalize training signal for GEPA/MIPROv2 optimization.
 
     Collects metrics from the completed pipeline run and creates
     a training signal that can be used for prompt optimization.
@@ -298,7 +298,7 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     # F-015 (issue #424): `pattern_accuracy` requires ground-truth-validated
     # pattern labels to be computed honestly. The labeling infrastructure does
     # not yet exist (see #426 / F-015-PhaseB). Until it lands, propagate `None`
-    # so downstream consumers (`compute_reward`, MIPROv2 optimization) skip the
+    # so downstream consumers (`compute_reward`, GEPA/MIPROv2 optimization) skip the
     # accuracy term rather than anchor on a fabricated value. Setting this to a
     # constant like 0.85 would silently bias the self-improvement loop.
     pattern_accuracy: float | None = None

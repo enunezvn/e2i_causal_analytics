@@ -5,7 +5,7 @@ Purpose: Self-improvement from user feedback
 
 DSPy Integration:
 - CognitiveRAG context enrichment at pipeline entry
-- Training signal collection for MIPROv2 optimization
+- Training signal collection for GEPA/MIPROv2 optimization
 - Memory contribution helpers for system learning
 """
 
@@ -87,7 +87,7 @@ class FeedbackLearnerAgent:
 
     DSPy Integration:
     - Accepts CognitiveRAG for 4-phase cognitive enrichment
-    - Collects training signals for MIPROv2 optimization
+    - Collects training signals for GEPA/MIPROv2 optimization
     - Generates memory contributions for system learning
     """
 

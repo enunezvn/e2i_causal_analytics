@@ -1486,9 +1486,9 @@ quality_tiers:
 # =============================================================================
 # SECTION 13: GEPA PROMPT OPTIMIZATION (V4.3.0)
 # =============================================================================
-# GEPA: Generative Evolutionary Prompting with AI
+# GEPA: Genetic-Pareto
 # Replaces MIPROv2 as the default DSPy optimizer, providing:
-# - 10%+ performance improvement over MIPROv2
+# - 10+ percentage-point gains over MIPROv2 (Agrawal et al., 2025, arXiv:2507.19457)
 # - Reflective evolution with rich textual feedback
 # - Joint tool optimization for DoWhy/EconML tools
 # - Pareto frontier for multi-objective KPI optimization
@@ -1497,7 +1497,7 @@ optimizer_types:
   description: "DSPy optimizer types for prompt optimization"
   values:
     - miprov2              # Previous DSPy optimizer (baseline)
-    - gepa                 # GEPA: Generative Evolutionary Prompting with AI
+    - gepa                 # GEPA: Genetic-Pareto
     - bootstrap_fewshot    # DSPy BootstrapFewShot
     - bootstrap_rs         # DSPy BootstrapRandomSearch
     - copro                # DSPy COPRO (Collaborative Prompt Optimization)

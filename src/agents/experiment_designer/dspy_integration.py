@@ -77,7 +77,7 @@ class ExperimentDesignTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting:
         - design_quality: 0.25 (appropriate design for question)

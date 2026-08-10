@@ -5,7 +5,7 @@ Purpose: Learn from user feedback to improve system performance
 
 DSPy Integration Support:
 - CognitiveContext from CognitiveRAG 4-phase cycle
-- Training signals for MIPROv2 optimization
+- Training signals for GEPA/MIPROv2 optimization
 - Memory contribution helpers
 
 Self-Improvement Support:

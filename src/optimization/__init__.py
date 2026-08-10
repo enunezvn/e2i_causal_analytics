@@ -1,7 +1,7 @@
 """E2I Optimization Module.
 
-Provides prompt optimization infrastructure including GEPA (Generative Evolutionary
-Prompting with AI) for the 21-agent 6-tier architecture.
+Provides prompt optimization infrastructure including GEPA (Genetic-Pareto)
+for the 21-agent 6-tier architecture.
 
 Submodules:
     gepa: GEPA optimizer implementation with metrics, tools, and integrations
