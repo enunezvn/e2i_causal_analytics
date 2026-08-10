@@ -611,10 +611,14 @@ class BusinessImpactCalculator(KPICalculatorBase):
         # fresh headline is the plausible-but-wrong shape #1527 rejected.
         context.pop("temporal_variability_band", None)
         try:
-            rows = self._execute_query(
-                "business_impact_roi_temporal_band",
-                [context.get("brand"), context.get("region")],
-            )
+            # Always unscoped: the headline this band rides beside is a
+            # portfolio-wide aggregate (its registry query takes no brand/
+            # region params), so the band must describe the same population —
+            # narrowing it to context brand/region would imply the headline is
+            # scoped when it is not (codex iter-2). Slices stay labeled per
+            # (brand, region); the query's nullable params are the seam for a
+            # future headline-scoping follow-up.
+            rows = self._execute_query("business_impact_roi_temporal_band", [None, None])
         except Exception as exc:  # noqa: BLE001 - supplementary metadata only
             logger.warning("WS3-BI-010 temporal band query failed (band omitted): %s", exc)
             return

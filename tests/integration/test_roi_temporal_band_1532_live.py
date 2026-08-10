@@ -10,7 +10,9 @@ These assert MEANING (the #574 lesson):
   substrate (measured 2026-08-10: business_metrics has zero
   is_synthetic=false rows) — a shape assertion, never a fabricated band.
 - The full calculator path stashes the band into KPIResult metadata with the
-  #1532 suppression contract (n >= 6), and the brand filter narrows slices.
+  #1532 suppression contract (n >= 6), and the band always covers the same
+  portfolio-wide population as the (unscoped) headline — brand context never
+  narrows it (codex iter-2; the SQL-level params are exercised directly).
 - #1527 regression: nothing in the calculated ROI result speaks
   confidence-interval language.
 
@@ -125,7 +127,13 @@ def test_full_calculator_path_stashes_band_with_suppression_contract(calc, monke
             assert s["band"]["roi_min"] <= s["band"]["roi_mean"] <= s["band"]["roi_max"]
 
 
-def test_full_calculator_path_brand_filter_scopes_band(calc, monkeypatch):
+def test_full_calculator_path_band_matches_headline_population(calc, monkeypatch):
+    """Codex iter-2 HIGH: the headline ROI is a portfolio-wide aggregate (its
+    registry query takes no brand/region params), so brand context must NOT
+    narrow the band — band and headline must describe the same population.
+    Slices stay labeled, so the Kisqali slices are findable within the full
+    band. (Headline scoping is a pre-existing gap tracked separately; the
+    band query's nullable params are its seam.)"""
     monkeypatch.setenv("E2I_KPI_INCLUDE_SYNTHETIC", "1")
     kpi = get_registry().get("WS3-BI-010")
     assert kpi is not None
@@ -134,8 +142,11 @@ def test_full_calculator_path_brand_filter_scopes_band(calc, monkeypatch):
     assert result.error is None
     band = (result.metadata.get("context") or {}).get("temporal_variability_band")
     assert band is not None
-    assert len(band["slices"]) > 0
-    assert {s["brand"] for s in band["slices"]} == {"Kisqali"}
+    brands = {s["brand"] for s in band["slices"]}
+    assert "Kisqali" in brands
+    # The substrate has multiple brands (test_band_brand_filter_narrows_slices
+    # measures kisqali < all): an unscoped band must show more than one.
+    assert len(brands) > 1
 
 
 def test_calculated_roi_result_speaks_no_interval_language_regression_1527(calc, monkeypatch):

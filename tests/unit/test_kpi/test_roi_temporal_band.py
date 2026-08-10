@@ -251,3 +251,20 @@ def test_stale_band_cleared_when_band_query_returns_empty():
     context = {"temporal_variability_band": {"min_n": 6, "slices": [{"stale": True}]}}
     calc._stash_roi_temporal_band(context)
     assert "temporal_variability_band" not in context
+
+
+@pytest.mark.unit
+def test_band_query_is_unscoped_even_with_brand_and_region_context():
+    """Codex iter-2 HIGH: the WS3-BI-010 headline is a portfolio-wide
+    aggregate (``business_impact_roi_business_metrics`` has no brand/region
+    registry variant), so the band must describe the SAME population — a
+    brand-narrowed band beside an unscoped headline would imply the headline
+    is scoped when it is not. Slices stay labeled per (brand, region), so a
+    brand-focused reader still finds their slices; migration 124's nullable
+    params remain the seam for a future headline-scoping follow-up."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=[])
+    calc = BusinessImpactCalculator(db_client=client)
+    calc._stash_roi_temporal_band({"brand": "Kisqali", "region": "northeast"})
+    rpc_payload = client.rpc.call_args[0][1]
+    assert rpc_payload["params"] == [None, None]

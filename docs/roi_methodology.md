@@ -210,6 +210,12 @@ band**: for each `(metric_name, brand, region)` slice, the range
   twin) in migration 124; `_calc_roi` attaches the assembled band to
   `KPIResult.metadata` when `business_metrics` answers the headline, and the
   chat response carries it as `temporal_variability_band`.
+- The band always covers the **same portfolio-wide population as the
+  headline** (whose registry query takes no brand/region params): request
+  context never narrows it, because a brand-only band beside an unscoped
+  headline would imply a scoping the headline doesn't have. Slices are
+  labeled per `(brand, region)`, and the query's nullable params are the
+  seam for a future headline-scoping follow-up.
 - Every slice reports its actual `n`; the band is **suppressed below n = 6**
   (`band_suppressed: true`, `band: null`) — a 3-month range dressed as a
   12-month band would be the same plausible-but-wrong shape §8 rejects.
