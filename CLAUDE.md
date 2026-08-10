@@ -177,14 +177,14 @@ When summarizing a plan agent's output, the dispatcher MUST verify the plan's ce
 
 ## Git & GitHub
 
-### Corporate Proxy Bypass (REQUIRED)
-Always bypass the corporate proxy for GitHub operations. Before any git push/pull/fetch:
+### Corporate Proxy Bypass (conditional — usually NOT needed)
+- **On the droplet (the normal environment): do NOT set any git proxy config.** There is no proxy here (measured 2026-08-10: no `*_proxy` env vars); plain `git push` / `gh` work as-is.
+- **In Claude Code web/remote sessions: NEVER apply the bypass.** The managed agent proxy injects git credentials; an empty `http.https://github.com.proxy` makes git bypass it and `git push` fails with a misleading `Invalid username or token`. If unsure, check `curl -sS "$HTTPS_PROXY/__agentproxy/status"` — if `gitConfigInjection` is true, leave git proxy config alone.
+- **Only on an actual Novartis-network machine** (rare, historical) is the bypass needed to avoid corporate-proxy 403s:
 
 ```bash
 git config --global http.https://github.com.proxy ""
 ```
-
-This prevents 403 errors from the Novartis corporate proxy intercepting GitHub traffic.
 
 ### Authentication
 - GitHub PAT is stored in `.env` as `GITHUB_PAT`
