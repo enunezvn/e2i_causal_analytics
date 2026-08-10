@@ -3469,7 +3469,7 @@ class ChatbotOptimizer:
     based on collected training signals.
 
     Supports:
-    - GEPA optimization (primary, 10%+ improvement over MIPROv2)
+    - GEPA optimization (primary; 10+ percentage-point gains over MIPROv2, arXiv:2507.19457)
     - MIPROv2 optimization (fallback)
     - A/B testing of prompt variants
     - Periodic batch optimization scheduling

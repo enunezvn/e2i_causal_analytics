@@ -909,7 +909,7 @@ Organizational learning from experiments with vector embeddings for similarity s
 
 **Source**: `database/ml/023_gepa_optimization_tables.sql`
 
-GEPA (Generative Evolutionary Prompting with AI) prompt optimization infrastructure. Tracks optimization sessions, stores versioned optimized instructions with Pareto lineage, and manages A/B tests comparing GEPA-optimized vs. baseline prompts.
+GEPA (Genetic-Pareto) prompt optimization infrastructure. Tracks optimization sessions, stores versioned optimized instructions with Pareto lineage, and manages A/B tests comparing GEPA-optimized vs. baseline prompts.
 
 ### Custom Enums
 

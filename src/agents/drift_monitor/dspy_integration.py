@@ -75,7 +75,7 @@ class DriftDetectionTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting:
         - detection_accuracy: 0.30 (drift correctly identified if validated)

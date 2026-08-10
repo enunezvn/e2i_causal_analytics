@@ -10,7 +10,7 @@
 --   - Captures signals from all DSPy phases (intent, routing, RAG, synthesis)
 --   - Stores computed reward scores for optimization
 --   - Enables the feedback_learner to train DSPy modules
---   - Supports GEPA (Generative Evolutionary Prompting with AI) optimization
+--   - Supports GEPA (Genetic-Pareto) optimization
 -- =============================================================================
 
 -- =============================================================================

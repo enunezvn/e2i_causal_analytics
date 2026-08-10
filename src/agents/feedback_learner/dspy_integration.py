@@ -6,8 +6,9 @@ Purpose: DSPy signatures, training signals, and GEPA/MIPROv2 optimization for fe
 This module implements the DSPy integration patterns for the Feedback Learner agent,
 enabling continuous self-improvement through:
 1. Training signal collection from all agents
-2. GEPA prompt optimization (primary, 10%+ improvement over MIPROv2)
-3. MIPROv2 prompt optimization (fallback)
+2. GEPA prompt optimization (primary; 10+ percentage-point gains over MIPROv2
+   reported in Agrawal et al., 2025, arXiv:2507.19457)
+3. MIPROv2 prompt optimization (fallback when GEPA is unavailable)
 4. Cognitive context enrichment from CognitiveRAG
 
 GEPA Migration (v4.3):
@@ -124,14 +125,14 @@ class AgentTrainingSignal(TypedDict):
 @dataclass
 class FeedbackLearnerTrainingSignal:
     """
-    Training signal for MIPROv2 optimization of feedback learning prompts.
+    Training signal for GEPA/MIPROv2 optimization of feedback learning prompts.
 
     This signal captures the full context of a learning cycle including:
     - Input: Collected feedback batch and cognitive context
     - Output: Detected patterns, recommendations, applied updates
     - Outcomes: Improvement in downstream agent metrics
 
-    The compute_reward() method produces a scalar that MIPROv2 uses to
+    The compute_reward() method produces a scalar that the optimizer uses to
     optimize the DSPy signatures used in pattern detection and recommendation.
     """
 
@@ -202,7 +203,7 @@ class FeedbackLearnerTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward score for MIPROv2 optimization.
+        Compute reward score for GEPA/MIPROv2 optimization.
 
         Weighting (with rubric):
         - pattern_accuracy: 0.20 (finding real patterns; skipped if None)
@@ -528,7 +529,7 @@ GEPA_AVAILABLE: bool = DSPY_AVAILABLE and os.path.isfile(_GEPA_PKG_INIT)
 if GEPA_AVAILABLE:
     logger.info("GEPA optimizer detected for Feedback Learner agent; import deferred until needed")
 else:
-    logger.info("GEPA not available - using MIPROv2 optimizer")
+    logger.warning("GEPA not available - using MIPROv2 optimizer")
 
 _GEPA_SYMBOL_NAMES = frozenset(
     {
@@ -570,7 +571,7 @@ def _get_gepa_symbols() -> Dict[str, Any]:
             "FeedbackLearnerGEPAMetric": FeedbackLearnerGEPAMetric,
         }
     except ImportError:
-        logger.info("GEPA import failed at use time - using MIPROv2 optimizer")
+        logger.warning("GEPA import failed at use time - using MIPROv2 optimizer")
         return dict.fromkeys(_GEPA_SYMBOL_NAMES)
 
 
@@ -754,10 +755,16 @@ class FeedbackLearnerOptimizer:
     signals to optimize the DSPy signatures used in pattern detection,
     recommendation generation, and knowledge updates.
 
-    GEPA provides 10%+ improvement over MIPROv2 via:
+    GEPA (Genetic-Pareto) is the configured default; the paper reports
+    10+ percentage-point gains over MIPROv2 (Agrawal et al., 2025,
+    arXiv:2507.19457) via:
     - Reflective evolution with rich textual feedback
     - Pareto frontier for multi-objective optimization
     - Better exploration of prompt space
+
+    A given run is not guaranteed to be GEPA: when GEPA (or dspy) is
+    unavailable in the environment, __init__ falls back to MIPROv2 and
+    logs a WARNING, so non-GEPA runs are visible in logs.
     """
 
     def __init__(
@@ -921,8 +928,8 @@ class FeedbackLearnerOptimizer:
         """
         Run GEPA optimization for a specific phase.
 
-        GEPA uses reflective evolution with rich textual feedback,
-        providing 10%+ improvement over MIPROv2.
+        GEPA uses reflective evolution with rich textual feedback; the paper
+        reports 10+ percentage-point gains over MIPROv2 (arXiv:2507.19457).
 
         Args:
             phase: Which signature to optimize

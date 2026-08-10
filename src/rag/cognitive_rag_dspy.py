@@ -16,7 +16,7 @@ The key insight: Each phase has LLM-driven decisions that can be
 optimized through DSPy signatures and modules.
 
 GEPA Migration (v4.3):
-- Added GEPA as primary optimizer (10%+ improvement over MIPROv2)
+- Added GEPA as primary optimizer (10+ percentage-point gains over MIPROv2, arXiv:2507.19457)
 - CognitiveRAGOptimizer now supports optimizer_type="gepa" or "miprov2"
 - Integrated with RAGAS feedback for RAG-specific quality evaluation
 """

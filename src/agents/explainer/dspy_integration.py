@@ -33,7 +33,7 @@ class ExplanationPrompts:
     """
     Optimized prompt templates for explanation generation.
 
-    These prompts are consumed from feedback_learner after MIPROv2 optimization.
+    These prompts are consumed from feedback_learner after GEPA/MIPROv2 optimization.
     The Explainer uses LLM for generation but the prompts themselves are
     optimized via the DSPy Recipient pattern.
     """
@@ -90,7 +90,7 @@ class ExplanationPrompts:
         "Suggest questions that deepen understanding."
     )
 
-    # Optimized by MIPROv2
+    # Optimized by GEPA/MIPROv2
     version: str = "1.0"
     last_optimized: str = ""
     optimization_score: float = 0.0

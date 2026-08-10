@@ -76,7 +76,7 @@ class GapAnalysisTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting:
         - gap_detection_quality: 0.25 (gaps found relative to segments)

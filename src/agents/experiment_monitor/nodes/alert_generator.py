@@ -303,7 +303,7 @@ class AlertGeneratorNode:
         # Recipient integration has no generation step that turns the prompt into
         # text. Surfacing it verbatim leaked the raw instruction into the UI alert
         # (e.g. "Describe enrollment issue for experiment '...'"). Until a real
-        # DSPy *generation* path is wired (feedback_learner/MIPROv2), return the
+        # DSPy *generation* path is wired (feedback_learner GEPA/MIPROv2), return the
         # deterministic human-readable message. The prompt templates remain
         # available via `self.dspy_integration` for that future generation step.
         return (

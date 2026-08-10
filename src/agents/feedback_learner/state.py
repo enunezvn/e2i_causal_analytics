@@ -5,7 +5,7 @@ Purpose: TypedDict state for feedback learning workflow
 
 Includes DSPy integration support:
 - CognitiveContext from CognitiveRAG 4-phase cycle
-- Training signal fields for MIPROv2 optimization
+- Training signal fields for GEPA/MIPROv2 optimization
 - ValidationOutcome from Causal Validation Protocol
 """
 
@@ -185,7 +185,7 @@ class FeedbackLearnerState(TypedDict):
     # === COGNITIVE CONTEXT (From CognitiveRAG) ===
     cognitive_context: NotRequired[FeedbackLearnerCognitiveContext]
 
-    # === DSPY TRAINING SIGNALS (For MIPROv2 Optimization) ===
+    # === DSPY TRAINING SIGNALS (For GEPA/MIPROv2 Optimization) ===
     training_signal: NotRequired[FeedbackLearnerTrainingSignal]
 
     # === FEEDBACK DATA ===

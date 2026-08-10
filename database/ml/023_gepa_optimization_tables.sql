@@ -21,7 +21,7 @@ DO $idem$ BEGIN
 -- Optimizer type enum (extends beyond just GEPA for future-proofing)
 CREATE TYPE optimizer_type AS ENUM (
     'miprov2',              -- Previous DSPy optimizer (baseline)
-    'gepa',                 -- GEPA: Generative Evolutionary Prompting with AI
+    'gepa',                 -- GEPA: Genetic-Pareto
     'bootstrap_fewshot',    -- DSPy BootstrapFewShot
     'copro',                -- DSPy COPRO
     'simba',                -- DSPy SIMBA

@@ -38,7 +38,7 @@ class HealthReportPrompts:
     """
     Optimized prompt templates for health score generation.
 
-    These prompts are consumed from feedback_learner after MIPROv2 optimization.
+    These prompts are consumed from feedback_learner after GEPA/MIPROv2 optimization.
     The Health Score agent is primarily computational but uses optimized templates
     for generating human-readable summaries and recommendations.
     """
@@ -125,7 +125,7 @@ class HealthReportPrompts:
         "Latency: {latency_ms}ms. Error: {error_message}."
     )
 
-    # Optimized by MIPROv2
+    # Optimized by GEPA/MIPROv2
     version: str = "1.0"
     last_optimized: str = ""
     optimization_score: float = 0.0

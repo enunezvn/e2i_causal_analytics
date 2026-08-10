@@ -609,7 +609,7 @@ def run_feedback_learning_cycle(self) -> Dict[str, Any]:
     process user feedback and persist a training signal to
     dspy_agent_training_signals (persistence happens in the finalize node).
     The daily optimize beat then reads those signals and gates on
-    GEPAOptimizationTrigger before running MIPROv2.
+    GEPAOptimizationTrigger before running GEPA (MIPROv2 fallback).
 
     Schedule: every 6 hours (beat entry "feedback-learning-cycle", queue
     "analytics").  Window size: DSPY_LEARN_WINDOW_HOURS env var (default 24).

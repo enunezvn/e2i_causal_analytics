@@ -29,7 +29,7 @@ class ResourceOptimizationPrompts:
     """
     Optimized prompt templates for resource optimization outputs.
 
-    These prompts are consumed from feedback_learner after MIPROv2 optimization.
+    These prompts are consumed from feedback_learner after GEPA/MIPROv2 optimization.
     The Resource Optimizer uses these for generating natural language summaries
     and recommendations from mathematical optimization results.
     """
@@ -80,7 +80,7 @@ class ResourceOptimizationPrompts:
         "Value: {value}. Scope: {scope}. Impact on optimization: {impact}."
     )
 
-    # Optimized by MIPROv2
+    # Optimized by GEPA/MIPROv2
     version: str = "1.0"
     last_optimized: str = ""
     optimization_score: float = 0.0

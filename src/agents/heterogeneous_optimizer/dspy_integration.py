@@ -78,7 +78,7 @@ class HeterogeneousOptimizationTrainingSignal:
 
     def compute_reward(self) -> float:
         """
-        Compute reward for MIPROv2 optimization.
+        Compute reward for GEPA/MIPROv2 prompt optimization.
 
         Weighting:
         - heterogeneity_detection: 0.25 (meaningful heterogeneity found)
