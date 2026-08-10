@@ -32,6 +32,8 @@ _TWIN_MIGRATIONS = (
     _MIGRATIONS_DIR / "066_kpi_query_synthetic_exclusion.sql",
     _MIGRATIONS_DIR / "085_kpi_patient_touch_rate_include_synthetic.sql",
     _MIGRATIONS_DIR / "095_kpi_dq_view_include_synthetic_twins.sql",
+    # 124 adds the #1532 ROI temporal-variability band pair.
+    _MIGRATIONS_DIR / "124_kpi_roi_temporal_band.sql",
 )
 
 
@@ -193,6 +195,7 @@ def test_twinned_set_matches_migrations():
     # would make the equality below pass for the wrong reason, so assert the
     # migrations actually yielded the expected twin count before comparing.
     # 36 from 066 + 1 (business_impact_patient_touch_rate) from 085 + 4
-    # (the view-backed WS1 data-quality ids) from 095 = 41.
-    assert len(parsed) == 41, f"twin-migration parse found {len(parsed)} twins, expected 41"
+    # (the view-backed WS1 data-quality ids) from 095 + 1
+    # (business_impact_roi_temporal_band, #1532) from 124 = 42.
+    assert len(parsed) == 42, f"twin-migration parse found {len(parsed)} twins, expected 42"
     assert parsed == SYNTHETIC_TWINNED_QUERY_IDS

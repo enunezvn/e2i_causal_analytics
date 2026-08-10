@@ -1803,6 +1803,18 @@ def _kpi_result_to_response(
     funnel_stages = (metadata.get("context") or {}).get("funnel_stages")
     if funnel_stages is not None:
         response["funnel_stages"] = funnel_stages
+    # #1532: WS3-BI-010 surfaces the per-slice trailing-12-month
+    # temporal-variability band (range of monthly ROI values — NOT a
+    # confidence interval; #1527 established none is possible on the 30-day
+    # headline). Honestly absent when the agent_activities fallback answered
+    # or real-mode has zero slices. Gated on the KPI id: the band is an
+    # ROI-only estimand, and a cached result whose metadata was polluted by
+    # the pre-fix shared-context leak must never show an ROI band beside a
+    # different KPI's figure (codex iter-1 finding 2).
+    if kpi.id == "WS3-BI-010":
+        temporal_band = (metadata.get("context") or {}).get("temporal_variability_band")
+        if temporal_band is not None:
+            response["temporal_variability_band"] = temporal_band
     if window_status == "default":
         window = KPI_REPORTING_WINDOWS.get(kpi.id)
         if window:

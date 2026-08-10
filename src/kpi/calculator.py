@@ -138,7 +138,14 @@ class KPICalculator:
         Returns:
             KPIResult with calculated value and status
         """
-        context = context or {}
+        # Private per-call copy: registered calculators stash per-KPI facts
+        # into the context (data_through, funnel_stages,
+        # temporal_variability_band) and embed it in metadata BY REFERENCE.
+        # Sharing the caller's dict let one KPI's stash leak into every other
+        # result computed with the same context (calculate_batch passes ONE
+        # dict — even results created EARLIER changed retroactively) and into
+        # subsequent cache keys (#1532 codex audit).
+        context = dict(context) if context else {}
 
         # Get KPI metadata
         kpi = self._registry.get(kpi_id)

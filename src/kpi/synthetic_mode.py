@@ -39,7 +39,7 @@ _SYNTHETIC_SUFFIX = "_include_synthetic"
 #: ``src/api/routes/copilotkit.py``).
 _TRUTHY = ("1", "true", "yes")
 
-#: The 41 base ``kpi_query_registry`` ids that have an
+#: The 42 base ``kpi_query_registry`` ids that have an
 #: ``{id}_include_synthetic`` twin: 36 sourced verbatim from
 #: ``database/migrations/066_kpi_query_synthetic_exclusion.sql``, plus
 #: ``business_impact_patient_touch_rate`` from
@@ -50,11 +50,14 @@ _TRUTHY = ("1", "true", "yes")
 #: (cross_source_match / stacking_lift / data_lag / time_to_release) from
 #: ``database/migrations/095_kpi_dq_view_include_synthetic_twins.sql`` (the
 #: same 066 gap as #1064 — their views are synthetic-excluding per 067, so
-#: /data-quality read honest-empty on a synthetic-gold instance). The twins are
+#: /data-quality read honest-empty on a synthetic-gold instance), plus
+#: ``business_impact_roi_temporal_band`` from
+#: ``database/migrations/124_kpi_roi_temporal_band.sql`` (#1532 — the WS3-BI-010
+#: per-slice trailing-12-month temporal-variability band). The twins are
 #: the synthetic-taggable statements; everything else in the registry is not
 #: synthetic-gated. This literal is kept in lock-step with the migrations by
-#: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 + 085 + 095
-#: and asserts equality — drift fails CI), so a future twin added by a later
+#: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 + 085 + 095 +
+#: 124 and asserts equality — drift fails CI), so a future twin added by a later
 #: migration is a one-line update guarded by a red test, never a silent miss.
 SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
     {
@@ -73,6 +76,7 @@ SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
         "business_impact_patient_touch_rate",
         "business_impact_roi_agent_activities",
         "business_impact_roi_business_metrics",
+        "business_impact_roi_temporal_band",
         "business_impact_trx",
         "business_impact_trx_share",
         "business_impact_wau_fallback",
