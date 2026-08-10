@@ -472,3 +472,100 @@ async def test_kpi_calculate_tool_segment_window_reach_conversion_context(monkey
     assert ctx["brand"] == "Remibrutinib"
     assert ctx["segment"] == "high_severity"
     assert "window" in ctx and ctx["window"]["start"] and ctx["window"]["end"]
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_surfaces_roi_temporal_band():
+    """#1532: WS3-BI-010 stashes ``temporal_variability_band`` into the
+    calculator context (the ``funnel_stages`` seam, #1360) and the mapper must
+    copy it up so the synthesizer can present the per-slice 12-month range."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-010")
+    assert kpi is not None
+    band = {
+        "semantics": "range of monthly values over the trailing 12 months — temporal variability",
+        "window": "trailing 12 months ending at the business_metrics data frontier",
+        "min_n": 6,
+        "slices": [
+            {
+                "metric_name": "market_share",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "n": 12,
+                "band": {"roi_min": 1.1, "roi_max": 1.9, "roi_mean": 1.5, "roi_stddev": 0.2},
+                "band_suppressed": False,
+            }
+        ],
+    }
+    result = KPIResult(
+        kpi_id="WS3-BI-010",
+        value=1.52,
+        status=KPIStatus.INFORMATIONAL,
+        metadata={"context": {"temporal_variability_band": band}},
+    )
+    resp = _kpi_result_to_response(kpi, result)
+    assert resp["success"] is True
+    assert resp["temporal_variability_band"] == band
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_band_absent_when_not_stashed():
+    """Honest absence: no band in the calculator context (agent_activities
+    fallback answered, band query failed, or real-mode zero slices) -> no
+    band key in the response. Applies to every other KPI too."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    for kpi_id, value in (("WS3-BI-010", 1.52), ("WS3-BI-005", 10.0)):
+        kpi = get_registry().get(kpi_id)
+        assert kpi is not None
+        result = KPIResult(kpi_id=kpi_id, value=value, status=KPIStatus.UNKNOWN, metadata={})
+        resp = _kpi_result_to_response(kpi, result)
+        assert "temporal_variability_band" not in resp
+
+
+@pytest.mark.unit
+def test_roi_response_carries_no_interval_keys_regression_1527():
+    """#1527 regression, executable: monthly data gives n=1 per slice in the
+    30-day headline window, so NO conditioning scheme can produce an interval
+    there — the ROI response must never grow confidence_interval / ci_lower /
+    ci_upper keys, band present or not (the band is a DIFFERENT estimand)."""
+    import json as _json
+
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-010")
+    assert kpi is not None
+    band = {
+        "semantics": "range of monthly values over the trailing 12 months — temporal variability",
+        "window": "trailing 12 months ending at the business_metrics data frontier",
+        "min_n": 6,
+        "slices": [],
+    }
+    result = KPIResult(
+        kpi_id="WS3-BI-010",
+        value=1.52,
+        status=KPIStatus.INFORMATIONAL,
+        metadata={"context": {"temporal_variability_band": band, "data_through": "2026-08-03"}},
+    )
+    resp = _kpi_result_to_response(kpi, result)
+    dumped = _json.dumps(resp).lower()
+    for forbidden in ("confidence_interval", "ci_lower", "ci_upper"):
+        assert forbidden not in dumped, f"ROI response contains forbidden key {forbidden!r}"
+
+
+@pytest.mark.unit
+def test_roi_semantic_note_pins_band_meaning():
+    """#1532 acceptance criterion 2: the WS3-BI-010 semantic note must state
+    the band is the range of monthly values over the past 12 months and must
+    not describe it as a confidence interval."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-010")
+    assert kpi is not None
+    result = KPIResult(kpi_id="WS3-BI-010", value=1.52, status=KPIStatus.INFORMATIONAL, metadata={})
+    resp = _kpi_result_to_response(kpi, result)
+    note = resp.get("semantic_note", "")
+    assert "12 months" in note
+    assert "point estimate" in note
+    assert "confidence interval" not in note.lower().replace("not a confidence interval", "")

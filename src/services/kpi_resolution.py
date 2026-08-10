@@ -219,6 +219,19 @@ KPI_SEMANTIC_NOTES = {
         "effectiveness — and 'viewed' is a delivery-status progression state, "
         "not a funnel prerequisite for acceptance."
     ),
+    # #1532 (supersedes #1527): monthly data gives every (metric, brand,
+    # region) slice exactly n=1 in the 30-day headline window, so no interval
+    # on the headline is possible; the band is a DIFFERENT estimand and must
+    # never be presented as inferential uncertainty.
+    "WS3-BI-010": (
+        "ROI's headline is a pooled point estimate with no interval — the "
+        "monthly substrate cannot support one. When temporal_variability_band "
+        "rides along, present each slice's band as the range of its monthly "
+        "ROI values over the past 12 months (recent temporal variability, "
+        "with its n) — it is NOT a confidence interval and NOT uncertainty "
+        "about the current value; slices with band_suppressed=true report "
+        "only n, never an invented range."
+    ),
 }
 
 

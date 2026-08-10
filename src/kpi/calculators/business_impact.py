@@ -12,6 +12,7 @@ Implements calculators for business impact metrics:
 - ROI
 """
 
+import logging
 from typing import Any
 
 from src.kpi.calculator import KPICalculatorBase
@@ -32,6 +33,8 @@ from src.kpi.synthetic_mode import (
     windowed_axis_query_id,
     windowed_query_id,
 )
+
+logger = logging.getLogger(__name__)
 
 # Brands for which the biologic-status / IgE-tertile axes are REAL. The
 # ``biologic_experienced`` and ``ige_level`` columns are populated ONLY for these
@@ -554,10 +557,26 @@ class BusinessImpactCalculator(KPICalculatorBase):
             return float(result[0]["conversion_rate"])
         raise RuntimeError("KPI WS3-BI-009 unavailable: no data for conversion rate")
 
+    # #1532 temporal-variability band: minimum monthly observations a slice
+    # needs before its band is shown (below this, n is still reported but the
+    # band is suppressed — a 3-month range dressed as a 12-month band would be
+    # the same plausible-but-wrong shape #1527 rejected for pooled STDDEV).
+    _ROI_BAND_MIN_N = 6
+
+    _ROI_BAND_SEMANTICS = (
+        "Range of each (metric_name, brand, region) slice's monthly ROI values "
+        "over the trailing 12 months of data — recent temporal variability of "
+        "the slice's ROI, NOT uncertainty about the current value. Monthly data "
+        "gives n=1 per slice in the 30-day headline window, so no interval on "
+        "the headline is possible (#1527); the headline stays a point estimate."
+    )
+
     def _calc_roi(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-010: Return on Investment.
 
-        Value generated per dollar invested.
+        Value generated per dollar invested. When ``business_metrics`` answers,
+        the per-slice trailing-12-month temporal-variability band (#1532) rides
+        the context into ``KPIResult.metadata`` (the ``funnel_stages`` seam).
         """
         # Try business_metrics table first
         result = self._execute_query("business_impact_roi_business_metrics", [])
@@ -566,15 +585,87 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # probes' frontiers diverge; that is why ROI has no static
             # reporting_window note in the chatbot map).
             self._stash_data_through(context, result)
+            self._stash_roi_temporal_band(context)
             return float(result[0]["avg_roi"])
 
-        # Try agent_activities table
+        # Try agent_activities table. No band here: the band describes
+        # business_metrics slices; attaching it to an agent_activities headline
+        # would pair a figure with dispersion from a different substrate.
         result = self._execute_query("business_impact_roi_agent_activities", [])
         if result and result[0].get("avg_roi") is not None:
             self._stash_data_through(context, result)
             return float(result[0]["avg_roi"])
 
         raise RuntimeError("KPI WS3-BI-010 unavailable: no data for return on investment (ROI)")
+
+    def _stash_roi_temporal_band(self, context: dict[str, Any]) -> None:
+        """Attach the #1532 per-slice band to the context (best-effort).
+
+        The band is supplementary metadata: a failure here must never take the
+        headline down with it (the headline itself keeps the #574 fail-loud
+        contract via ``_execute_query``), and omitting the band on error is
+        honest absence — nothing downstream renders a fabricated range.
+        """
+        try:
+            rows = self._execute_query(
+                "business_impact_roi_temporal_band",
+                [context.get("brand"), context.get("region")],
+            )
+        except Exception as exc:  # noqa: BLE001 - supplementary metadata only
+            logger.warning("WS3-BI-010 temporal band query failed (band omitted): %s", exc)
+            return
+        band = self._assemble_roi_temporal_band(rows)
+        if band is not None:
+            context["temporal_variability_band"] = band
+
+    @classmethod
+    def _assemble_roi_temporal_band(
+        cls, rows: list[dict[str, Any]] | None, min_n: int | None = None
+    ) -> dict[str, Any] | None:
+        """Pure: band-query rows -> ``temporal_variability_band`` payload.
+
+        #1532 contract: every slice reports its actual ``n``; the band itself
+        appears only at ``n >= min_n`` (default 6) AND with real aggregates —
+        otherwise ``band`` is None with ``band_suppressed`` True, never a
+        fabricated range. Empty/absent rows -> None (honest absence: real-mode
+        on an all-synthetic substrate has zero slices). The payload never uses
+        confidence-interval naming (the #1526 sensitivity_band discipline).
+        """
+        if not rows:
+            return None
+        floor = cls._ROI_BAND_MIN_N if min_n is None else min_n
+        slices: list[dict[str, Any]] = []
+        for row in rows:
+            n = int(row.get("n") or 0)
+            entry: dict[str, Any] = {
+                "metric_name": row.get("metric_name"),
+                "brand": row.get("brand"),
+                "region": row.get("region"),
+                "n": n,
+            }
+            has_stats = row.get("roi_min") is not None and row.get("roi_max") is not None
+            if n >= floor and has_stats:
+                entry["band"] = {
+                    "roi_min": float(row["roi_min"]),
+                    "roi_max": float(row["roi_max"]),
+                    "roi_mean": (
+                        float(row["roi_mean"]) if row.get("roi_mean") is not None else None
+                    ),
+                    "roi_stddev": (
+                        float(row["roi_stddev"]) if row.get("roi_stddev") is not None else None
+                    ),
+                }
+                entry["band_suppressed"] = False
+            else:
+                entry["band"] = None
+                entry["band_suppressed"] = True
+            slices.append(entry)
+        return {
+            "semantics": cls._ROI_BAND_SEMANTICS,
+            "window": "trailing 12 months ending at the business_metrics data frontier",
+            "min_n": floor,
+            "slices": slices,
+        }
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a vetted KPI query by id and return results.

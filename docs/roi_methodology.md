@@ -189,6 +189,36 @@ a CI (`src/kpi/calculators/causal_metrics.py:124`): there the rows are repeated
 estimates of one estimand, so the interval is meaningful. That precedent does not
 transfer to ROI.
 
+### 8.1 Conditioning was measured, and the 30-day window cannot support it (#1527)
+
+The sizing question above was answered against the live analytics DB
+(2026-08-10): `business_metrics` ROI data is **monthly** — one row per
+`(metric_name, brand, region)` slice per `metric_date` (9,840 ROI rows, 164
+monthly dates since 2013). Inside the KPI's 30-day window every slice therefore
+has exactly **n = 1** and `STDDEV(roi)` is NULL. No conditioning scheme within
+that window can produce an interval; the headline stays a point estimate **by
+design** (issue #1527, closed).
+
+### 8.2 What ships instead: the per-slice temporal-variability band (#1532)
+
+The re-scoped estimand is a **per-slice trailing-12-month temporal-variability
+band**: for each `(metric_name, brand, region)` slice, the range
+(min / max, with mean and stddev) of its monthly ROI values over the trailing
+12 months of data (n ≤ 12, frontier-anchored per migration 089).
+
+- Registered as `business_impact_roi_temporal_band` (+ `_include_synthetic`
+  twin) in migration 124; `_calc_roi` attaches the assembled band to
+  `KPIResult.metadata` when `business_metrics` answers the headline, and the
+  chat response carries it as `temporal_variability_band`.
+- Every slice reports its actual `n`; the band is **suppressed below n = 6**
+  (`band_suppressed: true`, `band: null`) — a 3-month range dressed as a
+  12-month band would be the same plausible-but-wrong shape §8 rejects.
+- It measures **recent temporal variability of the slice's ROI** — a different
+  claim than uncertainty about the current value. It is *not* a confidence
+  interval and is never named or rendered as one (the #1526 `sensitivity_band`
+  naming discipline); the semantics ride the payload itself and
+  `KPI_SEMANTIC_NOTES["WS3-BI-010"]`.
+
 ## 9. Sensitivity analysis (tornado diagram)
 
 Optional (`run_sensitivity=True`). Varies each value driver ±20% while holding all
@@ -248,12 +278,12 @@ years. Single-year initiatives should use `calculate_roi()` and ignore NPV.
    sensitivity band, not a sampling CI, and `assumptions` spells out the semantics.
    Note the deliberate contrast: `gap_analyzer`'s `ROIEstimate.confidence_interval`
    genuinely is a bootstrap CI and keeps its name.
-4. **Observed-ROI intervals are still unavailable** (§8). Conditioning the KPI query by
-   brand / region / metric_name is the path, and it needs a look at real row counts per
-   slice before it is worth building.
-
 ### Closed
 
 - ~~Chat drops the CI~~ — the band now renders in the gap_analyzer narrative (§11).
 - ~~`roi_estimator` reports a hardcoded ±25% band~~ — replaced with measured dispersion.
 - ~~`roi_estimator`'s band is named `confidence_interval`~~ — renamed `sensitivity_band` (#1526).
+- ~~Observed-ROI intervals are unavailable~~ — measured: monthly data gives every slice
+  n=1 in the 30-day window, so no interval is possible there **by design** (#1527);
+  the per-slice trailing-12-month **temporal-variability band** ships instead
+  (#1532, migration 124, §8.1–§8.2 — a different estimand, never called a CI).
