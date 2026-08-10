@@ -341,6 +341,11 @@ async def optimize_recipient(
     import dspy
 
     from src.optimization.gepa import create_gepa_optimizer
+    from src.repositories.prompt_optimization import (
+        record_run_completed,
+        record_run_failed,
+        record_run_started,
+    )
 
     from .recipient_metrics import get_recipient_metric
 
@@ -372,11 +377,36 @@ async def optimize_recipient(
             optimizer = create_gepa_optimizer(
                 metric=metric, trainset=trainset, valset=valset, auto=budget, seed=42
             )
-            optimized = optimizer.compile(module, trainset=trainset, valset=valset)
+            # One prompt_optimization_runs row per compile (migration 023
+            # wiring); record_* is best-effort and never raises.
+            run_id = await record_run_started(
+                agent_name=agent_name,
+                optimizer_type="gepa",
+                budget_preset=budget,
+                trainset_size=len(trainset),
+                valset_size=len(valset),
+                created_by="recipient_optimizer",
+            )
+            try:
+                optimized = optimizer.compile(module, trainset=trainset, valset=valset)
+            except Exception as compile_error:
+                import traceback
+
+                await record_run_failed(
+                    run_id, str(compile_error), traceback.format_exc()
+                )
+                raise
             instr = _read_instruction(optimized)
             if instr:
                 instructions[field] = instr
                 logger.info("Optimized recipient %s.%s", agent_name, field)
+            # predictor_name = the recipient's template field — the
+            # domain-meaningful name, not dspy's internal predictor label.
+            await record_run_completed(
+                run_id,
+                module=optimized,
+                instruction_entries=[(field, instr)] if instr else [],
+            )
         except Exception as e:  # noqa: BLE001 - one field failing must not abort the rest
             logger.error("Failed to optimize %s.%s: %s", agent_name, field, e)
     return instructions

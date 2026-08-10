@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -261,7 +262,34 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
     )
     module = dspy.ChainOfThought(EvidenceSynthesisSignature)
     seed_instructions = _instructions_of(module)
-    optimized = await asyncio.to_thread(optimizer.compile, module, trainset=trainset, valset=valset)
+
+    # One prompt_optimization_runs row per compile (migration 023 wiring).
+    # Started here — after every skip guard, right before judge budget is
+    # spent — so a run row exists exactly when real API calls were made.
+    # record_* is best-effort and never raises.
+    from src.repositories.prompt_optimization import (
+        record_run_completed,
+        record_run_failed,
+        record_run_started,
+    )
+
+    run_id = await record_run_started(
+        agent_name=OPTIMIZED_SYNTHESIS_AGENT_NAME,
+        optimizer_type="gepa",
+        budget_preset="custom",
+        max_metric_calls=budget,
+        trainset_size=len(trainset),
+        valset_size=len(valset),
+        created_by="run_rag_prompt_optimization",
+        config={"source": batch.source, "origin": records_path},
+    )
+    try:
+        optimized = await asyncio.to_thread(
+            optimizer.compile, module, trainset=trainset, valset=valset
+        )
+    except Exception as compile_error:
+        await record_run_failed(run_id, str(compile_error), traceback.format_exc())
+        raise
 
     # A judge that degraded mid-run (heuristic fallback, timeout, rate-limit)
     # loses those examples to failure_score 0.0, so the winning candidate may
@@ -276,7 +304,8 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
             "left un-fingerprinted so the next run retries.",
             reason,
         )
-        return {"status": "failed", "reason": reason, "degraded_examples": degraded}
+        await record_run_failed(run_id, reason)
+        return {"status": "failed", "reason": reason, "degraded_examples": degraded, "run_id": run_id}
 
     # GEPA seeds its candidate pool with the base program (dspy gepa.py:553 ->
     # gepa core/state.py:54) and picks argmax over val_aggregate_scores
@@ -303,12 +332,16 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         no_improvement_state = _load_trigger_state()
         no_improvement_state["rag_records_fingerprint"] = fingerprint
         _save_trigger_state(no_improvement_state)
+        # A completed measurement (real stats), but the winning candidate is
+        # the unchanged seed — no artifact, so no instruction rows either.
+        await record_run_completed(run_id, module=optimized, instruction_entries=[])
         return {
             "status": "skipped",
             "reason": reason,
             "examples": len(examples),
             "max_metric_calls": budget,
             "fingerprint": fingerprint,
+            "run_id": run_id,
         }
 
     info = save_optimized_module(
@@ -324,6 +357,7 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
             "max_metric_calls": budget,
         },
     )
+    await record_run_completed(run_id, module=optimized, artifact_info=info)
     # Merge into freshly-loaded state, not the copy read before the compile: that
     # snapshot is minutes stale by now, and writing it back would revert whatever
     # another writer recorded meanwhile. Same discipline as the beat's final save.
@@ -345,6 +379,7 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
         "version_id": info["version_id"],
         "agent_name": OPTIMIZED_SYNTHESIS_AGENT_NAME,
         "source": batch.source,
+        "run_id": run_id,
     }
 
 

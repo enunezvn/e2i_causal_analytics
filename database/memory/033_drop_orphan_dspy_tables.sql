@@ -18,7 +18,10 @@
 -- DO NOT drop in this migration (intentionally preserved):
 --   * `dspy_agent_training_signals` — LIVE (writer src/rag/memory_adapters.py:779,
 --     reader :814 get_signals_for_optimization);
---   * the `database/ml/023` GEPA tables — the current (unwired-but-roadmapped) stake.
+--   * the `database/ml/023` GEPA tables — the current stake, wired via
+--     `database/ml/035_gepa_persistence_constraints.sql` +
+--     `src/repositories/prompt_optimization.py` (was unwired-but-roadmapped
+--     when this migration shipped).
 --
 -- Idempotent (IF EXISTS). CASCADE clears dependent indexes/FKs.
 -- =============================================================================

@@ -6,6 +6,8 @@ agent versions against baselines in production.
 Integrates with:
 - prompt_ab_tests table (database/ml/023_gepa_optimization_tables.sql)
 - prompt_ab_test_observations table
+- both persisted via PromptABTestRepository in
+  src/repositories/prompt_optimization.py (migration 035)
 """
 
 import random
