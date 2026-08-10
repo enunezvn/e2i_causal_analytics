@@ -392,9 +392,7 @@ async def optimize_recipient(
             except Exception as compile_error:
                 import traceback
 
-                await record_run_failed(
-                    run_id, str(compile_error), traceback.format_exc()
-                )
+                await record_run_failed(run_id, str(compile_error), traceback.format_exc())
                 raise
             instr = _read_instruction(optimized)
             if instr:

@@ -69,14 +69,10 @@ async def client():
     )
     test_ids = [row["test_id"] for row in tests.data or []]
     if test_ids:
-        await (
-            c.table("prompt_ab_test_observations").delete().in_("test_id", test_ids).execute()
-        )
+        await c.table("prompt_ab_test_observations").delete().in_("test_id", test_ids).execute()
         await c.table("prompt_ab_tests").delete().in_("test_id", test_ids).execute()
     await c.table("optimized_instructions").delete().like("agent_name", f"{PREFIX}%").execute()
-    await (
-        c.table("optimized_tool_descriptions").delete().like("agent_name", f"{PREFIX}%").execute()
-    )
+    await c.table("optimized_tool_descriptions").delete().like("agent_name", f"{PREFIX}%").execute()
     await c.table("prompt_optimization_runs").delete().like("agent_name", f"{PREFIX}%").execute()
 
 
@@ -657,17 +653,10 @@ async def test_recorder_records_real_dspy_module_artifact(client, tmp_path):
     )
     assert run_id is not None
 
-    ok = await record_run_completed(
-        run_id, module=module, artifact_info=info, client=client
-    )
+    ok = await record_run_completed(run_id, module=module, artifact_info=info, client=client)
     assert ok is True
 
-    run = (
-        await client.table("prompt_optimization_runs")
-        .select("*")
-        .eq("run_id", run_id)
-        .execute()
-    )
+    run = await client.table("prompt_optimization_runs").select("*").eq("run_id", run_id).execute()
     assert run.data[0]["status"] == "completed"
     assert run.data[0]["log_dir"] == info["path"]
 

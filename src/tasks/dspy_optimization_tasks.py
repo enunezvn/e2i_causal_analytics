@@ -305,7 +305,12 @@ async def run_rag_prompt_optimization() -> Dict[str, Any]:
             reason,
         )
         await record_run_failed(run_id, reason)
-        return {"status": "failed", "reason": reason, "degraded_examples": degraded, "run_id": run_id}
+        return {
+            "status": "failed",
+            "reason": reason,
+            "degraded_examples": degraded,
+            "run_id": run_id,
+        }
 
     # GEPA seeds its candidate pool with the base program (dspy gepa.py:553 ->
     # gepa core/state.py:54) and picks argmax over val_aggregate_scores

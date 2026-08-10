@@ -499,9 +499,7 @@ class OptimizedInstructionRepository(BaseRepository):
     async def get_for_run(self, run_id: str) -> List[Dict[str, Any]]:
         if not self.client:
             return []
-        result = await _exec(
-            self.client.table(self.table_name).select("*").eq("run_id", run_id)
-        )
+        result = await _exec(self.client.table(self.table_name).select("*").eq("run_id", run_id))
         return [dict(row) for row in result.data or []]
 
 
@@ -694,9 +692,7 @@ class PromptABTestRepository(BaseRepository):
         ci = results.confidence_interval
         updates: Dict[str, Any] = {
             "status": status,
-            "ended_at": (
-                ab_test.ended_at.isoformat() if ab_test.ended_at else _utcnow_iso()
-            ),
+            "ended_at": (ab_test.ended_at.isoformat() if ab_test.ended_at else _utcnow_iso()),
             "baseline_requests": results.baseline_requests,
             "treatment_requests": results.treatment_requests,
             "baseline_score_avg": _clean_float(results.baseline_score_avg),
@@ -714,9 +710,7 @@ class PromptABTestRepository(BaseRepository):
             "decision_reason": results.recommendation,
         }
         result = await _exec(
-            self.client.table(self.table_name)
-            .update(updates)
-            .eq(self.id_column, ab_test.test_id)
+            self.client.table(self.table_name).update(updates).eq(self.id_column, ab_test.test_id)
         )
         return dict(result.data[0]) if result.data else None
 
@@ -887,9 +881,7 @@ async def record_run_completed(
                 agent_name=updated["agent_name"],
                 version=artifact.get("version_id") or f"run_{run_id}",
                 entries=entries,
-                val_score=(
-                    val_score if val_score is not None else stats.get("optimized_score")
-                ),
+                val_score=(val_score if val_score is not None else stats.get("optimized_score")),
                 candidate_idx=stats.get("best_candidate_idx"),
             )
         return True
