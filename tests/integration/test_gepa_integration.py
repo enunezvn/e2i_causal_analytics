@@ -382,21 +382,37 @@ class TestGEPADatabaseSchema:
         migration_path = Path(__file__).parent.parent.parent / "database" / "ml"
         gepa_migrations = list(migration_path.glob("*gepa*.sql"))
 
+        creates_tables = False
         for migration in gepa_migrations:
-            content = migration.read_text()
+            content = migration.read_text().lower()
 
-            # Check for expected tables
-            assert "CREATE TABLE" in content or "create table" in content.lower()
+            # Every GEPA migration must touch at least one of the 023 tables
+            # (035_gepa_persistence_constraints.sql is constraints-only, so
+            # CREATE TABLE cannot be required of every file).
+            gepa_tables = [
+                "prompt_optimization_runs",
+                "optimized_instructions",
+                "optimized_tool_descriptions",
+                "prompt_ab_tests",
+            ]
+            assert any(table in content for table in gepa_tables), (
+                f"{migration.name} references no GEPA table"
+            )
 
-            # Check for expected GEPA tables (actual table names in 023_gepa_optimization_tables.sql)
+            if "create table" not in content:
+                continue
+            creates_tables = True
+
+            # The table-creating migration (023) must define the core tables.
             expected_tables = [
                 "prompt_optimization_runs",
                 "optimized_instructions",
                 "prompt_ab_tests",
             ]
-
             for table in expected_tables:
-                assert table in content.lower(), f"Missing table {table} in {migration.name}"
+                assert table in content, f"Missing table {table} in {migration.name}"
+
+        assert creates_tables, "No GEPA migration creates the tables"
 
 
 class TestGEPAVocabulary:

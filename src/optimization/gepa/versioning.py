@@ -4,7 +4,8 @@ This module provides version management for GEPA-optimized DSPy modules,
 enabling save, load, and rollback of optimized agent prompts.
 
 Integrates with:
-- optimized_instructions table (database/ml/023_gepa_optimization_tables.sql)
+- optimized_instructions table (database/ml/023_gepa_optimization_tables.sql;
+  persistence wired via src/repositories/prompt_optimization.py, migration 035)
 - MLflow for experiment tracking
 - Local file system for module persistence
 """

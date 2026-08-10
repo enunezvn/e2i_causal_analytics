@@ -325,6 +325,31 @@ def _arm_leg(
     path = _records_file(tmp_path, records)
     monkeypatch.setenv(task_module.RAG_RECORDS_PATH_ENV, str(path))
 
+    # The migration-023 run recorder resolves the process-wide REAL supabase
+    # client when none is passed — a unit test must never write prod rows.
+    # (Real recording is covered by tests/integration/test_gepa_persistence_realdb.py.)
+    async def _recorder_started(**_k: Any) -> None:
+        return None
+
+    async def _recorder_terminal(*_a: Any, **_k: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "src.repositories.prompt_optimization.record_run_started",
+        _recorder_started,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "src.repositories.prompt_optimization.record_run_completed",
+        _recorder_terminal,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "src.repositories.prompt_optimization.record_run_failed",
+        _recorder_terminal,
+        raising=True,
+    )
+
     class _Metric:
         """Callable, so it satisfies GEPA's metric contract if ever constructed."""
 

@@ -319,6 +319,7 @@ jobs:
             tests/unit/test_issue_825_helpers.py \
             tests/unit/test_issue_825_monitor_flags.py \
             tests/unit/test_ml_foundation_schemas.py \
+            tests/unit/test_prompt_optimization_persistence_unit.py \
             tests/unit/test_ragas_fixture_regression_workflow.py \
             tests/unit/test_ragas_relevancy_decomposition_1489.py \
             tests/unit/test_ragas_smoke_workflow.py \

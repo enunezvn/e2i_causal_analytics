@@ -140,6 +140,18 @@ from src.repositories.observability_span import ObservabilitySpanRepository
 from src.repositories.patient_journey import PatientJourneyRepository
 from src.repositories.prediction import PredictionRepository
 
+# GEPA prompt-optimization persistence (Migration 023, wired via 035)
+from src.repositories.prompt_optimization import (
+    OptimizedInstructionRepository,
+    OptimizedToolDescriptionRepository,
+    PromptABTestRepository,
+    PromptOptimizationRunRepository,
+    record_run_completed,
+    record_run_discarded,
+    record_run_failed,
+    record_run_started,
+)
+
 # Query Logging (G13 - Observability)
 from src.repositories.query_logger import (
     QueryLogger,
@@ -254,6 +266,15 @@ __all__ = [
     "get_chatbot_feedback_repository",
     "ChatbotAnalyticsRepository",
     "get_chatbot_analytics_repository",
+    # GEPA prompt-optimization persistence (Migration 023, wired via 035)
+    "PromptOptimizationRunRepository",
+    "OptimizedInstructionRepository",
+    "OptimizedToolDescriptionRepository",
+    "PromptABTestRepository",
+    "record_run_started",
+    "record_run_completed",
+    "record_run_failed",
+    "record_run_discarded",
     # Utilities
     "get_supabase_client",
     # Query Logging (G13 - Observability)
