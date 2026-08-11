@@ -2,7 +2,8 @@
 """Parse user-requested time windows (rolling or absolute) into a normalized
 half-open ``[start, end)`` UTC range for the KPI engine.
 
-Rolling windows ("last 3 months") are anchored to ``now``. Absolute windows
+Rolling windows ("last 3 months") and calendar-aligned phrases ("this month",
+"this quarter", "last quarter") are anchored to ``now``. Absolute windows
 ("Q1 2025", "2024", "Jan-Mar 2025", ISO dates) are fixed. Returns ``None`` for
 no-window input; raises :class:`WindowParseError` on unparseable / invalid input
 (never silently defaults)."""
@@ -16,13 +17,8 @@ from typing import Any, Optional
 
 from dateutil.relativedelta import relativedelta  # type: ignore[import-untyped]
 
-_MONTHS = {
-    m: i
-    for i, m in enumerate(
-        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
-        start=1,
-    )
-}
+_MONTH_ABBRS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_MONTHS = {m: i for i, m in enumerate(_MONTH_ABBRS, start=1)}
 
 
 class WindowParseError(ValueError):
@@ -86,6 +82,44 @@ def parse_window(spec: Any, *, now: Optional[datetime] = None) -> Optional[Windo
             "year": relativedelta(years=n),
         }[unit]
         return _validate(now - delta, now, "rolling", f"last {n} {unit}s")
+
+    # Calendar-aligned phrases anchored to ``now`` (#1546): "this month" is the
+    # full calendar month containing ``now``, "last quarter" the most recent
+    # completed calendar quarter. The full period (not ``.. now``) keeps the
+    # window valid even at the period's first instant; future dates simply hold
+    # no data. "last month" / "last year" keep their rolling meaning — the
+    # rolling branch above matches them first — so only "quarter", which has no
+    # rolling unit, carries a last/previous calendar form here.
+    m = re.fullmatch(
+        r"(?:(?:this|current)\s+(week|month|quarter|year)|(?:last|previous)\s+(quarter))", s
+    )
+    if m:
+        unit = m.group(1) or m.group(2)
+        step = {
+            "week": relativedelta(weeks=1),
+            "month": relativedelta(months=1),
+            "quarter": relativedelta(months=3),
+            "year": relativedelta(years=1),
+        }[unit]
+        if unit == "week":
+            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - relativedelta(
+                days=now.weekday()
+            )
+        elif unit == "month":
+            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        elif unit == "quarter":
+            start = datetime(now.year, 3 * ((now.month - 1) // 3) + 1, 1, tzinfo=timezone.utc)
+        else:  # year
+            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+        if m.group(2):  # last/previous quarter
+            start -= step
+        label = {
+            "week": f"week of {start.date()}",
+            "month": f"{_MONTH_ABBRS[start.month - 1].capitalize()} {start.year}",
+            "quarter": f"Q{(start.month - 1) // 3 + 1} {start.year}",
+            "year": str(start.year),
+        }[unit]
+        return _validate(start, start + step, "absolute", label)
 
     m = re.fullmatch(r"q([1-4])\s+(\d{4})", s)
     if m:
