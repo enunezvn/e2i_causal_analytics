@@ -18,7 +18,7 @@
  * originally advertised.
  */
 
-import { KPI_CATALOG } from './kpi-catalog.generated';
+import { KPI_CATALOG, REGION_ALIAS_MAP } from './kpi-catalog.generated';
 
 /**
  * Colloquial aliases the registry itself cannot yield — spoken names with no
@@ -105,6 +105,28 @@ export function resolveBrand(brand: string | undefined): string | undefined {
   const trimmed = brand?.trim();
   if (!trimmed) return undefined;
   return BRAND_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
+
+/**
+ * Canonicalize a model-supplied region ('Northeast', 'North East', 'NE',
+ * 'Pacific', …) to its region_type enum label via the platform synonym table
+ * (#1538 — REGION_ALIAS_MAP is generated from src/services/enum_labels.py, the
+ * SSOT every backend surface shares). Three outcomes, three shapes:
+ *
+ * - blank / missing        -> `undefined` (no region scope)
+ * - label or known synonym -> the enum label ('northeast' | 'south' | …)
+ * - anything else          -> `null` — the caller must REFUSE with the known
+ *   labels rather than pass it through: region can never match a row, so a
+ *   passthrough would put a 0-value figure under a junk region caption (the
+ *   backend chat tool fails fast on the same input for the same reason).
+ */
+export function resolveRegion(region: string | undefined): string | null | undefined {
+  const trimmed = region?.trim();
+  if (!trimmed) return undefined;
+  // Mirror enum_labels.fold_region_key: casefold + remove separators — the
+  // labels are single concatenated words, so 'North East' folds to 'northeast'.
+  const folded = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
+  return REGION_ALIAS_MAP[folded] ?? null;
 }
 
 /** Severity aliases → canonical patient_journeys.segment_assignment values. */

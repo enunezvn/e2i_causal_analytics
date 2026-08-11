@@ -181,7 +181,15 @@ class KPICalculator:
         # Check cache (unless force_refresh)
         if use_cache and not force_refresh and self._cache.enabled:
             cached = self._cache.get(kpi_id, **cache_context)
-            if cached is not None:
+            # Region provenance is serialized with the entry (unlike window,
+            # whose truth is registry-derivable and re-stamped below). An entry
+            # that PREDATES #1538 deserializes to region_status="default" while
+            # a region was requested — it cannot attest whether the region was
+            # applied, so recompute rather than serve an unattested value for
+            # one TTL cycle.
+            if cached is not None and not (
+                context.get("region") and cached.region_status == "default"
+            ):
                 # A cached entry was computed for THIS window (window is part of
                 # the cache key), so reflect the requested window on the served
                 # result rather than the cache's serialized "default".
@@ -196,6 +204,10 @@ class KPICalculator:
         # registered-calculator and default paths, so stamp it here (the single
         # place the successful result is produced for calculate() to return).
         result = self._stamp_window(result, kpi, window)
+        # Region provenance (#1538): the routing seams mark the context when
+        # they select a region-scoped variant; stamp the verdict here, BEFORE
+        # caching, so the serialized entry attests it.
+        result = self._stamp_region(result, context)
 
         # Cache the result
         if use_cache and result.error is None:
@@ -234,6 +246,36 @@ class KPICalculator:
             result.window_requested = window
             result.window_applied = None
             result.window_status = "not_applicable"
+        return result
+
+    @staticmethod
+    def _stamp_region(result: KPIResult, context: dict[str, Any]) -> KPIResult:
+        """Stamp region provenance (#1538) from the routing seams' marker.
+
+        Unlike the window stamp there is no registry attribute to consult:
+        whether a region was applied is a ROUTING fact (a handful of
+        calculators select ``*_region``/``*_brand_region`` variants, with
+        per-method precedence rules that can silently drop the region). Each
+        seam sets ``context["_region_routed"] = True`` at the exact decision
+        point, so this stamp is truthful by construction:
+
+        * no region requested          -> defaults untouched ("default")
+        * region + marker              -> "applied" (requested == applied)
+        * region + no marker           -> "not_applicable"; the value is kept
+          but is global/portfolio-level — consumers must not caption it with
+          the region. Errored results also land here (consumers read ``error``
+          first; the requested region is still echoed for the record).
+        """
+        region = context.get("region")
+        if not region:
+            return result
+        result.region_requested = region
+        if context.get("_region_routed"):
+            result.region_applied = region
+            result.region_status = "applied"
+        else:
+            result.region_applied = None
+            result.region_status = "not_applicable"
         return result
 
     def calculate_batch(

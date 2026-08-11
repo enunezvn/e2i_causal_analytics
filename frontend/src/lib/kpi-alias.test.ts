@@ -19,6 +19,7 @@ import {
   resolveBrand,
   resolveCompareAxis,
   resolveKpiId,
+  resolveRegion,
   resolveSegment,
   resolveTherapyLine,
 } from './kpi-alias';
@@ -126,5 +127,36 @@ describe('resolveCompareAxis', () => {
   it('returns undefined for unknown/missing axes', () => {
     expect(resolveCompareAxis(undefined)).toBeUndefined();
     expect(resolveCompareAxis('region')).toBeUndefined();
+  });
+});
+
+describe('resolveRegion (#1538)', () => {
+  it('returns undefined for a missing or blank region', () => {
+    expect(resolveRegion(undefined)).toBeUndefined();
+    expect(resolveRegion('')).toBeUndefined();
+    expect(resolveRegion('   ')).toBeUndefined();
+  });
+
+  it('canonicalizes the enum labels case-insensitively', () => {
+    expect(resolveRegion('northeast')).toBe('northeast');
+    expect(resolveRegion('Northeast')).toBe('northeast');
+    expect(resolveRegion('SOUTH')).toBe('south');
+  });
+
+  it('resolves the platform synonyms (enum_labels REGION_ALIASES mirror)', () => {
+    expect(resolveRegion('North East')).toBe('northeast');
+    expect(resolveRegion('NE')).toBe('northeast');
+    expect(resolveRegion('new england')).toBe('northeast');
+    expect(resolveRegion('Pacific')).toBe('west');
+    expect(resolveRegion('mid-west')).toBe('midwest');
+    expect(resolveRegion('Southern')).toBe('south');
+  });
+
+  it('returns null for an unmappable region so callers can refuse honestly', () => {
+    // Passing junk through would put a 0-value figure under a region caption;
+    // null tells the router to refuse with the known-label list instead —
+    // the same fail-fast the backend chat tool applies.
+    expect(resolveRegion('EMEA')).toBeNull();
+    expect(resolveRegion('narnia')).toBeNull();
   });
 });

@@ -242,6 +242,19 @@ class KPIResult(BaseModel):
     window_applied: dict[str, Any] | None = None
     window_status: str = Field(default="default", description="default | applied | not_applicable")
 
+    # Region provenance (#1538), the window idiom applied to geography. Only a
+    # fixed set of calculators route to region-scoped query variants
+    # (migrations 077/078/113/118/125); every other calculator keeps its
+    # global/portfolio value when the context carries a region. region_status:
+    #   "default"        -> no region requested
+    #   "applied"        -> a region-scoped variant computed this value
+    #   "not_applicable" -> region requested but NOT applied (no variant, or a
+    #                       combination — e.g. a patient axis — dropped it);
+    #                       the value is global and must not be captioned regional
+    region_requested: str | None = None
+    region_applied: str | None = None
+    region_status: str = Field(default="default", description="default | applied | not_applicable")
+
     # Causal analysis details (if applicable)
     causal_library_used: CausalLibrary | None = None
     confidence_interval: tuple[float, float] | None = None

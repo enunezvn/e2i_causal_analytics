@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { KPI_CATALOG } from './kpi-catalog.generated';
+import { KPI_CATALOG, REGION_ALIAS_MAP, REGION_LABELS } from './kpi-catalog.generated';
 import { normalizeAlias, resolveKpiId } from './kpi-alias';
 
 /** Registry ids scraped straight from the YAML, independent of the generator. */
@@ -137,5 +137,35 @@ describe('semantic types', () => {
     for (const id of ['CM-001', 'CM-002', 'CM-003', 'CM-004', 'CM-005']) {
       expect(KPI_CATALOG.find((e) => e.id === id)?.semanticType).toBe('Number');
     }
+  });
+});
+
+describe('region vocabulary (#1538)', () => {
+  // The map is GENERATED from src/services/enum_labels.py (REGION_ALIASES) —
+  // the platform's one region synonym table — so the chat chart tools speak
+  // the same vocabulary as the backend chat tool and cohort resolution.
+  it('exports the four region_type enum labels', () => {
+    expect([...REGION_LABELS].sort()).toEqual(['midwest', 'northeast', 'south', 'west']);
+  });
+
+  it('maps every label to itself and every alias to a real label', () => {
+    for (const label of REGION_LABELS) {
+      expect(REGION_ALIAS_MAP[label]).toBe(label);
+    }
+    for (const target of Object.values(REGION_ALIAS_MAP)) {
+      expect(REGION_LABELS).toContain(target);
+    }
+  });
+
+  it('keys the map in folded form (casefolded, separators removed)', () => {
+    // Mirrors enum_labels.fold_region_key: the labels are single concatenated
+    // words, so lookups fold "North East"/"mid-west" down to them.
+    for (const key of Object.keys(REGION_ALIAS_MAP)) {
+      expect(key).toBe(key.toLowerCase());
+      expect(key).not.toMatch(/[\s_-]/);
+    }
+    expect(REGION_ALIAS_MAP['northeast']).toBe('northeast');
+    expect(REGION_ALIAS_MAP['newengland']).toBe('northeast');
+    expect(REGION_ALIAS_MAP['pacific']).toBe('west');
   });
 });

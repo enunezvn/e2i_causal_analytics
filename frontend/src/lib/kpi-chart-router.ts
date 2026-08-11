@@ -34,7 +34,15 @@ import {
 } from '@/api/kpi';
 import { KPI_CATALOG } from './kpi-catalog.generated';
 import type { KpiCatalogEntry } from './kpi-catalog.generated';
-import { resolveBrand, resolveCompareAxis, resolveKpiId, resolveSegment, resolveTherapyLine } from './kpi-alias';
+import {
+  resolveBrand,
+  resolveCompareAxis,
+  resolveKpiId,
+  resolveRegion,
+  resolveSegment,
+  resolveTherapyLine,
+} from './kpi-alias';
+import { REGION_LABELS } from './kpi-catalog.generated';
 // The Rx-volume family is the ONLY family the segmented endpoint serves (it
 // 422s the rest). That set already exists as the gate on useKPIHistoryNowcast
 // — reused here rather than restated, so the two cannot drift apart.
@@ -96,10 +104,12 @@ export interface KpiChartQuery {
   kpis: string[];
   brand?: string;
   /**
-   * Geographic region scope (#1536). Only the materialized-history path can
-   * honor it — the segmented, comparison and current-value endpoints have no
-   * region dimension, so those branches refuse a region request explicitly
-   * rather than render global data under a region caption.
+   * Geographic region scope (#1536/#1538). The materialized-history path
+   * fetches the region series directly; the current-value and comparison
+   * paths pass the region to the calculate endpoints and obey the response's
+   * REGION PROVENANCE — a figure is captioned with the region only when
+   * `region_status === 'applied'`. The segmented endpoint has no region
+   * dimension, so that branch still refuses explicitly.
    */
   region?: string;
   compareBy?: string;
@@ -151,16 +161,8 @@ function scopeLabel(brand: string | undefined, region?: string): string {
   return region && region.length > 0 ? `${brandPart} · ${region}` : brandPart;
 }
 
-/**
- * Lowercase-canon region from the model's wording, '' -> undefined. Stored
- * region labels are lowercase and the backend matches them LOWER=LOWER
- * (mirroring live migrations 077/078/125), so trim+lowercase at this chat
- * seam resolves "Northeast" the way resolveBrand resolves "kisqali".
- */
-function normalizeRegionScope(region: string | undefined): string | undefined {
-  const canon = (region ?? '').trim().toLowerCase();
-  return canon.length > 0 ? canon : undefined;
-}
+/** The known-label list every region refusal names, e.g. "northeast, south, midwest, west". */
+const KNOWN_REGIONS = REGION_LABELS.join(', ');
 
 /**
  * Fetch and shape whatever the named KPI(s) can actually provide.
@@ -171,7 +173,18 @@ function normalizeRegionScope(region: string | undefined): string | undefined {
 export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData> {
   const resolvedIds = query.kpis.map(resolveKpiId).filter((id) => id.length > 0);
   const brand = resolveBrand(query.brand);
-  const region = normalizeRegionScope(query.region);
+  const region = resolveRegion(query.region);
+
+  // Unmappable region: refuse BEFORE any fetch (#1538). region is an enum in
+  // the substrate — a junk value can never match a row, so passing it through
+  // would produce a 0-value figure under a junk caption. Same fail-fast the
+  // backend chat tool applies, with the same known-label list.
+  if (region === null) {
+    return emptyResult(
+      `Region '${query.region}' does not match any known region (${KNOWN_REGIONS}).`,
+      query.title ?? 'Chart'
+    );
+  }
 
   if (resolvedIds.length === 0) {
     return emptyResult('No KPI was named.', query.title ?? 'Chart');
@@ -179,13 +192,7 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
 
   // --- Several KPIs named: compare their current values side by side. -------
   if (resolvedIds.length > 1) {
-    if (region) {
-      return emptyResult(
-        `Side-by-side KPI comparison has no region scope yet — chart one KPI at a time for ${region}.`,
-        query.title ?? 'KPI comparison'
-      );
-    }
-    return await routeComparison(resolvedIds, brand, query);
+    return await routeComparison(resolvedIds, brand, region, query);
   }
 
   const kpiId = resolvedIds[0];
@@ -236,21 +243,11 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
     };
   }
 
-  // --- No series under a region scope: refuse honestly. ---------------------
-  // The current-value fallback cannot verify whether a given calculator has a
-  // live region variant, so a region request that reaches here would risk a
-  // global value under a region caption. Region-aware current-value charts
-  // are #1538's scope.
-  if (region) {
-    return emptyResult(
-      `No ${region} history series for ${displayName(kpiId)} — only KPIs with a region ` +
-        'axis carry region-scoped history.',
-      query.title ?? `${displayName(kpiId)} trend`
-    );
-  }
-
   // --- No series: chart the current value instead of drawing nothing. -------
-  return await routeCurrentValue(kpiId, brand, query);
+  // Under a region scope this is now safe (#1538): the calculate endpoint
+  // reports REGION PROVENANCE, and routeCurrentValue obeys it — a figure is
+  // captioned with the region only when the backend attests it was applied.
+  return await routeCurrentValue(kpiId, brand, region, query);
 }
 
 async function routeSegmented(
@@ -311,9 +308,10 @@ async function routeSegmented(
 async function routeCurrentValue(
   kpiId: string,
   brand: string | undefined,
+  region: string | undefined,
   query: KpiChartQuery
 ): Promise<KpiChartData> {
-  const result = await getKPIValue(kpiId, brand);
+  const result = await getKPIValue(kpiId, brand, region);
   const title = query.title ?? displayName(kpiId);
 
   if (result.value === undefined || result.value === null) {
@@ -321,6 +319,22 @@ async function routeCurrentValue(
       result.error
         ? `${displayName(kpiId)} could not be calculated: ${result.error}`
         : `${displayName(kpiId)} has no historical series and no current value.`,
+      title
+    );
+  }
+
+  // Region provenance gate (#1538): chart a region-captioned figure ONLY when
+  // the backend attests the region-scoped variant computed it. Anything else
+  // — 'not_applicable' (no variant for this calculator) or a backend that
+  // reports no provenance at all (pre-#1538) — is a global value, and drawing
+  // it under the region caption is the exact mislabel this gate removes.
+  if (region && result.region_status !== 'applied') {
+    return emptyResult(
+      result.region_status === 'not_applicable'
+        ? `${displayName(kpiId)} has no ${region} scope — its calculator is global-only, ` +
+          'so the current value covers all regions.'
+        : `${displayName(kpiId)} could not be verified as ${region}-scoped — the backend ` +
+          'reported no region provenance for this value.',
       title
     );
   }
@@ -345,7 +359,9 @@ async function routeCurrentValue(
   ];
 
   const semantic = valueSemantic(kpiId);
-  const scope = scopeLabel(brand);
+  // The caption carries the region only when it survived the provenance gate
+  // above — result.region_applied IS the applied enum label at this point.
+  const scope = scopeLabel(brand, region ? (result.region_applied ?? region) : undefined);
   const ciNote = interval
     ? ` · 95% CI ${formatBound(interval[0])} to ${formatBound(interval[1])}`
     : '';
@@ -382,20 +398,35 @@ async function routeCurrentValue(
 async function routeComparison(
   kpiIds: string[],
   brand: string | undefined,
+  region: string | undefined,
   query: KpiChartQuery
 ): Promise<KpiChartData> {
   const response = await batchCalculateKPIs({
     kpi_ids: kpiIds,
-    context: brand ? { brand } : undefined,
+    context: brand || region ? { ...(brand ? { brand } : {}), ...(region ? { region } : {}) } : undefined,
   });
-  const results = (response.results ?? []).filter(
+  const withValue = (response.results ?? []).filter(
     (r) => r.value !== undefined && r.value !== null
   );
   const title = query.title ?? 'KPI comparison';
 
+  // Region provenance gate (#1538): a comparison axis captioned with the
+  // region may draw ONLY values the backend attests are region-scoped —
+  // mixing an attested northeast figure with a global one on the same labeled
+  // axis would mislabel the global one. KPIs whose calculators are
+  // global-only are omitted and counted in the caption.
+  const results = region
+    ? withValue.filter((r) => r.region_status === 'applied')
+    : withValue;
+  const regionOmitted = region ? withValue.length - results.length : 0;
+
   if (results.length === 0) {
     return emptyResult(
-      `None of ${kpiIds.map(displayName).join(', ')} returned a value.`,
+      region && withValue.length > 0
+        ? `None of ${kpiIds.map(displayName).join(', ')} has a ${region} scope — their ` +
+          'calculators are global-only, so a region-labeled comparison would mislabel ' +
+          'global values.'
+        : `None of ${kpiIds.map(displayName).join(', ')} returned a value.`,
       title
     );
   }
@@ -425,7 +456,7 @@ async function routeComparison(
   }));
 
   const someMissing = !allHaveIntervals && intervals.some((ci) => Array.isArray(ci));
-  const skipped = kpiIds.length - results.length;
+  const skipped = kpiIds.length - results.length - regionOmitted;
   const chartType = query.chartType ?? DEFAULT_COMPARISON_CHART;
   return {
     rows,
@@ -439,7 +470,10 @@ async function routeComparison(
     ...(allHaveIntervals ? { errorBars: { low: 'ci_low', high: 'ci_high' } } : {}),
     title,
     subtitle:
-      `${scopeLabel(brand)} · ${results.length} KPI${results.length === 1 ? '' : 's'}` +
+      `${scopeLabel(brand, region)} · ${results.length} KPI${results.length === 1 ? '' : 's'}` +
+      (regionOmitted > 0
+        ? ` · ${regionOmitted} global-only (no ${region} scope), omitted`
+        : '') +
       (skipped > 0 ? ` · ${skipped} returned no value` : '') +
       (allHaveIntervals ? ' · 95% CI' : '') +
       (someMissing ? ' · intervals omitted (not reported for every KPI)' : '') +

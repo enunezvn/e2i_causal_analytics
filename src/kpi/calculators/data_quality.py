@@ -152,6 +152,8 @@ class DataQualityCalculator(KPICalculatorBase):
         """
         region = context.get("region")
         if region:
+            # #1538 region-provenance marker (see KPICalculator._stamp_region).
+            context["_region_routed"] = True
             return region_query_id(base_query_id), [region]
         return base_query_id, base_params
 

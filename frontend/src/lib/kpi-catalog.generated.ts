@@ -82,3 +82,14 @@ export const KPI_CATALOG: readonly KpiCatalogEntry[] = [
   {"id": "CM-004", "key": "counterfactual_outcome", "name": "Counterfactual Outcome", "workstream": "causal_metrics", "semanticType": "Number", "aliases": ["cm_004", "counterfactual_outcome"]},
   {"id": "CM-005", "key": "mediation_effect", "name": "Mediation Effect", "workstream": "causal_metrics", "semanticType": "Number", "aliases": ["cm_005", "mediation_effect"]},
 ] as const;
+
+/** region_type enum labels (US census regions) — SSOT: src/services/enum_labels.py (#1538). */
+export const REGION_LABELS: readonly string[] = ["northeast", "south", "midwest", "west"] as const;
+
+/**
+ * Folded region alias -> enum label, mirroring enum_labels.REGION_ALIASES
+ * (the platform's one region synonym table). Keys are folded the way
+ * `fold_region_key` folds: casefolded with space/hyphen/underscore removed —
+ * `resolveRegion` in kpi-alias.ts folds lookups the same way.
+ */
+export const REGION_ALIAS_MAP: Readonly<Record<string, string>> = {"central": "midwest", "midwest": "midwest", "mw": "midwest", "ne": "northeast", "newengland": "northeast", "northeast": "northeast", "northwest": "west", "nw": "west", "pacific": "west", "se": "south", "south": "south", "southeast": "south", "southern": "south", "southwest": "south", "sw": "south", "west": "west", "western": "west"} as const;

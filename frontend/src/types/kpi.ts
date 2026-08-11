@@ -214,6 +214,16 @@ export interface KPIResult {
   /** Provenance: 'database' = real (synthetic-excluded) rows; 'synthetic' =
    *  computed over synthetic-gold rows in demo/review mode (badged in the UI). */
   data_source?: string;
+  /** Region the caller asked for (#1538); absent when none was requested. */
+  region_requested?: string | null;
+  /** Region the value was actually computed for; null/absent when the
+   *  calculator has no region variant (the value is global/portfolio). */
+  region_applied?: string | null;
+  /** 'default' = no region requested; 'applied' = a region-scoped variant
+   *  computed this value; 'not_applicable' = region requested but NOT applied
+   *  — the value is global and must not be captioned with the region.
+   *  Absent entirely on pre-#1538 backends. */
+  region_status?: string;
   /** Additional calculation metadata */
   metadata: Record<string, unknown>;
 }

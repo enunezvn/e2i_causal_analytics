@@ -125,7 +125,7 @@ class KPICalculationRequest(BaseModel):
                 "kpi_id": "WS1-DQ-001",
                 "use_cache": True,
                 "force_refresh": False,
-                "context": {"brand": "kisqali", "territory": "Northeast"},
+                "context": {"brand": "kisqali", "region": "northeast"},
             }
         }
     )
@@ -189,6 +189,32 @@ class KPIResultResponse(BaseModel):
             "synthetic figure is never read as real-world data)."
         ),
         examples=["database", "synthetic"],
+    )
+
+    # Region provenance (#1538). Only a fixed set of calculators route to
+    # region-scoped query variants (migrations 077/078/113/118/125); every
+    # other calculator keeps its global/portfolio value when a region is
+    # requested. Consumers must caption a figure with the region ONLY when
+    # region_status == "applied".
+    region_requested: str | None = Field(
+        None, description="Region the caller asked for; None when none was requested"
+    )
+    region_applied: str | None = Field(
+        None,
+        description=(
+            "Region the value was actually computed for; None when the "
+            "calculator has no region variant (the value is global/portfolio)"
+        ),
+    )
+    region_status: str = Field(
+        default="default",
+        description=(
+            "'default' = no region requested; 'applied' = a region-scoped "
+            "variant computed this value; 'not_applicable' = region requested "
+            "but NOT applied — the value is global and must not be labeled "
+            "with the region"
+        ),
+        examples=["default", "applied", "not_applicable"],
     )
 
     # Causal analysis details

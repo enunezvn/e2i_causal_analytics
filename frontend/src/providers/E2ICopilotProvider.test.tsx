@@ -806,6 +806,31 @@ describe('Action Handlers', () => {
       expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali', 'northeast');
     });
 
+    it('resolves a region synonym via the platform vocabulary (#1538)', async () => {
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'trx', brand: 'kisqali', region: 'North East' });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali', 'northeast');
+    });
+
+    it('fetches nothing for an unmappable region (#1538)', async () => {
+      mockGetKPIHistory.mockClear();
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'trx', region: 'EMEA' });
+      });
+
+      // The chart component renders the honest empty state; the fetch must
+      // not run — a junk region can never match a row.
+      expect(mockGetKPIHistory).not.toHaveBeenCalled();
+    });
+
     it('fetches nothing when region is combined with a segment axis — segments are global-only (#1536)', async () => {
       mockGetKPIHistory.mockClear();
       mockGetKPIHistorySegmented.mockClear();
@@ -860,7 +885,8 @@ describe('Action Handlers', () => {
       });
 
       expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined, undefined);
-      expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined);
+      // Third arg = region (#1538), explicitly undefined when none was asked.
+      expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined, undefined);
       expect(result.emptyReason).toBeUndefined();
       expect(result.chartType).toBe('KPI Card');
     });

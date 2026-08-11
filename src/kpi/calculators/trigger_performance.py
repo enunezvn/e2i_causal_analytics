@@ -146,10 +146,13 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         brand = context.get("brand")
         region = context.get("region")
         if brand and region:
+            # #1538 region-provenance marker (see KPICalculator._stamp_region).
+            context["_region_routed"] = True
             return brand_region_query_id(base_query_id), [brand, region]
         if brand:
             return brand_scoped_query_id(base_query_id), [brand]
         if region:
+            context["_region_routed"] = True
             return region_query_id(base_query_id), [region]
         return base_query_id, []
 
@@ -179,6 +182,11 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         region = context.get("region")
         trigger_type = context.get("trigger_type")
         window = context.get("window")
+        if region:
+            # #1538 region-provenance marker: the 118/120 statements bind
+            # region on every branch below (NULL = no filter on the plain
+            # form, an explicit param on windowed_region).
+            context["_region_routed"] = True
         if window is not None:
             if region:
                 return (

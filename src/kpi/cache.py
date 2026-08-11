@@ -106,6 +106,13 @@ class KPICache:
                 else None,
                 error=result_dict.get("error"),
                 metadata=result_dict.get("metadata", {}),
+                # Region provenance (#1538) rides the entry: routing truth is
+                # not re-derivable on a hit. Pre-#1538 entries default to
+                # "default", which calculate() treats as unattested under a
+                # region ask (recompute).
+                region_requested=result_dict.get("region_requested"),
+                region_applied=result_dict.get("region_applied"),
+                region_status=result_dict.get("region_status", "default"),
                 causal_library_used=result_dict.get("causal_library_used"),
                 confidence_interval=tuple(result_dict["confidence_interval"])
                 if result_dict.get("confidence_interval")
@@ -155,6 +162,9 @@ class KPICache:
                 "cache_expires_at": expires_at.isoformat(),
                 "error": result.error,
                 "metadata": result.metadata,
+                "region_requested": result.region_requested,
+                "region_applied": result.region_applied,
+                "region_status": result.region_status,
                 "causal_library_used": result.causal_library_used,
                 "confidence_interval": list(result.confidence_interval)
                 if result.confidence_interval
