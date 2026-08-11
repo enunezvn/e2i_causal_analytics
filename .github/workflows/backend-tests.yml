@@ -126,7 +126,12 @@ jobs:
   type-check:
     name: Type Check (MyPy)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20 not 10 (#1544): the free-disk-space step below is runner-load-
+    # dependent (measured 2m01s quiet vs 9m42s under load) and the job's
+    # fixed costs (~7m16s total on a quiet runner) left no headroom at 10 —
+    # two consecutive deploy attempts were cancelled mid-mypy. Siblings
+    # running the same step budget 20-25.
+    timeout-minutes: 20
     needs: lint
     steps:
       - name: Checkout repository
