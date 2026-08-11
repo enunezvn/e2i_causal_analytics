@@ -142,7 +142,8 @@ describe('current-value routing', () => {
     const data = await routeKpiChart({ kpis: ['roc_auc'] });
 
     expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined, undefined);
-    expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined);
+    // Third arg = region (#1538), explicitly undefined when none was asked.
+    expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined, undefined);
     expect(data.emptyReason).toBeUndefined();
     expect(data.chartType).toBe('KPI Card');
     expect(data.rows[0].value).toBe(0.87);
@@ -393,11 +394,29 @@ describe('region scope (#1536)', () => {
     expect(data.subtitle).toContain('northeast');
   });
 
-  it('refuses an empty region series honestly instead of falling back to an unverifiable current value', async () => {
-    const data = await routeKpiChart({ kpis: ['roc_auc'], region: 'northeast' });
+  it('falls through to the region-aware current value when the region has no series (#1538)', async () => {
+    // #1536 refused here because the frontend could not verify whether a
+    // calculator had a live region variant. The backend now attests it via
+    // region provenance, so the fall-through is safe: the response says
+    // whether the figure is region-scoped, and the router obeys.
+    mockGetKPIValue.mockResolvedValue({
+      kpi_id: 'WS3-BI-009',
+      value: 0.31,
+      status: 'good',
+      calculated_at: '2026-08-11T00:00:00Z',
+      cached: false,
+      metadata: {},
+      region_requested: 'northeast',
+      region_applied: 'northeast',
+      region_status: 'applied',
+    });
 
-    expect(data.emptyReason).toMatch(/region/i);
-    expect(mockGetKPIValue).not.toHaveBeenCalled();
+    const data = await routeKpiChart({ kpis: ['conversion_rate'], region: 'northeast' });
+
+    expect(mockGetKPIValue).toHaveBeenCalledWith('WS3-BI-009', undefined, 'northeast');
+    expect(data.emptyReason).toBeUndefined();
+    expect(data.rows[0].value).toBe(0.31);
+    expect(data.subtitle).toContain('northeast');
   });
 
   it('refuses a region-scoped segmented request — the segmented endpoint is global-only', async () => {
@@ -411,15 +430,140 @@ describe('region scope (#1536)', () => {
     expect(mockGetKPIHistorySegmented).not.toHaveBeenCalled();
   });
 
-  it('refuses a region-scoped multi-KPI comparison', async () => {
-    const data = await routeKpiChart({ kpis: ['trx', 'nrx'], region: 'northeast' });
-
-    expect(data.emptyReason).toMatch(/region/i);
-    expect(mockBatchCalculateKPIs).not.toHaveBeenCalled();
-  });
-
   it('keeps the exact pre-region fetch when no region is passed', async () => {
     await routeKpiChart({ kpis: ['trx'] });
     expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', undefined, undefined);
+  });
+});
+
+describe('region vocabulary (#1538)', () => {
+  it('resolves a region synonym before fetching', async () => {
+    await routeKpiChart({ kpis: ['trx'], region: 'North East' });
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', undefined, 'northeast');
+  });
+
+  it('refuses an unmappable region with the known labels, before any fetch', async () => {
+    // Passing junk through would produce a 0-value figure under a region
+    // caption — the same misleading shape the backend tool fails fast on.
+    const data = await routeKpiChart({ kpis: ['trx'], region: 'EMEA' });
+
+    expect(data.emptyReason).toMatch(/EMEA/);
+    expect(data.emptyReason).toMatch(/northeast.*south.*midwest.*west/i);
+    expect(mockGetKPIHistory).not.toHaveBeenCalled();
+    expect(mockGetKPIValue).not.toHaveBeenCalled();
+  });
+});
+
+describe('region-aware current values (#1538)', () => {
+  it('refuses to caption a global value with the region when provenance says not applied', async () => {
+    mockGetKPIValue.mockResolvedValue({
+      kpi_id: 'WS3-BI-004',
+      value: 0.42,
+      status: 'good',
+      calculated_at: '2026-08-11T00:00:00Z',
+      cached: false,
+      metadata: {},
+      region_requested: 'northeast',
+      region_applied: null,
+      region_status: 'not_applicable',
+    });
+
+    const data = await routeKpiChart({ kpis: ['hcp_coverage'], region: 'northeast' });
+
+    expect(data.emptyReason).toMatch(/global/i);
+    expect(data.emptyReason).toMatch(/northeast/);
+    expect(data.rows).toEqual([]);
+  });
+
+  it('refuses when the backend reports no region provenance at all', async () => {
+    // A pre-#1538 backend (rolling deploy) cannot attest the scope; charting
+    // its value under the region caption would be the exact mislabel this
+    // change removes.
+    mockGetKPIValue.mockResolvedValue({
+      kpi_id: 'WS3-BI-009',
+      value: 0.31,
+      status: 'good',
+      calculated_at: '2026-08-11T00:00:00Z',
+      cached: false,
+      metadata: {},
+    });
+
+    const data = await routeKpiChart({ kpis: ['conversion_rate'], region: 'northeast' });
+
+    expect(data.emptyReason).toMatch(/region/i);
+    expect(data.rows).toEqual([]);
+  });
+
+  it('surfaces the calculator error verbatim for an unsupported region combination', async () => {
+    mockGetKPIValue.mockResolvedValue({
+      kpi_id: 'WS3-BI-009',
+      status: 'unknown',
+      error: 'brand and region cannot be combined for conversion rate',
+      calculated_at: '2026-08-11T00:00:00Z',
+      cached: false,
+      metadata: {},
+    });
+
+    const data = await routeKpiChart({
+      kpis: ['conversion_rate'],
+      brand: 'kisqali',
+      region: 'northeast',
+    });
+
+    expect(data.emptyReason).toMatch(/brand and region cannot be combined/);
+  });
+
+  it('charts only the region-scoped results in a region comparison and says what was omitted', async () => {
+    mockBatchCalculateKPIs.mockResolvedValue({
+      results: [
+        {
+          kpi_id: 'WS3-BI-005', value: 249, status: 'informational', calculated_at: '', cached: false, metadata: {},
+          region_requested: 'northeast', region_applied: 'northeast', region_status: 'applied',
+        },
+        {
+          kpi_id: 'WS1-MP-001', value: 0.87, status: 'good', calculated_at: '', cached: false, metadata: {},
+          region_requested: 'northeast', region_applied: null, region_status: 'not_applicable',
+        },
+      ],
+      calculated_at: '',
+      total_kpis: 2,
+    });
+
+    const data = await routeKpiChart({ kpis: ['trx', 'roc_auc'], region: 'northeast' });
+
+    expect(mockBatchCalculateKPIs).toHaveBeenCalledWith({
+      kpi_ids: ['WS3-BI-005', 'WS1-MP-001'],
+      context: { region: 'northeast' },
+    });
+    // Mixing a northeast figure and a global figure on one labeled axis would
+    // mislabel the global one — only attested region values are drawn.
+    expect(data.rows).toHaveLength(1);
+    expect(data.rows[0].kpi).toContain('TRx');
+    expect(data.subtitle).toContain('northeast');
+    expect(data.subtitle).toMatch(/1 .*(global|no northeast)/i);
+    expect(data.emptyReason).toBeUndefined();
+  });
+
+  it('refuses the comparison when no compared KPI is region-scoped', async () => {
+    mockBatchCalculateKPIs.mockResolvedValue({
+      results: [
+        {
+          kpi_id: 'WS1-MP-001', value: 0.87, status: 'good', calculated_at: '', cached: false, metadata: {},
+          region_requested: 'northeast', region_applied: null, region_status: 'not_applicable',
+        },
+        {
+          kpi_id: 'WS1-MP-002', value: 0.64, status: 'warning', calculated_at: '', cached: false, metadata: {},
+          region_requested: 'northeast', region_applied: null, region_status: 'not_applicable',
+        },
+      ],
+      calculated_at: '',
+      total_kpis: 2,
+    });
+
+    const data = await routeKpiChart({ kpis: ['roc_auc', 'pr_auc'], region: 'northeast' });
+
+    expect(data.rows).toEqual([]);
+    expect(data.emptyReason).toMatch(/northeast/);
+    expect(data.emptyReason).toMatch(/global/i);
   });
 });

@@ -11710,7 +11710,7 @@ export interface components {
          * @example {
          *       "context": {
          *         "brand": "kisqali",
-         *         "territory": "Northeast"
+         *         "region": "northeast"
          *       },
          *       "force_refresh": false,
          *       "kpi_id": "WS1-DQ-001",
@@ -12337,6 +12337,25 @@ export interface components {
              * @example synthetic
              */
             data_source: string;
+            /**
+             * Region Requested
+             * @description Region the caller asked for; None when none was requested
+             */
+            region_requested?: string | null;
+            /**
+             * Region Applied
+             * @description Region the value was actually computed for; None when the calculator has no region variant (the value is global/portfolio)
+             */
+            region_applied?: string | null;
+            /**
+             * Region Status
+             * @description 'default' = no region requested; 'applied' = a region-scoped variant computed this value; 'not_applicable' = region requested but NOT applied — the value is global and must not be labeled with the region
+             * @default default
+             * @example default
+             * @example applied
+             * @example not_applicable
+             */
+            region_status: string;
             /**
              * Causal Library Used
              * @description Causal library used for calculation

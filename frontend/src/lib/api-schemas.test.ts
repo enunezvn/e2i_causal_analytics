@@ -23,6 +23,7 @@ import {
   schemaRegistry,
   getSchema,
   // C31 wire schemas
+  BatchKPICalculationResponseSchema,
   KPIResultWireSchema,
   KPIListResponseWireSchema,
   KPIHistoryCoverageResponseWireSchema,
@@ -1260,5 +1261,60 @@ describe('KPIHistoryCoverageResponseWireSchema (#1536)', () => {
       total: 1,
     });
     expect(parsed.coverage[0].scopes).toBeUndefined();
+  });
+});
+
+describe('KPI region provenance (#1538)', () => {
+  const base = {
+    kpi_id: 'WS3-BI-009',
+    value: 0.31,
+    status: 'good',
+    calculated_at: '2026-08-11T00:00:00Z',
+    cached: false,
+    metadata: {},
+  };
+
+  it('preserves region provenance through the single-value parse (Zod strips unknown keys)', () => {
+    const parsed = KPIResultWireSchema.parse({
+      ...base,
+      region_requested: 'northeast',
+      region_applied: 'northeast',
+      region_status: 'applied',
+    });
+    expect(parsed.region_status).toBe('applied');
+    expect(parsed.region_applied).toBe('northeast');
+    expect(parsed.region_requested).toBe('northeast');
+  });
+
+  it('preserves region provenance through the batch parse', () => {
+    const parsed = BatchKPICalculationResponseSchema.parse({
+      results: [
+        {
+          ...base,
+          region_requested: 'northeast',
+          region_applied: null,
+          region_status: 'not_applicable',
+        },
+      ],
+      calculated_at: '2026-08-11T00:00:00Z',
+      total_kpis: 1,
+      successful: 1,
+      failed: 0,
+    });
+    expect(parsed.results[0].region_status).toBe('not_applicable');
+    expect(parsed.results[0].region_applied).toBeNull();
+  });
+
+  it('accepts pre-#1538 payloads (backend without provenance)', () => {
+    const single = KPIResultWireSchema.parse(base);
+    expect(single.region_status).toBeUndefined();
+    const batch = BatchKPICalculationResponseSchema.parse({
+      results: [base],
+      calculated_at: '2026-08-11T00:00:00Z',
+      total_kpis: 1,
+      successful: 1,
+      failed: 0,
+    });
+    expect(batch.results[0].region_status).toBeUndefined();
   });
 });

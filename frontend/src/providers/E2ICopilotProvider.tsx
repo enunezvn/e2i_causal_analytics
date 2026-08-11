@@ -25,6 +25,7 @@ import {
   resolveBrand,
   resolveCompareAxis,
   resolveKpiId,
+  resolveRegion,
   resolveSegment,
   resolveTherapyLine,
 } from '@/lib/kpi-alias';
@@ -917,10 +918,13 @@ const CopilotHooksInner: React.FC = () => {
         name: 'region',
         type: 'string',
         description:
-          'Geographic region scope (northeast, south, midwest, or west) — e.g. when the page ' +
-          'context names a region scope or the user asks for one. Omit for all regions. ' +
-          'A scope with no region series renders an honest empty state. Do NOT combine with ' +
-          'compareBy/segment/therapyLine — severity and line-of-therapy series are global-only.',
+          'Geographic region scope: northeast, south, midwest, or west (synonyms like ' +
+          '"North East", "NE", "new england", "Pacific" resolve; anything else renders an ' +
+          'honest refusal naming the known regions). Pass it when the page context names a ' +
+          'region scope or the user asks for one — e.g. "TRx in the north-east". Omit for ' +
+          'all regions. A scope with no region series renders an honest empty state. Do NOT ' +
+          'combine with compareBy/segment/therapyLine — severity and line-of-therapy series ' +
+          'are global-only.',
         required: false,
       },
       {
@@ -975,9 +979,12 @@ const CopilotHooksInner: React.FC = () => {
       // into the registry codes kpi_history speaks (nrx → WS3-BI-006).
       const resolvedKpi = resolveKpiId(kpiId);
       const resolvedBrand = resolveBrand(brand);
-      // Lowercase-canon region (#1536): stored labels are lowercase and the
-      // backend matches LOWER=LOWER, mirroring the live region variants.
-      const resolvedRegion = (region ?? '').trim().toLowerCase() || undefined;
+      // Platform region vocabulary (#1538): labels and synonyms resolve to
+      // the region_type enum label ('North East' -> 'northeast'); anything
+      // else is unmappable — return null WITHOUT fetching (a junk region can
+      // never match a row) and let the render explain with the known labels.
+      const resolvedRegion = resolveRegion(region);
+      if (resolvedRegion === null) return null;
       // Axis routing: compareBy (all tiers, one comparison chart) wins over a
       // single-tier segment/therapyLine filter. Both hit the live segmented
       // endpoint — the materialized history has no patient-segment dimension.
@@ -1005,6 +1012,17 @@ const CopilotHooksInner: React.FC = () => {
       // blank name. 'executing' = handler fetching (show loading). 'complete' =
       // result ready.
       if (status === 'inProgress') return <></>;
+      // Unmappable region: the handler refused without fetching (#1538) —
+      // name the known labels instead of a chart frame.
+      if (args?.region && resolveRegion(String(args.region)) === null) {
+        return (
+          <div className="my-2 rounded-md border p-3 text-sm text-muted-foreground">
+            Region &quot;{String(args.region)}&quot; does not match any known region — the
+            data covers northeast, south, midwest, and west (synonyms like &quot;NE&quot; or
+            &quot;Pacific&quot; work too).
+          </div>
+        );
+      }
       // Region + patient-axis is an invalid combination the handler refuses
       // (returns null without fetching) — say why instead of a chart frame.
       if (
@@ -1102,10 +1120,13 @@ const CopilotHooksInner: React.FC = () => {
         name: 'region',
         type: 'string',
         description:
-          'Geographic region scope (northeast, south, midwest, or west) — e.g. when the page ' +
-          'context names a region scope or the user asks for one. Omit for all regions. Only ' +
-          'monthly-history charts of region-axis KPIs can honor it; other shapes state why they ' +
-          'cannot rather than charting global data under a region caption.',
+          'Geographic region scope: northeast, south, midwest, or west (synonyms like ' +
+          '"North East", "NE", "Pacific" resolve; anything else renders an honest refusal ' +
+          'naming the known regions). Omit for all regions. Monthly-history charts fetch the ' +
+          'region series directly; current-value and comparison charts pass the region to the ' +
+          'calculate API and obey its region provenance — a figure is captioned with the ' +
+          'region only when the backend attests the region-scoped variant computed it, and ' +
+          'global-only KPIs state that instead of charting global data under a region caption.',
         required: false,
       },
       {

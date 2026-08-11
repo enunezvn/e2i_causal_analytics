@@ -22,6 +22,7 @@ per-family override map -- never guessed from the KPI name.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,23 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 YAML_PATH = REPO_ROOT / "config" / "kpi_definitions.yaml"
 OUT_PATH = REPO_ROOT / "frontend" / "src" / "lib" / "kpi-catalog.generated.ts"
+ENUM_LABELS_PATH = REPO_ROOT / "src" / "services" / "enum_labels.py"
+
+
+def load_region_vocabulary() -> tuple[tuple[str, ...], dict[str, str]]:
+    """(labels, folded alias -> label) from the platform SSOT (#1538).
+
+    ``src/services/enum_labels.py`` owns the region_type enum labels and the
+    one region synonym table (REGION_ALIASES) every backend surface shares.
+    Loaded file-scoped (importlib, not ``import src...``) so this generator
+    never triggers the src package init — enum_labels is a pure leaf (re +
+    typing only) and stays importable standalone.
+    """
+    spec = importlib.util.spec_from_file_location("e2i_enum_labels", ENUM_LABELS_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.REGION_ENUM_LABELS, dict(module.REGION_LABEL_BY_ALIAS)
 
 WORKSTREAM_KEYS = [
     "ws1_data_quality",
@@ -163,6 +181,8 @@ def main() -> None:
                 )
             seen[alias] = entry["id"]
 
+    region_labels, region_alias_map = load_region_vocabulary()
+
     body = ",\n".join(
         "  "
         + json.dumps(
@@ -215,9 +235,22 @@ def main() -> None:
         "  /** Normalized strings that resolve to this KPI. */\n"
         "  aliases: string[];\n"
         "}\n\n"
-        f"export const KPI_CATALOG: readonly KpiCatalogEntry[] = [\n{body},\n] as const;\n"
+        f"export const KPI_CATALOG: readonly KpiCatalogEntry[] = [\n{body},\n] as const;\n\n"
+        "/** region_type enum labels (US census regions) — SSOT: src/services/enum_labels.py (#1538). */\n"
+        f"export const REGION_LABELS: readonly string[] = {json.dumps(list(region_labels))} as const;\n\n"
+        "/**\n"
+        " * Folded region alias -> enum label, mirroring enum_labels.REGION_ALIASES\n"
+        " * (the platform's one region synonym table). Keys are folded the way\n"
+        " * `fold_region_key` folds: casefolded with space/hyphen/underscore removed —\n"
+        " * `resolveRegion` in kpi-alias.ts folds lookups the same way.\n"
+        " */\n"
+        "export const REGION_ALIAS_MAP: Readonly<Record<string, string>> = "
+        f"{json.dumps(dict(sorted(region_alias_map.items())), ensure_ascii=False)} as const;\n"
     )
-    print(f"wrote {OUT_PATH.relative_to(REPO_ROOT)} ({len(entries)} KPIs, {len(seen)} aliases)")
+    print(
+        f"wrote {OUT_PATH.relative_to(REPO_ROOT)} ({len(entries)} KPIs, {len(seen)} aliases, "
+        f"{len(region_alias_map)} region aliases)"
+    )
 
 
 if __name__ == "__main__":

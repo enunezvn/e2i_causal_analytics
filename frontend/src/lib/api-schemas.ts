@@ -225,6 +225,12 @@ export const KPIResultSchema = z.object({
   // 'database' = real (synthetic-excluded) rows; 'synthetic' = computed over
   // synthetic-gold rows in E2I_KPI_INCLUDE_SYNTHETIC demo mode (badged in the UI).
   data_source: z.string().optional(),
+  // Region provenance (#1538). MUST be declared or Zod strips it and the chart
+  // router cannot tell a region-scoped value from a global one. Optional: a
+  // pre-#1538 backend omits all three (the router then refuses region asks).
+  region_requested: z.string().nullable().optional(),
+  region_applied: z.string().nullable().optional(),
+  region_status: z.string().optional(),
   causal_library_used: z.string().optional(),
   confidence_interval: z.array(z.number()).length(2).optional(),
   p_value: z.number().optional(),
@@ -766,6 +772,12 @@ export const KPIResultWireSchema = z.object({
   // synthetic-gold rows in E2I_KPI_INCLUDE_SYNTHETIC demo mode. MUST be declared
   // here or Zod strips it from getKPIValue()'s result before the FE can badge it.
   data_source: z.string().nullable().optional(),
+  // Region provenance (#1538). MUST be declared or Zod strips it from
+  // getKPIValue()'s result and the chart router cannot tell a region-scoped
+  // value from a global one. Optional: pre-#1538 backends omit all three.
+  region_requested: z.string().nullable().optional(),
+  region_applied: z.string().nullable().optional(),
+  region_status: z.string().optional(),
   causal_library_used: z.string().nullable().optional(),
   confidence_interval: z.array(z.number()).nullable().optional(),
   p_value: z.number().nullable().optional(),
