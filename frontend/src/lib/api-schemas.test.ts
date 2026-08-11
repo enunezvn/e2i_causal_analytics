@@ -25,6 +25,7 @@ import {
   // C31 wire schemas
   KPIResultWireSchema,
   KPIListResponseWireSchema,
+  KPIHistoryCoverageResponseWireSchema,
   ModelsStatusResponseWireSchema,
   AlertListResponseWireSchema,
   CausalHealthResponseWireSchema,
@@ -1203,5 +1204,61 @@ describe('Wire Schemas (disputed sweep #4)', () => {
       };
       expect(HealthServiceStatusWireSchema.safeParse(bad).success).toBe(false);
     });
+  });
+});
+
+// =============================================================================
+// KPI HISTORY COVERAGE WIRE SCHEMA (#1536 region scopes)
+// =============================================================================
+
+describe('KPIHistoryCoverageResponseWireSchema (#1536)', () => {
+  it('preserves the scopes lattice through parsing (Zod strips unknown keys)', () => {
+    const payload = {
+      coverage: [
+        {
+          kpi_id: 'WS3-BI-010',
+          brands: ['', 'Kisqali'],
+          points: 164,
+          first_date: '2013-01-01',
+          last_date: '2026-08-01',
+          scopes: [
+            {
+              brand: '',
+              region: '',
+              points: 164,
+              first_date: '2013-01-01',
+              last_date: '2026-08-01',
+            },
+            {
+              brand: '',
+              region: 'northeast',
+              points: 164,
+              first_date: '2013-01-01',
+              last_date: '2026-08-01',
+            },
+          ],
+        },
+      ],
+      total: 1,
+    };
+    const parsed = KPIHistoryCoverageResponseWireSchema.parse(payload);
+    expect(parsed.coverage[0].scopes).toHaveLength(2);
+    expect(parsed.coverage[0].scopes?.[1].region).toBe('northeast');
+  });
+
+  it('accepts pre-scopes payloads (backend without the lattice)', () => {
+    const parsed = KPIHistoryCoverageResponseWireSchema.parse({
+      coverage: [
+        {
+          kpi_id: 'WS3-BI-010',
+          brands: [''],
+          points: 164,
+          first_date: null,
+          last_date: null,
+        },
+      ],
+      total: 1,
+    });
+    expect(parsed.coverage[0].scopes).toBeUndefined();
   });
 });

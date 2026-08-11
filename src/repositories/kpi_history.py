@@ -74,11 +74,12 @@ class KPIHistoryRepository(BaseRepository):
             return 0
 
     async def get_coverage(self) -> List[Dict[str, Any]]:
-        """Return per-(kpi_id, brand) coverage rows from ``v_kpi_history_coverage``.
+        """Return per-(kpi_id, brand, region) coverage rows from ``v_kpi_history_coverage``.
 
-        Each row: ``{kpi_id, brand, points, first_date, last_date}``. The view
-        (migration 098) aggregates in the database, so this stays one small read
-        regardless of how many history points accumulate.
+        Each row: ``{kpi_id, brand, points, first_date, last_date, region}``
+        (migration 126 lattice; ``region=''`` rows are the pre-region brand
+        axis). The view (098, regrained by 126) aggregates in the database, so
+        this stays one small read regardless of how many points accumulate.
         """
         if not self.client:
             return []
@@ -110,7 +111,10 @@ class KPIHistoryRepository(BaseRepository):
             query = self.client.table(self.table_name).select("*").eq("kpi_id", kpi_id)
             # '' is the canonical "global" scope value (see migration 079).
             query = query.eq("brand", brand if brand is not None else "")
-            query = query.eq("region", region if region is not None else "")
+            # Stored region canon is lowercase (backfill lowercases at the
+            # write seam); lowercase the filter so the read seam mirrors the
+            # live variants' LOWER(region) = LOWER($n) (077/078/125).
+            query = query.eq("region", (region or "").lower())
             if start_date:
                 query = query.gte("metric_date", start_date)
             if end_date:

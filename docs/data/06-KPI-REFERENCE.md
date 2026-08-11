@@ -1598,7 +1598,7 @@ Eight Postgres views pre-compute KPI aggregations for performance. These are def
 | `v_kpi_change_fail_rate` | Change-fail rate by change type | `triggers` | WS2-TR-008 |
 | `v_kpi_active_users` | MAU, WAU, and DAU counts | `user_sessions` | WS3-BI-001, WS3-BI-002 |
 | `v_kpi_intent_to_prescribe` | Intent-to-prescribe scores by brand and month | `hcp_intent_surveys` | BR-002 |
-| `v_kpi_history_coverage` | Per-`(kpi_id, brand)` coverage of materialized `kpi_history`: `points`, `first_date`, `last_date` (migration 098) | `kpi_history` | `GET /api/kpis/history/coverage` — Time-Series page badges and brand-scope dropdown |
+| `v_kpi_history_coverage` | Per-`(kpi_id, brand, region)` coverage lattice of materialized `kpi_history`: `points`, `first_date`, `last_date` (`region=''` rows = the pre-region brand axis; migration 098, regrained by 126 for #1536) | `kpi_history` | `GET /api/kpis/history/coverage` — Time-Series page badges, brand dropdown, and region selector (`scopes`) |
 
 > **Migration 095**: the live registry queries for DQ-003/004/007/009 no longer
 > read their `v_kpi_*` views — they were re-registered as deterministic

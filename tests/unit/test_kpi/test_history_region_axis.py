@@ -571,3 +571,66 @@ class TestRegionAxisLockstep:
         # never grow a region axis without a live variant to mirror.
         for kpi_id in ("WS3-BI-001", "WS3-BI-002", "BR-001", "BR-002", "BR-003", "BR-004"):
             assert kpi_id not in hb.REGION_AXIS_KPI_IDS
+
+
+# ---------------------------------------------------------------------------
+# Region label case canon (codex iter-1 finding 2)
+# ---------------------------------------------------------------------------
+
+
+class TestRegionCaseCanon:
+    """Every live region variant matches ``LOWER(region) = LOWER($n)``
+    (077/078/125). The mirror applies LOWER at the substrate-read seams, so a
+    mixed-case label merges into ONE canonical lowercase series instead of
+    forking a duplicate scope. No trim — live ``LOWER()`` does not trim either.
+    """
+
+    def test_journey_regions_lowercase_canon(self):
+        rows = [
+            {"patient_journey_id": "J1", "patient_id": "P1", "geographic_region": "Northeast"},
+            {"patient_journey_id": "J2", "patient_id": "P2", "geographic_region": "northeast"},
+        ]
+        assert hb._journey_regions(rows) == {"J1": "northeast", "J2": "northeast"}
+
+    def test_patient_regions_lowercase_canon(self):
+        rows = [
+            {"patient_journey_id": "J1", "patient_id": "P1", "geographic_region": "WEST"},
+            {"patient_journey_id": "J2", "patient_id": "P1", "geographic_region": "west"},
+        ]
+        assert hb._patient_regions(rows)["P1"] == {"west"}
+
+    def test_roi_mixed_case_regions_merge_into_one_series(self):
+        rows = [
+            {"metric_date": "2025-03-01", "brand": "Kisqali", "roi": 1.0, "region": "Northeast"},
+            {"metric_date": "2025-03-01", "brand": "Kisqali", "roi": 3.0, "region": "northeast"},
+        ]
+        client = _FakeClient({"business_metrics": rows})
+        points = asyncio.run(hb._backfill_roi(client, _meta("WS3-BI-010")))
+        scopes = _by_scope(points)
+        assert ("", "Northeast") not in scopes
+        assert scopes[("", "northeast")]["2025-03-01"] == 2.0  # merged mean, not a forked scope
+
+
+class TestHistoryReadSeamCaseInsensitive:
+    """``/api/kpis/{id}/history?region=`` mirrors the live variants'
+    ``LOWER(region) = LOWER($n)``: stored canon is lowercase (write seam
+    lowercases), so the read seam lowercases the filter input. Without this a
+    caller sending ``region=Northeast`` gets a live current value but an empty
+    history series (codex iter-1 finding 2).
+    """
+
+    def test_get_history_matches_mixed_case_region_input(self):
+        from src.repositories.kpi_history import KPIHistoryRepository
+
+        rows = [
+            {
+                "kpi_id": "WS3-BI-005",
+                "brand": "",
+                "region": "northeast",
+                "metric_date": "2025-03-01",
+                "value": 249.0,
+            },
+        ]
+        repo = KPIHistoryRepository(supabase_client=_FakeClient({"kpi_history": rows}))
+        out = asyncio.run(repo.get_history("WS3-BI-005", brand="", region="Northeast"))
+        assert [r["metric_date"] for r in out] == ["2025-03-01"]

@@ -347,14 +347,17 @@ def _journey_regions(journeys: List[Dict[str, Any]]) -> Dict[Any, str]:
     resolves to a region belongs to that region's series — mirroring migration
     077's ``patient_journey_id IN (SELECT ... WHERE geographic_region = $n)``.
     Unlinked events (NULL ``patient_journey_id``) drop from region series only,
-    exactly as the live predicate drops them.
+    exactly as the live predicate drops them. Labels are lowercased — every
+    live region variant matches ``LOWER(region) = LOWER($n)`` (077/078/125),
+    so mixed-case labels merge into one canonical series (no trim: ``LOWER()``
+    does not trim).
     """
     out: Dict[Any, str] = {}
     for r in journeys:
         region = r.get("geographic_region")
         journey_id = r.get("patient_journey_id")
         if journey_id is not None and region:
-            out[journey_id] = str(region)
+            out[journey_id] = str(region).lower()
     return out
 
 
@@ -363,13 +366,14 @@ def _patient_regions(journeys: List[Dict[str, Any]]) -> Dict[Any, set]:
 
     MEMBERSHIP semantics (migrations 077 conversion / 078 trigger family:
     ``patient_id IN region_patients``): a patient with journeys in two regions
-    belongs to BOTH region cohorts — never partitioned to one.
+    belongs to BOTH region cohorts — never partitioned to one. Labels are
+    lowercased to mirror the variants' ``LOWER(region) = LOWER($n)``.
     """
     out: Dict[Any, set] = defaultdict(set)
     for r in journeys:
         region = r.get("geographic_region")
         if region:
-            out[r.get("patient_id")].add(str(region))
+            out[r.get("patient_id")].add(str(region).lower())
     return out
 
 
@@ -426,6 +430,8 @@ async def _backfill_roi(
             brand_acc[(b, d)].append(roi)
         region = r.get("region")
         if region:
+            # LOWER-canon to mirror 125's LOWER(region::text) = LOWER($2).
+            region = str(region).lower()
             region_acc[(region, d)].append(roi)
             if b:
                 brand_region_acc[(b, region, d)].append(roi)
