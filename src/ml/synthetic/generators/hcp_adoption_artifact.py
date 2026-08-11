@@ -31,7 +31,7 @@ hcp_profiles DB grain) so both grains use the identical DGP (single SSOT).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -56,18 +56,85 @@ _ADOPT_TREATMENT_LOGIT = {
 # Brand-distinct adoption scale so a Kisqali probe differs from Remibrutinib.
 _BRAND_ADOPT_SCALE = {"Remibrutinib": 1.0, "Kisqali": 0.8, "Fabhalta": 1.2}
 
+# ---------------------------------------------------------------------------
+# #1551: per-(brand, specialty) adoption affinity on the LOGIT scale.
+#
+# The gold-standard champion (hcp_adoption_{brand}_goldstd_lr_v1) trains on
+# hcp_profiles.specialty JOINed to these labels. Without a specialty term the
+# LR's specialty coefficients fit pure noise — measured 2026-08-11 on the
+# canonical seed-42/427 cohort: Kisqali served propensity ranked rheumatology
+# 0.454 > dermatology 0.421 > oncology 0.410, clinically backwards for a CDK4/6
+# HR+/HER2- breast-cancer brand. These shifts make the DGP's specialty ordering
+# clinically sensible per brand:
+#   Kisqali      (ribociclib, CDK4/6; breast cancer)  -> oncology-led (hem/onc adjacent)
+#   Fabhalta     (iptacopan, complement inh.; PNH/IgAN) -> hematology-led
+#   Remibrutinib (BTK inh.; CSU)                       -> dermatology/allergy-led
+#
+# "*" is the default shift for unlisted specialties. Values are chosen so the
+# population-weighted mean shift on the mixed-brand 5000-HCP cohort (~33% onc,
+# 20% hem, 17% derm, 12% allergy, 10% IM, 5% rheum, 3% neuro) is ~0, keeping
+# each brand's marginal adoption inside the designed (0.10, 0.60) band, and so
+# the faithful goldstd-LR holdout AUC stays inside the accepted [0.70, 0.86]
+# band (measured: see PR for #1551).
+#
+# RNG stream discipline (#1524/#1542): the affinity is a DETERMINISTIC logit
+# shift — it consumes NO rng draws, so all seeded streams (treatment arms,
+# consideration-date months, downstream columns) are bit-identical whether or
+# not a specialty vector is supplied.
+_AFFINITY_DEFAULT_KEY = "*"
+_BRAND_SPECIALTY_AFFINITY: Dict[str, Dict[str, float]] = {
+    "Kisqali": {
+        "oncology": 0.9,
+        "hematology": 0.1,  # hem/onc practice adjacency
+        _AFFINITY_DEFAULT_KEY: -0.7,
+    },
+    "Fabhalta": {
+        "hematology": 1.0,  # PNH
+        "internal_medicine": 0.3,  # IgAN/C3G generalist overlap (no nephrology enum)
+        "neurology": 0.2,  # rare-disease overlap (mirrors BRAND_SPECIALTY_DIST)
+        _AFFINITY_DEFAULT_KEY: -0.4,
+    },
+    "Remibrutinib": {
+        "dermatology": 0.9,  # CSU
+        "allergy_immunology": 0.8,  # CSU
+        "rheumatology": 0.3,  # urticaria/autoimmune adjacency
+        _AFFINITY_DEFAULT_KEY: -0.5,
+    },
+}
+
+
+def _specialty_affinity(brand: str, specialty: Optional[Sequence[str]], n: int) -> np.ndarray:
+    """Vector of per-HCP logit shifts for ``brand``; zeros when no specialty
+    vector is supplied (legacy callers / specialty-free grains stay bit-identical)."""
+    if specialty is None:
+        return np.zeros(n, dtype=float)
+    shifts = _BRAND_SPECIALTY_AFFINITY.get(brand)
+    if not shifts:
+        return np.zeros(n, dtype=float)
+    default = shifts.get(_AFFINITY_DEFAULT_KEY, 0.0)
+    return np.array([shifts.get(s, default) for s in specialty], dtype=float)
+
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
     return np.asarray(1.0 / (1.0 + np.exp(-z)))
 
 
 def _compute_adoption(
-    rng: np.random.Generator, centrality_z: np.ndarray, brand: str
+    rng: np.random.Generator,
+    centrality_z: np.ndarray,
+    brand: str,
+    specialty: Optional[Sequence[str]] = None,
 ) -> Dict[str, np.ndarray]:
     """Shared adoption DGP on a standardized centrality vector. Returns
     hcp_segment, treatment_arm, adopted (0/1), and the per-HCP probability-scale
     cate_estimate. Used by BOTH the standalone optum_hcp frame and the hcp_generator
-    (hcp_profiles grain) so the two grains share one DGP."""
+    (hcp_profiles grain) so the two grains share one DGP.
+
+    ``specialty`` (optional, #1551): per-HCP specialty strings aligned to
+    ``centrality_z``. When supplied, a deterministic per-(brand, specialty)
+    logit shift makes the specialty ordering clinically sensible (see
+    ``_BRAND_SPECIALTY_AFFINITY``). When None, behaviour is bit-identical to the
+    pre-#1551 DGP — the shift consumes no RNG draws either way."""
     n = len(centrality_z)
     hcp_segment = np.where(
         centrality_z > 0.5,
@@ -81,16 +148,22 @@ def _compute_adoption(
 
     scale = _BRAND_ADOPT_SCALE.get(brand, 1.0)
     seg_treat = np.array([_ADOPT_TREATMENT_LOGIT[s] for s in hcp_segment], dtype=float)
+    # #1551: deterministic specialty-affinity shift (zeros when specialty=None);
+    # a pure table lookup — consumes NO rng draws, so the seeded stream is
+    # bit-identical with or without a specialty vector.
+    affinity = _specialty_affinity(brand, specialty, n)
     logit = (
         _ADOPT_INTERCEPT
         + _ADOPT_CENTRALITY_SLOPE * centrality_z
+        + affinity
         + scale * seg_treat * treatment_arm
         + rng.normal(0.0, 0.6, n)
     )
     adopted = (rng.random(n) < _sigmoid(logit)).astype(int)
 
-    # per-HCP CATE on the PROBABILITY scale (P(adopt) at T=1 vs T=0, centrality fixed).
-    base_logit = _ADOPT_INTERCEPT + _ADOPT_CENTRALITY_SLOPE * centrality_z
+    # per-HCP CATE on the PROBABILITY scale (P(adopt) at T=1 vs T=0, centrality
+    # and specialty fixed).
+    base_logit = _ADOPT_INTERCEPT + _ADOPT_CENTRALITY_SLOPE * centrality_z + affinity
     cate_estimate = _sigmoid(base_logit + scale * seg_treat) - _sigmoid(base_logit)
     return {
         "hcp_segment": hcp_segment,

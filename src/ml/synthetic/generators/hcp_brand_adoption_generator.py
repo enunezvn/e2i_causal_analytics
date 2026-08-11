@@ -12,7 +12,13 @@ live in hcp_profiles) and is why the validated prototype achieves AUC 0.77–0.8
 
 The shared leakage-safe DGP is _compute_adoption() from hcp_adoption_artifact.py:
     centrality_z = (pis - pis.mean()) / (pis.std() or 1.0)
-    _compute_adoption(rng, centrality_z, brand)  → adopted 0/1
+    _compute_adoption(rng, centrality_z, brand, specialty=...)  → adopted 0/1
+
+#1551: when hcp_df carries a ``specialty`` column, the DGP adds a deterministic
+per-(brand, specialty) logit shift (oncology-led Kisqali, hematology-led
+Fabhalta, derm/allergy-led Remibrutinib) so the champion LR's specialty
+ordering is clinically sensible instead of fit-to-noise.  The shift consumes no
+RNG draws — seeded streams are bit-identical with or without the column.
 
 Leakage safety: days_to_first / first_adoption_dt / adopter_rank are NEVER emitted.
 consideration_date is drawn INDEPENDENTLY of adopted (row attribute, not feature).
@@ -64,7 +70,14 @@ def generate_hcp_brand_adoption_frame(
     ----------
     hcp_df:
         DataFrame with at minimum columns ``hcp_id`` (str) and
-        ``peer_influence_score`` (float, = log1p(network_size)).
+        ``peer_influence_score`` (float, = log1p(network_size)).  When a
+        ``specialty`` column is present it feeds the per-(brand, specialty)
+        adoption affinity (#1551) so specialty orderings are clinically
+        sensible (Kisqali oncology-led, Fabhalta hematology-led, Remibrutinib
+        dermatology/allergy-led); the canonical loader
+        (scripts/load_hcp_brand_adoption.py) always supplies it.  The affinity
+        is a deterministic logit shift — it consumes no RNG draws, so all
+        seeded streams are bit-identical with or without the column.
     seed:
         Master RNG seed.  Deterministic: same seed + same hcp_df → same frame.
     end_date:
@@ -98,6 +111,13 @@ def generate_hcp_brand_adoption_frame(
     hcp_ids: List[str] = hcp_df["hcp_id"].tolist()
     n_hcps = len(hcp_ids)
 
+    # #1551: specialty vector for the brand-specialty adoption affinity. Optional
+    # so minimal legacy frames still generate (with the pre-#1551 specialty-free
+    # DGP); the canonical loader always carries hcp_profiles.specialty.
+    specialty: Optional[List[str]] = (
+        hcp_df["specialty"].tolist() if "specialty" in hcp_df.columns else None
+    )
+
     brand_frames: List[pd.DataFrame] = []
     for brand_idx, brand in enumerate(brands):
         # Derive a per-brand sub-RNG deterministically from master_rng index
@@ -106,7 +126,7 @@ def generate_hcp_brand_adoption_frame(
         brand_rng = np.random.default_rng(brand_seed)
 
         # Adoption labels from the SHARED DGP using the STORED centrality
-        dgp = _compute_adoption(brand_rng, centrality_z, brand)
+        dgp = _compute_adoption(brand_rng, centrality_z, brand, specialty=specialty)
         adopted = dgp["adopted"]  # ndarray of 0/1, length n_hcps
 
         # consideration_date: drawn INDEPENDENTLY of adopted
