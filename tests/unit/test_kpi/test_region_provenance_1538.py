@@ -436,6 +436,46 @@ def test_region_request_ignores_pre_feature_cache_entry():
 
 
 @pytest.mark.unit
+def test_marker_never_leaks_to_caller_context():
+    """codex iter-1 LOW, rebutted with this pin: calculate() private-copies the
+    context (#1532), so `_region_routed` is stamped on the copy and can never
+    reach the CALLER's dict — context-reuse callers (calculate_batch, the
+    chatbot window-coverage probe's `{**context, "window": ...}`) therefore
+    never smuggle the marker into a later call's cache key."""
+
+    class _KeyRecordingCache:
+        enabled = True
+
+        def __init__(self):
+            self.contexts: list[dict[str, Any]] = []
+
+        def get(self, kpi_id, **context):
+            self.contexts.append(dict(context))
+            return None
+
+        def set(self, result, ttl=None, **context):
+            return True
+
+    kpi = _kpi("WS3-BI-005")
+    cache = _KeyRecordingCache()
+    calc = KPICalculator(registry=_StubRegistry(kpi), cache=cache)
+
+    def _fake_calculate(k, ctx):
+        ctx["_region_routed"] = True
+        return KPIResult(kpi_id=k.id, value=1.0, status=KPIStatus.GOOD)
+
+    calc._calculate_kpi = _fake_calculate  # type: ignore[method-assign]
+
+    caller_ctx = {"brand": "Kisqali", "region": "northeast"}
+    calc.calculate("WS3-BI-005", context=caller_ctx)
+    assert "_region_routed" not in caller_ctx
+    # Probe-style reuse of the caller's dict: the second call's cache key
+    # context must be marker-free and identical in shape to the first's.
+    calc.calculate("WS3-BI-005", context={**caller_ctx, "window": {"start": "S", "end": "E"}})
+    assert all("_region_routed" not in c for c in cache.contexts)
+
+
+@pytest.mark.unit
 def test_no_region_request_still_serves_cache():
     """The guard is region-scoped only: global asks keep their cache hits."""
     kpi = _kpi("WS3-BI-005")
