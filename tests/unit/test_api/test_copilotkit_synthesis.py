@@ -139,6 +139,36 @@ def test_prompt_forbids_overlapping_window_baselines():
 
 
 @pytest.mark.unit
+def test_prompt_requires_prose_to_match_own_table():
+    """#1550 (2026-08-11 eval): the synthesizer's comparative prose contradicted
+    the correctly-retrieved table in the same answer — a wrong driver rank (1.5),
+    two different 'largest' cohorts two lines apart (1.7), a sign flip on both an
+    effect and its dollar impact (+0.092 described as '-0.09' / -$30.6K) (2.4),
+    and a drifted average (5.1). The instruction block must require every
+    comparative claim (rank, superlative, sign, dollar impact, average) to be
+    re-derived from the printed values, with the table winning any conflict."""
+    # Results deliberately generic — the INSTRUCTION block itself must carry the
+    # self-consistency requirement regardless of payload content.
+    p = build_synthesis_prompt(
+        "what drives TRx?",
+        [{"name": "causal_analysis_tool", "args": {"brand": "Kisqali"}}],
+        [{"tool": "causal_analysis_tool", "result": '{"drivers": []}'}],
+    )
+    assert "PROSE MUST MATCH YOUR OWN TABLE" in p
+    # Sign/direction discipline (2.4's +0.092 -> "-0.09" flip)
+    assert "sign and direction" in p
+    assert "+0.092" in p
+    # Ranking discipline (1.5's wrong rank)
+    assert "rank" in p.lower()
+    # Superlative discipline (1.7's two 'largest' cohorts)
+    assert "exactly ONE" in p
+    # Average discipline (5.1's 0.845 vs 0.8543)
+    assert "average" in p.lower()
+    # Conflict resolution: the table wins
+    assert "TABLE is correct" in p
+
+
+@pytest.mark.unit
 def test_prompt_requires_surfacing_coverage_warning():
     """When a tool result carries a coverage_warning, the synthesizer must repeat
     it and refuse trend conclusions from that figure."""
