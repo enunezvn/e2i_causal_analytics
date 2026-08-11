@@ -632,6 +632,14 @@ def _execute_bridge_agui_messages(messages: Optional[List[Any]]) -> List[Any]:
     return converted
 
 
+# Name of the graph's ToolNode (see create_e2i_chat_agent). Chat-model streams
+# raised INSIDE this node are tool-internal machinery (e.g. tool_composer's
+# decompose/plan LLM calls) and must never render as answer text (#1547).
+# LangGraphAgent._is_tool_internal_llm_event keys on this constant, so the
+# graph builder uses it too — keep them coupled.
+_TOOL_NODE_NAME = "tools"
+
+
 class LangGraphAgent(_LangGraphAGUIAgent):
     """
     Extended LangGraphAGUIAgent that adds the execute() method required by SDK.
@@ -665,6 +673,45 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         if self._graph_factory:
             return self._graph_factory()
         return self.graph
+
+    @staticmethod
+    def _is_tool_internal_llm_event(event: Any) -> bool:
+        """True for chat-model callback events raised INSIDE the tools node (#1547).
+
+        LangGraph's ``astream_events`` propagates callbacks into LLM calls made
+        *inside* tools (async contextvars), and ag_ui_langgraph's
+        ``_handle_single_event`` translates EVERY ``on_chat_model_stream`` event
+        into a TEXT_MESSAGE lifecycle. So when ``tool_composer_tool`` ran, its
+        decompose/plan phases' ``ainvoke`` generations streamed raw planner JSON
+        into the delivered answer (eval 2026-08-11 turn 2.6: two blobs, ~3,000
+        chars, the second truncated mid-generation, before any prose — measured
+        in raw_agui.jsonl: the leaked TEXT_MESSAGE lifecycles carry
+        ``rawEvent.metadata.langgraph_node == "tools"``, the legitimate ones
+        ``"chat"`` / ``"synthesize"``).
+
+        Tool-internal model streams are machinery, never answer text. Match
+        POSITIVELY on the tools node only — unknown/missing node metadata fails
+        open so no legitimate stream is ever silenced.
+        """
+        if not isinstance(event, dict):
+            return False
+        if not str(event.get("event", "")).startswith("on_chat_model_"):
+            return False
+        metadata = event.get("metadata") or {}
+        return bool(metadata.get("langgraph_node") == _TOOL_NODE_NAME)
+
+    async def _handle_single_event(self, event: Any, state: Any) -> AsyncGenerator[str, None]:
+        """Drop tool-internal chat-model events BEFORE AG-UI translation (#1547).
+
+        Filtering here (rather than in execute()) means no TEXT_MESSAGE
+        lifecycle is ever created for a tool-internal stream, so
+        ``messages_in_process`` bookkeeping cannot be corrupted for the real
+        chat/synthesize streams.
+        """
+        if self._is_tool_internal_llm_event(event):
+            return
+        async for translated in super()._handle_single_event(event, state):
+            yield translated
 
     def dict_repr(self) -> Dict[str, Any]:
         """Return dictionary representation for SDK info endpoint."""
@@ -3599,9 +3646,11 @@ def create_e2i_chat_agent(
     # Build the graph with tool calling support
     workflow = StateGraph(E2IAgentState)
 
-    # Add nodes
+    # Add nodes. The tools-node name is the shared constant because
+    # LangGraphAgent._is_tool_internal_llm_event filters tool-internal
+    # chat-model streams by this node name (#1547).
     workflow.add_node("chat", chat_node)
-    workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
+    workflow.add_node(_TOOL_NODE_NAME, ToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
 
     # Set entry point
@@ -3612,13 +3661,13 @@ def create_e2i_chat_agent(
         "chat",
         should_continue,
         {
-            "tools": "tools",
+            "tools": _TOOL_NODE_NAME,
             "end": END,
         },
     )
 
     # After tools, synthesize the results
-    workflow.add_edge("tools", "synthesize")
+    workflow.add_edge(_TOOL_NODE_NAME, "synthesize")
     workflow.add_edge("synthesize", END)
 
     # Checkpointer is required by ag_ui_langgraph for state management
