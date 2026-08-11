@@ -2782,7 +2782,18 @@ def build_synthesis_prompt(
         "CONTAINS those same 30 days); a valid baseline is a prior non-overlapping period of the "
         "same length. If no non-overlapping comparison figure is available in the tool results, "
         "say so instead of manufacturing one. If any tool result carries a coverage_warning, "
-        "quote it and do not draw trend conclusions from that figure."
+        "quote it and do not draw trend conclusions from that figure. "
+        "PROSE MUST MATCH YOUR OWN TABLE (#1550): every comparative claim in your prose — "
+        "rankings, 'largest'/'smallest'/'top' superlatives, signs and directions, dollar "
+        "impacts, averages — MUST be re-derived from the values printed in the SAME answer, "
+        "not paraphrased from memory. State each number's sign and direction exactly as "
+        "printed: +0.092 is positive (an increase), never 'declined by 0.09', and its dollar "
+        "impact keeps the same sign. When ranking items, order them by the printed values and "
+        "make the stated rank match that order. Name exactly ONE 'largest'/'smallest' item per "
+        "axis, the one the printed n or value actually supports — never two different ones in "
+        "the same answer. An average or total must be computed from the tabled values "
+        "(round, don't drift). Before finishing, re-check every comparative sentence against "
+        "the table beside it; on any conflict the TABLE is correct — rewrite the sentence."
     )
 
 
