@@ -305,6 +305,53 @@ async def test_kpi_calculate_tool_passes_region_into_context(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_kpi_calculate_tool_normalizes_brand_casing(monkeypatch):
+    """The input schema promises case-insensitive brands (codex #1534 iter-1
+    finding 1): 'kisqali' must reach the calculator as the real enum label
+    'Kisqali' — brand/region are enum columns, and #1534's scoped ROI query
+    (migration 125) matches ``brand::text = $1`` exactly, so a raw lowercase
+    brand would 0-row the scoped query and fail loud on a resolvable ask.
+    The response echo must carry the RESOLVED label (truthful echo)."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=1.9, status=KPIStatus.UNKNOWN)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke({"kpi_name": "ROI", "brand": "kisqali"})
+    assert resp["success"] is True
+    assert captured["context"]["brand"] == "Kisqali"
+    assert resp["brand"] == "Kisqali"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_unknown_brand_fails_before_calculator(monkeypatch):
+    """An unmappable brand can never match an enum row — fail fast with the
+    known-brand list BEFORE touching the calculator (the ``_query_kpis``
+    #1501 precedent), never a misleading 'no rows for that scope' error."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    def _boom():
+        raise AssertionError("calculator must not be constructed for an unknown brand")
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", _boom, raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke({"kpi_name": "ROI", "brand": "Acme"})
+    assert resp["success"] is False
+    assert "Acme" in resp["error"]
+    assert "Kisqali" in resp["error"]  # the known-brand list guides the retry
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
     """A severity-tier filter must reach the calculator under ``context['segment']``
     (migration 105 -- BusinessImpactCalculator._resolve_windowed_call routes on it)."""

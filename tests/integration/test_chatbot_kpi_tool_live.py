@@ -40,6 +40,25 @@ async def test_kpi_calculate_tool_computes_nbrx_live():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_kpi_calculate_tool_roi_lowercase_brand_resolves_live():
+    """#1534 codex iter-1 finding 1, end-to-end: the schema promises
+    case-insensitive brands, and the scoped ROI query (migration 125) matches
+    ``brand::text = $1`` exactly — so 'kisqali' must resolve to 'Kisqali' at
+    the tool seam and compute the SAME brand-scoped value, never fail loud on
+    a resolvable ask."""
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    lower = await kpi_calculate_tool.ainvoke({"kpi_name": "ROI", "brand": "kisqali"})
+    canonical = await kpi_calculate_tool.ainvoke({"kpi_name": "ROI", "brand": "Kisqali"})
+
+    assert lower["success"] is True, lower
+    assert lower["kpi_id"] == "WS3-BI-010"
+    assert lower["brand"] == "Kisqali"  # truthful echo carries the resolved label
+    assert lower["value"] == canonical["value"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_kpi_calculate_tool_unknown_kpi_fails_closed():
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 

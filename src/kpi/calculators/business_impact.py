@@ -574,19 +574,37 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_roi(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-010: Return on Investment.
 
-        Value generated per dollar invested. When ``business_metrics`` answers,
-        the per-slice trailing-12-month temporal-variability band (#1532) rides
-        the context into ``KPIResult.metadata`` (the ``funnel_stages`` seam).
+        Value generated per dollar invested. Honors brand/region request
+        context (#1534, migration 125): the headline is computed for exactly
+        the scope the surfaces label it with. When ``business_metrics``
+        answers, the per-slice trailing-12-month temporal-variability band
+        (#1532) rides the context into ``KPIResult.metadata`` (the
+        ``funnel_stages`` seam) — queried with the SAME scope, so band
+        population == headline population by construction.
         """
-        # Try business_metrics table first
-        result = self._execute_query("business_impact_roi_business_metrics", [])
+        brand = context.get("brand")
+        region = context.get("region")
+        # Try business_metrics first ([None, None] is value-identical to the
+        # legacy 0-param query — live-tested equivalence invariant).
+        result = self._execute_query("business_impact_roi_business_metrics_scoped", [brand, region])
         if result and result[0].get("avg_roi") is not None:
             # Provenance reflects whichever source actually answered (the two
             # probes' frontiers diverge; that is why ROI has no static
             # reporting_window note in the chatbot map).
             self._stash_data_through(context, result)
-            self._stash_roi_temporal_band(context)
+            self._stash_roi_temporal_band(context, brand=brand, region=region)
             return float(result[0]["avg_roi"])
+
+        # agent_activities has NO brand/region dimension (measured 2026-08-10),
+        # so under a requested scope there is no honest fallback: serving the
+        # portfolio number under a brand/region label is the exact defect
+        # #1534 removes (WS3-BI-009 fail-loud precedent).
+        if brand is not None or region is not None:
+            raise RuntimeError(
+                f"KPI WS3-BI-010 unavailable for brand={brand!r} region={region!r}: no "
+                "business_metrics ROI rows in the window for that scope, and the "
+                "agent_activities fallback has no brand/region dimension"
+            )
 
         # Try agent_activities table. No band here: the band describes
         # business_metrics slices; attaching it to an agent_activities headline
@@ -598,27 +616,27 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         raise RuntimeError("KPI WS3-BI-010 unavailable: no data for return on investment (ROI)")
 
-    def _stash_roi_temporal_band(self, context: dict[str, Any]) -> None:
+    def _stash_roi_temporal_band(
+        self, context: dict[str, Any], *, brand: str | None = None, region: str | None = None
+    ) -> None:
         """Attach the #1532 per-slice band to the context (best-effort).
 
         The band is supplementary metadata: a failure here must never take the
         headline down with it (the headline itself keeps the #574 fail-loud
         contract via ``_execute_query``), and omitting the band on error is
         honest absence — nothing downstream renders a fabricated range.
+
+        ``brand``/``region`` are the scope THE HEADLINE RESOLVED (#1534) —
+        passed explicitly by ``_calc_roi``, never re-derived from ``context``
+        (which is only the stash target), so band population == headline
+        population by construction (the #1532 codex iter-2 invariant).
         """
         # A reused context must never carry a previous calculation's band
         # forward: clear first, set only on success — a stale range beside a
         # fresh headline is the plausible-but-wrong shape #1527 rejected.
         context.pop("temporal_variability_band", None)
         try:
-            # Always unscoped: the headline this band rides beside is a
-            # portfolio-wide aggregate (its registry query takes no brand/
-            # region params), so the band must describe the same population —
-            # narrowing it to context brand/region would imply the headline is
-            # scoped when it is not (codex iter-2). Slices stay labeled per
-            # (brand, region); the query's nullable params are the seam for a
-            # future headline-scoping follow-up.
-            rows = self._execute_query("business_impact_roi_temporal_band", [None, None])
+            rows = self._execute_query("business_impact_roi_temporal_band", [brand, region])
         except Exception as exc:  # noqa: BLE001 - supplementary metadata only
             logger.warning("WS3-BI-010 temporal band query failed (band omitted): %s", exc)
             return

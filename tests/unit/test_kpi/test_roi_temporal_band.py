@@ -254,17 +254,28 @@ def test_stale_band_cleared_when_band_query_returns_empty():
 
 
 @pytest.mark.unit
-def test_band_query_is_unscoped_even_with_brand_and_region_context():
-    """Codex iter-2 HIGH: the WS3-BI-010 headline is a portfolio-wide
-    aggregate (``business_impact_roi_business_metrics`` has no brand/region
-    registry variant), so the band must describe the SAME population — a
-    brand-narrowed band beside an unscoped headline would imply the headline
-    is scoped when it is not. Slices stay labeled per (brand, region), so a
-    brand-focused reader still finds their slices; migration 124's nullable
-    params remain the seam for a future headline-scoping follow-up."""
+def test_band_query_scope_matches_headline_scope():
+    """The #1532 codex iter-2 invariant, generalized by #1534: the band must
+    describe the SAME population as the headline it rides beside. Pre-#1534
+    that meant always ``[None, None]`` (portfolio headline); now the headline
+    honors request scope (migration 125), so ``_stash_roi_temporal_band``
+    takes the resolved scope EXPLICITLY from ``_calc_roi`` — by construction,
+    never re-derived from context (context is only the stash target)."""
     client = MagicMock()
     client.rpc.return_value.execute.return_value = MagicMock(data=[])
     calc = BusinessImpactCalculator(db_client=client)
-    calc._stash_roi_temporal_band({"brand": "Kisqali", "region": "northeast"})
+    calc._stash_roi_temporal_band(
+        {"brand": "context-is-not-the-scope"}, brand="Kisqali", region="northeast"
+    )
+    rpc_payload = client.rpc.call_args[0][1]
+    assert rpc_payload["params"] == ["Kisqali", "northeast"]
+
+
+@pytest.mark.unit
+def test_band_query_defaults_to_unscoped_for_unscoped_headline():
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=[])
+    calc = BusinessImpactCalculator(db_client=client)
+    calc._stash_roi_temporal_band({})
     rpc_payload = client.rpc.call_args[0][1]
     assert rpc_payload["params"] == [None, None]

@@ -210,12 +210,17 @@ band**: for each `(metric_name, brand, region)` slice, the range
   twin) in migration 124; `_calc_roi` attaches the assembled band to
   `KPIResult.metadata` when `business_metrics` answers the headline, and the
   chat response carries it as `temporal_variability_band`.
-- The band always covers the **same portfolio-wide population as the
-  headline** (whose registry query takes no brand/region params): request
-  context never narrows it, because a brand-only band beside an unscoped
-  headline would imply a scoping the headline doesn't have. Slices are
-  labeled per `(brand, region)`, and the query's nullable params are the
-  seam for a future headline-scoping follow-up.
+- The band always covers the **same population as the headline**. Since
+  #1534 (migration 125) the headline honors brand/region request context via
+  `business_impact_roi_business_metrics_scoped` (2 nullable params;
+  `[NULL, NULL]` is value-identical to the legacy 0-param query), and
+  `_calc_roi` passes the exact scope it resolved on to the band query — so a
+  Kisqali request yields a Kisqali headline with a Kisqali-only band, while
+  an unscoped request keeps the portfolio headline and full portfolio band.
+  Slices stay labeled per `(brand, region)`. A scoped request that
+  `business_metrics` cannot answer **fails loud**: the `agent_activities`
+  fallback has no brand/region dimension, so serving it under a scope label
+  would relabel a portfolio number — the exact defect #1534 removed.
 - Every slice reports its actual `n`; the band is **suppressed below n = 6**
   (`band_suppressed: true`, `band: null`) — a 3-month range dressed as a
   12-month band would be the same plausible-but-wrong shape §8 rejects.

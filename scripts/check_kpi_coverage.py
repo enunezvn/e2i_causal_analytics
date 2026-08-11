@@ -111,7 +111,7 @@ PROBES: dict[str, tuple[str, str, str | None]] = {
     "WS3-BI-007": ("business_impact_nbrx", '["Kisqali"]', "nbrx"),
     "WS3-BI-008": ("business_impact_trx_share", '["Kisqali"]', "share"),
     "WS3-BI-009": ("business_impact_conversion_rate", "[]", "conversion_rate"),
-    "WS3-BI-010": ("business_impact_roi_business_metrics", "[]", "avg_roi"),
+    "WS3-BI-010": ("business_impact_roi_business_metrics_scoped", "[null, null]", "avg_roi"),
     # --- brand-specific ---
     "BR-001": ("brand_specific_remi_ah_uncontrolled", '["3"]', "uncontrolled_rate"),
     "BR-002": ("brand_specific_remi_intent_delta_fallback", "[]", "intent_delta"),
