@@ -106,6 +106,26 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         if train_df is None:
             raise ValueError("train_df not found in state")
 
+        # #1524: a temporal window can legitimately hold zero rows (nightly
+        # repro: seeded sample stream, n=10, empty 30-day val window). The
+        # fitted transforms below are per-row maps — an empty frame is a
+        # no-op — but sklearn's ``.transform`` refuses 0-row input, which
+        # surfaced as ``transformation_error`` and made the whole run raise.
+        # Normalize empty NON-train splits to ``None`` so the existing
+        # ``is not None`` guards skip them; whether an empty split blocks the
+        # run stays a QC-gate/split-enforcer decision. The state keys
+        # (``validation_df``/``test_df``/``holdout_df``) keep the original
+        # empty frames, so ratio checks still see the true split sizes.
+        if validation_df is not None and len(validation_df) == 0:
+            logger.warning("Validation split has 0 rows; skipping its transforms (#1524)")
+            validation_df = None
+        if test_df is not None and len(test_df) == 0:
+            logger.warning("Test split has 0 rows; skipping its transforms (#1524)")
+            test_df = None
+        if holdout_df is not None and len(holdout_df) == 0:
+            logger.warning("Holdout split has 0 rows; skipping its transforms (#1524)")
+            holdout_df = None
+
         # Get configuration from scope_spec
         scope_spec = state.get("scope_spec", {})
         # The canonical scope key is ``prediction_target`` — it is what the
