@@ -4,7 +4,9 @@ Sample Data Generator - Phase 1: Data Loading Foundation
 Generate realistic test data for ML pipelines:
 - Match production table schemas
 - Configurable sample sizes
-- Reproducible via random seeds
+- Reproducible via random seeds (per-purpose instance streams — dates,
+  categoricals, and numerics draw independently, so editing one field's
+  draw pattern cannot shift another's; see SampleDataGenerator.__init__)
 - Support for all ML-relevant tables
 
 Version: 1.0.0
@@ -99,12 +101,24 @@ class SampleDataGenerator:
         """
         Initialize generator.
 
+        Draws come from per-purpose instance streams instead of the
+        process-global RNGs (#1542): with a single shared stream, resizing
+        any categorical constant changed how ``random.choice`` consumed it
+        and shifted every subsequent date draw (#1521 -> #1524, an emptied
+        temporal-split window). Dates, categoricals, and numerics therefore
+        draw independently, and constructing a generator no longer reseeds
+        ``random`` / ``np.random`` for the whole process. ``RandomState`` is
+        used (not ``default_rng``) because its frozen bitstream matches the
+        legacy global draws, preserving the realised regime statistics.
+
         Args:
             seed: Random seed for reproducibility
         """
         self.seed = seed
-        np.random.seed(seed)
-        random.seed(seed)
+        self._rng_dates = random.Random(f"{seed}:dates")
+        self._rng_categorical = random.Random(f"{seed}:categorical")
+        self._rng_numeric = random.Random(f"{seed}:numeric")
+        self._np_rng = np.random.RandomState(seed)
 
     def _random_date(
         self,
@@ -113,7 +127,7 @@ class SampleDataGenerator:
     ) -> datetime:
         """Generate random datetime between start and end."""
         delta = end - start
-        random_seconds = random.randint(0, int(delta.total_seconds()))
+        random_seconds = self._rng_dates.randint(0, int(delta.total_seconds()))
         return start + timedelta(seconds=random_seconds)
 
     def _random_uuid(self) -> str:
@@ -153,26 +167,26 @@ class SampleDataGenerator:
 
         data = []
         for _ in range(n_samples):
-            brand = random.choice(brands)
-            kpi = random.choice(KPIS)
-            region = random.choice(REGIONS)
+            brand = self._rng_categorical.choice(brands)
+            kpi = self._rng_categorical.choice(KPIS)
+            region = self._rng_categorical.choice(REGIONS)
 
             # Generate realistic values based on KPI type
             if "rate" in kpi or "share" in kpi:
-                value = np.random.beta(5, 2) * 100  # 0-100%
-                target = np.random.uniform(60, 90)
+                value = self._np_rng.beta(5, 2) * 100  # 0-100%
+                target = self._np_rng.uniform(60, 90)
             elif "volume" in kpi:
-                value = np.random.exponential(scale=1000)
-                target = value * np.random.uniform(0.8, 1.2)
+                value = self._np_rng.exponential(scale=1000)
+                target = value * self._np_rng.uniform(0.8, 1.2)
             elif "time" in kpi:
-                value = np.random.exponential(scale=30)  # days
+                value = self._np_rng.exponential(scale=30)  # days
                 target = 30
             else:
-                value = np.random.exponential(scale=500)
-                target = value * np.random.uniform(0.9, 1.1)
+                value = self._np_rng.exponential(scale=500)
+                target = value * self._np_rng.uniform(0.9, 1.1)
 
             achievement_rate = value / target if target > 0 else 1.0
-            roi = np.random.uniform(0.5, 5.0) if "volume" in kpi else None
+            roi = self._np_rng.uniform(0.5, 5.0) if "volume" in kpi else None
 
             data.append(
                 {
@@ -223,37 +237,39 @@ class SampleDataGenerator:
 
         data = []
         for _ in range(n_samples):
-            pred_type = random.choice(prediction_types)
-            brand = random.choice(BRANDS)
+            pred_type = self._rng_categorical.choice(prediction_types)
+            brand = self._rng_categorical.choice(BRANDS)
 
             # Generate prediction value based on type
             if pred_type in ["churn", "response", "conversion"]:
-                predicted_value = np.random.beta(2, 5)  # Most predictions low
+                predicted_value = self._np_rng.beta(2, 5)  # Most predictions low
                 threshold = 0.5
             elif pred_type == "value":
-                predicted_value = np.random.exponential(scale=10000)
+                predicted_value = self._np_rng.exponential(scale=10000)
                 threshold = None
             else:  # risk
-                predicted_value = np.random.beta(2, 8)
+                predicted_value = self._np_rng.beta(2, 8)
                 threshold = 0.3
 
-            confidence = np.random.beta(5, 2)  # High confidence
-            rank = random.randint(1, 100)
+            confidence = self._np_rng.beta(5, 2)  # High confidence
+            rank = self._rng_numeric.randint(1, 100)
 
             # Actual outcome (with some noise vs prediction)
             actual: float
             if threshold:
                 actual = (
-                    1.0 if np.random.random() < predicted_value + np.random.normal(0, 0.1) else 0.0
+                    1.0
+                    if self._np_rng.random() < predicted_value + self._np_rng.normal(0, 0.1)
+                    else 0.0
                 )
             else:
-                actual = predicted_value * np.random.uniform(0.7, 1.3)
+                actual = predicted_value * self._np_rng.uniform(0.7, 1.3)
 
             data.append(
                 {
                     "prediction_id": self._random_uuid(),
                     "entity_id": self._random_uuid(),
-                    "entity_type": "hcp" if random.random() > 0.3 else "patient",
+                    "entity_type": "hcp" if self._rng_categorical.random() > 0.3 else "patient",
                     "prediction_type": pred_type,
                     "brand": brand,
                     "predicted_value": round(predicted_value, 4),
@@ -261,7 +277,7 @@ class SampleDataGenerator:
                     "rank": rank,
                     "threshold": threshold,
                     "actual_outcome": round(actual, 4) if isinstance(actual, float) else actual,
-                    "model_version": random.choice(model_versions),
+                    "model_version": self._rng_categorical.choice(model_versions),
                     "prediction_date": self._random_date(start, end).isoformat(),
                     "created_at": self._random_date(start, end).isoformat(),
                 }
@@ -308,15 +324,20 @@ class SampleDataGenerator:
 
         data = []
         for _ in range(n_samples):
-            trigger_type = random.choice(trigger_types)
-            brand = random.choice(BRANDS)
-            region = random.choice(REGIONS)
-            severity = random.choice(severities)
+            trigger_type = self._rng_categorical.choice(trigger_types)
+            brand = self._rng_categorical.choice(BRANDS)
+            region = self._rng_categorical.choice(REGIONS)
+            severity = self._rng_categorical.choice(severities)
 
             # Generate change metrics
-            baseline_value = np.random.exponential(scale=100)
-            current_value = baseline_value * np.random.uniform(0.6, 1.4)
+            baseline_value = self._np_rng.exponential(scale=100)
+            current_value = baseline_value * self._np_rng.uniform(0.6, 1.4)
             change_pct = ((current_value - baseline_value) / baseline_value) * 100
+
+            # Drawn unconditionally so the date stream consumes a fixed
+            # number of draws per row — a categorical shift flipping the
+            # resolved gate must not move later rows' dates (#1542).
+            resolved_date = self._random_date(start, end)
 
             data.append(
                 {
@@ -330,7 +351,7 @@ class SampleDataGenerator:
                     "change_percentage": round(change_pct, 2),
                     "detected_at": self._random_date(start, end).isoformat(),
                     "resolved_at": (
-                        self._random_date(start, end).isoformat() if random.random() > 0.4 else None
+                        resolved_date.isoformat() if self._rng_categorical.random() > 0.4 else None
                     ),
                     "created_at": self._random_date(start, end).isoformat(),
                 }
@@ -381,17 +402,21 @@ class SampleDataGenerator:
         data = []
         for _ in range(n_patients):
             patient_id = self._random_uuid()
-            brand = random.choice(BRANDS)
-            n_events = max(1, int(np.random.poisson(n_events_per_patient)))
+            brand = self._rng_categorical.choice(BRANDS)
+            n_events = max(1, int(self._np_rng.poisson(n_events_per_patient)))
 
-            # Generate events in chronological order
+            # Generate events in chronological order (event-day offsets are
+            # date-shaped draws, so they live on the dates stream)
             patient_start = self._random_date(start, end)
             event_dates = sorted(
-                [patient_start + timedelta(days=random.randint(0, 180)) for _ in range(n_events)]
+                [
+                    patient_start + timedelta(days=self._rng_dates.randint(0, 180))
+                    for _ in range(n_events)
+                ]
             )
 
             for event_date in event_dates:
-                event_type = random.choice(event_types)
+                event_type = self._rng_categorical.choice(event_types)
 
                 data.append(
                     {
@@ -402,7 +427,7 @@ class SampleDataGenerator:
                         "event_date": event_date.isoformat(),
                         "days_since_start": (event_date - patient_start).days,
                         "hcp_id": self._random_uuid() if event_type != "refill" else None,
-                        "region": random.choice(REGIONS),
+                        "region": self._rng_categorical.choice(REGIONS),
                         "created_at": event_date.isoformat(),
                     }
                 )
@@ -441,13 +466,13 @@ class SampleDataGenerator:
 
         data = []
         for _ in range(n_samples):
-            agent = random.choice(AGENT_NAMES)
-            brand = random.choice(BRANDS)
-            activity_type = random.choice(activity_types)
-            status = random.choices(statuses, weights=[0.85, 0.05, 0.10])[0]
+            agent = self._rng_categorical.choice(AGENT_NAMES)
+            brand = self._rng_categorical.choice(BRANDS)
+            activity_type = self._rng_categorical.choice(activity_types)
+            status = self._rng_categorical.choices(statuses, weights=[0.85, 0.05, 0.10])[0]
 
-            duration_ms = int(np.random.exponential(scale=5000))
-            confidence = np.random.beta(5, 2) if status == "completed" else None
+            duration_ms = int(self._np_rng.exponential(scale=5000))
+            confidence = self._np_rng.beta(5, 2) if status == "completed" else None
 
             data.append(
                 {
@@ -458,8 +483,8 @@ class SampleDataGenerator:
                     "status": status,
                     "duration_ms": duration_ms,
                     "confidence": round(confidence, 4) if confidence else None,
-                    "input_tokens": random.randint(100, 5000),
-                    "output_tokens": random.randint(50, 2000),
+                    "input_tokens": self._rng_numeric.randint(100, 5000),
+                    "output_tokens": self._rng_numeric.randint(50, 2000),
                     "created_at": self._random_date(start, end).isoformat(),
                 }
             )
@@ -511,13 +536,13 @@ class SampleDataGenerator:
 
         data = []
         for _ in range(n_samples):
-            brand = random.choice(BRANDS)
-            cause = random.choice(causes)
-            effect = random.choice(effects)
+            brand = self._rng_categorical.choice(BRANDS)
+            cause = self._rng_categorical.choice(causes)
+            effect = self._rng_categorical.choice(effects)
 
             # Generate causal effect metrics
-            ate = np.random.normal(0.2, 0.1)  # Average treatment effect
-            p_value = np.random.exponential(scale=0.1)
+            ate = self._np_rng.normal(0.2, 0.1)  # Average treatment effect
+            p_value = self._np_rng.exponential(scale=0.1)
             confidence_interval = [ate - 0.1, ate + 0.1]
 
             data.append(
@@ -530,8 +555,8 @@ class SampleDataGenerator:
                     "p_value": round(min(p_value, 1.0), 4),
                     "confidence_interval_lower": round(confidence_interval[0], 4),
                     "confidence_interval_upper": round(confidence_interval[1], 4),
-                    "sample_size": random.randint(100, 5000),
-                    "method": random.choice(["dowhy", "econml", "causalml"]),
+                    "sample_size": self._rng_numeric.randint(100, 5000),
+                    "method": self._rng_categorical.choice(["dowhy", "econml", "causalml"]),
                     "created_at": self._random_date(start, end).isoformat(),
                 }
             )
@@ -612,15 +637,15 @@ class SampleDataGenerator:
         for _ in range(n_patients):
             patient_journey_id = self._random_uuid()
             patient_id = self._random_uuid()  # Required by schema
-            brand = random.choice(BRANDS)
-            geographic_region = random.choice(valid_regions)  # Renamed per schema
+            brand = self._rng_categorical.choice(BRANDS)
+            geographic_region = self._rng_categorical.choice(valid_regions)  # Renamed per schema
 
             # Generate patient features
-            days_on_therapy = np.random.randint(30, 365)
-            hcp_visits = np.random.randint(1, 20)
-            prior_treatments = np.random.randint(0, 5)
-            age_group = random.choice(["<50", "50-65", ">65"])
-            data_quality_score = np.random.uniform(0.5, 1.0)
+            days_on_therapy = self._np_rng.randint(30, 365)
+            hcp_visits = self._np_rng.randint(1, 20)
+            prior_treatments = self._np_rng.randint(0, 5)
+            age_group = self._rng_categorical.choice(["<50", "50-65", ">65"])
+            data_quality_score = self._np_rng.uniform(0.5, 1.0)
 
             # Generate discontinuation flag with correlation to features
             # Higher risk with: fewer hcp_visits, more prior treatments, shorter therapy
@@ -664,17 +689,17 @@ class SampleDataGenerator:
                     + extra_signal
                 )
             )
-            noise = np.random.normal(0, noise_sd * max(scale, 0.05))
+            noise = self._np_rng.normal(0, noise_sd * max(scale, 0.05))
             min_floor = min(0.05, max(positive_rate * 0.5, 0.001))
             risk_score = max(min_floor, min(0.95, risk_score + noise))
-            discontinuation_flag = 1 if np.random.random() < risk_score else 0
+            discontinuation_flag = 1 if self._np_rng.random() < risk_score else 0
 
             # Map discontinuation to valid journey status
             # completed = successfully finished, stable = ongoing well
             if discontinuation_flag:
                 journey_status = "transitioning"  # About to discontinue
             else:
-                journey_status = random.choice(["active", "stable", "completed"])
+                journey_status = self._rng_categorical.choice(["active", "stable", "completed"])
 
             journey_start = self._random_date(start, end)
             journey_end = (
