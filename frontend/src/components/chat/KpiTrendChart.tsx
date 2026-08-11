@@ -200,7 +200,11 @@ export function KpiTrendChart({ kpiId, title, data, segmented, loading }: KpiTre
             {heading}
           </div>
           <p className="mt-1">
-            No historical series available for “{kpiId}”. (Point-in-time KPIs have no monthly history.)
+            {data.region
+              ? // A region miss needs its own explanation — the KPI may well have
+                // global history, it just has no series for THIS scope (#1536).
+                `No ${data.region} series available for “${kpiId}” — only KPIs with a region axis carry region-scoped history.`
+              : `No historical series available for “${kpiId}”. (Point-in-time KPIs have no monthly history.)`}
           </p>
         </CardContent>
       </Card>
