@@ -236,6 +236,33 @@ const compareBrandPoints: Record<string, { metric_date: string; value: number }[
   Remibrutinib: [{ metric_date: '2026-06-01', value: 300 }],
 };
 
+// Region-axis coverage (#1536): the default KPI carries region scopes in the
+// coverage lattice; every other KPI stays region-less.
+function mockRegionCoverage() {
+  const roiScopes = [
+    { brand: '', region: '', points: 3, first_date: '2026-04-01', last_date: '2026-06-01' },
+    {
+      brand: '',
+      region: 'northeast',
+      points: 3,
+      first_date: '2026-04-01',
+      last_date: '2026-06-01',
+    },
+    { brand: '', region: 'south', points: 3, first_date: '2026-04-01', last_date: '2026-06-01' },
+  ];
+  const coverage = sampleCoverage.map((entry) =>
+    entry.kpi_id === 'WS3-BI-010' ? { ...entry, scopes: roiScopes } : entry
+  );
+  mockUseKPIHistoryCoverage.mockReturnValue({
+    data: { coverage, total: coverage.length },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+    isRefetching: false,
+  });
+}
+
 function mockComparableHistories() {
   mockUseKPIHistoryMultiBrand.mockImplementation((kpiId: string, brands: string[]) =>
     brands.map((b) => ({
@@ -386,12 +413,14 @@ describe('TimeSeries (KPI-history home)', () => {
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
 
-    // The multi-brand hook is fed every named brand scope from coverage.
+    // The multi-brand hook is fed every named brand scope from coverage,
+    // in the all-regions scope ('' — the third arg, #1536).
     await waitFor(() => {
       const calls = mockUseKPIHistoryMultiBrand.mock.calls;
       expect(calls[calls.length - 1]).toEqual([
         'WS3-BI-007',
         ['Fabhalta', 'Kisqali', 'Remibrutinib'],
+        '',
       ]);
     });
 
@@ -413,6 +442,58 @@ describe('TimeSeries (KPI-history home)', () => {
     expect(screen.getByText('Data Points')).toBeInTheDocument();
     expect(screen.getByText('Current KPI Status')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: /^brand$/i })).not.toBeDisabled();
+  });
+
+  it('region selector is absent when coverage has no region scopes', () => {
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // Default sampleCoverage carries no scope lattice -> no region combobox.
+    expect(screen.queryByRole('combobox', { name: /^region$/i })).not.toBeInTheDocument();
+  });
+
+  it('region selector offers real region scopes and threads the pick to the hooks', async () => {
+    const user = userEvent.setup();
+    mockRegionCoverage();
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    const regionBox = await screen.findByRole('combobox', { name: /^region$/i });
+    await user.click(regionBox);
+    expect(await screen.findByRole('option', { name: /All Regions/i })).toBeInTheDocument();
+    await user.click(await screen.findByRole('option', { name: 'northeast' }));
+
+    // The (brand, region) scope reaches BOTH the history series and the
+    // point-in-time status card — the card must never mislabel a portfolio
+    // number as a region reading.
+    await waitFor(() => {
+      const calls = mockUseKPIHistory.mock.calls;
+      expect(calls[calls.length - 1]).toEqual(['WS3-BI-010', '', 'northeast']);
+    });
+    const valueCalls = mockUseKPIValue.mock.calls;
+    expect(valueCalls[valueCalls.length - 1]?.[2]).toBe('northeast');
+  });
+
+  it('region scope resets when switching to a KPI without region coverage', async () => {
+    const user = userEvent.setup();
+    mockRegionCoverage();
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    await user.click(await screen.findByRole('combobox', { name: /^region$/i }));
+    await user.click(await screen.findByRole('option', { name: 'south' }));
+    await waitFor(() => {
+      const calls = mockUseKPIHistory.mock.calls;
+      expect(calls[calls.length - 1]?.[2]).toBe('south');
+    });
+
+    await user.click(screen.getByRole('combobox', { name: /^kpi$/i }));
+    await user.click(await screen.findByRole('option', { name: /Alert Yield/ }));
+
+    // WS2-TR-005 has no region scopes: the selector disappears and the
+    // stale region never leaks into the new KPI's queries.
+    await waitFor(() => {
+      const calls = mockUseKPIHistory.mock.calls;
+      expect(calls[calls.length - 1]).toEqual(['WS2-TR-005', '', '']);
+    });
+    expect(screen.queryByRole('combobox', { name: /^region$/i })).not.toBeInTheDocument();
   });
 
   it('compare-mode export carries per-brand rows with absent (not zero) gaps', async () => {

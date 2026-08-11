@@ -37,6 +37,7 @@ from src.api.schemas.kpi import (
     KPIHistoryCoverageResponse,
     KPIHistoryPoint,
     KPIHistoryResponse,
+    KPIHistoryScopeEntry,
     KPIHistorySegmentSeries,
     KPIListResponse,
     KPIMetadataResponse,
@@ -446,16 +447,35 @@ async def get_kpi_history_coverage() -> KPIHistoryCoverageResponse:
         if entry is None:
             entry = KPIHistoryCoverageEntry(kpi_id=kpi_id)
             by_kpi[kpi_id] = entry
-        entry.brands.append(str(row.get("brand") if row.get("brand") is not None else ""))
-        entry.points += int(row.get("points") or 0)
+        brand = str(row.get("brand") if row.get("brand") is not None else "")
+        # Pre-126 view rows carry no region key — they are the region='' axis.
+        region = str(row.get("region") if row.get("region") is not None else "")
+        points = int(row.get("points") or 0)
         first = row.get("first_date")
         last = row.get("last_date")
+        entry.scopes.append(
+            KPIHistoryScopeEntry(
+                brand=brand,
+                region=region,
+                points=points,
+                first_date=str(first) if first else None,
+                last_date=str(last) if last else None,
+            )
+        )
+        if region:
+            # Region-scoped rows surface through `scopes` only: the brand
+            # axis keeps its pre-region meaning (#1536 — folding them in
+            # would duplicate brand entries and inflate point counts).
+            continue
+        entry.brands.append(brand)
+        entry.points += points
         if first and (entry.first_date is None or str(first) < entry.first_date):
             entry.first_date = str(first)
         if last and (entry.last_date is None or str(last) > entry.last_date):
             entry.last_date = str(last)
     for entry in by_kpi.values():
         entry.brands.sort()
+        entry.scopes.sort(key=lambda s: (s.brand, s.region))
     coverage = sorted(by_kpi.values(), key=lambda e: e.kpi_id)
     return KPIHistoryCoverageResponse(coverage=coverage, total=len(coverage))
 

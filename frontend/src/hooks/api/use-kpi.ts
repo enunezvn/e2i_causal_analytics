@@ -244,7 +244,9 @@ export function useKPIHistory(
   options?: Omit<UseQueryOptions<KPIHistoryResponse, Error>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery({
-    queryKey: queryKeys.kpi.history(kpiId, brand ?? ''),
+    // Region is part of the cache key (#1536): two region scopes of the same
+    // KPI+brand are different series and must never share a cache entry.
+    queryKey: queryKeys.kpi.history(kpiId, brand ?? '', region ?? ''),
     queryFn: () => getKPIHistory(kpiId, brand, region),
     staleTime: 10 * 60 * 1000, // 10 minutes — history is stable
     enabled: !!kpiId,
@@ -262,11 +264,17 @@ export function useKPIHistory(
  *
  * @returns query results in the same order as `brands`
  */
-export function useKPIHistoryMultiBrand(kpiId: string, brands: readonly string[]) {
+export function useKPIHistoryMultiBrand(
+  kpiId: string,
+  brands: readonly string[],
+  region?: string
+) {
   return useQueries({
     queries: brands.map((brand) => ({
-      queryKey: queryKeys.kpi.history(kpiId, brand),
-      queryFn: () => getKPIHistory(kpiId, brand),
+      // Same cache keys as the single-brand hook, region included (#1536) —
+      // a region-scoped comparison charts the brand×region series.
+      queryKey: queryKeys.kpi.history(kpiId, brand, region ?? ''),
+      queryFn: () => getKPIHistory(kpiId, brand, region),
       staleTime: 10 * 60 * 1000, // 10 minutes — matches useKPIHistory
       enabled: !!kpiId,
     })),

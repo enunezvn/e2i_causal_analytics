@@ -422,7 +422,22 @@ export interface KPINowcastHistoryResponse {
   points: KPINowcastPoint[];
 }
 
-/** History coverage for one KPI: which scopes have a real series. */
+/** One (brand, region) scope of a KPI's history (migration 126 lattice). */
+export interface KPIHistoryScopeEntry {
+  /** '' = global / all brands. */
+  brand: string;
+  /** '' = all regions. */
+  region: string;
+  points: number;
+  first_date?: string | null;
+  last_date?: string | null;
+}
+
+/** History coverage for one KPI: which scopes have a real series.
+ *
+ * `brands`/`points`/dates describe the BRAND axis (region='' rows only —
+ * unchanged semantics); `scopes` is the full (brand, region) lattice — the
+ * authority on which region series exist per brand (#1536). */
 export interface KPIHistoryCoverageEntry {
   kpi_id: string;
   /** Brand scopes with points; '' = global. Per-brand-only KPIs have no ''. */
@@ -430,6 +445,8 @@ export interface KPIHistoryCoverageEntry {
   points: number;
   first_date?: string | null;
   last_date?: string | null;
+  /** Full (brand, region) scope lattice, sorted by (brand, region). */
+  scopes?: KPIHistoryScopeEntry[];
 }
 
 /** Coverage map for the registry — KPIs absent here have NO history. */

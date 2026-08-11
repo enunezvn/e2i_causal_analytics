@@ -11811,6 +11811,11 @@ export interface components {
         /**
          * KPIHistoryCoverageEntry
          * @description History coverage for one KPI: which scopes have a real series.
+         *
+         *     ``brands``/``points``/``first_date``/``last_date`` describe the BRAND axis
+         *     (region='' rows only — unchanged semantics from before the region axis);
+         *     ``scopes`` is the full (brand, region) lattice, the source of truth for
+         *     which region series exist per brand (#1536).
          */
         KPIHistoryCoverageEntry: {
             /** Kpi Id */
@@ -11822,20 +11827,25 @@ export interface components {
             brands?: string[];
             /**
              * Points
-             * @description Total points across all scopes
+             * @description Total points across brand scopes (region='')
              * @default 0
              */
             points: number;
             /**
              * First Date
-             * @description Earliest metric_date across scopes
+             * @description Earliest metric_date across brand scopes
              */
             first_date?: string | null;
             /**
              * Last Date
-             * @description Latest metric_date across scopes
+             * @description Latest metric_date across brand scopes
              */
             last_date?: string | null;
+            /**
+             * Scopes
+             * @description Full (brand, region) scope lattice, sorted by (brand, region)
+             */
+            scopes?: components["schemas"]["KPIHistoryScopeEntry"][];
         };
         /**
          * KPIHistoryCoverageResponse
@@ -11916,6 +11926,40 @@ export interface components {
             count: number;
             /** Points */
             points?: components["schemas"]["KPIHistoryPoint"][];
+        };
+        /**
+         * KPIHistoryScopeEntry
+         * @description One (brand, region) scope of a KPI's history (migration 126 lattice).
+         */
+        KPIHistoryScopeEntry: {
+            /**
+             * Brand
+             * @description '' = global / all brands
+             * @default
+             */
+            brand: string;
+            /**
+             * Region
+             * @description '' = all regions
+             * @default
+             */
+            region: string;
+            /**
+             * Points
+             * @description Points in this scope
+             * @default 0
+             */
+            points: number;
+            /**
+             * First Date
+             * @description Earliest metric_date in scope
+             */
+            first_date?: string | null;
+            /**
+             * Last Date
+             * @description Latest metric_date in scope
+             */
+            last_date?: string | null;
         };
         /**
          * KPIHistorySegmentSeries

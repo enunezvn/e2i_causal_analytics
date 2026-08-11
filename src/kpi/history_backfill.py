@@ -73,6 +73,19 @@ the cumulative as-of handler (BR-003) emits a point for every month-end at or
 before its sources' frontier, because an as-of reading is complete by
 construction. ``is_synthetic=True`` on every point.
 
+Region axis (#1536): handlers in :data:`REGION_AXIS_KPI_IDS` ALSO emit
+region-scoped series, mirroring the vetted live region variants byte-for-byte
+in semantics (migrations 077/078/113/125): ROI reads
+``business_metrics.region`` directly; the Rx family attributes each event via
+its OWN ``patient_journey_id`` -> ``patient_journeys.geographic_region`` (an
+unlinked event stays global-only, exactly like the live ``IN (...)``
+predicate); conversion + the trigger family use ``patient_id`` MEMBERSHIP (a
+patient with journeys in two regions counts in both, mirroring
+``patient_id IN region_patients``); maturation cutoffs stay anchored to the
+GLOBAL frontier (113's unscoped ``MAX(trigger_timestamp)``). KPIs with no
+live region variant to mirror (MAU/WAU, BR-*) never grow a region axis — a
+region reading the live platform cannot produce would be a fabrication.
+
 Run:  python -m src.kpi.history_backfill           # all registered KPIs
       python -m src.kpi.history_backfill WS3-BI-010 # one KPI
 """
@@ -122,6 +135,27 @@ HANDLER_SOURCES: Dict[str, str] = {
     "BR-003": "patient_journeys+treatment_events.pnh",
     "BR-004": "treatment_events+patient_journeys",
 }
+
+# KPIs whose backfill emits region-scoped series (#1536). Lockstep contract
+# (tests/unit/test_kpi/test_history_region_axis.py): every id here maps to a
+# vetted live region-capable registry variant — 077 (Rx family + conversion),
+# 078/113 (trigger family), 125 (ROI). Never add an id without one.
+REGION_AXIS_KPI_IDS: frozenset = frozenset(
+    {
+        "WS3-BI-010",
+        "WS3-BI-005",
+        "WS3-BI-006",
+        "WS3-BI-007",
+        "WS3-BI-008",
+        "WS3-BI-009",
+        "WS2-TR-001",
+        "WS2-TR-004",
+        "WS2-TR-005",
+        "WS2-TR-006",
+        "WS2-TR-007",
+        "WS2-TR-008",
+    }
+)
 
 # Direction mirror of the live calculators (NOT re-derived from the YAML):
 # trigger_performance.py -> {TR-005, TR-006, TR-007, TR-008};
@@ -246,13 +280,15 @@ async def _fetch_all(
     return out
 
 
-def _point(kpi_meta: Any, brand: str, month: date, value: float) -> Dict[str, Any]:
+def _point(
+    kpi_meta: Any, brand: str, month: date, value: float, region: str = ""
+) -> Dict[str, Any]:
     """Build one kpi_history row dict (metric_date = month start)."""
     kpi_id = str(kpi_meta.id)
     return {
         "kpi_id": kpi_id,
         "brand": brand,
-        "region": "",
+        "region": region,
         "metric_date": month.isoformat(),
         "value": value,
         "status": _status_for(kpi_meta, value, kpi_id in LOWER_IS_BETTER),
@@ -268,7 +304,7 @@ async def _fetch_prescriptions(
     return await _fetch_all(
         client,
         "treatment_events",
-        "patient_id,brand,event_date,sequence_number",
+        "patient_id,brand,event_date,sequence_number,patient_journey_id",
         "treatment_event_id",
         eq_filters={"event_type": "prescription"},
         cache=cache,
@@ -295,11 +331,46 @@ async def _fetch_journeys(client: Any, cache: Optional[Dict[str, Any]]) -> List[
     return await _fetch_all(
         client,
         "patient_journeys",
-        "patient_id,journey_start_date,brand,primary_diagnosis_code",
+        "patient_id,patient_journey_id,journey_start_date,brand,"
+        "primary_diagnosis_code,geographic_region",
         "patient_journey_id",
         cache=cache,
         cache_key="patient_journeys",
     )
+
+
+def _journey_regions(journeys: List[Dict[str, Any]]) -> Dict[Any, str]:
+    """``patient_journey_id`` -> ``geographic_region`` (region-less journeys
+    omitted).
+
+    Backs the Rx-family region attribution: an event whose OWN journey link
+    resolves to a region belongs to that region's series — mirroring migration
+    077's ``patient_journey_id IN (SELECT ... WHERE geographic_region = $n)``.
+    Unlinked events (NULL ``patient_journey_id``) drop from region series only,
+    exactly as the live predicate drops them.
+    """
+    out: Dict[Any, str] = {}
+    for r in journeys:
+        region = r.get("geographic_region")
+        journey_id = r.get("patient_journey_id")
+        if journey_id is not None and region:
+            out[journey_id] = str(region)
+    return out
+
+
+def _patient_regions(journeys: List[Dict[str, Any]]) -> Dict[Any, set]:
+    """``patient_id`` -> set of regions across the patient's journeys.
+
+    MEMBERSHIP semantics (migrations 077 conversion / 078 trigger family:
+    ``patient_id IN region_patients``): a patient with journeys in two regions
+    belongs to BOTH region cohorts — never partitioned to one.
+    """
+    out: Dict[Any, set] = defaultdict(set)
+    for r in journeys:
+        region = r.get("geographic_region")
+        if region:
+            out[r.get("patient_id")].add(str(region))
+    return out
 
 
 def _rx_dated(rows: List[Dict[str, Any]]) -> List[tuple]:
@@ -323,21 +394,26 @@ async def _backfill_roi(
     """WS3-BI-010 ROI <- business_metrics.roi (already a monthly series).
 
     Produces a global (brand='', region='') monthly series = mean(roi) per month,
-    plus a per-brand (brand=X, region='') series = mean(roi) per (brand, month).
-    Mean is over the real business_metrics rows for the group — no synthesis.
+    plus per-brand, per-region and per-(brand, region) series = mean(roi) per
+    group (#1536 — ``business_metrics.region`` is the DIRECT region source the
+    migration-125 scoped headline reads; rows with an empty brand/region simply
+    stay out of that axis). Mean is over the real business_metrics rows for the
+    group — no synthesis.
     """
     result = await (
         client.table("business_metrics")
-        .select("metric_date,brand,roi")
+        .select("metric_date,brand,roi,region")
         .not_.is_("roi", "null")
         .order("metric_date")
         .limit(20000)
         .execute()
     )
     rows = result.data or []
-    # (scope_brand, metric_date) -> [roi, ...]
+    # (scope, metric_date) -> [roi, ...] per axis
     global_acc: Dict[str, List[float]] = defaultdict(list)
     brand_acc: Dict[tuple, List[float]] = defaultdict(list)
+    region_acc: Dict[tuple, List[float]] = defaultdict(list)
+    brand_region_acc: Dict[tuple, List[float]] = defaultdict(list)
     for r in rows:
         d = r.get("metric_date")
         roi = r.get("roi")
@@ -348,15 +424,22 @@ async def _backfill_roi(
         b = r.get("brand")
         if b:
             brand_acc[(b, d)].append(roi)
+        region = r.get("region")
+        if region:
+            region_acc[(region, d)].append(roi)
+            if b:
+                brand_region_acc[(b, region, d)].append(roi)
 
     points: List[Dict[str, Any]] = []
 
-    def _roi_point(brand: str, date_str: str, vals: List[float]) -> Dict[str, Any]:
+    def _roi_point(
+        brand: str, date_str: str, vals: List[float], region: str = ""
+    ) -> Dict[str, Any]:
         value = sum(vals) / len(vals)
         return {
             "kpi_id": kpi_meta.id,
             "brand": brand,
-            "region": "",
+            "region": region,
             "metric_date": date_str,
             "value": value,
             "status": _status_for(kpi_meta, value),
@@ -368,6 +451,10 @@ async def _backfill_roi(
         points.append(_roi_point("", date_str, vals))
     for (brand, date_str), vals in brand_acc.items():
         points.append(_roi_point(brand, date_str, vals))
+    for (region, date_str), vals in region_acc.items():
+        points.append(_roi_point("", date_str, vals, region))
+    for (brand, region, date_str), vals in brand_region_acc.items():
+        points.append(_roi_point(brand, date_str, vals, region))
     return points
 
 
@@ -383,13 +470,19 @@ async def _backfill_trx(
 
     Mirrors ``business_impact_trx`` (COUNT over event_type='prescription' with
     an optional brand filter); the trailing-30-day window becomes the calendar
-    month. Zero-count months inside the covered span are genuine zeros.
+    month. Zero-count months inside the covered span are genuine zeros. Region
+    + brand×region series mirror ``business_impact_trx_region`` (077): the
+    event's own journey link resolves the region.
     """
     dated = _rx_dated(await _fetch_prescriptions(client, cache))
     months = _complete_months([d for d, _ in dated])
+    journey_region = _journey_regions(await _fetch_journeys(client, cache))
     per_month: Dict[date, int] = defaultdict(int)
     per_brand_month: Dict[tuple, int] = defaultdict(int)
+    per_region_month: Dict[tuple, int] = defaultdict(int)
+    per_brand_region_month: Dict[tuple, int] = defaultdict(int)
     brands = set()
+    regions = set()
     for d, r in dated:
         m = _month_start(d)
         per_month[m] += 1
@@ -397,9 +490,32 @@ async def _backfill_trx(
         if b:
             brands.add(b)
             per_brand_month[(b, m)] += 1
+        region = journey_region.get(r.get("patient_journey_id"))
+        if region:
+            regions.add(region)
+            per_region_month[(region, m)] += 1
+            if b:
+                per_brand_region_month[(b, region, m)] += 1
     points = [_point(kpi_meta, "", m, float(per_month.get(m, 0))) for m in months]
     for b in sorted(brands):
         points.extend(_point(kpi_meta, b, m, float(per_brand_month.get((b, m), 0))) for m in months)
+    for region in sorted(regions):
+        points.extend(
+            _point(kpi_meta, "", m, float(per_region_month.get((region, m), 0)), region=region)
+            for m in months
+        )
+    for b in sorted(brands):
+        for region in sorted(regions):
+            points.extend(
+                _point(
+                    kpi_meta,
+                    b,
+                    m,
+                    float(per_brand_region_month.get((b, region, m), 0)),
+                    region=region,
+                )
+                for m in months
+            )
     return points
 
 
@@ -409,26 +525,55 @@ async def _backfill_nrx(
     """WS3-BI-006 NRx: COUNT(prescriptions with sequence_number=1) per month.
 
     Mirrors ``business_impact_nrx`` (sequence_number = 1 + optional brand
-    filter). Global + per-brand, calendar-month window.
+    filter). Global + per-brand + region + brand×region (077 ``_region``
+    idiom), calendar-month window.
     """
     dated = _rx_dated(await _fetch_prescriptions(client, cache))
     months = _complete_months([d for d, _ in dated])
+    journey_region = _journey_regions(await _fetch_journeys(client, cache))
     per_month: Dict[date, int] = defaultdict(int)
     per_brand_month: Dict[tuple, int] = defaultdict(int)
+    per_region_month: Dict[tuple, int] = defaultdict(int)
+    per_brand_region_month: Dict[tuple, int] = defaultdict(int)
     brands = set()
+    regions = set()
     for d, r in dated:
         b = r.get("brand")
         if b:
             brands.add(b)
+        region = journey_region.get(r.get("patient_journey_id"))
+        if region:
+            regions.add(region)
         if r.get("sequence_number") != 1:
             continue
         m = _month_start(d)
         per_month[m] += 1
         if b:
             per_brand_month[(b, m)] += 1
+        if region:
+            per_region_month[(region, m)] += 1
+            if b:
+                per_brand_region_month[(b, region, m)] += 1
     points = [_point(kpi_meta, "", m, float(per_month.get(m, 0))) for m in months]
     for b in sorted(brands):
         points.extend(_point(kpi_meta, b, m, float(per_brand_month.get((b, m), 0))) for m in months)
+    for region in sorted(regions):
+        points.extend(
+            _point(kpi_meta, "", m, float(per_region_month.get((region, m), 0)), region=region)
+            for m in months
+        )
+    for b in sorted(brands):
+        for region in sorted(regions):
+            points.extend(
+                _point(
+                    kpi_meta,
+                    b,
+                    m,
+                    float(per_brand_region_month.get((b, region, m), 0)),
+                    region=region,
+                )
+                for m in months
+            )
     return points
 
 
@@ -441,12 +586,21 @@ async def _backfill_nbrx(
     Mirrors ``business_impact_nbrx``: first_brand = MIN(event_date) per patient
     over the brand-filtered prescriptions, counted by the month the first date
     falls in. Per-brand ONLY — the live calculator fails loud without a brand
-    ("new-to-brand" is undefined globally), so no brand='' rows are written.
+    ("new-to-brand" is undefined globally), so no brand='' rows are written —
+    including on the region axis: brand×region series mirror
+    ``business_impact_nbrx_region`` (077: first date over the brand- AND
+    region-filtered prescriptions), never region-only rows.
     """
     dated = _rx_dated(await _fetch_prescriptions(client, cache))
     months = _complete_months([d for d, _ in dated])
+    journey_region = _journey_regions(await _fetch_journeys(client, cache))
     first_by_brand_patient: Dict[tuple, date] = {}
+    first_by_brand_region_patient: Dict[tuple, date] = {}
+    regions = set()
     for d, r in dated:
+        region = journey_region.get(r.get("patient_journey_id"))
+        if region:
+            regions.add(region)
         b = r.get("brand")
         if not b:
             continue
@@ -454,14 +608,34 @@ async def _backfill_nbrx(
         prev = first_by_brand_patient.get(key)
         if prev is None or d < prev:
             first_by_brand_patient[key] = d
+        if region:
+            rkey = (b, region, r.get("patient_id"))
+            rprev = first_by_brand_region_patient.get(rkey)
+            if rprev is None or d < rprev:
+                first_by_brand_region_patient[rkey] = d
     per_brand_month: Dict[tuple, int] = defaultdict(int)
+    per_brand_region_month: Dict[tuple, int] = defaultdict(int)
     brands = set()
     for (b, _pid), first in first_by_brand_patient.items():
         brands.add(b)
         per_brand_month[(b, _month_start(first))] += 1
+    for (b, region, _pid), first in first_by_brand_region_patient.items():
+        per_brand_region_month[(b, region, _month_start(first))] += 1
     points: List[Dict[str, Any]] = []
     for b in sorted(brands):
         points.extend(_point(kpi_meta, b, m, float(per_brand_month.get((b, m), 0))) for m in months)
+    for b in sorted(brands):
+        for region in sorted(regions):
+            points.extend(
+                _point(
+                    kpi_meta,
+                    b,
+                    m,
+                    float(per_brand_region_month.get((b, region, m), 0)),
+                    region=region,
+                )
+                for m in months
+            )
     return points
 
 
@@ -474,12 +648,20 @@ async def _backfill_trx_share(
     Mirrors ``business_impact_trx_share`` (brand COUNT / windowed category
     COUNT). Per-brand ONLY (the live calculator fails loud without a brand).
     Months with an empty category are skipped, mirroring NULLIF -> NULL.
+    Brand×region series mirror ``business_impact_trx_share_region`` (077):
+    share WITHIN the region — the category denominator is the REGION's
+    prescriptions that month, and empty region-months are skipped the same
+    way. No region-only rows (a brandless share is undefined).
     """
     dated = _rx_dated(await _fetch_prescriptions(client, cache))
     months = _complete_months([d for d, _ in dated])
+    journey_region = _journey_regions(await _fetch_journeys(client, cache))
     per_month: Dict[date, int] = defaultdict(int)
     per_brand_month: Dict[tuple, int] = defaultdict(int)
+    per_region_month: Dict[tuple, int] = defaultdict(int)
+    per_brand_region_month: Dict[tuple, int] = defaultdict(int)
     brands = set()
+    regions = set()
     for d, r in dated:
         m = _month_start(d)
         per_month[m] += 1
@@ -487,6 +669,12 @@ async def _backfill_trx_share(
         if b:
             brands.add(b)
             per_brand_month[(b, m)] += 1
+        region = journey_region.get(r.get("patient_journey_id"))
+        if region:
+            regions.add(region)
+            per_region_month[(region, m)] += 1
+            if b:
+                per_brand_region_month[(b, region, m)] += 1
     points: List[Dict[str, Any]] = []
     for b in sorted(brands):
         for m in months:
@@ -494,6 +682,21 @@ async def _backfill_trx_share(
             if total == 0:
                 continue
             points.append(_point(kpi_meta, b, m, per_brand_month.get((b, m), 0) / total))
+    for b in sorted(brands):
+        for region in sorted(regions):
+            for m in months:
+                total = per_region_month.get((region, m), 0)
+                if total == 0:
+                    continue
+                points.append(
+                    _point(
+                        kpi_meta,
+                        b,
+                        m,
+                        per_brand_region_month.get((b, region, m), 0) / total,
+                        region=region,
+                    )
+                )
     return points
 
 
@@ -507,8 +710,11 @@ async def _backfill_conversion_rate(
     SAME patient has a prescription with trigger_date <= event_date <=
     trigger_date + 30 days. Like the live query, the follow-up window is
     right-censored at the prescription frontier (a trigger near the frontier
-    that has had no time to convert counts as unconverted). Global only —
-    the live query is brand-agnostic.
+    that has had no time to convert counts as unconverted). Brand-agnostic
+    like the live query; region series mirror
+    ``business_impact_conversion_rate_region`` (077): patient MEMBERSHIP
+    scopes the triggers, while the converting prescription stays UNSCOPED —
+    exactly the live join shape.
     """
     triggers = await _fetch_triggers(client, cache)
     rx_by_patient: Dict[Any, List[date]] = defaultdict(list)
@@ -516,10 +722,13 @@ async def _backfill_conversion_rate(
         rx_by_patient[r.get("patient_id")].append(d)
     for dates in rx_by_patient.values():
         dates.sort()
+    patient_regions = _patient_regions(await _fetch_journeys(client, cache))
 
     trig_dates: List[date] = []
     triggered: Dict[date, int] = defaultdict(int)
     converted: Dict[date, int] = defaultdict(int)
+    region_triggered: Dict[tuple, int] = defaultdict(int)
+    region_converted: Dict[tuple, int] = defaultdict(int)
     for t in triggers:
         d = _to_date(t.get("trigger_timestamp"))
         if d is None:
@@ -527,19 +736,33 @@ async def _backfill_conversion_rate(
         trig_dates.append(d)
         m = _month_start(d)
         triggered[m] += 1
+        regions = patient_regions.get(t.get("patient_id"), ())
+        for region in regions:
+            region_triggered[(region, m)] += 1
         rx_dates = rx_by_patient.get(t.get("patient_id"))
         if not rx_dates:
             continue
         i = bisect_left(rx_dates, d)
         if i < len(rx_dates) and rx_dates[i] <= d + timedelta(days=30):
             converted[m] += 1
+            for region in regions:
+                region_converted[(region, m)] += 1
 
+    months = _complete_months(trig_dates)
     points: List[Dict[str, Any]] = []
-    for m in _complete_months(trig_dates):
+    for m in months:
         den = triggered.get(m, 0)
         if den == 0:
             continue
         points.append(_point(kpi_meta, "", m, converted.get(m, 0) / den))
+    for region in sorted({r for r, _ in region_triggered}):
+        for m in months:
+            den = region_triggered.get((region, m), 0)
+            if den == 0:
+                continue
+            points.append(
+                _point(kpi_meta, "", m, region_converted.get((region, m), 0) / den, region=region)
+            )
     return points
 
 
@@ -650,6 +873,13 @@ async def _trigger_monthly_ratio(
     Calendar-completeness (``_complete_months``) still uses ALL dates — a month
     is complete or not regardless of which of its triggers have matured.
 
+    Region series (#1536) mirror the 078/113 ``_region`` variants: patient
+    MEMBERSHIP (``patient_id IN region_patients``) scopes each region's
+    cohort, and the maturation cutoff stays anchored to the GLOBAL trigger
+    frontier (113's unscoped ``MAX(trigger_timestamp)``) — a per-region
+    frontier would shift the matured window per region and stop mirroring the
+    live reading.
+
     Rows with an unparseable ``trigger_timestamp`` are dropped at bucketing
     (they have no month), so every bucketed row carries a valid parsed date.
     """
@@ -661,11 +891,13 @@ async def _trigger_monthly_ratio(
             continue
         dates.append(d)
         by_month[_month_start(d)].append((d, r))
+    patient_regions = _patient_regions(await _fetch_journeys(client, cache))
     cutoff: Optional[date] = None
     if mature_days > 0 and dates:
         cutoff = max(dates) - timedelta(days=mature_days)
+    months = _complete_months(dates)
     points: List[Dict[str, Any]] = []
-    for m in _complete_months(dates):
+    for m in months:
         pairs = by_month.get(m, [])
         if cutoff is not None:
             pairs = [(d, r) for d, r in pairs if d <= cutoff]
@@ -674,6 +906,19 @@ async def _trigger_monthly_ratio(
             continue
         num = sum(1 for _, r in pairs if numerator(r))
         points.append(_point(kpi_meta, "", m, num / den))
+    for region in sorted({r for regs in patient_regions.values() for r in regs}):
+        for m in months:
+            pairs = by_month.get(m, [])
+            if cutoff is not None:
+                pairs = [(d, r) for d, r in pairs if d <= cutoff]
+            pairs = [
+                (d, r) for d, r in pairs if region in patient_regions.get(r.get("patient_id"), ())
+            ]
+            den = sum(1 for _, r in pairs if denominator(r))
+            if den == 0:
+                continue
+            num = sum(1 for _, r in pairs if numerator(r))
+            points.append(_point(kpi_meta, "", m, num / den, region=region))
     return points
 
 
@@ -764,9 +1009,13 @@ async def _backfill_tr007_lead_time(
 
     Mirrors ``trigger_performance_lead_time`` — PERCENTILE_CONT(0.5) over
     non-null lead_time_days; statistics.median matches (mean of the middle
-    two on even n). Months with no non-null values are skipped.
+    two on even n). Months with no non-null values are skipped. Region series
+    mirror ``trigger_performance_lead_time_region`` (078): the median over the
+    region cohort's triggers (patient membership).
     """
     by_month: Dict[date, List[float]] = defaultdict(list)
+    by_region_month: Dict[tuple, List[float]] = defaultdict(list)
+    patient_regions = _patient_regions(await _fetch_journeys(client, cache))
     dates: List[date] = []
     for r in await _fetch_triggers(client, cache):
         d = _to_date(r.get("trigger_timestamp"))
@@ -775,13 +1024,23 @@ async def _backfill_tr007_lead_time(
         dates.append(d)
         lead = r.get("lead_time_days")
         if lead is not None:
-            by_month[_month_start(d)].append(float(lead))
+            m = _month_start(d)
+            by_month[m].append(float(lead))
+            for region in patient_regions.get(r.get("patient_id"), ()):
+                by_region_month[(region, m)].append(float(lead))
+    months = _complete_months(dates)
     points: List[Dict[str, Any]] = []
-    for m in _complete_months(dates):
+    for m in months:
         vals = by_month.get(m)
         if not vals:
             continue
         points.append(_point(kpi_meta, "", m, float(statistics.median(vals))))
+    for region in sorted({r for r, _ in by_region_month}):
+        for m in months:
+            vals = by_region_month.get((region, m))
+            if not vals:
+                continue
+            points.append(_point(kpi_meta, "", m, float(statistics.median(vals)), region=region))
     return points
 
 
