@@ -48,6 +48,7 @@ def load_region_vocabulary() -> tuple[tuple[str, ...], dict[str, str]]:
     spec.loader.exec_module(module)
     return module.REGION_ENUM_LABELS, dict(module.REGION_LABEL_BY_ALIAS)
 
+
 WORKSTREAM_KEYS = [
     "ws1_data_quality",
     "ws1_model_performance",
@@ -123,7 +124,8 @@ def alias_forms(kpi_id: str, yaml_key: str, name: str) -> list[str]:
     """
 
     def norm(value: str) -> str:
-        out, prev_sep = [], False
+        out: list[str] = []
+        prev_sep = False
         for ch in value.lower():
             if ch in " -_/":
                 prev_sep = True
@@ -176,9 +178,7 @@ def main() -> None:
     for entry in entries:
         for alias in entry["aliases"]:
             if alias in seen and seen[alias] != entry["id"]:
-                raise SystemExit(
-                    f"Ambiguous alias {alias!r}: {seen[alias]} and {entry['id']}"
-                )
+                raise SystemExit(f"Ambiguous alias {alias!r}: {seen[alias]} and {entry['id']}")
             seen[alias] = entry["id"]
 
     region_labels, region_alias_map = load_region_vocabulary()
