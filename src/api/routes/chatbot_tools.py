@@ -1871,6 +1871,8 @@ async def _window_coverage_probe(
     window: Any,
     calculator: Any,
     context: Dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     """Disclose intra-window data-density asymmetry for volume KPIs.
 
@@ -1884,6 +1886,13 @@ async def _window_coverage_probe(
     ``coverage_warning`` when that share exceeds 2x the uniform expectation.
     Probe failures degrade silently — the main figure must never be blocked or
     altered by the probe.
+
+    An in-progress calendar window ("this quarter"/"this year" from #1546, but
+    equally an explicit "Q3 2026", bare "2026", or a dict spec) carries a
+    future ``window.end``; unclamped, the trailing sub-window lay entirely in
+    the future, so share was 0 and the warning silently suppressed (PR #1554
+    codex iter-1). Both the trailing window and the 45-day gate therefore use
+    the ELAPSED span, clamped to ``now``.
     """
     try:
         if window is None or kpi.id not in _VOLUME_KPI_IDS:
@@ -1893,13 +1902,16 @@ async def _window_coverage_probe(
         window_value = getattr(result, "value", None)
         if not isinstance(window_value, (int, float)) or window_value <= 0:
             return None
-        window_days = (window.end - window.start).days
+        if now is None:
+            now = datetime.now(timezone.utc)
+        effective_end = min(window.end, now)
+        window_days = (effective_end - window.start).days
         if window_days <= _COVERAGE_MIN_WINDOW_DAYS:
             return None
 
         trailing_window = {
-            "start": (window.end - timedelta(days=30)).isoformat(),
-            "end": window.end.isoformat(),
+            "start": (effective_end - timedelta(days=30)).isoformat(),
+            "end": effective_end.isoformat(),
         }
         trailing_result = await asyncio.to_thread(
             calculator.calculate, kpi.id, context={**context, "window": trailing_window}

@@ -19,12 +19,15 @@ uniform expectation — i.e., the window figure is dominated by its most recent
 30 days and must not be treated as a baseline.
 """
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.api.routes.chatbot_tools import kpi_calculate_tool
+from src.api.routes.chatbot_tools import _window_coverage_probe, kpi_calculate_tool
 from src.kpi.models import KPIResult, KPIStatus
+from src.services.time_window import Window
 
 NINETY_DAY_WINDOW = "2026-04-08 to 2026-07-07"
 
@@ -153,3 +156,95 @@ async def test_zero_window_value_skips_shares():
         )
     assert resp["success"] is True
     assert "window_coverage" not in resp
+
+
+# --- Future-end windows (PR #1554 codex iter-1): an in-progress calendar
+# --- period ("this quarter"/"this year" from #1546, but equally explicit
+# --- "Q3 2026", bare "2026", or a dict spec on main) carries a future
+# --- ``window.end``. Unclamped, the trailing-30d sub-window lies entirely in
+# --- the future -> trailing_value 0 -> share 0 -> the coverage warning is
+# --- silently SUPPRESSED for exactly the windows users most ask about.
+
+
+def _probe_kpi(kpi_id: str = "WS3-BI-005") -> SimpleNamespace:
+    return SimpleNamespace(id=kpi_id)
+
+
+def _probe_calculator(trailing_value: float):
+    calc = MagicMock()
+    calc.calculate = MagicMock(
+        side_effect=lambda kpi_id_arg, context=None, **_: _result(kpi_id_arg, trailing_value)
+    )
+    return calc
+
+
+NOW = datetime(2026, 8, 11, tzinfo=timezone.utc)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_future_end_window_probes_elapsed_tail():
+    """'this year' asked on 2026-08-11: end is 2027-01-01, but the trailing
+    probe must cover the last 30 ELAPSED days (2026-07-12 .. 2026-08-11) and
+    window_days must be the 222 elapsed days, not the 365 nominal ones."""
+    window = Window(
+        start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        end=datetime(2027, 1, 1, tzinfo=timezone.utc),
+        kind="absolute",
+        label="2026",
+    )
+    calc = _probe_calculator(trailing_value=15239.0)
+    cov = await _window_coverage_probe(
+        _probe_kpi(), _result("WS3-BI-005", 15767.0), window, calc, {}, now=NOW
+    )
+    assert cov is not None
+    assert cov["window_days"] == 222
+    assert cov["trailing_30d_value"] == 15239.0
+    assert cov["uniform_expected_share"] == pytest.approx(30 / 222, abs=0.001)
+    # 96.7% of the total in the elapsed tail >> 2x uniform -> warning restored.
+    assert "coverage_warning" in cov
+    probed = calc.calculate.call_args.kwargs["context"]["window"]
+    assert probed["start"] == "2026-07-12T00:00:00+00:00"
+    assert probed["end"] == "2026-08-11T00:00:00+00:00"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_future_end_short_elapsed_skips_probe():
+    """'this quarter' 41 elapsed days in: the 45-day gate must apply to the
+    ELAPSED span (41), not the 92-day nominal span — no probe at all."""
+    window = Window(
+        start=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        end=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        kind="absolute",
+        label="Q3 2026",
+    )
+    calc = _probe_calculator(trailing_value=0.0)
+    cov = await _window_coverage_probe(
+        _probe_kpi(), _result("WS3-BI-005", 9401.0), window, calc, {}, now=NOW
+    )
+    assert cov is None
+    assert calc.calculate.call_count == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_past_window_probe_unchanged_by_clamp():
+    """A window that already ended is untouched: clamping to a later ``now``
+    must leave days and trailing dates byte-identical to the pre-clamp math."""
+    window = Window(
+        start=datetime(2026, 4, 8, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 7, tzinfo=timezone.utc),
+        kind="absolute",
+        label="2026-04-08 to 2026-07-07",
+    )
+    calc = _probe_calculator(trailing_value=15239.0)
+    cov = await _window_coverage_probe(
+        _probe_kpi(), _result("WS3-BI-005", 15767.0), window, calc, {}, now=NOW
+    )
+    assert cov is not None
+    assert cov["window_days"] == 90
+    assert "coverage_warning" in cov
+    probed = calc.calculate.call_args.kwargs["context"]["window"]
+    assert probed["start"] == "2026-06-07T00:00:00+00:00"
+    assert probed["end"] == "2026-07-07T00:00:00+00:00"
