@@ -120,24 +120,89 @@ class TestLegitimateStreamsUntouched:
 
 
 class TestEvalTurn26Shape:
-    async def test_composer_run_yields_prose_only(self):
-        """Replay the 2.6 event shape: decomposer blob (tools) + planner blob
-        (tools) + synthesized prose (synthesize). Delivered text must be the
-        prose alone — no JSON blobs, no truncated fragment."""
+    async def test_composer_run_yields_one_prose_lifecycle(self):
+        """Replay the 2.6 event shape INCLUDING the on_chat_model_end events:
+        decomposer blob (tools) + end, planner blob (tools) + end, synthesized
+        prose (synthesize) + end. The delivered stream must be exactly ONE
+        paired TEXT_MESSAGE_START/END lifecycle with the prose in between —
+        no JSON deltas, no extra lifecycles from the suppressed tool streams
+        (this pins the "no lifecycle corruption" claim)."""
         agent = _bare_agent()
         prose = "The composer could not complete planning; here is the grounded view."
-        delivered: List[str] = []
+        emitted: List[Any] = []
         for ev in (
             _stream_event("tools", '{\n  "reasoning": "The query asks for..."', "lc_run--dec"),
+            _end_event("tools"),
             _stream_event("tools", '{\n  "reasoning": "sq_1 and sq_2 are DES', "lc_run--plan"),
+            _end_event("tools"),
             _stream_event("synthesize", prose, "lc_run--synth"),
+            _end_event("synthesize"),
         ):
-            for out in await _collect(agent, ev):
-                if "TEXT_MESSAGE_CONTENT" in str(getattr(out, "type", "")):
-                    delivered.append(out.delta)
-        text = "".join(delivered)
+            emitted.extend(await _collect(agent, ev))
+
+        types = [str(getattr(e, "type", "")) for e in emitted]
+        starts = [e for e, t in zip(emitted, types, strict=True) if "TEXT_MESSAGE_START" in t]
+        contents = [e for e, t in zip(emitted, types, strict=True) if "TEXT_MESSAGE_CONTENT" in t]
+        ends = [e for e, t in zip(emitted, types, strict=True) if "TEXT_MESSAGE_END" in t]
+
+        # Exactly one lifecycle — the synthesize stream. The unpatched library
+        # produces THREE (one per model call), the first two carrying JSON.
+        assert len(starts) == 1, types
+        assert len(ends) == 1, types
+        assert [starts[0].message_id, ends[0].message_id] == ["lc_run--synth", "lc_run--synth"]
+
+        # Pairing/order: START, then all CONTENT, then END.
+        i_start = types.index(next(t for t in types if "TEXT_MESSAGE_START" in t))
+        i_end = types.index(next(t for t in types if "TEXT_MESSAGE_END" in t))
+        i_contents = [i for i, t in enumerate(types) if "TEXT_MESSAGE_CONTENT" in t]
+        assert i_contents and i_start < min(i_contents) and max(i_contents) < i_end, types
+
+        text = "".join(c.delta for c in contents)
         assert text == prose
         assert '"reasoning"' not in text
+        assert all(c.message_id == "lc_run--synth" for c in contents)
+
+        # And the ended lifecycle left clean bookkeeping behind.
+        assert agent.messages_in_process.get("run-1") is None
+
+
+class TestDispatcherCoupling:
+    """The filter only works while the library dispatches events through the
+    overridden method name. Pin that coupling so a future ag_ui_langgraph /
+    copilotkit upgrade that renames the dispatcher fails HERE (loudly) instead
+    of silently turning the override into dead code and resurrecting the leak.
+    """
+
+    def test_override_is_defined_on_our_subclass(self):
+        """Removing the override (or renaming it away from the dispatcher's
+        method name) must fail this pin."""
+        assert "_handle_single_event" in LangGraphAgent.__dict__
+        assert callable(LangGraphAgent.__dict__["_handle_single_event"])
+
+    def test_base_chain_defines_the_overridden_method(self):
+        """Every base up the chain that we delegate through must still define
+        ``_handle_single_event`` — i.e. our method genuinely OVERRIDES an
+        inherited implementation rather than dangling on its own."""
+        bases_defining = [
+            klass
+            for klass in LangGraphAgent.__mro__[1:]
+            if "_handle_single_event" in klass.__dict__
+        ]
+        assert bases_defining, "no base class defines _handle_single_event (library renamed it?)"
+        inherited = bases_defining[0].__dict__["_handle_single_event"]
+        assert callable(inherited)
+        assert LangGraphAgent.__dict__["_handle_single_event"] is not inherited
+
+    def test_library_run_loop_still_dispatches_via_the_overridden_name(self):
+        """The installed ag_ui_langgraph run loop dispatches every stream event
+        via ``self._handle_single_event(...)`` (agent.py:218 at pin time) —
+        that dynamic ``self.`` dispatch is what makes our override effective.
+        If an upgrade renames the call site, this pin fails."""
+        import inspect
+
+        import ag_ui_langgraph.agent as _agui_agent_module
+
+        assert "self._handle_single_event(" in inspect.getsource(_agui_agent_module)
 
 
 class TestGraphCoupling:
