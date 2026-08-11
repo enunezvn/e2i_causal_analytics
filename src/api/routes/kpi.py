@@ -215,6 +215,12 @@ def _result_to_response(result: Any) -> KPIResultResponse:
         cache_expires_at=result.cache_expires_at,
         error=result.error,
         data_source=data_source,
+        # Region provenance (#1538): consumers caption with the region ONLY
+        # when region_status == "applied" — every other calculator keeps its
+        # global/portfolio value under a region ask.
+        region_requested=getattr(result, "region_requested", None),
+        region_applied=getattr(result, "region_applied", None),
+        region_status=getattr(result, "region_status", "default"),
         causal_library_used=causal_lib,
         confidence_interval=ci,
         p_value=result.p_value,

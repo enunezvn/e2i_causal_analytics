@@ -200,6 +200,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         therapy_line: int | str | None = None,
         biologic: str | None = None,
         ige_tier: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, list[Any]]:
         """Compose (query_id, positional params) for a windowable KPI.
 
@@ -257,10 +258,17 @@ class BusinessImpactCalculator(KPICalculatorBase):
             )
         if window is None:
             if region:
+                # #1538 region-provenance marker: set at the exact decision
+                # point a region variant is selected (axis branches above
+                # DROP the region — no marker, so the stamp says so).
+                if context is not None:
+                    context["_region_routed"] = True
                 return region_query_id(base_query_id), [brand, region]
             return base_query_id, [brand]
         qid = windowed_query_id(base_query_id, region=bool(region))
         if region:
+            if context is not None:
+                context["_region_routed"] = True
             return qid, [brand, region, window["start"], window["end"]]
         return qid, [brand, window["start"], window["end"]]
 
@@ -356,6 +364,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             therapy_line=context.get("therapy_line"),
             biologic=context.get("biologic"),
             ige_tier=context.get("ige_tier"),
+            context=context,
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -384,6 +393,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             therapy_line=context.get("therapy_line"),
             biologic=context.get("biologic"),
             ige_tier=context.get("ige_tier"),
+            context=context,
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -415,6 +425,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             therapy_line=context.get("therapy_line"),
             biologic=context.get("biologic"),
             ige_tier=context.get("ige_tier"),
+            context=context,
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -467,6 +478,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             therapy_line=context.get("therapy_line"),
             biologic=context.get("biologic"),
             ige_tier=context.get("ige_tier"),
+            context=context,
         )
         result = self._execute_query(query_id, params)
         self._stash_data_through(context, result)
@@ -545,6 +557,8 @@ class BusinessImpactCalculator(KPICalculatorBase):
                     "conversion rate (the region variant predates the brand-"
                     "scoped reads and takes region only)."
                 )
+            # #1538 region-provenance marker (see _stamp_region).
+            context["_region_routed"] = True
             query_id, params = self._region_variant(base), [region]
         elif brand:
             query_id, params = brand_scoped_query_id(base), [brand]
@@ -584,6 +598,11 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         brand = context.get("brand")
         region = context.get("region")
+        if region:
+            # #1538 region-provenance marker: the scoped read (migration 125)
+            # binds region whenever one is supplied; the no-rows case under a
+            # scope raises below (error read before provenance).
+            context["_region_routed"] = True
         # Try business_metrics first ([None, None] is value-identical to the
         # legacy 0-param query — live-tested equivalence invariant).
         result = self._execute_query("business_impact_roi_business_metrics_scoped", [brand, region])

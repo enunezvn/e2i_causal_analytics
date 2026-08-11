@@ -45,6 +45,8 @@ def test_kpi_result_to_response_value_badges_synthetic():
         "data_source": "synthetic",
         "brand": "Kisqali",
         "region": None,
+        # #1538: no region requested -> provenance defaults.
+        "region_status": "default",
         # No custom window requested -> engine default; provenance reflects that.
         "window_requested": None,
         "window_applied": None,
@@ -185,11 +187,17 @@ def test_kpi_result_to_response_echoes_brand_and_window_provenance():
         window_requested=applied,
         window_applied=applied,
         window_status="applied",
+        # #1538: the region echo is provenance-based — the engine attests the
+        # scoped variant ran, and the echo carries the APPLIED enum label
+        # (lowercase), not the caller's display-form argument.
+        region_requested="west",
+        region_applied="west",
+        region_status="applied",
     )
-    resp = _kpi_result_to_response(kpi, result, brand="Kisqali", region="West")
+    resp = _kpi_result_to_response(kpi, result, brand="Kisqali", region="west")
     assert resp["success"] is True
     assert resp["brand"] == "Kisqali"
-    assert resp["region"] == "West"
+    assert resp["region"] == "west"
     assert resp["window_status"] == "applied"
     assert resp["window_applied"] == applied
     assert resp["window_requested"] == applied
@@ -289,7 +297,17 @@ async def test_kpi_calculate_tool_passes_region_into_context(monkeypatch):
     class _FakeCalc:
         def calculate(self, kpi_id, context=None):
             captured["context"] = context
-            return KPIResult(kpi_id=kpi_id, value=7.0, status=KPIStatus.UNKNOWN)
+            # #1538: mirror the real engine, which stamps region provenance
+            # when the routing seam selects a region variant — the tool's echo
+            # is provenance-based, not a blind copy of the argument.
+            return KPIResult(
+                kpi_id=kpi_id,
+                value=7.0,
+                status=KPIStatus.UNKNOWN,
+                region_requested="northeast",
+                region_applied="northeast",
+                region_status="applied",
+            )
 
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
@@ -301,6 +319,7 @@ async def test_kpi_calculate_tool_passes_region_into_context(monkeypatch):
     assert ctx["region"] == "northeast"
     assert "territory" not in ctx  # the dead key must be gone
     assert resp["region"] == "northeast"
+    assert resp["region_status"] == "applied"
 
 
 @pytest.mark.unit

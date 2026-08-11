@@ -1643,7 +1643,18 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description="Brand filter (e.g. Remibrutinib, Fabhalta, Kisqali), case-insensitive.",
     )
-    region: Optional[str] = Field(default=None, description="Optional region/territory filter.")
+    region: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional geographic region filter. US census regions: northeast, "
+            "south, midwest, west (case-insensitive; synonyms like 'north "
+            "east', 'NE', 'new england', 'pacific' resolve to a label; any "
+            "other value errors honestly). The response's region_status tells "
+            "you whether the figure is region-scoped: only 'applied' means it "
+            "is; 'not_applicable' means this KPI has no region variant and "
+            "the value is global — NEVER present it as region-specific."
+        ),
+    )
     segment: Optional[str] = Field(
         default=None,
         description=(
@@ -1754,8 +1765,12 @@ def _kpi_result_to_response(
     synthetic-gold substrate so the chatbot/FE badges the figure honestly rather
     than passing it off as real-world data.
 
-    Echoes the ``brand``/``region`` the figure was computed for so the synthesizer
-    can name them instead of re-asking. Copies the engine's window provenance
+    Echoes the ``brand`` the figure was computed for so the synthesizer can
+    name it instead of re-asking. ``region`` is echoed from the engine's REGION
+    PROVENANCE (#1538): it carries the region ONLY when ``region_status ==
+    "applied"`` (a region-scoped query variant computed the value); when the
+    engine reports ``not_applicable`` the value is global — ``region`` is None
+    and ``region_note`` says so explicitly. Copies the engine's window provenance
     (``window_requested``/``window_applied``/``window_status``) so the chatbot can
     state exactly which period the figure covers. The static ``reporting_window``
     note is included ONLY when ``window_status == 'default'`` (no custom window was
@@ -1780,6 +1795,13 @@ def _kpi_result_to_response(
     metadata = getattr(result, "metadata", None) or {}
     include_synthetic = bool(metadata.get("include_synthetic"))
     window_status = getattr(result, "window_status", "default")
+    # Region echo is PROVENANCE-BASED (#1538), not the caller's argument: only
+    # a fixed set of calculators route to region-scoped variants; echoing the
+    # requested region beside a value the engine computed globally is the
+    # #1534 defect class (a scope the response names but the SQL never
+    # applied), and the synthesizer would caption the figure with it.
+    region_status = getattr(result, "region_status", "default")
+    region_applied = getattr(result, "region_applied", None)
     response: Dict[str, Any] = {
         "success": True,
         "query_type": "kpi_calculate",
@@ -1789,11 +1811,19 @@ def _kpi_result_to_response(
         "status": result.status,
         "data_source": "synthetic" if include_synthetic else "database",
         "brand": brand,
-        "region": region,
+        "region": region_applied if region_status == "applied" else None,
+        "region_status": region_status,
         "window_requested": getattr(result, "window_requested", None),
         "window_applied": getattr(result, "window_applied", None),
         "window_status": window_status,
     }
+    if region_status == "not_applicable":
+        requested_region = getattr(result, "region_requested", None) or region
+        response["region_note"] = (
+            f"the region filter ({requested_region}) was NOT applied — "
+            f"{kpi.name} has no region-scoped variant, so this value is "
+            "global/portfolio-level. Do not present it as region-specific."
+        )
     data_through = (metadata.get("context") or {}).get("data_through")
     if data_through is not None:
         response["data_through"] = data_through
@@ -1963,7 +1993,12 @@ async def kpi_calculate_tool(
     Args:
         kpi_name: the KPI to compute (resolved against the defined KPI registry).
         brand: optional brand filter (case-insensitive).
-        region: optional region/territory filter.
+        region: optional geographic region filter (US census regions:
+            northeast/south/midwest/west; synonyms resolve, anything else
+            errors with the known-label list). The response's
+            ``region_status`` says whether the figure is actually
+            region-scoped ("applied") or global ("not_applicable" — never
+            present those as region-specific).
         segment: optional severity tier filter (low_severity, medium_severity,
             high_severity); mutually exclusive with region/therapy_line.
         therapy_line: optional line-of-therapy filter ('0'-'3'); mutually
@@ -1982,8 +2017,9 @@ async def kpi_calculate_tool(
 
     Returns:
         Dict with success, kpi_id, kpi_name, value, status, data_source, brand,
-        region, the window provenance fields, data_through (the as-of date the
-        default window ends at, when the engine reports one), and (when no
+        region + region_status (+ region_note when a requested region was not
+        applied), the window provenance fields, data_through (the as-of date
+        the default window ends at, when the engine reports one), and (when no
         custom window applies) reporting_window.
 
     STATUS SEMANTICS: "good"/"warning"/"critical" = value vs the KPI's defined
@@ -2053,6 +2089,26 @@ async def kpi_calculate_tool(
                 ),
             }
         brand = normalized_brand
+
+    # Region gets the same treatment (#1538, the brand precedent above): the
+    # input schema promises synonym tolerance ('North East'/'NE'/'new
+    # england'), and an unmappable value can never match a row — fail fast
+    # with the known-label list before touching any calculator/DB instead of
+    # returning a misleading 0/None under a junk region.
+    if region:
+        normalized_region = _normalize_region(region)
+        if normalized_region is None:
+            return {
+                "success": False,
+                "query_type": "kpi_calculate",
+                "kpi_id": kpi.id,
+                "kpi_name": kpi.name,
+                "error": (
+                    f"region {region!r} does not match any known region "
+                    f"({', '.join(REGION_ENUM_LABELS)})"
+                ),
+            }
+        region = normalized_region
 
     context: Dict[str, Any] = {}
     if brand:
