@@ -781,13 +781,23 @@ export const KPIListResponseWireSchema = z.object({
   causal_library: z.string().nullable().optional(),
 });
 
-/** Faithful mirror of `KPIHistoryCoverageEntry` (types/kpi.ts). */
+/** Faithful mirror of `KPIHistoryScopeEntry` (types/kpi.ts) — one (brand, region) scope of the #1536 lattice. */
+export const KPIHistoryScopeEntryWireSchema = z.object({
+  brand: z.string(),
+  region: z.string(),
+  points: z.number().int().nonnegative(),
+  first_date: z.string().nullable().optional(),
+  last_date: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `KPIHistoryCoverageEntry` (types/kpi.ts). `scopes` optional: pre-#1536 backends omit it. */
 export const KPIHistoryCoverageEntryWireSchema = z.object({
   kpi_id: z.string(),
   brands: z.array(z.string()),
   points: z.number().int().nonnegative(),
   first_date: z.string().nullable().optional(),
   last_date: z.string().nullable().optional(),
+  scopes: z.array(KPIHistoryScopeEntryWireSchema).optional(),
 });
 
 /** Faithful mirror of `KPIHistoryCoverageResponse` (types/kpi.ts). */

@@ -284,6 +284,58 @@ describe('TimeSeries nowcast (backlog #45 PR-C)', () => {
     });
   });
 
+  it('with a region selected the fetch is gated off and the toggle says why (#1536)', async () => {
+    const user = userEvent.setup();
+    mockNowcast(NOWCAST_OK);
+    // TRx grows region scopes in coverage — the region selector appears.
+    mockUseKPIHistoryCoverage.mockReturnValue(
+      queryResult({
+        coverage: [
+          coverage[0],
+          {
+            ...coverage[1],
+            scopes: [
+              {
+                brand: '',
+                region: '',
+                points: 7,
+                first_date: '2026-01-01',
+                last_date: '2026-07-01',
+              },
+              {
+                brand: '',
+                region: 'northeast',
+                points: 7,
+                first_date: '2026-01-01',
+                last_date: '2026-07-01',
+              },
+            ],
+          },
+        ],
+        total: 2,
+      })
+    );
+    render(<TimeSeries />, { wrapper: createWrapper() });
+    await selectTRx(user);
+
+    await user.click(await screen.findByRole('combobox', { name: /^region$/i }));
+    await user.click(await screen.findByRole('option', { name: 'northeast' }));
+
+    // The nowcast endpoint has no region dimension: the fetch gates off...
+    await waitFor(() => {
+      const calls = mockUseKPIHistoryNowcast.mock.calls.filter(
+        (c: unknown[]) => c[0] === 'WS3-BI-005'
+      );
+      expect(
+        (calls[calls.length - 1][2] as { enabled?: boolean } | undefined)?.enabled
+      ).toBe(false);
+    });
+    // ...and the affordance stays visible but disabled with the reason —
+    // never silently absent, never a mislabeled portfolio overlay.
+    expect(screen.getByRole('button', { name: /show nowcast/i })).toBeDisabled();
+    expect(screen.getByText(/no region dimension/i)).toBeInTheDocument();
+  });
+
   // ===========================================================================
   // (a) provisional tail — default view
   // ===========================================================================

@@ -460,17 +460,41 @@ class KPIHistoryPoint(BaseModel):
     )
 
 
+class KPIHistoryScopeEntry(BaseModel):
+    """One (brand, region) scope of a KPI's history (migration 126 lattice)."""
+
+    brand: str = Field("", description="'' = global / all brands")
+    region: str = Field("", description="'' = all regions")
+    points: int = Field(default=0, description="Points in this scope")
+    first_date: str | None = Field(default=None, description="Earliest metric_date in scope")
+    last_date: str | None = Field(default=None, description="Latest metric_date in scope")
+
+
 class KPIHistoryCoverageEntry(BaseModel):
-    """History coverage for one KPI: which scopes have a real series."""
+    """History coverage for one KPI: which scopes have a real series.
+
+    ``brands``/``points``/``first_date``/``last_date`` describe the BRAND axis
+    (region='' rows only — unchanged semantics from before the region axis);
+    ``scopes`` is the full (brand, region) lattice, the source of truth for
+    which region series exist per brand (#1536).
+    """
 
     kpi_id: str
     brands: list[str] = Field(
         default_factory=list,
         description="Brand scopes with points; '' = global. Per-brand-only KPIs have no ''.",
     )
-    points: int = Field(default=0, description="Total points across all scopes")
-    first_date: str | None = Field(default=None, description="Earliest metric_date across scopes")
-    last_date: str | None = Field(default=None, description="Latest metric_date across scopes")
+    points: int = Field(default=0, description="Total points across brand scopes (region='')")
+    first_date: str | None = Field(
+        default=None, description="Earliest metric_date across brand scopes"
+    )
+    last_date: str | None = Field(
+        default=None, description="Latest metric_date across brand scopes"
+    )
+    scopes: list[KPIHistoryScopeEntry] = Field(
+        default_factory=list,
+        description="Full (brand, region) scope lattice, sorted by (brand, region)",
+    )
 
 
 class KPIHistoryCoverageResponse(BaseModel):

@@ -95,6 +95,13 @@ export interface KpiChartQuery {
   /** One or more KPI references as the model typed them. */
   kpis: string[];
   brand?: string;
+  /**
+   * Geographic region scope (#1536). Only the materialized-history path can
+   * honor it — the segmented, comparison and current-value endpoints have no
+   * region dimension, so those branches refuse a region request explicitly
+   * rather than render global data under a region caption.
+   */
+  region?: string;
   compareBy?: string;
   segment?: string;
   therapyLine?: string;
@@ -139,8 +146,20 @@ function valueSemantic(kpiId: string): string {
   return lookupKpi(kpiId)?.semanticType ?? 'Number';
 }
 
-function scopeLabel(brand: string | undefined): string {
-  return brand && brand.length > 0 ? brand : 'All brands';
+function scopeLabel(brand: string | undefined, region?: string): string {
+  const brandPart = brand && brand.length > 0 ? brand : 'All brands';
+  return region && region.length > 0 ? `${brandPart} · ${region}` : brandPart;
+}
+
+/**
+ * Lowercase-canon region from the model's wording, '' -> undefined. Stored
+ * region labels are lowercase and the backend matches them LOWER=LOWER
+ * (mirroring live migrations 077/078/125), so trim+lowercase at this chat
+ * seam resolves "Northeast" the way resolveBrand resolves "kisqali".
+ */
+function normalizeRegionScope(region: string | undefined): string | undefined {
+  const canon = (region ?? '').trim().toLowerCase();
+  return canon.length > 0 ? canon : undefined;
 }
 
 /**
@@ -152,6 +171,7 @@ function scopeLabel(brand: string | undefined): string {
 export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData> {
   const resolvedIds = query.kpis.map(resolveKpiId).filter((id) => id.length > 0);
   const brand = resolveBrand(query.brand);
+  const region = normalizeRegionScope(query.region);
 
   if (resolvedIds.length === 0) {
     return emptyResult('No KPI was named.', query.title ?? 'Chart');
@@ -159,6 +179,12 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
 
   // --- Several KPIs named: compare their current values side by side. -------
   if (resolvedIds.length > 1) {
+    if (region) {
+      return emptyResult(
+        `Side-by-side KPI comparison has no region scope yet — chart one KPI at a time for ${region}.`,
+        query.title ?? 'KPI comparison'
+      );
+    }
     return await routeComparison(resolvedIds, brand, query);
   }
 
@@ -171,6 +197,14 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
 
   // --- Patient-axis split (TRx/NRx/NBRx only). ------------------------------
   if (axis) {
+    if (region) {
+      return emptyResult(
+        `${displayName(kpiId)} by severity tier / line of therapy is global-only — the ` +
+          `segmented series has no region dimension. Drop the region scope, or chart the ` +
+          `plain ${region} trend.`,
+        query.title ?? `${displayName(kpiId)} trend`
+      );
+    }
     if (!RX_VOLUME_KPI_IDS.has(kpiId)) {
       return emptyResult(
         `${displayName(kpiId)} is not tracked by severity tier or line of therapy — ` +
@@ -182,7 +216,7 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
   }
 
   // --- Materialized monthly history, when this KPI has one. ----------------
-  const history = await getKPIHistory(kpiId, brand);
+  const history = await getKPIHistory(kpiId, brand, region);
   const points = history.points ?? [];
   if (points.length > 0) {
     const rows: ChartRow[] = points.map((point) => ({
@@ -196,10 +230,23 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
       encoding: { axis: 'month', value: 'value' },
       chartType,
       title: query.title ?? `${displayName(kpiId)} trend`,
-      subtitle: `${scopeLabel(history.brand || brand)} · ${points.length} month${
-        points.length === 1 ? '' : 's'
-      }`,
+      subtitle: `${scopeLabel(history.brand || brand, history.region || region)} · ${
+        points.length
+      } month${points.length === 1 ? '' : 's'}`,
     };
+  }
+
+  // --- No series under a region scope: refuse honestly. ---------------------
+  // The current-value fallback cannot verify whether a given calculator has a
+  // live region variant, so a region request that reaches here would risk a
+  // global value under a region caption. Region-aware current-value charts
+  // are #1538's scope.
+  if (region) {
+    return emptyResult(
+      `No ${region} history series for ${displayName(kpiId)} — only KPIs with a region ` +
+        'axis carry region-scoped history.',
+      query.title ?? `${displayName(kpiId)} trend`
+    );
   }
 
   // --- No series: chart the current value instead of drawing nothing. -------

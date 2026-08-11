@@ -44,6 +44,22 @@ describe('KpiTrendChart', () => {
     expect(screen.queryByTestId('kpi-trend-chart')).not.toBeInTheDocument();
   });
 
+  it('names the region in the empty state for a region-scoped miss (#1536)', () => {
+    // The generic "point-in-time KPIs have no monthly history" explanation is
+    // WRONG for a region miss (TRx has global history) — say the scope instead.
+    const data: KPIHistoryResponse = {
+      kpi_id: 'trx',
+      brand: '',
+      region: 'northeast',
+      count: 0,
+      points: [],
+    };
+    render(<KpiTrendChart kpiId="trx" data={data} />);
+    expect(screen.getByText(/No northeast series available/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Point-in-time KPIs/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kpi-trend-chart')).not.toBeInTheDocument();
+  });
+
   it('renders the chart with the scope and point count when real points are present', () => {
     const data: KPIHistoryResponse = {
       kpi_id: 'trx',

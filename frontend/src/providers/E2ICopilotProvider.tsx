@@ -914,11 +914,22 @@ const CopilotHooksInner: React.FC = () => {
         required: false,
       },
       {
+        name: 'region',
+        type: 'string',
+        description:
+          'Geographic region scope (northeast, south, midwest, or west) — e.g. when the page ' +
+          'context names a region scope or the user asks for one. Omit for all regions. ' +
+          'A scope with no region series renders an honest empty state. Do NOT combine with ' +
+          'compareBy/segment/therapyLine — severity and line-of-therapy series are global-only.',
+        required: false,
+      },
+      {
         name: 'compareBy',
         type: 'string',
         description:
           "'severity' or 'lot': draw one comparison chart with a line per severity tier " +
-          '(low/medium/high) or per line of therapy (0-3 prior lines). trx/nrx/nbrx only.',
+          '(low/medium/high) or per line of therapy (0-3 prior lines). trx/nrx/nbrx only. ' +
+          'Global-only: cannot be combined with region.',
         required: false,
       },
       {
@@ -945,12 +956,14 @@ const CopilotHooksInner: React.FC = () => {
     handler: async ({
       kpiId,
       brand,
+      region,
       compareBy,
       segment,
       therapyLine,
     }: {
       kpiId: string;
       brand?: string;
+      region?: string;
       compareBy?: string;
       segment?: string;
       therapyLine?: string;
@@ -962,6 +975,9 @@ const CopilotHooksInner: React.FC = () => {
       // into the registry codes kpi_history speaks (nrx → WS3-BI-006).
       const resolvedKpi = resolveKpiId(kpiId);
       const resolvedBrand = resolveBrand(brand);
+      // Lowercase-canon region (#1536): stored labels are lowercase and the
+      // backend matches LOWER=LOWER, mirroring the live region variants.
+      const resolvedRegion = (region ?? '').trim().toLowerCase() || undefined;
       // Axis routing: compareBy (all tiers, one comparison chart) wins over a
       // single-tier segment/therapyLine filter. Both hit the live segmented
       // endpoint — the materialized history has no patient-segment dimension.
@@ -970,6 +986,10 @@ const CopilotHooksInner: React.FC = () => {
       const lineValue = resolveTherapyLine(therapyLine);
       const axis = compareAxis ?? (segmentValue ? 'segment' : lineValue ? 'therapy_line' : undefined);
       if (axis) {
+        // Segmented series are global-only — fetching under a region scope
+        // would chart global data beneath a region caption. Return null; the
+        // render explains the invalid combination instead of drawing.
+        if (resolvedRegion) return null;
         const value = compareAxis
           ? undefined
           : axis === 'segment'
@@ -977,7 +997,7 @@ const CopilotHooksInner: React.FC = () => {
             : lineValue;
         return await getKPIHistorySegmented(resolvedKpi, axis, resolvedBrand, value);
       }
-      return await getKPIHistory(resolvedKpi, resolvedBrand);
+      return await getKPIHistory(resolvedKpi, resolvedBrand, resolvedRegion);
     },
     render: ({ status, args, result }) => {
       // 'inProgress' = the LLM is still streaming the arguments, so kpiId may be
@@ -985,6 +1005,19 @@ const CopilotHooksInner: React.FC = () => {
       // blank name. 'executing' = handler fetching (show loading). 'complete' =
       // result ready.
       if (status === 'inProgress') return <></>;
+      // Region + patient-axis is an invalid combination the handler refuses
+      // (returns null without fetching) — say why instead of a chart frame.
+      if (
+        args?.region &&
+        (args?.compareBy || args?.segment || args?.therapyLine)
+      ) {
+        return (
+          <div className="my-2 rounded-md border p-3 text-sm text-muted-foreground">
+            Severity-tier and line-of-therapy series are global-only — they have no region
+            dimension. Drop the region scope, or chart the plain {String(args.region)} trend.
+          </div>
+        );
+      }
       // CopilotKit types `result` loosely (any). Only treat a well-formed
       // response as data; otherwise leave it undefined so the chart shows an
       // explicit "couldn't load" state instead of masquerading a handler
@@ -1066,6 +1099,16 @@ const CopilotHooksInner: React.FC = () => {
         required: false,
       },
       {
+        name: 'region',
+        type: 'string',
+        description:
+          'Geographic region scope (northeast, south, midwest, or west) — e.g. when the page ' +
+          'context names a region scope or the user asks for one. Omit for all regions. Only ' +
+          'monthly-history charts of region-axis KPIs can honor it; other shapes state why they ' +
+          'cannot rather than charting global data under a region caption.',
+        required: false,
+      },
+      {
         name: 'compareBy',
         type: 'string',
         description:
@@ -1099,6 +1142,7 @@ const CopilotHooksInner: React.FC = () => {
       kpis,
       chartType,
       brand,
+      region,
       compareBy,
       segment,
       therapyLine,
@@ -1107,6 +1151,7 @@ const CopilotHooksInner: React.FC = () => {
       kpis: string[];
       chartType?: string;
       brand?: string;
+      region?: string;
       compareBy?: string;
       segment?: string;
       therapyLine?: string;
@@ -1121,6 +1166,7 @@ const CopilotHooksInner: React.FC = () => {
       return await routeKpiChart({
         kpis: Array.isArray(kpis) ? kpis : [kpis],
         brand,
+        region,
         compareBy,
         segment,
         therapyLine,

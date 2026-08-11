@@ -434,8 +434,10 @@ describe('useKPIHistoryMultiBrand', () => {
     expect(result.current[0].data?.brand).toBe('Fabhalta');
     expect(result.current[1].data?.brand).toBe('Kisqali');
     expect(result.current[1].data?.points[0]?.value).toBe(2);
-    expect(kpiApi.getKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Fabhalta');
-    expect(kpiApi.getKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Kisqali');
+    // Third arg is the #1536 region scope — undefined when not comparing
+    // within a region (same fetch as before the axis existed).
+    expect(kpiApi.getKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Fabhalta', undefined);
+    expect(kpiApi.getKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Kisqali', undefined);
   });
 
   it('runs no queries for an empty brand list', () => {

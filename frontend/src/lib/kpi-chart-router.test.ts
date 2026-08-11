@@ -65,7 +65,7 @@ describe('history routing', () => {
 
     const data = await routeKpiChart({ kpis: ['trx'] });
 
-    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', undefined);
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', undefined, undefined);
     expect(data.emptyReason).toBeUndefined();
     expect(data.chartType).toBe('Line Chart');
     // Real API values reach the rows unchanged.
@@ -78,7 +78,7 @@ describe('history routing', () => {
 
   it('canonicalizes the brand before fetching', async () => {
     await routeKpiChart({ kpis: ['trx'], brand: 'remi' });
-    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Remibrutinib');
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Remibrutinib', undefined);
   });
 
   it('honours an explicit chart type over the routed default', async () => {
@@ -141,7 +141,7 @@ describe('current-value routing', () => {
   it('charts the current value when a KPI has no series', async () => {
     const data = await routeKpiChart({ kpis: ['roc_auc'] });
 
-    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined);
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined, undefined);
     expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined);
     expect(data.emptyReason).toBeUndefined();
     expect(data.chartType).toBe('KPI Card');
@@ -373,5 +373,53 @@ describe('registry coverage', () => {
   it('names no KPI at all as an explicit reason', async () => {
     const data = await routeKpiChart({ kpis: [] });
     expect(data.emptyReason).toMatch(/No KPI was named/);
+  });
+});
+
+describe('region scope (#1536)', () => {
+  it('threads region into the history fetch and captions the chart with it', async () => {
+    mockGetKPIHistory.mockResolvedValue({
+      kpi_id: 'WS3-BI-005',
+      brand: 'Kisqali',
+      region: 'northeast',
+      count: 1,
+      points: [{ metric_date: '2026-06-01', value: 249 }],
+    });
+
+    const data = await routeKpiChart({ kpis: ['trx'], brand: 'kisqali', region: 'Northeast' });
+
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali', 'northeast');
+    expect(data.emptyReason).toBeUndefined();
+    expect(data.subtitle).toContain('northeast');
+  });
+
+  it('refuses an empty region series honestly instead of falling back to an unverifiable current value', async () => {
+    const data = await routeKpiChart({ kpis: ['roc_auc'], region: 'northeast' });
+
+    expect(data.emptyReason).toMatch(/region/i);
+    expect(mockGetKPIValue).not.toHaveBeenCalled();
+  });
+
+  it('refuses a region-scoped segmented request — the segmented endpoint is global-only', async () => {
+    const data = await routeKpiChart({
+      kpis: ['trx'],
+      compareBy: 'severity',
+      region: 'northeast',
+    });
+
+    expect(data.emptyReason).toMatch(/global-only/i);
+    expect(mockGetKPIHistorySegmented).not.toHaveBeenCalled();
+  });
+
+  it('refuses a region-scoped multi-KPI comparison', async () => {
+    const data = await routeKpiChart({ kpis: ['trx', 'nrx'], region: 'northeast' });
+
+    expect(data.emptyReason).toMatch(/region/i);
+    expect(mockBatchCalculateKPIs).not.toHaveBeenCalled();
+  });
+
+  it('keeps the exact pre-region fetch when no region is passed', async () => {
+    await routeKpiChart({ kpis: ['trx'] });
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', undefined, undefined);
   });
 });

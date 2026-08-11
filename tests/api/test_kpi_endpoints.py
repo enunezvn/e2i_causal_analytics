@@ -654,6 +654,89 @@ class TestKPIHistoryCoverageEndpoint:
         assert resp.status_code == 200
         assert resp.json() == {"coverage": [], "total": 0}
 
+    def test_coverage_region_rows_feed_scopes_not_brands(self):
+        """#1536: the region-aware view (migration 126) emits one row per
+        (kpi_id, brand, region). Region rows must NOT duplicate brand entries
+        or inflate the brand-axis points — they surface through `scopes`."""
+        rows = [
+            {
+                "kpi_id": "WS3-BI-010",
+                "brand": "",
+                "region": "",
+                "points": 164,
+                "first_date": "2013-01-01",
+                "last_date": "2026-07-01",
+            },
+            {
+                "kpi_id": "WS3-BI-010",
+                "brand": "",
+                "region": "northeast",
+                "points": 164,
+                "first_date": "2013-01-01",
+                "last_date": "2026-07-01",
+            },
+            {
+                "kpi_id": "WS3-BI-010",
+                "brand": "Kisqali",
+                "region": "",
+                "points": 163,
+                "first_date": "2013-02-01",
+                "last_date": "2026-07-01",
+            },
+            {
+                "kpi_id": "WS3-BI-010",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "points": 150,
+                "first_date": "2014-01-01",
+                "last_date": "2026-06-01",
+            },
+        ]
+        fake_repo = SimpleNamespace(get_coverage=AsyncMock(return_value=rows))
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            resp = client.get("/api/kpis/history/coverage")
+        assert resp.status_code == 200
+        entry = {e["kpi_id"]: e for e in resp.json()["coverage"]}["WS3-BI-010"]
+        # Brand axis: computed from region='' rows ONLY — semantics unchanged.
+        assert entry["brands"] == ["", "Kisqali"]
+        assert entry["points"] == 164 + 163
+        assert entry["first_date"] == "2013-01-01"
+        assert entry["last_date"] == "2026-07-01"
+        # Full scope lattice, sorted by (brand, region).
+        assert [(s["brand"], s["region"], s["points"]) for s in entry["scopes"]] == [
+            ("", "", 164),
+            ("", "northeast", 164),
+            ("Kisqali", "", 163),
+            ("Kisqali", "northeast", 150),
+        ]
+        assert entry["scopes"][3]["first_date"] == "2014-01-01"
+        assert entry["scopes"][3]["last_date"] == "2026-06-01"
+
+    def test_coverage_rows_without_region_key_stay_backward_compatible(self):
+        """Rows from the pre-126 view (no `region` key) read as region=''."""
+        rows = [
+            {
+                "kpi_id": "WS2-TR-004",
+                "brand": "",
+                "points": 12,
+                "first_date": "2025-01-01",
+                "last_date": "2025-12-01",
+            },
+        ]
+        fake_repo = SimpleNamespace(get_coverage=AsyncMock(return_value=rows))
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            resp = client.get("/api/kpis/history/coverage")
+        entry = resp.json()["coverage"][0]
+        assert entry["brands"] == [""]
+        assert entry["points"] == 12
+        assert [(s["brand"], s["region"]) for s in entry["scopes"]] == [("", "")]
+
 
 class TestWeeklyCapture:
     """src.kpi.history_capture — append-only capture of present-state KPIs."""

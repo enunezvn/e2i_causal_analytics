@@ -691,7 +691,7 @@ describe('Action Handlers', () => {
         await handler({ kpiId: 'nrx' });
       });
 
-      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-006', undefined);
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-006', undefined, undefined);
     });
 
     it('passes a canonicalized brand for per-brand KPIs', async () => {
@@ -702,7 +702,7 @@ describe('Action Handlers', () => {
         await handler({ kpiId: 'nbrx', brand: 'remibrutinib' });
       });
 
-      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Remibrutinib');
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-007', 'Remibrutinib', undefined);
     });
 
     it('declares the brand parameter so the model can pass it', () => {
@@ -791,7 +791,34 @@ describe('Action Handlers', () => {
         await handler({ kpiId: 'trx', brand: 'kisqali' });
       });
 
-      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali');
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali', undefined);
+      expect(mockGetKPIHistorySegmented).not.toHaveBeenCalled();
+    });
+
+    it('threads a region scope through the plain history fetch (#1536)', async () => {
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      await act(async () => {
+        await handler({ kpiId: 'trx', brand: 'kisqali', region: 'Northeast' });
+      });
+
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali', 'northeast');
+    });
+
+    it('fetches nothing when region is combined with a segment axis — segments are global-only (#1536)', async () => {
+      mockGetKPIHistory.mockClear();
+      mockGetKPIHistorySegmented.mockClear();
+      const handler = getActionHandler('renderKpiTrend') as unknown as (
+        p: Record<string, unknown>
+      ) => Promise<unknown>;
+      let out: unknown = 'sentinel';
+      await act(async () => {
+        out = await handler({ kpiId: 'trx', segment: 'high', region: 'northeast' });
+      });
+
+      expect(out).toBeNull();
+      expect(mockGetKPIHistory).not.toHaveBeenCalled();
       expect(mockGetKPIHistorySegmented).not.toHaveBeenCalled();
     });
   });
@@ -832,7 +859,7 @@ describe('Action Handlers', () => {
         result = await handler({ kpis: ['roc_auc'] });
       });
 
-      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined);
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('WS1-MP-001', undefined, undefined);
       expect(mockGetKPIValue).toHaveBeenCalledWith('WS1-MP-001', undefined);
       expect(result.emptyReason).toBeUndefined();
       expect(result.chartType).toBe('KPI Card');
@@ -846,7 +873,7 @@ describe('Action Handlers', () => {
         await handler({ kpis: ['cm-001'] });
       });
 
-      expect(mockGetKPIHistory).toHaveBeenCalledWith('CM-001', undefined);
+      expect(mockGetKPIHistory).toHaveBeenCalledWith('CM-001', undefined, undefined);
     });
 
     it('compares several KPIs through the batch endpoint', async () => {
@@ -947,6 +974,7 @@ describe('Action Handlers', () => {
         'kpis',
         'chartType',
         'brand',
+        'region',
         'compareBy',
         'segment',
         'therapyLine',

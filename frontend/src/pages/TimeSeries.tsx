@@ -103,6 +103,9 @@ const WORKSTREAM_GROUPS: { key: string; label: string }[] = [
 // sentinel in the brand <Select> and is mapped back to '' for the API.
 const GLOBAL_BRAND = '__global__';
 
+// Same Radix constraint for the region scope ('' = all regions, #1536).
+const ALL_REGIONS = '__all__';
+
 // Per-brand line colors for the compare overlay (matches ModelPerformance's
 // BRAND_COLORS so the same brand reads the same color across pages). Brands
 // outside the fixed map fall back to the remaining chart palette by position.
@@ -213,6 +216,9 @@ function TimeSeries() {
   const [kpiId, setKpiId] = useState<string>(DEFAULT_KPI_ID);
   // '' = global / all brands (the kpi_history scope convention).
   const [brand, setBrand] = useState<string>('');
+  // '' = all regions; named regions exist only where the backfill mirrors a
+  // vetted live region variant (#1536 — coverage `scopes` is the authority).
+  const [region, setRegion] = useState<string>('');
   const [timeRange, setTimeRange] = useState<string>('1825d');
   const [compareBrands, setCompareBrands] = useState<boolean>(false);
   // Claims-lag nowcast overlay preference (Rx-volume KPIs only). Default OFF —
@@ -241,9 +247,33 @@ function TimeSeries() {
   );
   const hasGlobalScope = !coverageEntry || brandScopes.includes('');
 
-  // Compare mode needs ≥2 named brand scopes to mean anything. The toggle
-  // state survives KPI switches but only takes effect where eligible.
-  const canCompare = namedBrands.length >= 2;
+  // Region scopes for the selected KPI + brand, from the coverage scope
+  // lattice (real coverage, not guesses): a region is offered only when a
+  // series for THIS (brand, region) actually exists.
+  const namedRegions = useMemo(
+    () =>
+      (coverageEntry?.scopes ?? [])
+        .filter((s) => s.brand === brand && s.region !== '')
+        .map((s) => s.region),
+    [coverageEntry, brand]
+  );
+
+  // Brands comparable in the CURRENT region scope: with a region selected,
+  // only brands with a real brand×region series can chart a line.
+  const compareScopeBrands = useMemo(
+    () =>
+      region === ''
+        ? namedBrands
+        : (coverageEntry?.scopes ?? [])
+            .filter((s) => s.region === region && s.brand !== '')
+            .map((s) => s.brand),
+    [region, namedBrands, coverageEntry]
+  );
+
+  // Compare mode needs ≥2 named brand scopes (in the selected region) to
+  // mean anything. The toggle state survives KPI switches but only takes
+  // effect where eligible.
+  const canCompare = compareScopeBrands.length >= 2;
   const comparing = compareBrands && canCompare;
 
   // Keep the brand scope valid for the selected KPI: per-brand-only KPIs
@@ -260,17 +290,35 @@ function TimeSeries() {
     }
   }, [kpiId, coverageMap, brand]);
 
-  const kpiValue = useKPIValue(kpiId, brand || undefined); // point-in-time value (status card)
+  // Keep the region scope valid for the selected KPI + brand: a scope with
+  // no real series would chart a false empty-state, so snap back to ''.
+  useEffect(() => {
+    if (region !== '' && !namedRegions.includes(region)) {
+      setRegion('');
+    }
+  }, [region, namedRegions]);
+
+  // Point-in-time value for the status card — same (brand, region) scope as
+  // the charted series (the live calculators honor region via the vetted
+  // region variants), so the card never mislabels a portfolio number.
+  const kpiValue = useKPIValue(kpiId, brand || undefined, region || undefined);
   // Real monthly history from the backend (kpi_history). Empty for point-in-time
   // KPIs — the chart then shows an honest empty-state, never a fabricated series.
-  const kpiHistory = useKPIHistory(kpiId, brand);
+  const kpiHistory = useKPIHistory(kpiId, brand, region);
   // Per-brand series for the compare overlay. Zero queries while off; each
   // query shares the single-brand cache key, so toggling never refetches.
-  const compareQueries = useKPIHistoryMultiBrand(kpiId, comparing ? namedBrands : []);
+  const compareQueries = useKPIHistoryMultiBrand(
+    kpiId,
+    comparing ? compareScopeBrands : [],
+    region
+  );
   // Claims-lag provisional/nowcast series — Rx-volume family ONLY (the
-  // endpoint 422s other KPIs; the hook carries the same hard gate).
+  // endpoint 422s other KPIs; the hook carries the same hard gate). The
+  // nowcast has no region dimension: gate it to the all-regions scope.
   const isRxVolume = RX_VOLUME_KPI_IDS.has(kpiId);
-  const kpiNowcast = useKPIHistoryNowcast(kpiId, brand, { enabled: isRxVolume });
+  const kpiNowcast = useKPIHistoryNowcast(kpiId, brand, {
+    enabled: isRxVolume && region === '',
+  });
 
   // ---- Chart series ----
   const kpiSeries: ChartPoint[] = useMemo(() => {
@@ -292,25 +340,25 @@ function TimeSeries() {
   const compareRows = useMemo(() => {
     if (!comparing) return [];
     const perBrand: Record<string, DatedValue[]> = {};
-    namedBrands.forEach((b, i) => {
+    compareScopeBrands.forEach((b, i) => {
       perBrand[b] = (compareQueries[i]?.data?.points ?? []).map((p) => ({
         date: p.metric_date,
         value: p.value,
       }));
     });
     const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-    return mergeBrandSeries(perBrand, namedBrands).filter((r) => {
+    return mergeBrandSeries(perBrand, compareScopeBrands).filter((r) => {
       const t = Date.parse(r.date);
       return Number.isNaN(t) ? true : t >= cutoffMs;
     });
-  }, [comparing, compareQueries, namedBrands, days]);
+  }, [comparing, compareQueries, compareScopeBrands, days]);
 
   // Per-brand latest-value cards for compare mode. The single-series stat
   // cards (average/max/min) are undefined across multiple series — replace
   // them instead of averaging brands into a number nobody asked for.
   const compareBrandStats = useMemo(
     () =>
-      namedBrands.map((b) => {
+      compareScopeBrands.map((b) => {
         const values = compareRows
           .map((r) => r[b])
           .filter((v): v is number => typeof v === 'number');
@@ -321,7 +369,7 @@ function TimeSeries() {
           sparkline: values,
         };
       }),
-    [namedBrands, compareRows]
+    [compareScopeBrands, compareRows]
   );
 
   const seriesLabel = kpiMetadata.data?.name ?? kpiId;
@@ -357,11 +405,19 @@ function TimeSeries() {
   // The provisional view replaces the plain chart ONLY when it adds honest
   // information (a provisional tail exists in range). Every other state —
   // off-family KPI, compare mode, fetch error, insufficient maturity, or an
-  // all-mature window — keeps the existing chart untouched.
-  const showProvisionalChart = !comparing && !kpiNowcast.error && provisionalCount > 0;
+  // all-mature window — keeps the existing chart untouched. A selected
+  // region also blocks it: the nowcast describes the all-regions series, and
+  // react-query retains the last fetch while the query is disabled — without
+  // this gate a cached GLOBAL overlay would drape over a REGION series.
+  const showProvisionalChart =
+    !comparing && region === '' && !kpiNowcast.error && provisionalCount > 0;
   // Rx KPI whose nowcast is honestly unavailable: disabled toggle + reason.
   const nowcastUnavailable =
     isRxVolume && !comparing && nowcastData?.insufficient_maturity === true;
+  // Rx KPI with a region selected: the nowcast has no region dimension, so
+  // the toggle stays visible but disabled with the reason spelled out —
+  // never silently absent, never a mislabeled portfolio overlay.
+  const nowcastRegionBlocked = isRxVolume && !comparing && region !== '';
 
   const toggleShowNowcast = () => {
     setShowNowcast((v) => {
@@ -417,10 +473,11 @@ function TimeSeries() {
 
   const handleExport = () => {
     const exportData = comparing
-      ? { kpiId, days, brands: namedBrands, series: compareRows }
+      ? { kpiId, days, brands: compareScopeBrands, region, series: compareRows }
       : {
           kpiId,
           brand,
+          region,
           days,
           series: kpiSeries,
           // Provenance for the on-screen provisional view: the claims
@@ -491,7 +548,7 @@ function TimeSeries() {
   // POST /chat/suggestions page_context).
   const pageChatSummary = useMemo(() => {
     const lines: string[] = [
-      `Time Series page. KPI: ${seriesLabel} (${kpiId}); brand scope: ${brand || 'All brands'}; time range: ${timeRange}.`,
+      `Time Series page. KPI: ${seriesLabel} (${kpiId}); brand scope: ${brand || 'All brands'}; region scope: ${region || 'all regions'}; time range: ${timeRange}.`,
     ];
     if (comparing) {
       const stats = compareBrandStats
@@ -514,6 +571,7 @@ function TimeSeries() {
     seriesLabel,
     kpiId,
     brand,
+    region,
     timeRange,
     comparing,
     compareBrandStats,
@@ -581,6 +639,27 @@ function TimeSeries() {
                 {namedBrands.map((b) => (
                   <SelectItem key={b} value={b}>
                     {b}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {/* Region scope — offered only where a real region series exists for
+              the selected KPI + brand (coverage scope lattice, #1536). Stays
+              ACTIVE in compare mode: it scopes the whole comparison. */}
+          {namedRegions.length > 0 && (
+            <Select
+              value={region === '' ? ALL_REGIONS : region}
+              onValueChange={(v) => setRegion(v === ALL_REGIONS ? '' : v)}
+            >
+              <SelectTrigger className="w-[150px]" aria-label="region">
+                <SelectValue placeholder="Region" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_REGIONS}>All Regions</SelectItem>
+                {namedRegions.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {r}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -714,7 +793,8 @@ function TimeSeries() {
                 <CardTitle>KPI History</CardTitle>
                 <CardDescription>
                   {seriesLabel} ({kpiId}){' '}
-                  {comparing ? 'per-brand comparison' : 'historical values'} — last {days} days
+                  {comparing ? 'per-brand comparison' : 'historical values'}
+                  {region ? ` · region: ${region}` : ''} — last {days} days
                 </CardDescription>
               </div>
               {/* Claims-lag nowcast toggle — Rx-volume KPIs only. Offered
@@ -722,7 +802,7 @@ function TimeSeries() {
                   plane cannot support an honest nowcast it stays DISABLED
                   with the reason spelled out (never silently absent, never
                   a fabricated overlay). */}
-              {(showProvisionalChart || nowcastUnavailable) && (
+              {(showProvisionalChart || nowcastUnavailable || nowcastRegionBlocked) && (
                 <div className="flex flex-col items-end gap-1">
                   <Button
                     variant={showNowcast && showProvisionalChart ? 'default' : 'outline'}
@@ -733,9 +813,12 @@ function TimeSeries() {
                   >
                     Show Nowcast
                   </Button>
-                  {nowcastUnavailable && (
+                  {(nowcastUnavailable || nowcastRegionBlocked) && (
                     <p className="max-w-[280px] text-right text-xs text-muted-foreground">
-                      Nowcast unavailable — {nowcastUnavailableText(nowcastData?.reason)}
+                      Nowcast unavailable —{' '}
+                      {nowcastRegionBlocked
+                        ? 'the claims-lag nowcast has no region dimension; switch to All Regions to see it.'
+                        : nowcastUnavailableText(nowcastData?.reason)}
                     </p>
                   )}
                 </div>
@@ -773,7 +856,7 @@ function TimeSeries() {
                   <Legend />
                   {/* One line per brand, colored like ModelPerformance's
                       overlay so a brand reads the same across pages. */}
-                  {namedBrands.map((b, i) => (
+                  {compareScopeBrands.map((b, i) => (
                     <Line
                       key={b}
                       type="monotone"
