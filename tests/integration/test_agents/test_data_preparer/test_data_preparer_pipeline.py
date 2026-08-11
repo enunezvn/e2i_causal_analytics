@@ -282,8 +282,9 @@ class TestDataTransformerNode:
     async def test_transform_separates_target(self, sample_generator):
         """Test that transformation separates target column."""
         df = sample_generator.business_metrics(n_samples=500)
-        # Add a target column
-        df["target"] = np.random.randint(0, 2, size=len(df))
+        # Add a target column (self-seeded: the generator no longer reseeds
+        # the global numpy stream, #1542)
+        df["target"] = np.random.RandomState(42).randint(0, 2, size=len(df))
 
         splitter = get_data_splitter(random_seed=42)
         splits = splitter.random_split(df)

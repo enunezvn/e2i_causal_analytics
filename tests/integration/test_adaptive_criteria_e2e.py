@@ -159,6 +159,24 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     nightly runs 30433515459 (2026-07-29) and 30524268029 (2026-07-30),
     bit-identical across both. Tolerance widths unchanged.
 
+    Rebaselined 2026-08-11 (#1542): PR #1543 decoupled the
+    SampleDataGenerator RNG streams (per-purpose instance RNGs replace
+    the reseeded process-global ``random``/``np.random`` — the
+    #1521→#1524 coupling vector). Same seed=42, but every draw now comes
+    from its purpose stream, so the realized cohort re-rolls (and the
+    keyed-draw split membership with it) while regime statistics are
+    preserved. AUCs barely moved (val roc_auc 0.7347 → 0.7383, within
+    the old pin's ±0.005 neighborhood; pr_auc 0.3347 → 0.3359); the
+    validation-frozen threshold moved 0.367 → 0.444, shifting the
+    thresholded metrics (val accuracy 0.5033 → 0.6267, recall
+    0.9773 → 0.7955). Values below are the full _diag surface of the
+    faithful branch slow-tests dispatch run 31521546251 (2026-08-11,
+    branch fix/sample-data-rng-streams-1542); the follow-up green
+    dispatch on the same branch is the second seeded run confirming
+    determinism (#773 precedent). Tolerance widths unchanged. (The
+    Apr-26 baseline doc referenced above was retired in 71a7dfe1; the
+    pins in this docstring are the authoritative record.)
+
     Tolerances (S3 fix):
       - AUC and PR-AUC: ±0.005 (deterministic at seed=42 modulo
         sklearn-version drift).
@@ -181,10 +199,11 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     # 8f0eb68b, PRs #729/#731/#733 — RETAINS the genuine sparse pre-index
     # predictors days_on_therapy / prior_treatments / hcp_visits on the
     # rare-event synthetic cohort). Re-pinned 2026-07-30 (#1311) after
-    # aed06cb7 (#44 plan B1) enlarged the goldstd holdout and reshuffled the
-    # keyed-draw split: the pins below are the CI nightly values
-    # (bit-identical across runs 30433515459 and 30524268029) —
-    # CI-authoritative; this box cannot run the flag-off test faithfully.
+    # aed06cb7 (#44 plan B1) enlarged the goldstd holdout, and again
+    # 2026-08-11 (#1542) after PR #1543 decoupled the generator's RNG
+    # streams: the pins below are from branch slow-tests dispatch run
+    # 31521546251 — CI-authoritative; this box cannot run the flag-off
+    # test faithfully.
     val = out["validation_metrics"]
     test = out["test_metrics"]
     # #773: emit the FULL realized metric surface in every assertion message
@@ -196,23 +215,23 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
         f"validation_metrics={val} | test_metrics={test} | "
         f"model_usefulness={out.get('model_usefulness')}"
     )
-    # Re-pinned 2026-07-30 (#1311): aed06cb7 (#44 plan B1) holdout
-    # enlargement reshuffled the keyed-draw split assignment. See the
-    # "Rebaselined 2026-07-30" docstring section. Values from the _diag
-    # surfaces of nightly runs 30433515459 + 30524268029 (bit-identical).
-    assert val["roc_auc"] == pytest.approx(0.7347, abs=0.005), _diag
-    assert val["pr_auc"] == pytest.approx(0.3347, abs=0.005), _diag
-    assert val["accuracy"] == pytest.approx(0.5033, abs=0.02), _diag
-    assert val["precision"] == pytest.approx(0.2251, abs=0.02), _diag
-    assert val["recall"] == pytest.approx(0.9773, abs=0.02), _diag
-    assert val["f1_score"] == pytest.approx(0.3660, abs=0.02), _diag
+    # Re-pinned 2026-08-11 (#1542): PR #1543's RNG stream decoupling
+    # re-rolled the seed-42 cohort. See the "Rebaselined 2026-08-11"
+    # docstring section. Values from the _diag surface of branch
+    # slow-tests dispatch run 31521546251.
+    assert val["roc_auc"] == pytest.approx(0.7383, abs=0.005), _diag
+    assert val["pr_auc"] == pytest.approx(0.3359, abs=0.005), _diag
+    assert val["accuracy"] == pytest.approx(0.6267, abs=0.02), _diag
+    assert val["precision"] == pytest.approx(0.2536, abs=0.02), _diag
+    assert val["recall"] == pytest.approx(0.7955, abs=0.02), _diag
+    assert val["f1_score"] == pytest.approx(0.3846, abs=0.02), _diag
 
-    # Test metrics — re-pinned 2026-07-30 (#1311, same nightly runs).
-    assert test["roc_auc"] == pytest.approx(0.6577, abs=0.005), _diag
-    assert test["accuracy"] == pytest.approx(0.4667, abs=0.02), _diag
-    assert test["precision"] == pytest.approx(0.1915, abs=0.02), _diag
-    assert test["recall"] == pytest.approx(0.8182, abs=0.02), _diag
-    assert test["f1_score"] == pytest.approx(0.3103, abs=0.02), _diag
+    # Test metrics — re-pinned 2026-08-11 (#1542, same dispatch run).
+    assert test["roc_auc"] == pytest.approx(0.6552, abs=0.005), _diag
+    assert test["accuracy"] == pytest.approx(0.5600, abs=0.02), _diag
+    assert test["precision"] == pytest.approx(0.1857, abs=0.02), _diag
+    assert test["recall"] == pytest.approx(0.5909, abs=0.02), _diag
+    assert test["f1_score"] == pytest.approx(0.2826, abs=0.02), _diag
 
     # Apr-26 verdict line 18: Step 7 BLOCKED, success_criteria_met False.
     assert out["success_criteria_met"] is False
