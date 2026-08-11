@@ -1538,3 +1538,131 @@ class TestSanitizeFeatureNames:
 
         names = ["x[1]", "x]1[", "x<1>", "x_1_"]
         assert sanitize_feature_names(names) == sanitize_feature_names(names)
+
+
+# ---------------------------------------------------------------------------
+# #1524: empty non-train splits must not crash the fitted transforms
+# ---------------------------------------------------------------------------
+
+
+def _empty_split_frames() -> dict:
+    """Train with numeric NaNs + categoricals so imputer/encoder/scaler all
+    engage; the empty splits share the train schema (0 rows).
+
+    Mirrors the nightly #1524 scenario: a temporal split whose 30-day val
+    window contains no rows (``_load_sample_data`` seeded stream, n=10) —
+    sklearn's ``.transform`` refuses 0-row input, which used to surface as
+    ``error_type=transformation_error`` and made ``DataPreparerAgent.run``
+    raise instead of returning a blocked-gate result.
+    """
+    train_df = pd.DataFrame(
+        {
+            "brand": ["A", "B", "A", "C", "B", "A"],
+            "value": [1.0, np.nan, 3.0, 4.0, np.nan, 6.0],
+            "target": [0, 1, 0, 1, 0, 1],
+        }
+    )
+    return {
+        "train_df": train_df,
+        "empty_df": train_df.iloc[0:0].copy(),
+        "one_row_df": pd.DataFrame({"brand": ["B"], "value": [9.0], "target": [1]}),
+    }
+
+
+def _empty_split_state(**overrides) -> dict:
+    frames = _empty_split_frames()
+    state = {
+        "experiment_id": "exp_1524_empty_split",
+        "scope_spec": {
+            "target_column": "target",
+            "encoding_method": "label",
+            "scaling_method": "minmax",
+            "imputation_strategy": "mean",
+            "extract_datetime_features": False,
+        },
+        "train_df": frames["train_df"],
+        "validation_df": frames["one_row_df"],
+        "test_df": frames["one_row_df"].copy(),
+        "holdout_df": None,
+    }
+    state.update(overrides)
+    return state
+
+
+class TestTransformDataEmptySplits:
+    """#1524: an empty val/test/holdout split is a data-quality outcome for
+    the QC gate / split enforcer to judge — not a reason for sklearn to
+    crash the whole preparation run."""
+
+    @pytest.mark.asyncio
+    async def test_empty_validation_split_completes_without_error(self) -> None:
+        frames = _empty_split_frames()
+        state = _empty_split_state(validation_df=frames["empty_df"])
+
+        result = await transform_data(state)
+
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert result["X_val"] is None
+        assert result["y_val"] is None
+        # Non-empty splits still transformed
+        assert len(result["X_train"]) == 6
+        assert len(result["X_test"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_test_split_completes_without_error(self) -> None:
+        frames = _empty_split_frames()
+        state = _empty_split_state(test_df=frames["empty_df"])
+
+        result = await transform_data(state)
+
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert result["X_test"] is None
+        assert result["y_test"] is None
+        assert len(result["X_train"]) == 6
+        assert len(result["X_val"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_holdout_split_completes_without_error(self) -> None:
+        frames = _empty_split_frames()
+        state = _empty_split_state(holdout_df=frames["empty_df"])
+
+        result = await transform_data(state)
+
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert result["X_holdout"] is None
+        assert result["y_holdout"] is None
+
+    @pytest.mark.asyncio
+    async def test_all_empty_non_train_splits_complete(self) -> None:
+        """The exact nightly shape: only train and one other split populated,
+        val empty (train=9/val=0/test=1 in CI; schema-equal here)."""
+        frames = _empty_split_frames()
+        state = _empty_split_state(
+            validation_df=frames["empty_df"],
+            test_df=frames["one_row_df"],
+        )
+
+        result = await transform_data(state)
+
+        assert "error" not in result
+        assert result["X_val"] is None
+        assert len(result["X_test"]) == 1
+        # Transforms were actually applied (imputer engaged on train NaNs)
+        assert not result["X_train"]["value"].isna().any()
+
+    @pytest.mark.asyncio
+    async def test_empty_train_keeps_existing_contract(self) -> None:
+        """Empty-split normalization is for NON-train splits only. The
+        pre-existing contract for an empty TRAIN split (measured before the
+        #1524 fix): the node completes and returns an empty ``X_train``
+        DataFrame — sufficiency/QC downstream judge the zero-row cohort.
+        This pins that the fix never maps ``train_df`` to ``None`` (which
+        would raise ``ValueError: train_df not found in state`` instead)."""
+        frames = _empty_split_frames()
+        state = _empty_split_state(train_df=frames["empty_df"])
+
+        result = await transform_data(state)
+
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert result["X_train"] is not None
+        assert len(result["X_train"]) == 0
