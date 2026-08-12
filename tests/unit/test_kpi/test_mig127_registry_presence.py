@@ -53,9 +53,7 @@ def _rows():
 
 def test_all_12_query_ids_registered():
     ids = {qid for qid, _, _ in _rows()}
-    expected = {
-        f"{base}_region{syn}" for base in BASES for syn in ("", "_include_synthetic")
-    }
+    expected = {f"{base}_region{syn}" for base in BASES for syn in ("", "_include_synthetic")}
     assert len(expected) == 12
     missing = expected - ids
     assert not missing, f"migration 127 missing query_ids: {sorted(missing)}"
@@ -63,9 +61,9 @@ def test_all_12_query_ids_registered():
 
 def test_region_predicate_is_case_insensitive_everywhere():
     for qid, body, _ in _rows():
-        assert re.search(
-            r"LOWER\((?:\w+\.)?geographic_region::text\) = LOWER\(\$\d\)", body
-        ), f"{qid}: region predicate must be LOWER(geographic_region::text) = LOWER($n)"
+        assert re.search(r"LOWER\((?:\w+\.)?geographic_region::text\) = LOWER\(\$\d\)", body), (
+            f"{qid}: region predicate must be LOWER(geographic_region::text) = LOWER($n)"
+        )
 
 
 def test_joins_on_patient_id_never_patient_journey_id():
@@ -124,9 +122,9 @@ def test_br005_filters_both_denominator_and_numerator():
     for qid, body, _ in _rows():
         if "oncologist_reach" not in qid:
             continue
-        assert (
-            len(re.findall(r"LOWER\((?:\w+\.)?geographic_region::text\)", body)) >= 2
-        ), f"{qid}: both the oncologists and engaged CTEs must be region-filtered"
+        assert len(re.findall(r"LOWER\((?:\w+\.)?geographic_region::text\)", body)) >= 2, (
+            f"{qid}: both the oncologists and engaged CTEs must be region-filtered"
+        )
 
 
 def test_br002_variants_join_hcp_profiles_for_region():

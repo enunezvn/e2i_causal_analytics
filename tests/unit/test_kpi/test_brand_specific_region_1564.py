@@ -87,9 +87,7 @@ def test_br001_region_routes_appends_region_and_stamps():
 
 @pytest.mark.unit
 def test_br001_no_region_base_untouched():
-    client = _RoutingClient(
-        {"brand_specific_remi_ah_uncontrolled": [{"uncontrolled_rate": 0.41}]}
-    )
+    client = _RoutingClient({"brand_specific_remi_ah_uncontrolled": [{"uncontrolled_rate": 0.41}]})
     calc = BrandSpecificCalculator(db_client=client)
     ctx: dict[str, Any] = {}
     value = calc._calc_remi_ah_uncontrolled(ctx)
@@ -162,9 +160,7 @@ def test_br002_region_both_legs_empty_fails_loud_naming_region():
 @pytest.mark.unit
 def test_br002_no_region_chain_untouched():
     """region=None keeps the certified primary(view) -> fallback chain, no marker."""
-    client = _RoutingClient(
-        {"brand_specific_remi_intent_delta_primary": [{"intent_delta": 0.32}]}
-    )
+    client = _RoutingClient({"brand_specific_remi_intent_delta_primary": [{"intent_delta": 0.32}]})
     calc = BrandSpecificCalculator(db_client=client)
     ctx: dict[str, Any] = {"brand": "Remibrutinib"}
     assert calc._calc_remi_intent_delta(ctx) == pytest.approx(0.32)
@@ -179,9 +175,7 @@ def test_br002_no_region_chain_untouched():
 def test_br003_region_routes_and_value_differs_from_portfolio():
     client = _RoutingClient(
         {
-            "brand_specific_fabhalta_pnh_tested": [
-                {"tested_rate": 0.55, "pnh_events_total": 40}
-            ],
+            "brand_specific_fabhalta_pnh_tested": [{"tested_rate": 0.55, "pnh_events_total": 40}],
             "brand_specific_fabhalta_pnh_tested_region": [
                 {"tested_rate": 0.71, "pnh_events_total": 40}
             ],
@@ -248,9 +242,7 @@ def test_br004_region_routes_and_value_differs_from_portfolio():
 
 @pytest.mark.unit
 def test_br004_no_region_base_untouched():
-    client = _RoutingClient(
-        {"brand_specific_kisqali_dx_adoption": [{"median_days": 42.0}]}
-    )
+    client = _RoutingClient({"brand_specific_kisqali_dx_adoption": [{"median_days": 42.0}]})
     calc = BrandSpecificCalculator(db_client=client)
     ctx: dict[str, Any] = {}
     assert calc._calc_kisqali_dx_adoption(ctx) == 42.0
@@ -280,9 +272,7 @@ def test_br005_region_routes_and_value_differs_from_portfolio():
 
 @pytest.mark.unit
 def test_br005_no_region_base_untouched():
-    client = _RoutingClient(
-        {"brand_specific_kisqali_oncologist_reach": [{"reach": 0.44}]}
-    )
+    client = _RoutingClient({"brand_specific_kisqali_oncologist_reach": [{"reach": 0.44}]})
     calc = BrandSpecificCalculator(db_client=client)
     ctx: dict[str, Any] = {}
     assert calc._calc_kisqali_oncologist_reach(ctx) == 0.44
@@ -301,9 +291,7 @@ def test_region_id_honors_synthetic_showcase_flag(monkeypatch):
     monkeypatch.setenv("E2I_KPI_INCLUDE_SYNTHETIC", "1")
     client = _RoutingClient(
         {
-            "brand_specific_kisqali_oncologist_reach_region_include_synthetic": [
-                {"reach": 0.51}
-            ],
+            "brand_specific_kisqali_oncologist_reach_region_include_synthetic": [{"reach": 0.51}],
         }
     )
     calc = BrandSpecificCalculator(db_client=client)
@@ -374,9 +362,7 @@ def test_e2e_br005_region_ask_stamps_applied_with_region_value():
 @pytest.mark.unit
 def test_e2e_br005_no_region_stays_default():
     kpi = _br_kpi("BR-005", "Kisqali - Oncologist Reach")
-    client = _RoutingClient(
-        {"brand_specific_kisqali_oncologist_reach": [{"reach": 0.44}]}
-    )
+    client = _RoutingClient({"brand_specific_kisqali_oncologist_reach": [{"reach": 0.44}]})
     res = _wired(kpi, client).calculate("BR-005")
     assert res.value == 0.44
     assert res.region_status == "default"
