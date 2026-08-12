@@ -126,7 +126,23 @@ export function resolveRegion(region: string | undefined): string | null | undef
   // Mirror enum_labels.fold_region_key: casefold + remove separators — the
   // labels are single concatenated words, so 'North East' folds to 'northeast'.
   const folded = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
-  return REGION_ALIAS_MAP[folded] ?? null;
+  const exact = REGION_ALIAS_MAP[folded];
+  if (exact !== undefined) return exact;
+  // #1565: mirror resolve_region_label's LOOKUP-time noise strip — a leading
+  // "the" and trailing "region"/"area" tokens never change WHICH region a
+  // phrase names ('the Northeast region' -> northeast). Tried only after the
+  // exact fold misses, so no existing resolution changes. Both patterns
+  // require a separator boundary: bare noise words ('the', 'region') strip
+  // to nothing and stay null. 'coast' is deliberately NOT stripped —
+  // 'central coast' (California) must never resolve to 'central' -> midwest.
+  const lower = trimmed.toLowerCase();
+  const stripped = lower
+    .replace(/^the[\s_-]+/, '')
+    .replace(/(?:[\s_-]+(?:region|area))+$/, '');
+  if (stripped !== lower) {
+    return REGION_ALIAS_MAP[stripped.replace(/[\s_-]+/g, '')] ?? null;
+  }
+  return null;
 }
 
 /** Severity aliases → canonical patient_journeys.segment_assignment values. */
