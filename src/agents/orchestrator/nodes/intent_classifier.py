@@ -433,9 +433,72 @@ _TIER_PRE_ANCHOR_COMMERCIAL_VETO = (
 # Abstaining returns the module's existing "pattern layer has nothing" verdict
 # (general@0.5), which is below ``execute``'s 0.8 trust floor, so an over-cap
 # query goes to the LLM fallback — and that fallback receives the query in FULL
-# (``execute`` passes ``state["query"]``, never a truncated head). It is also
-# strictly cheaper than truncating: no regex runs at all.
+# (``execute`` passes ``state["query"]``, never a truncated head). No quadratic
+# scan ever runs past the cap; #1563 adds only a LINEAR paragraph split plus at
+# most one table scan bounded at ``_ASK_TAIL_MAX_CHARS`` (see below).
 _PATTERN_SCAN_MAX_CHARS = 2000
+
+
+# #1563 — bounded recovery of the trailing ASK from an over-cap paste.
+#
+# The #1470 abstention closed the CPU hazard but opened a routing-parity gap,
+# measured live 2026-08-12 (raw_cap_probe_chat.jsonl): a 68-char KPI ask routes
+# segment_analysis@0.867 -> heterogeneous_optimizer, while the SAME ask behind
+# ~2.5KB of pasted meeting notes abstains, and the Haiku fallback — fed the
+# whole paste — lands the turn on a lone explainer that answers with a bare
+# KPI total. /chat pastes put context FIRST and the ask LAST, so the ask is
+# recoverable deterministically.
+#
+# WHY NOT a tail WINDOW (the naive form of this fix — disproved before
+# building, same battery): scoring the last 2000 chars of the padded probe, or
+# the whole padded query with the cap lifted, returns multi_faceted@0.867 —
+# the FILLER itself trips patterns ("payer mix shifts" fires drift_check), so
+# ANY scan that includes pasted context is poisoned by it. Only the trailing
+# ask paragraph alone reproduces the unpadded verdict (segment_analysis@0.867,
+# secondary [explanation] — exact parity).
+#
+# So past the cap the layer attempts ONE narrowly-guarded recovery before
+# abstaining: take the last blank-line-separated paragraph, and score it IFF
+#   (a) the query has paragraph structure at all (a single over-cap paragraph
+#       still abstains — #1470's tests are pinned on that shape),
+#   (b) the trailing paragraph is no longer than _ASK_TAIL_MAX_CHARS (600 —
+#       above the longest routed gold query, 593 chars; a trailing "ask"
+#       longer than any real routed query is treated as more paste), and
+#   (c) it is ask-shaped (_ASK_SHAPE_RE: "?", an interrogative pronoun, or an
+#       imperative request stem). This gate is what keeps ask-FIRST pastes on
+#       today's abstain->LLM path: their trailing paragraph is notes, and
+#       scoring notes at full trust was measured to produce a CONFIDENT
+#       drift_check@0.867 misroute where today safely escalates.
+# The recovered verdict is honored only at the same >=0.8 floor ``execute``
+# applies; anything weaker abstains exactly as before. Fail direction is
+# one-sided by construction: every guard failure lands on the #1470 behavior.
+#
+# Veto scoping is DELIBERATE (the #1470 codex-HIGH transplanted): whole-query
+# negative lookaheads (the KPI forecast guard, the tiering vetoes) see only
+# the trailing paragraph here. Within ONE paragraph that is #1470's veto
+# semantics unchanged; lexemes in OTHER paragraphs of an over-cap paste are
+# pasted context, and letting context suppress the ask's route is the same
+# filler-poisoning failure the window variant measured. A single ask whose own
+# veto evidence spans the paste without paragraph breaks still abstains (gate
+# (a)). Pinned by test_paste_ask_recovery_1563.py (parity, every fail-closed
+# edge, paragraph-scoped evidence, bounded cost).
+_ASK_TAIL_MAX_CHARS = 600
+
+_PARAGRAPH_BREAK_RE = re.compile(r"\n\s*\n")
+
+# Narrow ON PURPOSE: a missed marker only costs falling back to today's LLM
+# escalation, while a false hit on a notes paragraph risks a confident
+# misroute — so no noun-ish or notes-plausible lexemes ("list", "review",
+# "update" are all meeting-notes vocabulary). Prefix stems ("summari[sz]e",
+# bare "compare") do not match their past-tense forms, which read as notes
+# ("compared to Q2"), only the imperative.
+_ASK_SHAPE_RE = re.compile(
+    r"\?"
+    r"|\b(?:what|why|how|which|who|whom|whose|when|where"
+    r"|can you|could you|would you|please"
+    r"|give me|show me|tell me|compare|summari[sz]e|explain)\b",
+    re.IGNORECASE,
+)
 
 
 # KPI value lookups → explainer (#1337 gold: kpi_query is the largest gold
@@ -804,7 +867,14 @@ class IntentClassifierNode:
         # cap abstain outright rather than scoring a prefix — a prefix can hide
         # a pattern's own whole-query veto and produce a CONFIDENT misroute.
         # See _PATTERN_SCAN_MAX_CHARS. Escalates to the LLM, which sees it all.
+        # #1563: before abstaining, attempt the bounded trailing-ask recovery —
+        # a paste (context first, ask last) carries its ask in the final
+        # paragraph, and scoring THAT alone restores routing parity with the
+        # unpadded ask. Every guard failure falls through to the abstention.
         if len(query) > _PATTERN_SCAN_MAX_CHARS:
+            recovered = self._classify_trailing_ask(query)
+            if recovered is not None:
+                return recovered
             return IntentClassification(
                 primary_intent="general",
                 confidence=0.5,
@@ -937,6 +1007,39 @@ class IntentClassifierNode:
             secondary_intents=secondary[:2],
             requires_multi_agent=requires_multi_agent,
         )
+
+    def _classify_trailing_ask(self, query: str) -> Optional[IntentClassification]:
+        """Bounded recovery of the ask from an over-cap paste (#1563).
+
+        Returns a confident verdict for the trailing paragraph of ``query``
+        when — and only when — it is plausibly the operative ask; ``None``
+        means "abstain exactly as #1470 shipped it". See the block comment at
+        ``_ASK_TAIL_MAX_CHARS`` for the measured rationale behind each guard
+        (in particular why a tail WINDOW is disproved: any scan that includes
+        pasted context is poisoned by it).
+
+        Cost is bounded by construction: one linear paragraph split over the
+        paste, one ``_ASK_SHAPE_RE`` search over <= _ASK_TAIL_MAX_CHARS chars,
+        and at most one table scan over the same bounded tail (which re-enters
+        ``_pattern_classify`` strictly below the #1470 cap).
+        """
+        paragraphs = [p for p in (s.strip() for s in _PARAGRAPH_BREAK_RE.split(query)) if p]
+        if len(paragraphs) < 2:
+            # No paragraph structure — a single over-cap blob has no
+            # separable ask (#1470's veto-hiding shape lives here: one ask
+            # whose evidence spans the paste must not be scored piecemeal).
+            return None
+        tail = paragraphs[-1]
+        if len(tail) > _ASK_TAIL_MAX_CHARS:
+            return None
+        if not _ASK_SHAPE_RE.search(tail):
+            return None
+        verdict = self._pattern_classify(tail)
+        if verdict["confidence"] < 0.8:
+            # Same trust floor ``execute`` applies: a weak tail verdict must
+            # not displace the LLM fallback, which sees the full query.
+            return None
+        return verdict
 
     def _count_intent_bearing_clauses(self, query: str, strong_intents: List[str]) -> int:
         """Count coordinating clauses that INDEPENDENTLY bear a strong intent.
