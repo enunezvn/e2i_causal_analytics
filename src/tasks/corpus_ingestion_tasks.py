@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 def sync_operational_corpus(self, brands: Optional[list[str]] = None) -> dict[str, Any]:
     """Index the latest snapshot of every (brand, metric, region) KPI combo.
 
+    Also reconciles the existing corpus against the current fact table (#1552,
+    default ``reconcile=True`` inside :func:`index_business_metrics`): prose
+    matching no current ``business_metrics`` row (stale, e.g. values the frozen
+    substrate no longer attributes to that date) is deleted, and value-valid
+    prose in the pre-grain-label template is re-indexed under the labeled one.
+
     Args:
         brands: optional restriction; defaults to all brands in business_metrics.
 
