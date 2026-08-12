@@ -1307,6 +1307,46 @@ async def document_retrieval_tool(
         }
 
 
+def _project_failure_details(failure_details: Any) -> List[Dict[str, Any]]:
+    """Trim per-agent failure metadata to what chat surfaces may see (#1549).
+
+    ``_build_output``'s failure_details entries carry the dispatcher's raw
+    internal ``error`` audit strings (plus ``latency_ms``). The AG-UI
+    synthesis prompt serializes tool payloads without projection or
+    redaction, and on the partial_success path ``response_text`` does NOT
+    already narrate the errors — so a passthrough would put raw internals in
+    front of the synthesizer that this surface never exposed before. Mirror
+    of /chat's surfaced-``user_action`` pattern (``chat_bridge`` #1451): keep
+    the agent name, the dispatcher-authored user-facing next step, and a
+    coarse category DERIVED deterministically from the real error — never
+    the raw string. Unexpected shapes degrade to omission, not a raise
+    (orchestrator-supplied data, same tolerance as chat_bridge).
+    """
+    projected: List[Dict[str, Any]] = []
+    for detail in failure_details or []:
+        if not isinstance(detail, dict):
+            continue
+        error_text = str(detail.get("error") or "")
+        low = error_text.lower()
+        if "needs structured inputs" in low or "missing:" in low:
+            reason = "missing_required_inputs"
+        elif "timeout" in low or "timed out" in low:
+            reason = "timeout"
+        elif error_text:
+            reason = "agent_error"
+        else:
+            reason = "unknown"
+        entry: Dict[str, Any] = {
+            "agent_name": detail.get("agent_name"),
+            "reason": reason,
+        }
+        user_action = detail.get("user_action")
+        if isinstance(user_action, str) and user_action.strip():
+            entry["user_action"] = user_action.strip()
+        projected.append(entry)
+    return projected
+
+
 @tool(args_schema=OrchestratorToolInput)
 async def orchestrator_tool(
     query: str,
@@ -1401,6 +1441,8 @@ async def orchestrator_tool(
         agents_dispatched = orchestrator_result.get("agents_dispatched", [])
 
         # #1549 truthful envelope: success must reflect the run's REAL status.
+        # (failure_details are projected via _project_failure_details — see
+        # its docstring for the leak-surface rationale.)
         # _build_output always emits "status" ("completed" / "partial_success"
         # / "failed"); a fail-closed run (zero successful agents — the
         # synthesizer's "Please try again or rephrase your question."
@@ -1420,7 +1462,7 @@ async def orchestrator_tool(
         status = orchestrator_result.get("status")
         run_failed = status == "failed"
         failed_agents = orchestrator_result.get("failed_agents") or []
-        failure_details = orchestrator_result.get("failure_details") or []
+        failure_details = _project_failure_details(orchestrator_result.get("failure_details"))
 
         payload: Dict[str, Any] = {
             "success": not run_failed,
@@ -1649,8 +1691,12 @@ async def tool_composer_tool(
                 }
                 if fb_status is not None:
                     fb_payload["status"] = fb_status
+                if fallback_result.get("has_partial_failure"):
+                    fb_payload["has_partial_failure"] = True
                 fb_failed_agents = fallback_result.get("failed_agents") or []
-                fb_failure_details = fallback_result.get("failure_details") or []
+                fb_failure_details = _project_failure_details(
+                    fallback_result.get("failure_details")
+                )
                 if fb_failed_agents:
                     fb_payload["failed_agents"] = fb_failed_agents
                 if fb_failure_details:

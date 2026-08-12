@@ -769,6 +769,72 @@ class TestOrchestratorTool:
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_partial_failure_details_are_projected_not_raw(self, mock_get_orchestrator):
+        """#1549 iter-2 (codex MEDIUM): failure_details must be a TRIMMED
+        projection — agent name + coarse category + the dispatcher-authored
+        user_action — never the raw internal error string. The AG-UI synthesis
+        prompt serializes tool payloads without redaction, and on the
+        partial_success path response_text does NOT already narrate the
+        errors, so a passthrough would leak internals it never leaked before.
+        Mirrors /chat's surfaced-user_action pattern (chat_bridge #1451)."""
+        import json
+
+        raw_error = (
+            "Traceback (most recent call last): ValueError: 22P02 invalid "
+            "input value for enum region_t: 'northeastregion'"
+        )
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "status": "partial_success",
+                "response_text": "TRx is driven by HCP engagement (causal agent failed).",
+                "response_confidence": 0.7,
+                "agents_dispatched": ["gap_analyzer", "causal_impact"],
+                "successful_agents": ["gap_analyzer"],
+                "failed_agents": ["causal_impact"],
+                "has_partial_failure": True,
+                "failure_details": [
+                    {
+                        "agent_name": "causal_impact",
+                        "error": raw_error,
+                        "latency_ms": 40,
+                        "user_action": None,
+                    }
+                ],
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+
+        serialized = json.dumps(result, default=str)
+        assert raw_error not in serialized
+        assert "22P02" not in serialized
+        # Enough survives for an honest "the causal agent failed" caveat.
+        assert result["failure_details"] == [{"agent_name": "causal_impact", "reason": "agent_error"}]
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_failed_run_failure_details_are_projected(self, mock_get_orchestrator):
+        """Projection applies on the all-failed path too: user_action and the
+        category survive, raw error/latency internals are dropped (the honest
+        abstention narrative already lives in response_text — synthesizer
+        contract, out of this lane's scope)."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(return_value=self._fail_closed_orchestrator_result())
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke({"query": "explain that"})
+
+        detail = result["failure_details"][0]
+        assert detail["agent_name"] == "explainer"
+        assert detail["reason"] == "missing_required_inputs"
+        assert detail["user_action"].startswith("Run an analysis first")
+        assert "error" not in detail
+        assert "latency_ms" not in detail
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
     async def test_completed_run_reports_status_and_omits_empty_analysis_results(
         self, mock_get_orchestrator
     ):
@@ -1041,6 +1107,63 @@ class TestToolComposerTool:
         assert result["confidence"] == 0.0
         assert result["failed_agents"] == ["explainer"]
         assert result["failure_details"][0]["user_action"].startswith("Run an analysis first")
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_fallback_mirrors_partial_failure_metadata(
+        self, mock_compose_query, mock_get_orchestrator
+    ):
+        """#1549 iter-2 (codex LOW + MEDIUM): the composer fallback must mirror
+        orchestrator_tool fully — has_partial_failure propagates (it was
+        missing from the fallback in iter-1) and failure_details arrive as the
+        same trimmed projection, never raw internal error strings."""
+        import json
+
+        mock_compose_query.side_effect = Exception("Composition failed")
+
+        raw_error = (
+            "RuntimeError: resource_optimizer needs per-entity allocation "
+            "inputs; internal audit ref dispatcher.py:2853"
+        )
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "status": "partial_success",
+                "response_text": "Northeast snapshots below (optimizer failed closed).",
+                "response_confidence": 0.6,
+                "agents_dispatched": ["gap_analyzer", "resource_optimizer"],
+                "successful_agents": ["gap_analyzer"],
+                "failed_agents": ["resource_optimizer"],
+                "has_partial_failure": True,
+                "failure_details": [
+                    {
+                        "agent_name": "resource_optimizer",
+                        "error": raw_error,
+                        "latency_ms": 90,
+                        "user_action": (
+                            "Provide per-entity response coefficients and a budget."
+                        ),
+                    }
+                ],
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await tool_composer_tool.ainvoke({"query": "Complex multi-faceted query"})
+
+        assert result["success"] is True
+        assert result["fallback"] is True
+        assert result["status"] == "partial_success"
+        assert result["has_partial_failure"] is True
+        assert result["failed_agents"] == ["resource_optimizer"]
+        serialized = json.dumps(result, default=str)
+        assert raw_error not in serialized
+        assert "dispatcher.py" not in serialized
+        detail = result["failure_details"][0]
+        assert detail["agent_name"] == "resource_optimizer"
+        assert detail["reason"] == "agent_error"
+        assert detail["user_action"].startswith("Provide per-entity")
 
 
 class TestMultiFacetedQueryDetection:

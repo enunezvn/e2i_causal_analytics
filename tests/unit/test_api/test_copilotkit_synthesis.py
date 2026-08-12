@@ -217,3 +217,59 @@ def test_prompt_keeps_failed_envelope_response_text():
     assert "I was unable to complete the analysis" in p
     assert "Please try again or rephrase your question." in p
     assert "failed_agents" in p
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_partial_failure_payload_reaches_prompt_trimmed():
+    """#1549 iter-2 (codex finding 5): guard the ACTUAL tool->prompt seam,
+    not a hand-built payload. orchestrator_tool's partial_success envelope
+    is produced by the real tool code, serialized as langchain would, and
+    fed through build_synthesis_prompt: the trimmed projection (agent name +
+    category + honest response text) must reach the synthesizer, the raw
+    dispatcher audit string must NOT."""
+    import json
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.api.routes.chatbot_tools import orchestrator_tool
+
+    raw_error = (
+        "Traceback (most recent call last): ValueError: 22P02 invalid "
+        "input value for enum region_t: 'northeastregion'"
+    )
+    mock_orchestrator = MagicMock()
+    mock_orchestrator.run = AsyncMock(
+        return_value={
+            "status": "partial_success",
+            "response_text": "TRx is driven by HCP engagement (causal agent failed).",
+            "response_confidence": 0.7,
+            "agents_dispatched": ["gap_analyzer", "causal_impact"],
+            "successful_agents": ["gap_analyzer"],
+            "failed_agents": ["causal_impact"],
+            "has_partial_failure": True,
+            "failure_details": [
+                {
+                    "agent_name": "causal_impact",
+                    "error": raw_error,
+                    "latency_ms": 40,
+                    "user_action": None,
+                }
+            ],
+        }
+    )
+    with patch("src.api.routes.chatbot_tools.get_orchestrator", return_value=mock_orchestrator):
+        payload = await orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+
+    p = build_synthesis_prompt(
+        "Why is TRx moving?",
+        [{"name": "orchestrator_tool", "args": {"query": "Why is TRx moving?"}}],
+        [{"tool": "orchestrator_tool", "result": json.dumps(payload, default=str)}],
+    )
+    # Raw internals never reach the synthesis prompt.
+    assert raw_error not in p
+    assert "22P02" not in p
+    # The honest caveat material does.
+    assert "causal_impact" in p
+    assert "agent_error" in p
+    assert "has_partial_failure" in p
+    assert "TRx is driven by HCP engagement" in p
