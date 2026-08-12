@@ -448,9 +448,7 @@ class TestTrendOrigin:
         )
         df = BusinessMetricsGenerator(config).generate()
 
-        ratio = self._first_date_trx_ratio(
-            df, trend_factor=1.0 + self._TRX_TREND * 24
-        )
+        ratio = self._first_date_trx_ratio(df, trend_factor=1.0 + self._TRX_TREND * 24)
         assert 0.85 <= ratio <= 1.15, f"calendar-anchored first-date ratio off: {ratio:.3f}"
 
 

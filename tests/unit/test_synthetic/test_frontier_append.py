@@ -55,9 +55,7 @@ class TestMonthCohortContinuity:
 
         expected = trx.apply(
             lambda r: (
-                TRX_BASE[r["brand"]]
-                * REGION_FACTORS[r["region"]]
-                * (1 + TRX_TREND * AUG_2026_IDX)
+                TRX_BASE[r["brand"]] * REGION_FACTORS[r["region"]] * (1 + TRX_TREND * AUG_2026_IDX)
             ),
             axis=1,
         )
@@ -129,9 +127,7 @@ class TestTrendOriginChangedColumnInvariance:
     def test_changed_column_set_is_exactly_the_value_leg(self):
         df_none, df_origin = self._frames()
         assert list(df_none.columns) == list(df_origin.columns)
-        changed = {
-            col for col in df_none.columns if not df_none[col].equals(df_origin[col])
-        }
+        changed = {col for col in df_none.columns if not df_none[col].equals(df_origin[col])}
         assert changed == self.EXPECTED_CHANGED, (
             f"unexpected trend_origin-sensitive columns: "
             f"extra={changed - self.EXPECTED_CHANGED}, "
