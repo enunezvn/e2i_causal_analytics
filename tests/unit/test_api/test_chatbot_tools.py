@@ -647,6 +647,158 @@ class TestOrchestratorTool:
         assert "gap_analyzer" in result["agents_dispatched"]
         assert "explainer" in result["agents_dispatched"]
 
+    # ------------------------------------------------------------------
+    # #1549 truthful envelope: success must reflect the orchestrator run's
+    # REAL status. A fail-closed run (status "failed", zero successful
+    # agents, synthesizer's "Please try again or rephrase your question."
+    # abstention) was previously re-promoted to a hardcoded success=True,
+    # so the AG-UI synthesis prompt presented the ask-back as grounded
+    # evidence and tool_evidence/_grade_copilot_turn rewarded it.
+    # ------------------------------------------------------------------
+
+    _FAIL_CLOSED_TEXT = (
+        "I was unable to complete the analysis due to the following errors:\n"
+        "- explainer: explainer needs structured inputs that could not be "
+        "grounded in real data; missing: analysis_results. Failing closed - "
+        "no values were fabricated.\n\n"
+        "Please try again or rephrase your question."
+    )
+
+    @staticmethod
+    def _fail_closed_orchestrator_result():
+        return {
+            "status": "failed",
+            "response_text": TestOrchestratorTool._FAIL_CLOSED_TEXT,
+            "response_confidence": 0.0,
+            "agents_dispatched": ["explainer"],
+            "successful_agents": [],
+            "failed_agents": ["explainer"],
+            "has_partial_failure": False,
+            "failure_details": [
+                {
+                    "agent_name": "explainer",
+                    "error": (
+                        "explainer needs structured inputs that could not be "
+                        "grounded in real data; missing: analysis_results"
+                    ),
+                    "latency_ms": 12,
+                    "user_action": (
+                        "Run an analysis first (a causal, gap or segmentation "
+                        "question), then ask me to explain it."
+                    ),
+                }
+            ],
+        }
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_failed_run_propagates_success_false(self, mock_get_orchestrator):
+        """A fail-closed orchestrator run must NOT claim success=True; the
+        honest abstention text is preserved so the synthesizer can relay it,
+        and the failure metadata rides along."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(return_value=self._fail_closed_orchestrator_result())
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke({"query": "explain that"})
+
+        assert result["success"] is False
+        assert result["status"] == "failed"
+        assert result["fallback"] is False
+        # Honest abstention text preserved for the synthesizer to relay.
+        assert result["response"] == self._FAIL_CLOSED_TEXT
+        assert result["confidence"] == 0.0
+        assert result["failed_agents"] == ["explainer"]
+        assert result["failure_details"][0]["user_action"].startswith("Run an analysis first")
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_failed_run_payload_carries_no_evidence(self, mock_get_orchestrator):
+        """Downstream pin: the fail-closed envelope is excluded from
+        grounded-evidence counts (the #1257 rule keys on ``success``), so
+        _grade_copilot_turn no longer rewards fail-closed turns."""
+        import json
+
+        from src.utils.tool_evidence import evidence_tool_count, payload_carries_evidence
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(return_value=self._fail_closed_orchestrator_result())
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke({"query": "explain that"})
+
+        # langchain_core stringifies the dict payload into the ToolMessage.
+        payload = json.dumps(result, default=str)
+        assert payload_carries_evidence(payload) is False
+        assert evidence_tool_count([{"tool": "orchestrator_tool", "result": payload}]) == 0
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_partial_failure_keeps_success_with_metadata(self, mock_get_orchestrator):
+        """partial_success carries real evidence from the successful agents:
+        success stays True, but the failure metadata is propagated so the
+        synthesizer can caveat honestly."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "status": "partial_success",
+                "response_text": "TRx is driven by HCP engagement (causal agent failed).",
+                "response_confidence": 0.7,
+                "agents_dispatched": ["gap_analyzer", "causal_impact"],
+                "successful_agents": ["gap_analyzer"],
+                "failed_agents": ["causal_impact"],
+                "has_partial_failure": True,
+                "failure_details": [
+                    {
+                        "agent_name": "causal_impact",
+                        "error": "insufficient rows",
+                        "latency_ms": 40,
+                        "user_action": None,
+                    }
+                ],
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+
+        assert result["success"] is True
+        assert result["status"] == "partial_success"
+        assert result["has_partial_failure"] is True
+        assert result["failed_agents"] == ["causal_impact"]
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_completed_run_reports_status_and_omits_empty_analysis_results(
+        self, mock_get_orchestrator
+    ):
+        """_build_output never emits ``analysis_results``, so the tool's
+        ``analysis_results`` key was ALWAYS ``{}`` — silent evidence-loss noise
+        presented to the synthesis LLM. With zero consumers repo-wide, the key
+        is dropped rather than fabricated."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "status": "completed",
+                "response_text": "TRx grew 12% on HCP engagement.",
+                "response_confidence": 0.9,
+                "agents_dispatched": ["causal_impact"],
+                "successful_agents": ["causal_impact"],
+                "failed_agents": [],
+                "has_partial_failure": False,
+                "failure_details": None,
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke({"query": "TRx drivers?"})
+
+        assert result["success"] is True
+        assert result["status"] == "completed"
+        assert "analysis_results" not in result
+        assert "failed_agents" not in result
+        assert "failure_details" not in result
+
 
 class TestToolComposerTool:
     """Tests for tool_composer_tool."""
@@ -840,6 +992,55 @@ class TestToolComposerTool:
         assert result["success"] is False
         assert result["status"] == "FAILED"
         assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_fallback_propagates_orchestrator_failure(
+        self, mock_compose_query, mock_get_orchestrator
+    ):
+        """#1549: mirror of orchestrator_tool's truthful envelope in the
+        composer's fallback branch — when the fallback orchestrator run itself
+        fails closed, the payload must not claim success=True. The honest
+        abstention text and failure metadata are preserved."""
+        mock_compose_query.side_effect = Exception("Composition failed")
+
+        fail_text = (
+            "I was unable to complete the analysis due to the following errors:\n"
+            "- explainer: no successful upstream agent results.\n\n"
+            "Please try again or rephrase your question."
+        )
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "status": "failed",
+                "response_text": fail_text,
+                "response_confidence": 0.0,
+                "agents_dispatched": ["explainer"],
+                "failed_agents": ["explainer"],
+                "has_partial_failure": False,
+                "failure_details": [
+                    {
+                        "agent_name": "explainer",
+                        "error": "no successful upstream agent results",
+                        "latency_ms": 8,
+                        "user_action": "Run an analysis first, then ask me to explain it.",
+                    }
+                ],
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await tool_composer_tool.ainvoke({"query": "Complex multi-faceted query"})
+
+        assert result["success"] is False
+        assert result["fallback"] is True
+        assert result["status"] == "failed"
+        assert "Composition failed" in result["fallback_reason"]
+        assert result["response"] == fail_text
+        assert result["confidence"] == 0.0
+        assert result["failed_agents"] == ["explainer"]
+        assert result["failure_details"][0]["user_action"].startswith("Run an analysis first")
 
 
 class TestMultiFacetedQueryDetection:

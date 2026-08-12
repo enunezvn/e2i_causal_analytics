@@ -1399,16 +1399,39 @@ async def orchestrator_tool(
         response_text = orchestrator_result.get("response_text", "")
         response_confidence = orchestrator_result.get("response_confidence", 0.85)
         agents_dispatched = orchestrator_result.get("agents_dispatched", [])
-        analysis_results = orchestrator_result.get("analysis_results", {})
 
-        return {
-            "success": True,
+        # #1549 truthful envelope: success must reflect the run's REAL status.
+        # _build_output always emits "status" ("completed" / "partial_success"
+        # / "failed"); a fail-closed run (zero successful agents — the
+        # synthesizer's "Please try again or rephrase your question."
+        # abstention) was previously re-promoted to a hardcoded success=True,
+        # so the AG-UI synthesis prompt presented the ask-back as grounded
+        # evidence and tool_evidence/_grade_copilot_turn rewarded it (#1257
+        # rule keys on ``success``). A missing "status" (non-orchestrator-
+        # shaped dicts) keeps the old lenient contract. partial_success stays
+        # success=True — it carries real evidence from the successful agents —
+        # with the failure metadata propagated so the synthesizer can caveat.
+        #
+        # NOTE: no "analysis_results" key. _build_output never emits one, so
+        # the old `orchestrator_result.get("analysis_results", {})` was ALWAYS
+        # {} — silent evidence-loss noise with zero consumers repo-wide
+        # (verified 2026-08-12: src/ hits are the agent_activities JSONB
+        # column, frontend/ has none, tests only fabricated it in mocks).
+        status = orchestrator_result.get("status")
+        run_failed = status == "failed"
+        failed_agents = orchestrator_result.get("failed_agents") or []
+        failure_details = orchestrator_result.get("failure_details") or []
+
+        payload: Dict[str, Any] = {
+            "success": not run_failed,
             "fallback": False,
             "query": query,
+            # The honest response text is ALWAYS preserved — on a failed run
+            # it carries the synthesizer's fail-closed abstention, which must
+            # still reach the user via the synthesis prompt.
             "response": response_text,
             "confidence": response_confidence,
             "agents_dispatched": agents_dispatched,
-            "analysis_results": analysis_results,
             "target_agent_requested": target_agent,
             "context": {
                 "brand": brand,
@@ -1416,6 +1439,15 @@ async def orchestrator_tool(
                 "session_id": effective_session_id,
             },
         }
+        if status is not None:
+            payload["status"] = status
+        if orchestrator_result.get("has_partial_failure"):
+            payload["has_partial_failure"] = True
+        if failed_agents:
+            payload["failed_agents"] = failed_agents
+        if failure_details:
+            payload["failure_details"] = failure_details
+        return payload
 
     except Exception as e:
         logger.error(f"Orchestrator tool failed: {e}")
@@ -1601,14 +1633,29 @@ async def tool_composer_tool(
                         "user_context": {"brand": brand, "region": region},
                     }
                 )
-                return {
-                    "success": True,
+                # #1549: mirror orchestrator_tool's truthful envelope — the
+                # fallback of the fallback can itself fail closed, and a
+                # hardcoded success=True here counted that abstention as
+                # grounded evidence downstream. The honest response text is
+                # preserved either way.
+                fb_status = fallback_result.get("status")
+                fb_payload: Dict[str, Any] = {
+                    "success": fb_status != "failed",
                     "fallback": True,
                     "fallback_reason": f"Tool composer error: {str(e)}",
                     "query": query,
                     "response": fallback_result.get("response_text", ""),
                     "confidence": fallback_result.get("response_confidence", 0.7),
                 }
+                if fb_status is not None:
+                    fb_payload["status"] = fb_status
+                fb_failed_agents = fallback_result.get("failed_agents") or []
+                fb_failure_details = fallback_result.get("failure_details") or []
+                if fb_failed_agents:
+                    fb_payload["failed_agents"] = fb_failed_agents
+                if fb_failure_details:
+                    fb_payload["failure_details"] = fb_failure_details
+                return fb_payload
         except Exception as fallback_error:
             logger.error(f"Orchestrator fallback also failed: {fallback_error}")
 
