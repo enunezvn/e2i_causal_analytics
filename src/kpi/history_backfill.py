@@ -83,8 +83,10 @@ predicate); conversion + the trigger family use ``patient_id`` MEMBERSHIP (a
 patient with journeys in two regions counts in both, mirroring
 ``patient_id IN region_patients``); maturation cutoffs stay anchored to the
 GLOBAL frontier (113's unscoped ``MAX(trigger_timestamp)``). KPIs with no
-live region variant to mirror (MAU/WAU, BR-*) never grow a region axis — a
-region reading the live platform cannot produce would be a fabrication.
+live region variant to mirror (MAU/WAU) never grow a region axis — a region
+reading the live platform cannot produce would be a fabrication. BR-* gained
+live region variants in migration 127 (#1564); mirroring them here is
+follow-up scope, so the BR handlers still emit global-only series.
 
 Run:  python -m src.kpi.history_backfill           # all registered KPIs
       python -m src.kpi.history_backfill WS3-BI-010 # one KPI
