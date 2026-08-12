@@ -109,6 +109,112 @@ class TestResolveRegionWithSynonyms:
         assert enum_labels.resolve_region_label(supplied, allow_synonyms=True) is None
 
 
+class TestRegionNoiseTokens:
+    """#1565: natural phrasings carry noise tokens — a leading article ("the
+    Northeast") and a trailing geography noun ("Northeast region", "Pacific
+    area") — that never change WHICH region the phrase names. They are
+    stripped at LOOKUP time only, in the synonym-tolerant mode only:
+
+    * ``fold_region_key`` keeps its documented contract (casefold + remove
+      separators) because the frontend mirrors it verbatim
+      (``resolveRegion`` in kpi-alias.ts folds lookups against the generated
+      REGION_ALIAS_MAP), and the alias-map BUILD must never mangle a future
+      alias that legitimately contains one of these words.
+    * Strict mode stays exactly "a real label in any casing" — cohort-style
+      canonical contracts must not widen by accident.
+    """
+
+    @pytest.mark.parametrize(
+        "supplied,expected",
+        [
+            ("Northeast region", "northeast"),
+            ("the Northeast", "northeast"),
+            ("the Northeast region", "northeast"),
+            ("north east region", "northeast"),
+            ("NE region", "northeast"),
+            ("new england area", "northeast"),
+            ("the South", "south"),
+            ("southeast region", "south"),
+            ("central region", "midwest"),
+            ("the Midwest region", "midwest"),
+            ("Pacific area", "west"),
+            ("western region", "west"),
+            ("THE WEST REGION", "west"),
+            ("northeast region area", "northeast"),
+        ],
+    )
+    def test_noise_tokens_strip_at_lookup(self, supplied, expected):
+        assert enum_labels.resolve_region_label(supplied, allow_synonyms=True) == expected
+
+    @pytest.mark.parametrize(
+        "supplied",
+        [
+            # Genuinely ambiguous: "east" spans northeast + south(east); the
+            # Atlantic seaboard spans TWO census regions (ME..PA northeast,
+            # DE..FL south) — resolving would silently mis-scope. #1565 keeps
+            # these unresolved so the tool can ask instead.
+            "East",
+            "east region",
+            "the East",
+            "East Coast",
+            "the east coast",
+            "Atlantic",
+            "Sun Belt",
+            "mid atlantic",
+            # "coast" is deliberately NOT a noise token: stripping it would
+            # turn "central coast" (California) into "central" -> midwest,
+            # a WRONG region — the one outcome the resolver may never produce.
+            "central coast",
+            "gulf coast",
+            # State names are not regions.
+            "Florida",
+            "California",
+        ],
+    )
+    def test_ambiguous_phrasings_stay_unresolved(self, supplied):
+        assert enum_labels.resolve_region_label(supplied, allow_synonyms=True) is None
+
+    @pytest.mark.parametrize("supplied", ["the", "region", "area", "the region", "the area"])
+    def test_bare_noise_words_never_resolve(self, supplied):
+        # Stripping requires a separator boundary, so a phrase that is ONLY
+        # noise reduces to nothing and stays unresolved.
+        assert enum_labels.resolve_region_label(supplied, allow_synonyms=True) is None
+
+    @pytest.mark.parametrize(
+        "supplied", ["Northeast region", "the west", "West Coast", "Pacific area"]
+    )
+    def test_strict_mode_does_not_strip(self, supplied):
+        # Strict mode is "a real label in any casing" — #1565 must not widen it.
+        assert enum_labels.resolve_region_label(supplied, allow_synonyms=False) is None
+
+    def test_stripping_is_lookup_time_only_never_in_the_map(self):
+        # The generated frontend REGION_ALIAS_MAP mirrors this map verbatim and
+        # kpi-alias.ts re-implements fold_region_key (casefold + separator
+        # removal, NOTHING else). Noise-stripped forms must therefore never
+        # appear as map keys — they resolve via the lookup path instead.
+        for key in enum_labels.REGION_LABEL_BY_ALIAS:
+            assert not key.startswith("the"), key
+            assert not key.endswith(("region", "area")), key
+
+    def test_stripping_never_changes_an_existing_resolution(self):
+        # Strictly-widening guarantee: every already-admitted alias resolves
+        # to the same label it did before #1565.
+        for label, aliases in enum_labels.REGION_ALIASES.items():
+            for alias in (label, *aliases):
+                assert (
+                    enum_labels.resolve_region_label(alias, allow_synonyms=True) == label
+                ), alias
+
+    def test_west_coast_alias_resolves_and_east_coast_does_not(self):
+        # "west coast" is clean (CA/OR/WA are all west census region);
+        # "east coast" is NOT an alias — see the ambiguity rationale above.
+        assert enum_labels.resolve_region_label("West Coast", allow_synonyms=True) == "west"
+        assert enum_labels.resolve_region_label("the west coast", allow_synonyms=True) == "west"
+        assert enum_labels.REGION_LABEL_BY_ALIAS.get("westcoast") == "west"
+        assert "eastcoast" not in enum_labels.REGION_LABEL_BY_ALIAS
+        assert enum_labels.resolve_region_label("East Coast", allow_synonyms=True) is None
+
+
 class TestModeIsExplicit:
     def test_allow_synonyms_is_required_keyword_only(self):
         # No default: every call site must state which contract it wants, so a

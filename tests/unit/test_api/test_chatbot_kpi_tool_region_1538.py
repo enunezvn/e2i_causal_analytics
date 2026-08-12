@@ -153,6 +153,67 @@ async def test_tool_fails_fast_on_unmappable_region(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_tool_normalizes_natural_phrasings_into_context(monkeypatch):
+    """#1565: 'the Northeast region' / 'West Coast' are fully determinable
+    phrasings — they must reach the calculator as the enum label, and the
+    #1538 provenance echo must carry the APPLIED label, never the raw arg."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    for supplied, label in [("the Northeast region", "northeast"), ("West Coast", "west")]:
+        calc = _CapturingCalc(
+            KPIResult(
+                kpi_id="WS3-BI-005",
+                value=249.0,
+                status=KPIStatus.UNKNOWN,
+                region_requested=label,
+                region_applied=label,
+                region_status="applied",
+            )
+        )
+        monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda c=calc: c, raising=False)
+
+        resp = await kpi_calculate_tool.ainvoke(
+            {"kpi_name": "TRx", "brand": "Kisqali", "region": supplied}
+        )
+        assert resp["success"] is True, supplied
+        assert calc.calls[0]["context"]["region"] == label, supplied
+        assert resp["region"] == label, supplied
+        assert resp["region_status"] == "applied", supplied
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_clarifies_on_ambiguous_region(monkeypatch):
+    """#1565: an ambiguous phrasing ('East Coast' spans two census regions)
+    still fails closed pre-DB, but the failure must be a clarify — the hint
+    tells the LLM to ask which of the four US census regions is meant —
+    instead of a dead-end error."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    calc = _CapturingCalc(KPIResult(kpi_id="WS3-BI-005", value=0.0, status=KPIStatus.UNKNOWN))
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: calc, raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx", "region": "East Coast"})
+    assert resp["success"] is False
+    assert "East Coast" in resp["error"]
+    # Failure-closed pin from #1538 stays: the error names the known labels
+    # and the calculator/DB is never touched.
+    for lbl in ("midwest", "northeast", "south", "west"):
+        assert lbl in resp["error"]
+    assert calc.calls == []
+    # The #1565 upgrade: a clarify hint naming the census regions, phrased as
+    # a question to relay to the user.
+    hint = resp.get("hint", "")
+    assert "census region" in hint
+    for lbl in ("northeast", "south", "midwest", "west"):
+        assert lbl in hint
+    assert "ask" in hint.lower()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_tool_surfaces_not_applicable_provenance(monkeypatch):
     """When the engine reports the region was NOT applied, the tool response
     must carry that verdict so the synthesizer never mislabels the figure."""
