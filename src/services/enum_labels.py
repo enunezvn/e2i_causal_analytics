@@ -87,11 +87,17 @@ BRAND_BUCKET_LABELS: Tuple[str, ...] = ("competitor", "other")
 #: Owned here and re-exported by :mod:`src.rag.entity_extractor` (which feeds
 #: them to ``EntityVocabulary.from_default()``) so entity extraction and the
 #: chat KPI tool can never disagree about what "NE" means.
+#: "west coast" is admitted (#1565): every West Coast state (CA/OR/WA, and
+#: AK/HI when counted) sits in the west census region, so the phrase names
+#: exactly one label. "east coast" is deliberately ABSENT: the Atlantic
+#: seaboard spans TWO census regions (ME..PA -> northeast, DE..FL -> south),
+#: so resolving it to either would silently mis-scope the query — it stays
+#: unresolved and the chat KPI tool asks which census region is meant.
 REGION_ALIASES: Dict[str, List[str]] = {
     "northeast": ["northeast", "ne", "north east", "new england"],
     "south": ["south", "southeast", "se", "southwest", "sw", "southern"],
     "midwest": ["midwest", "mw", "mid west", "central"],
-    "west": ["west", "pacific", "northwest", "nw", "western"],
+    "west": ["west", "pacific", "northwest", "nw", "western", "west coast"],
 }
 
 # Case-insensitive matching uses ``str.casefold()`` (Python's documented
@@ -110,6 +116,22 @@ _BRAND_LABEL_BY_CASEFOLD: Dict[str, str] = {label.casefold(): label for label in
 
 _SEPARATORS = re.compile(r"[\s_-]+")
 
+# Noise tokens a natural region phrase carries without changing WHICH region
+# it names (#1565): a leading article ("the Northeast") and one or more
+# trailing geography nouns ("Northeast region", "Pacific area"). Both regexes
+# require a separator at the token boundary, so a phrase that is ONLY noise
+# ("the", "region") strips to nothing and stays unresolved. Applied at LOOKUP
+# time only (see ``resolve_region_label``), never when building
+# ``REGION_LABEL_BY_ALIAS``: the frontend consumes that map verbatim
+# (``REGION_ALIAS_MAP`` in kpi-catalog.generated.ts) and re-implements
+# ``fold_region_key`` exactly (kpi-alias.ts ``resolveRegion``), so build-time
+# stripping would silently fork the two surfaces. "coast" is deliberately NOT
+# a noise token: "central coast" (California) does not mean "central"
+# (midwest) — dropping it would resolve to a WRONG region, the one outcome
+# this module may never produce.
+_LEADING_NOISE = re.compile(r"^the[\s_-]+")
+_TRAILING_NOISE = re.compile(r"(?:[\s_-]+(?:region|area))+$")
+
 
 def fold_region_key(value: str) -> str:
     """Casefold and REMOVE separators (spaces / hyphens / underscores).
@@ -117,6 +139,11 @@ def fold_region_key(value: str) -> str:
     ``region_type`` labels are single concatenated words ("northeast"), so
     folding separators to underscores could never match — "North East" must
     become "northeast", not "north_east".
+
+    Deliberately does NOT strip the #1565 noise tokens: this fold is mirrored
+    verbatim by the frontend (kpi-alias.ts) and used to BUILD the alias map;
+    noise stripping is a lookup-time concern owned by
+    :func:`resolve_region_label`.
     """
     return _SEPARATORS.sub("", value.strip().casefold())
 
@@ -153,16 +180,29 @@ def resolve_region_label(region: Optional[str], *, allow_synonyms: bool) -> Opti
     "central", "Pacific"). This is the contract of both wired consumers — the
     chat KPI tool (#1501) and, since #1517, cohort resolution — because their
     inputs are chat/LLM-derived forms, and an unresolved value would either
-    22P02 the query or fail-close a resolvable ask.
+    22P02 the query or fail-close a resolvable ask. Since #1565 this mode also
+    strips noise tokens at lookup time — a leading "the" and trailing
+    "region"/"area" — so "the Northeast region" resolves; the strip is
+    strictly widening (tried only after the exact fold misses, and no admitted
+    alias contains a noise token), and genuinely ambiguous phrasings ("East",
+    "east coast", "central coast") still return ``None``.
 
     ``allow_synonyms`` is keyword-only and has NO default: each call site must
     state which contract it wants.
     """
     if not region or not region.strip():
         return None
-    if allow_synonyms:
-        return REGION_LABEL_BY_ALIAS.get(fold_region_key(region))
-    return _REGION_LABEL_BY_CASEFOLD.get(region.strip().casefold())
+    if not allow_synonyms:
+        return _REGION_LABEL_BY_CASEFOLD.get(region.strip().casefold())
+    label = REGION_LABEL_BY_ALIAS.get(fold_region_key(region))
+    if label is not None:
+        return label
+    # #1565 lookup-time noise strip (see _LEADING_NOISE/_TRAILING_NOISE).
+    phrase = region.strip().casefold()
+    stripped = _TRAILING_NOISE.sub("", _LEADING_NOISE.sub("", phrase))
+    if stripped != phrase:
+        return REGION_LABEL_BY_ALIAS.get(_SEPARATORS.sub("", stripped))
+    return None
 
 
 def resolve_brand_label(brand: Optional[str]) -> Optional[str]:

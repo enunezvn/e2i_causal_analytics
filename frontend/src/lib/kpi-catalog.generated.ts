@@ -92,4 +92,4 @@ export const REGION_LABELS: readonly string[] = ["northeast", "south", "midwest"
  * `fold_region_key` folds: casefolded with space/hyphen/underscore removed —
  * `resolveRegion` in kpi-alias.ts folds lookups the same way.
  */
-export const REGION_ALIAS_MAP: Readonly<Record<string, string>> = {"central": "midwest", "midwest": "midwest", "mw": "midwest", "ne": "northeast", "newengland": "northeast", "northeast": "northeast", "northwest": "west", "nw": "west", "pacific": "west", "se": "south", "south": "south", "southeast": "south", "southern": "south", "southwest": "south", "sw": "south", "west": "west", "western": "west"} as const;
+export const REGION_ALIAS_MAP: Readonly<Record<string, string>> = {"central": "midwest", "midwest": "midwest", "mw": "midwest", "ne": "northeast", "newengland": "northeast", "northeast": "northeast", "northwest": "west", "nw": "west", "pacific": "west", "se": "south", "south": "south", "southeast": "south", "southern": "south", "southwest": "south", "sw": "south", "west": "west", "westcoast": "west", "western": "west"} as const;

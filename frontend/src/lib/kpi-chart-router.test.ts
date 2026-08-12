@@ -452,6 +452,24 @@ describe('region vocabulary (#1538)', () => {
     expect(mockGetKPIHistory).not.toHaveBeenCalled();
     expect(mockGetKPIValue).not.toHaveBeenCalled();
   });
+
+  it('resolves natural phrasings before fetching (#1565)', async () => {
+    await routeKpiChart({ kpis: ['trx'], region: 'the Northeast region' });
+    expect(mockGetKPIHistory).toHaveBeenCalledWith('WS3-BI-005', undefined, 'northeast');
+  });
+
+  it('turns an ambiguous region into a clarify question, not a dead end (#1565)', async () => {
+    // "East Coast" spans the northeast AND south census regions — the
+    // refusal must ASK which one the user means (the backend tool's hint
+    // semantics), never just state the mismatch.
+    const data = await routeKpiChart({ kpis: ['trx'], region: 'East Coast' });
+
+    expect(data.emptyReason).toMatch(/East Coast/);
+    expect(data.emptyReason).toMatch(/northeast.*south.*midwest.*west/i);
+    expect(data.emptyReason).toMatch(/\?/);
+    expect(mockGetKPIHistory).not.toHaveBeenCalled();
+    expect(mockGetKPIValue).not.toHaveBeenCalled();
+  });
 });
 
 describe('region-aware current values (#1538)', () => {
