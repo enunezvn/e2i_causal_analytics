@@ -374,13 +374,14 @@ async def test_compose_tool_threads_resolved_frame_into_context(monkeypatch):
     monkeypatch.setattr(ct, "_resolve_cohort_frame", _fake_resolve)
 
     # Capture the context handed to compose_query (avoid running the full LLM
-    # pipeline -- we only assert the caller wiring).
-    async def _fake_compose_query(query, llm_client, context):  # noqa: ANN001
+    # pipeline -- we only assert the caller wiring). Signature mirrors the real
+    # compose_query: llm_client is optional since #1557 (entry point passes
+    # none; the composer builds per-phase clients in factory mode).
+    async def _fake_compose_query(query, llm_client=None, context=None):  # noqa: ANN001
         captured["context"] = context
         raise RuntimeError("short-circuit after context build")
 
     monkeypatch.setattr(ct, "compose_query", _fake_compose_query)
-    monkeypatch.setattr(ct, "get_chat_llm", lambda **_: object())  # never actually invoked
 
     out = await ct.tool_composer_tool.coroutine(
         query=CANONICAL_QUERY,
@@ -414,13 +415,12 @@ async def test_compose_tool_proceeds_when_resolver_unavailable(monkeypatch):
     def _raising_resolve(brand, region, data_source):  # noqa: ANN001
         raise RuntimeError("loader offline")
 
-    async def _fake_compose_query(query, llm_client, context):  # noqa: ANN001
+    async def _fake_compose_query(query, llm_client=None, context=None):  # noqa: ANN001
         captured["context"] = context
         raise RuntimeError("short-circuit after context build")
 
     monkeypatch.setattr(ct, "_resolve_cohort_frame", _raising_resolve)
     monkeypatch.setattr(ct, "compose_query", _fake_compose_query)
-    monkeypatch.setattr(ct, "get_chat_llm", lambda **_: object())
 
     out = await ct.tool_composer_tool.coroutine(
         query=CANONICAL_QUERY, brand="Kisqali", region="northeast"
