@@ -16,9 +16,13 @@ hcp_adoption_artifact.py) ALREADY generates exactly this structure:
     centrality_z      ~ EXOGENOUS (stored peer_influence_score, NEVER re-drawn)
     hcp_segment       = centrality tier {high,medium,low}_influence (effect modifier)
     treatment_arm     ~ Bernoulli(sigmoid(0.8*centrality_z + noise))   # CONFOUNDED
-    adoption_logit    = a + b*centrality_z + scale*tau(segment)*treatment_arm + noise
+    affinity          = per-(brand, specialty) DETERMINISTIC logit shift (#1551;
+                        stored hcp_profiles.specialty, consumes NO rng draws)
+    adoption_logit    = a + b*centrality_z + affinity
+                        + scale*tau(segment)*treatment_arm + noise
     adopted           ~ Bernoulli(sigmoid(adoption_logit))             # T -> Y
     cate_estimate     = sigmoid(base + scale*tau) - sigmoid(base)      # per-HCP RD
+                        (base includes the affinity term)
 
 i.e. ``adopted`` is CAUSALLY generated FROM ``treatment_arm`` (treatment -> outcome),
 heterogeneous by HCP influence segment, scaled per brand by ``_BRAND_ADOPT_SCALE``
@@ -28,9 +32,10 @@ heterogeneous by HCP influence segment, scaled per brand by ``_BRAND_ADOPT_SCALE
 
 WHAT IT DOES
 ------------
-Reads the EXISTING per-HCP centrality covariate ``peer_influence_score`` from the
-live ``hcp_profiles`` table (the causal input -- NEVER re-drawn), standardizes it
-exactly as the generator does, and per brand re-runs ``_compute_adoption`` to draw:
+Reads the EXISTING per-HCP covariates ``peer_influence_score`` + ``specialty``
+from the live ``hcp_profiles`` table (the causal inputs -- NEVER re-drawn),
+standardizes the centrality exactly as the generator does, and per brand re-runs
+``_compute_adoption`` (specialty threaded through for the #1551 affinity) to draw:
   * ``treatment_arm`` (0/1, confounded by centrality)  -- NEW column
   * ``adopted``       (0/1, CAUSALLY from treatment_arm) -- re-derived
 keyed back to ``hcp_brand_adoption`` rows on ``(hcp_id, brand)``. The per-brand
@@ -50,12 +55,20 @@ Two options were considered:
     the live ``adopted`` would be a SPURIOUS reverse-correlation, exactly the
     anti-pattern the honesty directive forbids. The causal link must be real.
   * RE-DERIVE both arm and label together from the committed DGP on the stored
-    centrality (this script). The treatment -> outcome link is INTACT and the
-    TRUE ATE is documented. Cost: ``adopted`` moves, so the 3 deployed HCP
-    gold-standard models must be RE-TRAINED on the new labels (one-time). The
-    aggregate adoption rate stays in the live band (~0.40-0.43) so the models'
-    base rate and AUC ceiling are preserved -- see the dry-run prevalence print
-    and the BLAST RADIUS section.
+    centrality + specialty (this script). The treatment -> outcome link is
+    INTACT and the TRUE ATE is documented. Cost: ``adopted`` moves, so the 3
+    deployed HCP gold-standard models must be RE-TRAINED on the new labels
+    (one-time). The aggregate adoption rate stays in the live band (~0.40-0.43)
+    so the models' base rate and AUC ceiling are preserved -- see the dry-run
+    prevalence print and the BLAST RADIUS section.
+
+    #1551 NOTE: "the committed DGP" now INCLUDES the per-(brand, specialty)
+    adoption affinity (_BRAND_SPECIALTY_AFFINITY), so this script threads the
+    stored hcp_profiles.specialty into _compute_adoption. A specialty-blind
+    re-derivation would silently UPDATE the live labels back to the
+    specialty-free distribution and undo the served-propensity fix. The
+    affinity is a deterministic logit shift with ZERO extra rng draws, so the
+    treatment_arm stream this script faithfully reproduces is unchanged.
 
 BLAST RADIUS (must read before --execute)
 -----------------------------------------
@@ -145,11 +158,12 @@ KEY = ["hcp_id", "brand"]
 
 
 def fetch_centrality(client: Any) -> Optional[pd.DataFrame]:
-    """Read the EXISTING per-HCP centrality covariate from hcp_profiles (paged).
+    """Read the EXISTING per-HCP causal inputs from hcp_profiles (paged).
 
-    Returns hcp_id + peer_influence_score for the synthetic HCPs. This is the
-    causal input -- it is NEVER re-drawn; treatment_arm and adopted are derived
-    FROM it, exactly as the generator does.
+    Returns hcp_id + peer_influence_score + specialty for the synthetic HCPs.
+    These are the causal inputs -- NEVER re-drawn; treatment_arm and adopted are
+    derived FROM them, exactly as the generator does (specialty feeds the #1551
+    per-(brand, specialty) adoption affinity).
     """
     try:
         rows: List[dict] = []
@@ -158,7 +172,7 @@ def fetch_centrality(client: Any) -> Optional[pd.DataFrame]:
         while True:
             resp = (
                 client.table(PROFILES_TABLE)
-                .select("hcp_id,peer_influence_score")
+                .select("hcp_id,peer_influence_score,specialty")
                 .eq("is_synthetic", True)
                 .order("hcp_id")
                 .range(page * page_size, (page + 1) * page_size - 1)
@@ -222,11 +236,23 @@ def derive(centrality: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
     (mirroring the original load's brand-seed derivation) and calls
     ``_compute_adoption``. Returns one row per (hcp_id, brand) with treatment_arm,
     adopted, adoption_category, and the per-HCP cate_estimate (for the TRUE ATE).
+
+    #1551: when the frame carries a ``specialty`` column (fetch_centrality now
+    selects it), it is threaded into ``_compute_adoption`` so the re-derived
+    labels carry the committed per-(brand, specialty) affinity — a
+    specialty-blind re-derivation would clobber the fixed labels on --execute.
+    NULL/missing specialty values naturally take the brand's default shift via
+    ``_specialty_affinity``'s ``.get(s, default)`` — no special casing. The
+    affinity consumes NO rng draws, so treatment_arm is byte-identical with or
+    without the column (faithful arm reproduction preserved).
     """
     hcp_ids = centrality["hcp_id"].tolist()
     pis = centrality["peer_influence_score"].to_numpy(dtype=float)
     pis_std = pis.std()
     centrality_z = (pis - pis.mean()) / (pis_std if pis_std > 0 else 1.0)
+    specialty: Optional[List[str]] = (
+        centrality["specialty"].tolist() if "specialty" in centrality.columns else None
+    )
 
     master_rng = np.random.default_rng(seed)
     frames: List[pd.DataFrame] = []
@@ -234,7 +260,7 @@ def derive(centrality: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
         # Same per-brand sub-seed derivation as the original load -> faithful.
         brand_seed = int(master_rng.integers(0, 2**32))
         brand_rng = np.random.default_rng(brand_seed)
-        dgp = _compute_adoption(brand_rng, centrality_z, brand)
+        dgp = _compute_adoption(brand_rng, centrality_z, brand, specialty=specialty)
         adopted = dgp["adopted"].astype(int)
         frames.append(
             pd.DataFrame(

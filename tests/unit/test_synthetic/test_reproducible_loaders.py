@@ -153,6 +153,22 @@ def test_hcp_consideration_date_span():
     assert str(months.max()) == "2026-06"
 
 
+def test_hcp_canonical_cohort_kisqali_oncology_first():
+    """#1551 acceptance mirror on the CANONICAL 5000-HCP cohort (seed 42 HCPs +
+    seed 427 adoption — exactly what the regen load ships): Kisqali adoption must
+    be oncology-first, with rheumatology/dermatology clearly below (the served
+    propensity ordering the champion LR fits follows these label means)."""
+    hcp = build_hcp_frame(seed=42)
+    frame = build_adoption_frame(adoption_seed=427)
+    joined = frame.merge(hcp[["hcp_id", "specialty"]], on="hcp_id", how="left")
+    means = joined[joined["brand"] == "Kisqali"].groupby("specialty")["adopted"].mean()
+    assert means.idxmax() == "oncology", (
+        f"Kisqali top specialty must be oncology; got\n{means.sort_values(ascending=False)}"
+    )
+    assert means["oncology"] > means["rheumatology"] + 0.10
+    assert means["oncology"] > means["dermatology"] + 0.10
+
+
 # ===========================================================================
 # cohort outcomes regeneration
 # ===========================================================================

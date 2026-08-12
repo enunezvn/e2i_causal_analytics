@@ -233,3 +233,123 @@ def test_adoption_category_values(frame):
 
 def test_is_synthetic(frame):
     assert frame["is_synthetic"].all(), "Not all rows have is_synthetic=True"
+
+
+# ---------------------------------------------------------------------------
+# Test 11 (#1551): brand-specialty adoption affinity — clinical ordering
+# ---------------------------------------------------------------------------
+# The champion LR trains on hcp_profiles.specialty JOINed to these labels; when
+# the DGP carries no specialty term the model's specialty coefficients fit pure
+# noise (measured 2026-08-11: Kisqali rheumatology 0.454 > dermatology 0.421 >
+# oncology 0.410 served propensity — clinically backwards for a CDK4/6
+# breast-cancer brand). The DGP must therefore encode per-brand specialty
+# affinity so the fitted ordering is clinically sensible.
+
+
+def _make_hcp_df_with_specialty(n: int = 3000, seed: int = 42) -> pd.DataFrame:
+    """HCP fixture carrying a specialty column with a realistic mixed-brand mix
+    (mirrors HCPGenerator's equal-brand cohort: ~1/3 oncology, hem-heavy and
+    derm/allergy-heavy thirds)."""
+    rng = np.random.default_rng(seed)
+    df = _make_hcp_df(n=n, seed=seed)
+    df["specialty"] = rng.choice(
+        [
+            "oncology",
+            "hematology",
+            "dermatology",
+            "allergy_immunology",
+            "internal_medicine",
+            "rheumatology",
+            "neurology",
+        ],
+        size=n,
+        p=[0.33, 0.20, 0.17, 0.12, 0.10, 0.05, 0.03],
+    )
+    return df
+
+
+@pytest.fixture(scope="module")
+def specialty_frame():
+    hcp = _make_hcp_df_with_specialty()
+    frame = generate_hcp_brand_adoption_frame(
+        hcp,
+        seed=427,
+        end_date=date(2026, 6, 1),
+        brands=_BRANDS,
+        n_months=37,
+    )
+    return frame.merge(hcp[["hcp_id", "specialty"]], on="hcp_id", how="left")
+
+
+def _specialty_means(frame: pd.DataFrame, brand: str) -> "pd.Series[float]":
+    sub = frame[frame["brand"] == brand]
+    return sub.groupby("specialty")["adopted"].mean()
+
+
+def test_kisqali_oncology_dominates_specialty_adoption(specialty_frame):
+    """#1551 core invariant: Kisqali (CDK4/6, HR+/HER2- breast cancer) adoption
+    must be clearly oncology-led; rheumatology/dermatology must not outrank it."""
+    means = _specialty_means(specialty_frame, "Kisqali")
+    onc = means["oncology"]
+    assert onc > means["rheumatology"] + 0.10, (
+        f"Kisqali oncology {onc:.3f} must clearly exceed rheumatology {means['rheumatology']:.3f}"
+    )
+    assert onc > means["dermatology"] + 0.10, (
+        f"Kisqali oncology {onc:.3f} must clearly exceed dermatology {means['dermatology']:.3f}"
+    )
+    # Oncology strictly first among ALL specialties (adjacency never outranks it).
+    assert onc == means.max(), (
+        f"Kisqali top specialty must be oncology; got\n{means.sort_values(ascending=False)}"
+    )
+
+
+def test_fabhalta_hematology_leads_specialty_adoption(specialty_frame):
+    """Fabhalta (iptacopan, complement inhibitor; PNH/IgAN) is hematology-led."""
+    means = _specialty_means(specialty_frame, "Fabhalta")
+    hem = means["hematology"]
+    assert hem == means.max(), (
+        f"Fabhalta top specialty must be hematology; got\n{means.sort_values(ascending=False)}"
+    )
+    for other in ("oncology", "dermatology", "rheumatology"):
+        assert hem > means[other] + 0.10, (
+            f"Fabhalta hematology {hem:.3f} must clearly exceed {other} {means[other]:.3f}"
+        )
+
+
+def test_remibrutinib_derm_allergy_lead_specialty_adoption(specialty_frame):
+    """Remibrutinib (BTK inhibitor, CSU) is dermatology/allergy-immunology-led."""
+    means = _specialty_means(specialty_frame, "Remibrutinib")
+    top_two = set(means.sort_values(ascending=False).index[:2])
+    assert top_two == {"dermatology", "allergy_immunology"}, (
+        f"Remibrutinib top-2 specialties must be dermatology + allergy_immunology; "
+        f"got\n{means.sort_values(ascending=False)}"
+    )
+    for lead in ("dermatology", "allergy_immunology"):
+        assert means[lead] > means["oncology"] + 0.10, (
+            f"Remibrutinib {lead} {means[lead]:.3f} must clearly exceed oncology "
+            f"{means['oncology']:.3f}"
+        )
+
+
+def test_specialty_affinity_keeps_adoption_rate_band(specialty_frame):
+    """Affinity shifts are population-balanced: per-brand marginal adoption stays
+    inside the DGP's designed (0.10, 0.60) band (same band test 3 asserts on the
+    no-specialty frame)."""
+    for brand in _BRANDS:
+        rate = specialty_frame.loc[specialty_frame["brand"] == brand, "adopted"].mean()
+        assert 0.10 <= rate <= 0.60, f"{brand}: marginal adoption {rate:.3f} out of band"
+
+
+def test_specialty_affinity_consumes_no_rng_draws():
+    """RNG stream discipline (#1524/#1542): the affinity term is a deterministic
+    logit shift, NOT an extra draw — every seeded draw (consideration_date months,
+    treatment arms) must be bit-identical with and without the specialty column."""
+    hcp = _make_hcp_df_with_specialty(n=500, seed=7)
+    kw = {"seed": 427, "end_date": date(2026, 6, 1), "brands": _BRANDS, "n_months": 37}
+    with_spec = generate_hcp_brand_adoption_frame(hcp, **kw)
+    without_spec = generate_hcp_brand_adoption_frame(hcp.drop(columns=["specialty"]), **kw)
+    # Identity + date columns byte-identical => no draw-count change anywhere.
+    for col in ("hcp_id", "brand", "consideration_date"):
+        assert with_spec[col].tolist() == without_spec[col].tolist(), (
+            f"column {col!r} diverged — the specialty path consumed RNG draws"
+        )
