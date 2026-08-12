@@ -811,7 +811,9 @@ class TestOrchestratorTool:
         assert raw_error not in serialized
         assert "22P02" not in serialized
         # Enough survives for an honest "the causal agent failed" caveat.
-        assert result["failure_details"] == [{"agent_name": "causal_impact", "reason": "agent_error"}]
+        assert result["failure_details"] == [
+            {"agent_name": "causal_impact", "reason": "agent_error"}
+        ]
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")
@@ -1141,9 +1143,7 @@ class TestToolComposerTool:
                         "agent_name": "resource_optimizer",
                         "error": raw_error,
                         "latency_ms": 90,
-                        "user_action": (
-                            "Provide per-entity response coefficients and a budget."
-                        ),
+                        "user_action": ("Provide per-entity response coefficients and a budget."),
                     }
                 ],
             }
