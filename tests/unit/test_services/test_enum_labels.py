@@ -201,9 +201,7 @@ class TestRegionNoiseTokens:
         # to the same label it did before #1565.
         for label, aliases in enum_labels.REGION_ALIASES.items():
             for alias in (label, *aliases):
-                assert (
-                    enum_labels.resolve_region_label(alias, allow_synonyms=True) == label
-                ), alias
+                assert enum_labels.resolve_region_label(alias, allow_synonyms=True) == label, alias
 
     def test_west_coast_alias_resolves_and_east_coast_does_not(self):
         # "west coast" is clean (CA/OR/WA are all west census region);
