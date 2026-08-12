@@ -16,6 +16,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  regionClarifyMessage,
   resolveBrand,
   resolveCompareAxis,
   resolveKpiId,
@@ -192,5 +193,27 @@ describe('resolveRegion natural phrasings (#1565)', () => {
     expect(resolveRegion('the')).toBeNull();
     expect(resolveRegion('region')).toBeNull();
     expect(resolveRegion('the region')).toBeNull();
+  });
+});
+
+describe('regionClarifyMessage (#1565)', () => {
+  it('is a clarify QUESTION naming all four census regions and echoing the phrase', () => {
+    // The user-facing mirror of the backend _REGION_CLARIFY_HINT: ambiguity
+    // must produce a question, never a dead-end refusal. One copy source so
+    // the router and the Copilot render path can never drift apart.
+    const msg = regionClarifyMessage('East Coast');
+    expect(msg).toContain('East Coast');
+    expect(msg).toMatch(/northeast.*south.*midwest.*west/i);
+    expect(msg).toMatch(/census region/i);
+    expect(msg).toMatch(/\?/);
+  });
+
+  it('stays generic for plain-unknown values (no fabricated candidates)', () => {
+    // Like the backend, no per-phrase candidate lists — that would be a
+    // second vocabulary surface that can drift from enum_labels (#1505).
+    const msg = regionClarifyMessage('narnia');
+    expect(msg).toContain('narnia');
+    expect(msg).toMatch(/northeast.*south.*midwest.*west/i);
+    expect(msg).toMatch(/\?/);
   });
 });

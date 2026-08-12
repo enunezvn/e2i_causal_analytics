@@ -22,6 +22,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAccessToken } from '@/stores/auth-store';
 import { getKPIHistory, getKPIHistorySegmented } from '@/api/kpi';
 import {
+  regionClarifyMessage,
   resolveBrand,
   resolveCompareAxis,
   resolveKpiId,
@@ -1013,13 +1014,13 @@ const CopilotHooksInner: React.FC = () => {
       // result ready.
       if (status === 'inProgress') return <></>;
       // Unmappable region: the handler refused without fetching (#1538) —
-      // name the known labels instead of a chart frame.
+      // and since #1565 the refusal is a clarify QUESTION naming the census
+      // regions (shared copy source with the chart router), so an ambiguous
+      // phrase like "East Coast" produces a question, not a dead end.
       if (args?.region && resolveRegion(String(args.region)) === null) {
         return (
           <div className="my-2 rounded-md border p-3 text-sm text-muted-foreground">
-            Region &quot;{String(args.region)}&quot; does not match any known region — the
-            data covers northeast, south, midwest, and west (synonyms like &quot;NE&quot; or
-            &quot;Pacific&quot; work too).
+            {regionClarifyMessage(String(args.region))}
           </div>
         );
       }

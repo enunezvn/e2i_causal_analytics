@@ -18,7 +18,7 @@
  * originally advertised.
  */
 
-import { KPI_CATALOG, REGION_ALIAS_MAP } from './kpi-catalog.generated';
+import { KPI_CATALOG, REGION_ALIAS_MAP, REGION_LABELS } from './kpi-catalog.generated';
 
 /**
  * Colloquial aliases the registry itself cannot yield — spoken names with no
@@ -143,6 +143,24 @@ export function resolveRegion(region: string | undefined): string | null | undef
     return REGION_ALIAS_MAP[stripped.replace(/[\s_-]+/g, '')] ?? null;
   }
   return null;
+}
+
+/**
+ * #1565: an unresolvable region should end in a QUESTION, not a dead end —
+ * the user-facing mirror of the backend chat tool's clarify hint
+ * (chatbot_tools._REGION_CLARIFY_HINT). One copy source for every
+ * chart-surface refusal (kpi-chart-router + the Copilot render path) so the
+ * wording can never drift between them. Deliberately generic rather than
+ * per-phrase candidate lists: the backend keeps a single clarify for the same
+ * reason — per-phrase candidate knowledge would be a second vocabulary
+ * surface that could drift from enum_labels (#1505).
+ */
+export function regionClarifyMessage(region: string): string {
+  return (
+    `Region "${region}" doesn't map to exactly one US census region — phrasings ` +
+    `like "East Coast" span more than one. Which should the data cover: ` +
+    `${REGION_LABELS.join(', ')}?`
+  );
 }
 
 /** Severity aliases → canonical patient_journeys.segment_assignment values. */

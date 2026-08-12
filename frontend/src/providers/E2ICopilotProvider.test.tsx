@@ -511,6 +511,23 @@ describe('Action Handlers', () => {
     return actionCall?.[0]?.handler;
   }
 
+  function getActionRender(
+    actionName: string
+  ): (state: Record<string, unknown>) => React.ReactElement {
+    render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    const actionCall = mockUseCopilotAction.mock.calls.find(
+      (call) => call[0]?.name === actionName
+    );
+    return actionCall?.[0]?.render;
+  }
+
   describe('navigateTo', () => {
     it('calls navigate with provided path', async () => {
       const handler = getActionHandler('navigateTo');
@@ -829,6 +846,22 @@ describe('Action Handlers', () => {
       // The chart component renders the honest empty state; the fetch must
       // not run — a junk region can never match a row.
       expect(mockGetKPIHistory).not.toHaveBeenCalled();
+    });
+
+    it('renders a clarify QUESTION for an ambiguous region, not a dead end (#1565)', () => {
+      // "East Coast" spans the northeast AND south census regions; the render
+      // must ask which one the user means (mirror of the backend tool's
+      // clarify hint), naming the four census regions.
+      const renderFn = getActionRender('renderKpiTrend');
+      const el = renderFn({
+        status: 'complete',
+        args: { kpiId: 'trx', region: 'East Coast' },
+        result: null,
+      });
+      const { container } = render(el);
+      expect(container.textContent).toMatch(/East Coast/);
+      expect(container.textContent).toMatch(/northeast[\s\S]*south[\s\S]*midwest[\s\S]*west/i);
+      expect(container.textContent).toMatch(/\?/);
     });
 
     it('fetches nothing when region is combined with a segment axis — segments are global-only (#1536)', async () => {
