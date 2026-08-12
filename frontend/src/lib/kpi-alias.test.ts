@@ -16,6 +16,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  regionClarifyMessage,
   resolveBrand,
   resolveCompareAxis,
   resolveKpiId,
@@ -158,5 +159,61 @@ describe('resolveRegion (#1538)', () => {
     // the same fail-fast the backend chat tool applies.
     expect(resolveRegion('EMEA')).toBeNull();
     expect(resolveRegion('narnia')).toBeNull();
+  });
+});
+
+describe('resolveRegion natural phrasings (#1565)', () => {
+  it('strips noise tokens at lookup time, mirroring resolve_region_label', () => {
+    // Backend enum_labels.resolve_region_label strips a leading "the" and
+    // trailing "region"/"area" tokens; the chart surface must resolve the
+    // same phrasings or the two brains disagree about the same user words.
+    expect(resolveRegion('Northeast region')).toBe('northeast');
+    expect(resolveRegion('the Northeast region')).toBe('northeast');
+    expect(resolveRegion('the South')).toBe('south');
+    expect(resolveRegion('Pacific area')).toBe('west');
+    expect(resolveRegion('western region')).toBe('west');
+    expect(resolveRegion('THE WEST REGION')).toBe('west');
+  });
+
+  it('resolves the west coast alias (regenerated REGION_ALIAS_MAP)', () => {
+    expect(resolveRegion('West Coast')).toBe('west');
+    expect(resolveRegion('the west coast')).toBe('west');
+  });
+
+  it('keeps ambiguous phrasings null — ambiguity must produce a question', () => {
+    // "East"/"East Coast" span the northeast AND south census regions;
+    // "central coast" (California) must never strip to "central" -> midwest.
+    expect(resolveRegion('East')).toBeNull();
+    expect(resolveRegion('East Coast')).toBeNull();
+    expect(resolveRegion('east region')).toBeNull();
+    expect(resolveRegion('central coast')).toBeNull();
+  });
+
+  it('never resolves bare noise words', () => {
+    expect(resolveRegion('the')).toBeNull();
+    expect(resolveRegion('region')).toBeNull();
+    expect(resolveRegion('the region')).toBeNull();
+  });
+});
+
+describe('regionClarifyMessage (#1565)', () => {
+  it('is a clarify QUESTION naming all four census regions and echoing the phrase', () => {
+    // The user-facing mirror of the backend _REGION_CLARIFY_HINT: ambiguity
+    // must produce a question, never a dead-end refusal. One copy source so
+    // the router and the Copilot render path can never drift apart.
+    const msg = regionClarifyMessage('East Coast');
+    expect(msg).toContain('East Coast');
+    expect(msg).toMatch(/northeast.*south.*midwest.*west/i);
+    expect(msg).toMatch(/census region/i);
+    expect(msg).toMatch(/\?/);
+  });
+
+  it('stays generic for plain-unknown values (no fabricated candidates)', () => {
+    // Like the backend, no per-phrase candidate lists — that would be a
+    // second vocabulary surface that can drift from enum_labels (#1505).
+    const msg = regionClarifyMessage('narnia');
+    expect(msg).toContain('narnia');
+    expect(msg).toMatch(/northeast.*south.*midwest.*west/i);
+    expect(msg).toMatch(/\?/);
   });
 });

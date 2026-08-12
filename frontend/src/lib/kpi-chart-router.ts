@@ -35,6 +35,7 @@ import {
 import { KPI_CATALOG } from './kpi-catalog.generated';
 import type { KpiCatalogEntry } from './kpi-catalog.generated';
 import {
+  regionClarifyMessage,
   resolveBrand,
   resolveCompareAxis,
   resolveKpiId,
@@ -42,7 +43,6 @@ import {
   resolveSegment,
   resolveTherapyLine,
 } from './kpi-alias';
-import { REGION_LABELS } from './kpi-catalog.generated';
 // The Rx-volume family is the ONLY family the segmented endpoint serves (it
 // 422s the rest). That set already exists as the gate on useKPIHistoryNowcast
 // — reused here rather than restated, so the two cannot drift apart.
@@ -161,9 +161,6 @@ function scopeLabel(brand: string | undefined, region?: string): string {
   return region && region.length > 0 ? `${brandPart} · ${region}` : brandPart;
 }
 
-/** The known-label list every region refusal names, e.g. "northeast, south, midwest, west". */
-const KNOWN_REGIONS = REGION_LABELS.join(', ');
-
 /**
  * Fetch and shape whatever the named KPI(s) can actually provide.
  *
@@ -178,12 +175,11 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
   // Unmappable region: refuse BEFORE any fetch (#1538). region is an enum in
   // the substrate — a junk value can never match a row, so passing it through
   // would produce a 0-value figure under a junk caption. Same fail-fast the
-  // backend chat tool applies, with the same known-label list.
+  // backend chat tool applies — and since #1565 the refusal is a CLARIFY
+  // question naming the census regions (the backend hint's user-facing
+  // mirror), so ambiguity ("East Coast") produces a question, not a dead end.
   if (region === null) {
-    return emptyResult(
-      `Region '${query.region}' does not match any known region (${KNOWN_REGIONS}).`,
-      query.title ?? 'Chart'
-    );
+    return emptyResult(regionClarifyMessage(String(query.region)), query.title ?? 'Chart');
   }
 
   if (resolvedIds.length === 0) {

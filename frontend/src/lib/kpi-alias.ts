@@ -18,7 +18,7 @@
  * originally advertised.
  */
 
-import { KPI_CATALOG, REGION_ALIAS_MAP } from './kpi-catalog.generated';
+import { KPI_CATALOG, REGION_ALIAS_MAP, REGION_LABELS } from './kpi-catalog.generated';
 
 /**
  * Colloquial aliases the registry itself cannot yield — spoken names with no
@@ -126,7 +126,41 @@ export function resolveRegion(region: string | undefined): string | null | undef
   // Mirror enum_labels.fold_region_key: casefold + remove separators — the
   // labels are single concatenated words, so 'North East' folds to 'northeast'.
   const folded = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
-  return REGION_ALIAS_MAP[folded] ?? null;
+  const exact = REGION_ALIAS_MAP[folded];
+  if (exact !== undefined) return exact;
+  // #1565: mirror resolve_region_label's LOOKUP-time noise strip — a leading
+  // "the" and trailing "region"/"area" tokens never change WHICH region a
+  // phrase names ('the Northeast region' -> northeast). Tried only after the
+  // exact fold misses, so no existing resolution changes. Both patterns
+  // require a separator boundary: bare noise words ('the', 'region') strip
+  // to nothing and stay null. 'coast' is deliberately NOT stripped —
+  // 'central coast' (California) must never resolve to 'central' -> midwest.
+  const lower = trimmed.toLowerCase();
+  const stripped = lower
+    .replace(/^the[\s_-]+/, '')
+    .replace(/(?:[\s_-]+(?:region|area))+$/, '');
+  if (stripped !== lower) {
+    return REGION_ALIAS_MAP[stripped.replace(/[\s_-]+/g, '')] ?? null;
+  }
+  return null;
+}
+
+/**
+ * #1565: an unresolvable region should end in a QUESTION, not a dead end —
+ * the user-facing mirror of the backend chat tool's clarify hint
+ * (chatbot_tools._REGION_CLARIFY_HINT). One copy source for every
+ * chart-surface refusal (kpi-chart-router + the Copilot render path) so the
+ * wording can never drift between them. Deliberately generic rather than
+ * per-phrase candidate lists: the backend keeps a single clarify for the same
+ * reason — per-phrase candidate knowledge would be a second vocabulary
+ * surface that could drift from enum_labels (#1505).
+ */
+export function regionClarifyMessage(region: string): string {
+  return (
+    `Region "${region}" doesn't map to exactly one US census region — phrasings ` +
+    `like "East Coast" span more than one. Which should the data cover: ` +
+    `${REGION_LABELS.join(', ')}?`
+  );
 }
 
 /** Severity aliases → canonical patient_journeys.segment_assignment values. */

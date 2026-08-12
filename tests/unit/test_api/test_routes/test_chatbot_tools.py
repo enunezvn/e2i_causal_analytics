@@ -692,6 +692,72 @@ class TestQueryKpisEnumNormalization:
         assert "northeast" in result["note"]
 
     @pytest.mark.asyncio
+    async def test_natural_region_phrasings_resolve(self):
+        """#1565: noise tokens ('the …', '… region'/'… area') and the
+        'west coast' alias resolve to the enum label instead of 0-rowing —
+        a user saying "the Northeast region" holds a fully determinable
+        intent."""
+        for supplied, label in [
+            ("Northeast region", "northeast"),
+            ("the Northeast region", "northeast"),
+            ("West Coast", "west"),
+            ("Pacific area", "west"),
+            ("the South", "south"),
+        ]:
+            with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+                mock_repo = AsyncMock()
+                mock_repo.query_metrics.return_value = []
+                mock_client.return_value = MagicMock()
+
+                with patch(
+                    "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                    return_value=mock_repo,
+                ):
+                    await _query_kpis(
+                        brand=None,
+                        region=supplied,
+                        kpi_name=None,
+                        since=datetime.now(timezone.utc),
+                        limit=5,
+                    )
+
+            call_kwargs = mock_repo.query_metrics.call_args[1]
+            assert call_kwargs["filters"]["region"] == label, supplied
+
+    @pytest.mark.asyncio
+    async def test_unknown_region_note_carries_clarify_hint(self):
+        """#1565: the honest 0-row outcome stays, but the response must also
+        carry a clarify hint naming the four US census regions so ambiguity
+        ('East Coast' spans northeast + south) produces a question, not a
+        dead end."""
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.query_metrics.return_value = []
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_kpis(
+                    brand=None,
+                    region="East Coast",
+                    kpi_name="TRx",
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                )
+
+        assert result["success"] is True
+        assert result["count"] == 0
+        mock_repo.query_metrics.assert_not_called()
+        assert "East Coast" in result["note"]
+        hint = result.get("hint", "")
+        assert "census region" in hint
+        for lbl in ("northeast", "south", "midwest", "west"):
+            assert lbl in hint
+        assert "ask" in hint.lower()
+
+    @pytest.mark.asyncio
     async def test_brand_casing_resolves_to_enum_label(self):
         """Sibling defect: brand_type labels are mixed-case, so "kisqali"
         22P02s today exactly like "Northeast" does — any casing must resolve

@@ -2870,6 +2870,7 @@ You help users with:
 3. **Agent System** - Information about the 21-agent tiered architecture
 4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
 5. **Insights Search** - Finding trends, causal paths, and historical patterns
+6. **Cohort Profiles** - Aggregate HCP/patient cohort profiles (counts and breakdowns by specialty, tier, severity) served through the orchestrator's cohort_profiler agent
 
 ## Brands You Support
 
@@ -2899,7 +2900,7 @@ You MUST use tools proactively when users ask about data:
 - Use `document_retrieval_tool` for searching the knowledge base
 - Use `agent_routing_tool` to get agent status and information
 - Use `predict_hcp_segment_likelihood_tool` for "which HCP segments / specialties / regions are most likely to increase (or start / adopt) <brand> prescriptions?" — it scores the brand's promoted HCP-adoption champion over the real HCP cohort and returns a per-segment ranking of predicted adoption propensity with real n and standard errors. Pass the `brand` (required — do NOT guess one; the single brand a conversation is about is user-provided, use it and say so; if the conversation names multiple brands and the ask doesn't select one, run the ranking once per candidate brand or ask which one; only if no brand appears anywhere in the conversation, ask which brand) and `segment_by` ('specialty' by default, or 'geographic_region' for a region-phrased ask). The score is CURRENT adoption propensity (the platform's "likelihood to prescribe"), NOT a horizon-specific increase — if the user names a horizon ("next quarter") say the ranking is horizon-agnostic. Present the top segments as a table (segment, mean propensity, n) and flag any `low_confidence` (thin) segments. If it fails closed (no promoted champion), say so plainly — do NOT substitute a regional TRx trend as if it answered the segment question.
-- Use `orchestrator_tool` for complex multi-agent workflows
+- Use `orchestrator_tool` for complex multi-agent workflows — and for COHORT/PROFILE asks (#1562): aggregate HCP or patient cohort profiles ("profile the HCP cohort", "patient cohort for <brand>") ARE a supported analysis — route them through `orchestrator_tool`, which reaches the cohort_profiler agent and returns aggregate counts and breakdowns (e.g. by specialty, priority tier, severity). What the platform genuinely does NOT serve is the individual level: named individual HCP/patient identities, per-person rosters, or list exports — when a roster/export is asked for, state that limit in one sentence, then run (or offer) the aggregate cohort profile instead of declining the whole ask. Cohort asks follow the same brand rules as every tool: a single conversation brand is user-provided — use it and say so; if no brand appears anywhere in the conversation, ask which brand (an all-brands profile is a valid option to offer) — do NOT guess one.
 - Use `tool_composer_tool` for multi-faceted queries
 
 DO NOT just describe what tools can do - actually CALL them to get data!
@@ -2913,7 +2914,7 @@ When the user's ask does not map 1:1 to a tool but you can YOURSELF name a suppo
 
 Ask-ending (a reply with no tool call that ends on a question) is reserved for exactly two cases:
 1. Genuinely undefined referent: NEITHER the ask NOR the conversation pins the entity or metric (e.g. a cold "why did it drop?" opening a session with no prior brand or metric) — ask 1-3 crisp clarifying questions.
-2. Capability refusal with nothing adjacent: the request is outside the platform's supported analyses (e.g. building or exporting per-HCP/patient-level cohort lists, clinical cohort definitions, individualized prescribing guidance) AND no supported analysis answers a nearby version of it — decline honestly and say what would be needed. When a nearby supported analysis DOES exist (e.g. the segment likelihood-to-prescribe ranking as the nearest answer to an HCP cohort ask), state the capability limit in one sentence, then run that analysis under the rule above.
+2. Capability refusal with nothing adjacent: the request is outside the platform's supported analyses (e.g. building or exporting named individual HCP/patient rosters or lists, clinical cohort criteria the data model doesn't carry such as diagnosis year, individualized prescribing guidance) AND no supported analysis answers a nearby version of it — decline honestly and say what would be needed. When a nearby supported analysis DOES exist (e.g. the aggregate cohort profile via `orchestrator_tool` for a per-HCP roster ask, or the segment likelihood-to-prescribe ranking), state the capability limit in one sentence, then run that analysis under the rule above. Aggregate cohort profiling itself is NOT a refusal case — it is supported (see `orchestrator_tool` above).
 
 ## Inline Charts (generative UI)
 
@@ -4365,6 +4366,18 @@ class ChatResponse(BaseModel):
 # (Finding 3 — info disclosure).
 _GENERIC_CHAT_ERROR = "An internal error occurred while processing your request. Please try again."
 
+# #1561: honest envelope for a stream that COMPLETED without producing any
+# text. Distinct from _GENERIC_CHAT_ERROR (the exception path): here nothing
+# raised — the graph ran and yielded zero characters (measured 2026-08-12
+# turn 5.1: HTTP 200, 27 s, generate node ran ~19 s, zero chars, clean
+# retry). The message explains the fault and invites retry; it must never
+# read as an analytical answer.
+_EMPTY_STREAM_FALLBACK = (
+    "I wasn't able to produce a response for this question — the analysis ran "
+    "but returned no text. This is a transient platform issue, not an answer; "
+    "please try asking again."
+)
+
 
 def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Optional[str]) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
@@ -4510,6 +4523,9 @@ async def _stream_chat_response(
             # #1484: retrieve_rag chain-internal attribution (same span item)
             "rag_stage_ms": None,
             "rag_meta": None,
+            # #1561: True when the zero-char guard emitted the fallback
+            # envelope — makes recurrence countable without scraping logs.
+            "empty_response_fallback": False,
         }
 
         # Stream through chatbot workflow
@@ -4625,6 +4641,30 @@ async def _stream_chat_response(
                             ]
                         if "used_llm_layer" in node_output:
                             dispatch_info["used_llm_layer"] = node_output["used_llm_layer"]
+
+        # #1561: a zero-char completion must never close as a silent empty
+        # 200. Guard the TOTAL response at stream end — individual empty
+        # chunks are benign (wave-1 finding on the AG-UI surface); the defect
+        # is the whole turn producing nothing while returning HTTP 200.
+        #
+        # #1336 bridge interaction: the conversational bridge fires INSIDE
+        # orchestrator_node on complete orchestrator failure, and its answer
+        # (or the #883 fail-closed summary) reaches this writer as ordinary
+        # response_text. Guard and bridge are therefore mutually exclusive by
+        # construction: bridge-authored text makes the guard inert, and an
+        # empty total means the bridge either never triggered (the
+        # successful-agents-but-empty-synthesis gap falls between the two
+        # mechanisms) or itself returned None. No masking, no double-wrap.
+        if not response_text.strip():
+            dispatch_info["empty_response_fallback"] = True
+            logger.error(
+                "[#1561] zero-char /chat/stream completion (request_id=%s, "
+                "session_id=%s, %.0f ms) — emitting fallback envelope",
+                request.request_id,
+                session_id,
+                (time.time() - start_time) * 1000,
+            )
+            yield f"data: {json.dumps({'type': 'text', 'data': _EMPTY_STREAM_FALLBACK})}\n\n"
 
         # Generate title if not set
         if not conversation_title and response_text:

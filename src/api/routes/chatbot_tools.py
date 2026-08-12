@@ -399,8 +399,27 @@ def _normalize_metric_name(kpi_name: str) -> str:
 
 
 def _normalize_region(region: str) -> Optional[str]:
-    """Map a display-form region or synonym to its region_type enum label."""
+    """Map a display-form region or synonym to its region_type enum label.
+
+    Since #1565 the shared resolver also strips natural-phrasing noise tokens
+    ("the Northeast region" -> northeast) and accepts "west coast"; anything
+    still unresolved is genuinely ambiguous ("East", "east coast") or unknown,
+    so the caller pairs its honest failure with ``_REGION_CLARIFY_HINT``.
+    """
     return resolve_region_label(region, allow_synonyms=True)
+
+
+#: #1565: an unresolvable region should end in a QUESTION, not a dead end.
+#: The error keeps naming the known labels (failure-closed, #1501/#1538
+#: precedent); this hint tells the LLM what to ask the user. Phrasings like
+#: "East Coast" are unresolvable BY DESIGN — the Atlantic seaboard spans the
+#: northeast AND south census regions — so only the user can disambiguate.
+_REGION_CLARIFY_HINT = (
+    "Ask the user which US census region they mean: northeast, south, "
+    "midwest, or west. Phrasings like 'East' or 'East Coast' span more than "
+    "one census region, so the data cannot be scoped to them without the "
+    "user's choice."
+)
 
 
 _normalize_brand = resolve_brand_label
@@ -458,7 +477,7 @@ async def _query_kpis(
                 requested["brand"] = brand
             if region and "region" not in filters:
                 requested["region"] = region
-            return {
+            response: Dict[str, Any] = {
                 "success": True,
                 "query_type": "kpi",
                 "count": 0,
@@ -468,6 +487,10 @@ async def _query_kpis(
                 "data_source": "synthetic" if kpi_include_synthetic() else "database",
                 "note": "; ".join(unmatched) + "; returned 0 rows",
             }
+            if region and "region" not in filters:
+                # #1565: unresolvable region -> clarify, not a dead end.
+                response["hint"] = _REGION_CLARIFY_HINT
+            return response
 
         client = await get_async_supabase_client()
         repo = BusinessMetricRepository(client)
@@ -1747,8 +1770,12 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Optional geographic region filter. US census regions: northeast, "
             "south, midwest, west (case-insensitive; synonyms like 'north "
-            "east', 'NE', 'new england', 'pacific' resolve to a label; any "
-            "other value errors honestly). The response's region_status tells "
+            "east', 'NE', 'new england', 'pacific', 'west coast' and natural "
+            "phrasings like 'the Northeast region' resolve to a label; any "
+            "other value errors honestly with a clarify hint). Ambiguous "
+            "phrasings ('East', 'East Coast') span more than one census "
+            "region and will NOT resolve — ask the user which census region "
+            "they mean instead of guessing. The response's region_status tells "
             "you whether the figure is region-scoped: only 'applied' means it "
             "is; 'not_applicable' means this KPI has no region variant and "
             "the value is global — NEVER present it as region-specific."
@@ -2105,8 +2132,10 @@ async def kpi_calculate_tool(
         kpi_name: the KPI to compute (resolved against the defined KPI registry).
         brand: optional brand filter (case-insensitive).
         region: optional geographic region filter (US census regions:
-            northeast/south/midwest/west; synonyms resolve, anything else
-            errors with the known-label list). The response's
+            northeast/south/midwest/west; synonyms and natural phrasings like
+            'the Northeast region' or 'west coast' resolve; ambiguous or
+            unknown values error with the known-label list plus a hint to ask
+            the user which census region they mean). The response's
             ``region_status`` says whether the figure is actually
             region-scoped ("applied") or global ("not_applicable" — never
             present those as region-specific).
@@ -2218,6 +2247,8 @@ async def kpi_calculate_tool(
                     f"region {region!r} does not match any known region "
                     f"({', '.join(REGION_ENUM_LABELS)})"
                 ),
+                # #1565: ambiguity produces a question, not a dead end.
+                "hint": _REGION_CLARIFY_HINT,
             }
         region = normalized_region
 
