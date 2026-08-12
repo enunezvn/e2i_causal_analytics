@@ -22,6 +22,7 @@ bookkeeping and selectively removable/re-syncable.
 
 import logging
 import uuid
+from datetime import date
 from typing import Any, Optional
 
 from src.memory.episodic_memory import (
@@ -46,25 +47,25 @@ _METRIC_COLUMNS = (
 )
 
 
-def render_business_metric(row: dict[str, Any]) -> str:
-    """Render a REAL ``business_metrics`` row as analytic prose.
+def _parse_metric_date(value: Any) -> Optional[date]:
+    """Parse ``metric_date`` (supabase ISO string or ``datetime.date``)."""
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
 
-    Every value is taken verbatim from the fact table -- no fabrication. Returns
-    a sentence like::
 
-        TRx for Kisqali in the northeast on 2025-01-01: value 684127.3,
-        target 736992.12, achievement 92.8%, year-over-year +18.7%, ROI 4.09.
-    """
-    name = row.get("metric_name")
-    brand = row.get("brand")
-    region = row.get("region")
-    date = row.get("metric_date")
-    value = row.get("value")
+def _metric_tail_parts(row: dict[str, Any]) -> list[str]:
+    """The value/target/achievement/yoy/ROI clauses shared by both templates."""
+    parts = [f"value {row.get('value')}"]
     target = row.get("target")
     ach = row.get("achievement_rate")
     yoy = row.get("year_over_year_change")
     roi = row.get("roi")
-    parts = [f"{name} for {brand} in the {region} on {date}: value {value}"]
     if target is not None:
         parts.append(f"target {target}")
     if ach is not None:
@@ -73,7 +74,52 @@ def render_business_metric(row: dict[str, Any]) -> str:
         parts.append(f"year-over-year {float(yoy) * 100:+.1f}%")
     if roi is not None:
         parts.append(f"ROI {roi}")
-    return ", ".join(parts) + "."
+    return parts
+
+
+def _render_business_metric_legacy(row: dict[str, Any]) -> str:
+    """The pre-#1552 template ('... on <date>: value ...') — kept ONLY so the
+    reconciliation pass can recognize value-valid legacy prose and migrate it
+    to the grain-labeled template (see ``_plan_corpus_reconciliation``)."""
+    head = (
+        f"{row.get('metric_name')} for {row.get('brand')} in the "
+        f"{row.get('region')} on {row.get('metric_date')}"
+    )
+    tail = _metric_tail_parts(row)
+    return ", ".join([f"{head}: " + tail[0]] + tail[1:]) + "."
+
+
+def render_business_metric(row: dict[str, Any]) -> str:
+    """Render a REAL ``business_metrics`` row as analytic prose.
+
+    Every value is taken verbatim from the fact table -- no fabrication.
+
+    Period grain (#1552): ``business_metrics`` is monthly-grain — every
+    ``metric_date`` sits on a month start (measured 2026-08-12: DISTINCT
+    ``metric_date - date_trunc('month', metric_date)`` = 0 across the live
+    table). The old '... on 2026-08-01: value ...' form read as a single day
+    and let the chat synthesizer invent 2-month and month-to-date buckets in
+    one table ("Jun/Jul 2026" next to "Aug 2026") and call the width artifact
+    "an unexplained scale discontinuity" (eval 6.5). Month-start rows are now
+    labeled with their bucket explicitly::
+
+        trx for Kisqali in the northeast for calendar month 2026-08
+        (August 2026, monthly grain): value 48654.99, target 65800.04,
+        achievement 73.9%, year-over-year +22.0%, ROI 3.22.
+
+    A row NOT on the month-start lattice (defensive: none exist today) keeps
+    the honest '... on <date>' form — never claim monthly grain for a row
+    that isn't one.
+    """
+    metric_date = _parse_metric_date(row.get("metric_date"))
+    if metric_date is None or metric_date.day != 1:
+        return _render_business_metric_legacy(row)
+    head = (
+        f"{row.get('metric_name')} for {row.get('brand')} in the {row.get('region')} "
+        f"for calendar month {metric_date:%Y-%m} ({metric_date:%B %Y}, monthly grain)"
+    )
+    tail = _metric_tail_parts(row)
+    return ", ".join([f"{head}: " + tail[0]] + tail[1:]) + "."
 
 
 async def index_operational_corpus(
@@ -146,6 +192,14 @@ def _fetch_brand_rows(
     coverage, no omitted combos (audit F3b). ``False`` keeps the legacy bounded
     recent-N behavior.
     """
+    if latest_per_combo:
+        return _latest_per_combo(_fetch_all_brand_rows(sb, brand))
+    base = _brand_rows_query(sb, brand)
+    return list(base.limit(limit_per_brand).execute().data or [])
+
+
+def _brand_rows_query(sb: Any, brand: str) -> Any:
+    """The provenance-filtered, deterministically-ordered brand rows query."""
     # metric_date DESC drives latest-per-combo; metric_id (PK) is a deterministic
     # secondary key so offset pagination over same-date rows can neither skip nor
     # duplicate a row across page boundaries (codex MED) -> _latest_per_combo sees
@@ -163,10 +217,15 @@ def _fetch_brand_rows(
     # Provenance (Shard 07 R12): exclude synthetic KPI prose from the prod corpus in
     # real mode; a synthetic-gold showcase instance (E2I_INCLUDE_SYNTHETIC) includes
     # it so the chatbot RAG corpus is populated rather than empty. (WS-SYNTH)
-    base = apply_provenance_filter(base)
-    if not latest_per_combo:
-        return list(base.limit(limit_per_brand).execute().data or [])
+    return apply_provenance_filter(base)
 
+
+def _fetch_all_brand_rows(sb: Any, brand: str) -> list[dict[str, Any]]:
+    """Paginate EVERY current ``business_metrics`` row for ``brand`` (date-DESC,
+    provenance-filtered). Feeds both the latest-per-combo selection and the
+    #1552 reconciliation pass (which must recognize prose derived from ANY
+    current fact row — not just the latest snapshot — as still valid)."""
+    base = _brand_rows_query(sb, brand)
     all_rows: list[dict[str, Any]] = []
     page = 0
     page_size = 1000
@@ -176,7 +235,7 @@ def _fetch_brand_rows(
         if len(batch) < page_size:
             break
         page += 1
-    return _latest_per_combo(all_rows)
+    return all_rows
 
 
 def _discover_brands(sb: Any) -> list[str]:
@@ -227,6 +286,89 @@ def _existing_corpus_descriptions(sb: Any, agent_name: str) -> set[str]:
     return seen
 
 
+def _corpus_rows_for_brand(sb: Any, agent_name: str, brand_lower: str) -> list[dict[str, Any]]:
+    """Paginate the existing corpus rows (id + prose) for one brand.
+
+    Scoped to ``agent_name`` (this module's attribution, migration 041) and the
+    lowercased ``brand`` column its inserts stamp — the reconciliation pass
+    must never see (or delete) rows this module did not write. Provenance
+    parity with the dedup read (real mode touches real rows only).
+    """
+    from src.repositories.provenance import apply_provenance_filter
+
+    rows: list[dict[str, Any]] = []
+    page = 0
+    page_size = 1000
+    while True:
+        q = (
+            sb.table("episodic_memories")
+            .select("memory_id,description")
+            .eq("agent_name", agent_name)
+            .eq("brand", brand_lower)
+        )
+        q = apply_provenance_filter(q)
+        resp = q.range(page * page_size, page * page_size + page_size - 1).execute()
+        batch = resp.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        page += 1
+    return rows
+
+
+def _plan_corpus_reconciliation(
+    sb: Any, agent_name: str, brand: str, all_rows: list[dict[str, Any]]
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Classify one brand's existing corpus prose against the CURRENT facts.
+
+    #1552: the corpus dedup is insert-only, so prose ingested from an earlier
+    substrate state can silently contradict the current fact table (measured:
+    a row attributing Jul-2026's Kisqali northeast TRx values to Jun-2026 sat
+    next to the valid Jul row; the chat merged the byte-identical pair into an
+    invented "Jun/Jul 2026" bucket and called the resulting scale gap an
+    unexplained discontinuity — eval 6.5).
+
+    Returns ``(stale_memory_ids, migrate_rows)``:
+
+    * a corpus description matching a current fact row under the CURRENT
+      template is valid history — kept;
+    * one matching a current fact row only under the LEGACY (pre-grain-label)
+      template is value-valid but unlabeled — deleted AND its fact row queued
+      for re-indexing under the labeled template (``migrate_rows``);
+    * anything else matches NO current fact row — stale — deleted.
+    """
+    valid_new: set[str] = set()
+    legacy_map: dict[str, dict[str, Any]] = {}
+    for row in all_rows:
+        valid_new.add(render_business_metric(row))
+        legacy_map[_render_business_metric_legacy(row)] = row
+
+    stale_ids: list[str] = []
+    migrate_rows: list[dict[str, Any]] = []
+    for crow in _corpus_rows_for_brand(sb, agent_name, (brand or "").lower()):
+        desc = crow.get("description")
+        mid = crow.get("memory_id")
+        if desc in valid_new or not mid:
+            continue
+        stale_ids.append(mid)
+        if desc in legacy_map:
+            migrate_rows.append(legacy_map[desc])
+    return stale_ids, migrate_rows
+
+
+def _delete_corpus_rows(sb: Any, agent_name: str, memory_ids: list[str]) -> None:
+    """Delete superseded corpus rows in bounded batches (agent-scoped)."""
+    batch_size = 100
+    for i in range(0, len(memory_ids), batch_size):
+        (
+            sb.table("episodic_memories")
+            .delete()
+            .eq("agent_name", agent_name)
+            .in_("memory_id", memory_ids[i : i + batch_size])
+            .execute()
+        )
+
+
 async def index_business_metrics(
     *,
     brands: Optional[list[str]] = None,
@@ -235,6 +377,7 @@ async def index_business_metrics(
     agent_name: str = _DEFAULT_AGENT_NAME,
     dedup: bool = True,
     latest_per_combo: bool = False,
+    reconcile: bool = True,
 ) -> list[str]:
     """Read REAL ``business_metrics`` rows and index them into the RAG substrate.
 
@@ -259,6 +402,13 @@ async def index_business_metrics(
             (metric_name, region) combo per brand (full coverage; ``limit_per_brand``
             ignored). The durable Celery sync uses this so no combo is omitted
             (audit F3b). When False, the legacy bounded recent-N behavior.
+        reconcile: when True (default) AND ``latest_per_combo`` is True, run the
+            #1552 reconciliation pass: corpus prose matching NO current fact row
+            (stale, e.g. values the substrate no longer attributes to that date)
+            is deleted, and value-valid prose in the legacy unlabeled template is
+            re-indexed under the grain-labeled template. Requires the full fact
+            scan, so the bounded path (``latest_per_combo=False``) NEVER
+            reconciles — deleting against a partial scan would drop valid prose.
 
     Returns:
         The inserted episodic ``memory_id``s (only the NEW rows when ``dedup``).
@@ -272,8 +422,24 @@ async def index_business_metrics(
     rows: list[tuple[str, Optional[str], Optional[str]]] = []
     batch_seen: set[str] = set()
     skipped = 0
+    stale_all: list[str] = []
     for brand in brands:
-        for row in _fetch_brand_rows(sb, brand, limit_per_brand, latest_per_combo):
+        if latest_per_combo:
+            all_rows = _fetch_all_brand_rows(sb, brand)
+            fetched: list[dict[str, Any]] = _latest_per_combo(all_rows)
+            if reconcile and all_rows:
+                # Empty-scan guard: a brand whose (provenance-filtered) fact scan
+                # returns 0 rows is skipped — an env/provenance misconfiguration
+                # (e.g. a showcase host missing E2I_INCLUDE_SYNTHETIC) must not
+                # mass-delete an otherwise valid corpus.
+                stale_ids, migrate_rows = _plan_corpus_reconciliation(
+                    sb, agent_name, brand, all_rows
+                )
+                stale_all.extend(stale_ids)
+                fetched = fetched + migrate_rows
+        else:
+            fetched = _fetch_brand_rows(sb, brand, limit_per_brand, latest_per_combo)
+        for row in fetched:
             text = render_business_metric(row)
             # Skip already-indexed prose and intra-batch duplicates (idempotency).
             if text in already or text in batch_seen:
@@ -286,7 +452,18 @@ async def index_business_metrics(
 
     if skipped:
         logger.info("index_business_metrics: skipped %d already-indexed/duplicate rows", skipped)
-    if not rows:
+    inserted: list[str] = []
+    if rows:
+        inserted = await index_operational_corpus(rows, agent_name=agent_name)
+    if stale_all:
+        # Insert-then-delete: a failure between the two leaves BOTH generations
+        # present until the next idempotent sync — never a corpus with valid
+        # prose missing.
+        _delete_corpus_rows(sb, agent_name, stale_all)
+        logger.info(
+            "index_business_metrics: reconciled %d stale/superseded corpus rows (#1552)",
+            len(stale_all),
+        )
+    if not rows and not stale_all:
         logger.info("index_business_metrics: nothing new to index (corpus up to date)")
-        return []
-    return await index_operational_corpus(rows, agent_name=agent_name)
+    return inserted
