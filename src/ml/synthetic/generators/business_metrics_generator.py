@@ -27,6 +27,27 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
     - hcp_engagement_score
 
     Metrics include targets, achievement rates, and statistical measures.
+
+    Trend indexing (#1566 D1): each record's value/target scale by
+    ``trend_factor = 1 + trend * month_idx``. By default month_idx is the
+    date's POSITION in the current run's date list, so a single-date run
+    (e.g. a monthly frontier cohort) always gets month_idx=0. Setting
+    ``config.trend_origin`` switches month_idx to absolute calendar months
+    since that origin, keeping short runs on the same trend line as a longer
+    frozen base. ``trend_origin=None`` preserves the positional behavior
+    byte-for-byte.
+
+    Derived-field caveat (#1566 D2, deferred — documented, not changed):
+    ``year_over_year_change``, ``month_over_month_change`` and ``roi`` are
+    MODEL-PARAMETER DRAWS, not measurements over the generated series:
+    ``yoy = trend*12 + N(0, 0.05)``, ``mom = trend + N(0, 0.02)``, and
+    ``roi`` is a level draw (``2.5 + N(0, 0.5)`` for trx/nrx, else
+    ``1.5 + N(0, 0.3)``). No spend column exists anywhere in the schema, so
+    ROI has no arithmetic basis in the data at all. Consumers must not
+    reconcile these stamps against month-over-month arithmetic on ``value``
+    (that inconsistency is exactly what #1566 observed). Closed-form
+    derivation from the value series is deferred (issue #1566, D2 in the
+    local plans backlog).
     """
 
     # Metric configurations by type
@@ -115,8 +136,20 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         # Generate date range
         dates = self._generate_date_range(n_dates)
 
+        # #1566 D1: month_idx drives trend_factor = 1 + trend * month_idx. With
+        # trend_origin set, use absolute calendar months from that origin so a
+        # single-date run stays on the same trend line as a longer base run;
+        # None keeps the positional index (byte-identical legacy behavior).
+        origin = self.config.trend_origin
+
         records = []
         for metric_date in dates:
+            if origin is not None:
+                month_idx = (metric_date.year - origin.year) * 12 + (
+                    metric_date.month - origin.month
+                )
+            else:
+                month_idx = dates.index(metric_date)
             for brand in brands:
                 for region in regions:
                     for metric_type in metric_types:
@@ -125,7 +158,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
                             brand=brand,
                             region=region,
                             metric_type=metric_type,
-                            month_idx=dates.index(metric_date),
+                            month_idx=month_idx,
                         )
                         records.append(record)
 

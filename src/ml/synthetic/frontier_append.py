@@ -97,6 +97,14 @@ logger = logging.getLogger(__name__)
 # --- already-loaded cohorts under the same PKs) --------------------------------
 EPOCH = date(2026, 7, 6)  # first Monday after the base-substrate freeze
 BM_EPOCH = date(2026, 8, 1)  # base bm rows exist through 2026-07-01
+# #1566 D1: absolute calendar origin for the monthly business_metrics trend.
+# FROZEN and NOT re-derivable by re-running the base generator (its default
+# date range re-anchors to the run date); 2013-01-01 is the first month of the
+# frozen base actually loaded in the DB (2026-07-03 load, 163 months
+# 2013-01..2026-07), giving July 2026 index 162 and the first appended month
+# (2026-08) index 163. Without it, a single-date cohort run resets the
+# positional month_idx to 0 and collapses to the 2013 baseline (~24% of July).
+BM_TREND_ORIGIN = date(2013, 1, 1)
 TRAIL_WEEKS = 26  # covers the max measured derived-date overshoot (~+89d) with margin
 
 # Base-substrate generation identity (scripts/load_synthetic_data.py defaults:
@@ -317,6 +325,10 @@ def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:
             n_records=MONTHLY_SIZES["business_metrics"],
             start_date=month_start,
             end_date=month_end,
+            # #1566 D1: anchor the trend index to the frozen base's first
+            # month; without it this single-date run gets month_idx=0 and the
+            # cohort collapses to the 2013 baseline.
+            trend_origin=BM_TREND_ORIGIN,
         )
     ).generate()
     # The generator draws metric_id as unprefixed seeded hex ("metric_<12hex>")

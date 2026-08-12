@@ -45,6 +45,16 @@ class GeneratorConfig:
     # Must keep ids within varchar(20): longest is patient_journey_id 'patient_000000'
     # (14) -> a <=3-char prefix is safe.
     id_prefix: str = ""
+    # #1566 D1: absolute calendar anchoring for BusinessMetricsGenerator's trend.
+    # When set, that generator computes month_idx as absolute calendar months from
+    # this origin ((d.year - origin.year)*12 + (d.month - origin.month)) instead of
+    # the date's POSITION in the current run's date list — a single-date frontier
+    # cohort would otherwise reset month_idx to 0 and collapse to the trend
+    # baseline. None preserves the positional behavior for all existing callers
+    # (byte-identical output). Kept LAST in the field order so any positional
+    # GeneratorConfig(...) caller outside this repo keeps its argument binding
+    # (codex audit LOW finding, 2026-08-12).
+    trend_origin: Optional[date] = None
 
 
 @dataclass
@@ -126,6 +136,7 @@ class BaseGenerator(ABC, Generic[T]):
                 anchor_reference=self.config.anchor_reference,
                 anchor_recent_fraction=self.config.anchor_recent_fraction,
                 verbose=self.config.verbose,
+                trend_origin=self.config.trend_origin,
                 id_prefix=self.config.id_prefix,
             )
 
