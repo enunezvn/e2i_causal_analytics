@@ -55,7 +55,6 @@ from src.services.enum_labels import (
     resolve_brand_label,
     resolve_region_label,
 )
-from src.utils.llm_factory import get_chat_llm
 from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
@@ -1649,11 +1648,18 @@ async def tool_composer_tool(
                     f"estimation_data: {resolve_err}"
                 )
 
-        # Get LLM client for Tool Composer (use reasoning tier for complex queries)
-        llm_client = get_chat_llm(model_tier="reasoning", max_tokens=4096)
-
-        # Use the compose_query convenience function
-        result = await compose_query(query=query, llm_client=llm_client, context=context)
+        # #1557: do NOT pre-build a shared LLM client here. Injecting one puts
+        # ToolComposer in dependency-injection mode ("every phase SHARES it
+        # unchanged"), which bypassed the #1365 per-phase sizing: the plan
+        # phase ran with adaptive thinking ON against the shared 4096 budget,
+        # thinking tokens ate the budget, and the planner JSON truncated at the
+        # ceiling (PlanningError, eval turn 2.6). With no client injected the
+        # composer builds a correctly-SIZED client per phase from the factory
+        # (plan -> thinking disabled, truncation impossible) — the same
+        # deliberate choice ToolComposerAgent._get_composer already makes. The
+        # tiers are equivalent anyway: "reasoning" and "standard" map to the
+        # same model for both providers, so nothing here depended on the tier.
+        result = await compose_query(query=query, context=context)
 
         # Extract composition results from Pydantic CompositionResult model
         # result.decomposition contains sub_questions, result.plan has execution info,
