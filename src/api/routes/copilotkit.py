@@ -4365,6 +4365,18 @@ class ChatResponse(BaseModel):
 # (Finding 3 — info disclosure).
 _GENERIC_CHAT_ERROR = "An internal error occurred while processing your request. Please try again."
 
+# #1561: honest envelope for a stream that COMPLETED without producing any
+# text. Distinct from _GENERIC_CHAT_ERROR (the exception path): here nothing
+# raised — the graph ran and yielded zero characters (measured 2026-08-12
+# turn 5.1: HTTP 200, 27 s, generate node ran ~19 s, zero chars, clean
+# retry). The message explains the fault and invites retry; it must never
+# read as an analytical answer.
+_EMPTY_STREAM_FALLBACK = (
+    "I wasn't able to produce a response for this question — the analysis ran "
+    "but returned no text. This is a transient platform issue, not an answer; "
+    "please try asking again."
+)
+
 
 def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Optional[str]) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
@@ -4510,6 +4522,9 @@ async def _stream_chat_response(
             # #1484: retrieve_rag chain-internal attribution (same span item)
             "rag_stage_ms": None,
             "rag_meta": None,
+            # #1561: True when the zero-char guard emitted the fallback
+            # envelope — makes recurrence countable without scraping logs.
+            "empty_response_fallback": False,
         }
 
         # Stream through chatbot workflow
@@ -4625,6 +4640,30 @@ async def _stream_chat_response(
                             ]
                         if "used_llm_layer" in node_output:
                             dispatch_info["used_llm_layer"] = node_output["used_llm_layer"]
+
+        # #1561: a zero-char completion must never close as a silent empty
+        # 200. Guard the TOTAL response at stream end — individual empty
+        # chunks are benign (wave-1 finding on the AG-UI surface); the defect
+        # is the whole turn producing nothing while returning HTTP 200.
+        #
+        # #1336 bridge interaction: the conversational bridge fires INSIDE
+        # orchestrator_node on complete orchestrator failure, and its answer
+        # (or the #883 fail-closed summary) reaches this writer as ordinary
+        # response_text. Guard and bridge are therefore mutually exclusive by
+        # construction: bridge-authored text makes the guard inert, and an
+        # empty total means the bridge either never triggered (the
+        # successful-agents-but-empty-synthesis gap falls between the two
+        # mechanisms) or itself returned None. No masking, no double-wrap.
+        if not response_text.strip():
+            dispatch_info["empty_response_fallback"] = True
+            logger.error(
+                "[#1561] zero-char /chat/stream completion (request_id=%s, "
+                "session_id=%s, %.0f ms) — emitting fallback envelope",
+                request.request_id,
+                session_id,
+                (time.time() - start_time) * 1000,
+            )
+            yield f"data: {json.dumps({'type': 'text', 'data': _EMPTY_STREAM_FALLBACK})}\n\n"
 
         # Generate title if not set
         if not conversation_title and response_text:
