@@ -180,3 +180,40 @@ def test_prompt_requires_surfacing_coverage_warning():
         [{"tool": "kpi_calculate_tool", "result": '{"value": 15767}'}],
     )
     assert "coverage_warning" in p
+
+
+@pytest.mark.unit
+def test_prompt_keeps_failed_envelope_response_text():
+    """#1549 downstream pin: orchestrator_tool now propagates success=false for
+    fail-closed runs, and the honest abstention text rides in ``response``.
+    ``build_synthesis_prompt`` performs NO success filtering — it must keep
+    carrying the failed payload (and its response text) to the synthesizer so
+    the honest abstention still reaches the user. This test pins that
+    reachability; if the builder ever grows a success filter, the abstention
+    text must be carried in a field the prompt still includes."""
+    import json
+
+    failed_payload = json.dumps(
+        {
+            "success": False,
+            "status": "failed",
+            "fallback": False,
+            "query": "explain that",
+            "response": (
+                "I was unable to complete the analysis due to the following errors:\n"
+                "- explainer: no successful upstream agent results.\n\n"
+                "Please try again or rephrase your question."
+            ),
+            "confidence": 0.0,
+            "agents_dispatched": ["explainer"],
+            "failed_agents": ["explainer"],
+        }
+    )
+    p = build_synthesis_prompt(
+        "explain that",
+        [{"name": "orchestrator_tool", "args": {"query": "explain that"}}],
+        [{"tool": "orchestrator_tool", "result": failed_payload}],
+    )
+    assert "I was unable to complete the analysis" in p
+    assert "Please try again or rephrase your question." in p
+    assert "failed_agents" in p
