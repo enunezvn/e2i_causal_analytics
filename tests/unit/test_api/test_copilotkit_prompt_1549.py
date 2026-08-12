@@ -51,6 +51,32 @@ def test_prompt_requires_stating_assumptions_and_offering_other_slices_after():
     assert "after" in LOW and "not instead of" in LOW
 
 
+def test_prompt_treats_multi_brand_sessions_as_ambiguous_not_absent():
+    """Codex iter-2 HIGH: a conversation that has discussed MORE THAN ONE
+    brand is a third scenario — distinct from both the single-session-brand
+    default (5.5 control: still proceeds) and the no-referent cold ask (A.5
+    control: still clarifies). The directive must forbid silently picking
+    one brand."""
+    assert "more than one brand" in LOW
+    assert "never silently pick one" in LOW
+    assert "ambiguous is not absent" in LOW
+
+
+def test_prompt_offers_per_brand_comparison_or_candidate_clarify():
+    """The multi-brand resolution is still run-first: a supported per-brand
+    comparison when one exists, otherwise ONE crisp question naming the
+    candidate brands — not a silent default and not a generic ask-back."""
+    assert "one call per candidate brand" in LOW
+    assert "naming the candidate brands" in LOW
+
+
+def test_predict_tool_brand_line_mirrors_multi_brand_rule():
+    """The per-tool brand rule must agree with the directive: single session
+    brand = user-provided; multiple session brands = per-candidate runs or a
+    which-one question; no brand anywhere = ask."""
+    assert "once per candidate brand" in LOW
+
+
 def test_prompt_reserves_ask_ending_for_undefined_referent():
     """A.5 control: a cold ask with NO entity/metric anywhere in the ask or
     conversation must still clarify — the rule names that case explicitly."""
