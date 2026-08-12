@@ -226,3 +226,96 @@ def test_prompt_requires_surfacing_coverage_warning():
         [{"tool": "kpi_calculate_tool", "result": '{"value": 15767}'}],
     )
     assert "coverage_warning" in p
+
+
+@pytest.mark.unit
+def test_prompt_keeps_failed_envelope_response_text():
+    """#1549 downstream pin: orchestrator_tool now propagates success=false for
+    fail-closed runs, and the honest abstention text rides in ``response``.
+    ``build_synthesis_prompt`` performs NO success filtering — it must keep
+    carrying the failed payload (and its response text) to the synthesizer so
+    the honest abstention still reaches the user. This test pins that
+    reachability; if the builder ever grows a success filter, the abstention
+    text must be carried in a field the prompt still includes."""
+    import json
+
+    failed_payload = json.dumps(
+        {
+            "success": False,
+            "status": "failed",
+            "fallback": False,
+            "query": "explain that",
+            "response": (
+                "I was unable to complete the analysis due to the following errors:\n"
+                "- explainer: no successful upstream agent results.\n\n"
+                "Please try again or rephrase your question."
+            ),
+            "confidence": 0.0,
+            "agents_dispatched": ["explainer"],
+            "failed_agents": ["explainer"],
+        }
+    )
+    p = build_synthesis_prompt(
+        "explain that",
+        [{"name": "orchestrator_tool", "args": {"query": "explain that"}}],
+        [{"tool": "orchestrator_tool", "result": failed_payload}],
+    )
+    assert "I was unable to complete the analysis" in p
+    assert "Please try again or rephrase your question." in p
+    assert "failed_agents" in p
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_partial_failure_payload_reaches_prompt_trimmed():
+    """#1549 iter-2 (codex finding 5): guard the ACTUAL tool->prompt seam,
+    not a hand-built payload. orchestrator_tool's partial_success envelope
+    is produced by the real tool code, serialized as langchain would, and
+    fed through build_synthesis_prompt: the trimmed projection (agent name +
+    category + honest response text) must reach the synthesizer, the raw
+    dispatcher audit string must NOT."""
+    import json
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.api.routes.chatbot_tools import orchestrator_tool
+
+    raw_error = (
+        "Traceback (most recent call last): ValueError: 22P02 invalid "
+        "input value for enum region_t: 'northeastregion'"
+    )
+    mock_orchestrator = MagicMock()
+    mock_orchestrator.run = AsyncMock(
+        return_value={
+            "status": "partial_success",
+            "response_text": "TRx is driven by HCP engagement (causal agent failed).",
+            "response_confidence": 0.7,
+            "agents_dispatched": ["gap_analyzer", "causal_impact"],
+            "successful_agents": ["gap_analyzer"],
+            "failed_agents": ["causal_impact"],
+            "has_partial_failure": True,
+            "failure_details": [
+                {
+                    "agent_name": "causal_impact",
+                    "error": raw_error,
+                    "latency_ms": 40,
+                    "user_action": None,
+                }
+            ],
+        }
+    )
+    with patch("src.api.routes.chatbot_tools.get_orchestrator", return_value=mock_orchestrator):
+        payload = await orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+
+    p = build_synthesis_prompt(
+        "Why is TRx moving?",
+        [{"name": "orchestrator_tool", "args": {"query": "Why is TRx moving?"}}],
+        [{"tool": "orchestrator_tool", "result": json.dumps(payload, default=str)}],
+    )
+    # Raw internals never reach the synthesis prompt.
+    assert raw_error not in p
+    assert "22P02" not in p
+    # The honest caveat material does.
+    assert "causal_impact" in p
+    assert "agent_error" in p
+    assert "has_partial_failure" in p
+    assert "TRx is driven by HCP engagement" in p
