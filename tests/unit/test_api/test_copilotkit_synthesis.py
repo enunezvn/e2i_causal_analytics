@@ -169,6 +169,52 @@ def test_prompt_requires_prose_to_match_own_table():
 
 
 @pytest.mark.unit
+def test_prompt_requires_period_grain_discipline():
+    """#1552 (2026-08-11 eval, 6.5): the synthesizer merged two source rows
+    into an invented 'Jun/Jul 2026' two-month bucket, rendered it in the same
+    table as an 'Aug 2026' row, and called the resulting gap 'an unexplained
+    scale discontinuity' — converting a period-labeling gap into user-facing
+    doubt about the data (the substrate is uniformly monthly-grain; measured).
+    The instruction block must require: one source period per row (no merged
+    period labels), no mixed period widths in one table unlabeled, partial-
+    period claims only when the tool results state them, and period-width
+    differences explained as such — never as unexplained discontinuities."""
+    # Results deliberately generic — the INSTRUCTION block itself must carry
+    # the grain discipline regardless of payload content.
+    p = build_synthesis_prompt(
+        "Forecast Kisqali TRx volume for the next two quarters",
+        [{"name": "e2i_data_query_tool", "args": {"query_type": "predictions"}}],
+        [{"tool": "e2i_data_query_tool", "result": '{"count": 0}'}],
+    )
+    assert "PERIOD GRAIN" in p
+    # No merged period labels (the invented 'Jun/Jul 2026' bucket)
+    assert "Jun/Jul" in p
+    # No mixed widths unlabeled in a single table
+    assert "width" in p.lower()
+    # Partial-period (MTD) claims only from the tool results, never invented
+    assert "month-to-date" in p.lower() or "MTD" in p
+    # Period-width artifacts are explained, never 'unexplained discontinuities'
+    assert "unexplained" in p
+    # No trend inference across unequal periods
+    assert "trend" in p.lower()
+
+
+@pytest.mark.unit
+def test_prompt_forbids_orphan_footnote_markers():
+    """5.1 (same eval): a table cell read '3 (0)*' with no footnote anywhere
+    in the answer — the marker was LLM-authored (the tool payload contains no
+    asterisk; verified against the raw event stream). The instruction block
+    must forbid footnote markers without their footnote text."""
+    p = build_synthesis_prompt(
+        "What is the current system health score?",
+        [{"name": "e2i_data_query_tool", "args": {"query_type": "agent_analysis"}}],
+        [{"tool": "e2i_data_query_tool", "result": '{"count": 0}'}],
+    )
+    assert "FOOTNOTES" in p
+    assert "footnote marker" in p.lower()
+
+
+@pytest.mark.unit
 def test_prompt_requires_surfacing_coverage_warning():
     """When a tool result carries a coverage_warning, the synthesizer must repeat
     it and refuse trend conclusions from that figure."""
