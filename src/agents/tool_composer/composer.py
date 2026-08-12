@@ -125,11 +125,12 @@ class ToolComposer:
 
         Args:
             llm_client: Anthropic/OpenAI-compatible LLM client shared across
-                phases (dependency-injection mode — used by tests and the
-                chatbot_tools entry point). When ``None`` the composer builds a
-                correctly-SIZED client PER PHASE from the factory (#1365): the
-                planning phase gets a real token budget with thinking disabled,
-                so the planning JSON can no longer truncate.
+                phases (dependency-injection mode — used by tests). When
+                ``None`` the composer builds a correctly-SIZED client PER PHASE
+                from the factory (#1365): the planning phase gets a real token
+                budget with thinking disabled, so the planning JSON can no
+                longer truncate. Both production entry points (the orchestrator
+                agent and the chatbot_tools chat path, #1557) pass ``None``.
             tool_registry: Optional custom tool registry (uses global if not provided)
             config: Optional configuration overrides
             memory_hooks: Optional memory hooks instance (G1, G2 integration)
@@ -191,9 +192,11 @@ class ToolComposer:
         Two modes:
 
         - **Dependency-injection.** When a client was injected
-          (``self.llm_client`` is not ``None``) — tests, or the chatbot_tools
-          entry point — every phase SHARES it unchanged. This preserves the
-          mock-injection contract the whole test suite relies on.
+          (``self.llm_client`` is not ``None``) — tests — every phase SHARES it
+          unchanged. This preserves the mock-injection contract the whole test
+          suite relies on. Production entry points must NOT inject (#1557): a
+          shared client puts the plan phase back on adaptive thinking, whose
+          tokens eat the budget and truncate the planner JSON.
         - **Factory.** When no client was injected, build a client sized for
           THIS phase from the factory (``get_chat_llm``), which encapsulates
           provider switching (anthropic vs openai) and the sonnet-5 thinking
@@ -983,14 +986,20 @@ class ToolComposer:
 
 
 async def compose_query(
-    query: str, llm_client: Any, context: Optional[Dict[str, Any]] = None, **kwargs
+    query: str,
+    llm_client: Optional[Any] = None,
+    context: Optional[Dict[str, Any]] = None,
+    **kwargs,
 ) -> CompositionResult:
     """
     Convenience function to compose a query.
 
     Args:
         query: The user's multi-faceted query
-        llm_client: LLM client for the composition phases
+        llm_client: LLM client shared by every composition phase (DI mode —
+            tests). Leave ``None`` (#1557) for factory mode: a correctly-SIZED
+            client per phase (#1365), notably thinking-off planning so the
+            planner JSON cannot truncate. Production entry points want ``None``.
         context: Optional context dictionary
         **kwargs: Additional arguments for ToolComposer
 
@@ -1002,7 +1011,10 @@ async def compose_query(
 
 
 def compose_query_sync(
-    query: str, llm_client: Any, context: Optional[Dict[str, Any]] = None, **kwargs
+    query: str,
+    llm_client: Optional[Any] = None,
+    context: Optional[Dict[str, Any]] = None,
+    **kwargs,
 ) -> CompositionResult:
     """
     Synchronous wrapper for query composition.

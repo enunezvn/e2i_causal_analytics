@@ -1580,13 +1580,14 @@ class TestToolComposerTool:
         ) as mock_compose:
             mock_compose.return_value = mock_result
 
-            with patch("src.api.routes.chatbot_tools.get_chat_llm"):
-                result = await tool_composer_tool.ainvoke(
-                    {
-                        "query": "What is TRx and why did it change?",
-                        "brand": "Kisqali",
-                    }
-                )
+            # #1557: no get_chat_llm patch needed — the entry point no longer
+            # pre-builds a client (the composer sizes clients per phase, #1365).
+            result = await tool_composer_tool.ainvoke(
+                {
+                    "query": "What is TRx and why did it change?",
+                    "brand": "Kisqali",
+                }
+            )
 
         assert result["success"] is True
         assert result["synthesized_response"] == "TRx is 100"
@@ -1607,12 +1608,13 @@ class TestToolComposerTool:
         ) as mock_compose:
             mock_compose.side_effect = Exception("Composition failed")
 
-            with patch("src.api.routes.chatbot_tools.get_chat_llm"):
-                with patch(
-                    "src.api.routes.chatbot_tools.get_orchestrator",
-                    return_value=mock_orchestrator,
-                ):
-                    result = await tool_composer_tool.ainvoke({"query": "Multi-faceted query"})
+            # #1557: no get_chat_llm patch needed — the entry point no longer
+            # pre-builds a client (the composer sizes clients per phase, #1365).
+            with patch(
+                "src.api.routes.chatbot_tools.get_orchestrator",
+                return_value=mock_orchestrator,
+            ):
+                result = await tool_composer_tool.ainvoke({"query": "Multi-faceted query"})
 
         assert result["success"] is True
         assert result["fallback"] is True

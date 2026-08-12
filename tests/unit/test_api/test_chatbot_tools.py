@@ -869,22 +869,14 @@ class TestOrchestratorTool:
 
 
 class TestToolComposerTool:
-    """Tests for tool_composer_tool."""
+    """Tests for tool_composer_tool.
 
-    @pytest.fixture(autouse=True)
-    def _mock_llm_client(self):
-        """Hermetic guard for the whole class.
-
-        tool_composer_tool builds a real LLM client via get_chat_llm()
-        (chatbot_tools.py:1490) BEFORE the mocked compose_query call, and
-        get_chat_llm requires OPENAI_API_KEY. That key is present on the dev
-        droplet (via .env) but ABSENT in CI, so without this patch these tests
-        pass locally and fail in CI with "OPENAI_API_KEY ... is not set". Mock
-        the factory so no real client is constructed and the tests are hermetic.
-        """
-        with patch("src.api.routes.chatbot_tools.get_chat_llm") as mock_llm:
-            mock_llm.return_value = MagicMock()
-            yield mock_llm
+    NOTE (#1557): the former ``_mock_llm_client`` autouse fixture (patching
+    ``chatbot_tools.get_chat_llm`` for CI hermeticity) is gone WITH the seam it
+    guarded — the entry point no longer pre-builds an LLM client before
+    ``compose_query``; the composer sizes clients per phase (#1365) and
+    ``compose_query`` is mocked here, so no real client is ever constructed.
+    """
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.compose_query")
