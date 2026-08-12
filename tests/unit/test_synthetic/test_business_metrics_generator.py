@@ -399,6 +399,59 @@ class TestReproducibility:
         assert not df1["value"].equals(df2["value"])
 
 
+class TestTrendOrigin:
+    """#1566 D1: absolute calendar anchoring of the trend index.
+
+    trend_origin=None (the default) preserves the positional month_idx
+    (= dates.index(metric_date)) for all existing callers; when set,
+    month_idx = (d.year - origin.year)*12 + (d.month - origin.month).
+    """
+
+    # trx model constants (METRIC_CONFIGS): base values, 2%/month trend.
+    _TRX_BASE = {"Remibrutinib": 15000.0, "Fabhalta": 8000.0, "Kisqali": 50000.0}
+    _REGION = {"northeast": 1.15, "south": 0.95, "midwest": 0.90, "west": 1.00}
+    _TRX_TREND = 0.02
+
+    def _first_date_trx_ratio(self, df: pd.DataFrame, trend_factor: float) -> float:
+        first = df["metric_date"].min()  # ISO strings sort chronologically
+        trx = df[(df["metric_date"] == first) & (df["metric_type"] == "trx")]
+        assert len(trx) == 12  # 3 brands x 4 regions
+        expected = trx.apply(
+            lambda r: self._TRX_BASE[r["brand"]] * self._REGION[r["region"]] * trend_factor,
+            axis=1,
+        )
+        return float((trx["value"] / expected).mean())
+
+    def test_default_none_keeps_positional_first_date_at_factor_one(self):
+        # Explicit non-default start_date so _generate_date_range honors it
+        # as-is (the 2022 default triggers the recency re-anchor instead).
+        config = GeneratorConfig(
+            n_records=500,
+            seed=42,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+        df = BusinessMetricsGenerator(config).generate()
+
+        # Positional behavior: the run's first date has index 0 -> factor 1.
+        ratio = self._first_date_trx_ratio(df, trend_factor=1.0)
+        # Per-row noise N(0, 0.15); the 12-row mean must sit near 1.
+        assert 0.85 <= ratio <= 1.15, f"positional first-date ratio drifted: {ratio:.3f}"
+
+    def test_trend_origin_24_months_before_start_scales_first_date(self):
+        config = GeneratorConfig(
+            n_records=500,
+            seed=42,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+            trend_origin=date(2022, 1, 1),  # 24 calendar months before start
+        )
+        df = BusinessMetricsGenerator(config).generate()
+
+        ratio = self._first_date_trx_ratio(df, trend_factor=1.0 + self._TRX_TREND * 24)
+        assert 0.85 <= ratio <= 1.15, f"calendar-anchored first-date ratio off: {ratio:.3f}"
+
+
 class TestMetricIDUniqueness:
     """Test metric ID uniqueness."""
 

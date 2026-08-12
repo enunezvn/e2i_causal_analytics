@@ -226,6 +226,14 @@ def generate_datasets(
         logger.info(f"  Merged {len(injected_rx):,} conversion prescriptions into treatment_events")
 
     # 6. Generate Business Metrics (for Gap Analyzer)
+    # ⚠️ #1566 coupling: this config carries the DEFAULT start_date, so
+    # BusinessMetricsGenerator._generate_date_range re-anchors the monthly
+    # window to END at the current run month (the 2026-07-03 full load produced
+    # 163 months 2013-01..2026-07). frontier_append.BM_TREND_ORIGIN is FROZEN
+    # to that load's first month (2013-01-01). A future full reseed run on a
+    # later date shifts the base's first month forward, and appended monthly
+    # cohorts would no longer sit on the new base's trend line — re-freeze
+    # BM_TREND_ORIGIN to the new base's first month in the same change.
     logger.info(f"Generating {sizes['business_metrics']:,} business metrics...")
     bm_config = GeneratorConfig(
         id_prefix=id_prefix,
