@@ -165,35 +165,75 @@ class TestIssue1582Scenario:
         assert [d["agent_name"] for d in out["dispatch_plan"]] == ["explainer"]
 
 
+# Exact dispatch expectations as (agent_name, priority, timeout_ms, fallback_agent).
+# Spelled out rather than derived so a change to INTENT_TO_AGENTS or to the
+# active-mode branch has to edit THIS table — a self-derived expectation would
+# move with the regression it is supposed to catch.
+_LEGACY_PREDICTION = [("prediction_synthesizer", "critical", 15000, None)]
+_PIPELINE_SINGLE = [("causal_impact", "critical", 300000, "explainer")]
+_PIPELINE_PARALLEL = [
+    ("causal_impact", "critical", 300000, "explainer"),
+    ("gap_analyzer", "high", 20000, None),
+]
+_PIPELINE_COMPOSER = [("tool_composer", "critical", 180000, "explainer")]
+
+_CLF_NONE = None
+_CLF_ABSTAIN = _clf("CLARIFICATION_NEEDED", [], 0.0)
+_CLF_LOWCONF = _clf("SINGLE_AGENT", ["causal_impact"], 0.2)
+_CLF_SINGLE = _clf("SINGLE_AGENT", ["causal_impact"], 0.8)
+_CLF_PARALLEL = _clf("PARALLEL_DELEGATION", ["causal_impact", "gap_analyzer"], 0.7)
+_CLF_COMPOSER = _clf("TOOL_COMPOSER", [], 0.9)
+
+# (mode, classification, expected dispatch tuples, expected authority)
+_DISPATCH_MATRIX = [
+    # off/shadow ignore the pipeline entirely, however confident it is
+    ("off", _CLF_NONE, _LEGACY_PREDICTION, "legacy"),
+    ("off", _CLF_SINGLE, _LEGACY_PREDICTION, "legacy"),
+    ("off", _CLF_PARALLEL, _LEGACY_PREDICTION, "legacy"),
+    ("shadow", _CLF_NONE, _LEGACY_PREDICTION, "legacy"),
+    ("shadow", _CLF_SINGLE, _LEGACY_PREDICTION, "legacy"),
+    ("shadow", _CLF_PARALLEL, _LEGACY_PREDICTION, "legacy"),
+    ("shadow", _CLF_COMPOSER, _LEGACY_PREDICTION, "legacy"),
+    # active: abstentions fall through to the SAME legacy plan
+    ("active", _CLF_NONE, _LEGACY_PREDICTION, "legacy"),
+    ("active", _CLF_ABSTAIN, _LEGACY_PREDICTION, "legacy"),
+    ("active", _CLF_LOWCONF, _LEGACY_PREDICTION, "legacy"),
+    # active: confident pipeline takes authority
+    ("active", _CLF_SINGLE, _PIPELINE_SINGLE, "pipeline"),
+    ("active", _CLF_PARALLEL, _PIPELINE_PARALLEL, "pipeline"),
+    ("active", _CLF_COMPOSER, _PIPELINE_COMPOSER, "pipeline"),
+]
+
+
 class TestRoutingUnchanged:
     """The marker must not perturb any routing output."""
 
-    @pytest.mark.parametrize("mode", ["off", "shadow", "active"])
     @pytest.mark.parametrize(
-        "classification",
-        [
-            None,
-            _clf("CLARIFICATION_NEEDED", [], 0.0),
-            _clf("SINGLE_AGENT", ["causal_impact"], 0.8),
-            _clf("PARALLEL_DELEGATION", ["causal_impact", "gap_analyzer"], 0.7),
-            _clf("TOOL_COMPOSER", [], 0.9),
-        ],
+        "mode,classification,expected_dispatch,expected_authority",
+        _DISPATCH_MATRIX,
     )
-    async def test_dispatch_outputs_untouched_by_marker(self, monkeypatch, mode, classification):
-        """Every routing-bearing key is exactly what it was; only the marker is new."""
+    async def test_dispatch_plan_is_exactly_unchanged(
+        self, monkeypatch, mode, classification, expected_dispatch, expected_authority
+    ):
+        """Byte-identical dispatch across every mode x pipeline-decision cell.
+
+        Asserts the FULL per-agent config (name, priority, timeout, fallback),
+        not merely that something was dispatched — the marker must be provably
+        additive, and #1582 would be a bad trade if it moved any SLA.
+        """
         out = await _route(_state(classification), monkeypatch, mode)
-        routing_keys = {
-            "dispatch_plan",
-            "parallel_groups",
-            "current_phase",
-            "discovery_routing_applied",
-            "discovery_aware_agents",
-        }
-        # the marker is additive, never a replacement for a routing key
-        assert routing_keys <= set(out)
+
+        actual = [
+            (d["agent_name"], d["priority"], d["timeout_ms"], d["fallback_agent"])
+            for d in out["dispatch_plan"]
+        ]
+        assert actual == expected_dispatch
+        assert out["routing_authority"] == expected_authority
+        # parallel_groups stays consistent with the plan it describes
+        assert [name for group in out["parallel_groups"] for name in group] == [
+            d[0] for d in expected_dispatch
+        ]
         assert out["current_phase"] == "dispatching"
-        assert len(out["dispatch_plan"]) >= 1
-        assert "routing_authority" in out
 
 
 class TestOrchestratorOutputThread:
