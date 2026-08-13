@@ -177,25 +177,52 @@ def test_small_frames_unsampled_and_deterministic() -> None:
     assert first == second, "repeat SHAP derivation on one frame must be deterministic"
 
 
-@pytest.mark.timeout(_REGRESSION_HEADROOM_SECONDS)
-def test_ranking_stable_under_cap() -> None:
-    """The capped run still recovers the planted driver ordering.
+def _mean_abs_ranking(shap_list: list[list[float]], feats: list[str]) -> list[str]:
+    """Reduce a SHAP matrix the way every consumer does: mean-|SHAP| per feature,
+    descending. Mirrors ``_predictive_only_ranking`` and
+    ``DriverRanker._compute_predictive_importance``."""
+    mean_abs = np.abs(np.asarray(shap_list, dtype=float)).mean(axis=0)
+    return [feats[i] for i in np.argsort(mean_abs)[::-1]]
 
-    This is the semantics argument the row cap rests on: consumers reduce the
-    SHAP matrix to mean-|SHAP| per feature, so a bounded row sample must yield
-    the same ranking as the full frame would.
+
+@pytest.mark.timeout(_REGRESSION_HEADROOM_SECONDS)
+def test_ranking_stable_under_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The capped explain set yields the SAME ranking as explaining every row.
+
+    This is the semantics argument the row cap rests on, and it is checked
+    against a real full-explain baseline rather than inferred: the cap is lifted
+    for one run (so the identical production code explains all n rows) and left
+    in place for the other, and the two mean-|SHAP| orderings must agree. Both
+    arms must also recover the planted coefficient order, which pins the
+    comparison to ground truth rather than to two matching-but-wrong runs.
+
+    At prod scale (37,515x12) the same comparison measured Spearman 1.0000
+    between capped and full explain — see the module docstring.
     """
     weights = (3.0, 1.5, 0.5)
     n = _EXPECTED_MAX_EXPLAIN_ROWS + 800
-    shap_list, feats = causal_discovery._compute_shap_from_frame(
-        _linear_frame(n, weights=weights), "y"
-    )
-
-    mean_abs = np.abs(np.asarray(shap_list, dtype=float)).mean(axis=0)
-    recovered = [feats[i] for i in np.argsort(mean_abs)[::-1]]
+    frame = _linear_frame(n, weights=weights)
     planted = [chr(ord("a") + i) for i in range(len(weights))]
 
-    assert recovered == planted, (
-        f"capped explain set reordered the drivers: got {recovered}, expected "
-        f"{planted} from planted weights {weights}."
+    # Baseline: same code path, cap raised so every row is explained.
+    monkeypatch.setattr(causal_discovery, "_SHAP_MAX_EXPLAIN_ROWS", n)
+    full_list, full_feats = causal_discovery._compute_shap_from_frame(frame, "y")
+    monkeypatch.undo()
+
+    capped_list, capped_feats = causal_discovery._compute_shap_from_frame(frame, "y")
+
+    assert len(full_list) == n, "baseline arm did not explain every row"
+    assert len(capped_list) == _EXPECTED_MAX_EXPLAIN_ROWS, "capped arm was not capped"
+    assert full_feats == capped_feats
+
+    full_ranking = _mean_abs_ranking(full_list, full_feats)
+    capped_ranking = _mean_abs_ranking(capped_list, capped_feats)
+
+    assert capped_ranking == full_ranking, (
+        f"capped explain set reordered the drivers: {capped_ranking} against "
+        f"{full_ranking} from explaining all {n} rows."
+    )
+    assert full_ranking == planted, (
+        f"full-explain baseline itself missed the planted order: got "
+        f"{full_ranking}, expected {planted} from weights {weights}."
     )
