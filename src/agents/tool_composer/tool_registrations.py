@@ -1507,8 +1507,13 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     When ``entities`` is non-empty, the result is restricted to those entity
     values (real filtering — not fabrication).
 
-    Fail-closed: no DataFrame, missing metric column, or no resolvable grouping
-    column -> ``RuntimeError``.
+    Fail-closed: no DataFrame, missing metric column, no resolvable grouping
+    column, or fewer than 2 distinct entity groups after filtering (#1574) ->
+    ``RuntimeError``. The last guard is what keeps a single-brand estimation
+    frame from being reported as a comparison of the focal brand against
+    itself; its reason carries an ``estimation_data_scope`` payload so
+    synthesis can disclose the scope actually covered
+    (see :func:`_gap_comparability_reason`).
 
     Args:
         metric: Numeric column to compare across entities.
@@ -1543,14 +1548,20 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
 
     grouped = df.groupby(group_col, dropna=False)[metric].mean()
     entity_values: Dict[str, float] = {str(k): float(v) for k, v in grouped.items()}
+    groups_present = sorted(entity_values)
     if entities:
         wanted = {str(e) for e in entities}
         entity_values = {k: v for k, v in entity_values.items() if k in wanted}
-    if not entity_values:
+    if len(entity_values) < 2:
         raise RuntimeError(
-            "gap_calculator: no entity groups matched after filtering "
-            f"entities={entities!r} on column {group_col!r}. Refusing to "
-            "fabricate."
+            _gap_comparability_reason(
+                entity_type=entity_type,
+                group_col=group_col,
+                groups_present=groups_present,
+                groups_matched=sorted(entity_values),
+                entities=entities,
+                row_count=len(df),
+            )
         )
 
     top_performer = max(entity_values, key=lambda k: entity_values[k])
@@ -1561,6 +1572,83 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
         entity_values=entity_values,
         top_performer=top_performer,
         bottom_performer=bottom_performer,
+    )
+
+
+# Cap for listing entity groups in the #1574 failure reason — keeps the
+# synthesis-visible scope informative without ballooning on a wide grouping
+# column (``entity_groups_present_count`` still reports the true total, so a
+# truncated list can never be read as a complete one).
+_MAX_LISTED_ENTITY_GROUPS = 25
+
+
+def _gap_comparability_reason(
+    *,
+    entity_type: str,
+    group_col: str,
+    groups_present: List[str],
+    groups_matched: List[str],
+    entities: List[str],
+    row_count: int,
+) -> str:
+    """Build the #1574 fail-closed reason for an uncomparable gap request.
+
+    A gap is a SPREAD, so it needs at least two distinct entity groups. The
+    orchestrator resolves ONE focal-brand-filtered estimation frame per plan
+    (``dispatcher._extract_brand_region`` binds exactly one brand via
+    ``query_entities.brand_from_text``, then ``resolve_kpi_frame`` /
+    ``resolve_cohort_frame`` filters to it), so a "<brand> vs competitors" ask
+    arrives with a single-valued brand column.
+
+    Two things this reason must never say:
+
+    * that a gap was computed — mirroring the one available group into both the
+      top and bottom slot yields ``gap=0.0``, a plausible-but-fake "no
+      competitive gap" finding (the #1574 defect), and
+    * that the requested entities do not exist. ``Brand.competitor`` is a real
+      enum member and ``patient_journeys`` carries competitor RWD rows; only
+      ``business_metrics`` deliberately excludes them
+      (``business_metrics_generator.py``). The honest claim is scoped to what
+      THIS estimation frame models — the same policy as the KPI tool's
+      unmatched-brand envelope (``chatbot_tools._query_kpis``): name what was
+      requested, enumerate what is actually available, assert nothing about the
+      wider platform.
+
+    The ``estimation_data_scope`` payload rides in the message because that is
+    the only channel that reaches synthesis (the executor surfaces a tool
+    exception as ``str(e)`` on ``ToolOutput.error``), letting the answer
+    disclose the scope the estimation actually covered.
+    """
+    label = (entity_type or group_col or "entity").strip().lower() or "entity"
+    scope = {
+        "grouping_column": group_col,
+        "row_count": int(row_count),
+        "entity_groups_present": groups_present[:_MAX_LISTED_ENTITY_GROUPS],
+        "entity_groups_present_count": len(groups_present),
+        "entity_groups_matched": groups_matched,
+        "entities_requested": [str(e) for e in entities],
+    }
+    if groups_matched:
+        observed = (
+            f"only 1 distinct {label} group ({groups_matched[0]!r}) is present "
+            "in the supplied estimation data"
+        )
+    else:
+        observed = (
+            f"no {label} groups matched after filtering entities={entities!r} "
+            f"on column {group_col!r}"
+        )
+    return (
+        f"gap_calculator: comparing requires at least 2 distinct {label} groups, but "
+        f"{observed}. The requested comparison entities are not modeled as comparable "
+        f"{label} entities in this estimation data, which covers "
+        f"{scope['entity_groups_present']!r} on column {group_col!r} — that is a "
+        "statement about the scope of THIS estimation frame, NOT a claim that the "
+        "requested entities have no data anywhere on the platform. Refusing to "
+        "fabricate a comparison: reporting the one available group as both the top "
+        "and the bottom performer with a gap of 0.0 would be a plausible-but-fake "
+        "finding, so an uncomparable request surfaces as a structured error. Report "
+        f"the covered scope instead. estimation_data_scope={scope!r}"
     )
 
 
