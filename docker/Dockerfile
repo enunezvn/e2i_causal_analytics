@@ -182,6 +182,16 @@ COPY config/ ./config/
 # baked into the image — they cannot be `docker cp`'d in at runtime.
 COPY scripts/ ./scripts/
 
+# #1560: bake src/ + config/ bytecode into the image. The runtime rootfs is
+# read-only and PYTHONDONTWRITEBYTECODE=1, so any module WITHOUT a baked .pyc
+# recompiles from source on EVERY worker boot (py-spy 2026-08-12 showed
+# `source_to_code` frames during the boot import storm). pip already
+# byte-compiles site-packages at install; the raw-COPY'd src/ and config/ did
+# not have pycs at all. `unchecked-hash` invalidation: the image fs is
+# immutable, so skip per-import source validation (and stay correct if a COPY
+# ever perturbs mtimes, where timestamp pycs would silently invalidate).
+RUN /app/.venv/bin/python -m compileall -q -j 0 --invalidation-mode unchecked-hash /app/src /app/config
+
 # Create directories for shared volumes. optimized_modules/optimized_prompts
 # must exist in the image so a fresh named volume is initialized with e2i
 # ownership (the chown -R below) — otherwise the engine creates the
