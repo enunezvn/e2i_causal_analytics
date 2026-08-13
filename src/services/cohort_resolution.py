@@ -59,10 +59,23 @@ logger = logging.getLogger(__name__)
 # treatment_initiated, disease_severity, academic_hcp, age_at_diagnosis).
 CANONICAL_COHORT_TABLE = "patient_journeys"
 
-# PostgREST imposes a configured max row count per request (default 1000). When a
-# canonical-table query returns at least this many rows without an explicit
-# ``limit``, the cohort may have been silently truncated to a sample.
-_POSTGREST_DEFAULT_MAX_ROWS = 1000
+# Per-request row cap for the canonical cohort query, mirroring ``kpi_resolution``
+# (#1587). We request an EXPLICIT bound so hitting it is exact evidence of
+# truncation. The previous guard instead inferred truncation from PostgREST's
+# 1000-row default cap, which this deployment does not enforce (one response
+# measurably carried 8,554 rows), so it fired on every complete cohort.
+#
+# Derivation: the cap must clear the widest COMPLETE cohort this service can be
+# asked for, or a logging fix would start truncating real cohorts. The widest is
+# the whole table -- ``brand=None, region=None`` applies no filter and is a
+# supported call from all three callers (chatbot_tools, the orchestrator
+# dispatcher, the cohort_builder tool). The DGP designs 28,333 journeys per brand
+# across the 3 focal brands (``EntityVolumes`` in src/ml/synthetic/config.py) =
+# 84,999 rows full-table; measured focal-brand cohorts are 8,554 / 8,615 / 8,729.
+# 250,000 is ~2.9x the designed full-table volume and ~9.6x the measured one.
+# ``test_cap_comfortably_exceeds_designed_substrate_volume`` pins that headroom so
+# a DGP volume bump fails loudly instead of silently truncating a cohort.
+_MAX_COHORT_ROWS = 250_000
 
 # brand_type / region_type labels and resolvers are shared with the chat KPI
 # tool (src.services.enum_labels, #1505) so an enum change lands in one place.
@@ -173,23 +186,26 @@ def _resolve_via_patient_journeys(
     from src.repositories.provenance import apply_provenance_filter
 
     query = apply_provenance_filter(query, include_synthetic)
-    if limit:
-        query = query.limit(limit)
+    # A falsy ``limit`` (None/0) means the caller set no bound; substitute the
+    # service cap so the request is always bounded and truncation is detectable
+    # at all. Hitting a cap we ASKED for is exact evidence, unlike inferring one.
+    caller_limit = limit if limit else None
+    query = query.limit(caller_limit or _MAX_COHORT_ROWS)
 
     response = query.execute()
     rows = getattr(response, "data", None) or []
     if not rows:
         return None
-    # No silent caps: if we hit the PostgREST default max without an explicit
-    # limit, the cohort may be a truncated sample -- surface it rather than
-    # presenting a partial frame as a complete cohort.
-    if limit is None and len(rows) >= _POSTGREST_DEFAULT_MAX_ROWS:
+    # An explicit caller limit is a deliberate sample -- hitting it is expected and
+    # not worth a WARNING. Hitting the service's own cap is invisible to the
+    # caller, so surface it rather than presenting a partial frame as complete.
+    if caller_limit is None and len(rows) >= _MAX_COHORT_ROWS:
         logger.warning(
-            "cohort_resolution: patient_journeys returned %d rows (>= PostgREST "
-            "default cap %d) for brand=%r region=%r; cohort may be truncated -- "
-            "pass limit= explicitly or paginate.",
+            "cohort_resolution: patient_journeys returned %d rows, hitting the "
+            "%d-row cap this service requested for brand=%r region=%r; the cohort "
+            "may be truncated -- pass limit= explicitly or paginate.",
             len(rows),
-            _POSTGREST_DEFAULT_MAX_ROWS,
+            _MAX_COHORT_ROWS,
             norm_brand,
             norm_region,
         )
@@ -227,9 +243,9 @@ def resolve_cohort_frame(
             the cached service-role client.
         limit: Optional row cap for the canonical ``patient_journeys`` path only
             (ignored on the explicit-``data_source`` path, where the tier0 loader
-            controls its own bounds). PostgREST also imposes its own configured
-            max (default 1000), so very large cohorts may be a sample -- a
-            WARNING is logged when that cap is hit without an explicit ``limit``.
+            controls its own bounds). When omitted, the service requests its own
+            ``_MAX_COHORT_ROWS`` bound and logs a WARNING if the fetch hits it --
+            exact truncation detection, since that cap is one we asked for.
 
     Returns:
         A non-empty ``pd.DataFrame`` on success, else ``None``. NEVER a
