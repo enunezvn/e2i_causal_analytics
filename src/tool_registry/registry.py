@@ -270,6 +270,17 @@ class ToolRegistry:
                     f"{p.name}: {p.type} - {p.description}" for p in t.schema.input_parameters
                 ],
                 "output": t.schema.output_schema,
+                # #1573: the REAL output field names (from the registered
+                # pydantic output model). Without these the planner only ever
+                # saw the model NAME ("CATEResults") and invented field
+                # references ($step_5.cate_estimate) that resolve to nothing
+                # at execution. Empty when the tool registered no output
+                # model (its output shape is dynamic).
+                "output_fields": (
+                    list(t.pydantic_output_model.model_fields.keys())
+                    if t.pydantic_output_model is not None
+                    else []
+                ),
                 "avg_ms": t.schema.avg_execution_ms,
             }
             for t in self._tools.values()

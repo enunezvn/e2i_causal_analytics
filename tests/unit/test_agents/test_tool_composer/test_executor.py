@@ -1066,6 +1066,395 @@ class TestCircuitBreakerIntegration:
 # ============================================================================
 
 
+class TestReferenceContract1573:
+    """#1573 — unresolvable plan references must FAIL FAST, never degrade to None.
+
+    Live evidence (q08, req 7dad3a48, 2026-08-12): the planner emitted
+    ``$dataset.*`` (an invented source) and ``$step_5.top_segments`` /
+    ``$step_5.cate_estimate`` (fields the CATE output does not carry). The
+    executor resolved all of them to silent None; the counterfactual step then
+    crashed with ``NoneType * float`` and was retried 3 times identically.
+
+    Contract pinned here:
+    (a) unknown reference source ('$dataset.*') -> explicit step failure, tool
+        NOT invoked, no silent None;
+    (b) known source / missing field ('$step_1.cate_estimate') -> explicit
+        step failure naming the field and the available fields;
+    (c) deterministic failures are NOT retried (resolution failures: zero tool
+        invocations; ToolInputError: exactly one invocation);
+    (d) the failure reason text reaches the synthesis input (honest disclosure
+        with the TRUE cause);
+    (e) the counterfactual simulator declines None input with a stated reason
+        instead of TypeError;
+    (f) F7 GUARD: references NESTED inside dict values keep degrading to None
+        (the discover_dag ``data={'col': '$ref'}`` artifact) — blanket
+        strictness would break q08's five working steps.
+    """
+
+    @staticmethod
+    def _single_step_plan(decomposition, step):
+        return ExecutionPlan(
+            decomposition=decomposition,
+            steps=[step],
+            tool_mappings=[],
+            parallel_groups=[[step.step_id]],
+            planning_reasoning="1573",
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_reference_source_fails_step_without_invoking_tool(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """(a)+(c): '$dataset.sales' must fail the step BEFORE the tool runs."""
+        calls = {"n": 0}
+
+        def counting_tool(**kwargs):
+            calls["n"] += 1
+            return {"predicted_lift": 0.1}
+
+        mock_tool_registry.clear()
+        schema = ToolSchema(
+            name="counting_tool",
+            description="Counts invocations",
+            source_agent="test",
+            tier=1,
+            avg_execution_ms=10,
+        )
+        mock_tool_registry.register(schema=schema, callable=counting_tool)
+
+        step = ExecutionStep(
+            step_id="step_1",
+            sub_question_id="sq_1",
+            tool_name="counting_tool",
+            source_agent="test",
+            input_mapping={"sales": "$dataset.sales"},  # planner-invented source (q08)
+            depends_on_steps=[],
+        )
+        executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
+        trace = await executor.execute(self._single_step_plan(sample_decomposition, step))
+
+        result = trace.step_results[0]
+        assert result.status == ExecutionStatus.FAILED
+        assert trace.tools_failed == 1
+        assert calls["n"] == 0, "tool must NOT be invoked with silently-degraded None inputs"
+
+        err = result.output.error or ""
+        assert "$dataset.sales" in err, f"failure reason must name the reference; got {err!r}"
+        assert "dataset" in err
+        # A plan defect must NOT poison the healthy tool's circuit breaker:
+        # the tool never ran, and opening its circuit would block other valid
+        # steps that use the same tool.
+        stats = executor.failure_tracker.get_stats("counting_tool")
+        assert stats is None or stats.total_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_missing_field_on_known_source_fails_dependent_step(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """(b): '$step_1.cate_estimate' where step_1's output lacks the field."""
+        calls = {"upstream": 0, "downstream": 0}
+
+        def upstream_tool(**kwargs):
+            calls["upstream"] += 1
+            # CATEResults shape: the fields the REAL cate_analyzer carries.
+            return {
+                "segments": [{"segment": "west", "cate": 0.1}],
+                "high_responders": ["west"],
+                "effect_by_segment": {"west": 0.1},
+            }
+
+        def downstream_tool(**kwargs):
+            calls["downstream"] += 1
+            return {"predicted_lift": 0.1}
+
+        mock_tool_registry.clear()
+        for name, fn in [("upstream_tool", upstream_tool), ("downstream_tool", downstream_tool)]:
+            schema = ToolSchema(
+                name=name,
+                description="1573 test tool",
+                source_agent="test",
+                tier=1,
+                avg_execution_ms=10,
+            )
+            mock_tool_registry.register(schema=schema, callable=fn)
+
+        steps = [
+            ExecutionStep(
+                step_id="step_1",
+                sub_question_id="sq_1",
+                tool_name="upstream_tool",
+                source_agent="test",
+                input_mapping={},
+                depends_on_steps=[],
+            ),
+            ExecutionStep(
+                step_id="step_2",
+                sub_question_id="sq_2",
+                tool_name="downstream_tool",
+                source_agent="test",
+                # The q08 defect: a field the upstream output does not carry.
+                input_mapping={"expected_effect": "$step_1.cate_estimate"},
+                depends_on_steps=["step_1"],
+            ),
+        ]
+        plan = ExecutionPlan(
+            decomposition=sample_decomposition,
+            steps=steps,
+            tool_mappings=[],
+            parallel_groups=[["step_1"], ["step_2"]],
+            planning_reasoning="1573",
+        )
+        executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
+        trace = await executor.execute(plan)
+
+        r1 = trace.get_result("step_1")
+        r2 = trace.get_result("step_2")
+        # The working upstream step is untouched (do-not-break-5/6 constraint).
+        assert r1.status == ExecutionStatus.COMPLETED
+        assert calls["upstream"] == 1
+        # The doomed downstream step fails fast, tool never invoked, no retries.
+        assert r2.status == ExecutionStatus.FAILED
+        assert calls["downstream"] == 0
+
+        err = r2.output.error or ""
+        assert "cate_estimate" in err
+        assert "step_1" in err
+        # Honest disclosure includes what IS available so synthesis can say why.
+        assert "effect_by_segment" in err, f"available fields must be listed; got {err!r}"
+
+    @pytest.mark.asyncio
+    async def test_deterministic_input_rejection_not_retried(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """(c)+(e): a ToolInputError is raised ONCE — never retried identically."""
+        from src.agents.tool_composer.errors import ToolInputError
+
+        calls = {"n": 0}
+
+        def declining_tool(**kwargs):
+            calls["n"] += 1
+            raise ToolInputError("declined: expected_effect is None — cannot simulate a lift")
+
+        mock_tool_registry.clear()
+        schema = ToolSchema(
+            name="declining_tool",
+            description="Declines deterministically",
+            source_agent="test",
+            tier=1,
+            avg_execution_ms=10,
+        )
+        mock_tool_registry.register(schema=schema, callable=declining_tool)
+
+        step = ExecutionStep(
+            step_id="step_1",
+            sub_question_id="sq_1",
+            tool_name="declining_tool",
+            source_agent="test",
+            input_mapping={},
+            depends_on_steps=[],
+        )
+        executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
+        trace = await executor.execute(self._single_step_plan(sample_decomposition, step))
+
+        assert calls["n"] == 1, "deterministic input rejection must not be retried"
+        result = trace.step_results[0]
+        assert result.status == ExecutionStatus.FAILED
+        err = result.output.error or ""
+        assert "declined" in err
+        assert "expected_effect" in err
+
+    @pytest.mark.asyncio
+    async def test_transient_tool_errors_are_still_retried(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """Regression guard: plain exceptions keep the existing retry behavior."""
+        calls = {"n": 0}
+
+        def flaky_tool(**kwargs):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise ValueError("transient")
+            return {"ok": True}
+
+        mock_tool_registry.clear()
+        schema = ToolSchema(
+            name="flaky_tool_1573",
+            description="Fails once then succeeds",
+            source_agent="test",
+            tier=1,
+            avg_execution_ms=10,
+        )
+        mock_tool_registry.register(schema=schema, callable=flaky_tool)
+
+        step = ExecutionStep(
+            step_id="step_1",
+            sub_question_id="sq_1",
+            tool_name="flaky_tool_1573",
+            source_agent="test",
+            input_mapping={},
+            depends_on_steps=[],
+        )
+        executor = PlanExecutor(
+            tool_registry=mock_tool_registry, max_retries=2, backoff_base_delay=0.01
+        )
+        trace = await executor.execute(self._single_step_plan(sample_decomposition, step))
+
+        assert calls["n"] == 2
+        assert trace.tools_succeeded == 1
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_reference_reason_reaches_synthesis_input(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """(d): the TRUE cause must reach the synthesis input and prompt."""
+        from src.agents.tool_composer.models.composition_models import SynthesisInput
+        from src.agents.tool_composer.synthesizer import ResponseSynthesizer
+
+        mock_tool_registry.clear()
+        schema = ToolSchema(
+            name="any_tool",
+            description="Never reached",
+            source_agent="test",
+            tier=1,
+            avg_execution_ms=10,
+        )
+        mock_tool_registry.register(schema=schema, callable=lambda **k: {"x": 1})
+
+        step = ExecutionStep(
+            step_id="step_1",
+            sub_question_id="sq_1",
+            tool_name="any_tool",
+            source_agent="test",
+            input_mapping={"expected_effect": "$dataset.cate_estimate"},
+            depends_on_steps=[],
+        )
+        executor = PlanExecutor(tool_registry=mock_tool_registry)
+        trace = await executor.execute(self._single_step_plan(sample_decomposition, step))
+
+        synthesis_input = SynthesisInput(
+            original_query=sample_decomposition.original_query,
+            decomposition=sample_decomposition,
+            execution_trace=trace,
+        )
+        ctx = synthesis_input.get_context_for_synthesis()
+        failed = [r for r in ctx["results"] if not r["success"]]
+        assert failed, "the failed step must appear in the synthesis context"
+        assert "$dataset.cate_estimate" in (failed[0]["error"] or "")
+
+        # And the synthesizer's prompt formatter carries the same reason.
+        formatted = ResponseSynthesizer(llm_client=object())._format_results(synthesis_input)
+        assert "$dataset.cate_estimate" in formatted
+
+    @pytest.mark.asyncio
+    async def test_nested_dict_reference_still_degrades_to_none_f7(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """(f) F7 GUARD: nested refs (the discover_dag data artifact) stay lenient.
+
+        q08's five WORKING steps resolved planner-invented ``$dataset.*`` refs
+        nested inside dict params to None and still succeeded (the F7 DataFrame
+        auto-injection repairs the broken ``data`` dict downstream). Top-level
+        strictness must NOT extend into nested constructions.
+        """
+        captured = {}
+
+        def dict_consuming_tool(**kwargs):
+            captured["data"] = kwargs.get("data")
+            return {"edge_list": []}
+
+        mock_tool_registry.clear()
+        schema = ToolSchema(
+            name="dict_consuming_tool",
+            description="Consumes a dict param",
+            source_agent="test",
+            tier=1,
+            avg_execution_ms=10,
+        )
+        mock_tool_registry.register(schema=schema, callable=dict_consuming_tool)
+
+        step = ExecutionStep(
+            step_id="step_1",
+            sub_question_id="sq_1",
+            tool_name="dict_consuming_tool",
+            source_agent="test",
+            input_mapping={
+                "data": {
+                    "patient_journey_id": "patient_journey_id",
+                    "conversion_rate": "$dataset.conversion_rate",
+                }
+            },
+            depends_on_steps=[],
+        )
+        executor = PlanExecutor(tool_registry=mock_tool_registry)
+        trace = await executor.execute(self._single_step_plan(sample_decomposition, step))
+
+        assert trace.step_results[0].status == ExecutionStatus.COMPLETED
+        assert captured["data"] == {
+            "patient_journey_id": "patient_journey_id",
+            "conversion_rate": None,
+        }
+
+    def test_counterfactual_simulator_declines_none_expected_effect(self):
+        """(e): stated-reason decline instead of ``NoneType * float`` TypeError."""
+        from src.agents.tool_composer import tool_registrations as tr
+        from src.agents.tool_composer.errors import ToolInputError
+
+        with pytest.raises(ToolInputError, match="expected_effect"):
+            tr.counterfactual_simulator(
+                intervention="increase rep visits",
+                target_entities=["west"],
+                expected_effect=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_real_simulator_none_from_context_fails_once_with_reason(
+        self, mock_tool_registry, sample_decomposition
+    ):
+        """(c)+(e) end-to-end: a LEGITIMATELY-resolved None (context field whose
+        value is None) reaches the real simulator, which declines once — the
+        executor must not retry the deterministic rejection."""
+        from src.agents.tool_composer import tool_registrations as tr
+
+        calls = {"n": 0}
+
+        def counting_simulator(**kwargs):
+            calls["n"] += 1
+            return tr.counterfactual_simulator(**kwargs)
+
+        mock_tool_registry.clear()
+        schema = ToolSchema(
+            name="counterfactual_simulator",
+            description="Real simulator behind a call counter",
+            source_agent="experiment_designer",
+            tier=3,
+            avg_execution_ms=10,
+        )
+        mock_tool_registry.register(schema=schema, callable=counting_simulator)
+
+        step = ExecutionStep(
+            step_id="step_1",
+            sub_question_id="sq_1",
+            tool_name="counterfactual_simulator",
+            source_agent="experiment_designer",
+            input_mapping={
+                "intervention": "increase rep visits",
+                "target_entities": ["west"],
+                "expected_effect": "$context.expected_effect",
+            },
+            depends_on_steps=[],
+        )
+        executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
+        trace = await executor.execute(
+            self._single_step_plan(sample_decomposition, step),
+            context={"expected_effect": None},
+        )
+
+        assert calls["n"] == 1, "deterministic None rejection must not be retried"
+        result = trace.step_results[0]
+        assert result.status == ExecutionStatus.FAILED
+        assert "expected_effect" in (result.output.error or "")
+
+
 class TestToolFailureStatsG8:
     """Tests for G8 performance learning metrics in ToolFailureStats."""
 

@@ -47,6 +47,8 @@ from src.tool_registry import (
     composable_tool,
 )
 
+from .errors import ToolInputError
+
 # Canonical kwargs keys under which callers may supply the real DataFrame for
 # causal_effect_estimator. Listed in priority order; the first non-None value
 # is used. The tool fail-closes if NONE of these keys is provided -- it does
@@ -1808,9 +1810,26 @@ def power_calculator(
     output_model=SimulationResults,
 )
 def counterfactual_simulator(
-    intervention: str, target_entities: List[str], expected_effect: float, **kwargs
+    intervention: str, target_entities: List[str], expected_effect: Optional[float], **kwargs
 ) -> SimulationResults:
-    """Simulate intervention outcomes."""
+    """Simulate intervention outcomes.
+
+    Null-guard (#1573): a ``None`` / non-numeric ``expected_effect`` means no
+    upstream effect estimate was actually supplied (live q08: the planner
+    referenced fields the CATE output does not carry, which degraded to
+    ``None`` and crashed here with ``NoneType * float`` three times). The
+    tool declines with a stated reason — a deterministic
+    :class:`ToolInputError` the executor does NOT retry — instead of
+    fabricating a lift or raising a bare ``TypeError``.
+    """
+    if not isinstance(expected_effect, (int, float)) or isinstance(expected_effect, bool):
+        raise ToolInputError(
+            "counterfactual_simulator declined: expected_effect is "
+            f"{expected_effect!r} — no usable effect estimate was supplied "
+            "(an upstream step likely failed or its output lacked the "
+            "referenced field). Refusing to simulate a lift from a missing "
+            "effect."
+        )
     return SimulationResults(
         predicted_lift=expected_effect * 0.85,  # Adjusted for real-world factors
         confidence="medium",

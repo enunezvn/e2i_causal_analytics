@@ -27,6 +27,7 @@ from src.tool_registry.registry import ToolRegistry
 # The @composable_tool decorators register tools when the module is imported
 from . import tool_registrations as _tool_registrations  # noqa: F401
 from .cache import get_cache_manager
+from .errors import ReferenceResolutionError, ToolInputError
 from .models.composition_models import (
     ExecutionPlan,
     ExecutionStatus,
@@ -533,8 +534,32 @@ class PlanExecutor:
                 completed_at=completed_at,
             )
 
-        # Resolve input parameters
-        resolved_inputs = self._resolve_inputs(step.input_mapping, prior_outputs, context)
+        # Resolve input parameters.
+        # #1573: an unresolvable TOP-LEVEL reference is a plan defect that
+        # dooms this step deterministically — fail fast with an explicit
+        # reason (which reaches synthesis via StepResult.output.error), never
+        # invoke the tool, and never retry. The tool's circuit breaker is NOT
+        # penalized: the tool never ran, and opening a healthy tool's circuit
+        # over a planner defect would block other, valid steps that use the
+        # same tool.
+        try:
+            resolved_inputs = self._resolve_inputs(step.input_mapping, prior_outputs, context)
+        except ReferenceResolutionError as e:
+            logger.warning(f"Step {step.step_id} ({step.tool_name}) failed before execution: {e}")
+            return StepResult(
+                step_id=step.step_id,
+                sub_question_id=step.sub_question_id,
+                tool_name=step.tool_name,
+                input=ToolInput(tool_name=step.tool_name, parameters={}, context=context),
+                output=ToolOutput(
+                    tool_name=step.tool_name,
+                    success=False,
+                    error=f"unresolvable reference: {e}",
+                ),
+                status=ExecutionStatus.FAILED,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
 
         # Phase 7.2 + S14: tool composer auto-population hook
         # ===========================================================
@@ -692,6 +717,32 @@ class PlanExecutor:
                     duration_ms=duration_ms,
                 )
 
+            except ToolInputError as e:
+                # #1573: deterministic input-contract violation — retrying with
+                # identical inputs cannot succeed, so fail once with the tool's
+                # stated reason. Not recorded against the circuit breaker: a
+                # rejected input says nothing about the tool's health, and a
+                # plan defect must not open the circuit for other, valid steps
+                # that use the same tool.
+                logger.warning(
+                    f"Step {step.step_id} input rejected by '{step.tool_name}': {e} "
+                    f"— not retrying (deterministic input-contract violation)"
+                )
+                return StepResult(
+                    step_id=step.step_id,
+                    sub_question_id=step.sub_question_id,
+                    tool_name=step.tool_name,
+                    input=tool_input,
+                    output=ToolOutput(
+                        tool_name=step.tool_name,
+                        success=False,
+                        error=f"input contract violation: {e}",
+                    ),
+                    status=ExecutionStatus.FAILED,
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"Step {step.step_id} attempt {attempt + 1} failed: {e}")
@@ -737,27 +788,54 @@ class PlanExecutor:
         return await asyncio.gather(*tasks, return_exceptions=False)
 
     def _resolve_inputs(
-        self, input_mapping: Dict[str, Any], prior_outputs: Dict[str, Any], context: Dict[str, Any]
+        self,
+        input_mapping: Dict[str, Any],
+        prior_outputs: Dict[str, Any],
+        context: Dict[str, Any],
+        _nested: bool = False,
     ) -> Dict[str, Any]:
         """
         Resolve input parameters, substituting references to prior outputs.
 
         References use the syntax: $step_X.field or $step_X.nested.field
+
+        Reference contract (#1573):
+
+        - A TOP-LEVEL string reference (``"param": "$step_X.field"``) that
+          cannot be resolved raises :class:`ReferenceResolutionError`: the
+          planner declared that argument IS the referenced value, so an
+          unresolvable reference means the argument is missing and the step
+          is deterministically doomed — it must fail fast with an explicit
+          reason instead of silently receiving ``None`` (the q08
+          ``NoneType * float`` crash).
+        - References NESTED inside dict/list values degrade to ``None`` with
+          a warning (unchanged behavior): nested containers are planner
+          CONSTRUCTIONS — e.g. the ``discover_dag`` ``data={'col': '$ref'}``
+          artifact — with a test-pinned degradation contract (F7 DataFrame
+          auto-injection repairs them downstream). Blanket strictness here
+          measurably breaks steps that succeed today.
+
+        Raises:
+            ReferenceResolutionError: on an unresolvable top-level reference.
         """
         resolved = {}
 
         for param, value in input_mapping.items():
             if isinstance(value, str) and value.startswith("$"):
                 # This is a reference to a prior output
-                resolved[param] = self._resolve_reference(value, prior_outputs, context)
+                if _nested:
+                    resolved[param] = self._resolve_reference_lenient(value, prior_outputs, context)
+                else:
+                    resolved[param] = self._resolve_reference(value, prior_outputs, context)
             elif isinstance(value, dict):
-                # Recursively resolve nested dicts
-                resolved[param] = self._resolve_inputs(value, prior_outputs, context)
+                # Recursively resolve nested dicts (lenient — see docstring)
+                resolved[param] = self._resolve_inputs(value, prior_outputs, context, _nested=True)
             elif isinstance(value, list):
-                # Resolve each list item
+                # Resolve each list item (lenient — list literals are
+                # constructions, same rationale as nested dicts)
                 resolved[param] = [
                     (
-                        self._resolve_reference(v, prior_outputs, context)
+                        self._resolve_reference_lenient(v, prior_outputs, context)
                         if isinstance(v, str) and v.startswith("$")
                         else v
                     )
@@ -768,6 +846,10 @@ class PlanExecutor:
 
         return resolved
 
+    # Cap for listing available fields/sources in error messages — keeps the
+    # synthesis-visible reason informative without ballooning on wide outputs.
+    _MAX_LISTED_FIELDS = 25
+
     def _resolve_reference(
         self, reference: str, prior_outputs: Dict[str, Any], context: Dict[str, Any]
     ) -> Any:
@@ -777,15 +859,17 @@ class PlanExecutor:
         Special references:
         - $context.field: Access context dictionary
         - $step_X.field: Access output from step X
+
+        Raises:
+            ReferenceResolutionError: when the source is unknown (e.g. a
+                planner-invented ``$dataset``) or the field path does not
+                exist on the source (#1573). This method NEVER silently
+                returns ``None`` for an unresolvable reference — the caller
+                decides whether to fail fast (top-level argument) or degrade
+                (:meth:`_resolve_reference_lenient`, nested constructions).
         """
-        # Remove the $ prefix
-        ref = reference[1:]
-
-        # Split by dots
-        parts = ref.split(".")
-
-        if not parts:
-            return None
+        # Remove the $ prefix and split by dots
+        parts = reference[1:].split(".")
 
         # Determine the source
         source_key = parts[0]
@@ -796,8 +880,15 @@ class PlanExecutor:
         elif source_key in prior_outputs:
             source = prior_outputs[source_key]
         else:
-            logger.warning(f"Unknown reference source: {source_key}")
-            return None
+            available = sorted(prior_outputs.keys())[: self._MAX_LISTED_FIELDS]
+            raise ReferenceResolutionError(
+                reference=reference,
+                reason=(
+                    f"unknown source '{source_key}' — valid sources are '$context' or "
+                    f"the id of a prior step with a successful output "
+                    f"(available step outputs: {available!r})"
+                ),
+            )
 
         # Navigate the field path
         current = source
@@ -807,10 +898,36 @@ class PlanExecutor:
             elif hasattr(current, field):
                 current = getattr(current, field)
             else:
-                logger.warning(f"Could not resolve field '{field}' in reference '{reference}'")
-                return None
+                available = (
+                    sorted(str(k) for k in current.keys())[: self._MAX_LISTED_FIELDS]
+                    if isinstance(current, dict)
+                    else []
+                )
+                raise ReferenceResolutionError(
+                    reference=reference,
+                    reason=(
+                        f"field '{field}' not found on source '{source_key}'"
+                        + (f" (available fields: {available!r})" if available else "")
+                    ),
+                )
 
         return current
+
+    def _resolve_reference_lenient(
+        self, reference: str, prior_outputs: Dict[str, Any], context: Dict[str, Any]
+    ) -> Any:
+        """Resolve a NESTED reference, degrading to ``None`` with a warning.
+
+        Preserves the pre-#1573 behavior for references inside dict/list
+        constructions (the F7 ``discover_dag`` data-dict contract depends on
+        it). Top-level references go through the strict
+        :meth:`_resolve_reference` instead.
+        """
+        try:
+            return self._resolve_reference(reference, prior_outputs, context)
+        except ReferenceResolutionError as e:
+            logger.warning(f"Nested reference degraded to None: {e}")
+            return None
 
     # ------------------------------------------------------------------
     # Phase 7.2 + S14: causal-role auto-population
