@@ -1850,6 +1850,46 @@ def _kpi_right_head(normalized_query: str, match_end: int) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _region_clarify_evidence(kpi: Any, phrase: str) -> Dict[str, Any]:
+    """Evidence payload that ASKS which census region is meant (#1572).
+
+    "East Coast" spans the northeast AND south census regions, so no label can
+    honestly serve it — the #1565 ruling that keeps it out of the shared alias
+    table. The chat KPI tool already pairs that miss with its clarify hint
+    (``_REGION_CLARIFY_HINT``, src/api/routes/chatbot_tools.py), but /chat's
+    Branch A never passes the phrase to the tool: the free-text scan dropped
+    it, so the ask was answered with a silent NATIONAL figure. This mirrors
+    the same facts as a direct question to the user.
+
+    Shaped like the Branch A value payload (context_assembler reads "agent" /
+    "analysis_type" / "key_findings" / "confidence" / "warnings"), with the
+    question in ``key_findings`` so the explainer's deterministic template
+    narrates it verbatim — and NO ``value``: the national figure is never
+    computed, which is the point.
+    """
+    from src.services.enum_labels import REGION_ENUM_LABELS
+
+    labels = ", ".join(REGION_ENUM_LABELS[:-1]) + f", or {REGION_ENUM_LABELS[-1]}"
+    question = (
+        f"Which US census region do you mean: {labels}? "
+        f"'{phrase}' spans more than one census region, so {kpi.name} "
+        "cannot be scoped to it without your choice."
+    )
+    return {
+        "agent": "kpi_calculator",
+        "analysis_type": "kpi_lookup_clarification",
+        "key_findings": [question],
+        "warnings": [question],
+        # The DECISION to clarify is deterministic (vocabulary miss + probe
+        # hit), not a hedge — same confidence as the vetted-SQL value read.
+        "confidence": _KPI_LOOKUP_CONFIDENCE,
+        "needs_clarification": True,
+        "unresolved_region_phrase": phrase,
+        "kpi_id": kpi.id,
+        "kpi_name": kpi.name,
+    }
+
+
 def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Branch A — bind the REAL computed value for a KPI value-lookup ask.
 
@@ -1908,6 +1948,21 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         return None
 
     brand, region = _extract_brand_region(agent_input)
+    if region is None:
+        # #1572: a region-LIKE phrase the shared vocabulary cannot resolve
+        # ("East Coast", bare "East") must end in a QUESTION, not a silent
+        # national figure. Only consulted when no structured source bound a
+        # region — an explicit entities/user_context region wins as before.
+        from src.services.query_entities import region_scan
+
+        ambiguous_phrase = region_scan(query).ambiguous_phrase
+        if ambiguous_phrase is not None:
+            logger.info(
+                "explainer resolver: region phrase %r is unresolvable by design "
+                "-> returning the census-region clarify instead of a national figure.",
+                ambiguous_phrase,
+            )
+            return [_region_clarify_evidence(kpi, ambiguous_phrase)]
     context: Dict[str, Any] = {}
     if brand:
         context["brand"] = brand
