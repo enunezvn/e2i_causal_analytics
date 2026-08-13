@@ -59,22 +59,28 @@ logger = logging.getLogger(__name__)
 # treatment_initiated, disease_severity, academic_hcp, age_at_diagnosis).
 CANONICAL_COHORT_TABLE = "patient_journeys"
 
-# Per-request row cap for the canonical cohort query, mirroring ``kpi_resolution``
-# (#1587). We request an EXPLICIT bound so hitting it is exact evidence of
-# truncation. The previous guard instead inferred truncation from PostgREST's
-# 1000-row default cap, which this deployment does not enforce (one response
-# measurably carried 8,554 rows), so it fired on every complete cohort.
+# Per-request row cap for the canonical cohort query (#1587). The query was
+# previously UNBOUNDED and inferred truncation from PostgREST's 1000-row default
+# cap, which this deployment does not enforce (one response measurably carried
+# 8,554 rows) -- so the warning fired on every complete cohort and meant nothing.
 #
-# Derivation: the cap must clear the widest COMPLETE cohort this service can be
-# asked for, or a logging fix would start truncating real cohorts. The widest is
-# the whole table -- ``brand=None, region=None`` applies no filter and is a
-# supported call from all three callers (chatbot_tools, the orchestrator
-# dispatcher, the cohort_builder tool). The DGP designs 28,333 journeys per brand
-# across the 3 focal brands (``EntityVolumes`` in src/ml/synthetic/config.py) =
-# 84,999 rows full-table; measured focal-brand cohorts are 8,554 / 8,615 / 8,729.
-# 250,000 is ~2.9x the designed full-table volume and ~9.6x the measured one.
-# ``test_cap_comfortably_exceeds_designed_substrate_volume`` pins that headroom so
-# a DGP volume bump fails loudly instead of silently truncating a cohort.
+# This cap is a SAFETY CEILING, not the completeness signal: truncation is
+# detected by comparing the exact row count the server reports against what we
+# received (see ``_resolve_via_patient_journeys``), which holds whatever the
+# table's true size is. The cap only has to be high enough never to clip a real
+# cohort, since clipping one to fix a logging bug would trade an annoying warning
+# for a silently partial cohort.
+#
+# Derivation -- the widest COMPLETE cohort this service can be asked for is the
+# whole table: ``brand=None, region=None`` applies no filter and is a supported
+# call from all three callers (chatbot_tools, the orchestrator dispatcher, the
+# cohort_builder tool). Two volume sources bound it: the loader actually builds
+# 25,000 journeys (``FULL_SIZES["patient"]`` in scripts/load_synthetic_data.py,
+# matching the measured 8,554 / 8,615 / 8,729 = 25,898 across the three focal
+# brands), while the DGP designs a larger 28,333 x 3 = 84,999 (``EntityVolumes``
+# in src/ml/synthetic/config.py). 250,000 is ~9.7x the built volume and ~2.9x the
+# designed ceiling. ``test_cap_comfortably_exceeds_designed_substrate_volume``
+# pins that headroom as a tripwire against a future volume bump.
 _MAX_COHORT_ROWS = 250_000
 
 # brand_type / region_type labels and resolvers are shared with the chat KPI
@@ -176,7 +182,11 @@ def _resolve_via_patient_journeys(
 
     client = supabase_client if supabase_client is not None else _default_client()
 
-    query = client.table(CANONICAL_COHORT_TABLE).select("*")
+    # ``count="exact"`` rides the SAME request (PostgREST returns it in
+    # Content-Range), so the total matching row count costs no extra round-trip.
+    # It is what makes truncation detection exact -- see the completeness check
+    # below.
+    query = client.table(CANONICAL_COHORT_TABLE).select("*", count="exact")
     if norm_brand:
         query = query.eq("brand", norm_brand)
     if norm_region:
@@ -196,19 +206,41 @@ def _resolve_via_patient_journeys(
     rows = getattr(response, "data", None) or []
     if not rows:
         return None
-    # An explicit caller limit is a deliberate sample -- hitting it is expected and
-    # not worth a WARNING. Hitting the service's own cap is invisible to the
-    # caller, so surface it rather than presenting a partial frame as complete.
-    if caller_limit is None and len(rows) >= _MAX_COHORT_ROWS:
-        logger.warning(
-            "cohort_resolution: patient_journeys returned %d rows, hitting the "
-            "%d-row cap this service requested for brand=%r region=%r; the cohort "
-            "may be truncated -- pass limit= explicitly or paginate.",
-            len(rows),
-            _MAX_COHORT_ROWS,
-            norm_brand,
-            norm_region,
-        )
+    # Completeness check. Only meaningful when the caller set no bound: an explicit
+    # ``limit`` is a deliberate sample, so receiving fewer rows than the total is
+    # the point, not news.
+    if caller_limit is None:
+        total = getattr(response, "count", None)
+        if total is not None and total > len(rows):
+            # EXACT: the server told us how many rows match, and we received fewer.
+            # This is the only check that also catches truncation by a server-side
+            # ``db-max-rows`` set BELOW our own cap -- comparing against our cap
+            # alone cannot see that, and would hand back a partial cohort silently
+            # while estimators treat it as the whole population.
+            logger.warning(
+                "cohort_resolution: patient_journeys returned %d of %d matching "
+                "rows for brand=%r region=%r; the cohort IS truncated -- pass "
+                "limit= explicitly or paginate.",
+                len(rows),
+                total,
+                norm_brand,
+                norm_region,
+            )
+        elif total is None and len(rows) >= _MAX_COHORT_ROWS:
+            # No count reported (a client or double that does not surface one):
+            # fall back to comparing against the cap we requested, which is the
+            # ``kpi_resolution`` pattern. Weaker than the exact check -- it cannot
+            # distinguish a complete cohort that happens to equal the cap -- so it
+            # is the fallback, not the primary signal.
+            logger.warning(
+                "cohort_resolution: patient_journeys returned %d rows, hitting the "
+                "%d-row cap this service requested for brand=%r region=%r; the "
+                "cohort may be truncated -- pass limit= explicitly or paginate.",
+                len(rows),
+                _MAX_COHORT_ROWS,
+                norm_brand,
+                norm_region,
+            )
     return pd.DataFrame(rows)
 
 
@@ -243,9 +275,11 @@ def resolve_cohort_frame(
             the cached service-role client.
         limit: Optional row cap for the canonical ``patient_journeys`` path only
             (ignored on the explicit-``data_source`` path, where the tier0 loader
-            controls its own bounds). When omitted, the service requests its own
-            ``_MAX_COHORT_ROWS`` bound and logs a WARNING if the fetch hits it --
-            exact truncation detection, since that cap is one we asked for.
+            controls its own bounds). When omitted, the service applies its own
+            ``_MAX_COHORT_ROWS`` ceiling and logs a WARNING if the fetch comes
+            back short of the exact row count the server reports (i.e. the cohort
+            really is truncated). An explicit ``limit`` is a deliberate sample and
+            never warns.
 
     Returns:
         A non-empty ``pd.DataFrame`` on success, else ``None``. NEVER a

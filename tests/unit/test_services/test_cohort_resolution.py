@@ -24,12 +24,14 @@ from src.services.cohort_resolution import resolve_cohort_frame
 class _FakeQuery:
     """Records the PostgREST query-builder chain and returns injected rows."""
 
-    def __init__(self, recorder, rows):
+    def __init__(self, recorder, rows, count):
         self._recorder = recorder
         self._rows = rows
+        self._count = count
 
-    def select(self, cols):
+    def select(self, cols, count=None):
         self._recorder["select"] = cols
+        self._recorder["count"] = count
         return self
 
     def eq(self, col, val):
@@ -42,17 +44,26 @@ class _FakeQuery:
 
     def execute(self):
         self._recorder["executed"] = True
-        return types.SimpleNamespace(data=self._rows)
+        # ``count`` rides the same response (PostgREST Content-Range). ``None``
+        # models a client/double that reports no count.
+        return types.SimpleNamespace(data=self._rows, count=self._count)
 
 
 class _FakeSupabase:
-    def __init__(self, rows):
+    def __init__(self, rows, count=None):
         self._rows = rows
-        self.recorder = {"eq": [], "executed": False, "table": None, "limit": None}
+        self._count = count
+        self.recorder = {
+            "eq": [],
+            "executed": False,
+            "table": None,
+            "limit": None,
+            "count": None,
+        }
 
     def table(self, name):
         self.recorder["table"] = name
-        return _FakeQuery(self.recorder, self._rows)
+        return _FakeQuery(self.recorder, self._rows, self._count)
 
 
 def _rows(n=3):
@@ -294,16 +305,74 @@ def test_warns_only_when_the_requested_cap_is_hit_and_names_it(caplog, monkeypat
     assert "5" in warnings[0]
 
 
+def test_exact_count_is_requested_on_the_query():
+    # The completeness signal rides the same request (PostgREST Content-Range),
+    # so asking for it costs no extra round-trip.
+    fake = _FakeSupabase(_rows(3), count=3)
+    resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)
+    assert fake.recorder["count"] == "exact"
+
+
+def test_server_side_truncation_below_our_cap_is_detected(caplog):
+    # THE blind spot a cap comparison alone cannot see (codex iter-1): a
+    # server-side PostgREST db-max-rows set BELOW _MAX_COHORT_ROWS truncates the
+    # response without our requested cap ever being reached. Comparing the total
+    # the server reports against what we received catches it exactly. A silent
+    # partial cohort is worse than a noisy complete one -- estimators would run
+    # on it as if it were the whole population.
+    import logging as _logging
+
+    fake = _FakeSupabase(_rows(1000), count=48_000)
+    with caplog.at_level(_logging.WARNING, logger="src.services.cohort_resolution"):
+        frame = resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)
+    assert isinstance(frame, pd.DataFrame)
+    assert len(frame) == 1000
+    warnings = [r.message for r in caplog.records if "truncated" in r.message]
+    assert len(warnings) == 1
+    assert "1000" in warnings[0] and "48000" in warnings[0]
+
+
+def test_complete_fetch_reported_by_count_never_warns_even_at_the_cap(caplog, monkeypatch):
+    # A cohort whose true total equals the cap is COMPLETE. The exact count says
+    # so, so the cap comparison must not manufacture a warning about it.
+    import logging as _logging
+
+    monkeypatch.setattr(cohort_resolution, "_MAX_COHORT_ROWS", 5)
+    fake = _FakeSupabase(_rows(5), count=5)
+    with caplog.at_level(_logging.WARNING, logger="src.services.cohort_resolution"):
+        resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)
+    assert not any("truncated" in r.message for r in caplog.records)
+
+
+def test_explicit_limit_never_warns_even_when_count_exceeds_rows(caplog):
+    # An explicit caller limit is a deliberate sample: receiving fewer rows than
+    # the total is the point, not news.
+    import logging as _logging
+
+    fake = _FakeSupabase(_rows(500), count=9999)
+    with caplog.at_level(_logging.WARNING, logger="src.services.cohort_resolution"):
+        resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake, limit=500)
+    assert not any("truncated" in r.message for r in caplog.records)
+
+
 def test_cap_comfortably_exceeds_designed_substrate_volume():
     # Cap derivation, made executable: the widest COMPLETE cohort this service
     # can be asked for is the whole patient_journeys table (brand=None,
     # region=None is a supported call — see test_no_brand_no_region_queries_
-    # unfiltered), so the cap must clear the DGP's designed full-table volume
-    # with room to spare. If a future volume bump erodes that headroom this
-    # test fails LOUDLY rather than silently truncating a complete cohort.
+    # unfiltered), so the cap must clear the substrate's volume with room to
+    # spare. If a future volume bump erodes that headroom this test fails LOUDLY
+    # rather than silently truncating a complete cohort.
+    #
+    # This is a TRIPWIRE, not the completeness guard — the guard is the exact
+    # count comparison above, which holds whatever the table's true size is.
+    # Pinned against the DGP's designed ceiling, which is the LARGER of the two
+    # volume sources: scripts/load_synthetic_data.py FULL_SIZES["patient"] builds
+    # 25,000 (matching the measured 25,898 across three focal brands), while the
+    # DGP designs 84,999. Asserting headroom over the larger one covers both.
+    # (That module is not imported here — it runs logging.basicConfig at import.)
     from src.ml.synthetic.config import EntityVolumes
 
-    designed_full_table = EntityVolumes().total_patients
+    designed_full_table = EntityVolumes().total_patients  # 28,333 * 3 = 84,999
     assert cohort_resolution._MAX_COHORT_ROWS >= 2 * designed_full_table
 
 
