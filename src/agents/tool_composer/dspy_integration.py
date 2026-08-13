@@ -168,6 +168,66 @@ class CompositionTrainingSignal:
 # 2. DSPy SIGNATURES
 # =============================================================================
 
+# #1584 parity with the live planner (PR #1581 / #1573): the DSPy planning
+# path must carry the SAME reference contract as
+# ``planner.PLANNING_SYSTEM_PROMPT``. The text is kept VERBATIM — a unit test
+# pins it as a substring of the live planner prompt, so the two surfaces
+# cannot drift apart without deliberate reconciliation.
+REFERENCE_CONTRACT_INSTRUCTION = """## Reference contract (CRITICAL):
+- The ONLY valid reference sources are $context.<field> and $step_N.<field>, where step_N is a step in THIS plan that the referencing step depends on.
+- NEVER invent other sources (e.g. $dataset, $data, $results) — they do not exist, and the referencing step will FAIL at execution.
+- When referencing a prior step's output, use ONLY the field names listed for that tool's Output above. Do NOT invent output field names — a reference to a nonexistent field FAILS the referencing step at execution."""
+
+
+def format_available_tools_for_planning(
+    schemas: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Render tool descriptions for the DSPy planning path (#1584).
+
+    Mirrors ``ToolPlanner._format_tools_for_prompt`` (the live q08 path fixed
+    by PR #1581): every tool renders its REAL output field names from
+    ``get_schemas_for_planning()``'s ``output_fields``, so ``$step_N.<field>``
+    references can only be planned against fields that exist. Use this to
+    build the ``available_tools`` input of :class:`ToolMappingSignature`.
+
+    Args:
+        schemas: Pre-fetched ``get_schemas_for_planning()`` entries. When
+            ``None``, pulled from the global tool registry.
+
+    Raises:
+        ValueError: when no tools are available — planning against an empty
+            tool list is a caller bug (mirrors the live planner's
+            ``PlanningError`` on an empty registry).
+    """
+    if schemas is None:
+        # Function-local import: keeps this module import-light (stdlib +
+        # optional dspy only at module level — it is loaded via
+        # feedback_learner's ``importlib`` seam).
+        from src.tool_registry.registry import get_registry
+
+        schemas = get_registry().get_schemas_for_planning()
+
+    if not schemas:
+        raise ValueError("No tools available in registry")
+
+    lines: List[str] = []
+    for tool in schemas:
+        lines.append(f"### {tool['name']} ({tool['source']})")
+        lines.append(f"Description: {tool['description']}")
+        lines.append(f"Inputs: {', '.join(tool['inputs'])}")
+        # #1581/#1584: show the REAL output field names so $step_N.<field>
+        # references can only be planned against fields that exist.
+        output_fields = tool.get("output_fields") or []
+        if output_fields:
+            lines.append(f"Output: {tool['output']} (fields: {', '.join(output_fields)})")
+        else:
+            lines.append(f"Output: {tool['output']}")
+        lines.append(f"Avg execution: {tool['avg_ms']}ms")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 try:
     import dspy
 
@@ -194,15 +254,23 @@ try:
         )
 
     class ToolMappingSignature(dspy.Signature):
-        """
-        Map sub-questions to available tools.
-
-        Given atomic sub-questions and available tools, determine the best
-        tool to answer each sub-question.
-        """
+        # #1584: a dspy.Signature's docstring IS the LM instruction, so the
+        # planning instruction must carry the same reference contract as the
+        # live planner prompt (PR #1581). Built via explicit __doc__ so the
+        # contract text stays a single shared constant.
+        __doc__ = (
+            "Map sub-questions to available tools.\n\n"
+            "Given atomic sub-questions and available tools, determine the best "
+            "tool to answer each sub-question.\n\n" + REFERENCE_CONTRACT_INSTRUCTION
+        )
 
         sub_questions: str = dspy.InputField(desc="Atomic sub-questions to map")
-        available_tools: str = dspy.InputField(desc="Available tools with descriptions")
+        available_tools: str = dspy.InputField(
+            desc=(
+                "Available tools with descriptions, inputs, and REAL output "
+                "field names (render with format_available_tools_for_planning)"
+            )
+        )
         past_mappings: str = dspy.InputField(desc="Similar past mappings (if any)")
 
         tool_assignments: list = dspy.OutputField(desc="Tool assignment for each sub-question")
@@ -508,6 +576,9 @@ __all__ = [
     "ToolMappingSignature",
     "ResponseSynthesisSignature",
     "DSPY_AVAILABLE",
+    # Planning parity (#1584)
+    "REFERENCE_CONTRACT_INSTRUCTION",
+    "format_available_tools_for_planning",
     # Collectors
     "ToolComposerSignalCollector",
     "ToolComposerDSPyIntegration",
