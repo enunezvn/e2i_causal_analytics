@@ -674,8 +674,8 @@ class PlanExecutor:
                         tool_callable(**resolved_inputs), timeout=self.timeout_seconds
                     )
                 else:
-                    result = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: tool_callable(**resolved_inputs)
+                    result = await self._run_sync_tool(
+                        tool_callable, resolved_inputs, step.tool_name
                     )
 
                 completed_at = datetime.now(timezone.utc)
@@ -743,6 +743,41 @@ class PlanExecutor:
                     completed_at=datetime.now(timezone.utc),
                 )
 
+            except SyncToolTimeout as e:
+                # #1592: the sync branch's timeout envelope fired. Unlike the
+                # async branch — where ``wait_for`` CANCELS the coroutine, so a
+                # retry starts from a clean slate — the timed-out sync call is
+                # still running on its bounded-pool thread (see
+                # :meth:`_run_sync_tool`). Re-dispatching the same compute over
+                # the same inputs would queue a second copy BEHIND the first on
+                # a pool sized to the heavy-compute budget: it cannot finish any
+                # sooner and it delays every other heavy op. So: fail the step
+                # once, with the honest reason.
+                #
+                # Recorded against the circuit breaker (unlike ToolInputError):
+                # a tool that exceeds the step budget IS a health signal, and
+                # opening the circuit after repeated timeouts stops the plan
+                # from feeding more abandoned work into the pool.
+                logger.warning(
+                    f"Step {step.step_id} tool '{step.tool_name}' {e} — not retrying "
+                    "(the abandoned thread still holds a bounded-pool slot)"
+                )
+                self.failure_tracker.record_failure(step.tool_name, str(e))
+                return StepResult(
+                    step_id=step.step_id,
+                    sub_question_id=step.sub_question_id,
+                    tool_name=step.tool_name,
+                    input=tool_input,
+                    output=ToolOutput(
+                        tool_name=step.tool_name,
+                        success=False,
+                        error=str(e),
+                    ),
+                    status=ExecutionStatus.FAILED,
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"Step {step.step_id} attempt {attempt + 1} failed: {e}")
@@ -768,6 +803,76 @@ class PlanExecutor:
             started_at=started_at,
             completed_at=completed_at,
         )
+
+    async def _run_sync_tool(
+        self, tool_callable: Any, resolved_inputs: Dict[str, Any], tool_name: str
+    ) -> Any:
+        """Run a SYNC tool off the loop: bounded pool + timeout envelope (#1592).
+
+        Two guarantees the previous ``run_in_executor(None, ...)`` did not give:
+
+        1. **Bounded.** ``None`` meant the loop's DEFAULT executor
+           (``min(32, cpu+4)`` threads — 12 on the prod box), which sidesteps the
+           per-worker heavy-compute bound that exists to keep concurrent
+           in-process compute inside the api container's 5G cgroup. 16 of the 20
+           registered composable tools are sync, and several of them (
+           ``causal_effect_estimator``, ``refutation_runner``, ``cate_analyzer``,
+           ``propensity_estimator``, ``cohort_builder``) fit real models over the
+           in-context frame. They now share the same bounded pool as the other
+           heavy paths — the seam #1590 already routes ``rank_drivers``' SHAP
+           through, and the pool that keeps the memory budget process-wide
+           (a second, composer-private pool would re-multiply exactly what
+           ``compute.py`` was built to bound).
+        2. **Time-boxed**, matching the async branch's ``self.timeout_seconds``.
+           Measured headroom on the largest frame observed in prod (37,515x12,
+           #1548): ``refutation_runner`` 26.0s, ``cate_analyzer`` 0.03s on a
+           realistic low-cardinality segment (35.3s when a planner binds a
+           high-cardinality column — the pathology the envelope is FOR),
+           ``causal_effect_estimator`` 0.32s, ``propensity_estimator`` 0.10s.
+
+        RESIDUAL — what this does NOT fix. ``wait_for`` cancels the FUTURE, never
+        the thread: on timeout the tool keeps running to completion and its
+        result is discarded. So (a) the abandoned call still occupies a bounded
+        pool slot until it returns, delaying other heavy compute (never the
+        loop); and (b) if that compute holds the GIL across a single C call —
+        #1548's ``dense_tree_shap`` held it for 1240.5s — the loop is still
+        starved for its duration and gunicorn can still murder the worker. The
+        envelope bounds PLAN latency and gives the step an honest failure; it is
+        not a substitute for bounding the compute itself.
+
+        Raises:
+            SyncToolTimeout: when the envelope fires. Any exception raised by the
+                tool itself propagates unchanged (including a ``TimeoutError`` of
+                its own, which is a tool failure, not an envelope timeout, and
+                keeps the ordinary retry semantics).
+        """
+        # Function-local import (mirrors the #1590 precedent in
+        # ``tool_registry/tools/causal_discovery.py``): keeps the
+        # ``src.api.dependencies`` package out of this module's import path for
+        # non-API consumers of the composer.
+        from src.api.dependencies.compute import run_in_bounded_executor
+
+        async def bounded_call() -> tuple[Any, Exception | None]:
+            # Capture the tool's own failure instead of letting it reach
+            # ``wait_for``, so a TimeoutError raised BY the tool can never be
+            # mislabeled as an envelope timeout. ``except Exception`` (not
+            # BaseException) deliberately lets CancelledError propagate.
+            try:
+                return await run_in_bounded_executor(lambda: tool_callable(**resolved_inputs)), None
+            except Exception as exc:  # noqa: BLE001 - re-raised by the caller
+                return None, exc
+
+        try:
+            value, tool_error = await asyncio.wait_for(bounded_call(), timeout=self.timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            raise SyncToolTimeout(
+                f"timed out after {self.timeout_seconds}s (sync tool, still running "
+                "on the bounded heavy-compute pool — a thread cannot be cancelled)"
+            ) from exc
+
+        if tool_error is not None:
+            raise tool_error
+        return value
 
     async def _execute_parallel(
         self,
@@ -1242,6 +1347,18 @@ class PlanExecutor:
 
 class ExecutionError(Exception):
     """Error during plan execution"""
+
+    pass
+
+
+class SyncToolTimeout(Exception):
+    """A SYNC tool exceeded the step's timeout envelope (#1592).
+
+    Distinct from a plain ``TimeoutError`` so the retry loop can tell "the
+    envelope fired around a thread we cannot cancel" (do not re-dispatch) from
+    "the tool itself reported a timeout" (ordinary retryable failure). Raised
+    only by :meth:`PlanExecutor._run_sync_tool`.
+    """
 
     pass
 

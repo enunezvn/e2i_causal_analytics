@@ -170,13 +170,12 @@ async def test_sync_tool_does_not_use_the_loop_default_executor() -> None:
     assert trace.get_result("step_1").status == ExecutionStatus.COMPLETED
     assert seen, "the sync tool never reached run_in_executor at all"
     assert all(e is not None for e in seen), (
-        "sync tools must not run on the loop's DEFAULT executor "
-        f"(recorded executors={seen})"
+        f"sync tools must not run on the loop's DEFAULT executor (recorded executors={seen})"
     )
     pools = [e for e in seen if isinstance(e, ThreadPoolExecutor)]
-    assert pools and all(
-        getattr(p, "_thread_name_prefix", "") == "heavy-compute" for p in pools
-    ), f"expected the shared bounded 'heavy-compute' pool; got {pools}"
+    assert pools and all(getattr(p, "_thread_name_prefix", "") == "heavy-compute" for p in pools), (
+        f"expected the shared bounded 'heavy-compute' pool; got {pools}"
+    )
 
 
 # ---------------------------------------------------------------------------
