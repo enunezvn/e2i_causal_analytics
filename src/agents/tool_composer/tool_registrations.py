@@ -1650,22 +1650,26 @@ def _gap_comparability_reason(
             f"({_clip_entity_labels(groups_matched)[0]!r}) is present "
             "in the supplied estimation data"
         )
+        refusal = (
+            "reporting the one available group as both the top and the bottom "
+            "performer with a gap of 0.0"
+        )
     else:
         # The requested entities are NOT repeated here — they are in the scope
         # payload below, and a second rendering is what pushes a wide list past
         # the composer's carry limit.
         observed = f"no {label} group matched the requested entities on column {group_col!r}"
+        refusal = "reporting a spread over groups this estimation data does not contain"
     return (
         f"gap_calculator: comparing requires at least 2 distinct {label} groups, but "
         f"{observed}. The requested comparison entities are not modeled as comparable "
         f"{label} entities in this estimation data, which covers "
         f"{scope['entity_groups_present']!r} on column {group_col!r} — that is a "
         "statement about the scope of THIS estimation frame, NOT a claim that the "
-        "requested entities have no data anywhere on the platform. Refusing to "
-        "fabricate a comparison: reporting the one available group as both the top "
-        "and the bottom performer with a gap of 0.0 would be a plausible-but-fake "
-        "finding, so an uncomparable request surfaces as a structured error. Report "
-        f"the covered scope instead. estimation_data_scope={scope!r}"
+        f"requested entities have no data anywhere on the platform. Refusing to "
+        f"fabricate a comparison: {refusal} would be a plausible-but-fake finding, so "
+        "an uncomparable request surfaces as a structured error. Report the covered "
+        f"scope instead. estimation_data_scope={scope!r}"
     )
 
 
