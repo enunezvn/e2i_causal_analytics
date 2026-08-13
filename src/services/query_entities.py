@@ -234,7 +234,7 @@ def region_from_text(query: Optional[str]) -> Optional[str]:
 
     Since #1572 the scan runs through the shared #1565 alias vocabulary
     (:mod:`src.services.enum_labels`), so unambiguous natural phrasings
-    ("West Coast", "New England", "the Pacific") bind their canonical label.
+    ("West Coast", "New England") bind their canonical label.
     It still binds only when the text pins down EXACTLY ONE region, in the
     substrate's canonical lowercase form; a multi-region phrase ("East
     Coast") binds nothing — callers that can ask the user consult
