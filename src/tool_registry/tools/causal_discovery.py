@@ -1073,7 +1073,55 @@ async def rank_drivers(
                 "was supplied. The tool fails closed rather than fabricate "
                 "SHAP values (CLAUDE.md anti-mocking)."
             )
-        shap_list, resolved_features = _compute_shap_from_frame(frame, target, feature_names)
+        # #1548: run the CPU-bound SHAP derivation (RandomForest fit +
+        # TreeExplainer ``shap_values``) OFF the event loop. Measured
+        # (2026-08-13 live faulthandler dumps): inline, this starved the
+        # uvicorn worker's main loop for >120s on heavy /chat/stream turns;
+        # uvicorn's ``callback_notify`` never ran, so gunicorn's arbiter
+        # murdered the worker at last-notify+120s → mid-stream tear. The
+        # executor's ``asyncio.wait_for`` cannot preempt a sync call that
+        # never yields.
+        #
+        # Seam choice: the EXISTING shared bounded heavy-compute pool
+        # (``run_in_bounded_executor``, prod heavy-compute cap prior art) —
+        # NOT ``asyncio.to_thread`` (loop's default executor is unbounded: N
+        # concurrent turns could fit N RandomForests inside the 5G cgroup,
+        # the exact OOM class the bounded pool was built to prevent) and NOT
+        # ``shap_explainer_realtime``'s pool (import-time global needing the
+        # gunicorn ``post_fork`` reset, eagerly imports mlflow, and is
+        # coupled to the /explain model-explainer cache). ``compute.py``'s
+        # pool is created lazily at first call — inherently preload/fork-safe.
+        # No ``heavy_compute_slot`` here: its reject-fast contract is for API
+        # entry points that can answer 503 + Retry-After; a composer step
+        # should briefly queue (bounded by the executor's ``wait_for``)
+        # rather than instantly fail the chat turn, and in-flight compute is
+        # already capped by the pool's worker count.
+        #
+        # Cancellation semantics: with the block off-loop, the composer's
+        # ``wait_for`` timeout CAN now fire — but cancelling the executor
+        # future cannot interrupt a compute already running in the pool
+        # thread; it runs to completion and its result is discarded. That is
+        # acceptable: the compute is pure CPU over an in-memory frame (no
+        # side effects to corrupt), the abandoned work occupies only a
+        # bounded pool slot (delaying other heavy compute, never the loop),
+        # and the step fails with a well-formed error instead of the worker
+        # being murdered mid-stream.
+        #
+        # Function-local import (mirrors ``model_inference.py``): keeps the
+        # ``src.api.dependencies`` package out of this module's import path
+        # for non-API consumers of the tool registry.
+        from src.api.dependencies.compute import run_in_bounded_executor
+
+        # Positive log marker for live verification of #1548 (grep:
+        # "off-loading SHAP derivation").
+        logger.info(
+            "rank_drivers: off-loading SHAP derivation to bounded heavy-compute pool (frame=%dx%d)",
+            frame.shape[0],
+            frame.shape[1],
+        )
+        shap_list, resolved_features = await run_in_bounded_executor(
+            _compute_shap_from_frame, frame, target, feature_names
+        )
 
     # F7: normalize the edge list so a chained ``discover_dag.edge_list`` (which
     # carries extra ``confidence``/``type``/``algorithms`` keys) validates
