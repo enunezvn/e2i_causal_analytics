@@ -83,7 +83,8 @@ def _normalize_region(region: Optional[str]) -> Optional[str]:
       registrations): LLM tool-call / planner arguments from chat text,
     * the orchestrator dispatcher (``_extract_brand_region``): NLP entity
       extractions, frontend ``user_context`` (typed to the four canonical
-      labels), or ``query_entities.region_from_text`` (canonical only).
+      labels), or ``query_entities.region_from_text`` (canonical labels and,
+      since #1572, unambiguous aliases from the same shared vocabulary).
 
     No consumer passes market/territory identifiers a ``REGION_ALIASES``
     entry could falsely match, and the chat KPI tool already resolves the

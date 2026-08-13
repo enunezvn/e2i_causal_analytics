@@ -1175,6 +1175,93 @@ def test_share_of_trx_resolves_the_share_kpi(monkeypatch) -> None:
     assert any("tracked portfolio" in f for f in payload["key_findings"])
 
 
+# --------------------------------------------------------------------------
+# #1572 — a multi-region phrase ("East Coast") must end in a clarify QUESTION,
+# never a silent national figure. AG-UI already clarifies (tool surface,
+# #1565/#1571); this pins the /chat multi-agent path's Branch A.
+# --------------------------------------------------------------------------
+
+EAST_COAST_QUERY = "What is the TRx for Kisqali on the East Coast?"
+
+
+def test_multi_region_phrase_clarifies_instead_of_national_figure(monkeypatch) -> None:
+    """'East Coast' spans the northeast AND south census regions — Branch A
+    must return the clarify question and must NOT compute the national KPI."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(EAST_COAST_QUERY), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    results = resolved["analysis_results"]
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["agent"] == "kpi_calculator"
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["needs_clarification"] is True
+    assert payload["unresolved_region_phrase"].lower() == "east coast"
+    findings = payload["key_findings"]
+    assert findings and all(isinstance(f, str) for f in findings)
+    # The question names all four census regions and echoes the phrase.
+    for label in ("northeast", "south", "midwest", "west"):
+        assert label in findings[0], findings
+    assert "East Coast" in findings[0], findings
+    assert "?" in findings[0], "the clarify must be a QUESTION"
+    # The silent-national defect: the engine must never be asked for the
+    # unscoped figure on this ask.
+    assert stub.calls == []
+
+
+def test_west_coast_still_binds_the_west_scoped_figure(monkeypatch) -> None:
+    """'West Coast' resolves (every west-coast state is census-west, #1565) —
+    the scoped figure keeps flowing; no spurious clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the TRx for Kisqali on the West Coast?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup"
+    assert payload["value"] == 12345.0
+    assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali", "region": "west"})]
+
+
+def test_guard_phrase_keeps_the_unscoped_figure_without_clarify(monkeypatch) -> None:
+    """'central coast' is a #1565 guard phrase (a locality, NOT a census-region
+    concept): it binds no region AND raises no clarify — the honest unscoped
+    figure keeps flowing exactly as before #1572."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the TRx for Kisqali on the central coast?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
+
+
+@pytest.mark.asyncio
+async def test_explainer_narrates_the_region_clarify_question(monkeypatch) -> None:
+    """The clarify question must reach the user-visible narrative verbatim,
+    with NO figure beside it."""
+    from src.agents.explainer import ExplainerAgent
+
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(EAST_COAST_QUERY), _dispatch())
+    assert isinstance(resolved, dict), resolved
+
+    output = await ExplainerAgent(use_llm=False).explain(**resolved)
+
+    narrative = f"{output.executive_summary}\n{output.detailed_explanation}"
+    assert "census region" in narrative, narrative
+    assert "East Coast" in narrative, narrative
+    assert "12,345" not in narrative, "no figure may accompany the clarify"
+    assert stub.calls == []
+
+
 @pytest.mark.asyncio
 async def test_sync_and_async_causal_path_search_build_the_same_filters() -> None:
     """The sync helper the resolver needs (the dispatcher contract is SYNC —
