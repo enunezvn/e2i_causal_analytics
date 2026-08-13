@@ -579,6 +579,99 @@ class TestDSPySignatures:
         assert issubclass(ResponseSynthesisSignature, dspy.Signature)
 
 
+class TestReferenceContract1584:
+    """#1584 — the DSPy planning path must carry #1581's reference-contract parity.
+
+    PR #1581 fixed the LIVE planner (``planner.py``): tool descriptions render
+    the REAL output field names from ``get_schemas_for_planning()``'s
+    ``output_fields``, and the prompt carries a Reference contract forbidding
+    invented sources (``$dataset``) and invented output field names. The DSPy
+    planning path (``ToolMappingSignature`` + its ``available_tools`` input)
+    had neither: no formatter rendered output fields, and nothing in the
+    signature instructions forbade invented references — so any composition
+    routed through the DSPy planner still planned blind.
+    """
+
+    @staticmethod
+    def _register_cate_like(registry, with_output_model: bool):
+        from pydantic import BaseModel
+
+        from src.tool_registry.registry import ToolSchema
+
+        class FakeCATEResults(BaseModel):
+            segments: list = []
+            high_responders: list = []
+            effect_by_segment: dict = {}
+
+        schema = ToolSchema(
+            name="cate_analyzer",
+            description="Analyze conditional average treatment effects",
+            source_agent="heterogeneous_optimizer",
+            tier=2,
+            output_schema="CATEResults",
+            avg_execution_ms=800,
+        )
+        registry.register(
+            schema=schema,
+            callable=lambda **k: {},
+            output_model=FakeCATEResults if with_output_model else None,
+        )
+
+    def test_format_available_tools_includes_output_fields_when_model_known(self, empty_registry):
+        from src.agents.tool_composer.dspy_integration import (
+            format_available_tools_for_planning,
+        )
+
+        self._register_cate_like(empty_registry, with_output_model=True)
+        text = format_available_tools_for_planning(empty_registry.get_schemas_for_planning())
+        assert "effect_by_segment" in text
+        assert "high_responders" in text
+
+    def test_format_available_tools_no_fields_line_without_model(self, empty_registry):
+        from src.agents.tool_composer.dspy_integration import (
+            format_available_tools_for_planning,
+        )
+
+        self._register_cate_like(empty_registry, with_output_model=False)
+        text = format_available_tools_for_planning(empty_registry.get_schemas_for_planning())
+        assert "CATEResults" in text
+        assert "fields:" not in text
+
+    def test_format_available_tools_rejects_empty(self):
+        from src.agents.tool_composer.dspy_integration import (
+            format_available_tools_for_planning,
+        )
+
+        with pytest.raises(ValueError):
+            format_available_tools_for_planning([])
+
+    @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
+    def test_tool_mapping_signature_carries_reference_contract(self):
+        from src.agents.tool_composer.dspy_integration import ToolMappingSignature
+
+        instructions = ToolMappingSignature.instructions
+        # The two REAL sources must be documented...
+        assert "$context." in instructions
+        assert "$step_" in instructions
+        # ...and invented sources explicitly forbidden, naming the one the
+        # planner actually hallucinated in the wild (q08).
+        assert "$dataset" in instructions
+        assert "invent" in instructions.lower()
+
+    def test_reference_contract_matches_live_planner(self):
+        """Parity pin: the DSPy contract text is VERBATIM the live planner's.
+
+        If either surface's wording changes without the other, this fails —
+        forcing deliberate reconciliation instead of silent drift.
+        """
+        from src.agents.tool_composer.dspy_integration import (
+            REFERENCE_CONTRACT_INSTRUCTION,
+        )
+        from src.agents.tool_composer.planner import PLANNING_SYSTEM_PROMPT
+
+        assert REFERENCE_CONTRACT_INSTRUCTION in PLANNING_SYSTEM_PROMPT
+
+
 class TestFullSignalLifecycle:
     """Integration tests for complete signal lifecycle."""
 
