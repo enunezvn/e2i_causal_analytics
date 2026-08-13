@@ -1,23 +1,46 @@
-"""Frontier-append business_metrics cohort tests (#1566 D1).
+"""Frontier-append business_metrics cohort tests (#1566 D1) and instant-
+granularity holdback tests (#1577).
 
-The frozen base (loaded 2026-07-03) spans 163 months 2013-01..2026-07, so its
-July-2026 trx rows carry trend_factor 1 + 0.02*162. Monthly frontier cohorts
-(``generate_month_cohort``) are single-date runs, so the positional
-``month_idx = dates.index(metric_date)`` reset to 0 and every appended month
-from BM_EPOCH (2026-08-01) forward collapsed to the 2013 baseline (~24% of
-July's level) — deterministically and permanently. D1 anchors the cohort's
-trend to the absolute calendar origin ``BM_TREND_ORIGIN = date(2013, 1, 1)``
-instead; ``trend_origin=None`` preserves the positional behavior for every
-other caller byte-for-byte.
+#1566 D1: the frozen base (loaded 2026-07-03) spans 163 months 2013-01..
+2026-07, so its July-2026 trx rows carry trend_factor 1 + 0.02*162. Monthly
+frontier cohorts (``generate_month_cohort``) are single-date runs, so the
+positional ``month_idx = dates.index(metric_date)`` reset to 0 and every
+appended month from BM_EPOCH (2026-08-01) forward collapsed to the 2013
+baseline (~24% of July's level) — deterministically and permanently. D1
+anchors the cohort's trend to the absolute calendar origin ``BM_TREND_ORIGIN
+= date(2013, 1, 1)`` instead; ``trend_origin=None`` preserves the positional
+behavior for every other caller byte-for-byte.
+
+#1577: the DB enforces ``CHECK (event_timestamp <= now())`` on feature_values
+(constraint ``valid_event_timestamp`` — the only now()-CHECK in the schema).
+``filter_to_frontier`` filtered at DATE granularity only, so the Mon-3AM cron
+(frontier=today) shipped frontier-day rows timed AFTER 03:00 (measured: e.g.
+``2026-08-10 18:56:17`` on the 2026-08-10 03:00 run) — 28-459 rejected rows
+per weekly run, every cron run since 2026-07-06. The ``as_of`` instant
+holdback extends the filter's documented "held back (regenerated next run)"
+self-heal contract from date to instant granularity. Rows must be HELD BACK,
+never clamped: clamping would change ``event_timestamp`` — part of the
+loader's upsert key ``(feature_id, entity_values, event_timestamp)``
+(batch_loader TABLE_ON_CONFLICT) — so re-generated rows would duplicate
+instead of dedup on the next run.
 """
 
-from datetime import date
+import json
+from datetime import date, datetime
 
 import pandas as pd
 
 import src.ml.synthetic.frontier_append as fa
-from src.ml.synthetic.frontier_append import generate_month_cohort
-from src.ml.synthetic.generators import BusinessMetricsGenerator, GeneratorConfig
+from src.ml.synthetic.frontier_append import (
+    build_frontier_datasets,
+    filter_to_frontier,
+    generate_month_cohort,
+)
+from src.ml.synthetic.generators import (
+    BusinessMetricsGenerator,
+    GeneratorConfig,
+    HCPGenerator,
+)
 
 # Frozen-base trx model pinned literally (NOT read from METRIC_CONFIGS): the DB
 # base was generated from these values on 2026-07-03 and does not retune with
@@ -170,3 +193,216 @@ class TestPKStability:
             _cohort_config(trend_origin=date(2013, 1, 1))
         ).generate()
         assert list(df_none["metric_id"]) == list(df_origin["metric_id"])
+
+
+# ---------------------------------------------------------------------------
+# #1577: instant-granularity (as_of) holdback
+# ---------------------------------------------------------------------------
+
+# EPOCH (2026-07-06) is a Monday: with frontier=EPOCH the trailing window is a
+# SINGLE weekly cohort (iter_week_starts clamps at EPOCH) and no monthly bm
+# cohorts exist yet (BM_EPOCH is 2026-08-01) — the cheapest full pass through
+# the real build_frontier_datasets path.
+FRONTIER_MONDAY = fa.EPOCH
+# The real cron instant: Monday 03:00:50 (the measured 2026-08-10 run started
+# 03:00:50).
+CRON_AS_OF = datetime(2026, 7, 6, 3, 0, 50)
+FAR_AS_OF = datetime(2100, 1, 1)
+NEXT_MONDAY = date(2026, 7, 13)
+NEXT_CRON_AS_OF = datetime(2026, 7, 13, 3, 0, 50)
+
+
+def _small_hcp() -> pd.DataFrame:
+    """Real HCPGenerator, smaller universe (the factory is an existing
+    injection point of build_frontier_datasets — nothing is mocked). Both
+    runs of any comparison use the same factory, so determinism and
+    self-heal contracts hold exactly as with the full 5000-HCP base."""
+    return HCPGenerator(GeneratorConfig(id_prefix="scv", seed=42, n_records=50)).generate()
+
+
+_BUILD_CACHE: dict = {}
+
+
+def _build(frontier: date, as_of):
+    """Cached build_frontier_datasets(frontier, as_of) — generation is ~2s
+    per cohort; tests share read-only results."""
+    key = (frontier, as_of)
+    if key not in _BUILD_CACHE:
+        _BUILD_CACHE[key] = build_frontier_datasets(
+            frontier=frontier,
+            as_of=as_of,
+            include_coverage=False,
+            hcp_frame_factory=_small_hcp,
+        )
+    return _BUILD_CACHE[key]
+
+
+def _fv_keyed(fv: pd.DataFrame) -> pd.DataFrame:
+    """feature_values on the loader's upsert key (feature_entity_timestamp_
+    unique) plus the value columns byte-identity is asserted over. The ``id``
+    column is uuid4-per-generation (measured: the ONLY non-deterministic
+    column) and is resolved by the DB upsert, so it is excluded."""
+    out = pd.DataFrame(
+        {
+            "feature_id": fv["feature_id"].astype(str),
+            "entity_values": fv["entity_values"].map(lambda v: json.dumps(v, sort_keys=True)),
+            "event_timestamp": fv["event_timestamp"].astype(str),
+            "value": fv["value"].map(lambda v: json.dumps(v, sort_keys=True)),
+            "freshness_status": fv["freshness_status"].astype(str),
+        }
+    )
+    return out.sort_values(["feature_id", "entity_values", "event_timestamp"]).reset_index(
+        drop=True
+    )
+
+
+def _fv_keys(fv: pd.DataFrame) -> set:
+    keyed = _fv_keyed(fv)
+    return set(
+        zip(keyed["feature_id"], keyed["entity_values"], keyed["event_timestamp"], strict=True)
+    )
+
+
+class TestAsOfInstantHoldback:
+    """Headline #1577 contract: a Monday-03:00 run must not emit feature_values
+    rows the DB CHECK (event_timestamp <= now()) will reject."""
+
+    def test_no_feature_value_after_as_of(self):
+        fv = _build(FRONTIER_MONDAY, CRON_AS_OF)["feature_values"]
+        assert len(fv) > 0
+        # ISO8601: generated isoformat() strings have MIXED precision (rows
+        # clipped to a whole second print without the .%f fraction)
+        ts = pd.to_datetime(fv["event_timestamp"], format="ISO8601")
+        offenders = fv[ts > pd.Timestamp(CRON_AS_OF)]
+        assert offenders.empty, (
+            f"{len(offenders)} feature_values rows after as_of={CRON_AS_OF} would "
+            f"violate the DB valid_event_timestamp CHECK: "
+            f"{offenders['event_timestamp'].tolist()[:5]}"
+        )
+
+    def test_holdback_is_not_vacuous(self):
+        """The hazard is real: without the instant cutoff, frontier-day rows
+        timed after 03:00 exist (measured 10 of 28 on the EPOCH cohort) —
+        exactly the rows all 6 cron runs since 2026-07-06 failed on."""
+        fv = _build(FRONTIER_MONDAY, FAR_AS_OF)["feature_values"]
+        ts = pd.to_datetime(fv["event_timestamp"], format="ISO8601")
+        intraday_future = (ts > pd.Timestamp(CRON_AS_OF)) & (ts.dt.date == FRONTIER_MONDAY)
+        assert intraday_future.any(), (
+            "expected frontier-day rows timed after the cron instant; the "
+            "holdback test would be vacuous without them"
+        )
+
+    def test_boundary_row_at_as_of_is_kept(self):
+        """CHECK (event_timestamp <= now()) is inclusive — a row exactly AT
+        as_of must load, not be held back."""
+        df = pd.DataFrame(
+            {
+                "feature_id": ["f1", "f2", "f3"],
+                "event_timestamp": [
+                    "2026-07-06T03:00:50",
+                    "2026-07-06T03:00:50.000001",
+                    "2026-07-06T02:59:59",
+                ],
+            }
+        )
+        out = filter_to_frontier(
+            {"feature_values": df}, date(2026, 7, 6), as_of=datetime(2026, 7, 6, 3, 0, 50)
+        )["feature_values"]
+        assert list(out["feature_id"]) == ["f1", "f3"]
+
+    def test_filter_without_as_of_stays_date_only(self):
+        """as_of=None preserves the pre-#1577 date-granularity contract for
+        direct filter_to_frontier callers."""
+        df = pd.DataFrame(
+            {
+                "feature_id": ["f1", "f2"],
+                "event_timestamp": ["2026-07-06T23:59:59", "2026-07-07T00:00:00"],
+            }
+        )
+        out = filter_to_frontier({"feature_values": df}, date(2026, 7, 6))["feature_values"]
+        assert list(out["feature_id"]) == ["f1"]
+
+
+class TestAsOfSelfHeal:
+    """Held-back rows are DEFERRED, never lost: the next run regenerates them
+    byte-identically (on the upsert key) and they pass its later as_of."""
+
+    def test_held_back_rows_reappear_next_run(self):
+        all_rows = _fv_keys(_build(FRONTIER_MONDAY, FAR_AS_OF)["feature_values"])
+        loaded = _fv_keys(_build(FRONTIER_MONDAY, CRON_AS_OF)["feature_values"])
+        held_back = all_rows - loaded
+        assert held_back, "expected held-back rows (measured 10 on the EPOCH cohort)"
+
+        next_run = _fv_keys(_build(NEXT_MONDAY, NEXT_CRON_AS_OF)["feature_values"])
+        missing = held_back - next_run
+        assert not missing, (
+            f"{len(missing)} held-back rows never reappeared — the self-heal "
+            f"contract (held back, regenerated next run) is broken: "
+            f"{sorted(missing)[:3]}"
+        )
+
+    def test_held_back_rows_byte_identical_beyond_key(self):
+        """value + freshness_status must also match — a clamp/shift fix would
+        break this (and duplicate rows in the DB instead of dedup)."""
+        first = _fv_keyed(_build(FRONTIER_MONDAY, FAR_AS_OF)["feature_values"])
+        next_run = _fv_keyed(_build(NEXT_MONDAY, NEXT_CRON_AS_OF)["feature_values"])
+        key_cols = ["feature_id", "entity_values", "event_timestamp"]
+        merged = first.merge(next_run, on=key_cols, suffixes=("_a", "_b"))
+        assert len(merged) == len(first)  # every first-run row regenerates
+        assert merged["value_a"].equals(merged["value_b"])
+        assert merged["freshness_status_a"].equals(merged["freshness_status_b"])
+
+
+class TestAsOfDeterminism:
+    def test_same_frontier_and_as_of_twice_is_identical(self):
+        """Deterministic given (frontier, as_of) — modulo the uuid4 ``id``
+        column, which the DB resolves via the natural-key upsert."""
+        a = build_frontier_datasets(
+            frontier=FRONTIER_MONDAY,
+            as_of=CRON_AS_OF,
+            include_coverage=False,
+            hcp_frame_factory=_small_hcp,
+        )
+        b = _build(FRONTIER_MONDAY, CRON_AS_OF)
+        assert set(a) == set(b)
+        for table in a:
+            df_a, df_b = a[table], b[table]
+            if table == "feature_values":
+                df_a = df_a.drop(columns=["id"])
+                df_b = df_b.drop(columns=["id"])
+            pd.testing.assert_frame_equal(df_a, df_b), table
+
+
+class TestAsOfRegression:
+    """A fully-past frontier must behave exactly as before #1577."""
+
+    def test_none_as_of_matches_far_future_for_past_frontier(self):
+        """as_of=None resolves to now(); for a frontier weeks in the past the
+        instant filter is a no-op, so output matches a far-future as_of —
+        i.e. matches the pre-#1577 date-only behavior (backdated manual runs
+        keep loading frontier-day 23:59 rows, which are all in the past)."""
+        none_run = _build(FRONTIER_MONDAY, None)
+        far_run = _build(FRONTIER_MONDAY, FAR_AS_OF)
+        assert set(none_run) == set(far_run)
+        for table in none_run:
+            df_a, df_b = none_run[table], far_run[table]
+            if table == "feature_values":
+                df_a = df_a.drop(columns=["id"])
+                df_b = df_b.drop(columns=["id"])
+            pd.testing.assert_frame_equal(df_a, df_b), table
+
+    def test_as_of_touches_only_feature_values(self):
+        """Scope pin: feature_values is the ONLY table with a DB now()-CHECK;
+        triggers/ml_predictions/agent_activities carry intraday times too but
+        have no constraint and no measured harm — they must pass through
+        untouched (opt-in via INSTANT_COLUMNS if that ever changes)."""
+        cron_run = _build(FRONTIER_MONDAY, CRON_AS_OF)
+        far_run = _build(FRONTIER_MONDAY, FAR_AS_OF)
+        assert set(cron_run) == set(far_run)
+        for table in far_run:
+            if table == "feature_values":
+                continue
+            pd.testing.assert_frame_equal(cron_run[table], far_run[table]), table
+
+    def test_instant_registry_scope_is_exactly_feature_values(self):
+        assert fa.INSTANT_COLUMNS == {"feature_values": "event_timestamp"}
