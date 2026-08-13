@@ -818,11 +818,24 @@ class PlanExecutor:
            registered composable tools are sync, and several of them (
            ``causal_effect_estimator``, ``refutation_runner``, ``cate_analyzer``,
            ``propensity_estimator``, ``cohort_builder``) fit real models over the
-           in-context frame. They now share the same bounded pool as the other
-           heavy paths — the seam #1590 already routes ``rank_drivers``' SHAP
-           through, and the pool that keeps the memory budget process-wide
-           (a second, composer-private pool would re-multiply exactly what
-           ``compute.py`` was built to bound).
+           in-context frame. They now share the process-global bounded pool
+           (default: ONE worker) with the two other paths that use it —
+           ``rank_drivers``' SHAP (#1590) and ``POST /api/digital-twin/simulate``
+           — so those can no longer run concurrently with a composer sync tool.
+           A composer-private pool was rejected: it would re-multiply exactly the
+           in-flight memory ``compute.py`` exists to bound.
+
+           NOT bounded against: ``POST /api/explain/predict``, which holds a
+           ``heavy_compute_slot`` but runs SHAP on its OWN pool
+           (``src/api/routes/explain.py``), so it can still overlap with a
+           composer sync tool. That overlap is unchanged from before this fix
+           (the two were already on different pools) — this change only ever
+           REMOVES concurrency. Closing it would mean taking a
+           ``heavy_compute_slot`` here, which is deliberately not done: the slot
+           is reject-fast for API entry points that can answer 503 +
+           ``Retry-After``, and a chat turn's tool step should queue briefly
+           (bounded by the envelope below) rather than fail outright — the same
+           call #1590 made for ``rank_drivers``.
         2. **Time-boxed**, matching the async branch's ``self.timeout_seconds``.
            Measured headroom on the largest frame observed in prod (37,515x12,
            #1548): ``refutation_runner`` 26.0s, ``cate_analyzer`` 0.03s on a

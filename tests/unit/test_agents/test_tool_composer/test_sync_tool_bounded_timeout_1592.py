@@ -190,10 +190,12 @@ async def test_slow_sync_tool_trips_the_timeout_envelope() -> None:
     the release event fires) instead of failing at ``timeout_seconds``."""
     released = threading.Event()
     started = threading.Event()
+    finished = threading.Event()
 
     def slow_tool(**_kwargs: Any) -> Dict[str, Any]:
         started.set()
         released.wait(timeout=30)
+        finished.set()
         return {"ok": True}
 
     registry = _registry_with("slow_sync_probe", slow_tool)
@@ -210,7 +212,10 @@ async def test_slow_sync_tool_trips_the_timeout_envelope() -> None:
             timeout=10,
         )
     finally:
+        # Drain the abandoned pool thread before the fixture resets the shared
+        # executor, so no stray thread leaks into the next test.
         released.set()
+        assert finished.wait(timeout=10), "the abandoned pool thread never drained"
 
     result = trace.get_result("step_1")
     assert started.is_set(), "the stub tool never ran"
@@ -232,6 +237,7 @@ async def test_timed_out_sync_tool_is_not_re_dispatched() -> None:
     is invoked ``max_retries + 1`` == 3 times.
     """
     released = threading.Event()
+    finished = threading.Event()
     invocations: List[int] = []
     lock = threading.Lock()
 
@@ -239,6 +245,7 @@ async def test_timed_out_sync_tool_is_not_re_dispatched() -> None:
         with lock:
             invocations.append(1)
         released.wait(timeout=30)
+        finished.set()
         return {"ok": True}
 
     registry = _registry_with("slow_sync_probe", slow_tool)
@@ -258,6 +265,7 @@ async def test_timed_out_sync_tool_is_not_re_dispatched() -> None:
         )
     finally:
         released.set()
+        assert finished.wait(timeout=10), "the abandoned pool thread never drained"
 
     assert trace.get_result("step_1").status == ExecutionStatus.FAILED
     assert len(invocations) == 1, (
@@ -360,6 +368,48 @@ async def test_fast_sync_tool_result_is_unchanged() -> None:
     assert result.output.result == {"effect": 0.15, "ci_lower": 0.12, "note": "rx_volume"}
     assert seen_kwargs["metric"] == "rx_volume"
     assert result.duration_ms is not None and result.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_tool_raised_timeout_error_is_not_an_envelope_timeout() -> None:
+    """``asyncio.TimeoutError`` IS the builtin ``TimeoutError`` on 3.11+, so a
+    tool that reports its OWN timeout (a socket/DB deadline) must not be
+    mistaken for the envelope firing: it is an ordinary tool failure and keeps
+    the retry semantics.
+
+    Falsifiability: a naive ``except asyncio.TimeoutError`` around the whole
+    dispatch would swallow this into ``SyncToolTimeout`` — one invocation and a
+    'timed out after 120s' error that never happened.
+    """
+    invocations: List[int] = []
+
+    def tool_with_own_timeout(**_kwargs: Any) -> Dict[str, Any]:
+        invocations.append(1)
+        raise TimeoutError("upstream query exceeded its 5s deadline")
+
+    registry = _registry_with("own_timeout_probe", tool_with_own_timeout)
+    executor = PlanExecutor(
+        tool_registry=registry,
+        enable_caching=False,
+        max_retries=1,
+        backoff_base_delay=0.01,
+        backoff_max_delay=0.02,
+        timeout_seconds=30,
+    )
+
+    trace = await executor.execute(_single_step_plan("own_timeout_probe"), context={})
+
+    result = trace.get_result("step_1")
+    assert result.status == ExecutionStatus.FAILED
+    assert "upstream query exceeded its 5s deadline" in (result.output.error or "")
+    assert "bounded heavy-compute pool" not in (result.output.error or ""), (
+        "the tool's own TimeoutError was mislabeled as an envelope timeout: "
+        f"{result.output.error!r}"
+    )
+    assert len(invocations) == 2, (
+        f"a tool-raised TimeoutError must keep ordinary retry semantics; "
+        f"invoked {len(invocations)} times"
+    )
 
 
 @pytest.mark.asyncio
