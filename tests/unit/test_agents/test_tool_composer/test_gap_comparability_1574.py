@@ -329,9 +329,7 @@ def _wire_total_failure(composer: ToolComposer, *, tool_name: str, error: str) -
         sub_questions=[],
         decomposition_reasoning="r",
     )
-    plan = ExecutionPlan(
-        decomposition=decomp, steps=[], tool_mappings=[], planning_reasoning="r"
-    )
+    plan = ExecutionPlan(decomposition=decomp, steps=[], tool_mappings=[], planning_reasoning="r")
     composer.decomposer.decompose = AsyncMock(return_value=decomp)
     composer.planner.plan = AsyncMock(return_value=plan)
     composer.executor.execute = AsyncMock(
