@@ -256,11 +256,10 @@ class TestJsonSafePayloadUnchanged:
 
         payload = await _contributed_payload(composer, result)
 
-        # Byte-identical, not merely equal: the encoded JSON must match what
+        # Byte-identical, not merely equal: unsorted so that a difference in
+        # key ORDER fails too, since insertion order is part of the encoding
         # the pre-#1583 `model_dump(mode="json")` produced.
-        assert json.dumps(payload, sort_keys=True) == json.dumps(
-            result.model_dump(mode="json"), sort_keys=True
-        )
+        assert json.dumps(payload) == json.dumps(result.model_dump(mode="json"))
         assert payload == result.model_dump(mode="json")
 
 
