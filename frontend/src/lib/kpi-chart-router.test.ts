@@ -513,10 +513,20 @@ describe('region-aware current values (#1538)', () => {
   });
 
   it('surfaces the calculator error verbatim for an unsupported region combination', async () => {
+    // This test pins the error PASS-THROUGH mechanism only — the router must
+    // surface whatever the calculator said, verbatim. The fixture quotes the
+    // real region+window rejection from src/kpi/calculators/business_impact.py
+    // (_calc_conversion_rate), which #1579 deliberately kept loud. (#1585: the
+    // fixture previously quoted the brand+region rejection, a backend behavior
+    // #1579 removed.)
+    const calculatorError =
+      'KPI WS3-BI-009: a time window on conversion rate cannot be combined ' +
+      'with a region filter (no windowed-region variant is registered; ' +
+      'migration 111 covers brand/segment/line).';
     mockGetKPIValue.mockResolvedValue({
       kpi_id: 'WS3-BI-009',
       status: 'unknown',
-      error: 'brand and region cannot be combined for conversion rate',
+      error: calculatorError,
       calculated_at: '2026-08-11T00:00:00Z',
       cached: false,
       metadata: {},
@@ -524,11 +534,10 @@ describe('region-aware current values (#1538)', () => {
 
     const data = await routeKpiChart({
       kpis: ['conversion_rate'],
-      brand: 'kisqali',
       region: 'northeast',
     });
 
-    expect(data.emptyReason).toMatch(/brand and region cannot be combined/);
+    expect(data.emptyReason).toMatch(calculatorError);
   });
 
   it('charts only the region-scoped results in a region comparison and says what was omitted', async () => {
