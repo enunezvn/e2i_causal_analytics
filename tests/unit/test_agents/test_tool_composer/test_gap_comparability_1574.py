@@ -27,10 +27,24 @@ inside tool bodies, not in tests).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
 import pandas as pd
 import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
+from src.agents.tool_composer.composer import ToolComposer
+from src.agents.tool_composer.models.composition_models import (
+    ComposedResponse,
+    DecompositionResult,
+    ExecutionPlan,
+    ExecutionStatus,
+    ExecutionTrace,
+    StepResult,
+    ToolInput,
+    ToolOutput,
+)
 
 # The b2 wording the failure must carry, and the flat non-existence claims it
 # must never carry.
@@ -275,3 +289,115 @@ def test_unresolvable_grouping_column_guard_unchanged():
     msg = str(exc_info.value)
     assert "could not resolve a grouping column" in msg
     assert _COMPARABILITY_PHRASE not in msg
+
+
+# ---------------------------------------------------------------------------
+# b3 carrier — the scope must survive the F6 total-failure gate.
+#
+# A one-step "<brand> vs competitors" plan now fails 0/1, so the composition
+# never reaches synthesis: it returns through `_create_total_failure_result`.
+# Pre-fix that path emitted only "All 1 tool(s) failed", discarding every
+# per-step reason — which would leave b3's estimation_data_scope stranded on
+# `ToolOutput.error` and hand the user a less informative answer than the
+# fabricated comparison it replaced.
+# ---------------------------------------------------------------------------
+def _failed_trace(plan_id: str, *, tool_name: str, error: str) -> ExecutionTrace:
+    now = datetime.now(timezone.utc)
+    return ExecutionTrace(
+        plan_id=plan_id,
+        step_results=[
+            StepResult(
+                step_id="step_1",
+                sub_question_id="sq_1",
+                tool_name=tool_name,
+                input=ToolInput(tool_name=tool_name, parameters={}),
+                output=ToolOutput(tool_name=tool_name, success=False, error=error),
+                status=ExecutionStatus.FAILED,
+                started_at=now,
+                completed_at=now,
+            )
+        ],
+        tools_executed=1,
+        tools_succeeded=0,
+        tools_failed=1,
+    )
+
+
+def _wire_total_failure(composer: ToolComposer, *, tool_name: str, error: str) -> None:
+    decomp = DecompositionResult(
+        original_query="Kisqali vs competitors market share",
+        sub_questions=[],
+        decomposition_reasoning="r",
+    )
+    plan = ExecutionPlan(
+        decomposition=decomp, steps=[], tool_mappings=[], planning_reasoning="r"
+    )
+    composer.decomposer.decompose = AsyncMock(return_value=decomp)
+    composer.planner.plan = AsyncMock(return_value=plan)
+    composer.executor.execute = AsyncMock(
+        return_value=_failed_trace(plan.plan_id, tool_name=tool_name, error=error)
+    )
+    composer.synthesizer.synthesize = AsyncMock(
+        return_value=ComposedResponse(answer="synthesized", confidence=0.8)
+    )
+
+
+@pytest.mark.asyncio
+async def test_total_failure_result_preserves_the_tool_reason():
+    reason = tr._gap_comparability_reason(
+        entity_type="brand",
+        group_col="brand",
+        groups_present=["Kisqali"],
+        groups_matched=["Kisqali"],
+        entities=["Kisqali", "competitor"],
+        row_count=6,
+    )
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire_total_failure(composer, tool_name="gap_calculator", error=reason)
+
+    result = await composer.compose("Kisqali vs competitors market share")
+
+    assert result.success is False
+    assert result.response is not None
+    assert result.response.confidence == 0.0
+    # The b3 scope reaches the consumer through BOTH channels agent.py maps
+    # (`response.answer` and `response.caveats`).
+    assert _COMPARABILITY_PHRASE in result.response.answer
+    assert "estimation_data_scope=" in result.response.answer
+    assert any(_COMPARABILITY_PHRASE in c for c in result.response.caveats)
+    assert any("estimation_data_scope=" in e for e in result.errors)
+    # The failing tool is still named, and the honest lead is unchanged.
+    assert "gap_calculator" in result.response.answer
+    assert result.response.failed_components == ["gap_calculator"]
+    assert "All 1 tool(s) failed" in result.error
+    # Still no fabricated synthesis over zero successful outputs (F6).
+    composer.synthesizer.synthesize.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_total_failure_result_without_a_reason_is_unchanged():
+    """A failed step with no error text must not grow an empty ' : ' fragment."""
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire_total_failure(composer, tool_name="gap_calculator", error="")
+
+    result = await composer.compose("Kisqali vs competitors market share")
+
+    assert result.response is not None
+    assert result.response.answer == (
+        "Unable to complete analysis: All 1 tool(s) failed; no analysis could be "
+        "completed. Returning a failed result rather than a fabricated answer."
+    )
+    assert result.response.caveats == [result.error]
+
+
+@pytest.mark.asyncio
+async def test_total_failure_reason_is_length_bounded():
+    """A pathological tool error must not balloon the user-visible answer."""
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire_total_failure(composer, tool_name="gap_calculator", error="x" * 20_000)
+
+    result = await composer.compose("Kisqali vs competitors market share")
+
+    assert result.response is not None
+    assert len(result.response.answer) <= 2_500
+    assert result.response.answer.endswith("…(truncated)")
