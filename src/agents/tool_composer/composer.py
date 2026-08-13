@@ -48,6 +48,7 @@ from .models.composition_models import (
     SynthesisInput,
 )
 from .planner import PlanningError, ToolPlanner
+from .serialization import dump_json_safe
 from .synthesizer import ResponseSynthesizer
 
 logger = logging.getLogger(__name__)
@@ -854,8 +855,15 @@ class ToolComposer:
             brand = context.get("brand")
             region = context.get("region")
 
-            # Convert result to dict for memory storage
-            result_dict = result.model_dump(mode="json")
+            # Convert result to dict for memory storage.
+            # #1583: the executor threads the real cohort DataFrame into every
+            # step's ``input.parameters``/``input.context``, and a plain
+            # ``model_dump(mode="json")`` has no encoder for it — it raised
+            # here and the ``except`` below dropped the WHOLE contribution.
+            # ``dump_json_safe`` summarizes what pydantic cannot encode (and is
+            # byte-identical when every member is JSON-safe); the ``except``
+            # still covers any genuinely unserializable remainder.
+            result_dict = dump_json_safe(result)
 
             counts = await contribute_to_memory(
                 result=result_dict,
