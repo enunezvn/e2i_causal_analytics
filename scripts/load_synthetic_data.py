@@ -859,7 +859,14 @@ def main():
             from src.ml.synthetic.frontier_append import build_frontier_datasets
 
             frontier = date.fromisoformat(args.frontier_ref) if args.frontier_ref else None
-            datasets = build_frontier_datasets(frontier=frontier)
+            # #1577: as_of = the load instant. The DB enforces
+            # CHECK (event_timestamp <= now()) on feature_values, and the
+            # Mon-3AM cron's current-week cohort contains frontier-day rows
+            # timed after 03:00 — date-only filtering shipped 28-459 doomed
+            # rows per weekly run. Rows after as_of are held back and
+            # regenerate byte-identically on the next run (the filter's
+            # documented self-heal contract, extended to instant granularity).
+            datasets = build_frontier_datasets(frontier=frontier, as_of=datetime.now())
             if not datasets:
                 logger.info("append-frontier: nothing to load (frontier precedes epoch)")
                 return 0

@@ -62,7 +62,7 @@ honest append-rate density (~160 new patients/week). MAU/WAU are unaffected.
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
@@ -150,6 +150,27 @@ OCCURRENCE_COLUMNS = {
     "business_metrics": "metric_date",
     "feature_values": "event_timestamp",
     "agent_activities": "activity_timestamp",  # #1355
+}
+
+# #1577: columns that must ALSO be filtered at INSTANT granularity. The DB
+# enforces ``CHECK (event_timestamp <= now())`` on feature_values (constraint
+# ``valid_event_timestamp`` — the only now()-CHECK in the schema). The Mon-3AM
+# cron runs with frontier=today and iter_week_starts includes the week
+# CONTAINING the frontier, so the current-week cohort holds frontier-DAY rows
+# whose times fall after the run instant (measured: e.g. 18:56:17 on the
+# 2026-08-10 03:00 run). Date-granularity filtering passes them; the DB then
+# rejects them (23514) — 28-459 rows/week, every cron run since 2026-07-06.
+# Held-back rows regenerate byte-identically on the loader's upsert key
+# (feature_id, entity_values, event_timestamp) and load on a later run — the
+# same self-heal contract as the date filter, extended to instant granularity.
+# They must be held back, NEVER clamped: event_timestamp is part of that
+# upsert key, so shifting it would make re-generated rows duplicate instead
+# of dedup.
+# Scope (deliberate): ONLY feature_values. triggers / ml_predictions /
+# agent_activities carry intraday times too but have no DB instant constraint
+# and no measured harm — add a table:column entry here to opt one in.
+INSTANT_COLUMNS = {
+    "feature_values": "event_timestamp",
 }
 
 
@@ -340,11 +361,17 @@ def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:
 
 
 def filter_to_frontier(
-    datasets: Dict[str, pd.DataFrame], frontier: date
+    datasets: Dict[str, pd.DataFrame], frontier: date, as_of: Optional[datetime] = None
 ) -> Dict[str, pd.DataFrame]:
     """Drop rows whose OCCURRENCE date is after the frontier. Tables without a
     registered occurrence column pass through unchanged (feature_groups,
-    features, coverage tables — self-bounded by run_date)."""
+    features, coverage tables — self-bounded by run_date).
+
+    #1577: when ``as_of`` is given, tables registered in INSTANT_COLUMNS are
+    additionally filtered to instant <= as_of (inclusive, mirroring the DB
+    CHECK ``event_timestamp <= now()``), so a 03:00 cron run cannot ship
+    frontier-day rows the DB will reject. ``as_of=None`` preserves the
+    date-only contract for direct callers."""
     out: Dict[str, pd.DataFrame] = {}
     cutoff = frontier.isoformat()
     for table, df in datasets.items():
@@ -361,19 +388,44 @@ def filter_to_frontier(
                 dropped,
                 cutoff,
             )
+        instant_col = INSTANT_COLUMNS.get(table)
+        if as_of is not None and instant_col is not None and instant_col in df.columns:
+            # format="ISO8601": the column holds datetime.isoformat() strings
+            # of MIXED precision (a row landing on a whole second prints
+            # without the .%f fraction) — default inference locks onto the
+            # first row's format and raises on the rest.
+            instant_keep = pd.to_datetime(df[instant_col], format="ISO8601") <= pd.Timestamp(as_of)
+            held_instant = int((keep & ~instant_keep).sum())
+            if held_instant:
+                logger.info(
+                    "instant filter %s: %d rows after %s held back (regenerated next run)",
+                    table,
+                    held_instant,
+                    as_of.isoformat(),
+                )
+            keep &= instant_keep
         out[table] = df[keep].reset_index(drop=True)
     return out
 
 
 def build_frontier_datasets(
     frontier: Optional[date] = None,
+    as_of: Optional[datetime] = None,
     include_coverage: bool = True,
     hcp_frame_factory: Callable[[], pd.DataFrame] = base_hcp_frame,
 ) -> Dict[str, pd.DataFrame]:
     """Assemble everything one append run loads: trailing weekly cohorts +
     epoch monthly bm cohorts, frontier-filtered, plus the coverage refresh.
-    Deterministic given ``frontier``; safe to re-run any number of times."""
+    Deterministic given ``(frontier, as_of)``; safe to re-run any number of
+    times.
+
+    ``as_of`` (#1577) is the load instant: INSTANT_COLUMNS tables are held
+    back to instant <= as_of so the DB's ``event_timestamp <= now()`` CHECK
+    cannot reject rows. None resolves to ``datetime.now()`` (mirroring the
+    ``frontier`` default) — for a backdated frontier that is a no-op, so
+    historical/manual runs behave exactly as before."""
     frontier = frontier or date.today()
+    as_of = as_of or datetime.now()
     week_starts = iter_week_starts(frontier)
     month_starts = iter_month_starts(frontier)
     if not week_starts:
@@ -409,7 +461,7 @@ def build_frontier_datasets(
             merged.setdefault(table, []).append(df)
 
     datasets = {t: pd.concat(frames, ignore_index=True) for t, frames in merged.items()}
-    datasets = filter_to_frontier(datasets, frontier)
+    datasets = filter_to_frontier(datasets, frontier, as_of=as_of)
 
     if include_coverage:
         # Base-identity coverage run: user_sessions rows are keyed to absolute
