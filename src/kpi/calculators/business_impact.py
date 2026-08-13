@@ -24,6 +24,7 @@ from src.kpi.models import (
 )
 from src.kpi.synthetic_mode import (
     biologic_query_id,
+    brand_region_query_id,
     brand_scoped_query_id,
     ige_tier_query_id,
     line_query_id,
@@ -503,10 +504,13 @@ class BusinessImpactCalculator(KPICalculatorBase):
         definition and never changes; a window bounds WHICH triggers count.
 
         Axis precedence mirrors `_resolve_windowed_call` (segment >
-        therapy_line > region). Unsupported combinations fail loud instead of
-        silently dropping a filter: biologic/IgE-tier (triggers carry no such
-        dimension) and region+window / region+brand (no such registry
-        variants; the legacy `_region` read is region-only).
+        therapy_line > region). Brand+region routes to the migration-128
+        `_brand_region` joint leg (#1575 — before it, the combination failed
+        loud and the chat layer answered "KPI unavailable" for a combination
+        that was unserved, not unservable). Unsupported combinations still
+        fail loud instead of silently dropping a filter: biologic/IgE-tier
+        (triggers carry no such dimension) and region+window (no windowed
+        region variant is registered, with or without a brand).
         """
         brand = context.get("brand")
         region = context.get("region")
@@ -551,15 +555,13 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 [brand, window["start"], window["end"]],
             )
         elif region:
-            if brand:
-                raise RuntimeError(
-                    "KPI WS3-BI-009: brand and region cannot be combined for "
-                    "conversion rate (the region variant predates the brand-"
-                    "scoped reads and takes region only)."
-                )
             # #1538 region-provenance marker (see _stamp_region).
             context["_region_routed"] = True
-            query_id, params = self._region_variant(base), [region]
+            if brand:
+                # #1575: joint brand+region leg (migration 128, [brand, region]).
+                query_id, params = brand_region_query_id(base), [brand, region]
+            else:
+                query_id, params = self._region_variant(base), [region]
         elif brand:
             query_id, params = brand_scoped_query_id(base), [brand]
         else:
