@@ -8,6 +8,7 @@ shutdown — accepted (telemetry, not billing records).
 """
 
 import logging
+import os
 import queue
 import threading
 import time
@@ -52,7 +53,14 @@ class LLMUsageEvent:
 
 
 _queue: "queue.Queue[LLMUsageEvent]" = queue.Queue(maxsize=_QUEUE_MAX)
-_flusher_started = False
+# pid-keyed, not boolean (#1560): under gunicorn --preload the module state
+# forks from the master. If the master ever enqueues (starting its flusher),
+# a boolean guard would fork as True into every worker whose inherited flusher
+# THREAD is dead post-fork — usage events would queue forever and silently
+# drop. Keying the guard on os.getpid() makes each forked process start its
+# own flusher on first enqueue. (Same class as the #569 warmup cache-buster
+# pid-salt.)
+_flusher_pid: Optional[int] = None
 _flusher_lock = threading.Lock()
 
 _drop_lock = threading.Lock()
@@ -94,15 +102,16 @@ def _record_drop() -> None:
 
 
 def _ensure_flusher() -> None:
-    global _flusher_started
-    if _flusher_started:
+    global _flusher_pid
+    pid = os.getpid()
+    if _flusher_pid == pid:
         return
     with _flusher_lock:
-        if _flusher_started:
+        if _flusher_pid == pid:
             return
         thread = threading.Thread(target=_flush_loop, name="llm-usage-flusher", daemon=True)
         thread.start()
-        _flusher_started = True
+        _flusher_pid = pid
 
 
 def _drain_batch() -> List[LLMUsageEvent]:
