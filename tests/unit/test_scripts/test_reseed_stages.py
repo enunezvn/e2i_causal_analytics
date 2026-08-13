@@ -269,6 +269,22 @@ class TestWrapperEndToEnd:
         assert "--refresh-ab" not in out  # full generate path rebuilds AB itself
         assert "FAKE_RETRAIN ran" in out
 
+    @pytest.mark.parametrize("order", [("--full", "--skip-retrain"), ("--skip-retrain", "--full")])
+    def test_full_with_skip_retrain_combined(self, fake_tree, order):
+        """codex iter-1 LOW: --skip-retrain is consumed (from ANY position)
+        before --full mode detection, so the combination must take the
+        full-mode loader/purge path, skip the retrain stage, and still skip
+        the A/B refresh."""
+        proc = _run_wrapper(fake_tree, *order)
+        out = proc.stdout
+        assert proc.returncode == 0, out + proc.stderr
+        assert "--anchor-to-now" in out
+        assert "history_capture --purge" in out
+        assert "goldstd retrain SKIPPED (--skip-retrain)" in out
+        assert "FAKE_RETRAIN ran" not in out
+        assert "--refresh-ab" not in out
+        assert "(all stages OK)" in out
+
 
 class TestWrapperTextPins:
     """Environment gotchas the wrapper header documents must survive the
