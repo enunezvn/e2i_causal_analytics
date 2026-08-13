@@ -246,6 +246,26 @@ def reinitialize_opentelemetry(app=None) -> bool:
     _tracer = None
     _tracer_provider = None
 
+    # PR #569 gate 1 (#1560): the OTel API's ``set_tracer_provider`` is guarded
+    # by a one-shot ``Once`` — after the master's import-time init, a re-call in
+    # the forked child logs "Overriding of current TracerProvider is not
+    # allowed" and KEEPS the inherited (dead-exporter) provider, so the rebuild
+    # below would silently not take (measured on opentelemetry-api 1.39.1).
+    # Reset the API-level guard so the child's provider actually registers.
+    # Safe here: this runs post-fork before the worker serves, single-threaded.
+    try:
+        from opentelemetry import trace as _trace_api
+        from opentelemetry.util._once import Once as _Once
+
+        _trace_api._TRACER_PROVIDER_SET_ONCE = _Once()
+        _trace_api._TRACER_PROVIDER = None
+    except Exception as exc:  # pragma: no cover - private API drift guard
+        logger.warning(
+            "OpenTelemetry: could not reset API provider guard before "
+            "re-init (private API drift?): %s",
+            exc,
+        )
+
     return init_opentelemetry()
 
 

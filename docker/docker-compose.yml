@@ -64,6 +64,20 @@ x-common-env: &common-env
   # steady-state setting. Must be forwarded here or the host .env never reaches the
   # containers and the in-code default governs (the OPIK_ENABLED lesson above).
   E2I_REQUIRE_FULL_AGENT_REGISTRY: ${E2I_REQUIRE_FULL_AGENT_REGISTRY:-false}
+  # #1560 stream-tear fix: gunicorn preload. The measured root cause of the
+  # /chat/stream tears is each worker re-importing the whole app on its event
+  # loop at boot (py-spy: MainThread 174.8/175s in importlib), starving
+  # uvicorn's heartbeat until the arbiter SIGABRTs the worker mid-stream —
+  # self-perpetuating because every murder recycles a worker to cold. With
+  # preload the master imports ONCE pre-fork (plus the config/gunicorn.conf.py
+  # heavy-leaf warm: econml/causalml/dowhy) and workers fork warm, CoW-shared.
+  # config/gunicorn.conf.py reads this env var (in-code default false = dark),
+  # so it must be forwarded here or the in-code default governs (the
+  # OPIK_ENABLED lesson above). Default TRUE: this line IS the #1560 fix
+  # activation. Kill switch: set GUNICORN_PRELOAD=false in the host .env.
+  # Only gunicorn (the api service) reads it; it is inert on the celery
+  # workers that merge this anchor.
+  GUNICORN_PRELOAD: ${GUNICORN_PRELOAD:-true}
   # #1454 chatbot cold-start warming. ON by default: each worker pre-builds the
   # DSPy LM config, the retrieval clients, the orchestrator registry and the
   # intent classifier in a fail-open background task, so the ~30s cold init does

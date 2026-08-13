@@ -108,3 +108,61 @@ def test_drain_batch_respects_max(monkeypatch):
     monkeypatch.setattr(recorder, "_queue", q)
     batch = recorder._drain_batch()
     assert len(batch) == recorder._BATCH_MAX
+
+
+# =============================================================================
+# #1560: the flusher guard must be pid-keyed (fork-safe under gunicorn preload)
+# =============================================================================
+
+
+class _FakeThread:
+    """Records construction/start without spawning a real thread."""
+
+    instances: list["_FakeThread"] = []
+
+    def __init__(self, *args, **kwargs):
+        self.kwargs = kwargs
+        self.started = False
+        _FakeThread.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+
+def test_flusher_guard_is_pid_keyed_not_boolean():
+    """A boolean guard forked True from a preloaded master would silently
+    suppress the child's flusher (dead inherited thread, events never flush)."""
+    assert not hasattr(recorder, "_flusher_started"), (
+        "boolean _flusher_started is fork-unsafe under gunicorn --preload; "
+        "use the pid-keyed _flusher_pid guard"
+    )
+    assert hasattr(recorder, "_flusher_pid")
+
+
+def test_ensure_flusher_restarts_in_forked_child(monkeypatch):
+    import os
+
+    _FakeThread.instances = []
+    monkeypatch.setattr(recorder.threading, "Thread", _FakeThread)
+    # Simulate state inherited from a master process with a different pid.
+    monkeypatch.setattr(recorder, "_flusher_pid", os.getpid() + 1)
+
+    recorder._ensure_flusher()
+
+    assert len(_FakeThread.instances) == 1, "forked child must start its OWN flusher"
+    assert _FakeThread.instances[0].started is True
+    assert recorder._flusher_pid == os.getpid()
+
+
+def test_ensure_flusher_is_idempotent_within_a_process(monkeypatch):
+    import os
+
+    _FakeThread.instances = []
+    monkeypatch.setattr(recorder.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(recorder, "_flusher_pid", None)
+
+    recorder._ensure_flusher()
+    recorder._ensure_flusher()
+
+    assert len(_FakeThread.instances) == 1, "same-pid re-entry must not spawn again"
+    assert recorder._flusher_pid == os.getpid()
