@@ -152,9 +152,29 @@ def test_region_plus_window_fails_loud():
         calc._calc_conversion_rate({"region": "northeast", "window": _WINDOW})
 
 
-def test_region_plus_brand_fails_loud():
-    """The legacy `_region` read takes region only; serving it while echoing a
-    brand would repeat the silent-drop bug the migration fixed."""
+def test_brand_plus_region_routes_to_brand_region_variant():
+    """#1575: brand+region routes to the migration-128 joint leg — before it,
+    this combination raised ('brand and region cannot be combined') and the
+    chat layer answered 'KPI unavailable' for e.g. Kisqali-in-the-west."""
+    calc, client = _calc({"conversion_rate": 0.612})
+    context = {"brand": "Kisqali", "region": "west"}
+    assert calc._calc_conversion_rate(context) == 0.612
+    assert client.calls[0]["query_id"] == "business_impact_conversion_rate_brand_region"
+    assert client.calls[0]["params"] == ["Kisqali", "west"]
+
+
+def test_brand_plus_region_sets_region_provenance_marker():
+    """#1538: the region echo comes FROM the routing marker, never the raw arg —
+    the new joint path must attest region application like the region-only path."""
+    calc, _ = _calc({"conversion_rate": 0.612})
+    context = {"brand": "Kisqali", "region": "west"}
+    calc._calc_conversion_rate(context)
+    assert context.get("_region_routed") is True
+
+
+def test_brand_plus_region_plus_window_still_fails_loud():
+    """#1575 keeps the honest-failure note for combos still genuinely unserved:
+    no windowed brand+region conversion variant is registered."""
     calc, _ = _calc({"conversion_rate": 0.6})
-    with pytest.raises(RuntimeError, match="brand and region"):
-        calc._calc_conversion_rate({"brand": "Remibrutinib", "region": "northeast"})
+    with pytest.raises(RuntimeError, match="region"):
+        calc._calc_conversion_rate({"brand": "Kisqali", "region": "west", "window": _WINDOW})
