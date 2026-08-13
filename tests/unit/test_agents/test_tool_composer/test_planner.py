@@ -359,6 +359,83 @@ class TestToolDescriptionFormatting:
         # The tools are in the full system prompt, not just first 100 chars
 
 
+class TestReferenceContract1573:
+    """#1573 — the planner must SEE real output fields and the reference contract.
+
+    Root cause of the q08 invented references: ``get_schemas_for_planning``
+    exposed only the output MODEL NAME ("CATEResults"), never its field names,
+    so the LLM had no way to know ``effect_by_segment`` exists but
+    ``cate_estimate`` does not — and nothing in the prompt forbade invented
+    sources like ``$dataset``.
+    """
+
+    @staticmethod
+    def _register_cate_like(registry, with_output_model: bool):
+        from pydantic import BaseModel
+
+        from src.tool_registry.registry import ToolSchema
+
+        class FakeCATEResults(BaseModel):
+            segments: list = []
+            high_responders: list = []
+            effect_by_segment: dict = {}
+
+        schema = ToolSchema(
+            name="cate_analyzer",
+            description="Analyze conditional average treatment effects",
+            source_agent="heterogeneous_optimizer",
+            tier=2,
+            output_schema="CATEResults",
+            avg_execution_ms=800,
+        )
+        registry.register(
+            schema=schema,
+            callable=lambda **k: {},
+            output_model=FakeCATEResults if with_output_model else None,
+        )
+
+    def test_get_schemas_for_planning_carries_output_fields(self, empty_registry):
+        self._register_cate_like(empty_registry, with_output_model=True)
+        schemas = empty_registry.get_schemas_for_planning()
+        assert schemas[0]["output_fields"] == [
+            "segments",
+            "high_responders",
+            "effect_by_segment",
+        ]
+
+    def test_get_schemas_for_planning_empty_fields_without_model(self, empty_registry):
+        self._register_cate_like(empty_registry, with_output_model=False)
+        schemas = empty_registry.get_schemas_for_planning()
+        assert schemas[0]["output_fields"] == []
+
+    def test_format_tools_includes_output_fields_when_model_known(
+        self, mock_llm_client, empty_registry
+    ):
+        self._register_cate_like(empty_registry, with_output_model=True)
+        planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=empty_registry)
+        text = planner._format_tools_for_prompt()
+        assert "effect_by_segment" in text
+        assert "high_responders" in text
+
+    def test_format_tools_no_fields_line_without_model(self, mock_llm_client, empty_registry):
+        self._register_cate_like(empty_registry, with_output_model=False)
+        planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=empty_registry)
+        text = planner._format_tools_for_prompt()
+        assert "CATEResults" in text
+        assert "fields:" not in text
+
+    def test_planning_prompt_documents_reference_contract(self):
+        from src.agents.tool_composer.planner import PLANNING_SYSTEM_PROMPT
+
+        # The two REAL sources must be documented...
+        assert "$context." in PLANNING_SYSTEM_PROMPT
+        assert "$step_" in PLANNING_SYSTEM_PROMPT
+        # ...and invented sources explicitly forbidden, naming the one the
+        # planner actually hallucinated in the wild (q08).
+        assert "$dataset" in PLANNING_SYSTEM_PROMPT
+        assert "invent" in PLANNING_SYSTEM_PROMPT.lower()
+
+
 class TestEmptyRegistryHandling:
     """Tests for handling empty registry"""
 

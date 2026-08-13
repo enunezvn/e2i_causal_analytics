@@ -82,6 +82,11 @@ Tool Chaining for Causal Discovery:
 3. Determine execution order based on dependencies
 4. Group independent tools for parallel execution
 
+## Reference contract (CRITICAL):
+- The ONLY valid reference sources are $context.<field> and $step_N.<field>, where step_N is a step in THIS plan that the referencing step depends on.
+- NEVER invent other sources (e.g. $dataset, $data, $results) — they do not exist, and the referencing step will FAIL at execution.
+- When referencing a prior step's output, use ONLY the field names listed for that tool's Output above. Do NOT invent output field names — a reference to a nonexistent field FAILS the referencing step at execution.
+
 ## Output Format:
 Return a JSON object with:
 {{
@@ -375,7 +380,13 @@ class ToolPlanner:
             lines.append(f"### {tool['name']} ({tool['source']})")
             lines.append(f"Description: {tool['description']}")
             lines.append(f"Inputs: {', '.join(tool['inputs'])}")
-            lines.append(f"Output: {tool['output']}")
+            # #1573: show the REAL output field names so $step_N.<field>
+            # references can only be planned against fields that exist.
+            output_fields = tool.get("output_fields") or []
+            if output_fields:
+                lines.append(f"Output: {tool['output']} (fields: {', '.join(output_fields)})")
+            else:
+                lines.append(f"Output: {tool['output']}")
             lines.append(f"Avg execution: {tool['avg_ms']}ms")
             lines.append("")
 
