@@ -35,9 +35,9 @@ Test-design reasoning (stated explicitly, per the #1548 brief):
 
 * Every test drives the FULLY REAL ``_compute_shap_from_frame`` — real frames,
   real ``RandomForestRegressor`` fit, real ``TreeExplainer``. No mocked SHAP.
-  ``test_forest_depth_bounded`` wraps the sklearn class in a recording factory
-  that RETURNS A REAL INSTANCE, so the real fit still runs; it observes the
-  constructor kwargs rather than substituting behaviour.
+  ``test_forest_depth_bounded``'s only spy records the fitted estimator on its
+  way into the explainer and then delegates to the real ``TreeExplainer``, so
+  it observes the production object rather than substituting behaviour.
 * Assertions are on shape and ordering, never on wall-clock, so nothing here is
   box-load dependent. The bound's *timing* payoff is measured in the issue; what
   a unit test can pin deterministically is that the bound is APPLIED.
@@ -90,9 +90,7 @@ def _linear_frame(
     mean-|SHAP| ordering recovered from the frame has a known ground truth.
     """
     rng = np.random.default_rng(seed)
-    features = {
-        chr(ord("a") + i): rng.normal(size=n) for i in range(len(weights))
-    }
+    features = {chr(ord("a") + i): rng.normal(size=n) for i in range(len(weights))}
     y = sum(w * features[name] for w, name in zip(weights, features, strict=True))
     return pd.DataFrame({**features, "y": y + rng.normal(size=n)})
 
@@ -151,7 +149,7 @@ def test_forest_depth_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     model = captured.get("model")
     assert model is not None, "TreeExplainer was never constructed — test harness defect"
     assert model.max_depth == _EXPECTED_TREE_MAX_DEPTH, (
-        f"#1548 regression: the surrogate forest was fitted with max_depth="
+        "#1548 regression: the surrogate forest was fitted with max_depth="
         f"{model.max_depth!r}; unbounded-depth trees make TreeExplainer "
         "intractable at prod scale."
     )

@@ -875,6 +875,21 @@ async def discover_dag(
     return result.model_dump()
 
 
+# #1548: bounds that keep the SHAP derivation tractable. shap's
+# ``_cext.dense_tree_shap`` holds the GIL for its ENTIRE monolithic C call
+# (measured: a single 1240.5s heartbeat gap at n=6000x12, 100 trees), so
+# #1590's off-load to the heavy-compute pool cannot protect the event loop —
+# the compute must be BOUNDED, not merely moved. Measured at prod scale
+# (37,515x12, 50 trees): unbounded depth = intractable; depth 8 + full explain
+# = 142.2s (114.9s of it one contiguous GIL hold, still on the 120s gunicorn
+# arbiter); depth 8 + 2,000-row explain = 32.1s total with only ~5.8s GIL-held.
+# Depth is the binding term (unbounded depth on the same 2,000-row sample:
+# 1144.7s). Rankings are unaffected — Spearman 1.0000 against the full-explain
+# run, true-weight recovery 0.9983 for both.
+_SHAP_TREE_MAX_DEPTH = 8
+_SHAP_MAX_EXPLAIN_ROWS = 2000
+
+
 def _compute_shap_from_frame(
     df: pd.DataFrame,
     target: str,
@@ -889,8 +904,15 @@ def _compute_shap_from_frame(
     1. Coerce to numeric, drop all-NaN cols / any-NaN rows.
     2. ``feature_names`` = numeric columns minus ``target`` (or the explicit
        list, intersected with what's present).
-    3. Fit a RandomForest on ``(features, target)`` and compute TreeExplainer
-       SHAP values.
+    3. Fit a depth-bounded RandomForest (``_SHAP_TREE_MAX_DEPTH``) on
+       ``(features, target)`` — over ALL rows — and compute TreeExplainer SHAP
+       values over at most ``_SHAP_MAX_EXPLAIN_ROWS`` rows (seeded, so the
+       sample and therefore the ranking are deterministic).
+
+    Only the EXPLAIN set is capped; the fit still sees every row. Consumers
+    reduce this matrix to mean-|SHAP| per feature, so subsampling rows is
+    ranking-preserving (see the ``_SHAP_*`` constants above for the
+    measurements behind both bounds).
 
     Fails closed (descriptive ``RuntimeError``) if ``target`` is absent or no
     usable features remain. NEVER fabricates SHAP values.
@@ -918,9 +940,20 @@ def _compute_shap_from_frame(
 
     x = numeric[feats].to_numpy(dtype=float)
     y = numeric[target].to_numpy(dtype=float)
-    model = RandomForestRegressor(n_estimators=50, random_state=0).fit(x, y)
+    model = RandomForestRegressor(
+        n_estimators=50, random_state=0, max_depth=_SHAP_TREE_MAX_DEPTH
+    ).fit(x, y)
+
+    if len(x) > _SHAP_MAX_EXPLAIN_ROWS:
+        # Seeded so one frame always yields one ranking (a re-run of the same
+        # chat turn must not reorder drivers).
+        idx = np.random.default_rng(0).choice(len(x), size=_SHAP_MAX_EXPLAIN_ROWS, replace=False)
+        x_explain = x[idx]
+    else:
+        x_explain = x
+
     explainer = shap.TreeExplainer(model)
-    shap_array = np.asarray(explainer.shap_values(x), dtype=float)
+    shap_array = np.asarray(explainer.shap_values(x_explain), dtype=float)
     # TreeExplainer may return (n_samples, n_features) or, for some models, a
     # list/3D array; collapse to a 2-D (n_samples, n_features) matrix.
     if shap_array.ndim == 3:
