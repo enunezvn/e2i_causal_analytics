@@ -964,7 +964,12 @@ class ToolComposer:
         reasons: List[str] = []
         for step in getattr(execution_trace, "step_results", None) or []:
             output = getattr(step, "output", None)
-            if getattr(output, "success", False):
+            # ``is_success`` (success AND a result present) is the model's own
+            # definition of a successful step — it is what ``ExecutionTrace``
+            # counts and what ``get_all_outputs`` returns, so the failed-step
+            # collector must agree with it or a ``success=True, result=None``
+            # step would be counted failed and then listed nowhere.
+            if getattr(output, "is_success", False):
                 continue
             tool_name = str(
                 getattr(step, "tool_name", None) or getattr(output, "tool_name", None) or "unknown"

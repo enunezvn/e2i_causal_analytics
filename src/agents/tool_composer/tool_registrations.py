@@ -1575,11 +1575,25 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     )
 
 
-# Cap for listing entity groups in the #1574 failure reason — keeps the
-# synthesis-visible scope informative without ballooning on a wide grouping
-# column (``entity_groups_present_count`` still reports the true total, so a
-# truncated list can never be read as a complete one).
-_MAX_LISTED_ENTITY_GROUPS = 25
+# Caps for the entity lists in the #1574 failure reason. Both the number of
+# listed values and each value's length are bounded, which gives the whole
+# reason a hard ceiling: it is carried verbatim into the composer's
+# total-failure envelope, which truncates from the END, and the
+# ``estimation_data_scope`` payload sits at the end. An unbounded grouping
+# column (territories) or a long planner-emitted ``entities`` list would
+# otherwise push the scope past that bound and elide it. The ``_count``
+# companions always report the true totals, so a capped list can never be read
+# as a complete one.
+_MAX_LISTED_ENTITY_GROUPS = 8
+_MAX_ENTITY_LABEL_CHARS = 28
+
+
+def _clip_entity_labels(values: List[str]) -> List[str]:
+    """Cap an entity list to ``_MAX_LISTED_ENTITY_GROUPS`` clipped labels."""
+    return [
+        v if len(v) <= _MAX_ENTITY_LABEL_CHARS else v[: _MAX_ENTITY_LABEL_CHARS - 1] + "…"
+        for v in values[:_MAX_LISTED_ENTITY_GROUPS]
+    ]
 
 
 def _gap_comparability_reason(
@@ -1620,24 +1634,27 @@ def _gap_comparability_reason(
     disclose the scope the estimation actually covered.
     """
     label = (entity_type or group_col or "entity").strip().lower() or "entity"
+    requested = [str(e) for e in entities]
     scope = {
         "grouping_column": group_col,
         "row_count": int(row_count),
-        "entity_groups_present": groups_present[:_MAX_LISTED_ENTITY_GROUPS],
+        "entity_groups_present": _clip_entity_labels(groups_present),
         "entity_groups_present_count": len(groups_present),
-        "entity_groups_matched": groups_matched,
-        "entities_requested": [str(e) for e in entities],
+        "entity_groups_matched": _clip_entity_labels(groups_matched),
+        "entities_requested": _clip_entity_labels(requested),
+        "entities_requested_count": len(requested),
     }
     if groups_matched:
         observed = (
-            f"only 1 distinct {label} group ({groups_matched[0]!r}) is present "
+            f"only 1 distinct {label} group "
+            f"({_clip_entity_labels(groups_matched)[0]!r}) is present "
             "in the supplied estimation data"
         )
     else:
-        observed = (
-            f"no {label} groups matched after filtering entities={entities!r} "
-            f"on column {group_col!r}"
-        )
+        # The requested entities are NOT repeated here — they are in the scope
+        # payload below, and a second rendering is what pushes a wide list past
+        # the composer's carry limit.
+        observed = f"no {label} group matched the requested entities on column {group_col!r}"
     return (
         f"gap_calculator: comparing requires at least 2 distinct {label} groups, but "
         f"{observed}. The requested comparison entities are not modeled as comparable "

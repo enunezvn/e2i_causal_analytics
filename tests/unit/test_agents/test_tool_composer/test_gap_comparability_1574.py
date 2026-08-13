@@ -399,3 +399,87 @@ async def test_total_failure_reason_is_length_bounded():
     assert result.response is not None
     assert len(result.response.answer) <= 2_500
     assert result.response.answer.endswith("…(truncated)")
+
+
+@pytest.mark.asyncio
+async def test_pathological_gap_reason_still_carries_the_scope():
+    """The composer truncates from the END, where estimation_data_scope sits.
+
+    A wide grouping column (territories) or a long planner-emitted ``entities``
+    list must therefore not be able to push the scope past that bound — the
+    reason's own entity lists are capped in count AND per-label length.
+    """
+    reason = tr._gap_comparability_reason(
+        entity_type="territory",
+        group_col="territory",
+        groups_present=[f"territory_{i}_" + "x" * 200 for i in range(400)],
+        groups_matched=[],
+        entities=[f"requested_{i}_" + "y" * 200 for i in range(400)],
+        row_count=10**9,
+    )
+    # Bounded well inside the composer's 2000-char carry limit, so the trailing
+    # scope payload survives.
+    assert len(reason) < 2_000, f"reason is {len(reason)} chars"
+    # The true totals are still disclosed, so the capped lists cannot be read
+    # as complete.
+    assert "'entity_groups_present_count': 400" in reason
+    assert "'entities_requested_count': 400" in reason
+    assert len(tr._clip_entity_labels(["z" * 500])[0]) == tr._MAX_ENTITY_LABEL_CHARS
+
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire_total_failure(composer, tool_name="gap_calculator", error=reason)
+    result = await composer.compose("compare every territory against the rest")
+
+    assert result.response is not None
+    assert "…(truncated)" not in result.response.answer
+    assert "estimation_data_scope=" in result.response.answer
+    assert "'entity_groups_present_count': 400" in result.response.answer
+
+
+@pytest.mark.asyncio
+async def test_step_with_success_flag_but_no_result_is_reported_failed():
+    """`is_success` (success AND a result) is the model's own success test.
+
+    `ExecutionTrace` counts successes with it, so a `success=True, result=None`
+    step is counted FAILED there; the failed-step collector must agree or that
+    step would be listed nowhere.
+    """
+    now = datetime.now(timezone.utc)
+    decomp = DecompositionResult(original_query="q", sub_questions=[], decomposition_reasoning="r")
+    plan = ExecutionPlan(decomposition=decomp, steps=[], tool_mappings=[], planning_reasoning="r")
+    trace = ExecutionTrace(
+        plan_id=plan.plan_id,
+        step_results=[
+            StepResult(
+                step_id="step_1",
+                sub_question_id="sq_1",
+                tool_name="gap_calculator",
+                input=ToolInput(tool_name="gap_calculator", parameters={}),
+                output=ToolOutput(
+                    tool_name="gap_calculator",
+                    success=True,
+                    result=None,
+                    error="empty result",
+                ),
+                status=ExecutionStatus.COMPLETED,
+                started_at=now,
+                completed_at=now,
+            )
+        ],
+        tools_executed=1,
+        tools_succeeded=0,
+        tools_failed=1,
+    )
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    composer.decomposer.decompose = AsyncMock(return_value=decomp)
+    composer.planner.plan = AsyncMock(return_value=plan)
+    composer.executor.execute = AsyncMock(return_value=trace)
+    composer.synthesizer.synthesize = AsyncMock(
+        return_value=ComposedResponse(answer="synthesized", confidence=0.8)
+    )
+
+    result = await composer.compose("q")
+
+    assert result.response is not None
+    assert result.response.failed_components == ["gap_calculator"]
+    assert "gap_calculator: empty result" in result.response.answer
