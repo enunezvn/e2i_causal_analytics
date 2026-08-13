@@ -244,15 +244,67 @@ def test_competitor_brand_normalizes_to_lowercase_enum():
     assert ("brand", "competitor") in fake.recorder["eq"]
 
 
-def test_postgrest_cap_logs_truncation_warning(caplog):
+# ---------------------------------------------------------------------------
+# #1587 — truncation detection must be EXACT, not a heuristic.
+#
+# The original guard warned whenever an unlimited fetch returned >= 1000 rows,
+# on the premise that PostgREST caps a request at its 1000-row default. That
+# premise is false for this deployment: a single response measurably carried
+# 8,554 rows. Complete focal-brand cohorts are 8,554 / 8,615 / 8,729 rows, so
+# the warning fired on EVERY complete cohort and carried no signal either way
+# (it could not distinguish "complete fetch > 1000" from "truncated at a real
+# cap"). The fix mirrors src/services/kpi_resolution.py: request an explicit
+# cap and warn only when the fetch hits the cap we actually asked for.
+# ---------------------------------------------------------------------------
+
+
+def test_complete_large_cohort_logs_no_truncation_warning(caplog):
+    # 8,554 rows == the measured COMPLETE Kisqali cohort. Nothing was truncated,
+    # so nothing may be warned about. This is the #1587 false positive.
     import logging as _logging
 
-    fake = _FakeSupabase(_rows(1000))  # exactly the default PostgREST cap
+    fake = _FakeSupabase(_rows(8554))
     with caplog.at_level(_logging.WARNING, logger="src.services.cohort_resolution"):
         frame = resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)
     assert isinstance(frame, pd.DataFrame)
-    assert len(frame) == 1000
-    assert any("may be truncated" in r.message for r in caplog.records)
+    assert len(frame) == 8554
+    assert not any("truncated" in r.message for r in caplog.records)
+
+
+def test_default_cap_is_requested_on_the_query():
+    # Truncation can only be detected exactly if we ASK for a bound. Without an
+    # explicit caller limit the service must still send its own default cap.
+    fake = _FakeSupabase(_rows(3))
+    resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)
+    assert fake.recorder["limit"] == cohort_resolution._MAX_COHORT_ROWS
+
+
+def test_warns_only_when_the_requested_cap_is_hit_and_names_it(caplog, monkeypatch):
+    # Hitting the cap we requested is the ONLY state that means "possibly
+    # truncated". The message must name the cap so the reader can act on it.
+    import logging as _logging
+
+    monkeypatch.setattr(cohort_resolution, "_MAX_COHORT_ROWS", 5)
+    fake = _FakeSupabase(_rows(5))
+    with caplog.at_level(_logging.WARNING, logger="src.services.cohort_resolution"):
+        frame = resolve_cohort_frame("Kisqali", "northeast", supabase_client=fake)
+    assert isinstance(frame, pd.DataFrame)
+    warnings = [r.message for r in caplog.records if "truncated" in r.message]
+    assert len(warnings) == 1
+    assert "5" in warnings[0]
+
+
+def test_cap_comfortably_exceeds_designed_substrate_volume():
+    # Cap derivation, made executable: the widest COMPLETE cohort this service
+    # can be asked for is the whole patient_journeys table (brand=None,
+    # region=None is a supported call — see test_no_brand_no_region_queries_
+    # unfiltered), so the cap must clear the DGP's designed full-table volume
+    # with room to spare. If a future volume bump erodes that headroom this
+    # test fails LOUDLY rather than silently truncating a complete cohort.
+    from src.ml.synthetic.config import EntityVolumes
+
+    designed_full_table = EntityVolumes().total_patients
+    assert cohort_resolution._MAX_COHORT_ROWS >= 2 * designed_full_table
 
 
 def test_no_truncation_warning_when_explicit_limit(caplog):
