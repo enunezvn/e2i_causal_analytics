@@ -4357,6 +4357,12 @@ class ChatResponse(BaseModel):
     # 4-stage ClassificationPipeline observability (ORCHESTRATOR_CLASSIFIER_MODE
     # shadow/active; None when off or when the orchestrator was not consulted).
     routing_pattern: Optional[str] = None
+    # #1582: "pipeline" | "legacy" — which subsystem produced this turn's
+    # dispatch plan. routing_pattern above is the PIPELINE's decision and is
+    # emitted in shadow mode too, where legacy routing is what answered; this
+    # names the difference so an abstaining pattern beside a real
+    # agents_dispatched no longer reads as a routing regression.
+    routing_authority: Optional[str] = None
     classification_latency_ms: Optional[float] = None
     used_llm_layer: Optional[bool] = None
 
@@ -4506,6 +4512,7 @@ async def _stream_chat_response(
             "routing_rationale": None,
             # 4-stage classifier observability
             "routing_pattern": None,
+            "routing_authority": None,
             "classification_latency_ms": None,
             "used_llm_layer": None,
             # #1454: per-request latency span (from the __latency_span__ item)
@@ -4635,6 +4642,8 @@ async def _stream_chat_response(
                         # 4-stage classifier observability
                         if "routing_pattern" in node_output:
                             dispatch_info["routing_pattern"] = node_output["routing_pattern"]
+                        if "routing_authority" in node_output:
+                            dispatch_info["routing_authority"] = node_output["routing_authority"]
                         if "classification_latency_ms" in node_output:
                             dispatch_info["classification_latency_ms"] = node_output[
                                 "classification_latency_ms"
@@ -4837,6 +4846,7 @@ async def chat(
         routing_rationale = result.get("routing_rationale")
         # 4-stage classifier observability
         routing_pattern = result.get("routing_pattern")
+        routing_authority = result.get("routing_authority")
         classification_latency_ms = result.get("classification_latency_ms")
         used_llm_layer = result.get("used_llm_layer")
 
@@ -4870,6 +4880,7 @@ async def chat(
             routing_rationale=routing_rationale,
             # 4-stage classifier observability
             routing_pattern=routing_pattern,
+            routing_authority=routing_authority,
             classification_latency_ms=classification_latency_ms,
             used_llm_layer=used_llm_layer,
         )

@@ -128,18 +128,14 @@ class TestRoutingAuthorityMarker:
 
     async def test_marker_is_only_ever_the_two_values(self, monkeypatch):
         for mode in ("off", "shadow", "active"):
-            out = await _route(
-                _state(_clf("CLARIFICATION_NEEDED", [], 0.0)), monkeypatch, mode
-            )
+            out = await _route(_state(_clf("CLARIFICATION_NEEDED", [], 0.0)), monkeypatch, mode)
             assert out["routing_authority"] in ("legacy", "pipeline")
 
 
 class TestIssue1582Scenario:
     """End-to-end on the REAL pipeline output for the real stimulus."""
 
-    async def test_answered_kpi_turn_is_legacy_authority_and_pattern_unchanged(
-        self, monkeypatch
-    ):
+    async def test_answered_kpi_turn_is_legacy_authority_and_pattern_unchanged(self, monkeypatch):
         """The #1582 turn: CLARIFICATION_NEEDED label, legacy authority, answered.
 
         Pins that the fix does NOT relabel routing_pattern (that would perturb
@@ -183,9 +179,7 @@ class TestRoutingUnchanged:
             _clf("TOOL_COMPOSER", [], 0.9),
         ],
     )
-    async def test_dispatch_outputs_untouched_by_marker(
-        self, monkeypatch, mode, classification
-    ):
+    async def test_dispatch_outputs_untouched_by_marker(self, monkeypatch, mode, classification):
         """Every routing-bearing key is exactly what it was; only the marker is new."""
         out = await _route(_state(classification), monkeypatch, mode)
         routing_keys = {

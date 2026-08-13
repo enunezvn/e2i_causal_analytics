@@ -251,11 +251,19 @@ class RouterNode:
         # low confidence / unknown pattern it abstains (returns None) and
         # legacy intent routing below proceeds unchanged. Shadow/off modes
         # never enter this branch, keeping today's routing byte-identical.
+        # #1582: which subsystem actually decided THIS turn. Computed HERE,
+        # where the plan's origin is known — deriving it from
+        # `_classifier_mode()` would report "pipeline" for an active-mode turn
+        # on which the pipeline ABSTAINED, which is the very conflation the
+        # marker exists to remove.
+        routing_authority = "legacy"
+
         classification = state.get("classification")
         if _classifier_mode() == "active" and classification:
             pipeline_plan = self._dispatch_from_classification(classification)
             if pipeline_plan is not None:
                 dispatch_plan, parallel_groups = pipeline_plan
+                routing_authority = "pipeline"
 
         # Check for multi-agent patterns
         if (
@@ -387,6 +395,8 @@ class RouterNode:
             "parallel_groups": parallel_groups or [cleaned_names],
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
+            # #1582: additive telemetry — never read back for routing.
+            "routing_authority": routing_authority,
             # V4.4: Discovery routing metadata
             "discovery_routing_applied": discovery_routing_applied,
             "discovery_aware_agents": discovery_aware_agents if discovery_aware_agents else None,
@@ -532,6 +542,8 @@ class RouterNode:
             "parallel_groups": [[d["agent_name"] for d in dispatch_plan]],
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
+            # #1582: this path never consults the pipeline.
+            "routing_authority": "legacy",
         }
 
     def _agent_for_intent(self, intent_name: str) -> str:
