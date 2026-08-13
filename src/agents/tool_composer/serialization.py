@@ -28,8 +28,9 @@ into Redis) read none of the step payload's frame members. So:
   ``src/api/routes/segments.py`` ``_to_native`` precedent for ``numpy.int64``.
 * array-likes and frames (DataFrame / Series / Index / ndarray / pandas
   extension arrays) -> a compact structured summary: type, shape or length,
-  columns, dtypes — enough to tell a reader *what* the step carried, marked
-  ``__summarized__`` so nobody mistakes it for the data.
+  columns, dtypes (positionally aligned with ``columns``) — enough to tell a
+  reader *what* the step carried, marked ``__summarized__`` so nobody mistakes
+  it for the data.
 * anything else -> a type marker only, plus an honest WARNING naming the type.
   The ``repr`` is deliberately NOT included: contributions are persisted to
   Redis and Supabase, and an arbitrary object's repr can carry credentials or
@@ -61,17 +62,23 @@ def _type_name(obj: Any) -> str:
 
 
 def _summarize_dataframe(frame: Any) -> Dict[str, Any]:
-    """Compact descriptor for a pandas DataFrame — shape, columns, dtypes."""
-    dtypes = [(str(column), str(dtype)) for column, dtype in frame.dtypes.items()]
-    kept = dtypes[:MAX_SUMMARIZED_COLUMNS]
+    """Compact descriptor for a pandas DataFrame — shape, columns, dtypes.
+
+    ``dtypes`` is positionally aligned with ``columns`` rather than keyed by
+    column name: a frame can carry duplicate labels (a sloppy merge) or
+    MultiIndex columns that stringify to the same key, and a dict would
+    silently drop one of them.
+    """
+    described = [(str(column), str(dtype)) for column, dtype in frame.dtypes.items()]
+    kept = described[:MAX_SUMMARIZED_COLUMNS]
     summary: Dict[str, Any] = {
         "__type__": _type_name(frame),
         "__summarized__": True,
         "shape": [int(frame.shape[0]), int(frame.shape[1])],
         "columns": [column for column, _ in kept],
-        "dtypes": dict(kept),
+        "dtypes": [dtype for _, dtype in kept],
     }
-    if len(dtypes) > len(kept):
+    if len(described) > len(kept):
         summary["columns_truncated"] = True
     return summary
 

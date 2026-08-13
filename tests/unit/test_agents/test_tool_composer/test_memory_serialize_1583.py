@@ -206,7 +206,19 @@ class TestDataFrameMembers:
             assert summary["__summarized__"] is True
             assert summary["shape"] == [3, 2]
             assert summary["columns"] == ["region", "trx"]
-            assert summary["dtypes"] == {"region": "object", "trx": "int64"}
+            assert summary["dtypes"] == ["object", "int64"]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_column_labels_keep_every_dtype(self, composer):
+        """A sloppy merge can leave duplicate labels — none may be dropped."""
+        frame = pd.DataFrame([[1, "west"], [2, "east"]], columns=["trx", "trx"])
+        result = _make_result(step_context={"estimation_data": frame})
+
+        payload = await _contributed_payload(composer, result)
+
+        summary = payload["execution"]["step_results"][0]["input"]["context"]["estimation_data"]
+        assert summary["columns"] == ["trx", "trx"]
+        assert summary["dtypes"] == ["int64", "object"]
 
     @pytest.mark.asyncio
     async def test_frame_contents_are_not_dumped_into_the_payload(self, composer):
@@ -244,6 +256,11 @@ class TestJsonSafePayloadUnchanged:
 
         payload = await _contributed_payload(composer, result)
 
+        # Byte-identical, not merely equal: the encoded JSON must match what
+        # the pre-#1583 `model_dump(mode="json")` produced.
+        assert json.dumps(payload, sort_keys=True) == json.dumps(
+            result.model_dump(mode="json"), sort_keys=True
+        )
         assert payload == result.model_dump(mode="json")
 
 
