@@ -7,6 +7,8 @@ domains using weighted scoring. Each domain has specific signals that
 indicate relevance.
 """
 
+import re
+
 from .schemas import (
     Domain,
     DomainMapping,
@@ -17,6 +19,58 @@ from .schemas import (
     StructuralFeatures,
     TemporalFeatures,
 )
+
+# =============================================================================
+# KPI VALUE-LOOKUP FAST PATH (#1593)
+# =============================================================================
+# Stage 2 had no notion of a KPI value lookup, so "what is the TRx for Kisqali"
+# scored no domain above CONFIDENCE_THRESHOLD and the whole pipeline abstained
+# — 46 of the 54 KPI-lookup rows in the 337-row #1337 gold set, the largest
+# gold class. Teaching the mapper the pattern the intent classifier already
+# routes on takes that subset from 7/54 to 46/54 agents-exact.
+#
+# The pattern is IMPORTED, never copied: ``KPI_VALUE_LOOKUP_RE`` (#1475) is the
+# SSOT shared with the orchestrator dispatcher's explainer resolver, which
+# binds a REAL KPI value for exactly the shape it selects. A forked copy would
+# let "routes to explainer" and "explainer can answer it" drift apart. The
+# import is function-local because ``nodes/intent_classifier.py`` imports THIS
+# package (``from ..classifier import ClassificationPipeline``) — a
+# module-level import here is a genuine import cycle.
+
+# Clears PatternSelector's explanation-override floor (> 0.7). The DECISION is
+# deterministic — a vetted regex hit, not a scored guess — so it is not hedged
+# below the floor that would send it back to the ambiguity path.
+KPI_LOOKUP_CONFIDENCE = 0.85
+KPI_LOOKUP_EVIDENCE = "kpi_value_lookup"
+
+# --- narrowing: shapes the fast path must NOT claim ---------------------------
+# In active mode the classifier's decision IS the dispatch plan
+# (RouterNode._dispatch_from_classification), so the fast path may only claim a
+# query when the KPI value lookup is the WHOLE ask. Two shapes measured as
+# active-mode degradations on the gold set are handed back to legacy routing.
+#
+# (a) Population breakdown. "NRx broken down by patient segment" asks for a
+#     DECOMPOSITION; the explainer resolver binds one scalar, so the fast
+#     path's own answerability premise fails. cohort_profiler owns per-segment
+#     counts (see PatternSelector.DOMAIN_TO_AGENT). Gold bench-0008 / 0133 /
+#     0139 / 0140 / 0141 are all gold ``cohort_profiler``.
+_POPULATION_AXIS_RE = re.compile(r"\bpatients?\b", re.IGNORECASE)
+_DECOMPOSITION_RE = re.compile(
+    r"\bsegments?\b|\bsegmented\b|\bbreak\s*downs?\b|\bbroken\s+down\b|\bsplit\b|\bcohorts?\b",
+    re.IGNORECASE,
+)
+
+
+def _kpi_value_lookup_re() -> re.Pattern[str]:
+    """The #1475 KPI-value-lookup SSOT (function-local: import cycle, above)."""
+    from ..nodes.intent_classifier import KPI_VALUE_LOOKUP_RE
+
+    return KPI_VALUE_LOOKUP_RE
+
+
+def _is_population_breakdown(query: str) -> bool:
+    """A per-patient-population decomposition, not a single-figure lookup."""
+    return bool(_POPULATION_AXIS_RE.search(query) and _DECOMPOSITION_RE.search(query))
 
 
 class DomainMapper:
@@ -108,6 +162,17 @@ class DomainMapper:
         # Sort by confidence descending
         domain_scores.sort(key=lambda x: x.confidence, reverse=True)
 
+        if self._takes_kpi_lookup_fast_path(features):
+            # Replace any weakly-scored EXPLANATION with the deterministic hit
+            # and put it first, so PatternSelector's explanation override fires.
+            domain_scores = [
+                DomainMatch(
+                    domain=Domain.EXPLANATION,
+                    confidence=KPI_LOOKUP_CONFIDENCE,
+                    evidence=[KPI_LOOKUP_EVIDENCE],
+                )
+            ] + [dm for dm in domain_scores if dm.domain is not Domain.EXPLANATION]
+
         # Determine primary domain
         primary_domain = domain_scores[0].domain if domain_scores else None
 
@@ -117,6 +182,32 @@ class DomainMapper:
             primary_domain=primary_domain,
             is_multi_domain=len(domain_scores) > 1,
         )
+
+    def _takes_kpi_lookup_fast_path(self, features: ExtractedFeatures) -> bool:
+        """Whether this query is a KPI value lookup the explainer can answer whole.
+
+        The SSOT pattern carries its own vetoes (notably the whole-query
+        forecast guard, so a forecast ask is never answered with a
+        current-period figure). The two added here are the NARROWING: shapes
+        where a lone explainer would be a measured active-mode degradation.
+        """
+        query = features.raw_query
+        if not _kpi_value_lookup_re().search(query):
+            return False
+        if _is_population_breakdown(query):
+            return False
+        # (b) Compound ask — a second wh-clause after a connector is a second
+        # facet a lone explainer silently drops (gold bench-0143, gold
+        # PARALLEL_DELEGATION[explainer, gap_analyzer]). Deliberately
+        # conservative: it also yields on compound asks the explainer COULD
+        # cover (gold bench-0064 / 0135), because the two are not separable
+        # without fitting the gold set — the DomainMapper scores GAP_ANALYSIS
+        # for both (0.49 vs 0.34) purely off the shared "what"/"which"
+        # exploration keywords. Yielding costs a forgone win; claiming costs a
+        # dropped facet, and the second is the one that reaches a user.
+        if features.structural.has_compound_question:
+            return False
+        return True
 
     # =========================================================================
     # DOMAIN SCORING

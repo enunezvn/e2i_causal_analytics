@@ -21,6 +21,12 @@ from .schemas import (
     TemporalFeatures,
 )
 
+# A second wh-clause hanging off a connector — "what is the total TRx AND WHICH
+# region has the largest gap". Module-level so Stage 2 can gate on the same
+# signal Stage 1 counts with (#1593); a forked copy would let the compound
+# veto and the compound count disagree.
+COMPOUND_QUESTION_RE = re.compile(r",?\s+and\s+(what|which|how|why|where|who)", re.IGNORECASE)
+
 
 class FeatureExtractor:
     """
@@ -245,8 +251,7 @@ class FeatureExtractor:
         # Count questions (? marks + implied questions with "and")
         question_marks = query.count("?")
         # Detect compound questions: "X, and Y?" or "X and what Y"
-        compound_pattern = r",?\s+and\s+(what|which|how|why|where|who)"
-        compound_matches = len(re.findall(compound_pattern, query_lower))
+        compound_matches = len(COMPOUND_QUESTION_RE.findall(query_lower))
         question_count = max(question_marks, 1) + compound_matches
 
         # Count clauses (split by major conjunctions)
@@ -272,6 +277,7 @@ class FeatureExtractor:
 
         return StructuralFeatures(
             question_count=question_count,
+            has_compound_question=compound_matches > 0,
             clause_count=max(clause_count, 1),
             has_conditional=has_conditional,
             has_comparison=has_comparison,

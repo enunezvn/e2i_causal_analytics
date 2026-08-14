@@ -10,12 +10,16 @@ authority changes stay human-gated).
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 from src.tasks.routing_metrics import (
+    CLASSIFIER_BASELINE_EPOCH,
     DEFAULT_ACTIVE_FLOOR,
     compute_run_metrics,
     compute_threshold_proposals,
 )
+
+_ON_CURRENT_BASELINE = (CLASSIFIER_BASELINE_EPOCH + timedelta(days=1)).isoformat()
 
 
 def _row(pattern, conf, was_correct, *, used_llm=False, source=None):
@@ -114,8 +118,15 @@ class TestThresholdProposals:
     ]
 
     def test_lowering_floor_surfaces_correct_flips(self):
+        # #1593: a floor recommendation now requires rows provably on the
+        # CURRENT classifier baseline — engagement is a property of the
+        # classifier, so pooled-across-flip rows cannot justify a floor. The
+        # maths under test is unchanged; the rows are stamped so the
+        # precondition is visible rather than incidental. The withholding
+        # directions are pinned in test_routing_metrics_baseline_1593.py.
+        rows = [dict(r, created_at=_ON_CURRENT_BASELINE) for r in self._PROP_ROWS]
         out = compute_threshold_proposals(
-            self._PROP_ROWS, current_floor=0.5, candidates=[0.40], min_evidence=2
+            rows, current_floor=0.5, candidates=[0.40], min_evidence=2
         )
         assert out["current_floor"] == 0.5
         # baseline engaged @0.5: rows with conf>=0.5 & not CLARIFICATION = 3
