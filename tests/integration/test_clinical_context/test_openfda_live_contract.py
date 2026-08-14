@@ -85,11 +85,26 @@ def test_openfda_signals_no_match_with_http_404_not_empty_results() -> None:
         params={"search": f'openfda.generic_name:"{_BRAND}"', "limit": 5, **_api_key_params()},
         timeout=30.0,
     )
-    assert response.status_code == 404, (
-        "openFDA no-longer 404s on a zero-result search "
-        f"(got HTTP {response.status_code}); revisit fetch_label's retry contract"
-    )
-    assert response.json().get("error", {}).get("code") == "NOT_FOUND"
+    # Assert the SEMANTIC contract, not one spelling of it (codex review MED,
+    # #1612). The client treats both forms as "no match", so a switch from
+    # 404-NOT_FOUND to 200-with-empty-results is not a functional break and
+    # must not redden the nightly lane. A third behaviour — some other 404, or
+    # a 200 that actually returns results for a brand under generic_name —
+    # would break the retry contract and still fails here.
+    if response.status_code == 404:
+        assert response.json().get("error", {}).get("code") == "NOT_FOUND", (
+            "openFDA returned a 404 that is not its NOT_FOUND no-match signal; "
+            "_fetch_by_field would treat this as a transport failure"
+        )
+    else:
+        assert response.status_code == 200, (
+            f"openFDA zero-result search returned HTTP {response.status_code}; "
+            "expected 404 NOT_FOUND or 200 with empty results"
+        )
+        assert not (response.json().get("results") or []), (
+            "openFDA now RESOLVES a brand name under openfda.generic_name; "
+            "the generic-then-brand retry order should be revisited"
+        )
 
 
 # ------------------------------------------------------------------------ parsed

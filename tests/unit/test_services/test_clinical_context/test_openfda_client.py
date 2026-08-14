@@ -221,6 +221,28 @@ def test_fetch_label_returns_none_when_both_fields_404() -> None:
     assert calls == ["generic", "brand"]
 
 
+def test_fetch_label_treats_non_not_found_404_as_a_real_failure() -> None:
+    """A 404 that is NOT openFDA's no-match signal must suppress the retry.
+
+    codex review MED (#1612): mapping every 404 to the retryable ``{}`` sentinel
+    would read a moved endpoint, a proxy/CDN 404, or an HTML error page as
+    "this drug has no label" and fire a pointless second query — masking an
+    outage as a miss. Only ``{"error": {"code": "NOT_FOUND"}}`` counts.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = request.url.query.decode("utf-8")
+        calls.append("generic" if "openfda.generic_name" in q else "brand")
+        return httpx.Response(404, html="<html><body>404 Not Found</body></html>")
+
+    with _openfda(handler) as client:
+        result = client.fetch_label("ribociclib")
+
+    assert result is None
+    assert calls == ["generic"], "a non-NOT_FOUND 404 must not trigger the brand retry"
+
+
 def test_fetch_label_does_not_retry_on_server_error() -> None:
     """A non-404 HTTP failure suppresses the retry (invariant kept from #1612).
 

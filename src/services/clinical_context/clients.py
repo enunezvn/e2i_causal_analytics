@@ -424,12 +424,25 @@ class _OpenFDAClient:
             # openFDA signals "no matches" for a zero-result search with HTTP
             # 404 + ``{"error": {"code": "NOT_FOUND"}}`` rather than 200 with an
             # empty ``results`` list (verified live 2026-08-14, #1612). That is
-            # semantically the SAME case as empty results, so it must return the
+            # semantically the SAME case as empty results, so it returns the
             # retryable ``{}`` sentinel — mapping it to ``None`` made
             # ``fetch_label``'s documented brand_name retry unreachable for every
-            # brand-name-only drug. ``None`` stays reserved for transport/HTTP
-            # errors, where retrying the same dead endpoint is pointless.
-            return {}
+            # brand-name-only drug.
+            #
+            # Only a body that actually says NOT_FOUND counts. A moved endpoint,
+            # a proxy/CDN 404, or an HTML error page would otherwise be read as
+            # "this drug has no label" and quietly trigger a pointless second
+            # query — masking an outage as a miss. Anything else is a real HTTP
+            # failure and returns ``None``, which suppresses the retry.
+            if self._is_no_match_body(response):
+                return {}
+            logger.debug(
+                "OpenFDA 404 for %r with a non-NOT_FOUND body (possible endpoint "
+                "move or proxy error): %s",
+                drug_name,
+                response.text[:200],
+            )
+            return None
         if response.status_code >= 400:
             logger.debug(
                 "OpenFDA HTTP %d for %r: %s",
@@ -448,6 +461,23 @@ class _OpenFDAClient:
             # Sentinel: empty results (not an error) — caller may retry.
             return {}
         return self._pick_best(results, drug_name)
+
+    @staticmethod
+    def _is_no_match_body(response: httpx.Response) -> bool:
+        """True when a 404 body is openFDA's own "no matches" signal.
+
+        Distinguishes ``{"error": {"code": "NOT_FOUND"}}`` — a legitimate empty
+        search result — from any other 404 (moved endpoint, proxy error, HTML
+        page), which must be treated as a transport failure rather than a miss.
+        """
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001 - a non-JSON 404 is not a no-match signal
+            return False
+        if not isinstance(payload, dict):
+            return False
+        error = payload.get("error")
+        return isinstance(error, dict) and error.get("code") == "NOT_FOUND"
 
     @staticmethod
     def _pick_best(results: list[dict[str, Any]], drug_name: str) -> dict[str, Any]:

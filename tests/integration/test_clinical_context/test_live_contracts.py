@@ -79,9 +79,13 @@ def test_chembl_mechanism_of_action_parsed_contract() -> None:
         "ribociclib's stable ChEMBL id changed; the compound_search parse path "
         "or upstream identity has drifted"
     )
+    # Shape + non-empty only. Pinning wording (e.g. requiring "kinase") would
+    # redden on a legitimate upstream re-phrasing such as "CDK4/CDK6 inhibitor"
+    # while the parser and provider contract still work (codex review LOW,
+    # #1612). The stable ChEMBL ID above is the identity contract; this is the
+    # extraction contract.
     moa = client.mechanism_of_action(_DRUG)
     assert isinstance(moa, str) and moa.strip(), f"ChEMBL returned no MoA for {_DRUG}"
-    assert "kinase" in moa.lower(), f"ribociclib MoA no longer mentions a kinase: {moa!r}"
 
 
 # ============================================================== ClinicalTrials.gov v2

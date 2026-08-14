@@ -92,14 +92,25 @@ def test_degraded_provider_is_labelled_not_silently_dropped() -> None:
         assert moa.mechanism_of_action, "degraded mechanism fragment carries no fallback text"
 
 
-def test_get_context_payload_labels_every_source() -> None:
-    """Every fragment surfaced to callers carries its provenance label."""
+def test_get_context_payload_carries_live_provenance() -> None:
+    """The assembled payload must reach callers with LIVE provenance labels.
+
+    codex review LOW (#1612): an earlier version asserted only that each
+    ``source`` key was non-empty, which would stay green if all four APIs broke
+    — every fragment still carries a ``static_fallback`` label. In the live lane
+    a test without teeth is worse than no test, so this asserts the live source
+    values end-to-end through ``get_context`` (the path the API routes and the
+    Executive Brief actually call), not merely that a label exists.
+    """
     service = ClinicalContextService()
     payload = service.get_context("Kisqali", "adherence")
 
-    assert payload["mechanism"]["source"]
-    assert payload["pivotal_endpoints"]["source"]
-    assert payload["approved_indications"]["source"]
+    assert payload["mechanism"]["source"] == "chembl"
+    assert payload["pivotal_endpoints"]["source"] == "clinicaltrials.gov"
+    assert payload["approved_indications"]["source"] == "openfda"
+    assert payload["mechanism"]["mechanism_of_action"], "live payload carries no MoA text"
+    assert payload["approved_indications"]["indications"], "live payload carries no indications"
+
     # The honesty label distinguishes the SYNTHETIC effect estimate from the
     # REAL public-source clinical context; losing it would misrepresent both.
     assert "SYNTHETIC" in payload["honesty_label"]
