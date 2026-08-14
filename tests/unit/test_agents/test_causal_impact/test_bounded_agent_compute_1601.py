@@ -253,11 +253,34 @@ class TestOffloadsUseTheBoundedAgentPool:
 
 
 class TestAgentPoolIsBoundedAndSeparate:
+    def test_container_wide_budget_stays_within_the_cpu_quota(self):
+        """The invariant that matters is CONTAINER-wide, not per-process.
+
+        The pool is per gunicorn worker process, and the api container runs
+        ``--workers 2`` inside ``cpus: '2'`` (docker/docker-compose.yml). So the
+        real budget is ``workers x per-process threads``, and it must not exceed
+        the CPU quota — otherwise the causal runs simply thrash each other and
+        legitimate 223-300s suites start missing their dispatch budgets.
+
+        Pinned as the invariant rather than the literal constant so that
+        re-sizing the pool cannot silently break the container-wide guarantee.
+        """
+        gunicorn_workers = 2  # docker/docker-compose.yml: WORKERS / --workers
+        cpu_quota = 2  # docker/docker-compose.yml: deploy.resources.limits.cpus
+        per_process = _compute_mod._DEFAULT_AGENT_COMPUTE_WORKERS
+
+        assert per_process >= 1
+        assert per_process * gunicorn_workers <= cpu_quota, (
+            f"{gunicorn_workers} gunicorn workers x {per_process} agent-compute "
+            f"threads = {per_process * gunicorn_workers} concurrent heavy causal "
+            f"computations on a {cpu_quota}-CPU container"
+        )
+
     @pytest.mark.asyncio
-    async def test_pool_is_bounded_to_the_documented_default(self):
+    async def test_pool_actually_bounds_concurrency_to_its_configured_size(self):
         """Concurrency cap, measured by how many callables overlap in time."""
         workers = _compute_mod._agent_compute_workers_from_env()
-        assert workers == _compute_mod._DEFAULT_AGENT_COMPUTE_WORKERS == 2
+        assert workers == _compute_mod._DEFAULT_AGENT_COMPUTE_WORKERS
 
         live = 0
         peak = 0
@@ -372,6 +395,98 @@ class TestCooperativeDeadlineNotAnEnvelope:
         assert started == [], "estimation must not start once the budget is exhausted"
         assert result.get("status") == "failed"
         assert "budget" in (result.get("error_message") or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_budget_is_rechecked_on_the_worker_thread_after_queueing(self, monkeypatch):
+        """codex round-1 HIGH: a BOUNDED pool queues, so a pre-submit check goes stale.
+
+        A call can pass the deadline check on the event loop, then wait in the
+        queue behind another agent-compute task until its budget is spent, and
+        start anyway — holding a scarce slot for a turn that is already lost,
+        with the caller's ``wait_for`` possibly already gone. The budget must be
+        re-checked ON the worker thread, at the moment the callable starts.
+        """
+        import time as _time
+
+        started: list = []
+        node = EstimationNode.__new__(EstimationNode)
+
+        def _sel(*a, **k):
+            started.append(1)
+            return ({"method": "LinearDML", "ate": 0.1}, {}, 1.0)
+
+        monkeypatch.setattr(node, "_select_estimator_with_energy_score", _sel)
+
+        # Occupy every pool thread so the estimation below must queue.
+        release = threading.Event()
+        occupants = [
+            asyncio.create_task(
+                _compute_mod.run_in_agent_compute_executor(lambda: release.wait(timeout=5))
+            )
+            for _ in range(_compute_mod._agent_compute_workers_from_env())
+        ]
+        await asyncio.sleep(0.1)  # let them all claim their threads
+
+        # Headroom NOW (so the pre-submit check passes) but gone before the
+        # queued call can be picked up.
+        state = _estimation_state(_frame(), compute_deadline=_time.monotonic() + 0.3)
+        exec_task = asyncio.create_task(node.execute(state))
+
+        await asyncio.sleep(0.8)  # deadline lapses while the call sits in the queue
+        release.set()
+        await asyncio.gather(*occupants)
+        result = await exec_task
+
+        assert started == [], (
+            "estimation started after its budget lapsed in the pool queue — "
+            "it would hold a bounded slot for a turn that is already lost"
+        )
+        assert result.get("status") == "failed"
+        assert "budget" in (result.get("error_message") or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_refutation_budget_is_rechecked_after_queueing(self, monkeypatch):
+        """Same queueing gap on the refutation side, with its own error shape.
+
+        The reconstruction is the first pooled call, so a budget that lapses in
+        the queue must stop it before it starts and surface the structured
+        fail-closed refutation error — tagged as the QUEUED case, not the
+        pre-flight one.
+        """
+        import time as _time
+
+        started: list = []
+        node = RefutationNode()
+
+        monkeypatch.setattr(
+            _ref_mod,
+            "_reconstruct_dowhy_artifacts",
+            lambda **k: (started.append(1), (SimpleNamespace(), object(), object()))[1],
+        )
+
+        release = threading.Event()
+        occupants = [
+            asyncio.create_task(
+                _compute_mod.run_in_agent_compute_executor(lambda: release.wait(timeout=5))
+            )
+            for _ in range(_compute_mod._agent_compute_workers_from_env())
+        ]
+        await asyncio.sleep(0.1)
+
+        state = _refutation_state(_frame(), compute_deadline=_time.monotonic() + 0.3)
+        exec_task = asyncio.create_task(node.execute(state))
+
+        await asyncio.sleep(0.8)
+        release.set()
+        await asyncio.gather(*occupants)
+        result = await exec_task
+
+        assert started == [], "reconstruction started after its budget lapsed in the queue"
+        assert result.get("status") == "failed"
+        assert (
+            result.get("refutation_error_details", {}).get("reason")
+            == "time_budget_exceeded_queued_refutation"
+        ), result.get("refutation_error_details")
 
     @pytest.mark.asyncio
     async def test_estimation_runs_when_the_deadline_has_headroom(self, monkeypatch):

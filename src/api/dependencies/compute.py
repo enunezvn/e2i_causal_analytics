@@ -56,9 +56,16 @@ _DEFAULT_MAX_CONCURRENCY = 1
 
 # Agent-graph compute pool (#1601). Deliberately SEPARATE from the shared
 # heavy-compute pool above — see ``run_in_agent_compute_executor`` for the
-# measurements that force the split. Sized to the api container's ``cpus: '2'``
-# quota: beyond two runnable compute threads the container only thrashes.
-_DEFAULT_AGENT_COMPUTE_WORKERS = 2
+# measurements that force the split.
+#
+# PER GUNICORN WORKER PROCESS, like everything else in this module. The api
+# container runs ``--workers 2`` inside ``cpus: '2'``
+# (docker/docker-compose.yml), so the CONTAINER-wide budget is 2 processes x 1
+# thread = 2 concurrent heavy causal computations, which is exactly the CPU
+# quota. A per-process 2 would have meant 4 on 2 CPUs: the runs would only
+# thrash each other, and a suite that legitimately needs ~223s inside a 240s
+# cooperative budget would start missing it under concurrency.
+_DEFAULT_AGENT_COMPUTE_WORKERS = 1
 
 T = TypeVar("T")
 
@@ -309,11 +316,14 @@ async def run_in_agent_compute_executor(func: Callable[..., T], *args: Any, **kw
     at once: measured 177 MB, negligible against the 5G cgroup, and far cheaper
     than the head-of-line blocking it avoids.
 
-    Sizing. Default 2, matching the container's ``cpus: '2'`` quota — beyond two
-    runnable compute threads the container thrashes without gaining throughput.
-    One would serialize concurrent causal chat turns (~350 s each) past the 300 s
-    dispatch budget, turning today's "two slower turns" into "one turn times
-    out". Override with ``AGENT_COMPUTE_EXECUTOR_WORKERS``.
+    Sizing. Default 1 PER WORKER PROCESS. The container runs ``--workers 2``
+    inside ``cpus: '2'``, so container-wide that is 2 concurrent heavy causal
+    computations — exactly the CPU quota, and ~354 MB of in-flight estimation
+    memory. Two concurrent chat turns still proceed in parallel when gunicorn
+    lands them on different workers; two on the SAME worker serialize, which is
+    the intended trade (4 threads on 2 CPUs would only thrash, and the ~223 s
+    suite would start missing its 240 s budget). Override with
+    ``AGENT_COMPUTE_EXECUTOR_WORKERS``.
 
     No ``heavy_compute_slot`` is taken: the slot is reject-fast (503 +
     ``Retry-After``) for API entry points that can shed load, and a chat turn's
@@ -324,6 +334,10 @@ async def run_in_agent_compute_executor(func: Callable[..., T], *args: Any, **kw
     ``asyncio.wait_for`` would abandon a still-running call that keeps holding a
     bounded slot. Callers bound the WORK cooperatively instead, via the
     ``compute_deadline`` in ``CausalImpactState``, which lets the thread return.
+    Because this pool QUEUES, that budget must be re-checked on the worker
+    thread rather than only before submitting — see
+    ``agents/causal_impact/nodes/_compute_budget.run_bounded_with_budget``,
+    which is how the causal_impact nodes call in here.
 
     Context is copied exactly as ``asyncio.to_thread`` does, so replacing a
     ``to_thread`` call with this helper preserves contextvar propagation.

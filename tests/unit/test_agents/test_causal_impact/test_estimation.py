@@ -608,18 +608,29 @@ async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
     pins the pool rather than the bare thread hand-off.
     """
     import asyncio as _aio
+    import threading as _threading
 
-    from src.api.dependencies import compute as _compute_mod
+    from src.agents.causal_impact.nodes import estimation as _est_mod
 
     node = EstimationNode()
     offloaded: list = []
-    real_offload = _compute_mod.run_in_agent_compute_executor
+    thread_names: list = []
+    real_offload = _est_mod.run_bounded_with_budget
 
     async def _spy(func, *args, **kwargs):
         offloaded.append(getattr(func, "__name__", str(func)))
-        return await real_offload(func, *args, **kwargs)
 
-    monkeypatch.setattr(_compute_mod, "run_in_agent_compute_executor", _spy)
+        def _observed(*a, **k):
+            thread_names.append(_threading.current_thread().name)
+            return func(*a, **k)
+
+        return await real_offload(_observed, *args, **kwargs)
+
+    # Spy at the node's own seam: the callable reaching the pool is the
+    # budget-guarded wrapper, so the pool boundary can no longer see the
+    # selection by name. The inner wrapper still runs the REAL selection and
+    # records which pool thread executed it.
+    monkeypatch.setattr(_est_mod, "run_bounded_with_budget", _spy)
 
     # And it must NOT fall back to the unbounded default executor.
     to_thread_calls: list = []
@@ -659,8 +670,10 @@ async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
 
     result = await node.execute(state)
 
-    # The heavy selection ran on the BOUNDED agent-compute pool (offloaded)...
+    # The heavy selection was handed to the BOUNDED agent-compute pool...
     assert "_select_estimator_with_energy_score" in offloaded
+    # ...on a thread, not inline on the loop.
+    assert "agent-compute" in (thread_names[0] if thread_names else "")
     # ...never on the loop's unbounded default executor...
     assert to_thread_calls == [], f"selection escaped to the default executor via {to_thread_calls}"
     # ...and the run still produced a real estimate (offload is transparent).
