@@ -54,7 +54,7 @@ COMPOUND_QUESTION_RE = re.compile(
 # segment that is not itself an ask does not count, so "whats TRx mean? total
 # rx's?" (gold bench-0253) and "what is the TRx for kisqali and remibrutinib"
 # (one ask, two entities) stay single lookups.
-_CLAUSE_SPLIT_RE = re.compile(r"[?;.!\n]+|\band\b", re.IGNORECASE)
+_CLAUSE_SPLIT_RE = re.compile(r"[?;.!,\n]+|\band\b", re.IGNORECASE)
 _ASK_HEAD_RE = re.compile(
     r"\b(what'?s?|which|how|why|where|who|whose|when"
     r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",

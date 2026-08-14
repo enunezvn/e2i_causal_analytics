@@ -108,10 +108,10 @@ class TestKpiFastPathReadsTheSSOT:
         fast path may only ever raise this domain."""
         from src.agents.orchestrator.classifier.domain_mapper import KPI_LOOKUP_CONFIDENCE
 
-        # describe / how / understand — three explanation keywords, one
-        # sentence, no connector, so neither veto fires and the fast path is
-        # reached with a stronger keyword score already in hand.
-        query = "what is the TRx, describe how it is calculated to help me understand"
+        # understand / how / describe — three explanation keywords in ONE
+        # clause (no terminator, connector or comma), so neither veto fires and
+        # the fast path is reached with a stronger keyword score in hand.
+        query = "what is the TRx so I understand how to describe it"
         features = FeatureExtractor().extract(query)
         assert features.structural.has_compound_question is False, "fixture trips the compound veto"
 
@@ -244,6 +244,11 @@ class TestNarrowingKeepsContestedRowsAbstaining:
             "what is the total TRx and please show me the top regions",
             "what is the TRx and can you show me the top regions",
             "what is the TRx and could you please rank the regions",
+            # Comma-joined second asks — no connector, no terminator
+            # (codex iter-6 HIGH).
+            "what is TRx for Kisqali, please show me the top regions",
+            "what is TRx for Kisqali, can you rank the regions",
+            "show me the TRx for Kisqali, also list the top territories",
         ],
     )
     def test_compound_veto_covers_second_asks_however_punctuated(self, query):
@@ -259,6 +264,10 @@ class TestNarrowingKeepsContestedRowsAbstaining:
             "What is TRx for Kisqali? Thanks.",
             "what is the TRx for kisqali and remibrutinib",  # one ask, two brands
             "what is the market share and growth rate for Kisqali",  # one ask, two metrics
+            # A LEADING adverbial is not a second ask — splitting on commas
+            # must not turn every scoped lookup into a compound one.
+            "For Kisqali, what is the TRx?",
+            "In the northeast, show me the TRx",
         ],
     )
     def test_a_second_segment_without_an_ask_is_not_compound(self, query):
