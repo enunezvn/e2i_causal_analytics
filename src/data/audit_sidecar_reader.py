@@ -51,7 +51,13 @@ logger = logging.getLogger(__name__)
 # (True when the deterministic structural decider fired on an unclassifiable
 # attestation → review). Additive, nullable, absent on pre-1.7 sidecars (surface
 # as None without a warning, mirroring the 1.5 structural-key handling). MAJOR=1.
-_READER_SCHEMA_VERSION = "1.7"
+# 1.8 (Phase 2.6 citation channel, #1608): five additive per-verdict citation
+# keys (``citations_checked`` / ``citations_verified`` / ``citations_unverified``
+# / ``cited_pmids`` / ``verified_citation_ids``) recording whether the PMIDs an
+# LLM verdict cited were actually verified against the abstracts behind them.
+# Emitted unconditionally by every verdict path so the schema stays uniform;
+# absent on pre-1.8 sidecars (surface as None/[] without a warning). MAJOR=1.
+_READER_SCHEMA_VERSION = "1.8"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -88,6 +94,14 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "contract_window_days",
         "llm_role",
         "llm_remediation",
+        # Phase 2.6 citation channel (#1608). Registered in lockstep with the
+        # writer's 1.8 bump so a current sidecar does not trip the
+        # unknown-verdict-key WARN on every file.
+        "citations_checked",
+        "citations_verified",
+        "citations_unverified",
+        "cited_pmids",
+        "verified_citation_ids",
         # 5 evaluator audit keys (Plan layer4_evaluator_audit_signal.md):
         "evaluator_satisfied",
         "evaluator_rationale_complete",
@@ -236,6 +250,16 @@ class VerdictRecord:
     # unclassifiable/malformed attestation (decided_by="structural", role None →
     # review). Absent on pre-1.7 sidecars (surface as None). Additive at 1.7+.
     structural_unclassifiable: Optional[bool] = None
+    # Phase 2.6 citation channel (schema 1.8, #1608). ``None`` on pre-1.8
+    # sidecars. ``citations_checked`` distinguishes "the LLM cited nothing"
+    # from "everything it cited failed verification" — a distinction the two
+    # counts alone cannot express, and the one that matters when auditing
+    # whether a cited PMID was ever checked against the abstract behind it.
+    citations_checked: Optional[int] = None
+    citations_verified: Optional[int] = None
+    citations_unverified: Optional[int] = None
+    cited_pmids: Optional[list[str]] = None
+    verified_citation_ids: Optional[list[str]] = None
 
 
 class SidecarReader:
@@ -483,6 +507,11 @@ class SidecarReader:
             structural_remediation_override=_opt_str(raw.get("structural_remediation_override")),
             structural_gate_fired=_opt_str(raw.get("structural_gate_fired")),
             structural_unclassifiable=_opt_bool(raw.get("structural_unclassifiable")),
+            citations_checked=_opt_int(raw.get("citations_checked")),
+            citations_verified=_opt_int(raw.get("citations_verified")),
+            citations_unverified=_opt_int(raw.get("citations_unverified")),
+            cited_pmids=_opt_str_list(raw.get("cited_pmids")),
+            verified_citation_ids=_opt_str_list(raw.get("verified_citation_ids")),
         )
 
 

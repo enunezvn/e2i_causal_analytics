@@ -111,9 +111,10 @@ class CitationResolver:
         europe_pmc: Optional pre-constructed Europe PMC client.
         crossref: Optional pre-constructed Crossref client.
         umls: Optional pre-constructed UMLS client (used for synonym
-            expansion). If None, citation verification will only match the
-            ``preferred_name`` of each entity (no synonyms), which is a
-            weaker check.
+            expansion). If None, one is built when ``UMLS_UTS_API_KEY`` is
+            available; otherwise ``self.umls`` is None and citation
+            verification only matches the ``preferred_name`` of each entity
+            (no synonyms), which is a weaker but still useful check.
     """
 
     def __init__(
@@ -128,7 +129,25 @@ class CitationResolver:
         self._owns_umls = umls is None
         self.europe_pmc = europe_pmc if europe_pmc is not None else EuropePMCClient()
         self.crossref = crossref if crossref is not None else CrossrefClient()
-        self.umls = umls if umls is not None else UMLSClient()
+        # UMLS is OPTIONAL — it only widens the term list with synonyms.
+        # ``UMLSClient()`` raises ``UMLSAuthError`` when no key is present, so
+        # constructing it unconditionally made this whole resolver
+        # unconstructible in any environment without ``UMLS_UTS_API_KEY``
+        # (CI included) and left the degraded mode this docstring promises
+        # unreachable. Europe PMC and Crossref are zero-auth and must stay
+        # usable on their own (#1608).
+        self.umls: Optional[UMLSClient]
+        if umls is not None:
+            self.umls = umls
+        else:
+            try:
+                self.umls = UMLSClient()
+            except UMLSAuthError:
+                logger.info(
+                    "CitationResolver: no UMLS_UTS_API_KEY — synonym expansion "
+                    "disabled; matching preferred names only."
+                )
+                self.umls = None
 
     def __enter__(self) -> "CitationResolver":
         return self
@@ -141,7 +160,7 @@ class CitationResolver:
             self.europe_pmc.close()
         if self._owns_crossref:
             self.crossref.close()
-        if self._owns_umls:
+        if self._owns_umls and self.umls is not None:
             self.umls.close()
 
     def resolve_pmid(self, pmid: str) -> Optional[AbstractRecord]:
@@ -262,7 +281,7 @@ class CitationResolver:
         terms: list[str] = []
         if primary_name:
             terms.append(primary_name)
-        if cui:
+        if cui and self.umls is not None:
             try:
                 concept: KGConcept = self.umls.cui_lookup(cui)
             except UMLSAuthError as exc:

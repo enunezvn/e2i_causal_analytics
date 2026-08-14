@@ -254,3 +254,57 @@ def test_fetch_doi_metadata_preserves_doi_slashes() -> None:
     raw = captured["raw_path"]
     assert b"/works/10.1234/abc.2024.001" in raw
     assert b"%2F" not in raw.upper()
+
+
+def test_tag_removal_does_not_glue_adjacent_text_nodes() -> None:
+    """Structured JATS abstracts must not fuse a section title to the next word.
+
+    #1608: ``_ALL_TAGS.sub("", ...)`` deleted tags without leaving a separator,
+    so ``<jats:title>Background</jats:title><jats:p>Breast cancer ...`` became
+    ``"BackgroundBreast cancer"``. ``CitationResolver._first_match`` matches on
+    WORD BOUNDARIES, so the fused term could never match and the first entity
+    after every section heading was invisible to verification — a systematic
+    source of false "unverified" verdicts, since JATS abstracts are almost
+    always structured (Background / Methods / Results / Conclusions).
+
+    Measured against the live Crossref record for 10.1186/s13058-023-01623-6:
+    "breast cancer" did not match before this fix and does after.
+    """
+    structured = (
+        "<jats:title>Abstract</jats:title>"
+        "<jats:sec><jats:title>Background</jats:title>"
+        "<jats:p>Breast cancer treatments may affect return to work.</jats:p></jats:sec>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_sample_message(abstract=structured))
+
+    with _client_with_handler(handler) as client:
+        record = client.fetch_doi_metadata("10.1234/abc.2024.001")
+
+    assert record is not None
+    assert "BackgroundBreast" not in record.abstract, (
+        f"tag removal fused adjacent text nodes: {record.abstract!r}"
+    )
+    assert "Background Breast cancer" in record.abstract
+    # Whitespace must still be collapsed — no double spaces from the separator.
+    assert "  " not in record.abstract
+
+
+def test_word_boundary_entity_match_survives_a_structured_abstract() -> None:
+    """The end-to-end consequence: the matcher must find the fused term."""
+    from src.data.kg.citation_resolver import _first_match
+
+    structured = (
+        "<jats:title>Background</jats:title>"
+        "<jats:p>Breast cancer treatments may affect outcomes.</jats:p>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_sample_message(abstract=structured))
+
+    with _client_with_handler(handler) as client:
+        record = client.fetch_doi_metadata("10.1234/abc.2024.001")
+
+    assert record is not None
+    assert _first_match(["breast cancer"], record.abstract.lower()) == "breast cancer"
