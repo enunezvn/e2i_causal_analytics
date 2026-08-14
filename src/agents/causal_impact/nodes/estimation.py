@@ -22,7 +22,6 @@ F-006 brief; we kept it in-place because rewiring data loading is outside
 the F-006/F-014 scope.
 """
 
-import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -799,6 +798,20 @@ class EstimationNode:
                 explicit_method,
                 selection_strategy,
             )
+            # #1601: cooperative budget check BEFORE starting the fit, mirroring
+            # the refutation node's pre-flight guard. The selection measures
+            # ~125 s on the largest prod frame and runs on a BOUNDED pool, so
+            # starting it for a turn whose budget has already expired would deny
+            # a scarce compute slot to a turn that can still be answered — and
+            # the thread cannot be cancelled once it starts.
+            deadline = cast(Optional[float], state.get("compute_deadline"))
+            if deadline is not None and time.monotonic() >= deadline:
+                raise EstimationError(
+                    "Compute budget exhausted before estimation could start; failing "
+                    "closed rather than occupying a bounded compute slot for a turn "
+                    "that can no longer be answered.",
+                    details={"reason": "time_budget_exceeded_pre_estimation"},
+                )
             try:
                 # Offload the CPU-bound energy-score selection (fits the whole
                 # econml estimator registry) to a thread so the gunicorn worker's
@@ -806,7 +819,17 @@ class EstimationNode:
                 # the loop past gunicorn's --timeout and the worker is KILLED
                 # mid-run (orphaning the async job). numpy/sklearn release the GIL
                 # during the heavy ops, so the loop genuinely keeps serving.
-                result, selection_dict, energy_latency_ms = await asyncio.to_thread(
+                #
+                # #1601: on the BOUNDED agent-compute pool, not ``asyncio.to_thread``
+                # (which means the loop's DEFAULT executor — 12 threads here, outside
+                # every in-process bound). This fit is the memory term of the graph:
+                # measured 177.4 MB peak RSS / 124.9 s on the largest observed prod
+                # frame (37,515x12), so 12 concurrent copies would be ~2.1 GiB against
+                # a 5G cgroup. Function-local import (the #1590 / #1598 precedent)
+                # keeps ``src.api.dependencies`` off this module's import path.
+                from src.api.dependencies.compute import run_in_agent_compute_executor
+
+                result, selection_dict, energy_latency_ms = await run_in_agent_compute_executor(
                     self._select_estimator_with_energy_score,
                     data,
                     treatment,

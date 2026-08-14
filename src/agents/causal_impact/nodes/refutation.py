@@ -17,7 +17,6 @@ Anti-Mocking (F-014 fix, #416):
   reconstruction fails. NEVER dispatches to the deleted ``_mock_*`` paths.
 """
 
-import asyncio
 import logging
 import math
 import time
@@ -1201,13 +1200,31 @@ class RefutationNode:
             # async job. These calls are pure compute (no async clients — the
             # supabase client is used elsewhere on the main loop), so threading is
             # loop-safe.
+            #
+            # #1601: all three off-loads below go to the BOUNDED agent-compute pool
+            # rather than ``asyncio.to_thread`` (= the loop's DEFAULT executor, 12
+            # threads here, outside every in-process bound). Unlike estimation these
+            # calls are cheap in memory (measured 0.3-0.5 MB peak RSS) but very
+            # expensive in CPU TIME — the suite is designed to run ~223 s inside its
+            # 240 s cooperative budget — so on 2 container CPUs a dozen concurrent
+            # copies is pure thrash. The pool is deliberately NOT the shared
+            # heavy-compute one: that is a single thread serving reject-fast API
+            # endpoints and composer sync tools under a 120 s envelope, which a
+            # ~223 s suite would monopolize (see ``run_in_agent_compute_executor``).
+            #
+            # There is deliberately NO ``asyncio.wait_for`` around these calls. A
+            # thread cannot be cancelled, so an envelope would abandon a still-running
+            # suite that keeps holding a bounded slot; ``deadline`` below is the
+            # cooperative bound that lets the thread RETURN instead.
+            from src.api.dependencies.compute import run_in_agent_compute_executor
+
             # Time the reconstruction — it fits the SAME estimator once, so its
             # wall-time is a good a-priori per-refit cost. We hand it to
             # run_all_tests as ``per_refit_hint`` so even the FIRST refuter is
             # gated against the deadline (otherwise a single slow first refuter
             # could run unconditionally and orphan past the hard cap).
             _recon_t0 = time.monotonic()
-            causal_model, identified_estimand, estimate = await asyncio.to_thread(
+            causal_model, identified_estimand, estimate = await run_in_agent_compute_executor(
                 _reconstruct_dowhy_artifacts,
                 data=refutation_data,
                 treatment=treatment,
@@ -1237,7 +1254,7 @@ class RefutationNode:
             if deadline is not None and time.monotonic() + per_refit_hint <= deadline:
                 try:
                     _cal_t0 = time.monotonic()
-                    await asyncio.to_thread(
+                    await run_in_agent_compute_executor(
                         causal_model.refute_estimate,
                         identified_estimand,
                         estimate,
@@ -1254,7 +1271,7 @@ class RefutationNode:
                     )
 
             # Run all refutation tests
-            suite: RefutationSuite = await asyncio.to_thread(
+            suite: RefutationSuite = await run_in_agent_compute_executor(
                 self.runner.run_all_tests,
                 original_effect=original_ate,
                 original_ci=original_ci,

@@ -597,22 +597,39 @@ class TestEnergyScoreReviewGate:
 @pytest.mark.asyncio
 async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
     """The CPU-bound energy-score estimator selection must run OFF the event
-    loop (via asyncio.to_thread) so a multi-minute fit cannot block the gunicorn
-    worker past --timeout and get it KILLED mid-run (which orphaned async jobs
-    at status='running'). Verifies the offload happens AND stays transparent."""
+    loop so a multi-minute fit cannot block the gunicorn worker past --timeout
+    and get it KILLED mid-run (which orphaned async jobs at status='running').
+    Verifies the offload happens AND stays transparent.
+
+    #1601: the off-load target changed from ``asyncio.to_thread`` — i.e. the
+    loop's DEFAULT executor, 12 threads and outside every in-process bound — to
+    the BOUNDED agent-compute pool. The original guarantee (off the loop,
+    transparent) is unchanged; the destination is now bounded, so this test
+    pins the pool rather than the bare thread hand-off.
+    """
     import asyncio as _aio
 
-    from src.agents.causal_impact.nodes import estimation as _est_mod
+    from src.api.dependencies import compute as _compute_mod
 
     node = EstimationNode()
     offloaded: list = []
-    real_to_thread = _aio.to_thread
+    real_offload = _compute_mod.run_in_agent_compute_executor
 
     async def _spy(func, *args, **kwargs):
         offloaded.append(getattr(func, "__name__", str(func)))
+        return await real_offload(func, *args, **kwargs)
+
+    monkeypatch.setattr(_compute_mod, "run_in_agent_compute_executor", _spy)
+
+    # And it must NOT fall back to the unbounded default executor.
+    to_thread_calls: list = []
+    real_to_thread = _aio.to_thread
+
+    async def _to_thread_spy(func, /, *args, **kwargs):
+        to_thread_calls.append(getattr(func, "__name__", str(func)))
         return await real_to_thread(func, *args, **kwargs)
 
-    monkeypatch.setattr(_est_mod.asyncio, "to_thread", _spy)
+    monkeypatch.setattr(_aio, "to_thread", _to_thread_spy)
 
     state = {
         "query": "offload test",
@@ -642,8 +659,10 @@ async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
 
     result = await node.execute(state)
 
-    # The heavy selection ran in a worker thread (offloaded)...
+    # The heavy selection ran on the BOUNDED agent-compute pool (offloaded)...
     assert "_select_estimator_with_energy_score" in offloaded
+    # ...never on the loop's unbounded default executor...
+    assert to_thread_calls == [], f"selection escaped to the default executor via {to_thread_calls}"
     # ...and the run still produced a real estimate (offload is transparent).
     assert "ate" in result["estimation_result"]
 

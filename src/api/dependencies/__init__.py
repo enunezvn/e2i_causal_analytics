@@ -34,6 +34,7 @@ from src.api.dependencies.compute import (
     HeavyComputeSaturated,
     get_heavy_compute_limiter,
     heavy_compute_slot,
+    run_in_agent_compute_executor,
     run_in_bounded_executor,
 )
 from src.api.dependencies.falkordb_client import (
@@ -81,6 +82,7 @@ __all__ = [
     "HeavyComputeSaturated",
     "heavy_compute_slot",
     "run_in_bounded_executor",
+    "run_in_agent_compute_executor",
     "get_heavy_compute_limiter",
     # Redis
     "init_redis",
