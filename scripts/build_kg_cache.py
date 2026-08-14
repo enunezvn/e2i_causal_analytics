@@ -270,12 +270,19 @@ def _drug_disease_edges_for_cui(
     feature's disease", so it is emitted against the identifiers both sides
     actually hold.
 
-    Provenance that SURVIVES the cache file: ``subject_name`` (the Open Targets
-    drug name, e.g. "OMALIZUMAB"), ``object_name`` (the resolved disease name)
-    and ``datasource="chembl_indications"``. ``KGEdge.raw`` is populated for
-    in-process callers but is NOT persisted — ``cache._kg_edge_to_json`` writes
-    a fixed field list that excludes it — so the resolved ChEMBL/MONDO ids are
-    deliberately mirrored into the names rather than relied on from ``raw``.
+    Because the rewrite discards the identifiers the source actually spoke, the
+    originals are carried on ``source_subject_id`` / ``source_object_id``, which
+    ``cache._kg_edge_to_json`` persists. That matters more than it looks: the
+    feature's CUI is mapped to a disease by a fuzzy
+    ``open_targets.search_disease(preferred_name)`` lookup, and a broad or
+    outright wrong EFO/MONDO match still produces a perfectly plausible
+    ``object_name``. These edges drive a leakage finding, so "which disease did
+    we actually match this feature to?" has to be answerable from the committed
+    artifact alone — names are not auditable, ids are.
+
+    ``KGEdge.raw`` keeps the fuller context (including the upstream row) for
+    in-process callers, but is NOT persisted: ``_kg_edge_to_json`` writes a
+    fixed field list that excludes it.
     """
     errors: list[str] = []
     try:
@@ -311,6 +318,8 @@ def _drug_disease_edges_for_cui(
                 pmids=edge.pmids,
                 datasource=edge.datasource,
                 evidence=edge.evidence,
+                source_subject_id=edge.subject_id,
+                source_object_id=edge.object_id,
                 raw={
                     "open_targets_subject_id": edge.subject_id,
                     "open_targets_object_id": edge.object_id,

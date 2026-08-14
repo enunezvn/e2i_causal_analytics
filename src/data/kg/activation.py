@@ -93,13 +93,21 @@ def apply_kg_activation(
 ) -> bool:
     """Stamp ``kg_cache_path`` / ``kg_mode`` / ``target_entity_codes`` in place.
 
-    Returns True when KG was activated. Idempotent, and never overwrites a
-    value an operator set explicitly — an explicit ``kg_mode`` in the scope_spec
-    always wins, so this cannot silently re-enable a cohort someone turned off.
+    Returns True when KG was activated. Idempotent. An explicit ``kg_mode`` an
+    operator set is never overwritten — but only ``"off"`` short-circuits the
+    binding.
 
-    A missing cache file is an ERROR log and a no-op, not a silent pass: the
-    whole point of #1607 is that "no cache" and "no signal" were
-    indistinguishable.
+    That distinction is load-bearing. An explicit ``"shadow"`` or ``"promoted"``
+    is an instruction to turn the KG layer **on**, and it is the most natural
+    way for an operator to ask for exactly what this module provides. Treating
+    it as "hands off" left ``kg_cache_path`` unset, so ``_load_kg_cache``
+    returned nothing and every feature came back ``no_signal`` — with no ERROR
+    logged, because the missing-cache check was never reached. That is the
+    "no cache is indistinguishable from no signal" failure #1607 exists to kill,
+    reintroduced by the guard meant to respect operators. Under ``"promoted"``
+    it is worse still: the operator believes the KG can now drop features.
+
+    A missing cache file is an ERROR log and a no-op, not a silent pass.
     """
     if not manifest_source:
         return False
@@ -107,10 +115,11 @@ def apply_kg_activation(
     if activation is None:
         return False
 
-    if scope_spec.get("kg_mode") is not None:
+    explicit_mode = scope_spec.get("kg_mode")
+    if explicit_mode is not None and str(explicit_mode).strip().lower() == "off":
         logger.info(
-            "KG activation: scope_spec already sets kg_mode=%r for %s; leaving it alone",
-            scope_spec.get("kg_mode"),
+            "KG activation: scope_spec sets kg_mode=%r for %s; staying off",
+            explicit_mode,
             manifest_source,
         )
         return False
@@ -129,7 +138,11 @@ def apply_kg_activation(
         return False
 
     scope_spec["kg_cache_path"] = str(cache_path)
-    scope_spec["kg_mode"] = activation.mode
+    # Bind the data, but let an operator's explicit on-mode stand. Promotion is
+    # an operator decision (``compute_promotion_eligibility``); activation
+    # supplies the cache it needs, it does not overrule it.
+    if explicit_mode is None:
+        scope_spec["kg_mode"] = activation.mode
     # Only set target codes when the cohort has not already declared them; the
     # cache fingerprint is derived from these, so a caller-supplied value that
     # disagrees would silently read a cache built for a different target.
@@ -152,7 +165,7 @@ def apply_kg_activation(
     logger.info(
         "KG activation: %s -> mode=%s cache=%s (%s)",
         manifest_source,
-        activation.mode,
+        scope_spec["kg_mode"],
         cache_path.name,
         activation.note,
     )

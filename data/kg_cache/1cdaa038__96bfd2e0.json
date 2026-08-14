@@ -10,6 +10,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0005271",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       },
@@ -22,6 +24,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0018621",
         "subject_name": ""
       },
@@ -34,6 +38,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0005324",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -51,7 +57,7 @@
     ],
     "feature_name": "allergic_rhinitis_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:25.380000+00:00",
+    "queried_at": "2026-08-14T18:00:37.197032+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -77,7 +83,7 @@
     ],
     "feature_name": "ana_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.941430+00:00",
+    "queried_at": "2026-08-14T18:00:41.675047+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -103,7 +109,7 @@
     ],
     "feature_name": "ana_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.941214+00:00",
+    "queried_at": "2026-08-14T18:00:41.674968+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -129,7 +135,7 @@
     ],
     "feature_name": "ana_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.941042+00:00",
+    "queried_at": "2026-08-14T18:00:41.674767+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -155,6 +161,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0010481",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -172,7 +180,7 @@
     ],
     "feature_name": "angioedema_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.322628+00:00",
+    "queried_at": "2026-08-14T18:00:38.990333+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -202,7 +210,7 @@
     ],
     "feature_name": "anxiety_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:26.201530+00:00",
+    "queried_at": "2026-08-14T18:00:37.975001+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -220,6 +228,20 @@
   {
     "edges": [
       {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2887465",
+        "subject_name": ""
+      },
+      {
         "datasource": "chembl_indications",
         "evidence": [],
         "evidence_source": "open_targets",
@@ -228,6 +250,8 @@
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0004979",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -245,7 +269,7 @@
     ],
     "feature_name": "asthma_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:24.530192+00:00",
+    "queried_at": "2026-08-14T18:00:36.317510+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -271,6 +295,8 @@
         "pmids": [],
         "predicate": "rb",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0011615",
         "subject_name": ""
       }
@@ -288,7 +314,7 @@
     ],
     "feature_name": "atopic_dermatitis_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:24.115616+00:00",
+    "queried_at": "2026-08-14T18:00:35.681297+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -314,7 +340,7 @@
     ],
     "feature_name": "cbc_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:30.153651+00:00",
+    "queried_at": "2026-08-14T18:00:41.913915+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -340,7 +366,7 @@
     ],
     "feature_name": "cbc_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:30.153521+00:00",
+    "queried_at": "2026-08-14T18:00:41.913771+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -366,7 +392,7 @@
     ],
     "feature_name": "cbc_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:30.153206+00:00",
+    "queried_at": "2026-08-14T18:00:41.913552+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -392,7 +418,7 @@
     ],
     "feature_name": "crp_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.346713+00:00",
+    "queried_at": "2026-08-14T18:00:41.023996+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -418,7 +444,7 @@
     ],
     "feature_name": "crp_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.346580+00:00",
+    "queried_at": "2026-08-14T18:00:41.023806+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -444,7 +470,7 @@
     ],
     "feature_name": "crp_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.346399+00:00",
+    "queried_at": "2026-08-14T18:00:41.023124+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -470,6 +496,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0011570",
         "subject_name": ""
       }
@@ -487,7 +515,7 @@
     ],
     "feature_name": "depression_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:26.889485+00:00",
+    "queried_at": "2026-08-14T18:00:38.593715+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -513,6 +541,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0010481",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -530,7 +560,7 @@
     ],
     "feature_name": "dx_angioedema_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:23.806466+00:00",
+    "queried_at": "2026-08-14T18:00:35.363252+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -556,6 +586,8 @@
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -573,7 +605,7 @@
     ],
     "feature_name": "dx_l50_1_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:22.798219+00:00",
+    "queried_at": "2026-08-14T18:00:34.546643+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -594,11 +626,27 @@
         "datasource": "chembl_indications",
         "evidence": [],
         "evidence_source": "open_targets",
+        "object_id": "C0263338",
+        "object_name": "chronic idiopathic urticaria",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "source_object_id": "MONDO_0044212",
+        "source_subject_id": "CHEMBL1201589",
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
         "object_id": "C0042109",
         "object_name": "urticaria",
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -616,7 +664,7 @@
     ],
     "feature_name": "dx_l50_8_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:23.102488+00:00",
+    "queried_at": "2026-08-14T18:00:34.966989+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -642,6 +690,8 @@
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -659,7 +709,7 @@
     ],
     "feature_name": "dx_l50_9_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:23.102702+00:00",
+    "queried_at": "2026-08-14T18:00:34.967225+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -685,6 +735,8 @@
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -698,7 +750,7 @@
     ],
     "feature_name": "dx_total_csu",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:23.102846+00:00",
+    "queried_at": "2026-08-14T18:00:34.967417+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -724,7 +776,7 @@
     ],
     "feature_name": "eosinophil_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.160699+00:00",
+    "queried_at": "2026-08-14T18:00:40.815119+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -750,7 +802,7 @@
     ],
     "feature_name": "eosinophil_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.160618+00:00",
+    "queried_at": "2026-08-14T18:00:40.815036+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -776,7 +828,7 @@
     ],
     "feature_name": "eosinophil_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.160453+00:00",
+    "queried_at": "2026-08-14T18:00:40.814846+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -802,7 +854,7 @@
     ],
     "feature_name": "free_t4_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.562340+00:00",
+    "queried_at": "2026-08-14T18:00:41.256895+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -828,7 +880,7 @@
     ],
     "feature_name": "free_t4_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.562228+00:00",
+    "queried_at": "2026-08-14T18:00:41.256785+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -854,7 +906,7 @@
     ],
     "feature_name": "free_t4_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.562020+00:00",
+    "queried_at": "2026-08-14T18:00:41.256588+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -880,7 +932,7 @@
     ],
     "feature_name": "h1_1g_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.481841+00:00",
+    "queried_at": "2026-08-14T18:00:39.149170+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -906,7 +958,7 @@
     ],
     "feature_name": "h1_1g_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.481808+00:00",
+    "queried_at": "2026-08-14T18:00:39.149125+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -932,7 +984,7 @@
     ],
     "feature_name": "h1_1g_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.481687+00:00",
+    "queried_at": "2026-08-14T18:00:39.148982+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -958,7 +1010,7 @@
     ],
     "feature_name": "h1_1g_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.481772+00:00",
+    "queried_at": "2026-08-14T18:00:39.149085+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -984,7 +1036,7 @@
     ],
     "feature_name": "h1_2g_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.644823+00:00",
+    "queried_at": "2026-08-14T18:00:39.304469+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1010,7 +1062,7 @@
     ],
     "feature_name": "h1_2g_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.644752+00:00",
+    "queried_at": "2026-08-14T18:00:39.304325+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1036,7 +1088,7 @@
     ],
     "feature_name": "h1_2g_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.644520+00:00",
+    "queried_at": "2026-08-14T18:00:39.304107+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1062,7 +1114,7 @@
     ],
     "feature_name": "h1_2g_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.644674+00:00",
+    "queried_at": "2026-08-14T18:00:39.304255+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1088,7 +1140,7 @@
     ],
     "feature_name": "h2_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.817199+00:00",
+    "queried_at": "2026-08-14T18:00:39.474128+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1114,7 +1166,7 @@
     ],
     "feature_name": "h2_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.817095+00:00",
+    "queried_at": "2026-08-14T18:00:39.474009+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1140,7 +1192,7 @@
     ],
     "feature_name": "h2_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.816781+00:00",
+    "queried_at": "2026-08-14T18:00:39.473652+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1166,7 +1218,7 @@
     ],
     "feature_name": "h2_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.817000+00:00",
+    "queried_at": "2026-08-14T18:00:39.473855+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1192,6 +1244,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0005271",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       },
@@ -1204,6 +1258,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0018621",
         "subject_name": ""
       },
@@ -1216,6 +1272,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0005324",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -1233,7 +1291,7 @@
     ],
     "feature_name": "has_allergic_rhinitis",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:25.379566+00:00",
+    "queried_at": "2026-08-14T18:00:37.196538+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1259,6 +1317,8 @@
         "pmids": [],
         "predicate": "associated_with",
         "score": null,
+        "source_object_id": "MONDO_0010481",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -1276,7 +1336,7 @@
     ],
     "feature_name": "has_angioedema",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.322259+00:00",
+    "queried_at": "2026-08-14T18:00:38.990140+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1306,7 +1366,7 @@
     ],
     "feature_name": "has_anxiety",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:26.201259+00:00",
+    "queried_at": "2026-08-14T18:00:37.974483+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1324,6 +1384,20 @@
   {
     "edges": [
       {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2887465",
+        "subject_name": ""
+      },
+      {
         "datasource": "chembl_indications",
         "evidence": [],
         "evidence_source": "open_targets",
@@ -1332,6 +1406,8 @@
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0004979",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -1349,7 +1425,7 @@
     ],
     "feature_name": "has_asthma",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:24.529905+00:00",
+    "queried_at": "2026-08-14T18:00:36.317078+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1375,6 +1451,8 @@
         "pmids": [],
         "predicate": "rb",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0011615",
         "subject_name": ""
       }
@@ -1392,7 +1470,7 @@
     ],
     "feature_name": "has_atopic_dermatitis",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:24.115346+00:00",
+    "queried_at": "2026-08-14T18:00:35.680829+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1418,6 +1496,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0011570",
         "subject_name": ""
       }
@@ -1435,7 +1515,7 @@
     ],
     "feature_name": "has_depression",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:26.888974+00:00",
+    "queried_at": "2026-08-14T18:00:38.593194+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1463,7 +1543,7 @@
     ],
     "feature_name": "has_nsaid_hypersensitivity",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.300737+00:00",
+    "queried_at": "2026-08-14T18:00:38.970885+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1489,6 +1569,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0677606",
         "subject_name": ""
       },
@@ -1501,6 +1583,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0677606",
         "subject_name": ""
       }
@@ -1518,7 +1602,7 @@
     ],
     "feature_name": "has_thyroid_autoimmune",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.279560+00:00",
+    "queried_at": "2026-08-14T18:00:38.947234+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1548,7 +1632,7 @@
     ],
     "feature_name": "ige_total_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.957683+00:00",
+    "queried_at": "2026-08-14T18:00:40.618677+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1578,7 +1662,7 @@
     ],
     "feature_name": "ige_total_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.957548+00:00",
+    "queried_at": "2026-08-14T18:00:40.618519+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1608,7 +1692,7 @@
     ],
     "feature_name": "ige_total_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.957327+00:00",
+    "queried_at": "2026-08-14T18:00:40.618306+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1634,6 +1718,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1646,6 +1732,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1658,6 +1746,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1670,6 +1760,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1682,6 +1774,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1694,6 +1788,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1706,6 +1802,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1718,6 +1816,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1730,6 +1830,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1742,6 +1844,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1754,6 +1858,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1766,6 +1872,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       }
@@ -1779,7 +1887,7 @@
     ],
     "feature_name": "immunosupp_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.583668+00:00",
+    "queried_at": "2026-08-14T18:00:40.260297+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1805,6 +1913,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1817,6 +1927,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1829,6 +1941,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1841,6 +1955,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1853,6 +1969,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1865,6 +1983,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1877,6 +1997,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1889,6 +2011,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1901,6 +2025,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1913,6 +2039,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1925,6 +2053,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1937,6 +2067,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       }
@@ -1950,7 +2082,7 @@
     ],
     "feature_name": "immunosupp_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.583461+00:00",
+    "queried_at": "2026-08-14T18:00:40.260042+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -1976,6 +2108,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -1988,6 +2122,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2000,6 +2136,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2012,6 +2150,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2024,6 +2164,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2036,6 +2178,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2048,6 +2192,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2060,6 +2206,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2072,6 +2220,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2084,6 +2234,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2096,6 +2248,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2108,6 +2262,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       }
@@ -2121,7 +2277,7 @@
     ],
     "feature_name": "immunosupp_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.582929+00:00",
+    "queried_at": "2026-08-14T18:00:40.259501+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2147,6 +2303,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2159,6 +2317,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2171,6 +2331,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2183,6 +2345,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2195,6 +2359,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2207,6 +2373,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2219,6 +2387,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2231,6 +2401,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2243,6 +2415,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2255,6 +2429,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2267,6 +2443,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       },
@@ -2279,6 +2457,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0021081",
         "subject_name": ""
       }
@@ -2292,7 +2472,7 @@
     ],
     "feature_name": "immunosupp_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.583252+00:00",
+    "queried_at": "2026-08-14T18:00:40.259798+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2318,7 +2498,7 @@
     ],
     "feature_name": "ltra_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.979120+00:00",
+    "queried_at": "2026-08-14T18:00:39.636720+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2344,7 +2524,7 @@
     ],
     "feature_name": "ltra_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.979096+00:00",
+    "queried_at": "2026-08-14T18:00:39.636697+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2370,7 +2550,7 @@
     ],
     "feature_name": "ltra_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.978974+00:00",
+    "queried_at": "2026-08-14T18:00:39.636594+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2396,7 +2576,7 @@
     ],
     "feature_name": "ltra_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.979067+00:00",
+    "queried_at": "2026-08-14T18:00:39.636672+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2424,7 +2604,7 @@
     ],
     "feature_name": "nsaid_hypersensitivity_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.321581+00:00",
+    "queried_at": "2026-08-14T18:00:38.989829+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2450,6 +2630,8 @@
         "pmids": [],
         "predicate": "treats",
         "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL1201589",
         "subject_id": "302379",
         "subject_name": "OMALIZUMAB"
       }
@@ -2467,7 +2649,7 @@
     ],
     "feature_name": "primary_diagnosis_code",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:22.458798+00:00",
+    "queried_at": "2026-08-14T18:00:34.210927+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2493,6 +2675,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C2825472",
         "subject_name": ""
       }
@@ -2506,7 +2690,7 @@
     ],
     "feature_name": "sys_steroid_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.139688+00:00",
+    "queried_at": "2026-08-14T18:00:39.782351+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2532,6 +2716,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C2825472",
         "subject_name": ""
       }
@@ -2545,7 +2731,7 @@
     ],
     "feature_name": "sys_steroid_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.139654+00:00",
+    "queried_at": "2026-08-14T18:00:39.782313+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2571,6 +2757,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C2825472",
         "subject_name": ""
       }
@@ -2584,7 +2772,7 @@
     ],
     "feature_name": "sys_steroid_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.139502+00:00",
+    "queried_at": "2026-08-14T18:00:39.782180+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2610,6 +2798,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C2825472",
         "subject_name": ""
       }
@@ -2623,7 +2813,7 @@
     ],
     "feature_name": "sys_steroid_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.139614+00:00",
+    "queried_at": "2026-08-14T18:00:39.782271+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2649,6 +2839,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0677606",
         "subject_name": ""
       },
@@ -2661,6 +2853,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0677606",
         "subject_name": ""
       }
@@ -2678,7 +2872,7 @@
     ],
     "feature_name": "thyroid_autoimmune_claim_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:27.279904+00:00",
+    "queried_at": "2026-08-14T18:00:38.947568+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2704,6 +2898,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2716,6 +2912,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2728,6 +2926,8 @@
         "pmids": [],
         "predicate": "rb",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2740,6 +2940,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2752,6 +2954,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       }
@@ -2765,7 +2969,7 @@
     ],
     "feature_name": "top_steroid_days_since_last_fill",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.424183+00:00",
+    "queried_at": "2026-08-14T18:00:40.093827+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2791,6 +2995,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2803,6 +3009,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2815,6 +3023,8 @@
         "pmids": [],
         "predicate": "rb",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2827,6 +3037,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2839,6 +3051,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       }
@@ -2852,7 +3066,7 @@
     ],
     "feature_name": "top_steroid_days_supply_total",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.423971+00:00",
+    "queried_at": "2026-08-14T18:00:40.093636+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2878,6 +3092,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2890,6 +3106,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2902,6 +3120,8 @@
         "pmids": [],
         "predicate": "rb",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2914,6 +3134,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2926,6 +3148,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       }
@@ -2939,7 +3163,7 @@
     ],
     "feature_name": "top_steroid_ever_filled",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.423485+00:00",
+    "queried_at": "2026-08-14T18:00:40.093156+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -2965,6 +3189,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2977,6 +3203,8 @@
         "pmids": [],
         "predicate": "inverse_isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -2989,6 +3217,8 @@
         "pmids": [],
         "predicate": "rb",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -3001,6 +3231,8 @@
         "pmids": [],
         "predicate": "rn",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       },
@@ -3013,6 +3245,8 @@
         "pmids": [],
         "predicate": "isa",
         "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
         "subject_id": "C0001617",
         "subject_name": ""
       }
@@ -3026,7 +3260,7 @@
     ],
     "feature_name": "top_steroid_fill_count",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:28.423763+00:00",
+    "queried_at": "2026-08-14T18:00:40.093438+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -3054,7 +3288,7 @@
     ],
     "feature_name": "tpo_ab_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.371006+00:00",
+    "queried_at": "2026-08-14T18:00:41.053238+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -3082,7 +3316,7 @@
     ],
     "feature_name": "tpo_ab_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.370976+00:00",
+    "queried_at": "2026-08-14T18:00:41.053217+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -3110,7 +3344,7 @@
     ],
     "feature_name": "tpo_ab_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.370895+00:00",
+    "queried_at": "2026-08-14T18:00:41.053162+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -3136,7 +3370,7 @@
     ],
     "feature_name": "tsh_abnormal_flag",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.748058+00:00",
+    "queried_at": "2026-08-14T18:00:41.480000+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -3162,7 +3396,7 @@
     ],
     "feature_name": "tsh_result_last",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.747979+00:00",
+    "queried_at": "2026-08-14T18:00:41.479864+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",
@@ -3188,7 +3422,7 @@
     ],
     "feature_name": "tsh_tested",
     "manifest_fingerprint_sha8": "1cdaa038",
-    "queried_at": "2026-08-14T17:16:29.747770+00:00",
+    "queried_at": "2026-08-14T18:00:41.479687+00:00",
     "sources_attempted": [
       "umls_uts",
       "rxnav",

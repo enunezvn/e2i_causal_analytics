@@ -317,6 +317,18 @@ class KGEdge:
             cross-walked), and the original datasource score. Defaults
             to ``()`` so pre-#245 callers that construct edges without
             evidence remain unaffected. See ``EvidenceItem``.
+        source_subject_id: The subject id as the upstream source stated it,
+            when ``subject_id`` has been normalised to a different vocabulary.
+            ``build_kg_cache`` rewrites Open Targets endpoints to the
+            manifest/scope identifiers so ``classify_kg_signal._connects`` can
+            match them; without this field the committed cache records a
+            leakage finding with no way to tell which ChEMBL drug produced it
+            (#1607). ``None`` means no normalisation happened.
+        source_object_id: The object id as the upstream source stated it, under
+            the same rule. This one carries the audit weight: a feature's CUI
+            is mapped to a disease by a fuzzy ``search_disease(preferred_name)``
+            lookup, and a broad or wrong EFO/MONDO match still yields a
+            perfectly plausible ``object_name``. Names are not auditable.
     """
 
     subject_id: str
@@ -329,6 +341,8 @@ class KGEdge:
     pmids: tuple[str, ...] = ()
     datasource: Optional[str] = None
     evidence: tuple[EvidenceItem, ...] = ()
+    source_subject_id: Optional[str] = None
+    source_object_id: Optional[str] = None
     raw: Optional[dict] = field(default=None, repr=False)
 
 

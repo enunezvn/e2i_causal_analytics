@@ -52,6 +52,29 @@ If the target does not resolve to a drug, the build still succeeds but logs a
 warning and emits **taxonomic edges only** — which, on their own, can never
 produce a signal (see below).
 
+### Auditing a flagged feature
+
+The drug-disease pass rewrites edge endpoints to the manifest CUI and the scope's
+target code, because `classify_kg_signal._connects` compares against those and
+would never match a raw ChEMBL/MONDO id. The identifiers the source actually
+spoke are preserved on `source_subject_id` / `source_object_id`, which the cache
+file persists.
+
+Use them. The feature's CUI is mapped to a disease by a fuzzy
+`open_targets.search_disease(preferred_name)` lookup, and a broad or wrong
+EFO/MONDO match still yields a perfectly plausible `object_name` — so a name
+alone cannot tell you whether the match was right. These edges drive a leakage
+finding that can drop a feature, so check the id:
+
+```bash
+jq '.[] | select(.feature_name=="dx_total_csu") | .edges[]
+    | select(.evidence_source=="open_targets")
+    | {predicate, object_name, source_object_id, source_subject_id}' \
+  data/kg_cache/1cdaa038__96bfd2e0.json
+```
+
+Cache files written before #1607 have no such keys and load with both as `None`.
+
 ### Why taxonomic edges alone are not enough
 
 `query_disease_hierarchy(cui)` returns a concept's own parents and children. It
@@ -90,8 +113,11 @@ drift apart.
 applied inside the adaptive-validity node, so every entry point gets the same
 binding regardless of which runner assembled the `scope_spec`.
 
-* An explicit `kg_mode` in the `scope_spec` always wins — activation never
-  re-enables a cohort an operator turned off.
+* An explicit `kg_mode="off"` always wins — activation never re-enables a cohort
+  an operator turned off. Any *other* explicit mode (`shadow`, `promoted`) is
+  preserved but still gets the cache bound: an explicit on-mode is a request to
+  turn the layer on, and treating it as "hands off" left `kg_cache_path` unset,
+  which is indistinguishable from the KG having nothing to say.
 * A configured-but-missing cache logs an **ERROR** and leaves KG off. "No
   cache" and "no signal" must never look alike.
 

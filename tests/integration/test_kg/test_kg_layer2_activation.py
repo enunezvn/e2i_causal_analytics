@@ -94,6 +94,44 @@ def test_activation_respects_an_explicit_operator_setting() -> None:
     assert "kg_cache_path" not in scope_spec
 
 
+@pytest.mark.parametrize("explicit_mode", ["shadow", "promoted"])
+def test_an_explicit_on_mode_still_gets_the_cache_bound(explicit_mode: str) -> None:
+    """An explicit *on* mode means "turn KG ON", not "skip the binding".
+
+    Only ``off`` is an instruction to stay dark. Short-circuiting on ANY
+    explicit ``kg_mode`` meant an operator who wrote ``kg_mode="shadow"`` — the
+    most natural way to ask for exactly what this module provides — got no
+    ``kg_cache_path``, so ``_load_kg_cache`` returned nothing and every feature
+    came back ``no_signal`` with no ERROR logged. That is precisely the
+    "no cache is indistinguishable from no signal" failure #1607 is about,
+    reintroduced by the guard meant to respect operators.
+
+    ``promoted`` is the worse half: the operator believes the KG can now drop
+    features, and it silently cannot.
+    """
+    scope_spec: dict = {"feature_manifest_source": "optum", "kg_mode": explicit_mode}
+    assert apply_kg_activation(scope_spec, "optum") is True
+
+    # The operator's mode is preserved — activation binds data, it does not
+    # overrule a promotion decision.
+    assert scope_spec["kg_mode"] == explicit_mode
+    assert scope_spec["kg_cache_path"].endswith(_OPTUM.cache_filename)
+    assert [tuple(t) for t in scope_spec["target_entity_codes"]] == [("RXNORM", "302379")]
+    assert _load_kg_cache(scope_spec), "explicit mode bound a path the loader cannot read"
+
+
+def test_explicit_on_mode_with_a_missing_cache_is_still_loud(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The missing-cache ERROR must fire for an explicit mode too."""
+    scope_spec: dict = {"feature_manifest_source": "optum", "kg_mode": "shadow"}
+    with caplog.at_level("ERROR", logger="src.data.kg.activation"):
+        activated = apply_kg_activation(scope_spec, "optum", cache_dir=tmp_path)
+
+    assert activated is False
+    assert any("MISSING" in message for message in caplog.messages)
+
+
 def test_activation_is_a_loud_noop_when_the_cache_is_missing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -211,7 +249,43 @@ def test_open_targets_edges_are_present_and_phase_gated() -> None:
     )
     treats = [e for e in ot_edges if e.get("predicate") == "treats"]
     assert treats, "no 'treats' edges — only an approved indication earns that predicate"
-    # Provenance survives the cache round-trip via the NAMES (KGEdge.raw is not
-    # serialised by cache._kg_edge_to_json).
     assert any(e.get("subject_name") for e in treats), "lost the drug name provenance"
     assert all(e.get("datasource") == "chembl_indications" for e in ot_edges)
+
+
+def test_committed_cache_preserves_the_open_targets_identifiers() -> None:
+    """The rewritten endpoints must not be the ONLY identifiers on record.
+
+    ``_drug_disease_edges_for_cui`` rewrites subject/object to the manifest and
+    scope identifiers so ``classify_kg_signal._connects`` can match. That is a
+    necessary normalisation, but on its own it launders provenance: the
+    feature's CUI is resolved to a disease by a fuzzy
+    ``open_targets.search_disease(preferred_name)`` call, and if that lands on a
+    broad or simply wrong EFO/MONDO term, the resulting ``object_name`` still
+    reads perfectly plausible. Names are not auditable; ids are.
+
+    These edges drive a LEAKAGE finding, so "which disease did we actually match
+    this feature to?" has to be answerable from the committed artifact alone.
+    """
+    records = json.loads(_cache_path().read_text())
+    ot_edges = [
+        edge
+        for record in records
+        for edge in (record.get("edges") or [])
+        if edge.get("evidence_source") == "open_targets"
+    ]
+    assert ot_edges, "no open_targets edges to check provenance on"
+
+    for edge in ot_edges:
+        assert (edge.get("source_subject_id") or "").startswith("CHEMBL"), (
+            f"lost the Open Targets drug id on {edge!r} — the rewritten "
+            "subject_id is a manifest code, so nothing records WHICH ChEMBL "
+            "drug produced this edge"
+        )
+        source_object = edge.get("source_object_id") or ""
+        assert source_object.startswith(("MONDO_", "EFO_", "HP_", "Orphanet_", "OTAR_")), (
+            f"lost the Open Targets disease id on {edge!r} — the fuzzy "
+            "search_disease() match is unauditable without it"
+        )
+        # The rewrite must actually have happened, or _connects cannot fire.
+        assert edge["subject_id"] != edge["source_subject_id"]

@@ -277,3 +277,91 @@ def test_kg_edge_serialization_round_trip(tmp_path: Path):
     assert e.predicate == "treats"
     assert e.score == 0.87
     assert e.pmids == ("28846349", "30000000")
+
+
+def test_source_endpoint_ids_round_trip(tmp_path: Path):
+    """The pre-normalisation endpoint ids must survive the cache file (#1607).
+
+    ``build_kg_cache._drug_disease_edges_for_cui`` rewrites an Open Targets
+    edge's endpoints to the manifest/scope identifiers so the voter's
+    ``_connects`` check can match them. The original ChEMBL/EFO ids were kept
+    only in ``KGEdge.raw``, which ``_kg_edge_to_json`` does not serialise — so
+    the committed artifact recorded a leakage finding with no way to audit which
+    disease the fuzzy ``search_disease`` call had actually matched.
+    """
+    from src.data.kg.cache import CacheRecord, load_cache, save_cache
+    from src.data.kg.types import KGEdge
+
+    edge = KGEdge(
+        subject_id="302379",  # rewritten to the scope's RxNorm code
+        predicate="treats",
+        object_id="C0041834",  # rewritten to the feature's UMLS CUI
+        evidence_source="open_targets",
+        subject_name="OMALIZUMAB",
+        object_name="chronic urticaria",
+        datasource="chembl_indications",
+        source_subject_id="CHEMBL1201589",
+        source_object_id="MONDO_0005492",
+    )
+    record = CacheRecord(
+        feature_name="dx_total_csu",
+        manifest_fingerprint_sha8="a",
+        target_codes_fingerprint_sha8="b",
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(("UMLS", "C0041834"),),
+        target_entity_codes=(("RXNORM", "302379"),),
+        sources_attempted=("open_targets",),
+        status="ok",
+        edges=(edge,),
+        errors=(),
+    )
+
+    path = tmp_path / "cache.json"
+    save_cache([record], path)
+    loaded = load_cache(path)[0].edges[0]
+
+    assert loaded.source_subject_id == "CHEMBL1201589"
+    assert loaded.source_object_id == "MONDO_0005492"
+    # ...while the rewritten endpoints are what _connects still sees.
+    assert loaded.subject_id == "302379"
+    assert loaded.object_id == "C0041834"
+
+
+def test_pre_1607_cache_files_load_without_source_ids(tmp_path: Path):
+    """Older cache files have no source ids; they must load, not explode."""
+    import json
+
+    from src.data.kg.cache import load_cache
+
+    payload = [
+        {
+            "feature_name": "f",
+            "manifest_fingerprint_sha8": "a",
+            "target_codes_fingerprint_sha8": "b",
+            "queried_at": datetime.now(timezone.utc).isoformat(),
+            "feature_entity_codes": [["UMLS", "C1"]],
+            "target_entity_codes": [["RXNORM", "1"]],
+            "sources_attempted": ["umls"],
+            "status": "ok",
+            "edges": [
+                {
+                    "subject_id": "C1",
+                    "subject_name": "",
+                    "predicate": "is_a",
+                    "object_id": "C2",
+                    "object_name": "",
+                    "evidence_source": "umls",
+                    "score": None,
+                    "pmids": [],
+                    "datasource": None,
+                }
+            ],
+            "errors": [],
+        }
+    ]
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(payload))
+
+    edge = load_cache(path)[0].edges[0]
+    assert edge.source_subject_id is None
+    assert edge.source_object_id is None

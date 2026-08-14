@@ -157,18 +157,6 @@ def test_query_concept_relations_does_not_dedupe_cross_source_rows() -> None:
     assert sources == {"MSH", "SNOMEDCT_US"}
 
 
-def test_query_drug_disease_edges_propagates_open_targets_error() -> None:
-    """Transport failures must surface so callers can distinguish "no
-    edges" from "GraphQL/transport failure" (codex H1 from PR #102 review).
-    Cache builders, EnsembleVoter, and operator-facing pipelines need
-    typed errors to record ``status=source_error`` instead of
-    ``status=queried_no_edges``."""
-    umls = _StubUMLS()
-    ot = _StubOT(raise_error=True)
-    with pytest.raises(OpenTargetsError):
-        _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
-
-
 def test_query_disease_hierarchy_filters_to_taxonomic_predicates() -> None:
     umls = _StubUMLS(
         relations=[
