@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, List, Optional
@@ -36,6 +37,11 @@ OPENFDA_BASE: str = "https://api.fda.gov/drug"
 # Short default timeout: enrichment is best-effort and must not hold the request
 # open. The service layer treats a timeout as "degrade to static fallback".
 DEFAULT_TIMEOUT: float = 8.0
+
+# PubMed E-utilities allows 3 requests/second without an API key and answers a
+# burst with HTTP 429. Same shape as ChEMBLClient's retry budget (#1612).
+PUBMED_DEFAULT_MAX_RETRIES: int = 3
+PUBMED_DEFAULT_RETRY_BACKOFF_S: float = 0.5
 _LRU_MAXSIZE: int = 2048
 
 
@@ -184,10 +190,56 @@ class PubMedClient:
         base: str = PUBMED_BASE,
         timeout: float = DEFAULT_TIMEOUT,
         client: Optional[httpx.Client] = None,
+        max_retries: int = PUBMED_DEFAULT_MAX_RETRIES,
+        retry_backoff_s: float = PUBMED_DEFAULT_RETRY_BACKOFF_S,
     ) -> None:
         self._base = base.rstrip("/")
         self._client = client if client is not None else httpx.Client(timeout=timeout)
         self._owns_client = client is None
+        self._max_retries = max_retries
+        self._retry_backoff_s = retry_backoff_s
+
+    def _get(self, path: str, params: dict[str, Any], *, op: str) -> dict[str, Any]:
+        """GET ``{base}{path}`` with HTTP-429 retry.
+
+        NCBI E-utilities permits 3 requests/second without an API key and
+        answers a burst with HTTP 429 (measured 2026-08-14: 4 of 8 rapid
+        esearch calls throttled). Without a retry, a burst surfaced as
+        ``PubMedError`` -> ``CitationFragment(source="unavailable")``, which the
+        fan-out then cached as a degraded result — a transient throttle
+        presenting as missing evidence. Mirrors ``ChEMBLClient._get`` (#1612).
+
+        Only 429 is retried: other 4xx/5xx are not throttles, and re-querying an
+        unhealthy endpoint would just double the load on it.
+        """
+        url = f"{self._base}{path}"
+        attempts = 0
+        last_error: Optional[str] = None
+        while attempts <= self._max_retries:
+            try:
+                response = self._client.get(url, params=params)
+            except httpx.HTTPError as exc:
+                raise PubMedError(f"PubMed {op} transport error: {exc}") from exc
+            if response.status_code == 429:
+                attempts += 1
+                last_error = f"HTTP 429: {response.text[:200]!r}"
+                if attempts > self._max_retries:
+                    break
+                if self._retry_backoff_s > 0:
+                    time.sleep(self._retry_backoff_s)
+                continue
+            if response.status_code >= 400:
+                raise PubMedError(
+                    f"PubMed {op} HTTP {response.status_code}: {response.text[:200]!r}"
+                )
+            try:
+                payload: dict[str, Any] = response.json()
+            except ValueError as exc:
+                raise PubMedError(f"PubMed {op} non-JSON body: {response.text[:200]!r}") from exc
+            return payload
+        raise PubMedError(
+            f"PubMed {op} rate-limit exhausted after {self._max_retries} retries: {last_error}"
+        )
 
     def __enter__(self) -> "PubMedClient":
         return self
@@ -214,46 +266,26 @@ class PubMedClient:
         return _pubmed_fetch_by_pmid_cached(self, pmid)
 
     def _esearch_top_pmid(self, term: str) -> Optional[str]:
-        try:
-            response = self._client.get(
-                f"{self._base}/esearch.fcgi",
-                params={
-                    "db": "pubmed",
-                    "term": term,
-                    "retmode": "json",
-                    "retmax": 1,
-                    "sort": "relevance",
-                },
-            )
-        except httpx.HTTPError as exc:
-            raise PubMedError(f"PubMed esearch transport error: {exc}") from exc
-        if response.status_code >= 400:
-            raise PubMedError(
-                f"PubMed esearch HTTP {response.status_code}: {response.text[:200]!r}"
-            )
-        try:
-            payload: dict[str, Any] = response.json()
-        except ValueError as exc:
-            raise PubMedError(f"PubMed esearch non-JSON body: {response.text[:200]!r}") from exc
+        payload = self._get(
+            "/esearch.fcgi",
+            {
+                "db": "pubmed",
+                "term": term,
+                "retmode": "json",
+                "retmax": 1,
+                "sort": "relevance",
+            },
+            op="esearch",
+        )
         idlist = payload.get("esearchresult", {}).get("idlist") or []
         return str(idlist[0]) if idlist else None
 
     def _esummary(self, pmid: str) -> Optional[PubMedArticle]:
-        try:
-            response = self._client.get(
-                f"{self._base}/esummary.fcgi",
-                params={"db": "pubmed", "id": pmid, "retmode": "json"},
-            )
-        except httpx.HTTPError as exc:
-            raise PubMedError(f"PubMed esummary transport error: {exc}") from exc
-        if response.status_code >= 400:
-            raise PubMedError(
-                f"PubMed esummary HTTP {response.status_code}: {response.text[:200]!r}"
-            )
-        try:
-            payload: dict[str, Any] = response.json()
-        except ValueError as exc:
-            raise PubMedError(f"PubMed esummary non-JSON body: {response.text[:200]!r}") from exc
+        payload = self._get(
+            "/esummary.fcgi",
+            {"db": "pubmed", "id": pmid, "retmode": "json"},
+            op="esummary",
+        )
         record = payload.get("result", {}).get(str(pmid))
         if not isinstance(record, dict):
             return None
@@ -352,11 +384,16 @@ class _OpenFDAClient:
            like "letrozole and ribociclib".
         2. The first result if no single-ingredient match is found.
 
-        Returns ``None`` on HTTP 404, empty results, or any exception.
+        A zero-result search is reported by openFDA as HTTP 404, not as an
+        empty ``results`` list, so both spellings of "no match" reach the retry
+        (#1612). ``None`` is reserved for transport/HTTP failures.
+
+        Returns ``None`` when neither field matches, or on any exception.
         """
         result = self._fetch_by_field("openfda.generic_name", drug_name)
         if result is None:
-            # 404 or exception — do not retry.
+            # Transport / non-404 HTTP error — retrying the same dead endpoint
+            # with a different search field would not help.
             return None
         if result:
             return result
@@ -368,8 +405,9 @@ class _OpenFDAClient:
     def _fetch_by_field(self, field: str, drug_name: str) -> Optional[dict[str, Any]]:
         """GET /drug/label.json searching by ``field``.
 
-        Returns the best matching record dict, an empty dict sentinel when
-        results are genuinely empty, or ``None`` on 404 / exception.
+        Returns the best matching record dict, an empty dict sentinel when the
+        search matched nothing (either 200-with-empty-``results`` or openFDA's
+        HTTP 404 ``NOT_FOUND``), or ``None`` on transport/HTTP error.
         """
         params: dict[str, Any] = {
             "search": f'{field}:"{drug_name}"',
@@ -383,6 +421,27 @@ class _OpenFDAClient:
             logger.debug("OpenFDA transport error for %r: %s", drug_name, exc)
             return None
         if response.status_code == 404:
+            # openFDA signals "no matches" for a zero-result search with HTTP
+            # 404 + ``{"error": {"code": "NOT_FOUND"}}`` rather than 200 with an
+            # empty ``results`` list (verified live 2026-08-14, #1612). That is
+            # semantically the SAME case as empty results, so it returns the
+            # retryable ``{}`` sentinel — mapping it to ``None`` made
+            # ``fetch_label``'s documented brand_name retry unreachable for every
+            # brand-name-only drug.
+            #
+            # Only a body that actually says NOT_FOUND counts. A moved endpoint,
+            # a proxy/CDN 404, or an HTML error page would otherwise be read as
+            # "this drug has no label" and quietly trigger a pointless second
+            # query — masking an outage as a miss. Anything else is a real HTTP
+            # failure and returns ``None``, which suppresses the retry.
+            if self._is_no_match_body(response):
+                return {}
+            logger.debug(
+                "OpenFDA 404 for %r with a non-NOT_FOUND body (possible endpoint "
+                "move or proxy error): %s",
+                drug_name,
+                response.text[:200],
+            )
             return None
         if response.status_code >= 400:
             logger.debug(
@@ -402,6 +461,23 @@ class _OpenFDAClient:
             # Sentinel: empty results (not an error) — caller may retry.
             return {}
         return self._pick_best(results, drug_name)
+
+    @staticmethod
+    def _is_no_match_body(response: httpx.Response) -> bool:
+        """True when a 404 body is openFDA's own "no matches" signal.
+
+        Distinguishes ``{"error": {"code": "NOT_FOUND"}}`` — a legitimate empty
+        search result — from any other 404 (moved endpoint, proxy error, HTML
+        page), which must be treated as a transport failure rather than a miss.
+        """
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001 - a non-JSON 404 is not a no-match signal
+            return False
+        if not isinstance(payload, dict):
+            return False
+        error = payload.get("error")
+        return isinstance(error, dict) and error.get("code") == "NOT_FOUND"
 
     @staticmethod
     def _pick_best(results: list[dict[str, Any]], drug_name: str) -> dict[str, Any]:

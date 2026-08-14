@@ -277,3 +277,101 @@ def test_pubmed_http_error_raises() -> None:
     with _pubmed(handler) as client:
         with pytest.raises(PubMedError):
             client.top_article("ribociclib")
+
+
+# ---------------------------------------------------------------------------
+# HTTP-429 retry (#1612)
+#
+# NCBI E-utilities allows 3 requests/second without an API key. Measured
+# 2026-08-14: 8 rapid esearch calls returned [200, 200, 200, 429, 429, 429,
+# 429, 200] — 4 of 8 throttled. PubMedClient had no retry at all, so a burst
+# surfaced as PubMedError -> CitationFragment(source="unavailable"), cached as a
+# degraded fan-out. ChEMBLClient already retries 429 (chembl.py:_get); these
+# tests hold PubMed to the same in-repo standard.
+#
+# MockTransport is used here only because a 429 cannot be produced on demand
+# from the real endpoint; the *live* counterpart in
+# tests/integration/test_clinical_context/ proves the retry against real NCBI
+# throttling.
+# ---------------------------------------------------------------------------
+
+
+def test_pubmed_retries_on_429_then_succeeds() -> None:
+    """A throttled esearch is retried rather than raised straight through."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "esearch" in request.url.path:
+            calls.append("esearch")
+            if len(calls) == 1:
+                return httpx.Response(429, text="rate limit")
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["38507751"]}})
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "38507751": {
+                        "title": "Ribociclib plus Endocrine Therapy in Early Breast Cancer.",
+                        "source": "N Engl J Med",
+                        "pubdate": "2024 Mar 21",
+                        "articleids": [{"idtype": "doi", "value": "10.1056/NEJMoa2305488"}],
+                    }
+                }
+            },
+        )
+
+    client = PubMedClient(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=2,
+        retry_backoff_s=0.0,
+    )
+    with client:
+        article = client.top_article("ribociclib breast cancer")
+
+    assert calls == ["esearch", "esearch"], "429 was not retried"
+    assert article is not None and article.pmid == "38507751"
+
+
+def test_pubmed_raises_after_retry_budget_exhausted() -> None:
+    """Persistent throttling still surfaces as an error, not a silent None.
+
+    The provider layer turns this into ``source="unavailable"``; what must not
+    happen is an unbounded retry loop against an API that is refusing us.
+    """
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(429, text="rate limit")
+
+    client = PubMedClient(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=2,
+        retry_backoff_s=0.0,
+    )
+    with client:
+        with pytest.raises(PubMedError):
+            client.top_article("ribociclib")
+
+    # 1 initial attempt + 2 retries, then give up.
+    assert len(calls) == 3, f"expected 3 attempts with max_retries=2, got {len(calls)}"
+
+
+def test_pubmed_does_not_retry_non_429_errors() -> None:
+    """A 503 is not a throttle; retrying it just doubles load on a sick endpoint."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(503, text="down")
+
+    client = PubMedClient(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=3,
+        retry_backoff_s=0.0,
+    )
+    with client:
+        with pytest.raises(PubMedError):
+            client.top_article("ribociclib")
+
+    assert len(calls) == 1, "a 503 must not be retried"

@@ -171,8 +171,42 @@ def test_fetch_label_brand_fallback_when_generic_empty() -> None:
     assert result["openfda"]["generic_name"] == ["ribociclib"]
 
 
-def test_fetch_label_brand_fallback_not_triggered_on_404() -> None:
-    """On a 404 from generic search, skip the brand retry and return None."""
+def test_fetch_label_brand_fallback_triggered_on_404_from_generic() -> None:
+    """A 404 from the generic search MUST still reach the brand_name retry.
+
+    openFDA reports a zero-result search as HTTP 404 with
+    ``{"error": {"code": "NOT_FOUND"}}`` — not as 200 with an empty ``results``
+    list (verified against the live endpoint 2026-08-14, #1612). This test
+    previously asserted the opposite ("skip the brand retry and return None"),
+    which was written from a mocked assumption about the API rather than its
+    real behaviour, and made ``fetch_label``'s documented brand_name retry
+    unreachable for every brand-name-only drug (KISQALI, FABHALTA, ...).
+
+    404 and 200-with-empty are the same case semantically — "this field matched
+    nothing" — so both must fall through to the retry. See the live counterpart
+    ``tests/integration/test_clinical_context/test_openfda_live_contract.py``.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = request.url.query.decode("utf-8")
+        if "openfda.generic_name" in q:
+            calls.append("generic")
+            return httpx.Response(404, json={"error": {"code": "NOT_FOUND"}})
+        calls.append("brand")
+        assert "openfda.brand_name" in q
+        return httpx.Response(200, json={"results": [_KISQALI_STANDALONE]})
+
+    with _openfda(handler) as client:
+        result = client.fetch_label("KISQALI")
+
+    assert calls == ["generic", "brand"], "404 on generic must not suppress the brand retry"
+    assert result is not None
+    assert result["openfda"]["generic_name"] == ["ribociclib"]
+
+
+def test_fetch_label_returns_none_when_both_fields_404() -> None:
+    """Both spellings missing → a final miss, after both were attempted."""
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -183,9 +217,51 @@ def test_fetch_label_brand_fallback_not_triggered_on_404() -> None:
     with _openfda(handler) as client:
         result = client.fetch_label("unknowndrug")
 
-    # 404 on generic → no results (not "empty"), no brand retry
     assert result is None
-    assert "brand" not in calls
+    assert calls == ["generic", "brand"]
+
+
+def test_fetch_label_treats_non_not_found_404_as_a_real_failure() -> None:
+    """A 404 that is NOT openFDA's no-match signal must suppress the retry.
+
+    codex review MED (#1612): mapping every 404 to the retryable ``{}`` sentinel
+    would read a moved endpoint, a proxy/CDN 404, or an HTML error page as
+    "this drug has no label" and fire a pointless second query — masking an
+    outage as a miss. Only ``{"error": {"code": "NOT_FOUND"}}`` counts.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = request.url.query.decode("utf-8")
+        calls.append("generic" if "openfda.generic_name" in q else "brand")
+        return httpx.Response(404, html="<html><body>404 Not Found</body></html>")
+
+    with _openfda(handler) as client:
+        result = client.fetch_label("ribociclib")
+
+    assert result is None
+    assert calls == ["generic"], "a non-NOT_FOUND 404 must not trigger the brand retry"
+
+
+def test_fetch_label_does_not_retry_on_server_error() -> None:
+    """A non-404 HTTP failure suppresses the retry (invariant kept from #1612).
+
+    ``None`` stays reserved for transport/HTTP errors: re-querying the same
+    unhealthy endpoint with a different search field cannot help, and would
+    double the load on an API that is already failing.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = request.url.query.decode("utf-8")
+        calls.append("generic" if "openfda.generic_name" in q else "brand")
+        return httpx.Response(500, text="upstream boom")
+
+    with _openfda(handler) as client:
+        result = client.fetch_label("ribociclib")
+
+    assert result is None
+    assert calls == ["generic"], "a 5xx must NOT trigger a second query"
 
 
 def test_fetch_label_returns_none_on_exception() -> None:
