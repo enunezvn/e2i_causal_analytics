@@ -369,7 +369,18 @@ def test_api_key_attached_to_request_when_set() -> None:
     assert "api_key=test-key-xyz" in seen_params[0]
 
 
-def test_no_api_key_omits_param() -> None:
+def test_no_api_key_omits_param(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #1602 (same .env walk-up class): ``api_key=None`` means "resolve from
+    # env" by design (clients.py:328), so this no-key pin is only expressible
+    # with OPENFDA_API_KEY absent. The repo-root .env sets it (line 102), and
+    # the root conftest's load_dotenv(override=True) hands it to local runs —
+    # the request then carried the REAL key and the assertion failed on the
+    # droplet while passing in CI. Per-test delenv, matching the credential
+    # precedent in test_data_source_validator (OPENAI_API_KEY/ANTHROPIC_API_KEY);
+    # this one is a credential, not a mode flag, so it is deliberately NOT in
+    # the unit-tree autouse pin — tests that need a key still get the ambient one.
+    monkeypatch.delenv("OPENFDA_API_KEY", raising=False)
+
     seen_params: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
