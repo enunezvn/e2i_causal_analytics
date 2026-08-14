@@ -110,3 +110,45 @@ def test_the_summary_report_is_not_silently_dropped() -> None:
             f"{summary} is dropped by the `*.md` exclusion — move the kg_cache "
             "un-ignore later in .dockerignore"
         )
+
+
+# --------------------------------------------------------------- #1623: staleness
+
+
+def test_configured_cache_filename_still_matches_the_live_manifest() -> None:
+    """The cache name must describe the manifest that exists TODAY (#1623).
+
+    The filename embeds fingerprints of both the feature manifest and the target
+    entity codes, and ``KG_ACTIVATIONS`` names it as a literal. Edit
+    ``OPTUM_FEATURES`` — add a feature, change one ``kg_entity_codes`` entry — and
+    the manifest fingerprint changes while the literal does not.
+
+    Nothing else catches that. The packaging guard above proves the artifact reaches
+    the image, and ``test_kg_layer2_activation.py`` reads the cache *by its
+    configured name*, so both stay green while the name has stopped describing the
+    manifest. At runtime the drift IS detected, but in ``shadow`` mode it logs and
+    skips — so the symptom is every feature returning ``no_signal``, which is
+    exactly the "the KG had nothing to say" ambiguity #1607 exists to eliminate.
+    """
+    from src.data.kg.cache import (
+        compose_cache_filename,
+        compute_manifest_fingerprint,
+        compute_target_codes_fingerprint,
+    )
+    from src.data.manifests.optum_feature_manifest import OPTUM_FEATURES
+
+    activation = KG_ACTIVATIONS["optum"]
+    expected = compose_cache_filename(
+        compute_manifest_fingerprint(OPTUM_FEATURES),
+        compute_target_codes_fingerprint(tuple(tuple(t) for t in activation.target_entity_codes)),
+    )
+
+    assert expected == activation.cache_filename, (
+        f"KG_ACTIVATIONS['optum'] points at {activation.cache_filename!r}, but the "
+        f"current OPTUM_FEATURES + target codes fingerprint to {expected!r}. The "
+        "manifest or the target changed without the cache being rebuilt, so KG "
+        "Layer 2 will go quietly dark (shadow mode logs the mismatch and skips). "
+        "Rebuild with scripts/build_kg_cache.py --live (see docs/runbooks/kg_cache.md), "
+        "commit the new artifact, add it to the .gitignore un-ignore, and update "
+        "KG_ACTIVATIONS."
+    )
