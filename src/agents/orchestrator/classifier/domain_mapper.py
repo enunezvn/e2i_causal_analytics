@@ -163,13 +163,20 @@ class DomainMapper:
         domain_scores.sort(key=lambda x: x.confidence, reverse=True)
 
         if self._takes_kpi_lookup_fast_path(features):
-            # Replace any weakly-scored EXPLANATION with the deterministic hit
-            # and put it first, so PatternSelector's explanation override fires.
+            # Promote EXPLANATION to first so PatternSelector's explanation
+            # override fires. FLOOR, not overwrite: a query that also scored
+            # EXPLANATION above KPI_LOOKUP_CONFIDENCE on real keyword evidence
+            # ("whats TRx mean? explain how") keeps its higher score and its
+            # evidence — the fast path may only ever raise this domain.
+            scored = next(
+                (dm for dm in domain_scores if dm.domain is Domain.EXPLANATION),
+                None,
+            )
             domain_scores = [
                 DomainMatch(
                     domain=Domain.EXPLANATION,
-                    confidence=KPI_LOOKUP_CONFIDENCE,
-                    evidence=[KPI_LOOKUP_EVIDENCE],
+                    confidence=max(KPI_LOOKUP_CONFIDENCE, scored.confidence if scored else 0.0),
+                    evidence=[KPI_LOOKUP_EVIDENCE] + (scored.evidence if scored else []),
                 )
             ] + [dm for dm in domain_scores if dm.domain is not Domain.EXPLANATION]
 

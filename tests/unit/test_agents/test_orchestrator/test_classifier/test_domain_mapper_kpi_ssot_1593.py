@@ -99,6 +99,24 @@ class TestKpiFastPathReadsTheSSOT:
         mapping = _map("Good morning team")
         assert mapping.domain_count == 0
 
+    def test_fast_path_floors_explanation_never_downgrades_it(self):
+        """A query that ALSO scores EXPLANATION on real keyword evidence above
+        KPI_LOOKUP_CONFIDENCE must keep the higher score and its evidence — the
+        fast path may only ever raise this domain."""
+        from src.agents.orchestrator.classifier.domain_mapper import KPI_LOOKUP_CONFIDENCE
+
+        query = "whats TRx mean? explain how"
+        keyword_only = DomainMapper()._score_domain(
+            Domain.EXPLANATION, FeatureExtractor().extract(query)
+        )[0]
+        assert keyword_only > KPI_LOOKUP_CONFIDENCE, "fixture no longer exercises the floor"
+
+        top = _map(query).domains_detected[0]
+        assert top.domain == Domain.EXPLANATION
+        assert top.confidence == pytest.approx(keyword_only, abs=1e-3)
+        assert "kpi_value_lookup" in top.evidence
+        assert len(top.evidence) > 1, "keyword evidence must survive alongside the marker"
+
     def test_every_detected_domain_still_carries_evidence(self):
         for query in KPI_LOOKUPS:
             for dm in _map(query).domains_detected:
