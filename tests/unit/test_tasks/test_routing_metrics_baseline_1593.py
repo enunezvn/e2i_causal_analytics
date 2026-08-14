@@ -67,6 +67,18 @@ class TestBaselineConstants:
     def test_baseline_version_is_a_nonempty_slug(self):
         assert isinstance(CLASSIFIER_BASELINE, str) and CLASSIFIER_BASELINE.strip()
 
+    def test_epoch_is_a_utc_day_boundary_after_the_deploy_day(self):
+        """Rounded UP, so a same-day PRE-deploy row is never credited to the new
+        classifier — that would fail OPEN on a promotion signal. Mis-attributing
+        a same-day POST-deploy row as prior only withholds (codex iter-1)."""
+        assert CLASSIFIER_BASELINE_EPOCH.utcoffset().total_seconds() == 0
+        assert (
+            CLASSIFIER_BASELINE_EPOCH.hour,
+            CLASSIFIER_BASELINE_EPOCH.minute,
+            CLASSIFIER_BASELINE_EPOCH.second,
+        ) == (0, 0, 0)
+        assert CLASSIFIER_BASELINE_EPOCH.date().isoformat() > CLASSIFIER_BASELINE[:10]
+
 
 class TestRunMetricsAttribution:
     def test_metrics_name_the_baseline_they_describe(self):

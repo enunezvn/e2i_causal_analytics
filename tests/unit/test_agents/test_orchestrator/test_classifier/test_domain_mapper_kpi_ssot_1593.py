@@ -12,16 +12,19 @@ decision IS a routing change (``RouterNode._dispatch_from_classification``).
 Two query shapes measured as active-mode degradations on the gold set must keep
 abstaining — the pipeline yields and legacy routing proceeds unchanged:
 
-- **population breakdown** — the ask is a per-segment decomposition, not one
-  figure. The explainer resolver binds a single scalar, so the fast path's own
+- **decomposition ask** — the KPI split across an axis, not one figure. The
+  explainer resolver binds a single scalar, so the fast path's own
   answerability premise fails; cohort_profiler owns per-segment counts.
   (gold bench-0008 / 0133 / 0139 / 0140 / 0141, all gold ``cohort_profiler``)
-- **compound ask** — a second wh-clause after a connector is a second facet a
-  lone explainer would silently drop.
+- **compound ask** — a second ask after a connector is a facet a lone
+  explainer would silently drop.
   (gold bench-0143, gold ``PARALLEL_DELEGATION[explainer, gap_analyzer]``)
 
-Queries are the verbatim gold rows so the pins track the measured set, not a
-paraphrase of it.
+The gold rows are pinned verbatim so the tests track the measured set. Both
+vetoes are additionally pinned on shapes NOT in the gold set — decompositions
+that never say "patient", compound asks with imperative second facets — because
+a veto that only recognises the wording of the rows it was derived from is
+fitted, not principled (codex iter-1).
 """
 
 from __future__ import annotations
@@ -131,16 +134,67 @@ class TestNarrowingKeepsContestedRowsAbstaining:
         assert "kpi_value_lookup" not in evidence, query
 
     @pytest.mark.parametrize("query", POPULATION_BREAKDOWNS)
-    def test_population_breakdown_is_recognised(self, query):
+    def test_decomposition_ask_is_recognised(self, query):
         from src.agents.orchestrator.classifier import domain_mapper
 
-        assert domain_mapper._is_population_breakdown(query) is True, query
+        assert domain_mapper._is_decomposition_ask(query) is True, query
 
     @pytest.mark.parametrize("query", KPI_LOOKUPS)
-    def test_plain_lookups_are_not_population_breakdowns(self, query):
+    def test_plain_lookups_are_not_decomposition_asks(self, query):
         from src.agents.orchestrator.classifier import domain_mapper
 
-        assert domain_mapper._is_population_breakdown(query) is False, query
+        assert domain_mapper._is_decomposition_ask(query) is False, query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # No "patient" anywhere: an earlier draft required it and let these
+            # through to a lone explainer (codex iter-1 HIGH).
+            "Give me NRx breakdown by clinical segment for Remibrutinib",
+            "show TRx split by biologic-naive vs experienced",
+            "what is the TRx broken out by tier",
+            "show me NRx per cohort",
+            "what is TRx across all deciles",
+        ],
+    )
+    def test_decomposition_veto_does_not_depend_on_the_word_patient(self, query):
+        from src.agents.orchestrator.classifier import domain_mapper
+
+        assert domain_mapper._is_decomposition_ask(query) is True, query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # A scalar SCOPED to one group is a filter, not a decomposition —
+            # the explainer resolver binds these fine.
+            "what is the TRx for the West segment",
+            "show me the market share for Kisqali in the northeast",
+            "What is the conversion rate metric for Remibrutinib across our patient population?",
+        ],
+    )
+    def test_scoped_scalar_lookups_are_not_decomposition_asks(self, query):
+        from src.agents.orchestrator.classifier import domain_mapper
+
+        assert domain_mapper._is_decomposition_ask(query) is False, query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Imperative second facets: a wh-only pattern missed this family
+            # entirely (codex iter-1 MEDIUM).
+            "what is TRx and compare it to last quarter",
+            "what is the total TRx and show me the top regions",
+            "what is TRx and break it down by region",
+        ],
+    )
+    def test_compound_veto_covers_imperative_second_facets(self, query):
+        feats = FeatureExtractor().extract(query)
+        assert feats.structural.has_compound_question is True, query
+
+    def test_two_metrics_joined_by_and_is_not_compound(self):
+        """ "kisqali and remibrutinib" is one ask over two entities, not two asks."""
+        feats = FeatureExtractor().extract("what is the TRx for kisqali and remibrutinib")
+        assert feats.structural.has_compound_question is False
 
     def test_compound_veto_reads_clause_structure_not_question_marks(self):
         """bench-0164 ('whats the TRx for kisqali??') has TWO '?' but one ask.

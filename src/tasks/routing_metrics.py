@@ -62,9 +62,15 @@ LABEL_SOURCES = (
 #
 # So each emitted metrics dict names the baseline it describes and counts how
 # many rows predate it. BUMP BOTH constants whenever the classifier's decision
-# surface changes again — the epoch is the DEPLOY date of that change, not the
-# merge date, and a few hours of skew shows up as one ``mixed`` run rather
-# than silent contamination.
+# surface changes again.
+#
+# The epoch is rounded UP to the first full UTC day AFTER the deploy day, not
+# set to the deploy day's midnight. Midnight would falsely credit same-day
+# PRE-deploy rows to the new classifier and could make a mixed set look
+# single-baseline — failing OPEN on a promotion signal (codex iter-1 MEDIUM).
+# Rounding up mis-attributes same-day POST-deploy rows as ``prior`` instead,
+# which only withholds a recommendation. The labeler runs nightly, so a day is
+# the natural granularity and at most one run is affected.
 #
 # No migration is needed for the persisted side: ``routing_classifier_metrics``
 # already stores ``run_at``, so the stored TIME SERIES segments by comparing
@@ -73,7 +79,7 @@ LABEL_SOURCES = (
 # the flip — which is exactly what the ``mixed`` flag on the returned dict
 # carries into the labeler's run summary and the Phase-3 artifact.
 CLASSIFIER_BASELINE = "2026-08-14-kpi-value-lookup"
-CLASSIFIER_BASELINE_EPOCH = datetime(2026, 8, 14, tzinfo=timezone.utc)
+CLASSIFIER_BASELINE_EPOCH = datetime(2026, 8, 15, tzinfo=timezone.utc)
 
 
 def _row_is_current_baseline(row: Dict[str, Any]) -> Optional[bool]:

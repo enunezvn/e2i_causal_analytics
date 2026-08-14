@@ -49,14 +49,29 @@ KPI_LOOKUP_EVIDENCE = "kpi_value_lookup"
 # query when the KPI value lookup is the WHOLE ask. Two shapes measured as
 # active-mode degradations on the gold set are handed back to legacy routing.
 #
-# (a) Population breakdown. "NRx broken down by patient segment" asks for a
-#     DECOMPOSITION; the explainer resolver binds one scalar, so the fast
+# (a) Decomposition ask. "NRx broken down by segment" asks the KPI to be SPLIT
+#     ACROSS AN AXIS; the explainer resolver binds one scalar, so the fast
 #     path's own answerability premise fails. cohort_profiler owns per-segment
 #     counts (see PatternSelector.DOMAIN_TO_AGENT). Gold bench-0008 / 0133 /
 #     0139 / 0140 / 0141 are all gold ``cohort_profiler``.
-_POPULATION_AXIS_RE = re.compile(r"\bpatients?\b", re.IGNORECASE)
+#
+#     The test is the DECOMPOSITION SHAPE alone — deliberately NOT conjoined
+#     with a "patient" mention, which would be fitted to those gold rows'
+#     wording and would let "NRx breakdown by clinical segment" through
+#     (codex iter-1 HIGH). What it must NOT catch is a scalar SCOPED to one
+#     group ("TRx for the West segment") — a filter, not a decomposition — so
+#     the axis alternatives are anchored on by/per/across and on explicit
+#     plural-enumerating determiners, never on a bare noun or on "for".
 _DECOMPOSITION_RE = re.compile(
-    r"\bsegments?\b|\bsegmented\b|\bbreak\s*downs?\b|\bbroken\s+down\b|\bsplit\b|\bcohorts?\b",
+    r"\bbreak(?:\s|-)?downs?\b"
+    r"|\bbroken(?:\s+|-)(?:down|out)\b"
+    r"|\bbreak(?:\s+|-)out\b"
+    r"|\bsplits?\b"
+    r"|\bsegmented\s+by\b"
+    r"|\b(?:by|per|across)\s+(?:[\w'-]+\s+){0,3}?"
+    r"(?:segments?|cohorts?|sub-?groups?|tiers?|deciles?|quartiles?|buckets?|strata)\b"
+    r"|\b(?:different|each|every|all)\s+(?:[\w'-]+\s+){0,3}?"
+    r"(?:segments|cohorts|sub-?groups|tiers|deciles|quartiles|buckets)\b",
     re.IGNORECASE,
 )
 
@@ -68,9 +83,9 @@ def _kpi_value_lookup_re() -> re.Pattern[str]:
     return KPI_VALUE_LOOKUP_RE
 
 
-def _is_population_breakdown(query: str) -> bool:
-    """A per-patient-population decomposition, not a single-figure lookup."""
-    return bool(_POPULATION_AXIS_RE.search(query) and _DECOMPOSITION_RE.search(query))
+def _is_decomposition_ask(query: str) -> bool:
+    """The KPI split across an axis, rather than a single figure."""
+    return bool(_DECOMPOSITION_RE.search(query))
 
 
 class DomainMapper:
@@ -201,7 +216,7 @@ class DomainMapper:
         query = features.raw_query
         if not _kpi_value_lookup_re().search(query):
             return False
-        if _is_population_breakdown(query):
+        if _is_decomposition_ask(query):
             return False
         # (b) Compound ask — a second wh-clause after a connector is a second
         # facet a lone explainer silently drops (gold bench-0143, gold

@@ -21,11 +21,22 @@ from .schemas import (
     TemporalFeatures,
 )
 
-# A second wh-clause hanging off a connector — "what is the total TRx AND WHICH
+# A second ASK hanging off a connector — "what is the total TRx AND WHICH
 # region has the largest gap". Module-level so Stage 2 can gate on the same
 # signal Stage 1 counts with (#1593); a forked copy would let the compound
 # veto and the compound count disagree.
-COMPOUND_QUESTION_RE = re.compile(r",?\s+and\s+(what|which|how|why|where|who)", re.IGNORECASE)
+#
+# The imperative heads (compare/show/list/...) matter as much as the wh-words:
+# "what is TRx and compare it to last quarter" is just as compound as
+# "... and which region leads", and a wh-only pattern silently misses that
+# whole family (codex iter-1 MEDIUM). ``question_count`` has no behavioural
+# consumer, so widening here only makes the compound count more accurate.
+COMPOUND_QUESTION_RE = re.compile(
+    r",?\s+and\s+(?:also\s+|then\s+)?"
+    r"(what|which|how|why|where|who|whose"
+    r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",
+    re.IGNORECASE,
+)
 
 
 class FeatureExtractor:

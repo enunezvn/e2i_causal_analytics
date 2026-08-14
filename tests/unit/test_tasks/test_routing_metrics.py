@@ -145,9 +145,14 @@ class TestThresholdProposals:
         assert out["recommended_floor"] == 0.40
 
     def test_insufficient_evidence_no_recommendation(self):
+        # Rows must be baseline-attributable, else #1593's guard would withhold
+        # the recommendation before min_evidence is ever consulted and this
+        # test would pass for the wrong reason.
+        rows = [dict(r, created_at=_ON_CURRENT_BASELINE) for r in self._PROP_ROWS]
         out = compute_threshold_proposals(
-            self._PROP_ROWS, current_floor=0.5, candidates=[0.40], min_evidence=99
+            rows, current_floor=0.5, candidates=[0.40], min_evidence=99
         )
+        assert out["classifier_baseline"]["rows_undated"] == 0
         assert out["recommended_floor"] is None
 
     def test_never_mutates_router_config(self):
