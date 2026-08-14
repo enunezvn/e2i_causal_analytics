@@ -195,12 +195,13 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None and path.exists()
     payload = json.loads(Path(path).read_text())
-    # Schema bump assertion (current producer minor; 1.7 since Layer-4 Phase 2
-    # added the additive per-verdict ``structural_unclassifiable`` key — still
-    # MAJOR=1; Phase 1 bumped 1.5 → 1.6 for leakage_fdr, #501 1.4 → 1.5 for the
-    # M-structure shadow keys, #508 1.3 → 1.4 for the leak-crosscheck key, #240
-    # Stage 3 1.2 → 1.3 for its soft-gate keys).
-    assert payload["schema_version"] == "1.7"
+    # Schema bump assertion (current producer minor; 1.8 since #1608 wired the
+    # citation channel and added its additive per-verdict keys — still MAJOR=1;
+    # Layer-4 Phase 2 bumped 1.6 → 1.7 for ``structural_unclassifiable``, Phase 1
+    # 1.5 → 1.6 for leakage_fdr, #501 1.4 → 1.5 for the M-structure shadow keys,
+    # #508 1.3 → 1.4 for the leak-crosscheck key, #240 Stage 3 1.2 → 1.3 for its
+    # soft-gate keys).
+    assert payload["schema_version"] == "1.8"
     assert "role_attributions" in payload
     assert len(payload["role_attributions"]) == 2
 
@@ -209,12 +210,12 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
         reader = SidecarReader(artifacts_dir=tmp_path)
         records = list(reader.iter_verdict_records())
 
-    # No schema-version WARN on "1.7" (exact match with the reader; MAJOR=1).
+    # No schema-version WARN on "1.8" (exact match with the reader; MAJOR=1).
     schema_warns = [
         r for r in caplog.records if "schema_version" in r.message and r.levelname == "WARNING"
     ]
     assert schema_warns == [], (
-        f"reader emitted unexpected schema_version warns for 1.7: {[w.message for w in schema_warns]}"
+        f"reader emitted unexpected schema_version warns for 1.8: {[w.message for w in schema_warns]}"
     )
 
     by_feature = {r.feature: r for r in records}
