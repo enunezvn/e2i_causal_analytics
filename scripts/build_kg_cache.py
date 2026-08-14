@@ -19,23 +19,42 @@ Usage::
     python scripts/build_kg_cache.py \
         --manifest-module src.data.manifests.optum_feature_manifest \
         --features-attr OPTUM_FEATURES \
-        --target-entity-codes RXNORM:479158,RXNORM:1011295 \
+        --target-entity-codes RXNORM:302379 \
         --out data/kg_cache
 
     # Live KG querying (instantiates UMLSClient + OpenTargetsClient via
     # EntityLinker + KnowledgeGraphQuerier; UMLS_UTS_API_KEY required):
     python scripts/build_kg_cache.py --live ... (other args)
 
-Item B of the engineering-actionable arc (PR-C live KG querying loop):
-the ``--live`` mode replaces the prior NotImplementedError. Per-entity
-dispatch handles ``("UMLS", <CUI>)`` entries directly via
-``UMLSClient.cui_lookup`` (validate) + ``KGQuerier.query_disease_hierarchy``
-(query) — bypassing ``EntityLinker.resolve``, which only knows the
-source-vocab cross-walk systems (ICD10CM/LOINC/CPT/HCPCS/RXNORM and
-friends) per ``_UTS_SOURCE_BY_SYSTEM``. Without this dispatch the ~30
-UMLS-CUI entries in the Optum manifest would silently degrade to no_signal.
+``RXNORM:302379`` is omalizumab. The earlier example here used
+``RXNORM:479158,RXNORM:1011295``, which are not valid RxCUIs at all — RxNav
+resolves both to None (pinned by
+``test_rxnav_unknown_code_returns_none_not_an_error``). Copying it produced a
+build with an unresolvable target, and therefore no drug-disease pass.
 
-Reference: docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md
+The live build runs TWO passes per feature, and both are load-bearing:
+
+1. **Taxonomic** — ``("UMLS", <CUI>)`` entries dispatch directly via
+   ``UMLSClient.cui_lookup`` (validate) + ``KGQuerier.query_disease_hierarchy``
+   (query), bypassing ``EntityLinker.resolve``, which only knows the
+   source-vocab cross-walk systems (ICD10CM/LOINC/CPT/HCPCS/RXNORM and friends)
+   per ``_UTS_SOURCE_BY_SYSTEM``. Without this dispatch the ~30 UMLS-CUI entries
+   in the Optum manifest would silently degrade to no_signal.
+
+2. **Drug-disease** — ``--target-entity-codes`` is resolved to a drug and Open
+   Targets is asked which of the manifest's disease concepts that drug is
+   APPROVED to treat (see ``_resolve_target_drug`` / ``_drug_disease_edges_for_cui``).
+
+Pass 1 alone can never light a signal (#1607). ``query_disease_hierarchy``
+relates a concept only to its OWN parents and children, never to the prediction
+target, while ``classify_kg_signal._connects`` requires one edge endpoint in the
+feature set AND one in the target set. Measured: a taxonomic-only build produced
+74 records with 82 real UMLS edges and 74/74 ``no_signal``. Pass 2 is what
+produces ``leak_drug_treats_disease``.
+
+References:
+* docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md
+* docs/runbooks/kg_cache.md (build, commit, activate, verify)
 """
 
 from __future__ import annotations
