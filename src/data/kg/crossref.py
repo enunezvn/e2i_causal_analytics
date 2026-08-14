@@ -48,7 +48,12 @@ _ALL_TAGS = re.compile(r"<[^>]+>")
 
 # Closing punctuation that should never be preceded by whitespace once tags
 # have been replaced with spaces (see ``_fetch_doi_uncached``).
-_SPACE_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?%)\]])")
+#
+# ``%`` is deliberately EXCLUDED (codex review, #1608): "50 %" is a legitimate
+# house style in published abstracts, not a tag artifact, and rewriting it to
+# "50%" would alter source text this substitution has no business touching.
+# Only marks that a stripped tag can realistically sit in front of are listed.
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?)\]])")
 
 
 class CrossrefError(Exception):
