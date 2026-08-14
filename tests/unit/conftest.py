@@ -82,6 +82,87 @@ def _pin_dead_supabase_env(
         monkeypatch.setenv(var, value)
 
 
+# REAL-MODE SYNTHETIC PIN (#1602, same contamination class as #1420). This
+# droplet is a synthetic-gold showcase instance, so the repo-root .env sets
+# E2I_INCLUDE_SYNTHETIC=true (line 100) and E2I_KPI_INCLUDE_SYNTHETIC=true
+# (line 52). Both are CORRECT for the running services and must not be edited
+# — the tests are what needs isolating.
+#
+# The root conftest's ``load_dotenv(override=True)`` + ``find_dotenv`` walk-up
+# hands those flags to every local pytest process (nested worktrees have no
+# ``.env`` of their own, so the walk reaches the repo root). Production then
+# legitimately reports ``deployment_includes_synthetic()`` /
+# ``kpi_include_synthetic()`` True, ``apply_provenance_filter`` skips its
+# ``.eq('is_synthetic', False)`` link, and ``resolve_kpi_query_id`` swaps in
+# the ``_include_synthetic`` RPC twin. Measured on main @ e4654355: 56 unit
+# tests that pin the real-mode default fail on the droplet and pass in CI
+# (no ``.env`` anywhere up the runner's checkout path) — 47 in
+# tests/unit/test_repositories/ + 9 in tests/unit/test_kpi/. Most are direct
+# ``*_excludes_synthetic`` predicate pins; the rest are collateral, because a
+# skipped ``.eq`` link makes a default-exclude mock chain miss its AsyncMock
+# and ``await`` land on a bare MagicMock.
+#
+# PR #1414 established the delenv precedent and #1495/#1497 extended it, but
+# always per-module/per-class, so every new provenance-asserting test file
+# re-introduced the failure. Pinning once at the unit-tree root closes the
+# class instead of the instances. Those five local fixtures are deliberately
+# LEFT in place: their docstrings carry the incident history at the point of
+# use, and they keep the modules self-pinning if ever collected under a
+# different conftest root.
+#
+# Must be a per-test fixture, not an import-time ``os.environ`` write, for the
+# same reason as the dead-Supabase pin above: ``pytest_configure`` re-runs
+# ``load_dotenv(override=True)`` AFTER every conftest imports.
+#
+# Nor can it be worked around by dropping an empty ``.env`` in the worktree:
+# measured 2026-08-14, the flags STILL arrive. ``find_dotenv`` walks up from
+# the CALLING frame, and at least one loader's frame lives in site-packages —
+# ``.venv/`` sits at the repo root, so that walk reaches the real ``.env``
+# regardless of what the worktree contains. (This is #1414's second vector.
+# It is easy to mis-measure: wrapping ``load_dotenv`` to trace it inserts a
+# worktree-rooted frame into the walk and masks the injection.) A per-test
+# delenv is the only isolation that holds.
+#
+# Showcase-mode tests are unaffected: they re-set the flag with their own
+# FUNCTION-scope ``monkeypatch.setenv`` (test body, or a function-scope
+# fixture), which runs after this conftest-level autouse and therefore wins.
+# A BROADER-scope autouse fixture (module/class/session) would lose instead —
+# it runs before this function-scope pin, which then deletes its value. No
+# unit module sets either flag at module scope today, and the lock test
+# exercises exactly that ordering deliberately.
+#
+# ``@pytest.mark.real_supabase`` opts out, reusing the #1420 escape hatch: a
+# reachability-gated READ-ONLY faithful check runs against the live deployment,
+# so it must keep the WHOLE ambient env, not just the credentials. Measured:
+# without this opt-out, test_kpi_resolution's faithful frame check fails 3/3
+# ("no KPI frame resolved for Kisqali/northeast") — this droplet's substrate is
+# entirely ``is_synthetic=true``, so pinning real mode makes the live query
+# return zero rows. That is an environment artifact, not a defect.
+#
+# Scope is the unit tree ONLY. tests/integration/ holds deliberate live probes
+# of this showcase deployment (test_chatbot_kpi_tool_live.py,
+# test_577_action_rate_uplift_live.py) that must keep reading the ambient
+# flags; the ones needing real mode already delenv per-test
+# (test_rag_feedstock_realdb_1489.py).
+# Locked by tests/unit/test_utils/test_unit_tree_real_mode_synthetic_1602.py.
+_REAL_MODE_SYNTHETIC_FLAGS = (
+    "E2I_INCLUDE_SYNTHETIC",
+    "E2I_KPI_INCLUDE_SYNTHETIC",
+)
+
+
+@pytest.fixture(autouse=True)
+def _pin_real_mode_synthetic_flags(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Autouse: every unit test runs with the deployment synthetic switches OFF."""
+    if request.node.get_closest_marker("real_supabase") is not None:
+        return
+    for var in _REAL_MODE_SYNTHETIC_FLAGS:
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _silence_lifecycle_monitoring_in_unit_tests(
     monkeypatch: pytest.MonkeyPatch,
