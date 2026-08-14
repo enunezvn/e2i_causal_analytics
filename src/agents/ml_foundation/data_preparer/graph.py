@@ -12,6 +12,7 @@ from typing import Any, Dict, Literal
 
 from langgraph.graph import END, StateGraph
 
+from src.data.audit_sidecar_reader import SIDECAR_SCHEMA_VERSION
 from src.data.role_attribution import derive_role_attributions
 
 from .nodes import (
@@ -175,42 +176,18 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
         # ``DataPreparerState`` as ``Optional[List[Dict[str, Any]]]``).
         role_attributions = state.get("role_attributions") or []
         payload = {
-            # Schema-version pin (Issue #235): ``major.minor`` string. Bump the
-            # major on any breaking change to the sidecar payload shape; bump
-            # the minor on additive forward-compatible changes. The reader
-            # (``src/data/audit_sidecar_reader.py``) WARNs on missing or
-            # unknown-major schema_version values.
+            # Schema-version pin (Issue #235), single-sourced from the reader
+            # (#1620). This used to be an independent literal here plus a
+            # hand-synced copy of the full 1.1 -> 1.8 bump changelog, so a bump
+            # was a multi-touchpoint edit in which missing a touchpoint was the
+            # DEFAULT failure mode: PR #1618's 1.7 -> 1.8 updated three pins and
+            # missed two, costing a full CI cycle.
             #
-            # 1.1 (Phase 1, Issue #237): additive ``role_attributions``
-            # list. Reader pins MAJOR=1; minor bumps do not WARN.
-            # 1.2 (Issue #240 Stage 1): additive shadow promotion keys
-            # (would_promote_severity / would_flag_for_review /
-            # rationale_incomplete_flag) per the minor-bump-on-additive
-            # policy above. Still MAJOR=1.
-            # 1.3 (Issue #240 Stage 3): additive env-gated soft-gate keys
-            # (gate_rule_fired / worker_severity_pre_gate). Still MAJOR=1.
-            # 1.4 (Issue #501 / #240): additive leakage × role cross-check
-            # shadow key (would_flag_role_leak_disagreement). Still MAJOR=1.
-            # 1.5 (Issue #501 / #240): additive M-structure structural-
-            # remediation gate shadow keys (structural_role /
-            # structural_llm_disagreement / structural_remediation_override /
-            # structural_gate_fired). Still MAJOR=1.
-            # 1.6 (Layer-4 Phase 1): additive run-level ``leakage_fdr`` summary
-            # — the dynamic FDR firing-driver decision (active / enabled / q /
-            # n_permutations / n_confident / confident_features / reason) so the
-            # auto-fire provenance is persisted in the audit-of-record, not just
-            # in-memory state. Still MAJOR=1.
-            # 1.7 (Layer-4 Phase 2): additive per-verdict ``structural_unclassifiable``
-            # key (True when the structural decider fired on an unclassifiable
-            # attestation → review). Additive, nullable. Still MAJOR=1.
-            # 1.8 (Phase 2.6 citation channel, #1608): additive per-verdict
-            # citation-verification keys — ``citations_checked`` /
-            # ``citations_verified`` / ``citations_unverified`` /
-            # ``cited_pmids`` / ``verified_citation_ids``. Before this, the
-            # audit trail recorded LLM-cited PMIDs with no evidence they had
-            # ever been checked against the abstract behind them. Additive.
-            # Still MAJOR=1.
-            "schema_version": "1.8",
+            # The changelog and the bump policy now live in ONE place, beside the
+            # constant in ``src/data/audit_sidecar_reader.py``. The reader WARNs
+            # on a missing or unknown-MAJOR schema_version, so writer and reader
+            # agreeing is a property the system requires, not a coincidence.
+            "schema_version": SIDECAR_SCHEMA_VERSION,
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,
