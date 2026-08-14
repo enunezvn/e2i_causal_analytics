@@ -92,6 +92,7 @@ Dockerfile*
 # Data & Artifacts
 # -----------------------------------------------------------------------------
 data/
+# ...except the committed KG Layer-2 caches — re-included below, after `*.json`.
 *.csv
 *.parquet
 *.pkl
@@ -104,6 +105,21 @@ data/
 !package-lock.json
 !tsconfig.json
 !config/**/*.json
+# The committed KG Layer-2 caches (#1607). ~72 KB build-time INPUTS, not runtime
+# artifacts: src/data/kg/activation.py binds a cohort's feature manifest to one
+# of these files and the adaptive-validity node loads it on the hot path. The
+# blanket `data/` exclusion above made the whole KG layer inert IN THE IMAGE
+# while the artifact sat committed in git — the #600 shape again, where a
+# missing artifact presents as "the KG had nothing to say" rather than as a
+# missing file.
+#
+# Placement is load-bearing: this must sit AFTER `*.json` and after the `*.md`
+# rule near the top, because .dockerignore is last-match-wins — an un-ignore
+# beside `data/` would be silently undone by both. Same reason
+# !config/**/*.json lives here. Guarded by
+# tests/unit/test_data/test_kg/test_kg_cache_packaging.py.
+!data/kg_cache/
+!data/kg_cache/**
 
 # ML artifacts
 models/
