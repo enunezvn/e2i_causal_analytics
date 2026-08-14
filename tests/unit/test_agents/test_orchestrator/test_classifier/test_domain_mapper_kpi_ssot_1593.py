@@ -175,6 +175,9 @@ class TestNarrowingKeepsContestedRowsAbstaining:
             "show me market share by brand",
             "what is the TRx by month",
             "show me NRx by specialty",
+            # A PLURAL axis noun is an axis whatever modifies it.
+            "what is the TRx by the top 3 regions",
+            "what is TRx across all regions",
         ],
     )
     def test_decomposition_veto_covers_non_population_axes(self, query):
@@ -192,6 +195,14 @@ class TestNarrowingKeepsContestedRowsAbstaining:
             "what is the TRx in the northeast region",
             "what is the trx for kisqali in the west",
             "What is the conversion rate metric for Remibrutinib across our patient population?",
+            # "across <named> region" names ONE region — the same scalar ask as
+            # "in the northeast region", with or without the article
+            # (codex iter-3 HIGH). Over-vetoing here would silently give back
+            # the improvement the fast path exists to deliver.
+            "what is the TRx across the northeast region",
+            "what is the TRx across northeast region",
+            "what is the TRx across the west territory",
+            "what is the TRx across west territory",
         ],
     )
     def test_scoped_scalar_lookups_are_not_decomposition_asks(self, query):

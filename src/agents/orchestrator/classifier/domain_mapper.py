@@ -75,13 +75,39 @@ _AXIS_NOUNS = (
     r"|months?|quarters?|weeks?|years?|periods?"
     r"|hcps?|physicians?|prescribers?|providers?|specialt(?:y|ies))"
 )
+_AXIS_NOUNS_PLURAL = (
+    r"(?:segments|cohorts|sub-?groups|tiers|deciles|quartiles|buckets|strata"
+    r"|regions|territories|geographies|states|markets|zips|districts"
+    r"|brands|products|drugs|skus"
+    r"|months|quarters|weeks|years|periods"
+    r"|hcps|physicians|prescribers|providers|specialties)"
+)
+#     Generic vs NAMED use of the axis noun is what separates a decomposition
+#     from a filter (codex iter-3 HIGH): "across regions" is an axis, but
+#     "across the northeast region" names ONE region and is the same scalar ask
+#     as "in the northeast region". So for a SINGULAR axis noun the veto is
+#     tempered — no definite determiner and no instance NAME may appear between
+#     the preposition and the noun. A PLURAL axis noun is an axis whatever
+#     modifies it ("by the top 3 regions"). The census names mirror
+#     FeatureExtractor.ENTITY_PATTERNS["region"]; over-vetoing here would
+#     silently give back the improvement this fast path exists to deliver, so
+#     the boundary is pinned in both directions by tests.
+_INSTANCE_MODIFIER = (
+    r"(?:the|this|that|these|those|our|your|its|a|an"
+    r"|north(?:east|west)?|south(?:east|west)?|east|west|midwest|central)"
+)
 _DECOMPOSITION_RE = re.compile(
     r"\bbreak(?:\s|-)?downs?\b"
     r"|\bbroken(?:\s+|-)(?:down|out)\b"
     r"|\bbreak(?:\s+|-)out\b"
     r"|\bsplits?\b"
     r"|\bsegmented\s+by\b"
-    r"|\b(?:by|per|across)\s+(?:[\w'-]+\s+){0,3}?" + _AXIS_NOUNS + r"\b"
+    r"|\b(?:by|per|across)\s+(?:[\w'-]+\s+){0,3}?" + _AXIS_NOUNS_PLURAL + r"\b"
+    r"|\b(?:by|per|across)\s+(?:(?!"
+    + _INSTANCE_MODIFIER
+    + r"\b)[\w'-]+\s+){0,3}?"
+    + _AXIS_NOUNS
+    + r"\b"
     r"|\b(?:different|each|every|all)\s+(?:[\w'-]+\s+){0,3}?" + _AXIS_NOUNS + r"\b",
     re.IGNORECASE,
 )
