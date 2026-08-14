@@ -97,6 +97,16 @@ RUN pip install --no-cache-dir debugpy==1.8.20
 COPY src/ ./src/
 COPY config/ ./config/
 COPY tests/ ./tests/
+
+# KG Layer-2 caches (#1607). src/data/kg/activation.py binds a cohort's feature
+# manifest to one of these committed artifacts and the adaptive-validity node
+# loads it on the hot path, so it is a baked image input — not a runtime
+# artifact. The named volumes under /app/data mount SUBDIRECTORIES
+# (causal_outputs, ml_artifacts, ...), so this path is never masked by them.
+# Without it, `.dockerignore`'s blanket `data/` left the KG layer inert in the
+# image while the artifact sat committed in git (#600 shape: the failure
+# presents as "no signal", not as "missing file").
+COPY data/kg_cache/ ./data/kg_cache/
 # Ops/maintenance scripts (e.g. scripts/train_twin_model.py, the reachable
 # #705 H4 twin train/persist trigger run via `docker exec … python scripts/…`).
 COPY scripts/ ./scripts/
@@ -176,6 +186,17 @@ COPY pyproject.toml ./
 # Copy application code
 COPY src/ ./src/
 COPY config/ ./config/
+
+# KG Layer-2 caches (#1607). src/data/kg/activation.py binds a cohort's feature
+# manifest to one of these committed artifacts and the adaptive-validity node
+# loads it on the hot path, so it is a baked image input — not a runtime
+# artifact. The named volumes under /app/data mount SUBDIRECTORIES
+# (causal_outputs, ml_artifacts, ...), so this path is never masked by them.
+# Without it, `.dockerignore`'s blanket `data/` left the KG layer inert in the
+# image while the artifact sat committed in git (#600 shape: the failure
+# presents as "no signal", not as "missing file").
+COPY data/kg_cache/ ./data/kg_cache/
+
 # Ops/maintenance scripts run inside the container via `docker exec` (e.g.
 # scripts/train_twin_model.py, the reachable #705 H4 twin train/persist trigger
 # while worker_heavy is dark). The prod rootfs is read-only, so these must be
