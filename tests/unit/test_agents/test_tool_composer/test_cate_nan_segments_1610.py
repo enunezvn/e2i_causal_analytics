@@ -247,6 +247,52 @@ def test_nullable_float64_outcome_does_not_escape_as_a_bare_typeerror():
     assert list(dumped["effect_by_segment"]) == [">65"]
 
 
+def test_non_numeric_outcome_refuses_once_rather_than_raising_typeerror():
+    """codex iter-1 — the #1600 shape, one seam earlier than ``_coerce_finite``.
+
+    ``treated.mean()`` over an object column raises ``TypeError`` ("Could not
+    convert string 'hi' to numeric") BEFORE the difference is coerced, so the
+    exception escapes the tool body into the executor's RETRYING arm: retried
+    ``max_retries`` times and charged to the tool's circuit breaker, even though
+    the column's dtype is a property of the resolved inputs and identical on
+    every attempt. ``gap_calculator`` already wraps its metric aggregation this
+    way (#1600); the outcome column needs the same treatment.
+    """
+    df = pd.DataFrame(
+        {
+            "age_group": ["<50", "<50", ">65", ">65"],
+            "high_engagement": [1, 0, 1, 0],
+            "discontinuation_flag": ["high", "low", "high", "low"],
+        }
+    )
+    with pytest.raises(ToolRefusalError) as excinfo:
+        _cate(df)
+    reason = str(excinfo.value)
+    assert "discontinuation_flag" in reason
+    assert "object" in reason  # the dtype, so the caller can see WHY
+
+
+def test_datetime_outcome_difference_is_excluded_not_crashed():
+    """A datetime outcome differences to a ``Timedelta``, whose ``float()`` raises.
+
+    ``_coerce_finite`` already funnels that ``TypeError`` to the non-finite
+    exclusion branch — pinned so the guard is not narrowed to ``NaN``/``pd.NA``
+    later.
+    """
+    df = pd.DataFrame(
+        {
+            "age_group": ["<50", "<50", ">65", ">65"],
+            "high_engagement": [1, 0, 1, 0],
+            "discontinuation_flag": pd.to_datetime(
+                ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]
+            ),
+        }
+    )
+    with pytest.raises(ToolRefusalError) as excinfo:
+        _cate(df)
+    assert "cate_estimation_scope=" in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # The excluded segments must not steer the ranking chain
 # ---------------------------------------------------------------------------

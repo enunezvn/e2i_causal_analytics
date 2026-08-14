@@ -1406,6 +1406,10 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     - No segment yields a MEASURED CATE -> ``RuntimeError`` (#1610). An empty
       segment set would read as "no heterogeneity between segments", a finding
       this data cannot support because no segment was ever estimated.
+    - A non-numeric ``outcome`` column, whose mean raises out of pandas ->
+      ``RuntimeError`` (#1600 shape, codex iter-1). The dtype is a property of
+      the resolved inputs, so the refusal must surface ONCE instead of being
+      retried and charged to the tool's circuit breaker.
 
     Segments that cannot produce a CATE are excluded from ``segments`` /
     ``effect_by_segment`` and disclosed in ``excluded_segments`` (#1610), the
@@ -1504,8 +1508,25 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
         # populated while one carries no non-null ``outcome`` value: its mean is
         # then NaN (or ``pd.NA`` under a nullable dtype, whose ``float()`` raises
         # TypeError and would escape into the executor's RETRYING arm). Guarding
-        # the computed VALUE is what #1599 found the group-mean case needed.
-        cate_val = _coerce_finite(treated.mean() - control.mean())
+        # the computed VALUE is what #1599 found the group-mean case needed. It
+        # also catches a datetime outcome, whose difference is a ``Timedelta``.
+        try:
+            cate_val = _coerce_finite(treated.mean() - control.mean())
+        except (TypeError, ValueError) as exc:
+            # One seam earlier: a non-numeric outcome raises out of pandas'
+            # aggregation itself ("Could not convert string 'hi' to numeric"),
+            # before there is any value to coerce. The column's dtype is a
+            # property of the RESOLVED inputs and identical for every segment, so
+            # this must surface ONCE as a refusal (#1600) rather than be retried
+            # and charged to the tool's circuit breaker as if the tool were
+            # unhealthy -- the same guard ``gap_calculator`` puts on its metric.
+            raise ToolRefusalError(
+                f"cate_analyzer: outcome column {_clip_name(outcome)!r} is not numeric "
+                f"(dtype={df[outcome].dtype!s}), so no within-segment mean difference "
+                f"can be computed for {_clip_name(segment_col)!r}={_clip_name(name)!r}: "
+                f"{exc}. Refusing to fabricate a treatment effect from a non-numeric "
+                "outcome."
+            ) from exc
         if cate_val is None:
             excluded_segments.append(
                 {
