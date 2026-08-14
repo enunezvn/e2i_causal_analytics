@@ -24,7 +24,8 @@ pipeline-vs-judge agreement (overall accuracy below).
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Sequence
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # The router's active-mode floor (RouterNode.MIN_ACTIVE_CONFIDENCE). Duplicated
 # as a default here to keep this module import-light (no orchestrator/langgraph
@@ -48,6 +49,85 @@ LABEL_SOURCES = (
     "llm_judge",
     "llm_judge_abstain",
 )
+
+# =============================================================================
+# Classifier baseline attribution (#1593)
+# =============================================================================
+# Everything below reads ``_is_engaged`` — the abstain rule — so every number
+# here is a statement ABOUT A PARTICULAR CLASSIFIER. #1593 changed that
+# classifier: teaching DomainMapper the KPI-value-lookup SSOT stops the
+# pipeline abstaining on 46 of the 54 KPI rows in the #1337 gold set. A series
+# spanning that flip averages two different classifiers, and a floor retune
+# compiled from pooled rows is worse than no retune.
+#
+# So each emitted metrics dict names the baseline it describes and counts how
+# many rows predate it. BUMP BOTH constants whenever the classifier's decision
+# surface changes again.
+#
+# The epoch is rounded UP to the first full UTC day AFTER the deploy day, not
+# set to the deploy day's midnight. Midnight would falsely credit same-day
+# PRE-deploy rows to the new classifier and could make a mixed set look
+# single-baseline — failing OPEN on a promotion signal (codex iter-1 MEDIUM).
+# Rounding up mis-attributes same-day POST-deploy rows as ``prior`` instead,
+# which only withholds a recommendation. The labeler runs nightly, so a day is
+# the natural granularity and at most one run is affected.
+#
+# No migration is needed for the persisted side: ``routing_classifier_metrics``
+# already stores ``run_at``, so the stored TIME SERIES segments by comparing
+# ``run_at`` against ``CLASSIFIER_BASELINE_EPOCH``. What the DB cannot
+# reconstruct is per-ROW attribution WITHIN one window — a run that straddles
+# the flip — which is exactly what the ``mixed`` flag on the returned dict
+# carries into the labeler's run summary and the Phase-3 artifact.
+CLASSIFIER_BASELINE = "2026-08-14-kpi-value-lookup"
+CLASSIFIER_BASELINE_EPOCH = datetime(2026, 8, 15, tzinfo=timezone.utc)
+
+
+def _row_is_current_baseline(row: Dict[str, Any]) -> Optional[bool]:
+    """True/False for a dated row, None when the row cannot be attributed."""
+    raw = row.get("created_at")
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        parsed = raw
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed >= CLASSIFIER_BASELINE_EPOCH
+
+
+def _baseline_attribution(rows: Sequence[Dict[str, Any]]) -> Tuple[Dict[str, Any], bool]:
+    """Attribute a row set to classifier generations.
+
+    Returns the reportable block and whether the set is PROVABLY all on the
+    current baseline. Undated rows are never guessed into a generation: they
+    make the set unattributable, which is the fail-closed direction for a
+    promotion-adjacent signal (and keeps a dropped ``created_at`` in the
+    repository SELECT loud instead of silent).
+    """
+    current = prior = undated = 0
+    for row in rows:
+        verdict = _row_is_current_baseline(row)
+        if verdict is None:
+            undated += 1
+        elif verdict:
+            current += 1
+        else:
+            prior += 1
+    block = {
+        "version": CLASSIFIER_BASELINE,
+        "epoch": CLASSIFIER_BASELINE_EPOCH.isoformat(),
+        "rows_current": current,
+        "rows_prior": prior,
+        "rows_undated": undated,
+        # A window that straddles the flip: its rates describe no single
+        # classifier and must not be read as a trend against earlier runs.
+        "mixed": bool(current and prior),
+    }
+    return block, bool(current and not prior and not undated)
 
 
 def _label_source(row: Dict[str, Any]) -> Optional[str]:
@@ -140,8 +220,12 @@ def compute_run_metrics(
         bucket["accuracy_pct"] = round(100.0 * bucket["correct"] / denom, 2) if denom else None
 
     judged = correct + incorrect
+    baseline_block, _ = _baseline_attribution(rows)
     return {
         "total": total,
+        # Which classifier generation these rates describe (#1593). Annotation
+        # only: telemetry always emits, even across the flip.
+        "classifier_baseline": baseline_block,
         "labeled": labeled,
         "awaiting_feedback": total - labeled,
         "overall_accuracy_pct": round(100.0 * correct / judged, 2) if judged else None,
@@ -220,20 +304,36 @@ def compute_threshold_proposals(
             }
         )
 
-    recommended = _pick_recommended(proposals, base_acc, min_evidence)
+    # #1593: engagement is a property of the CLASSIFIER, so a floor compiled
+    # from rows that span (or predate) the current baseline is not evidence
+    # about the classifier now running. Withhold the recommendation; the
+    # per-candidate evidence below is still returned for human review.
+    baseline_block, single_baseline = _baseline_attribution(labeled)
+    recommended = _pick_recommended(proposals, base_acc, min_evidence) if single_baseline else None
+    note = (
+        "PROPOSAL ONLY — human-gated. Compiled offline from judged labels; "
+        "never auto-applied to routing (RouterNode.MIN_ACTIVE_CONFIDENCE is "
+        "unchanged). Insufficient labeled evidence yields no recommendation."
+    )
+    if not single_baseline:
+        note += (
+            f" NO RECOMMENDATION: the labeled set is not provably all on classifier "
+            f"baseline {CLASSIFIER_BASELINE} "
+            f"(current={baseline_block['rows_current']}, "
+            f"prior={baseline_block['rows_prior']}, "
+            f"undated={baseline_block['rows_undated']}) — engagement depends on the "
+            "classifier, so pooled rows cannot justify a floor."
+        )
     return {
         "current_floor": current_floor,
         "baseline_engaged_n": len(base_engaged),
         "baseline_accuracy_pct": round(base_acc, 2) if base_acc is not None else None,
         "labeled_rows": len(labeled),
         "min_evidence": min_evidence,
+        "classifier_baseline": baseline_block,
         "candidates": proposals,
         "recommended_floor": recommended,
-        "note": (
-            "PROPOSAL ONLY — human-gated. Compiled offline from judged labels; "
-            "never auto-applied to routing (RouterNode.MIN_ACTIVE_CONFIDENCE is "
-            "unchanged). Insufficient labeled evidence yields no recommendation."
-        ),
+        "note": note,
     }
 
 

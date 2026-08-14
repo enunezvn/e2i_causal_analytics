@@ -34,9 +34,18 @@ from src.agents.orchestrator.nodes.router import RouterNode
 QUERY = "test query"
 
 # The real #1582 stimulus: gold row bench-0000, the single highest-volume
-# production query shape. The 4-stage pipeline emits CLARIFICATION_NEEDED for
-# it while the graph answers via legacy explainer routing.
+# production query shape. #1593 taught DomainMapper the KPI-value-lookup SSOT,
+# so the pipeline now decides SINGLE_AGENT[explainer] here instead of
+# abstaining — which makes this the STRONGER form of the #1582 pin: even a
+# confident pipeline verdict must not be credited as pipeline authority in
+# shadow mode.
 KPI_QUERY = "What is TRx for Kisqali?"
+
+# Gold row bench-0008 — a population breakdown #1593 deliberately keeps
+# abstaining on (gold cohort_profiler; a lone explainer would be a measured
+# active-mode degradation). It carries the original #1582 scenario forward:
+# an abstaining label sitting beside an answered turn.
+ABSTAINING_QUERY = "Give me an NRx breakdown by patient clinical segment for Remibrutinib"
 
 
 def _intent(primary="prediction", requires_multi=False, secondary=None):
@@ -135,31 +144,47 @@ class TestRoutingAuthorityMarker:
 class TestIssue1582Scenario:
     """End-to-end on the REAL pipeline output for the real stimulus."""
 
-    async def test_answered_kpi_turn_is_legacy_authority_and_pattern_unchanged(self, monkeypatch):
-        """The #1582 turn: CLARIFICATION_NEEDED label, legacy authority, answered.
-
-        Pins that the fix does NOT relabel routing_pattern (that would perturb
-        routing_metrics.py and, in active mode, the router's abstain branch) —
-        it only names who decided.
-        """
+    async def _shadow_route(self, query, monkeypatch):
         pipeline = ClassificationPipeline(llm_client=None, enable_llm_layer=False)
-        result = await pipeline.classify(query=KPI_QUERY)
+        result = await pipeline.classify(query=query)
+        state = {
+            "query": query,
+            "intent": _intent(primary="explanation"),
+            "classification": result.model_dump(mode="json", exclude={"stages"}),
+            "routing_pattern": result.routing_pattern.value,
+        }
+        return result, await _route(state, monkeypatch, "shadow")
 
-        # Unchanged: the pipeline still abstains, and still says so.
+    async def test_confident_pipeline_verdict_is_still_legacy_authority_in_shadow(
+        self, monkeypatch
+    ):
+        """#1593 made this turn a CONFIDENT pipeline decision. Shadow mode must
+        still credit legacy — authority is per-turn provenance, never a
+        restatement of what the pipeline happened to conclude."""
+        result, out = await self._shadow_route(KPI_QUERY, monkeypatch)
+
+        assert result.routing_pattern.value == "SINGLE_AGENT"
+        assert result.target_agents == ["explainer"]
+
+        assert out["routing_pattern"] == "SINGLE_AGENT"
+        assert out["routing_authority"] == "legacy"
+        assert [d["agent_name"] for d in out["dispatch_plan"]] == ["explainer"]
+
+    async def test_abstaining_turn_is_legacy_authority_and_pattern_unchanged(self, monkeypatch):
+        """The original #1582 shape, on a query #1593 keeps abstaining:
+        CLARIFICATION_NEEDED label, legacy authority, answered turn.
+
+        Pins that #1593 does NOT relabel routing_pattern wholesale — genuine
+        abstentions still say so, so routing_metrics.py keeps measuring a real
+        abstain rate rather than a retrofitted one.
+        """
+        result, out = await self._shadow_route(ABSTAINING_QUERY, monkeypatch)
+
         assert result.routing_pattern.value == "CLARIFICATION_NEEDED"
         assert result.target_agents == []
 
-        classification = result.model_dump(mode="json", exclude={"stages"})
-        state = {
-            "query": KPI_QUERY,
-            "intent": _intent(primary="explanation"),
-            "classification": classification,
-            "routing_pattern": result.routing_pattern.value,
-        }
-        out = await _route(state, monkeypatch, "shadow")
-
-        # The envelope is now self-describing: the abstaining label sits next
-        # to an explicit statement that legacy routing answered the turn.
+        # The envelope is self-describing: the abstaining label sits next to an
+        # explicit statement that legacy routing answered the turn.
         assert out["routing_pattern"] == "CLARIFICATION_NEEDED"
         assert out["routing_authority"] == "legacy"
         assert [d["agent_name"] for d in out["dispatch_plan"]] == ["explainer"]

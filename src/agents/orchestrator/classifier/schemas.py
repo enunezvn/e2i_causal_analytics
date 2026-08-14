@@ -60,6 +60,11 @@ class StructuralFeatures(BaseModel):
     """Features extracted from query structure."""
 
     question_count: int = Field(default=1, ge=0)
+    # A SECOND wh-clause after a connector ("... and which region ..."), i.e. a
+    # genuinely compound ask. Distinct from ``question_count``, which also
+    # counts bare '?' characters and so reads "whats the TRx for kisqali??" as
+    # two questions when it is one (#1593).
+    has_compound_question: bool = False
     clause_count: int = Field(default=1, ge=1)
     has_conditional: bool = False
     has_comparison: bool = False

@@ -21,6 +21,69 @@ from .schemas import (
     TemporalFeatures,
 )
 
+# A second ASK hanging off a connector — "what is the total TRx AND WHICH
+# region has the largest gap". Module-level so Stage 2 can gate on the same
+# signal Stage 1 counts with (#1593); a forked copy would let the compound
+# veto and the compound count disagree.
+#
+# The imperative heads (compare/show/list/...) matter as much as the wh-words:
+# "what is TRx and compare it to last quarter" is just as compound as
+# "... and which region leads", and a wh-only pattern silently misses that
+# whole family (codex iter-1 MEDIUM). ``question_count`` has no behavioural
+# consumer, so widening here only makes the compound count more accurate.
+COMPOUND_QUESTION_RE = re.compile(
+    r",?\s+and\s+(?:also\s+|then\s+)?"
+    r"(what|which|how|why|where|who|whose"
+    r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",
+    re.IGNORECASE,
+)
+
+# ``COMPOUND_QUESTION_RE`` above enumerates connector FORMS, which is a losing
+# game: it missed imperative heads (codex iter-1), then whole second SENTENCES
+# with no connector at all (iter-4), then polite/modal interposition —
+# "and please show me...", "and can you rank..." (iter-5). Each fix closed one
+# spelling and left the next.
+#
+# So the veto's real test is structural and enumerates nothing: cut the query
+# at every clause boundary (sentence terminators AND "and"), then count the
+# segments that OPEN AN ASK. Two or more asks is a compound query however it is
+# punctuated or padded. This subsumes the connector pattern; the two are OR-ed
+# so ``question_count`` keeps its original connector-based meaning.
+#
+# The ask-head list is what keeps it safe in the other direction: a second
+# segment that is not itself an ask does not count, so "whats TRx mean? total
+# rx's?" (gold bench-0253) and "what is the TRx for kisqali and remibrutinib"
+# (one ask, two entities) stay single lookups.
+_CLAUSE_SPLIT_RE = re.compile(r"[?;.!,\n]+|\band\b", re.IGNORECASE)
+# ANCHORED at the segment start (after at most a short politeness/modal
+# lead-in), because the test is whether a segment OPENS an ask — a head buried
+# mid-clause ("the TRx broken down by what measure") is not a second ask.
+_ASK_HEAD_RE = re.compile(
+    r"^\s*(?:(?:also|then|please|kindly|can|could|would|will|you|i|we|let|me)\s+){0,3}"
+    r"(what'?s?|which|how|why|where|who|whose|when"
+    r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",
+    re.IGNORECASE,
+)
+
+
+def has_second_ask(query: str) -> bool:
+    """Two or more clause-like segments that each OPEN an ask.
+
+    Known residual: a leading subordinate clause that itself starts with a
+    wh-word ("When looking at Kisqali, what is the TRx?") counts as an ask, so
+    such queries are treated as compound and fall through to legacy routing.
+    Separating those from real interrogatives needs syntax, not shape — and the
+    error direction is a forgone improvement, never a dropped facet. Zero of
+    the 337 #1337 gold queries take that form.
+    """
+    asks = 0
+    for segment in _CLAUSE_SPLIT_RE.split(query):
+        if len(segment.split()) >= 2 and _ASK_HEAD_RE.search(segment):
+            asks += 1
+            if asks >= 2:
+                return True
+    return False
+
 
 class FeatureExtractor:
     """
@@ -245,8 +308,7 @@ class FeatureExtractor:
         # Count questions (? marks + implied questions with "and")
         question_marks = query.count("?")
         # Detect compound questions: "X, and Y?" or "X and what Y"
-        compound_pattern = r",?\s+and\s+(what|which|how|why|where|who)"
-        compound_matches = len(re.findall(compound_pattern, query_lower))
+        compound_matches = len(COMPOUND_QUESTION_RE.findall(query_lower))
         question_count = max(question_marks, 1) + compound_matches
 
         # Count clauses (split by major conjunctions)
@@ -272,6 +334,7 @@ class FeatureExtractor:
 
         return StructuralFeatures(
             question_count=question_count,
+            has_compound_question=compound_matches > 0 or has_second_ask(query),
             clause_count=max(clause_count, 1),
             has_conditional=has_conditional,
             has_comparison=has_comparison,
