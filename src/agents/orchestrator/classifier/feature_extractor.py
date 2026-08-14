@@ -38,15 +38,23 @@ COMPOUND_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# A connector is not the only way to ask twice. "What is TRx for Kisqali? Which
-# region has the largest gap?" is two SENTENCES with no "and" anywhere, and the
-# KPI SSOT pattern is \A-anchored but not end-anchored, so it matches the first
-# sentence and the whole query would take the fast path (codex iter-4 HIGH).
-# Detected structurally: two or more sentence-like segments that each open an
-# ask. The head list is what makes this safe — "whats TRx mean? total rx's?"
-# (gold bench-0253) has two segments but only ONE ask, so it stays a single
-# lookup.
-_SENTENCE_SPLIT_RE = re.compile(r"[?;.!\n]+")
+# ``COMPOUND_QUESTION_RE`` above enumerates connector FORMS, which is a losing
+# game: it missed imperative heads (codex iter-1), then whole second SENTENCES
+# with no connector at all (iter-4), then polite/modal interposition —
+# "and please show me...", "and can you rank..." (iter-5). Each fix closed one
+# spelling and left the next.
+#
+# So the veto's real test is structural and enumerates nothing: cut the query
+# at every clause boundary (sentence terminators AND "and"), then count the
+# segments that OPEN AN ASK. Two or more asks is a compound query however it is
+# punctuated or padded. This subsumes the connector pattern; the two are OR-ed
+# so ``question_count`` keeps its original connector-based meaning.
+#
+# The ask-head list is what keeps it safe in the other direction: a second
+# segment that is not itself an ask does not count, so "whats TRx mean? total
+# rx's?" (gold bench-0253) and "what is the TRx for kisqali and remibrutinib"
+# (one ask, two entities) stay single lookups.
+_CLAUSE_SPLIT_RE = re.compile(r"[?;.!\n]+|\band\b", re.IGNORECASE)
 _ASK_HEAD_RE = re.compile(
     r"\b(what'?s?|which|how|why|where|who|whose|when"
     r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",
@@ -54,10 +62,10 @@ _ASK_HEAD_RE = re.compile(
 )
 
 
-def has_second_sentence_ask(query: str) -> bool:
-    """Two or more sentence-like segments that each open an ask."""
+def has_second_ask(query: str) -> bool:
+    """Two or more clause-like segments that each open an ask."""
     asks = 0
-    for segment in _SENTENCE_SPLIT_RE.split(query):
+    for segment in _CLAUSE_SPLIT_RE.split(query):
         if len(segment.split()) >= 2 and _ASK_HEAD_RE.search(segment):
             asks += 1
             if asks >= 2:
@@ -314,7 +322,7 @@ class FeatureExtractor:
 
         return StructuralFeatures(
             question_count=question_count,
-            has_compound_question=compound_matches > 0 or has_second_sentence_ask(query),
+            has_compound_question=compound_matches > 0 or has_second_ask(query),
             clause_count=max(clause_count, 1),
             has_conditional=has_conditional,
             has_comparison=has_comparison,

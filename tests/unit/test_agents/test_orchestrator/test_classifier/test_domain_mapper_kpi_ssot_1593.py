@@ -238,26 +238,31 @@ class TestNarrowingKeepsContestedRowsAbstaining:
             "What is TRx for Kisqali? Which region has the largest gap opportunity?",
             "What is TRx for Kisqali; which region has the largest gap?",
             "What is TRx for Kisqali. Show me the top regions.",
+            # Polite / modal padding between the connector and the second ask
+            # head — the family that defeated connector-form enumeration
+            # (codex iter-5 HIGH).
+            "what is the total TRx and please show me the top regions",
+            "what is the TRx and can you show me the top regions",
+            "what is the TRx and could you please rank the regions",
         ],
     )
-    def test_compound_veto_covers_second_sentence_asks(self, query):
+    def test_compound_veto_covers_second_asks_however_punctuated(self, query):
         assert FeatureExtractor().extract(query).structural.has_compound_question is True, query
 
     @pytest.mark.parametrize(
         "query",
         [
-            # Two segments, ONE ask — must stay a single lookup.
+            # A second SEGMENT is not a second ASK. These must stay single
+            # lookups or the structural detector would swallow the very
+            # improvement the fast path exists to deliver.
             "whats TRx mean? total rx's?",  # bench-0253
             "What is TRx for Kisqali? Thanks.",
+            "what is the TRx for kisqali and remibrutinib",  # one ask, two brands
+            "what is the market share and growth rate for Kisqali",  # one ask, two metrics
         ],
     )
     def test_a_second_segment_without_an_ask_is_not_compound(self, query):
         assert FeatureExtractor().extract(query).structural.has_compound_question is False, query
-
-    def test_two_metrics_joined_by_and_is_not_compound(self):
-        """ "kisqali and remibrutinib" is one ask over two entities, not two asks."""
-        feats = FeatureExtractor().extract("what is the TRx for kisqali and remibrutinib")
-        assert feats.structural.has_compound_question is False
 
     def test_compound_veto_reads_clause_structure_not_question_marks(self):
         """bench-0164 ('whats the TRx for kisqali??') has TWO '?' but one ask.
