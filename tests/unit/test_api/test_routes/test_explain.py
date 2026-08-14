@@ -34,12 +34,65 @@ from src.api.routes.explain import (
 # =============================================================================
 
 
+# The propensity model's authoritative feature order as exposed by BentoML
+# ``/model_info``. Deliberately a STRICT SUBSET of the ``sample_features``
+# fixture so the doubles also exercise the documented "extra non-model fields
+# in the request are IGNORED" half of the ``resolve_canonical_model_features``
+# contract.
+PROPENSITY_FEATURE_COLUMNS = [
+    "days_since_last_hcp_visit",
+    "total_hcp_interactions_90d",
+    "therapy_adherence_score",
+]
+
+# The validated numeric dict ``get_prediction`` must hand back as
+# ``model_features``. explain_prediction FAILS CLOSED (500) unless every value
+# is a genuine int/float — bools are explicitly rejected (see
+# src/api/routes/explain.py, "fail closed on missing model_features contract").
+VALIDATED_MODEL_FEATURES = {
+    "days_since_last_hcp_visit": 45.0,
+    "total_hcp_interactions_90d": 12.0,
+    "therapy_adherence_score": 0.72,
+}
+
+
+def prediction_payload(**overrides):
+    """Build a ``get_prediction`` return value that satisfies the route contract.
+
+    Mirrors the real ``RealTimeSHAPService.get_prediction`` return shape. Test
+    doubles that omit ``model_features`` (or fill it with non-numerics) are
+    correctly refused by the endpoint's fail-closed guard, so every double for
+    that method must go through here.
+    """
+    payload = {
+        "prediction_class": "high_propensity",
+        "prediction_probability": 0.78,
+        "model_version_id": "v2.3.1",
+        "model_features": dict(VALIDATED_MODEL_FEATURES),
+        # Legacy (non gold-standard) path: SHAP runs in-process over
+        # ``model_features``, so both of these are None.
+        "serving_name": None,
+        "raw_features": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
 @pytest.fixture
 def mock_bentoml_client():
-    """Mock BentoML client."""
+    """Mock BentoML client speaking the current serving contract.
+
+    ``get_model_info`` exposes the model's ``feature_columns`` (the audit-grade
+    feature order ``resolve_canonical_model_features`` validates against) and
+    ``predict`` returns the flat ``probabilities`` list. No ``keep_columns``, so
+    doubles built on this take the legacy bare-estimator branch.
+    """
     client = AsyncMock()
+    client.get_model_info = AsyncMock(
+        return_value={"feature_columns": list(PROPENSITY_FEATURE_COLUMNS)}
+    )
     client.predict = AsyncMock(
-        return_value={"predictions": [[0.25, 0.75]], "_metadata": {"model_name": "v2.3.1-prod"}}
+        return_value={"probabilities": [0.75], "_metadata": {"model_name": "v2.3.1-prod"}}
     )
     return client
 
@@ -241,9 +294,27 @@ class TestRealTimeSHAPService:
         assert len(refs) > 0
         assert any("comorbidity_count" in ref for ref in refs)
 
-    def test_get_feature_refs_for_model_unknown(self, shap_service):
-        """Test feature refs for unknown model type returns empty list."""
-        refs = shap_service._get_feature_refs_for_model("unknown_model")
+    def test_get_feature_refs_for_model_missing_registry_entry(self, shap_service):
+        """A model type absent from the canonical registry yields ``[]``.
+
+        This is the documented legacy contract of
+        ``_get_feature_refs_for_model``: it must NOT apply the propensity
+        fallback that ``feature_refs_for_model`` uses, because callers here
+        check for the empty list. Every ``ModelType`` member currently HAS a
+        registry entry, so the only faithful way to reach the ``[]`` default is
+        to drop one — the previous form of this test passed a bare
+        ``"unknown_model"`` string, violating the ``ModelType`` signature and
+        only ever exercising an AttributeError.
+        """
+        from src.feature_store import model_feature_refs
+
+        trimmed = {
+            k: v
+            for k, v in model_feature_refs.MODEL_FEATURE_REFS.items()
+            if k != ModelType.NEXT_BEST_ACTION.value
+        }
+        with patch.object(model_feature_refs, "MODEL_FEATURE_REFS", trimmed):
+            refs = shap_service._get_feature_refs_for_model(ModelType.NEXT_BEST_ACTION)
 
         assert refs == []
 
@@ -257,7 +328,13 @@ class TestRealTimeSHAPService:
 
     @pytest.mark.asyncio
     async def test_get_prediction_from_bentoml(self, shap_service, sample_features):
-        """Test prediction from BentoML."""
+        """Test prediction from BentoML.
+
+        Also pins the ``model_features`` half of the contract the endpoint
+        fail-closes on: the returned dict is the model's own ``feature_columns``
+        as floats, with the request's extra non-model fields dropped rather than
+        hash/zero-filled into audit-grade output.
+        """
         prediction = await shap_service.get_prediction(
             features=sample_features,
             model_type=ModelType.PROPENSITY,
@@ -265,23 +342,34 @@ class TestRealTimeSHAPService:
 
         assert "prediction_class" in prediction
         assert "prediction_probability" in prediction
-        assert "model_version_id" in prediction
+        assert prediction["model_version_id"] == "v2.3.1-prod"
         assert prediction["prediction_probability"] == 0.75
+        assert prediction["model_features"] == VALIDATED_MODEL_FEATURES
+        assert list(prediction["model_features"]) == PROPENSITY_FEATURE_COLUMNS
 
     @pytest.mark.asyncio
-    async def test_get_prediction_fallback(
+    async def test_get_prediction_fails_closed_when_bentoml_errors(
         self, shap_service, mock_bentoml_client, sample_features
     ):
-        """Test prediction fallback when BentoML fails."""
+        """#532: a BentoML failure must FAIL LOUD, not fabricate a prediction.
+
+        This test previously asserted ``prediction_probability == 0.78`` — the
+        hardcoded demonstration fallback. That value fed a real SHAP explanation
+        and a persistable regulatory-audit record, so it was deliberately
+        removed (see ``get_prediction``'s docstring: "The previous hardcoded
+        ``0.78`` demonstration fallback is removed for this reason"). The
+        expectation, not the production behaviour, was stale.
+        """
         mock_bentoml_client.predict.side_effect = Exception("BentoML error")
 
-        prediction = await shap_service.get_prediction(
-            features=sample_features,
-            model_type=ModelType.PROPENSITY,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await shap_service.get_prediction(
+                features=sample_features,
+                model_type=ModelType.PROPENSITY,
+            )
 
-        assert "prediction_class" in prediction
-        assert prediction["prediction_probability"] == 0.78  # Fallback value
+        assert exc_info.value.status_code == 503
+        assert "prediction failed" in str(exc_info.value.detail).lower()
 
     def test_prepare_numeric_features(self, shap_service):
         """Test feature conversion to numeric."""
@@ -513,13 +601,7 @@ class TestExplainPredictionEndpoint:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={"feat1": 1.0})
-            mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high_propensity",
-                    "prediction_probability": 0.78,
-                    "model_version_id": "v2.3.1",
-                }
-            )
+            mock_service.get_prediction = AsyncMock(return_value=prediction_payload())
             mock_service.compute_shap = AsyncMock(
                 return_value={
                     "base_value": 0.42,
@@ -563,11 +645,11 @@ class TestExplainPredictionEndpoint:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock()
             mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high",
-                    "prediction_probability": 0.8,
-                    "model_version_id": "v1",
-                }
+                return_value=prediction_payload(
+                    prediction_class="high",
+                    prediction_probability=0.8,
+                    model_version_id="v1",
+                )
             )
             mock_service.compute_shap = AsyncMock(
                 return_value={
@@ -583,6 +665,14 @@ class TestExplainPredictionEndpoint:
             # Should NOT call get_features since features were provided
             mock_service.get_features.assert_not_called()
 
+            # SHAP must run over the VALIDATED model features get_prediction
+            # returned, never the raw request dict — the request's {"feat1": 42.0}
+            # is not a model feature and would be fabricated into audit-grade
+            # output by _prepare_numeric_features.
+            assert mock_service.compute_shap.call_args.kwargs["features"] == (
+                VALIDATED_MODEL_FEATURES
+            )
+
     @pytest.mark.asyncio
     async def test_explain_prediction_narrative_format(self, mock_user):
         """Test prediction with narrative format."""
@@ -596,11 +686,11 @@ class TestExplainPredictionEndpoint:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={})
             mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high",
-                    "prediction_probability": 0.8,
-                    "model_version_id": "v1",
-                }
+                return_value=prediction_payload(
+                    prediction_class="high",
+                    prediction_probability=0.8,
+                    model_version_id="v1",
+                )
             )
             mock_service.compute_shap = AsyncMock(
                 return_value={
@@ -1293,8 +1383,19 @@ class TestListExplainableModelsEndpoint:
             captured["order"] = (col, desc)
             return chain
 
+        def eq_capture(col, value):
+            captured.setdefault("eq", []).append((col, value))
+            return chain
+
         chain = MagicMock()
         chain.in_.return_value = chain
+        # ``.eq`` (the #894 is_synthetic provenance predicate) and ``.like`` (the
+        # #39 gold-standard family query) are part of the builder chain the route
+        # uses. Without them the MagicMock returns a fresh child instead of
+        # ``chain``, so nothing downstream is captured and the lookup silently
+        # falls into its best-effort except branch.
+        chain.eq.side_effect = eq_capture
+        chain.like.return_value = chain
         chain.select.side_effect = select_capture
         chain.order.side_effect = order_capture
         chain.execute.side_effect = lambda: async_execute()
@@ -1321,6 +1422,9 @@ class TestListExplainableModelsEndpoint:
             # Confirm SELECT and ORDER targeted the canonical column.
             assert "registered_at" in captured.get("select", ""), captured
             assert captured.get("order", (None, None))[0] == "registered_at"
+            # #894: ml_model_registry is is_synthetic-tagged, so a synthetic row
+            # would otherwise win the latest-version race on this user route.
+            assert ("is_synthetic", False) in captured.get("eq", []), captured
 
             by_type = {m["model_type"]: m["latest_version"] for m in response["supported_models"]}
             assert by_type["propensity"] == "v3.0"  # newest, not v2.3.1
@@ -1481,11 +1585,11 @@ class TestEdgeCases:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high",
-                    "prediction_probability": 0.8,
-                    "model_version_id": "v1",
-                }
+                return_value=prediction_payload(
+                    prediction_class="high",
+                    prediction_probability=0.8,
+                    model_version_id="v1",
+                )
             )
             mock_service.compute_shap = AsyncMock(
                 return_value={
@@ -1513,11 +1617,11 @@ class TestEdgeCases:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={})
             mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high",
-                    "prediction_probability": 0.8,
-                    "model_version_id": "v1",
-                }
+                return_value=prediction_payload(
+                    prediction_class="high",
+                    prediction_probability=0.8,
+                    model_version_id="v1",
+                )
             )
             mock_service.compute_shap = AsyncMock(
                 return_value={
@@ -1615,13 +1719,7 @@ class TestExplainHeavyComputeBounding:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={"feat1": 1.0})
-            mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high_propensity",
-                    "prediction_probability": 0.78,
-                    "model_version_id": "v2.3.1",
-                }
-            )
+            mock_service.get_prediction = AsyncMock(return_value=prediction_payload())
             mock_service.compute_shap = AsyncMock(
                 return_value={
                     "base_value": 0.42,
@@ -1723,11 +1821,11 @@ class TestExplainHeavyComputeBounding:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={"feat1": 1.0})
             mock_service.get_prediction = AsyncMock(
-                return_value={
-                    "prediction_class": "high",
-                    "prediction_probability": 0.8,
-                    "model_version_id": "v1",
-                }
+                return_value=prediction_payload(
+                    prediction_class="high",
+                    prediction_probability=0.8,
+                    model_version_id="v1",
+                )
             )
             mock_service.compute_shap = AsyncMock(
                 return_value={"base_value": 0.5, "contributions": [], "shap_sum": 0.3}

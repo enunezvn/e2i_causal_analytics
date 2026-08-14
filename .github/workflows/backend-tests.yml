@@ -341,7 +341,6 @@ jobs:
             --ignore=tests/unit/test_api/test_episodic_memory_bridge.py \
             --ignore=tests/unit/test_api/test_cors_configuration.py \
             --ignore=tests/unit/test_api/test_dependencies/test_auth.py \
-            --ignore=tests/unit/test_api/test_routes/test_explain.py \
             --ignore=tests/unit/test_api/test_routes/test_feedback.py \
             --ignore=tests/unit/test_api/test_routes/test_resource_optimizer.py \
             --ignore=tests/unit/test_repositories/test_query_logger.py \

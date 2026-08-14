@@ -418,18 +418,45 @@ class TestAsyncDSPyClassification:
         assert len(collector) == initial_count + 1
 
     async def test_async_classification_with_context(self):
-        """Test classification with conversation and brand context."""
-        intent, confidence, reasoning, method = await classify_intent_dspy(
-            query="What is TRx?",
-            conversation_context="User: Hello\nAssistant: Hi there!",
-            brand_context="Kisqali",
-            collect_signal=False,
+        """Conversation and brand context reach the DSPy classifier, whose answer
+        is normalized before it is returned.
+
+        The classifier is stubbed: this is a unit test, and calling the real one
+        makes a live LLM request whose answer is not ours to assert on. The
+        previous form did exactly that, and its `hasattr(intent, "value")`
+        escape hatch never fired — ``IntentType`` is a plain constants class, not
+        an Enum — so the test was green only while the model happened to answer
+        `kpi_query` or `help`.
+        """
+        stub_classifier = MagicMock(
+            return_value=MagicMock(
+                intent="KPI Query",  # a variation _normalize_intent must map
+                confidence=0.91,
+                reasoning="Brand context names a product; query asks for a metric",
+            )
         )
-        # DSPy model may classify TRx query as kpi_query or help depending on context
-        # The key behavior is that a valid intent is returned with confidence
-        valid_intents = [IntentType.KPI_QUERY, IntentType.HELP, "kpi_query", "help"]
-        assert intent in valid_intents or hasattr(intent, "value")
-        assert confidence > 0
+
+        with patch(
+            "src.api.routes.chatbot_dspy._get_dspy_classifier", return_value=stub_classifier
+        ):
+            intent, confidence, reasoning, method = await classify_intent_dspy(
+                query="What is TRx?",
+                conversation_context="User: Hello\nAssistant: Hi there!",
+                brand_context="Kisqali",
+                collect_signal=False,
+            )
+
+        assert method == "dspy"
+        assert intent == IntentType.KPI_QUERY
+        assert intent in VALID_INTENTS
+        assert confidence == 0.91
+        assert reasoning
+
+        # Both context arguments must be threaded through to the classifier.
+        kwargs = stub_classifier.call_args.kwargs
+        assert kwargs["query"] == "What is TRx?"
+        assert kwargs["conversation_context"] == "User: Hello\nAssistant: Hi there!"
+        assert kwargs["brand_context"] == "Kisqali"
 
 
 class TestGlobalSignalCollector:
