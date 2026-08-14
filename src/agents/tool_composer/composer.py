@@ -53,6 +53,20 @@ from .synthesizer import ResponseSynthesizer
 
 logger = logging.getLogger(__name__)
 
+# Cap for tool-authored failure reasons carried into the F6 total-failure
+# envelope (#1574). The reasons are what let a fail-closed tool state the scope
+# it actually covered, but they are of unknown length, and this envelope is
+# returned to the caller verbatim (no synthesis pass to compress it).
+_MAX_FAILURE_REASON_CHARS = 2000
+_TRUNCATION_MARKER = "…(truncated)"
+
+
+def _truncate(text: str, limit: int = _MAX_FAILURE_REASON_CHARS) -> str:
+    """Bound ``text`` to ``limit`` characters, marking any elision."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - len(_TRUNCATION_MARKER)] + _TRUNCATION_MARKER
+
 
 # Per-phase LLM client sizing (#1365). Prod runs claude-sonnet-5 (adaptive
 # thinking), whose thinking tokens count against max_tokens — at the old shared
@@ -954,19 +968,43 @@ class ToolComposer:
         """
         from .models.composition_models import ComposedResponse
 
-        failed_tools = [
-            getattr(r, "tool_name", "unknown")
-            for r in getattr(execution_trace, "step_results", [])
-            if not getattr(r, "success", False)
-        ]
+        failed_tools: List[str] = []
+        reasons: List[str] = []
+        for step in getattr(execution_trace, "step_results", None) or []:
+            output = getattr(step, "output", None)
+            # ``is_success`` (success AND a result present) is the model's own
+            # definition of a successful step — it is what ``ExecutionTrace``
+            # counts and what ``get_all_outputs`` returns, so the failed-step
+            # collector must agree with it or a ``success=True, result=None``
+            # step would be counted failed and then listed nowhere.
+            if getattr(output, "is_success", False):
+                continue
+            tool_name = str(
+                getattr(step, "tool_name", None) or getattr(output, "tool_name", None) or "unknown"
+            )
+            failed_tools.append(tool_name)
+            reason = str(getattr(output, "error", None) or "").strip()
+            if reason:
+                reasons.append(f"{tool_name}: {reason}")
         msg = (
             f"All {execution_trace.tools_executed} tool(s) failed; no analysis could "
             "be completed. Returning a failed result rather than a fabricated answer."
         )
+        # This answer is NOT synthesized — it is returned verbatim to the caller
+        # (``agent.py`` maps it to ``ToolComposerOutput.response``). Carrying the
+        # per-step reasons is what keeps a fail-closed tool's honest envelope
+        # reaching the user: #1574's ``gap_calculator`` guard states which entity
+        # groups the estimation data actually covered, and a one-step plan
+        # fail-closes here, before synthesis, so dropping the reason would leave
+        # the answer LESS informative than the fabricated comparison it replaced.
+        # Bounded because the reason is tool-authored text of unknown length.
+        answer = f"Unable to complete analysis: {msg}"
+        if reasons:
+            answer = _truncate(f"{answer} Reason(s): {' | '.join(reasons)}")
         response = ComposedResponse(
-            answer=f"Unable to complete analysis: {msg}",
+            answer=answer,
             confidence=0.0,
-            caveats=[msg],
+            caveats=[msg, *(_truncate(r) for r in reasons)],
             failed_components=failed_tools or ["execute"],
         )
         completed_at = datetime.now(timezone.utc)
@@ -981,7 +1019,7 @@ class ToolComposer:
             phase_durations=phase_durations,
             status=CompositionStatus.FAILED,
             success=False,
-            errors=[msg],
+            errors=[msg, *(_truncate(r) for r in reasons)],
             error=msg,
             started_at=started_at,
             completed_at=completed_at,

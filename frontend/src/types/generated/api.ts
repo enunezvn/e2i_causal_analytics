@@ -7529,6 +7529,8 @@ export interface components {
             routing_rationale?: string | null;
             /** Routing Pattern */
             routing_pattern?: string | null;
+            /** Routing Authority */
+            routing_authority?: string | null;
             /** Classification Latency Ms */
             classification_latency_ms?: number | null;
             /** Used Llm Layer */

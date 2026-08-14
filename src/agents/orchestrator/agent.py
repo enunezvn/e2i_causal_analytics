@@ -454,6 +454,10 @@ class OrchestratorAgent:
             "classification": state.get("classification"),
             "routing_pattern": state.get("routing_pattern"),
             "used_llm_layer": state.get("used_llm_layer"),
+            # #1582: names WHICH subsystem decided this turn, so an abstaining
+            # routing_pattern next to a real agents_dispatched is no longer
+            # read as a routing regression. None when routing never ran.
+            "routing_authority": state.get("routing_authority"),
         }
 
     def _generate_query_id(self) -> str:

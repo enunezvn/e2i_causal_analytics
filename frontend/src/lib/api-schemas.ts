@@ -655,6 +655,12 @@ export const ChatResponseSchema = z.object({
   routing_rationale: z.string().nullable().optional(),
   // 4-stage ClassificationPipeline observability (ORCHESTRATOR_CLASSIFIER_MODE)
   routing_pattern: z.string().nullable().optional(),
+  // #1582: "pipeline" | "legacy" — which subsystem produced this turn's
+  // dispatch plan. Kept a bare string (not z.enum) to match routing_pattern's
+  // existing permissiveness: a backend-side vocabulary change must not make
+  // the whole response fail to parse. Declared explicitly because the object
+  // schema STRIPS unknown keys, so an undeclared field never reaches callers.
+  routing_authority: z.string().nullable().optional(),
   classification_latency_ms: z.number().nullable().optional(),
   used_llm_layer: z.boolean().nullable().optional(),
 });

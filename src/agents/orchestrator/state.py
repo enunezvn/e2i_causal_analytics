@@ -161,6 +161,12 @@ class OrchestratorState(TypedDict, total=False):
     routing_pattern: NotRequired[Optional[str]]
     used_llm_layer: NotRequired[bool]
 
+    # #1582: which subsystem produced this turn's dispatch plan —
+    # "pipeline" (active mode AND the pipeline was confident) or "legacy"
+    # (off, shadow, OR active-but-abstained). Set by RouterNode, where the
+    # plan's origin is known. Telemetry only; nothing routes on it.
+    routing_authority: NotRequired[Optional[str]]
+
     # Timing
     classification_latency_ms: int
 

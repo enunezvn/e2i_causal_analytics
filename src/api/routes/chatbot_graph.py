@@ -1617,6 +1617,11 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             classification = orchestrator_result.get("classification") or {}
             routing_pattern = orchestrator_result.get("routing_pattern")
             used_llm_layer = orchestrator_result.get("used_llm_layer")
+            # #1582: routing_pattern is the PIPELINE's decision; agents_dispatched
+            # below is what LEGACY routing actually did. Without this marker the
+            # two read as one decision, and an answered kpi_query turn looks like
+            # an abstain.
+            routing_authority = orchestrator_result.get("routing_authority")
             classification_latency_ms = classification.get("classification_latency_ms")
 
             # Phase 3: Extract partial failure information
@@ -1702,6 +1707,7 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                     "orchestrator_used": True,
                     "response_confidence": response_confidence,
                     "routing_pattern": routing_pattern,
+                    "routing_authority": routing_authority,
                     "classification_latency_ms": classification_latency_ms,
                     "used_llm_layer": used_llm_layer,
                     "metadata": {
@@ -1719,6 +1725,7 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                         "bridge_used": bridge_used,
                         # 4-stage classifier observability
                         "routing_pattern": routing_pattern,
+                        "routing_authority": routing_authority,
                         "classification_latency_ms": classification_latency_ms,
                         "used_llm_layer": used_llm_layer,
                     },

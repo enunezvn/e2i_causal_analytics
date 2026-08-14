@@ -77,6 +77,10 @@ class ChatbotState(TypedDict, total=False):
     routing_pattern: Optional[
         str
     ]  # SINGLE_AGENT | PARALLEL_DELEGATION | TOOL_COMPOSER | CLARIFICATION_NEEDED
+    # #1582: "pipeline" | "legacy" — which subsystem produced the dispatch plan.
+    # Disambiguates the line above, which is the PIPELINE's decision even when
+    # legacy routing is what actually answered the turn.
+    routing_authority: Optional[str]
     classification_latency_ms: Optional[float]  # Pipeline's own latency (ClassificationResult)
     used_llm_layer: Optional[bool]  # Whether the pipeline's LLM layer actually ran
 
@@ -237,6 +241,7 @@ def create_initial_state(
         agents_dispatched=[],
         response_confidence=None,
         routing_pattern=None,
+        routing_authority=None,
         classification_latency_ms=None,
         used_llm_layer=None,
         brand_context=brand_context,
