@@ -231,7 +231,11 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     needs: lint
-    timeout-minutes: 20
+    # 30 not 20: #1614 returned the ~200-test test_explain.py file to this lane,
+    # putting its real duration at ~16-17 min — a slow shared runner then trips
+    # a 20-min cap (measured: 20m05s timeout on main @ b34638c1 vs 16m23s pass
+    # on the identical-content sibling run eight minutes earlier).
+    timeout-minutes: 30
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
@@ -378,7 +382,7 @@ jobs:
     needs: lint
     # Serviceless, like the unit lane, but split into its own job because these
     # dirs are slow (test_digital_twin ~8min, test_causal_engine ~5min serial):
-    # bundling them into unit-tests would blow its 20-min cap. They pass with no
+    # bundling them into unit-tests would blow its 30-min cap. They pass with no
     # service containers (verified serviceless, #555). 60s per-test timeout for
     # the heavier ML/causal fits on slower CI runners.
     timeout-minutes: 20
