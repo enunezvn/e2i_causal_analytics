@@ -19,12 +19,15 @@ rate-limit headers versus `x-ratelimit-limit: 240`).
 credential-named env reads and require each to be forwarded, aliased, or exempt.
 Catches a key added to a client before it is added to compose.
 
-**Rule B — `.env`-derived (droplet/local only).** Any credential-looking variable
-actually *set* in `.env` must be forwarded. This encodes the #1622 failure directly
-— "the value exists on the host but not in the container" — rather than inferring it
-from a naming convention, and it would have caught both keys by construction.
-`.env` is gitignored, so this rule SKIPS where the file is absent; it is a
-droplet guard, not a CI gate. Rule A is the CI gate.
+**Rule B — `.env`-derived (droplet/local only).** A credential that `src/` reads
+AND the host has AND the container lacks. This encodes the #1622 failure directly
+rather than inferring it from a naming convention, and would have caught both keys
+by construction. `.env` is gitignored, so this rule SKIPS where the file is absent;
+it is a droplet guard, not a CI gate. Rule A is the CI gate.
+
+The "src/ reads it" half of that intersection is not decoration — see the test's own
+docstring: `.env` here also holds credentials for tooling the application never
+touches, and requiring all of them to be forwarded flags 13 non-defects.
 
 ## Known bound (stated rather than left implicit)
 
