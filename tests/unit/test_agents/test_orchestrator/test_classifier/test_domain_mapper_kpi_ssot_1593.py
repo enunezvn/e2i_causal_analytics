@@ -268,6 +268,8 @@ class TestNarrowingKeepsContestedRowsAbstaining:
             # must not turn every scoped lookup into a compound one.
             "For Kisqali, what is the TRx?",
             "In the northeast, show me the TRx",
+            # An ask head buried mid-clause does not OPEN an ask.
+            "the TRx broken down by what measure",
         ],
     )
     def test_a_second_segment_without_an_ask_is_not_compound(self, query):

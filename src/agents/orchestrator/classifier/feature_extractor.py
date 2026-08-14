@@ -55,15 +55,27 @@ COMPOUND_QUESTION_RE = re.compile(
 # rx's?" (gold bench-0253) and "what is the TRx for kisqali and remibrutinib"
 # (one ask, two entities) stay single lookups.
 _CLAUSE_SPLIT_RE = re.compile(r"[?;.!,\n]+|\band\b", re.IGNORECASE)
+# ANCHORED at the segment start (after at most a short politeness/modal
+# lead-in), because the test is whether a segment OPENS an ask — a head buried
+# mid-clause ("the TRx broken down by what measure") is not a second ask.
 _ASK_HEAD_RE = re.compile(
-    r"\b(what'?s?|which|how|why|where|who|whose|when"
+    r"^\s*(?:(?:also|then|please|kindly|can|could|would|will|you|i|we|let|me)\s+){0,3}"
+    r"(what'?s?|which|how|why|where|who|whose|when"
     r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",
     re.IGNORECASE,
 )
 
 
 def has_second_ask(query: str) -> bool:
-    """Two or more clause-like segments that each open an ask."""
+    """Two or more clause-like segments that each OPEN an ask.
+
+    Known residual: a leading subordinate clause that itself starts with a
+    wh-word ("When looking at Kisqali, what is the TRx?") counts as an ask, so
+    such queries are treated as compound and fall through to legacy routing.
+    Separating those from real interrogatives needs syntax, not shape — and the
+    error direction is a forgone improvement, never a dropped facet. Zero of
+    the 337 #1337 gold queries take that form.
+    """
     asks = 0
     for segment in _CLAUSE_SPLIT_RE.split(query):
         if len(segment.split()) >= 2 and _ASK_HEAD_RE.search(segment):
