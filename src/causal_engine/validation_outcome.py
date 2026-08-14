@@ -85,7 +85,9 @@ class ValidationOutcome:
     extracted failure patterns for systematic learning.
 
     Attributes:
-        outcome_id: Unique identifier for this outcome
+        outcome_id: Unique identifier for this outcome. Persisted as the
+            validation_outcomes PRIMARY KEY (declared UUID), so it must be
+            UUID-coercible — keep any display prefix out of this field.
         outcome_type: Classification of outcome (passed/failed/review/blocked)
         timestamp: When the validation occurred
         estimate_id: ID of the causal estimate being validated
@@ -389,7 +391,9 @@ def create_validation_outcome(
     effect_size = suite.tests[0].original_effect if suite.tests else None
 
     return ValidationOutcome(
-        outcome_id=f"vo_{uuid.uuid4().hex[:12]}",
+        # Bare uuid4: this id is the validation_outcomes PRIMARY KEY, declared
+        # UUID, so any prefix makes every insert fail 22P02 (#1611).
+        outcome_id=str(uuid.uuid4()),
         outcome_type=outcome_type,
         timestamp=datetime.now(timezone.utc).isoformat(),
         estimate_id=suite.estimate_id,

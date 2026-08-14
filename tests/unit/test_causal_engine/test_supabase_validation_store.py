@@ -15,6 +15,7 @@ Version: 1.0.0
 """
 
 import os
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -393,6 +394,111 @@ class TestSupabaseValidationOutcomeStoreOperations:
         assert patterns[0]["category"] == "refutation"
         assert patterns[0]["count"] == 5
         client.table.assert_called_with("v_validation_failure_patterns")
+
+
+class _UuidStrictTable:
+    """Insert stub that enforces the real ``outcome_id UUID`` column type.
+
+    A non-UUID id raises the same 22P02 PostgREST surfaced live in #1611, so the
+    test proves the generated id against the column instead of against a string
+    pattern.
+    """
+
+    def __init__(self):
+        self.rows = []
+        self._pending = None
+
+    def insert(self, row):
+        self._pending = row
+        return self
+
+    def execute(self):
+        row = self._pending
+        try:
+            uuid.UUID(str(row["outcome_id"]))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"{{'message': 'invalid input syntax for type uuid: "
+                f"\"{row['outcome_id']}\"', 'code': '22P02'}}"
+            ) from exc
+        self.rows.append(row)
+        return MagicMock(data=[row])
+
+
+class _UuidStrictClient:
+    """Minimal Supabase client exposing only the insert path under test."""
+
+    def __init__(self):
+        self.validation_outcomes = _UuidStrictTable()
+
+    def table(self, name):
+        assert name == "validation_outcomes", f"unexpected table {name!r}"
+        return self.validation_outcomes
+
+
+def _passing_suite():
+    """A suite create_validation_outcome accepts, so the id under test is minted
+    by the real generator."""
+    from src.causal_engine.refutation_runner import (
+        GateDecision,
+        RefutationResult,
+        RefutationStatus,
+        RefutationSuite,
+        RefutationTestType,
+    )
+
+    return RefutationSuite(
+        passed=True,
+        confidence_score=0.91,
+        gate_decision=GateDecision.PROCEED,
+        tests=[
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.42,
+                refuted_effect=0.01,
+                delta_percent=2.4,
+            )
+        ],
+        treatment_variable="rep_visits",
+        outcome_variable="trx_total",
+        brand="Kisqali",
+        estimate_id="est_1611",
+    )
+
+
+class TestGeneratedOutcomeIdAgainstUuidColumn:
+    """#1611: the minted outcome_id must survive the UUID primary key."""
+
+    @pytest.mark.asyncio
+    async def test_generated_outcome_persists_durably(self):
+        """End-to-end: generator → serializer → UUID-strict insert → DURABLE.
+
+        RED before the fix: the ``vo_``-prefixed id raises 22P02 here exactly as
+        it did live, ``store_with_status`` swallows it into the ephemeral
+        fallback, and the assertions below see persisted=False /
+        backend='memory_fallback'.
+        """
+        from src.causal_engine.validation_outcome import create_validation_outcome
+        from src.causal_engine.validation_outcome_store import (
+            SupabaseValidationOutcomeStore,
+        )
+
+        client = _UuidStrictClient()
+        store = SupabaseValidationOutcomeStore()
+        store._client = client
+
+        outcome = create_validation_outcome(_passing_suite())
+        result = await store.store_with_status(outcome)
+
+        assert result.persisted is True
+        assert result.degraded is False
+        assert result.backend == "supabase"
+        assert result.outcome_id == outcome.outcome_id
+
+        assert len(client.validation_outcomes.rows) == 1
+        stored_id = client.validation_outcomes.rows[0]["outcome_id"]
+        assert str(uuid.UUID(stored_id)) == stored_id
 
 
 class TestSupabaseValidationOutcomeStoreFallback:

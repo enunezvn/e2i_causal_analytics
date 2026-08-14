@@ -17,16 +17,31 @@ confidence_interval jsonb) while the code writes eight richer top-level fields
 agent_context, dag_hash). migration 021 declared only agent_context — and even
 that never reached the live table because the ledger recorded it as applied, so
 the runner skipped it. Migration 121 reconciles all eight.
+
+Key parity is necessary but not sufficient: #1611 showed a declared column can
+still reject the payload on TYPE. ``outcome_id`` is ``UUID PRIMARY KEY`` while
+the generator emitted ``vo_<12 hex>``, so every insert failed 22P02 and hit the
+same memory_fallback drop. The type guard below closes that second dimension.
 """
 
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
+from typing import Callable
 
+from src.causal_engine.refutation_runner import (
+    GateDecision,
+    RefutationResult,
+    RefutationStatus,
+    RefutationSuite,
+    RefutationTestType,
+)
 from src.causal_engine.validation_outcome import (
     ValidationOutcome,
     ValidationOutcomeType,
+    create_validation_outcome,
 )
 from src.causal_engine.validation_outcome_store import SupabaseValidationOutcomeStore
 
@@ -83,6 +98,86 @@ def _declared_columns() -> set[str]:
                 cols.add(a.group(1).lower())
 
     return cols
+
+
+# A column's SQL type: the leading type token plus any (n) / (p,s) args.
+# "double precision" is the one multi-word type this table uses.
+_TYPE = r"(?P<type>double\s+precision|[a-z][a-z0-9_]*(?:\s*\([^)]*\))?)"
+_COLUMN_TYPE_DECL = re.compile(r'^\s*"?(?P<name>[a-z_][a-z0-9_]*)"?\s+' + _TYPE, re.IGNORECASE)
+_ALTER_COLUMN_TYPE = re.compile(
+    r'ALTER\s+COLUMN\s+"?(?P<name>[a-z_][a-z0-9_]*)"?\s+(?:SET\s+DATA\s+)?TYPE\s+' + _TYPE,
+    re.IGNORECASE,
+)
+
+
+def _declared_column_type(column: str) -> str | None:
+    """The SQL type validation_outcomes.<column> ends up with after every migration.
+
+    Later files win, so an ``ALTER COLUMN ... TYPE`` in a newer migration
+    supersedes the original ``CREATE TABLE`` declaration.
+    """
+    latest: str | None = None
+    for sql_file in sorted(_MIGRATIONS_DIR.rglob("*.sql")):
+        text = sql_file.read_text(encoding="utf-8")
+        if _TABLE not in text:
+            continue
+
+        for m in re.finditer(
+            r"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?"
+            + _TABLE
+            + r"\s*\((?P<body>.*?)\n\)\s*;",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            for raw in m.group("body").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("--") or _CONSTRAINT_LEAD.match(line):
+                    continue
+                decl = _COLUMN_TYPE_DECL.match(line)
+                if decl and decl.group("name").lower() == column:
+                    latest = decl.group("type")
+
+        for m in re.finditer(
+            r"ALTER\s+TABLE\s+(?:public\.)?" + _TABLE + r"\b(?P<stmt>.*?);",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            for a in _ALTER_COLUMN_TYPE.finditer(m.group("stmt")):
+                if a.group("name").lower() == column:
+                    latest = a.group("type")
+
+    return " ".join(latest.lower().split()) if latest else None
+
+
+# How to prove a value would coerce into a declared column type. A type absent
+# from this map fails the guard loudly rather than passing vacuously.
+_TYPE_COERCERS: dict[str, Callable[[str], object]] = {
+    "uuid": uuid.UUID,
+    "text": str,
+}
+
+
+def _minimal_suite() -> RefutationSuite:
+    """The smallest suite create_validation_outcome accepts, so the id under test
+    comes from the REAL generator rather than a hand-written literal."""
+    return RefutationSuite(
+        passed=True,
+        confidence_score=0.9,
+        gate_decision=GateDecision.PROCEED,
+        tests=[
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.5,
+                refuted_effect=0.01,
+                delta_percent=2.0,
+            )
+        ],
+        treatment_variable="rep_visits",
+        outcome_variable="trx_total",
+        brand="Kisqali",
+        estimate_id="est-1611",
+    )
 
 
 def _sample_outcome() -> ValidationOutcome:
@@ -182,3 +277,39 @@ def test_outcome_row_keys_are_all_declared_in_migrations() -> None:
         "validation_outcomes insert payload writes columns not declared in any "
         f"migration (would trigger PGRST204 → memory_fallback): {sorted(missing)}"
     )
+
+
+def test_outcome_id_column_type_is_parsed_from_the_migrations() -> None:
+    # Sanity that the type parser sees the real DDL, so the guard below can
+    # never pass just because it found nothing.
+    assert _declared_column_type("outcome_id") == "uuid"
+
+
+def test_generated_outcome_id_coerces_to_the_declared_column_type() -> None:
+    """The id the generator mints must fit the column it is inserted into.
+
+    RED before the fix: create_validation_outcome minted ``vo_<12 hex>`` while
+    outcome_id is declared UUID, so Postgres rejected every insert with 22P02
+    ("invalid input syntax for type uuid") and the store degraded to the
+    ephemeral memory_fallback — the Feedback-Learner signal dropped on every
+    refutation run (#1611). GREEN once the generator mints a bare uuid4.
+    """
+    declared = _declared_column_type("outcome_id")
+    assert declared, "no outcome_id column type found in the migrations"
+
+    coerce = _TYPE_COERCERS.get(declared)
+    assert coerce is not None, (
+        f"outcome_id is declared {declared!r}, which this guard cannot verify — "
+        "add a coercer so the payload/column type contract stays proven"
+    )
+
+    store = SupabaseValidationOutcomeStore()
+    row = store._outcome_to_row(create_validation_outcome(_minimal_suite()))
+
+    try:
+        coerce(row["outcome_id"])
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise AssertionError(
+            f"generated outcome_id {row['outcome_id']!r} does not coerce to the declared "
+            f"{declared} column — the insert fails and degrades to memory_fallback: {exc}"
+        ) from exc
