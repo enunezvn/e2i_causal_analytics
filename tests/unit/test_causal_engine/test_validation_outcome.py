@@ -7,6 +7,7 @@ Phase 4: Connect Feedback Learner to validation outcomes
 """
 
 import os
+import uuid
 from unittest.mock import patch
 
 import pytest
@@ -399,6 +400,56 @@ class TestCreateValidationOutcome:
         assert outcome.agent_context["agent"] == "test"
         assert outcome.dag_hash == "abc123"
         assert outcome.sample_size == 1000
+
+    def test_generated_outcome_id_is_a_bare_uuid(self):
+        """The minted outcome_id must be UUID-coercible (#1611).
+
+        validation_outcomes.outcome_id is UUID PRIMARY KEY, so the ``vo_<12 hex>``
+        id this used to mint made every Supabase insert fail 22P02 and silently
+        degrade to the ephemeral in-memory fallback.
+        """
+        suite = RefutationSuite(
+            passed=True,
+            confidence_score=0.90,
+            gate_decision=GateDecision.PROCEED,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.BOOTSTRAP,
+                    status=RefutationStatus.PASSED,
+                    original_effect=0.50,
+                    refuted_effect=0.48,
+                    delta_percent=4.0,
+                )
+            ],
+            treatment_variable="rep_visits",
+            outcome_variable="trx_total",
+        )
+
+        outcome = create_validation_outcome(suite)
+
+        # Raises ValueError on the old ``vo_``-prefixed id.
+        assert str(uuid.UUID(outcome.outcome_id)) == outcome.outcome_id
+
+    def test_generated_outcome_ids_are_unique(self):
+        """Distinct outcomes must not collide on the primary key."""
+        suite = RefutationSuite(
+            passed=True,
+            confidence_score=0.90,
+            gate_decision=GateDecision.PROCEED,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.BOOTSTRAP,
+                    status=RefutationStatus.PASSED,
+                    original_effect=0.50,
+                    refuted_effect=0.48,
+                    delta_percent=4.0,
+                )
+            ],
+        )
+
+        ids = {create_validation_outcome(suite).outcome_id for _ in range(50)}
+
+        assert len(ids) == 50
 
 
 class TestInMemoryValidationOutcomeStore:
