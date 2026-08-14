@@ -27,7 +27,7 @@ from src.tool_registry.registry import ToolRegistry
 # The @composable_tool decorators register tools when the module is imported
 from . import tool_registrations as _tool_registrations  # noqa: F401
 from .cache import get_cache_manager
-from .errors import ReferenceResolutionError, ToolInputError
+from .errors import ReferenceResolutionError, ToolInputError, ToolRefusalError
 from .models.composition_models import (
     ExecutionPlan,
     ExecutionStatus,
@@ -717,16 +717,38 @@ class PlanExecutor:
                     duration_ms=duration_ms,
                 )
 
-            except ToolInputError as e:
-                # #1573: deterministic input-contract violation — retrying with
-                # identical inputs cannot succeed, so fail once with the tool's
-                # stated reason. Not recorded against the circuit breaker: a
-                # rejected input says nothing about the tool's health, and a
-                # plan defect must not open the circuit for other, valid steps
-                # that use the same tool.
+            except (ToolInputError, ToolRefusalError) as e:
+                # Deterministic over the step's resolved inputs — re-running the
+                # identical call is futile BY CONSTRUCTION, so fail once with
+                # the tool's stated reason.
+                #
+                # ToolInputError (#1573): the value is not a legal input.
+                # ToolRefusalError (#1600): the inputs are structurally fine but
+                # the data they carry cannot answer the question (a single-brand
+                # frame asked for a brand-vs-brand gap, an all-null metric
+                # column). Before #1600 these were plain RuntimeErrors and fell
+                # into the generic arm below, so every deterministic refusal was
+                # re-dispatched max_retries more times — measured as 3 identical
+                # gap_calculator refusals in the 2026-08-14 forced q08 replay,
+                # and since #1598 those repeats also serialize behind the
+                # one-slot heavy-compute pool.
+                #
+                # Neither is recorded against the circuit breaker: a rejected
+                # input or an unanalyzable frame says nothing about the tool's
+                # health, and a plan/data defect must not open the circuit for
+                # other, valid steps that use the same tool.
+                #
+                # A refusal's message is surfaced VERBATIM. #1574's
+                # ``estimation_data_scope`` disclosure rides that string into
+                # synthesis through ``ToolOutput.error``, and the composer's
+                # total-failure envelope truncates from the END — where the
+                # scope payload sits — so a prefix is not free. The
+                # ToolInputError prefix is kept exactly as #1573 shipped it.
+                is_input_error = isinstance(e, ToolInputError)
+                kind = "input rejected by" if is_input_error else "refused by"
                 logger.warning(
-                    f"Step {step.step_id} input rejected by '{step.tool_name}': {e} "
-                    f"— not retrying (deterministic input-contract violation)"
+                    f"Step {step.step_id} {kind} '{step.tool_name}': {e} "
+                    f"— not retrying (deterministic over the step's inputs)"
                 )
                 return StepResult(
                     step_id=step.step_id,
@@ -736,7 +758,7 @@ class PlanExecutor:
                     output=ToolOutput(
                         tool_name=step.tool_name,
                         success=False,
-                        error=f"input contract violation: {e}",
+                        error=f"input contract violation: {e}" if is_input_error else str(e),
                     ),
                     status=ExecutionStatus.FAILED,
                     started_at=started_at,
