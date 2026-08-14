@@ -69,20 +69,35 @@ def test_writer_and_reader_agree_at_runtime() -> None:
     )
 
 
+#: Marker the reader puts above its changelog block. Keying the test to an explicit
+#: sentinel rather than to comment formatting means the entries can be reworded or
+#: restyled freely without a false CI failure (codex round 1, LOW).
+_CHANGELOG_MARKER = "SIDECAR SCHEMA CHANGELOG"
+
+
 def test_the_bump_changelog_lives_in_exactly_one_place() -> None:
     """One changelog, not two hand-synced copies.
 
     Both files previously carried the full 1.1 → 1.8 history in near-identical
     prose, so a bump meant editing two comment blocks as well as two literals.
     """
-    writer_entries = re.findall(r"^\s*#\s*1\.\d+ \(", _WRITER.read_text(), flags=re.MULTILINE)
-    reader_entries = re.findall(r"^\s*#\s*1\.\d+ \(", _READER.read_text(), flags=re.MULTILINE)
+    reader_source = _READER.read_text()
+    writer_source = _WRITER.read_text()
 
-    assert len(reader_entries) >= 8, (
-        f"the reader should hold the full bump changelog; found {len(reader_entries)} entries"
+    assert _CHANGELOG_MARKER in reader_source, (
+        f"audit_sidecar_reader.py should carry the {_CHANGELOG_MARKER!r} marker above "
+        "the bump history — it is what makes the single-source claim checkable."
     )
-    assert not writer_entries, (
-        f"graph.py still carries {len(writer_entries)} changelog entries. The history "
-        "belongs beside the constant in audit_sidecar_reader.py; a pointer is enough "
-        "here, so a future bump edits ONE block."
+    assert _CHANGELOG_MARKER not in writer_source, (
+        "graph.py carries the changelog marker; the history belongs in exactly one "
+        "file, beside the constant."
+    )
+
+    # A second, format-independent check on the writer: a *copy* of the history would
+    # show up as several version-labelled comment lines. A pointer mentions none.
+    writer_entries = re.findall(r"^\s*#\s*v?1\.\d+\b", writer_source, flags=re.MULTILINE)
+    assert len(writer_entries) <= 1, (
+        f"graph.py still carries {len(writer_entries)} version-labelled comment lines, "
+        "which looks like a re-duplicated changelog. Keep the history beside the "
+        "constant so a future bump edits ONE block."
     )

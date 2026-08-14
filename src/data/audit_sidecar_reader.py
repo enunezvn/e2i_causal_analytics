@@ -24,6 +24,11 @@ from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
+# === SIDECAR SCHEMA CHANGELOG (single source of truth — #1620) ===
+# This block is THE record of every schema_version bump. It lives here, beside
+# SIDECAR_SCHEMA_VERSION, and nowhere else; graph.py carries a pointer, not a copy.
+# tests/unit/test_data/test_sidecar_schema_version_ssot.py keys off the marker
+# above, so the entries below can be reformatted freely without breaking CI.
 # Issue #235: schema_version contract between producer (graph.py:
 # write_adaptive_verdicts_sidecar) and reader. Bump major on breaking
 # changes, minor on additive forward-compatible changes.
