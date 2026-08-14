@@ -60,7 +60,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.causal_engine.pipeline import (
     PipelineInput,
@@ -133,11 +133,27 @@ class CateAnalyzerInput(BaseModel):
 
 
 class CATEResults(BaseModel):
-    """Output from CATE analysis"""
+    """Output from CATE analysis.
+
+    ``segments`` and ``effect_by_segment`` carry ONLY the segments whose CATE was
+    actually measured — every value in them is a finite float (#1610). A segment
+    that could not produce one moves to ``excluded_segments`` instead of entering
+    the numeric results as ``NaN``: a ``NaN`` there is not JSON-compliant for a
+    strict consumer (``json.dumps(allow_nan=False)`` raises) and renders as a
+    plausible-looking blank in synthesis. Same reasoning as ``GapAnalysis``'s
+    finite ``entity_values`` (#1599).
+
+    Each ``excluded_segments`` entry is ``{"name", "n", "reason", "detail"}``.
+    ``reason`` is one of the ``_CATE_EXCLUDED_*`` codes (stable, for consumers to
+    branch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is
+    ``None`` for the null-key group — the rows whose segment value is missing name
+    no segment, so there is no honest label to give them.
+    """
 
     segments: List[Dict[str, Any]]
     high_responders: List[str]
     effect_by_segment: Dict[str, float]
+    excluded_segments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class GapCalculatorInput(BaseModel):
@@ -1346,6 +1362,12 @@ def sensitivity_analyzer(ate: float, ci_lower: float, **kwargs) -> Dict[str, Any
 # HETEROGENEOUS OPTIMIZER AGENT TOOLS
 # ============================================================================
 
+# Stable codes for ``CATEResults.excluded_segments[*]["reason"]`` (#1610). A
+# consumer branches on the code; the accompanying ``detail`` is the prose.
+_CATE_EXCLUDED_MISSING = "missing_segment_value"
+_CATE_EXCLUDED_NO_CONTRAST = "no_within_segment_contrast"
+_CATE_EXCLUDED_NON_FINITE = "non_finite_mean_difference"
+
 
 @composable_tool(
     name="cate_analyzer",
@@ -1381,6 +1403,28 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     - No DataFrame supplied via the canonical kwargs keys -> ``RuntimeError``.
     - The treatment / outcome / segment columns missing from the frame ->
       ``RuntimeError``. The tool never substitutes a plausible-but-fake result.
+    - No segment yields a MEASURED CATE -> ``RuntimeError`` (#1610). An empty
+      segment set would read as "no heterogeneity between segments", a finding
+      this data cannot support because no segment was ever estimated.
+
+    Segments that cannot produce a CATE are excluded from ``segments`` /
+    ``effect_by_segment`` and disclosed in ``excluded_segments`` (#1610), the
+    same exclude-or-refuse treatment ``gap_calculator`` gives a non-finite group
+    mean (#1599). Three ways a segment fails to produce one:
+
+    * its rows sit on only ONE side of ``treatment``, so there is no contrast to
+      difference (the case the previous ``float("nan")`` sentinel marked);
+    * one arm carries no non-null ``outcome`` values, so the difference in means
+      is ``NaN`` (or ``pd.NA`` under a nullable dtype) even though BOTH arms are
+      populated — a shape the emptiness check above cannot see; and
+    * the group KEY is null. ``groupby(..., dropna=False)`` is deliberate and is
+      KEPT: the null rows must not vanish silently, so they are still seen,
+      counted and disclosed. What changes is that they no longer enter the
+      results, where ``str(float('nan'))`` labeled them ``"nan"`` — a label
+      indistinguishable from a real category of that name, and promotable into
+      ``high_responders`` (measured) and from there into
+      ``segment_ranker.recommended_targets``. Rows with an unknown segment name
+      no segment anyone can act on, so they are excluded rather than relabeled.
 
     Args:
         treatment: Binary treatment column name in the supplied DataFrame.
@@ -1415,30 +1459,106 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
 
     segment_dicts: List[Dict[str, Any]] = []
     effect_by_segment: Dict[str, float] = {}
+    excluded_segments: List[Dict[str, Any]] = []
+    named_groups: List[str] = []
+    rows_missing_segment_value = 0
     for seg_value, sub in df.groupby(segment_col, dropna=False):
+        n = int(len(sub))
+        if _is_missing_group_key(seg_value):
+            rows_missing_segment_value += n
+            excluded_segments.append(
+                {
+                    "name": None,
+                    "n": n,
+                    "reason": _CATE_EXCLUDED_MISSING,
+                    "detail": (
+                        f"rows whose {segment_col!r} value is null name no segment, "
+                        "so they are excluded from the per-segment effects rather "
+                        "than reported as one"
+                    ),
+                }
+            )
+            continue
+        name = str(seg_value)
+        named_groups.append(name)
         treated = sub[sub[treatment] == 1][outcome]
         control = sub[sub[treatment] == 0][outcome]
         if len(treated) == 0 or len(control) == 0:
             # No within-segment contrast available -> cannot estimate a CATE.
-            # Surface as NaN rather than fabricate (anti-mocking pattern #4).
-            cate_val = float("nan")
-        else:
-            cate_val = float(treated.mean() - control.mean())
-        name = str(seg_value)
-        segment_dicts.append({"name": name, "cate": cate_val, "n": int(len(sub))})
+            # Excluded rather than fabricated (anti-mocking pattern #4); the
+            # exclusion is disclosed below.
+            excluded_segments.append(
+                {
+                    "name": name,
+                    "n": n,
+                    "reason": _CATE_EXCLUDED_NO_CONTRAST,
+                    "detail": (
+                        f"segment carries {len(treated)} rows with {treatment!r}=1 "
+                        f"and {len(control)} with {treatment!r}=0, so there is no "
+                        "within-segment contrast to difference"
+                    ),
+                }
+            )
+            continue
+        # ``_coerce_finite`` -- not ``float(...)`` -- because BOTH arms can be
+        # populated while one carries no non-null ``outcome`` value: its mean is
+        # then NaN (or ``pd.NA`` under a nullable dtype, whose ``float()`` raises
+        # TypeError and would escape into the executor's RETRYING arm). Guarding
+        # the computed VALUE is what #1599 found the group-mean case needed.
+        cate_val = _coerce_finite(treated.mean() - control.mean())
+        if cate_val is None:
+            excluded_segments.append(
+                {
+                    "name": name,
+                    "n": n,
+                    "reason": _CATE_EXCLUDED_NON_FINITE,
+                    "detail": (
+                        f"the within-segment difference in mean {outcome!r} is not a "
+                        "finite number — one arm carries no non-null values to average"
+                    ),
+                }
+            )
+            continue
+        segment_dicts.append({"name": name, "cate": cate_val, "n": n})
         effect_by_segment[name] = cate_val
 
-    finite_effects = [v for v in effect_by_segment.values() if math.isfinite(v)]
-    threshold = (sum(finite_effects) / len(finite_effects)) if finite_effects else 0.0
-    high_responders = [
-        name
-        for name, v in effect_by_segment.items()
-        if math.isfinite(v) and v >= threshold and v > 0
-    ]
+    if not effect_by_segment:
+        no_contrast = sum(1 for e in excluded_segments if e["reason"] == _CATE_EXCLUDED_NO_CONTRAST)
+        non_finite = sum(1 for e in excluded_segments if e["reason"] == _CATE_EXCLUDED_NON_FINITE)
+        # Bounded like the gap reason (#1574): the reason is carried verbatim into
+        # the composer's total-failure envelope, which truncates from the END --
+        # where the scope payload sits.
+        segment_label = _clip_name(segment_col)
+        scope: Dict[str, Any] = {
+            "segment_column": segment_label,
+            "row_count": int(len(df)),
+            "segment_groups_present": _clip_entity_labels(sorted(named_groups)),
+            "segment_groups_present_count": len(named_groups),
+            "rows_missing_segment_value": rows_missing_segment_value,
+        }
+        raise ToolRefusalError(
+            f"cate_analyzer: no {segment_label!r} segment in the supplied estimation "
+            f"data yields a measured CATE — of {len(named_groups)} named segments, "
+            f"{no_contrast} carry rows on only one side of {_clip_name(treatment)!r} "
+            f"and {non_finite} have no non-null {_clip_name(outcome)!r} values to "
+            f"average in one arm; a further {rows_missing_segment_value} rows carry no "
+            f"{segment_label!r} value at all and so name no segment. Refusing to "
+            "fabricate: an empty segment set reads as 'no heterogeneity between "
+            "segments', which is a finding this data cannot support — the segments "
+            f"were never estimated. cate_estimation_scope={scope!r}"
+        )
+
+    # Every value is finite by construction now, so the cross-segment mean is a
+    # mean over MEASURED effects only -- an excluded segment can no longer shift
+    # the threshold that decides which segments are recommended.
+    effects = list(effect_by_segment.values())
+    threshold = sum(effects) / len(effects)
+    high_responders = [name for name, v in effect_by_segment.items() if v >= threshold and v > 0]
     return CATEResults(
         segments=segment_dicts,
         high_responders=high_responders,
         effect_by_segment=effect_by_segment,
+        excluded_segments=excluded_segments,
     )
 
 
@@ -1616,7 +1736,21 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     # a gap over a basis that is not the one it claims, which is the
     # fabricated-finding shape #1574 exists to forbid.
     by_label: Dict[str, List[Any]] = {}
+    rows_missing_group_key = 0
     for raw_key, raw_mean in grouped.items():
+        if _is_missing_group_key(raw_key):
+            # #1610. ``dropna=False`` is deliberate and is KEPT -- the null rows
+            # must not vanish silently -- but a null key is not an entity, and
+            # ``str(float('nan'))`` made it the label ``"nan"``. Measured on a
+            # ``{west, null}`` region column that label won the comparison:
+            # ``top_performer='nan'``, ``gap=0.35``. Naming a non-entity as the
+            # top performer is the fabricated-finding shape #1574 forbids, and
+            # ``roi_estimator`` / ``segment_ranker`` would then recommend
+            # targeting it. Excluded from the basis, counted, and disclosed in
+            # the refusal reason when the exclusion is what makes the request
+            # uncomparable.
+            rows_missing_group_key = int(df[group_col].isna().sum())
+            continue
         by_label.setdefault(str(raw_key), []).append(raw_mean)
 
     groups_present = sorted(by_label)
@@ -1681,6 +1815,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
                 entities=entities,
                 metric=metric,
                 row_count=len(df),
+                rows_missing_group_key=rows_missing_group_key,
             )
         )
 
@@ -1761,6 +1896,37 @@ def _coerce_finite(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
+def _is_missing_group_key(value: Any) -> bool:
+    """Return True when a ``groupby`` key is a null rather than a category.
+
+    ``groupby(..., dropna=False)`` yields the null group under a key that is
+    ``float('nan')`` for an object/float column, ``pd.NA`` for a nullable dtype
+    and ``pd.NaT`` for a datetime one. All three are nulls; none of them is a
+    segment or an entity, and ``str()`` turns the first into the literal label
+    ``"nan"`` (#1610).
+
+    The string ``"nan"`` is NOT a null: a column may genuinely contain a category
+    of that name, and collapsing the two is the confusion this guard exists to
+    prevent — so the check is ``pd.isna``, never a comparison against the
+    stringified key.
+
+    ``pandas`` is imported inside the function because this module deliberately
+    keeps it off the module-load path (see ``_extract_dataframe_from_kwargs``);
+    by the time a key exists the caller has already supplied a real DataFrame, so
+    the import is a cached lookup. ``pd.isna`` over an array-like key (a grouper
+    on multiple columns) returns an array whose ``bool()`` raises — a composite
+    key is not a null key, so that case answers False.
+    """
+    if value is None:
+        return True
+    import pandas as pd
+
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _gap_comparability_reason(
     *,
     entity_type: str,
@@ -1771,6 +1937,7 @@ def _gap_comparability_reason(
     row_count: int,
     groups_non_finite: Optional[List[str]] = None,
     metric: Optional[str] = None,
+    rows_missing_group_key: int = 0,
 ) -> str:
     """Build the #1574 fail-closed reason for an uncomparable gap request.
 
@@ -1823,6 +1990,12 @@ def _gap_comparability_reason(
         "entity_groups_present_count": len(groups_present),
         "entity_groups_matched": _clip_entity_labels(groups_matched, limit=listed),
     }
+    if rows_missing_group_key:
+        # #1610. A COUNT, never a list: there is exactly one null group per
+        # column, so the count is already complete information -- and the reason
+        # has a fixed total budget. Omitted entirely at zero, which is what keeps
+        # every pre-#1610 reason byte-identical.
+        scope["rows_missing_grouping_value"] = int(rows_missing_group_key)
     if non_finite:
         # Placed next to ``entity_groups_matched`` (the set it is a subset of)
         # rather than appended, so the two are read together.
@@ -1870,6 +2043,15 @@ def _gap_comparability_reason(
         # the composer's carry limit.
         observed = f"no {label} group matched the requested entities on column {group_col!r}"
         refusal = "reporting a spread over groups this estimation data does not contain"
+    if rows_missing_group_key:
+        # #1610. Without this clause the observed-group count reads as a complete
+        # account of the frame while some of its rows were excluded for having no
+        # grouping value at all. Rendered in the prose (not only in the scope
+        # payload) because the prose survives an END-truncation of the message.
+        observed += (
+            f" ({int(rows_missing_group_key)} rows carry no {group_col!r} value at all, "
+            f"so they name no {label})"
+        )
     return (
         f"gap_calculator: comparing requires {requirement}, but "
         f"{observed}. The requested comparison entities are not modeled as comparable "
