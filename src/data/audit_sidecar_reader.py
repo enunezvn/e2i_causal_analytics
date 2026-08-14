@@ -57,7 +57,22 @@ logger = logging.getLogger(__name__)
 # LLM verdict cited were actually verified against the abstracts behind them.
 # Emitted unconditionally by every verdict path so the schema stays uniform;
 # absent on pre-1.8 sidecars (surface as None/[] without a warning). MAJOR=1.
-_READER_SCHEMA_VERSION = "1.8"
+#: THE sidecar schema version. Single source of truth for both sides of the
+#: contract (#1620): the producer
+#: ``src/agents/ml_foundation/data_preparer/graph.py::write_adaptive_verdicts_sidecar``
+#: imports this rather than restating it. Public (no leading underscore) because
+#: it is a cross-module import; ``_READER_SCHEMA_VERSION`` remains as a
+#: backwards-compatible alias for existing importers.
+#:
+#: Bumping it is deliberately not free: five tests across tests/unit and
+#: tests/integration pin this value as literals. They are tripwires — their whole
+#: function is to fail on a change and force an explicit, reviewed confirmation
+#: that the new keyset is additive and MAJOR-preserving. Do NOT derive them from
+#: this constant; that would make them ``assert X == X``.
+SIDECAR_SCHEMA_VERSION = "1.8"
+
+#: Deprecated alias. Prefer ``SIDECAR_SCHEMA_VERSION``.
+_READER_SCHEMA_VERSION = SIDECAR_SCHEMA_VERSION
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
