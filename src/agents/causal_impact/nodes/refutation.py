@@ -17,7 +17,6 @@ Anti-Mocking (F-014 fix, #416):
   reconstruction fails. NEVER dispatches to the deleted ``_mock_*`` paths.
 """
 
-import asyncio
 import logging
 import math
 import time
@@ -25,6 +24,10 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
+from src.agents.causal_impact.nodes._compute_budget import (
+    ComputeBudgetExpired,
+    run_bounded_with_budget,
+)
 from src.agents.causal_impact.state import (
     CausalImpactState,
     RefutationResults,
@@ -233,6 +236,20 @@ def _reconstruction_nuisance_init_params(
             "model_final": StatsModelsLinearRegression(),
         }
     return {}
+
+
+def _queued_budget_error() -> RefutationError:
+    """#1601: the budget lapsed while a call waited for a bounded pool slot.
+
+    Same fail-closed shape as the pre-flight guard in ``execute``; the distinct
+    ``reason`` keeps the QUEUED case distinguishable from the pre-flight one in
+    persisted evidence.
+    """
+    return RefutationError(
+        "Compute budget exhausted before refutation could start; failing closed "
+        "rather than orphaning refutation compute past the worker's wall-clock cap.",
+        details={"reason": "time_budget_exceeded_queued_refutation"},
+    )
 
 
 def _subsample_for_refutation(
@@ -1201,20 +1218,45 @@ class RefutationNode:
             # async job. These calls are pure compute (no async clients — the
             # supabase client is used elsewhere on the main loop), so threading is
             # loop-safe.
+            #
+            # #1601: all three off-loads below go to the BOUNDED agent-compute pool
+            # rather than ``asyncio.to_thread`` (= the loop's DEFAULT executor, 12
+            # threads here, outside every in-process bound). Unlike estimation these
+            # calls are cheap in memory (measured 0.3-0.5 MB peak RSS) but very
+            # expensive in CPU TIME — the suite is designed to run ~223 s inside its
+            # 240 s cooperative budget — so on 2 container CPUs a dozen concurrent
+            # copies is pure thrash. The pool is deliberately NOT the shared
+            # heavy-compute one: that is a single thread serving reject-fast API
+            # endpoints and composer sync tools under a 120 s envelope, which a
+            # ~223 s suite would monopolize (see ``run_in_agent_compute_executor``).
+            #
+            # There is deliberately NO ``asyncio.wait_for`` around these calls. A
+            # thread cannot be cancelled, so an envelope would abandon a still-running
+            # suite that keeps holding a bounded slot; ``deadline`` is the
+            # cooperative bound that lets the thread RETURN instead. Because the pool
+            # QUEUES, ``run_bounded_with_budget`` re-checks that deadline on the
+            # worker thread — the pre-flight check above can go stale while a call
+            # waits for a slot, and starting then would hold the slot for a turn
+            # that is already lost.
+
             # Time the reconstruction — it fits the SAME estimator once, so its
             # wall-time is a good a-priori per-refit cost. We hand it to
             # run_all_tests as ``per_refit_hint`` so even the FIRST refuter is
             # gated against the deadline (otherwise a single slow first refuter
             # could run unconditionally and orphan past the hard cap).
             _recon_t0 = time.monotonic()
-            causal_model, identified_estimand, estimate = await asyncio.to_thread(
-                _reconstruct_dowhy_artifacts,
-                data=refutation_data,
-                treatment=treatment,
-                outcome=outcome,
-                common_causes=common_causes,
-                estimation_result=cast(Dict[str, Any], estimation_result),
-            )
+            try:
+                causal_model, identified_estimand, estimate = await run_bounded_with_budget(
+                    _reconstruct_dowhy_artifacts,
+                    budget_deadline=deadline,
+                    data=refutation_data,
+                    treatment=treatment,
+                    outcome=outcome,
+                    common_causes=common_causes,
+                    estimation_result=cast(Dict[str, Any], estimation_result),
+                )
+            except ComputeBudgetExpired as be:
+                raise _queued_budget_error() from be
             per_refit_hint = time.monotonic() - _recon_t0
             # #1419: the reconstruction fit is NOT a faithful per-sim cost for
             # the POINT-refit refuters — on the live 5k subsample it measures
@@ -1237,10 +1279,11 @@ class RefutationNode:
             if deadline is not None and time.monotonic() + per_refit_hint <= deadline:
                 try:
                     _cal_t0 = time.monotonic()
-                    await asyncio.to_thread(
+                    await run_bounded_with_budget(
                         causal_model.refute_estimate,
                         identified_estimand,
                         estimate,
+                        budget_deadline=deadline,
                         method_name="placebo_treatment_refuter",
                         placebo_type="permute",
                         num_simulations=1,
@@ -1254,29 +1297,33 @@ class RefutationNode:
                     )
 
             # Run all refutation tests
-            suite: RefutationSuite = await asyncio.to_thread(
-                self.runner.run_all_tests,
-                original_effect=original_ate,
-                original_ci=original_ci,
-                treatment=treatment,
-                outcome=outcome,
-                brand=brand,
-                estimate_id=query_id,
-                # Data passthrough from estimation node (enables DoWhy-based refutation)
-                data=refutation_data,
-                causal_model=causal_model,
-                identified_estimand=identified_estimand,
-                estimate=estimate,
-                deadline=deadline,
-                per_refit_hint=per_refit_hint,
-                per_refit_hint_heavy=per_refit_hint_heavy,
-                outcome_std=outcome_std_full,
-                # DESIGN declaration from the API layer (dataset spec): a
-                # genuinely randomized treatment reports the E-value as
-                # information instead of an unmeasured-confounding BLOCK gate.
-                # Fail-closed: absent/False keeps the full observational gate.
-                randomized_design=bool(state.get("randomized_design")),
-            )
+            try:
+                suite: RefutationSuite = await run_bounded_with_budget(
+                    self.runner.run_all_tests,
+                    budget_deadline=deadline,
+                    original_effect=original_ate,
+                    original_ci=original_ci,
+                    treatment=treatment,
+                    outcome=outcome,
+                    brand=brand,
+                    estimate_id=query_id,
+                    # Data passthrough from estimation node (enables DoWhy-based refutation)
+                    data=refutation_data,
+                    causal_model=causal_model,
+                    identified_estimand=identified_estimand,
+                    estimate=estimate,
+                    deadline=deadline,
+                    per_refit_hint=per_refit_hint,
+                    per_refit_hint_heavy=per_refit_hint_heavy,
+                    outcome_std=outcome_std_full,
+                    # DESIGN declaration from the API layer (dataset spec): a
+                    # genuinely randomized treatment reports the E-value as
+                    # information instead of an unmeasured-confounding BLOCK gate.
+                    # Fail-closed: absent/False keeps the full observational gate.
+                    randomized_design=bool(state.get("randomized_design")),
+                )
+            except ComputeBudgetExpired as be:
+                raise _queued_budget_error() from be
 
             # #1419: stamp subsample provenance onto every test's details so
             # each persisted evidence row (details_json) records

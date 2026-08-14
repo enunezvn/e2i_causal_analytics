@@ -54,6 +54,19 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_CONCURRENCY = 1
 
+# Agent-graph compute pool (#1601). Deliberately SEPARATE from the shared
+# heavy-compute pool above — see ``run_in_agent_compute_executor`` for the
+# measurements that force the split.
+#
+# PER GUNICORN WORKER PROCESS, like everything else in this module. The api
+# container runs ``--workers 2`` inside ``cpus: '2'``
+# (docker/docker-compose.yml), so the CONTAINER-wide budget is 2 processes x 1
+# thread = 2 concurrent heavy causal computations, which is exactly the CPU
+# quota. A per-process 2 would have meant 4 on 2 CPUs: the runs would only
+# thrash each other, and a suite that legitimately needs ~223s inside a 240s
+# cooperative budget would start missing it under concurrency.
+_DEFAULT_AGENT_COMPUTE_WORKERS = 1
+
 T = TypeVar("T")
 
 
@@ -140,6 +153,11 @@ _limiters: dict[asyncio.AbstractEventLoop, HeavyComputeLimiter] = {}
 _executor: ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
 
+# #1601: the agent-graph pool. Process-global like ``_executor`` (plain threads,
+# never bound to a loop) but sized and consumed independently.
+_agent_compute_executor: ThreadPoolExecutor | None = None
+_agent_compute_lock = threading.Lock()
+
 # True while THIS asyncio context already holds a heavy slot. Lets a batch
 # endpoint hold one slot for its whole fan-out while the inner per-item calls
 # reuse it instead of each contending for (and self-rejecting on) a new slot.
@@ -170,17 +188,49 @@ def _get_executor(max_workers: int) -> ThreadPoolExecutor:
     return _executor
 
 
+def _agent_compute_workers_from_env() -> int:
+    """Worker count for the agent-graph pool (``AGENT_COMPUTE_EXECUTOR_WORKERS``)."""
+    raw = os.environ.get("AGENT_COMPUTE_EXECUTOR_WORKERS")
+    if raw is None or raw.strip() == "":
+        return _DEFAULT_AGENT_COMPUTE_WORKERS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid AGENT_COMPUTE_EXECUTOR_WORKERS=%r; falling back to %d",
+            raw,
+            _DEFAULT_AGENT_COMPUTE_WORKERS,
+        )
+        return _DEFAULT_AGENT_COMPUTE_WORKERS
+    return max(1, value)
+
+
+def _get_agent_compute_executor(max_workers: int) -> ThreadPoolExecutor:
+    global _agent_compute_executor
+    if _agent_compute_executor is None:
+        with _agent_compute_lock:
+            if _agent_compute_executor is None:
+                _agent_compute_executor = ThreadPoolExecutor(
+                    max_workers=max_workers,
+                    thread_name_prefix="agent-compute",
+                )
+    return _agent_compute_executor
+
+
 def _reset_limiter_cache_for_tests() -> None:
-    """Test hook: drop cached limiters/executor so env overrides re-apply.
+    """Test hook: drop cached limiters/executors so env overrides re-apply.
 
     Not part of the production API; used by the unit tests to start each case
     from a clean limiter bound to the test's event loop.
     """
-    global _executor
+    global _executor, _agent_compute_executor
     _limiters.clear()
     if _executor is not None:
         _executor.shutdown(wait=False, cancel_futures=True)
         _executor = None
+    if _agent_compute_executor is not None:
+        _agent_compute_executor.shutdown(wait=False, cancel_futures=True)
+        _agent_compute_executor = None
     _slot_held.set(False)
 
 
@@ -225,6 +275,77 @@ async def run_in_bounded_executor(func: Callable[..., T], *args: Any, **kwargs: 
     executor = _get_executor(max_workers)
     call = functools.partial(func, *args, **kwargs)
     # run_in_executor returns Future[Any]; the callable's return type is T.
+    result: T = await loop.run_in_executor(executor, call)
+    return result
+
+
+async def run_in_agent_compute_executor(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Run LONG-RUNNING agent-graph compute on a bounded pool, off the loop (#1601).
+
+    Why a SECOND pool instead of :func:`run_in_bounded_executor`
+    -----------------------------------------------------------
+    The causal_impact agent graph off-loaded four heavy sync calls with
+    ``asyncio.to_thread``, i.e. onto the loop's DEFAULT executor
+    (``min(32, cpu+4)`` = 12 threads here), outside every in-process bound the
+    container has. Measured on this box (2026-08-14, real callables, real frame
+    shapes):
+
+    ==============================================  ========  ===============
+    call                                                wall   peak RSS delta
+    ==============================================  ========  ===============
+    ``_select_estimator_with_energy_score``           124.9 s        177.4 MB
+      (37,515x12, the largest frame observed in prod)
+    ``_reconstruct_dowhy_artifacts`` (5k subsample)    10.2 s          0.3 MB
+    ``refute_estimate(num_simulations=1)``              9.7 s          0.5 MB
+    ==============================================  ========  ===============
+
+    So estimation is the MEMORY term — 177 MB x 12 concurrent copies is ~2.1 GiB
+    against a 5G cgroup already carrying ~549 MB/worker of imports — and the
+    refutation calls are a pure CPU-TIME term. Bounding both is right; putting
+    them on the SHARED pool is not. That pool is ONE thread (default
+    ``HEAVY_COMPUTE_*`` are unset repo-wide) serving reject-fast API endpoints
+    plus #1598's composer sync tools under a 120 s envelope, whereas one causal
+    run occupies a thread for ~350 s (125 s estimation + a suite designed to run
+    ~223 s inside its 240 s cooperative budget, see
+    ``orchestrator/nodes/router.py``). Sharing would make every composer sync
+    step blow its envelope and stall ``rank_drivers`` SHAP (#1590) and
+    ``POST /api/digital-twin/simulate`` for minutes — trading an unlikely OOM for
+    a certain cross-feature failure.
+
+    The cost of the split is the extra in-flight memory the two pools can hold
+    at once: measured 177 MB, negligible against the 5G cgroup, and far cheaper
+    than the head-of-line blocking it avoids.
+
+    Sizing. Default 1 PER WORKER PROCESS. The container runs ``--workers 2``
+    inside ``cpus: '2'``, so container-wide that is 2 concurrent heavy causal
+    computations — exactly the CPU quota, and ~354 MB of in-flight estimation
+    memory. Two concurrent chat turns still proceed in parallel when gunicorn
+    lands them on different workers; two on the SAME worker serialize, which is
+    the intended trade (4 threads on 2 CPUs would only thrash, and the ~223 s
+    suite would start missing its 240 s budget). Override with
+    ``AGENT_COMPUTE_EXECUTOR_WORKERS``.
+
+    No ``heavy_compute_slot`` is taken: the slot is reject-fast (503 +
+    ``Retry-After``) for API entry points that can shed load, and a chat turn's
+    analysis should queue briefly rather than fail outright — the same call
+    #1590 made for ``rank_drivers`` and #1598 for composer sync tools.
+
+    NOT a timeout. A thread cannot be cancelled, so wrapping this in
+    ``asyncio.wait_for`` would abandon a still-running call that keeps holding a
+    bounded slot. Callers bound the WORK cooperatively instead, via the
+    ``compute_deadline`` in ``CausalImpactState``, which lets the thread return.
+    Because this pool QUEUES, that budget must be re-checked on the worker
+    thread rather than only before submitting — see
+    ``agents/causal_impact/nodes/_compute_budget.run_bounded_with_budget``,
+    which is how the causal_impact nodes call in here.
+
+    Context is copied exactly as ``asyncio.to_thread`` does, so replacing a
+    ``to_thread`` call with this helper preserves contextvar propagation.
+    """
+    loop = asyncio.get_running_loop()
+    executor = _get_agent_compute_executor(_agent_compute_workers_from_env())
+    ctx = contextvars.copy_context()
+    call = functools.partial(ctx.run, func, *args, **kwargs)
     result: T = await loop.run_in_executor(executor, call)
     return result
 

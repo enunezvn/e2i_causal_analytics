@@ -648,6 +648,20 @@ def _resolve_causal_impact_input(
         )
         out: Dict[str, Any] = {k: params[k] for k in passthrough if params.get(k) is not None}
         out.setdefault("data_source", "router_parameters")
+        # #1601: the explicit-spec branch used to return WITHOUT a cooperative
+        # deadline, so refutation ran its full 105-sim suite (~728 s measured)
+        # against a 300 s dispatch timeout — the graph was torn down and the
+        # uncancellable thread orphaned, exactly the pathology the deadline
+        # exists to prevent. Harmless-ish on the default executor (it burned a
+        # spare core); now that the thread holds a slot on the BOUNDED
+        # agent-compute pool it would deny that slot to live turns, so the same
+        # budget the substrate branch applies is applied here.
+        timeout_ms = dispatch.get("timeout_ms") or 0
+        if timeout_ms > 0:
+            out.setdefault(
+                "compute_deadline",
+                time.monotonic() + (timeout_ms / 1000.0) * _CAUSAL_DEADLINE_FRACTION,
+            )
         return out
 
     # (2) build the causal spec from the real KPI substrate.
