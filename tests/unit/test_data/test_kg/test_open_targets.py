@@ -195,6 +195,43 @@ def test_caches_drug_disease_response() -> None:
         assert call_count["n"] == 1
 
 
+def test_drug_disease_cache_is_keyed_on_the_drug_alone() -> None:
+    """Different diseases for one drug must NOT re-fetch the same payload.
+
+    The v4 query takes only ``$drugId`` and returns the drug's whole indication
+    list, which the caller filters. Keying the cache on the disease as well
+    meant a cache build over N features asked Open Targets for the identical
+    payload N times — 74 round-trips where 1 suffices on the Optum manifest.
+    """
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "data": {"drug": {"id": "X", "name": "X", "indications": {"count": 0, "rows": []}}}
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        client.drug_disease_evidence("X", "MONDO_1")
+        client.drug_disease_evidence("X", "MONDO_2")
+        client.drug_disease_evidence("X", "MONDO_3")
+        assert call_count["n"] == 1, (
+            "the disease is filtered client-side and is not a query variable, so "
+            "it must not multiply network calls"
+        )
+
+    # A different drug is a genuinely different query.
+    call_count["n"] = 0
+    with _client_with_handler(handler) as client:
+        client.drug_disease_evidence("A", "MONDO_1")
+        client.drug_disease_evidence("B", "MONDO_1")
+        assert call_count["n"] == 2
+
+
 def test_payload_missing_data_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"weird_payload": "no data"})

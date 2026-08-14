@@ -133,8 +133,6 @@ class KnowledgeGraphQuerier:
         self,
         drug_id: str,
         disease_id: str,
-        *,
-        size: int = 25,
     ) -> list[KGEdge]:
         """Open Targets drug → disease evidence as ``KGEdge`` records.
 
@@ -179,7 +177,7 @@ class KnowledgeGraphQuerier:
         sooner. Drug and disease names are populated from the response.
         """
         try:
-            data = self.open_targets.drug_disease_evidence(drug_id, disease_id, size=size)
+            data = self.open_targets.drug_disease_evidence(drug_id, disease_id)
         except OpenTargetsError as exc:
             logger.warning(
                 "Open Targets drug-disease query failed for %s/%s: %s",

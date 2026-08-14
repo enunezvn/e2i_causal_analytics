@@ -167,31 +167,28 @@ class OpenTargetsClient:
         self,
         drug_chembl_id: str,
         disease_efo_id: str,
-        *,
-        size: int = 25,
     ) -> dict[str, Any]:
-        """Return drug → disease evidence + indication phase info.
+        """Return the drug's declared indications, for the caller to filter.
 
-        The output dict has two top-level keys:
-            - ``drug``: drug record with declared indications and phase
-            - ``evidences``: list of evidence rows with literature PMIDs
+        The output dict has one top-level key, ``drug``, carrying the drug
+        record and its full ``indications`` list with ``maxClinicalStage``.
+
+        ``disease_efo_id`` is accepted because it is what the caller is asking
+        about and it keeps call sites readable, but it is NOT a query variable:
+        the v4 schema returns the indication list whole and
+        ``KnowledgeGraphQuerier.query_drug_disease_edges`` filters it. It is
+        therefore deliberately excluded from the cache key — see
+        ``_drug_disease_cached``.
+
+        There is no ``size`` parameter. The pre-v4 query had one; the current
+        ``Drug.indications`` field accepts no arguments at all, so a ``size``
+        knob here would have been an inert lie in the API surface. The list is
+        returned complete (verified live, and pinned by
+        ``test_drug_indications_are_returned_whole_not_paginated``).
         """
-        return _drug_disease_cached(
-            self, drug_chembl_id=drug_chembl_id, disease_efo_id=disease_efo_id, size=size
-        )
+        return _drug_disease_cached(self, drug_chembl_id=drug_chembl_id)
 
-    def _drug_disease_uncached(
-        self,
-        *,
-        drug_chembl_id: str,
-        disease_efo_id: str,
-        size: int,
-    ) -> dict[str, Any]:
-        # ``disease_efo_id`` / ``size`` are no longer query variables — the
-        # indication list is returned whole for the drug and filtered by the
-        # caller (see the schema-migration note on ``_DRUG_DISEASE_QUERY``).
-        # They remain in the signature because they are part of this method's
-        # public contract and its lru_cache key.
+    def _drug_disease_uncached(self, *, drug_chembl_id: str) -> dict[str, Any]:
         return self.query_raw(_DRUG_DISEASE_QUERY, {"drugId": drug_chembl_id})
 
     def search_drug(self, name: str) -> Optional[str]:
@@ -230,12 +227,13 @@ def _drug_disease_cached(
     client: OpenTargetsClient,
     *,
     drug_chembl_id: str,
-    disease_efo_id: str,
-    size: int,
 ) -> dict[str, Any]:
-    return client._drug_disease_uncached(
-        drug_chembl_id=drug_chembl_id, disease_efo_id=disease_efo_id, size=size
-    )
+    # Keyed on the drug ALONE, because the v4 query takes only ``$drugId``: it
+    # returns the drug's whole indication list and the caller filters it. Keying
+    # on the disease too meant a cache build over N features fetched the
+    # identical payload N times (74 round-trips on the Optum manifest where 1
+    # suffices).
+    return client._drug_disease_uncached(drug_chembl_id=drug_chembl_id)
 
 
 @lru_cache(maxsize=_LRU_MAXSIZE)

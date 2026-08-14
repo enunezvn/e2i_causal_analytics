@@ -117,6 +117,38 @@ def test_open_targets_drug_disease_query_matches_the_live_schema() -> None:
     )
 
 
+def test_drug_indications_are_returned_whole_not_paginated() -> None:
+    """``drug.indications`` must return every row, or our filter misses leaks.
+
+    ``query_drug_disease_edges`` asks for the drug's whole indication list and
+    filters client-side to the disease it cares about. That is only sound while
+    the list is complete: if Open Targets ever truncates it to a page, a real
+    approved indication outside that page silently becomes ``no_signal`` — the
+    exact "a missing answer looks like a negative answer" failure #1607 is about.
+
+    Measured 2026-08-14: ``Drug.indications`` accepts NO arguments at all (no
+    ``size``, no cursor — verified by schema introspection), and returns
+    ``count == len(rows)`` for drugs well past any plausible default page:
+    omalizumab 39, adalimumab 83, rituximab 113, ibuprofen 132. So there is no
+    page to be beyond today. This test is the tripwire for that changing.
+    """
+    client = OpenTargetsClient()
+    # Deliberately includes drugs with far more indications than ours, so the
+    # tripwire fires on a default page size we would not otherwise reach.
+    for chembl_id in ("CHEMBL1201589", "CHEMBL1201581", "CHEMBL521"):
+        payload = client.drug_disease_evidence(chembl_id, "MONDO_0005492")
+        indications = ((payload.get("drug") or {}).get("indications")) or {}
+        count = indications.get("count")
+        rows = indications.get("rows") or []
+        assert isinstance(count, int), f"{chembl_id}: indications.count is gone"
+        assert count == len(rows), (
+            f"{chembl_id}: Open Targets returned {len(rows)} of {count} indications — "
+            "the list is now paginated and query_drug_disease_edges' client-side "
+            "filter can miss a real approved indication. Paginate before trusting "
+            "a no_signal result."
+        )
+
+
 def test_open_targets_graphql_rejects_the_removed_evidences_field() -> None:
     """Pin the schema change that broke us, so a revert is detectable.
 
