@@ -58,6 +58,7 @@ import asyncio
 import math
 import re
 import time
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -1592,8 +1593,49 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             f"DataFrame columns={list(df.columns)!r}. Refusing to fabricate."
         )
 
-    grouped = df.groupby(group_col, dropna=False)[metric].mean()
-    group_means: Dict[str, float] = {str(k): float(v) for k, v in grouped.items()}
+    try:
+        grouped = df.groupby(group_col, dropna=False)[metric].mean()
+    except (TypeError, ValueError) as exc:
+        # A non-numeric metric column raises out of pandas' aggregation
+        # ("agg function failed [how->mean,dtype->object]"). That is
+        # deterministic over the resolved inputs, so it must surface ONCE as a
+        # refusal (#1600) rather than be retried and charged to the tool's
+        # circuit breaker as if the tool were unhealthy.
+        raise ToolRefusalError(
+            f"gap_calculator: metric column {metric!r} is not numeric (dtype="
+            f"{df[metric].dtype!s}), so no per-{group_col!r} group mean can be "
+            f"computed: {exc}. Refusing to fabricate a comparison from a "
+            "non-numeric metric."
+        ) from exc
+
+    # Group KEYS are coerced with ``str`` because ``GapAnalysis.entity_values``
+    # is a ``Dict[str, float]``. Distinct raw keys can collide under that
+    # coercion -- measured: raw groups ``1``, ``"1"``, ``"Kisqali"`` (means
+    # 0.1 / 0.9 / 0.5) collapsed to ``{'1': 0.9, 'Kisqali': 0.5}`` and reported
+    # gap=0.4, silently dropping the 0.1 group when the true spread was 0.8.
+    # A gap over a basis that is not the one it claims is exactly the
+    # fabricated-finding shape #1574 exists to forbid, and the ambiguity cannot
+    # be represented in the output type, so this fails closed.
+    labels = [str(k) for k in grouped.index]
+    collisions = sorted({label for label, n in Counter(labels).items() if n > 1})
+    if collisions:
+        raise ToolRefusalError(
+            f"gap_calculator: {len(labels)} distinct {group_col!r} groups collapse to "
+            f"{len(set(labels))} labels under string coercion — "
+            f"{_clip_entity_labels(collisions)!r} each name more than one raw group, so a "
+            "per-group mean cannot be attributed unambiguously. Refusing to fabricate: "
+            "comparing the surviving labels would silently drop a real group and report "
+            "a spread over the wrong basis."
+        )
+
+    # ``_coerce_finite`` funnels every "not a usable number" shape to ``None``:
+    # ``NaN``, ``±inf``, and ``pd.NA`` from pandas nullable dtypes (``Float64``/
+    # ``Int64``), whose ``float()`` raises ``TypeError`` rather than yielding
+    # ``NaN`` — which would otherwise escape this tool as a bare ``TypeError``
+    # into the executor's RETRYING arm, bypassing the #1599 guard entirely.
+    group_means: Dict[str, Optional[float]] = {
+        str(k): _coerce_finite(v) for k, v in grouped.items()
+    }
     groups_present = sorted(group_means)
     if entities:
         wanted = {str(e) for e in entities}
@@ -1616,7 +1658,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     # excluded from the comparison basis outright -- and therefore from
     # ``entity_values``, which must stay self-consistent with the gap it
     # explains (a NaN there is also not JSON-compliant for strict consumers).
-    entity_values: Dict[str, float] = {k: v for k, v in group_means.items() if math.isfinite(v)}
+    entity_values: Dict[str, float] = {k: v for k, v in group_means.items() if v is not None}
     groups_non_finite = [k for k in groups_matched if k not in entity_values]
 
     if len(entity_values) < 2:
@@ -1674,12 +1716,40 @@ def _clip_entity_labels(values: List[str], *, limit: int = _MAX_LISTED_ENTITY_GR
     ]
 
 
-def _clip_metric_label(metric: Optional[str]) -> str:
-    """Clip a metric column name for inclusion in a bounded failure reason."""
-    text = str(metric or "")
-    if len(text) <= _MAX_METRIC_LABEL_CHARS:
+def _clip_name(name: Optional[str], *, limit: int = _MAX_METRIC_LABEL_CHARS) -> str:
+    """Clip a single caller-supplied name for a length-bounded failure reason.
+
+    Covers the metric column, the ``entity_type`` label and the resolved
+    grouping column. All three are rendered MORE THAN ONCE in the reason (prose
+    plus the ``estimation_data_scope`` payload) and none is bounded at its
+    source: ``entity_type`` is planner-emitted (LLM output) and the column name
+    comes from the frame. Unclipped, a pathological value measured at 21,780
+    chars against the composer's 2000-char carry limit — which truncates from
+    the END, eliding the scope payload the reason exists to deliver. A no-op
+    for every real value ('brand', 'geographic_region', 'market_share').
+    """
+    text = str(name or "")
+    if len(text) <= limit:
         return text
-    return text[: _MAX_METRIC_LABEL_CHARS - 1] + "…"
+    return text[: limit - 1] + "…"
+
+
+def _coerce_finite(value: Any) -> Optional[float]:
+    """Return ``value`` as a finite float, or ``None`` if it is not one.
+
+    Group means arrive as numpy scalars, plain floats, ``NaN``, ``±inf``, or —
+    for pandas nullable dtypes (``Float64``/``Int64``) — ``pd.NA``, whose
+    ``float()`` raises ``TypeError`` instead of yielding ``NaN``. Left
+    unguarded that ``TypeError`` escapes ``gap_calculator`` into the executor's
+    RETRYING arm, bypassing the #1599 fail-closed guard entirely and losing the
+    ``estimation_data_scope`` disclosure. Funnelling every "not a usable
+    number" shape to ``None`` keeps one branch responsible for all of them.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _gap_comparability_reason(
@@ -1721,7 +1791,10 @@ def _gap_comparability_reason(
     exception as ``str(e)`` on ``ToolOutput.error``), letting the answer
     disclose the scope the estimation actually covered.
     """
-    label = (entity_type or group_col or "entity").strip().lower() or "entity"
+    # Both are rendered repeatedly below (prose + scope payload) and neither is
+    # bounded at its source, so both are clipped -- see :func:`_clip_name`.
+    label = _clip_name((entity_type or group_col or "entity").strip().lower()) or "entity"
+    group_col = _clip_name(group_col)
     requested = [str(e) for e in entities]
     non_finite = list(groups_non_finite or [])
     # The reason has a FIXED total list budget, because it is carried verbatim
@@ -1759,7 +1832,7 @@ def _gap_comparability_reason(
         # deliberately NOT re-rendered here — it is in the scope payload below,
         # and a second rendering is what pushes a wide list past the composer's
         # carry limit (the same call the no-match branch makes).
-        metric_label = f"{_clip_metric_label(metric)!r} " if metric else ""
+        metric_label = f"{_clip_name(metric)!r} " if metric else ""
         comparable = len(groups_matched) - len(non_finite)
         requirement = f"at least 2 distinct {label} groups with a finite {metric_label}mean"
         observed = (

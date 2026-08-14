@@ -295,3 +295,139 @@ def test_region_gap_with_a_nan_region_still_compares_the_finite_regions():
     assert result.top_performer == "northeast"
     assert result.bottom_performer == "west"
     assert "blank" not in result.entity_values
+
+
+# ---------------------------------------------------------------------------
+# codex iter-1 — input shapes that bypassed the finite-mean guard entirely.
+#
+# Each of these reached the executor as a bare TypeError (or a silently wrong
+# result) rather than a ToolRefusalError, which means: retried max_retries
+# times, recorded against the circuit breaker, and no estimation_data_scope
+# disclosure. Measured with pandas 2.3.3.
+# ---------------------------------------------------------------------------
+def test_nullable_float64_all_na_group_means_fail_closed():
+    """``float(pd.NA)`` raises TypeError, bypassing the whole #1599 guard.
+
+    Nullable dtypes reach ``mean()`` as ``pd.NA``, not ``NaN``.
+    """
+    df = pd.DataFrame(
+        {
+            "brand": ["Kisqali", "Kisqali", "Ibrance", "Ibrance"],
+            "market_share": pd.array([None, None, None, None], dtype="Float64"),
+        }
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        tr.gap_calculator(
+            metric="market_share",
+            entity_type="brand",
+            entities=[],
+            estimation_data=df,
+        )
+    msg = str(exc_info.value)
+    assert "estimation_data_scope=" in msg
+    assert "'entity_groups_non_finite_count': 2" in msg
+
+
+def test_nullable_float64_mixed_still_compares_the_finite_groups():
+    """A pd.NA group must be excluded, not crash the comparison."""
+    df = pd.DataFrame(
+        {
+            "brand": ["AAA", "AAA", "Kisqali", "Kisqali", "Ibrance", "Ibrance"],
+            "market_share": pd.array([None, None, 0.50, 0.50, 0.70, 0.70], dtype="Float64"),
+        }
+    )
+    result = tr.gap_calculator(
+        metric="market_share",
+        entity_type="brand",
+        entities=[],
+        estimation_data=df,
+    )
+    assert result.gap == pytest.approx(0.20)
+    assert "AAA" not in result.entity_values
+
+
+def test_non_numeric_metric_column_fails_closed_once():
+    """``mean()`` over an object column raises TypeError — deterministic, so
+    it must surface as a refusal rather than be retried (#1600's thesis)."""
+    df = pd.DataFrame(
+        {
+            "brand": ["Kisqali", "Kisqali", "Ibrance", "Ibrance"],
+            "market_share": ["a", "b", "c", "d"],
+        }
+    )
+    from src.agents.tool_composer.errors import ToolRefusalError
+
+    with pytest.raises(ToolRefusalError) as exc_info:
+        tr.gap_calculator(
+            metric="market_share",
+            entity_type="brand",
+            entities=[],
+            estimation_data=df,
+        )
+    assert "not numeric" in str(exc_info.value)
+    assert "market_share" in str(exc_info.value)
+
+
+def test_string_coerced_group_labels_that_collide_fail_closed():
+    """Raw groups 1 and '1' are DISTINCT to groupby but collapse under str().
+
+    Measured pre-fix: 3 raw groups (means 0.1 / 0.9 / 0.5) became 2 entries
+    ``{'1': 0.9, 'Kisqali': 0.5}`` and reported gap=0.4 — a spread over the
+    wrong basis, silently dropping the 0.1 group (the true spread was 0.8).
+    """
+    df = pd.DataFrame(
+        {
+            "brand": [1, 1, "1", "1", "Kisqali", "Kisqali"],
+            "market_share": [0.1, 0.1, 0.9, 0.9, 0.5, 0.5],
+        }
+    )
+    from src.agents.tool_composer.errors import ToolRefusalError
+
+    with pytest.raises(ToolRefusalError) as exc_info:
+        tr.gap_calculator(
+            metric="market_share",
+            entity_type="brand",
+            entities=[],
+            estimation_data=df,
+        )
+    msg = str(exc_info.value)
+    assert "collapse to 2 labels under string coercion" in msg
+    assert "3 distinct 'brand' groups" in msg
+    assert "'1'" in msg
+
+
+def test_infinite_group_mean_is_excluded_like_nan():
+    """+/-inf is not a measurable performance level either."""
+    df = pd.DataFrame(
+        {
+            "brand": ["AAA", "AAA", "Kisqali", "Kisqali", "Ibrance", "Ibrance"],
+            "market_share": [np.inf, np.inf, 0.50, 0.50, 0.70, 0.70],
+        }
+    )
+    result = tr.gap_calculator(
+        metric="market_share",
+        entity_type="brand",
+        entities=[],
+        estimation_data=df,
+    )
+    assert result.gap == pytest.approx(0.20)
+    assert "AAA" not in result.entity_values
+
+
+def test_reason_length_bound_holds_for_pathological_label_and_column():
+    """``entity_type`` is planner-supplied and ``group_col`` frame-supplied;
+    both are rendered repeatedly, so both must be clipped or the scope payload
+    can still be truncated away."""
+    reason = tr._gap_comparability_reason(
+        entity_type="e" * 4_000,
+        group_col="c" * 4_000,
+        groups_present=[f"g_{i}_" + "x" * 200 for i in range(400)],
+        groups_matched=[f"g_{i}_" + "x" * 200 for i in range(400)],
+        groups_non_finite=[f"g_{i}_" + "x" * 200 for i in range(400)],
+        entities=[f"r_{i}_" + "y" * 200 for i in range(400)],
+        metric="m" * 4_000,
+        row_count=10**9,
+    )
+    assert len(reason) < 2_000, f"reason is {len(reason)} chars"
+    assert "estimation_data_scope=" in reason
+    assert "'entity_groups_non_finite_count': 400" in reason
