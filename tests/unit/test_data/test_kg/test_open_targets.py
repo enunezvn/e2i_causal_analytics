@@ -29,36 +29,55 @@ def _client_with_handler(
 
 
 def test_drug_disease_evidence_happy_path() -> None:
+    """Open Targets v4 returns drug->disease claims via ``drug.indications``.
+
+    The previous version of this test asserted a ``diseaseId`` GraphQL variable
+    and an ``evidences`` block. Open Targets REMOVED the top-level ``evidences``
+    Query field and renamed ``maxPhaseForIndication`` to ``maxClinicalStage``,
+    so the old document returned HTTP 400 on every live call while this mocked
+    test stayed green (#1607). The disease is now filtered client-side from the
+    drug's full indication list, so ``diseaseId`` is no longer a query variable.
+    """
+
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))
         assert body["variables"]["drugId"] == "CHEMBL1234"
-        assert body["variables"]["diseaseId"] == "EFO_0001"
+        assert "diseaseId" not in body["variables"], (
+            "diseaseId is no longer a query variable — the indication list is "
+            "returned whole and filtered by the caller"
+        )
+        assert "maxPhaseForIndication" not in body["query"], (
+            "maxPhaseForIndication was renamed upstream; using it makes the "
+            "whole query fail with HTTP 400"
+        )
         return httpx.Response(
             200,
             json={
                 "data": {
-                    "drug": {"id": "CHEMBL1234", "name": "TestDrug", "indications": {"rows": []}},
-                    "evidences": {
-                        "count": 1,
-                        "rows": [
-                            {
-                                "score": 0.85,
-                                "datatypeId": "literature",
-                                "datasourceId": "europepmc",
-                                "literature": ["12345678"],
-                                "drug": {"id": "CHEMBL1234", "name": "TestDrug"},
-                                "disease": {"id": "EFO_0001", "name": "TestDisease"},
-                            }
-                        ],
-                    },
+                    "drug": {
+                        "id": "CHEMBL1234",
+                        "name": "TestDrug",
+                        "maximumClinicalStage": "APPROVAL",
+                        "indications": {
+                            "count": 1,
+                            "rows": [
+                                {
+                                    "disease": {"id": "EFO_0001", "name": "TestDisease"},
+                                    "maxClinicalStage": "APPROVAL",
+                                }
+                            ],
+                        },
+                    }
                 }
             },
         )
 
     with _client_with_handler(handler) as client:
         result = client.drug_disease_evidence("CHEMBL1234", "EFO_0001")
-        assert result["evidences"]["count"] == 1
-        assert result["evidences"]["rows"][0]["literature"] == ["12345678"]
+        rows = result["drug"]["indications"]["rows"]
+        assert len(rows) == 1
+        assert rows[0]["disease"]["id"] == "EFO_0001"
+        assert rows[0]["maxClinicalStage"] == "APPROVAL"
 
 
 def test_search_drug_returns_first_drug_hit() -> None:
@@ -174,6 +193,43 @@ def test_caches_drug_disease_response() -> None:
         client.drug_disease_evidence("X", "Y")
         client.drug_disease_evidence("X", "Y")
         assert call_count["n"] == 1
+
+
+def test_drug_disease_cache_is_keyed_on_the_drug_alone() -> None:
+    """Different diseases for one drug must NOT re-fetch the same payload.
+
+    The v4 query takes only ``$drugId`` and returns the drug's whole indication
+    list, which the caller filters. Keying the cache on the disease as well
+    meant a cache build over N features asked Open Targets for the identical
+    payload N times — 74 round-trips where 1 suffices on the Optum manifest.
+    """
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "data": {"drug": {"id": "X", "name": "X", "indications": {"count": 0, "rows": []}}}
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        client.drug_disease_evidence("X", "MONDO_1")
+        client.drug_disease_evidence("X", "MONDO_2")
+        client.drug_disease_evidence("X", "MONDO_3")
+        assert call_count["n"] == 1, (
+            "the disease is filtered client-side and is not a query variable, so "
+            "it must not multiply network calls"
+        )
+
+    # A different drug is a genuinely different query.
+    call_count["n"] = 0
+    with _client_with_handler(handler) as client:
+        client.drug_disease_evidence("A", "MONDO_1")
+        client.drug_disease_evidence("B", "MONDO_1")
+        assert call_count["n"] == 2
 
 
 def test_payload_missing_data_raises() -> None:

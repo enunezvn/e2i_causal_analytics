@@ -116,6 +116,13 @@ def _kg_edge_to_json(edge: KGEdge) -> dict[str, Any]:
         # cache files lack this key — see ``_kg_edge_from_json`` for the
         # missing-key default.
         "evidence": [_evidence_item_to_json(e) for e in edge.evidence],
+        # Issue #1607: the pre-normalisation endpoint ids. build_kg_cache
+        # rewrites Open Targets endpoints to manifest/scope identifiers so the
+        # voter's ``_connects`` check can match them; these preserve what the
+        # source actually said, so a fuzzy disease match stays auditable from
+        # the committed artifact alone. Same missing-key default as ``evidence``.
+        "source_subject_id": edge.source_subject_id,
+        "source_object_id": edge.source_object_id,
     }
 
 
@@ -131,6 +138,9 @@ def _kg_edge_from_json(payload: dict[str, Any]) -> KGEdge:
         pmids=tuple(payload.get("pmids", [])),
         datasource=payload.get("datasource"),
         evidence=tuple(_evidence_item_from_json(e) for e in payload.get("evidence", [])),
+        # Absent in pre-#1607 cache files; None means "no normalisation".
+        source_subject_id=payload.get("source_subject_id"),
+        source_object_id=payload.get("source_object_id"),
     )
 
 

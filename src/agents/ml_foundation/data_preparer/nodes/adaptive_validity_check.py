@@ -3604,6 +3604,24 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # ``None`` means no cache configured / file missing / kg_mode='off'
     # → kg_edges default of ``()`` flows through to the voter (Stage 1
     # behavior).
+    # Bind the cohort to its committed KG cache before reading it (#1607).
+    # Phase 2.9 Stage 2 shipped the KG code but never the data: kg_cache_path
+    # and kg_mode both defaulted to None, so _resolve_kg_mode returned "off"
+    # and every feature classified as no_signal. Applied HERE rather than in a
+    # runner so every entry point into this node gets the same binding —
+    # scope_specs are assembled in several places. Respects an explicit
+    # kg_mode, and is a loud no-op when the cache file is absent.
+    try:
+        from src.data.kg.activation import apply_kg_activation
+
+        apply_kg_activation(scope_spec, manifest_source)
+    except Exception as exc:  # pragma: no cover - defensive, never block
+        logger.warning(
+            "adaptive_validity_check: KG activation failed (%s); continuing with "
+            "kg_mode as configured",
+            exc,
+        )
+
     kg_cache = _load_kg_cache(scope_spec)
     kg_mode = _resolve_kg_mode(scope_spec.get("kg_mode"))
     target_ids = _parse_target_entity_codes(scope_spec.get("target_entity_codes") or [])

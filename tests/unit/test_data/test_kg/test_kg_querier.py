@@ -49,7 +49,7 @@ class _StubOT:
         evidence: Optional[dict[str, Any]] = None,
         raise_error: bool = False,
     ) -> None:
-        self._evidence = evidence or {"evidences": {"rows": []}}
+        self._evidence = evidence or {"drug": {"indications": {"rows": []}}}
         self._raise_error = raise_error
         self.calls: list[tuple[str, ...]] = []
 
@@ -155,149 +155,6 @@ def test_query_concept_relations_does_not_dedupe_cross_source_rows() -> None:
     assert len(edges) == 2
     sources = {e.datasource for e in edges}
     assert sources == {"MSH", "SNOMEDCT_US"}
-
-
-def test_query_drug_disease_edges_happy_path() -> None:
-    umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 2,
-                "rows": [
-                    {
-                        "score": 0.91,
-                        "datatypeId": "literature",
-                        "datasourceId": "europepmc",
-                        "literature": ["12345678", "87654321"],
-                        "drug": {"id": "CHEMBL1234", "name": "DrugA"},
-                        "disease": {"id": "EFO_0000270", "name": "atopic dermatitis"},
-                    },
-                    {
-                        "score": 0.45,
-                        "datatypeId": "clinical_trial",
-                        "datasourceId": "clinical_trials",
-                        "literature": [],
-                        "drug": {"id": "CHEMBL1234", "name": "DrugA"},
-                        "disease": {"id": "EFO_0000270", "name": "atopic dermatitis"},
-                    },
-                ],
-            }
-        }
-    )
-    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL1234", "EFO_0000270")
-    assert len(edges) == 2
-    e0 = edges[0]
-    assert e0.subject_id == "CHEMBL1234"
-    assert e0.subject_name == "DrugA"
-    assert e0.object_id == "EFO_0000270"
-    assert e0.predicate == "associated_with"
-    assert e0.evidence_source == "open_targets"
-    assert e0.score == pytest.approx(0.91)
-    assert e0.pmids == ("12345678", "87654321")
-    assert e0.datasource == "europepmc"
-    assert edges[1].pmids == ()  # no literature on the second row
-    assert edges[1].datasource == "clinical_trials"
-
-
-def test_query_drug_disease_edges_empty_when_no_evidence() -> None:
-    umls = _StubUMLS()
-    ot = _StubOT(evidence={"evidences": {"rows": []}})
-    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
-
-
-def test_query_drug_disease_edges_handles_null_rows() -> None:
-    """GraphQL ``[Evidence!]`` (nullable list) returns null on resolver error;
-    must collapse to [] without raising TypeError."""
-    umls = _StubUMLS()
-    ot = _StubOT(evidence={"evidences": {"rows": None}})
-    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
-
-
-def test_query_drug_disease_edges_handles_null_evidences_object() -> None:
-    """If the entire ``evidences`` block is null, still degrade to []."""
-    umls = _StubUMLS()
-    ot = _StubOT(evidence={"evidences": None})
-    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
-
-
-def test_query_drug_disease_edges_propagates_open_targets_error() -> None:
-    """Transport failures must surface so callers can distinguish "no
-    edges" from "GraphQL/transport failure" (codex H1 from PR #102 review).
-    Cache builders, EnsembleVoter, and operator-facing pipelines need
-    typed errors to record ``status=source_error`` instead of
-    ``status=queried_no_edges``."""
-    umls = _StubUMLS()
-    ot = _StubOT(raise_error=True)
-    with pytest.raises(OpenTargetsError):
-        _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
-
-
-def test_query_drug_disease_edges_rejects_nan_score() -> None:
-    """NaN scores must collapse to None so ranking logic isn't poisoned."""
-    umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "rows": [
-                    {
-                        "score": float("nan"),
-                        "datasourceId": "europepmc",
-                        "literature": [],
-                        "drug": {"id": "X", "name": "X"},
-                        "disease": {"id": "Y", "name": "Y"},
-                    }
-                ]
-            }
-        }
-    )
-    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
-    assert len(edges) == 1
-    assert edges[0].score is None
-
-
-def test_query_drug_disease_edges_rejects_inf_score() -> None:
-    """+/-inf scores must also collapse to None."""
-    umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "rows": [
-                    {
-                        "score": float("inf"),
-                        "datasourceId": "europepmc",
-                        "literature": [],
-                        "drug": {"id": "X"},
-                        "disease": {"id": "Y"},
-                    }
-                ]
-            }
-        }
-    )
-    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
-    assert len(edges) == 1
-    assert edges[0].score is None
-
-
-def test_query_drug_disease_edges_handles_missing_score_key() -> None:
-    """If the row simply has no 'score' key, edge.score must be None."""
-    umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "rows": [
-                    {
-                        "datasourceId": "europepmc",
-                        "literature": [],
-                        "drug": {"id": "X"},
-                        "disease": {"id": "Y"},
-                    }
-                ]
-            }
-        }
-    )
-    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
-    assert len(edges) == 1
-    assert edges[0].score is None
 
 
 def test_query_disease_hierarchy_filters_to_taxonomic_predicates() -> None:
@@ -496,106 +353,6 @@ def test_kgedge_immutability() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "datatype_id, datasource_id, expected_predicate",
-    [
-        # known_drug (the ONLY treats-bearing datatype per Ochoa 2021):
-        ("known_drug", "chembl", "treats"),
-        ("known_drug", "clinical_trials", "treats"),
-        # All six other canonical Open Targets datatypeIds (Ochoa 2021,
-        # NAR Table 1) — every one must produce associated_with, not
-        # treats. Codex PR-0 review L6: cover the full taxonomy so a
-        # future code change that drifts the partition is caught.
-        ("literature", "europepmc", "associated_with"),
-        ("genetic_association", "eva", "associated_with"),
-        ("affected_pathway", "progeny", "associated_with"),
-        ("rna_expression", "expression_atlas", "associated_with"),
-        ("somatic_mutation", "cancer_biomarkers", "associated_with"),
-        ("animal_model", "phenodigm", "associated_with"),
-    ],
-)
-def test_query_drug_disease_edges_predicate_by_datatype(
-    datatype_id: str, datasource_id: str, expected_predicate: str
-) -> None:
-    """Each Open Targets datatypeId maps to one semantic predicate.
-
-    The Open Targets data model (Ochoa 2021, NAR) defines seven canonical
-    ``datatypeId`` values. Only ``known_drug`` carries drug-treats-disease
-    semantics; all others are gene/target-disease association, literature,
-    or pathway evidence. PR-0 maps ``datatypeId == "known_drug"`` →
-    ``predicate="treats"`` at the querier boundary so the
-    ``EnsembleVoter.classify_kg_signal`` treats path comes alive.
-
-    Pre-fix the querier emitted ``predicate="associated_with"`` for ALL
-    rows; the ``known_drug`` parametrize cases would fail under pre-fix
-    code (proving the dead-signal bug existed). Post-fix the ``known_drug``
-    rows produce ``"treats"``; the rest stay ``"associated_with"``.
-
-    Reference: docs/superpowers/specs/2026-05-08-kg-predicate-reconciliation-design.md
-    """
-    umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 1,
-                "rows": [
-                    {
-                        "score": 0.85,
-                        "datatypeId": datatype_id,
-                        "datasourceId": datasource_id,
-                        "literature": [],
-                        "drug": {"id": "CHEMBL1234", "name": "drug-x"},
-                        "disease": {"id": "EFO_0000270", "name": "disease-y"},
-                    }
-                ],
-            }
-        }
-    )
-    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL1234", "EFO_0000270")
-    assert len(edges) == 1
-    assert edges[0].predicate == expected_predicate
-    assert edges[0].evidence_source == "open_targets"
-    assert edges[0].datasource == datasource_id
-
-
-# ---------------------------------------------------------------------------
-# Issue #245: KGEdge.evidence + ChEMBL drug-disease evidence enrichment
-# ---------------------------------------------------------------------------
-
-
-class _StubChEMBL:
-    """Stub ChEMBL client for KGQuerier wiring tests.
-
-    Records every call so tests can assert call site invariants
-    (cross-walk runs once per gene symbol, bioactivity is queried only
-    when a target resolved, etc.). Does not exercise HTTP — that's
-    covered by ``test_chembl.py``'s MockTransport tests.
-    """
-
-    def __init__(
-        self,
-        *,
-        gene_to_target: dict[str, Optional[str]] | None = None,
-        bioactivity: dict[str, list[Any]] | None = None,
-    ) -> None:
-        self._gene_to_target = gene_to_target or {}
-        self._bioactivity = bioactivity or {}
-        self.calls: list[tuple[str, ...]] = []
-
-    def open_targets_target_to_chembl(self, gene_or_id: Optional[str]) -> Optional[str]:
-        self.calls.append(("cross_walk", str(gene_or_id)))
-        if not gene_or_id:
-            return None
-        return self._gene_to_target.get(gene_or_id)
-
-    def get_bioactivity(self, target_chembl_id: str) -> list[Any]:
-        self.calls.append(("get_bioactivity", target_chembl_id))
-        return self._bioactivity.get(target_chembl_id, [])
-
-    def close(self) -> None:
-        pass
-
-
 def test_kgedge_evidence_field_default_is_empty_tuple() -> None:
     """KGEdge.evidence is an additive optional field; default is an empty
     tuple so existing callers don't break."""
@@ -629,181 +386,149 @@ def test_kgedge_evidence_carries_evidence_items() -> None:
     assert edge.evidence[0].pmid == "12345678"
 
 
-def test_query_drug_disease_edges_populates_evidence_from_open_targets() -> None:
-    """When Open Targets returns literature PMIDs + a datatype score, the
-    resulting KGEdge.evidence carries one EvidenceItem per PMID. Each
-    EvidenceItem records the datasource score so consumers can rank
-    edges by evidence strength."""
-    from src.data.kg.types import EvidenceItem  # noqa: F401 — referenced via attr
+# ---------------------------------------------------------------------------
+# Drug -> disease edges, Open Targets v4 `drug.indications` schema (#1607)
+#
+# These replace the previous suite, which modelled a top-level
+# `evidences(drugIds:, diseaseIds:)` Query field that Open Targets has REMOVED.
+# Those tests were green while production returned HTTP 400 on every live call
+# — they mocked a wire shape that no longer existed. Coverage dropped with the
+# old schema, and why:
+#
+#   * score sanitisation (NaN / inf / missing) — `indications.rows` carries no
+#     score field at all, so there is no number to sanitise.
+#   * `EvidenceItem` / literature PMIDs and the ChEMBL target cross-walk
+#     (issue #245) — both were sourced from evidence rows. Drug->disease
+#     evidence with literature is not reachable in the v4 schema:
+#     `Disease.evidences` REQUIRES a gene `ensemblIds` argument, and `Drug` no
+#     longer exposes `linkedTargets`, so there is no drug->gene path. Verified
+#     by live introspection 2026-08-14.
+#   * datatypeId -> predicate mapping — replaced by `maxClinicalStage`, which
+#     is a strictly better signal (it distinguishes an APPROVED indication from
+#     a PHASE_1 exploratory one).
+#
+# The live counterpart is
+# tests/integration/test_kg/test_kg_layer2_live_contracts.py.
+# ---------------------------------------------------------------------------
 
-    umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 1,
-                "rows": [
-                    {
-                        "score": 0.91,
-                        "datatypeId": "known_drug",
-                        "datasourceId": "chembl",
-                        "literature": ["12345678", "87654321"],
-                        "drug": {"id": "CHEMBL941", "name": "imatinib"},
-                        "disease": {"id": "EFO_0000222", "name": "CML"},
-                    }
-                ],
-            }
+
+def _indications(*rows: dict[str, Any], drug_name: str = "DrugA") -> dict[str, Any]:
+    """Build a `drug.indications` payload in the current schema shape."""
+    return {
+        "drug": {
+            "id": "CHEMBL1234",
+            "name": drug_name,
+            "maximumClinicalStage": "APPROVAL",
+            "indications": {"count": len(rows), "rows": list(rows)},
         }
-    )
-    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL941", "EFO_0000222")
+    }
+
+
+def _row(disease_id: str, name: str, stage: str) -> dict[str, Any]:
+    return {"disease": {"id": disease_id, "name": name}, "maxClinicalStage": stage}
+
+
+def test_query_drug_disease_edges_emits_treats_for_approved_indication() -> None:
+    umls = _StubUMLS()
+    ot = _StubOT(evidence=_indications(_row("EFO_0000270", "atopic dermatitis", "APPROVAL")))
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL1234", "EFO_0000270")
+
     assert len(edges) == 1
     edge = edges[0]
-    assert len(edge.evidence) == 2
-    assert {ev.pmid for ev in edge.evidence} == {"12345678", "87654321"}
-    for ev in edge.evidence:
-        assert ev.source == "open_targets"
-        assert ev.datasource_score == pytest.approx(0.91)
-        # Without a ChEMBL client wired, no target ID is associated.
-        assert ev.chembl_target_id is None
+    assert edge.subject_id == "CHEMBL1234"
+    assert edge.subject_name == "DrugA"
+    assert edge.object_id == "EFO_0000270"
+    assert edge.object_name == "atopic dermatitis"
+    assert edge.predicate == "treats"
+    assert edge.evidence_source == "open_targets"
+    assert edge.datasource == "chembl_indications"
+    # Honest emptiness: the indication list carries neither score nor PMIDs.
+    assert edge.score is None
+    assert edge.pmids == ()
+    assert edge.evidence == ()
 
 
-def test_query_drug_disease_edges_enriches_with_chembl_when_target_gene_present() -> None:
-    """When (1) a ChEMBL client is attached AND (2) Open Targets exposes
-    the drug's target gene, the querier cross-walks gene → ChEMBL target ID
-    and tags every EvidenceItem with that ID.
+@pytest.mark.parametrize(
+    "stage,expected",
+    [
+        ("APPROVAL", "treats"),
+        ("PHASE_3", "associated_with"),
+        ("PHASE_2", "associated_with"),
+        ("PHASE_1", "associated_with"),
+        ("", "associated_with"),
+        ("SOME_FUTURE_STAGE", "associated_with"),
+    ],
+)
+def test_predicate_is_gated_on_clinical_stage(stage: str, expected: str) -> None:
+    """Only a regulator-approved indication is a therapeutic claim.
+
+    A deferred codex review (PR-0 M1) warned that emitting `treats` for ANY
+    known-drug row lets a Phase I pairing produce a false-positive
+    `leak_drug_treats_disease` verdict in the voter. `maxClinicalStage` makes
+    that gate implementable; unknown/absent stages fall to the safe side.
     """
     umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 1,
-                "rows": [
-                    {
-                        "score": 0.91,
-                        "datatypeId": "known_drug",
-                        "datasourceId": "chembl",
-                        "literature": ["16480739"],
-                        "drug": {"id": "CHEMBL941", "name": "imatinib"},
-                        "disease": {"id": "EFO_0000222", "name": "CML"},
-                        # Open Targets exposes the drug's primary target
-                        # gene in the evidence row.
-                        "target": {"id": "ENSG00000097007", "approvedSymbol": "ABL1"},
-                    }
-                ],
-            }
-        }
-    )
-    chembl = _StubChEMBL(gene_to_target={"ABL1": "CHEMBL1862"})
-    querier = KnowledgeGraphQuerier(
-        umls=umls,  # type: ignore[arg-type]
-        open_targets=ot,  # type: ignore[arg-type]
-        chembl=chembl,  # type: ignore[arg-type]
-    )
-    edges = querier.query_drug_disease_edges("CHEMBL941", "EFO_0000222")
+    ot = _StubOT(evidence=_indications(_row("EFO_1", "d", stage)))
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL1234", "EFO_1")
     assert len(edges) == 1
-    edge = edges[0]
-    assert len(edge.evidence) == 1
-    assert edge.evidence[0].chembl_target_id == "CHEMBL1862"
-    # Cross-walk should have been called with the gene symbol.
-    assert ("cross_walk", "ABL1") in chembl.calls
+    assert edges[0].predicate == expected
 
 
-def test_query_drug_disease_edges_no_chembl_target_still_emits_evidence() -> None:
-    """If ChEMBL cross-walk returns None (target not in ChEMBL), evidence
-    items are still produced from Open Targets PMIDs — chembl_target_id is
-    None. The path must not raise."""
+def test_query_drug_disease_edges_filters_to_the_requested_disease() -> None:
+    """The API returns the drug's WHOLE indication list; only the asked-for
+    disease may become an edge, or the edge would encode a pair the caller
+    never asked about."""
     umls = _StubUMLS()
     ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 1,
-                "rows": [
-                    {
-                        "score": 0.5,
-                        "datatypeId": "literature",
-                        "datasourceId": "europepmc",
-                        "literature": ["999"],
-                        "drug": {"id": "CHEMBL1", "name": "x"},
-                        "disease": {"id": "EFO_X", "name": "x"},
-                        "target": {"id": "ENSG_unknown", "approvedSymbol": "UNKNOWN"},
-                    }
-                ],
-            }
-        }
+        evidence=_indications(
+            _row("EFO_OTHER", "unrelated", "APPROVAL"),
+            _row("EFO_0000270", "atopic dermatitis", "APPROVAL"),
+            _row("EFO_ANOTHER", "also unrelated", "APPROVAL"),
+        )
     )
-    chembl = _StubChEMBL(gene_to_target={"UNKNOWN": None})
-    querier = KnowledgeGraphQuerier(
-        umls=umls,  # type: ignore[arg-type]
-        open_targets=ot,  # type: ignore[arg-type]
-        chembl=chembl,  # type: ignore[arg-type]
-    )
-    edges = querier.query_drug_disease_edges("CHEMBL1", "EFO_X")
-    assert len(edges) == 1
-    assert edges[0].evidence[0].chembl_target_id is None
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL1234", "EFO_0000270")
+    assert [e.object_id for e in edges] == ["EFO_0000270"]
 
 
-def test_query_drug_disease_edges_works_without_chembl_client() -> None:
-    """Backwards-compatible path: existing callers that did not pass a
-    ChEMBL client get the Open Targets PMID evidence threaded through
-    KGEdge.evidence, and no ChEMBL HTTP is attempted."""
+def test_query_drug_disease_edges_empty_when_drug_has_no_indications() -> None:
     umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 1,
-                "rows": [
-                    {
-                        "score": 0.7,
-                        "datatypeId": "known_drug",
-                        "datasourceId": "chembl",
-                        "literature": ["77"],
-                        "drug": {"id": "CHEMBL1", "name": "x"},
-                        "disease": {"id": "EFO_X", "name": "x"},
-                    }
-                ],
-            }
-        }
-    )
-    # No ``chembl=...`` kwarg.
-    querier = KnowledgeGraphQuerier(
-        umls=umls,  # type: ignore[arg-type]
-        open_targets=ot,  # type: ignore[arg-type]
-    )
-    edges = querier.query_drug_disease_edges("CHEMBL1", "EFO_X")
-    assert len(edges) == 1
-    assert len(edges[0].evidence) == 1
-    assert edges[0].evidence[0].chembl_target_id is None
+    ot = _StubOT(evidence=_indications())
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
 
 
-def test_query_drug_disease_edges_skips_cross_walk_when_no_target_in_payload() -> None:
-    """If the Open Targets row doesn't expose a target gene symbol, the
-    ChEMBL cross-walk MUST NOT be attempted (avoid wasted HTTP)."""
+def test_query_drug_disease_edges_handles_null_rows() -> None:
+    """`indications.rows` is a nullable GraphQL list; null must collapse to []."""
     umls = _StubUMLS()
-    ot = _StubOT(
-        evidence={
-            "evidences": {
-                "count": 1,
-                "rows": [
-                    {
-                        "score": 0.1,
-                        "datatypeId": "literature",
-                        "datasourceId": "europepmc",
-                        "literature": ["1"],
-                        "drug": {"id": "CHEMBL1", "name": "x"},
-                        "disease": {"id": "EFO_X", "name": "x"},
-                        # No "target" key.
-                    }
-                ],
-            }
-        }
-    )
-    chembl = _StubChEMBL()
-    querier = KnowledgeGraphQuerier(
-        umls=umls,  # type: ignore[arg-type]
-        open_targets=ot,  # type: ignore[arg-type]
-        chembl=chembl,  # type: ignore[arg-type]
-    )
-    edges = querier.query_drug_disease_edges("CHEMBL1", "EFO_X")
-    assert len(edges) == 1
-    # No cross-walk call.
-    cross_walk_calls = [c for c in chembl.calls if c[0] == "cross_walk"]
-    assert cross_walk_calls == []
+    ot = _StubOT(evidence={"drug": {"indications": {"rows": None}}})
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+
+
+def test_query_drug_disease_edges_handles_null_indications_object() -> None:
+    umls = _StubUMLS()
+    ot = _StubOT(evidence={"drug": {"indications": None}})
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+
+
+def test_query_drug_disease_edges_handles_null_drug_object() -> None:
+    """A drug id Open Targets does not know resolves `drug` to null."""
+    umls = _StubUMLS()
+    ot = _StubOT(evidence={"drug": None})
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+
+
+def test_query_drug_disease_edges_skips_malformed_rows() -> None:
+    umls = _StubUMLS()
+    ot = _StubOT(evidence={"drug": {"indications": {"rows": ["not-a-dict", None]}}})
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+
+
+def test_query_drug_disease_edges_propagates_open_targets_error() -> None:
+    """Transport failures must surface so callers can distinguish "no edges"
+    from "GraphQL/transport failure" (codex H1 from PR #102 review). Cache
+    builders need typed errors to record ``status=source_error`` instead of
+    ``status=queried_no_edges`` — which is exactly how the dead query stayed
+    invisible for so long."""
+    umls = _StubUMLS()
+    ot = _StubOT(raise_error=True)
+    with pytest.raises(OpenTargetsError):
+        _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")

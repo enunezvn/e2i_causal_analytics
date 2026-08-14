@@ -19,23 +19,42 @@ Usage::
     python scripts/build_kg_cache.py \
         --manifest-module src.data.manifests.optum_feature_manifest \
         --features-attr OPTUM_FEATURES \
-        --target-entity-codes RXNORM:479158,RXNORM:1011295 \
+        --target-entity-codes RXNORM:302379 \
         --out data/kg_cache
 
     # Live KG querying (instantiates UMLSClient + OpenTargetsClient via
     # EntityLinker + KnowledgeGraphQuerier; UMLS_UTS_API_KEY required):
     python scripts/build_kg_cache.py --live ... (other args)
 
-Item B of the engineering-actionable arc (PR-C live KG querying loop):
-the ``--live`` mode replaces the prior NotImplementedError. Per-entity
-dispatch handles ``("UMLS", <CUI>)`` entries directly via
-``UMLSClient.cui_lookup`` (validate) + ``KGQuerier.query_disease_hierarchy``
-(query) — bypassing ``EntityLinker.resolve``, which only knows the
-source-vocab cross-walk systems (ICD10CM/LOINC/CPT/HCPCS/RXNORM and
-friends) per ``_UTS_SOURCE_BY_SYSTEM``. Without this dispatch the ~30
-UMLS-CUI entries in the Optum manifest would silently degrade to no_signal.
+``RXNORM:302379`` is omalizumab. The earlier example here used
+``RXNORM:479158,RXNORM:1011295``, which are not valid RxCUIs at all — RxNav
+resolves both to None (pinned by
+``test_rxnav_unknown_code_returns_none_not_an_error``). Copying it produced a
+build with an unresolvable target, and therefore no drug-disease pass.
 
-Reference: docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md
+The live build runs TWO passes per feature, and both are load-bearing:
+
+1. **Taxonomic** — ``("UMLS", <CUI>)`` entries dispatch directly via
+   ``UMLSClient.cui_lookup`` (validate) + ``KGQuerier.query_disease_hierarchy``
+   (query), bypassing ``EntityLinker.resolve``, which only knows the
+   source-vocab cross-walk systems (ICD10CM/LOINC/CPT/HCPCS/RXNORM and friends)
+   per ``_UTS_SOURCE_BY_SYSTEM``. Without this dispatch the ~30 UMLS-CUI entries
+   in the Optum manifest would silently degrade to no_signal.
+
+2. **Drug-disease** — ``--target-entity-codes`` is resolved to a drug and Open
+   Targets is asked which of the manifest's disease concepts that drug is
+   APPROVED to treat (see ``_resolve_target_drug`` / ``_drug_disease_edges_for_cui``).
+
+Pass 1 alone can never light a signal (#1607). ``query_disease_hierarchy``
+relates a concept only to its OWN parents and children, never to the prediction
+target, while ``classify_kg_signal._connects`` requires one edge endpoint in the
+feature set AND one in the target set. Measured: a taxonomic-only build produced
+74 records with 82 real UMLS edges and 74/74 ``no_signal``. Pass 2 is what
+produces ``leak_drug_treats_disease``.
+
+References:
+* docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md
+* docs/runbooks/kg_cache.md (build, commit, activate, verify)
 """
 
 from __future__ import annotations
@@ -195,6 +214,143 @@ def _query_edges_for_cui(
     return edges, errors
 
 
+def _resolve_target_drug(
+    target_entity_codes: list[tuple[str, str]],
+    entity_linker: "EntityLinker",
+) -> tuple[Optional[str], Optional[str], list[str]]:
+    """Resolve the prediction target to a ChEMBL drug id, ONCE per build.
+
+    Returns ``(chembl_id, target_code_used, errors)``.
+
+    This is the step that makes RxNav load-bearing at build time: a target
+    expressed as an RXNORM code is turned into a drug NAME via RxNav, and the
+    name is what Open Targets' ``search_drug`` can resolve to a ChEMBL id. A
+    target already given as ``("CHEMBL", "CHEMBL1201589")`` is used directly.
+
+    Returning ``(None, None, errors)`` is a normal outcome — the target may not
+    be a drug at all — and simply means no drug-disease edges are attempted.
+    """
+    errors: list[str] = []
+    for system, code in target_entity_codes:
+        system_upper = system.upper()
+        name: Optional[str] = None
+        if system_upper == "CHEMBL":
+            return code, code, errors
+        if system_upper == "RXNORM":
+            try:
+                props = entity_linker.rxnav.properties(code)
+            except Exception as exc:  # noqa: BLE001 - best-effort resolution
+                errors.append(f"rxnav properties({code}) failed: {exc}")
+                continue
+            if not props:
+                errors.append(f"rxnav: RXNORM:{code} is not a known RxCUI")
+                continue
+            name = str(props.get("name") or "")
+        elif system_upper in ("UMLS", "MESH"):
+            # A target expressed as a concept: use its preferred name.
+            try:
+                name = entity_linker.umls.cui_lookup(code).preferred_name
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"umls cui_lookup({code}) failed: {exc}")
+                continue
+        if not name:
+            continue
+        try:
+            chembl_id = entity_linker.open_targets.search_drug(name)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"open_targets search_drug({name!r}) failed: {exc}")
+            continue
+        if chembl_id:
+            return chembl_id, code, errors
+        errors.append(f"open_targets: no ChEMBL id for target drug {name!r}")
+    return None, None, errors
+
+
+def _drug_disease_edges_for_cui(
+    cui: str,
+    *,
+    entity_linker: "EntityLinker",
+    kg_querier: "KnowledgeGraphQuerier",
+    target_chembl_id: str,
+    target_code: str,
+) -> tuple[tuple[KGEdge, ...], list[str]]:
+    """Open Targets "does the target drug treat this feature's disease?" edges.
+
+    This is the Layer-2 signal the voter was designed around
+    (``leak_drug_treats_disease``) and the one the taxonomic path can never
+    produce: ``query_disease_hierarchy`` only relates a feature concept to its
+    own parents/children, never to the prediction target, so
+    ``classify_kg_signal``'s ``_connects`` check could never fire (#1607).
+
+    Endpoint rewriting is deliberate. Open Targets speaks ChEMBL/MONDO ids,
+    while the runtime's ``feature_entity_ids`` / ``target_entity_ids`` come
+    from the manifest and scope_spec. An edge keyed on ChEMBL/MONDO would be
+    invisible to ``_connects``. The edge asserts "target drug treats THIS
+    feature's disease", so it is emitted against the identifiers both sides
+    actually hold.
+
+    Because the rewrite discards the identifiers the source actually spoke, the
+    originals are carried on ``source_subject_id`` / ``source_object_id``, which
+    ``cache._kg_edge_to_json`` persists. That matters more than it looks: the
+    feature's CUI is mapped to a disease by a fuzzy
+    ``open_targets.search_disease(preferred_name)`` lookup, and a broad or
+    outright wrong EFO/MONDO match still produces a perfectly plausible
+    ``object_name``. These edges drive a leakage finding, so "which disease did
+    we actually match this feature to?" has to be answerable from the committed
+    artifact alone — names are not auditable, ids are.
+
+    ``KGEdge.raw`` keeps the fuller context (including the upstream row) for
+    in-process callers, but is NOT persisted: ``_kg_edge_to_json`` writes a
+    fixed field list that excludes it.
+    """
+    errors: list[str] = []
+    try:
+        concept_name = entity_linker.umls.cui_lookup(cui).preferred_name
+    except Exception as exc:  # noqa: BLE001
+        return (), [f"umls cui_lookup({cui}) failed for drug-disease: {exc}"]
+    if not concept_name:
+        return (), [f"no preferred name for {cui}; cannot resolve a disease id"]
+    try:
+        efo_id = entity_linker.open_targets.search_disease(concept_name)
+    except Exception as exc:  # noqa: BLE001
+        return (), [f"open_targets search_disease({concept_name!r}) failed: {exc}"]
+    if not efo_id:
+        # Not an error: many features are labs/utilisation concepts with no
+        # disease counterpart in Open Targets.
+        return (), []
+    try:
+        raw_edges = kg_querier.query_drug_disease_edges(target_chembl_id, efo_id)
+    except Exception as exc:  # noqa: BLE001 - mirrors the taxonomic path
+        return (), [f"open_targets drug-disease {target_chembl_id}/{efo_id} failed: {exc}"]
+
+    rewritten: list[KGEdge] = []
+    for edge in raw_edges:
+        rewritten.append(
+            KGEdge(
+                subject_id=target_code,
+                subject_name=edge.subject_name or target_chembl_id,
+                predicate=edge.predicate,
+                object_id=cui,
+                object_name=edge.object_name or concept_name,
+                evidence_source=edge.evidence_source,
+                score=edge.score,
+                pmids=edge.pmids,
+                datasource=edge.datasource,
+                evidence=edge.evidence,
+                source_subject_id=edge.subject_id,
+                source_object_id=edge.object_id,
+                raw={
+                    "open_targets_subject_id": edge.subject_id,
+                    "open_targets_object_id": edge.object_id,
+                    "resolved_from_cui": cui,
+                    "resolved_disease_id": efo_id,
+                    "row": edge.raw,
+                },
+            )
+        )
+    return tuple(rewritten), errors
+
+
 def _build_record_live(
     fc: FeatureContract,
     *,
@@ -204,6 +360,8 @@ def _build_record_live(
     sources_attempted: tuple[str, ...],
     entity_linker: "EntityLinker",
     kg_querier: "KnowledgeGraphQuerier",
+    target_chembl_id: Optional[str] = None,
+    target_code: Optional[str] = None,
 ) -> CacheRecord:
     """Per-feature live-query path. Aggregates edges + errors across each
     of the feature's ``kg_entity_codes``.
@@ -256,6 +414,22 @@ def _build_record_live(
             queries_failed += 1
         aggregated_edges.extend(edges)
         errors.extend(edge_errors)
+
+        # Drug-disease pass (#1607). The taxonomic edges above relate the
+        # feature concept to its OWN hierarchy and can never connect it to the
+        # prediction target, so on their own they always classify as
+        # ``no_signal``. This pass asks the question the voter's
+        # ``leak_drug_treats_disease`` rule was written for.
+        if target_chembl_id and target_code:
+            dd_edges, dd_errors = _drug_disease_edges_for_cui(
+                cui,
+                entity_linker=entity_linker,
+                kg_querier=kg_querier,
+                target_chembl_id=target_chembl_id,
+                target_code=target_code,
+            )
+            aggregated_edges.extend(dd_edges)
+            errors.extend(dd_errors)
 
     if aggregated_edges:
         status: Any = "ok"
@@ -336,6 +510,36 @@ def build_cache_for_manifest(
     live_mode = entity_linker is not None and kg_querier is not None
     sources_attempted: tuple[str, ...] = ("umls_uts",) if live_mode else ()
 
+    # Resolve the prediction target to a ChEMBL drug ONCE per build (#1607).
+    # When it resolves, every feature additionally gets the Open Targets
+    # "does this drug treat that disease?" pass — the only path that can yield
+    # a KG signal the voter can act on. ``sources_attempted`` records exactly
+    # which upstreams were consulted so a reader can tell a genuine
+    # "no evidence" from "we never asked".
+    target_chembl_id: Optional[str] = None
+    target_code: Optional[str] = None
+    target_resolution_errors: list[str] = []
+    if live_mode:
+        assert entity_linker is not None
+        target_chembl_id, target_code, target_resolution_errors = _resolve_target_drug(
+            target_entity_codes, entity_linker
+        )
+        if target_chembl_id:
+            sources_attempted = sources_attempted + ("rxnav", "open_targets")
+            logger.info(
+                "KG cache: target resolved to ChEMBL %s (from %s); drug-disease pass ENABLED",
+                target_chembl_id,
+                target_code,
+            )
+        else:
+            logger.warning(
+                "KG cache: target did not resolve to a ChEMBL drug (%s) — only "
+                "taxonomic edges will be built, which cannot produce a KG signal "
+                "against the target. Errors: %s",
+                target_entity_codes,
+                target_resolution_errors,
+            )
+
     features = list(features)
     manifest_fp = compute_manifest_fingerprint(features)
     target_fp = compute_target_codes_fingerprint(target_entity_codes)
@@ -356,6 +560,8 @@ def build_cache_for_manifest(
                     sources_attempted=sources_attempted,
                     entity_linker=entity_linker,
                     kg_querier=kg_querier,
+                    target_chembl_id=target_chembl_id,
+                    target_code=target_code,
                 )
             )
         else:

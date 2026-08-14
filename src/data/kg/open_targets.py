@@ -38,43 +38,43 @@ DEFAULT_TIMEOUT = 15.0
 _LRU_MAXSIZE = 2048
 
 
+# Drug -> disease therapeutic claims, sourced from the drug's INDICATION list.
+#
+# Schema migration (#1607, verified by live introspection 2026-08-14). The prior
+# document was broken against the live API and returned HTTP 400 on EVERY call,
+# so `query_drug_disease_edges` could never yield an edge. Two independent
+# upstream changes:
+#
+#   1. ``ClinicalIndicationFromDrug.maxPhaseForIndication`` (Int 0-4) was
+#      renamed to ``maxClinicalStage`` (String: APPROVAL / PHASE_3 / ...).
+#   2. The top-level ``evidences(drugIds:, diseaseIds:)`` Query field was
+#      REMOVED. Evidence now hangs off ``Disease.evidences``, which REQUIRES a
+#      gene ``ensemblIds`` argument and therefore cannot serve a drug->disease
+#      lookup at all.
+#
+# Nothing detected this because every Open Targets unit test mocks the
+# transport. `tests/integration/test_kg/test_kg_layer2_live_contracts.py` now
+# executes this document against the real endpoint.
+#
+# Consequence of (2): edges no longer carry literature PMIDs or per-row scores.
+# That is not a regression against a working baseline — the path that supplied
+# them had been failing outright. In exchange, ``maxClinicalStage`` supplies the
+# phase signal needed to gate the ``treats`` predicate (see
+# ``KnowledgeGraphQuerier.query_drug_disease_edges``).
 _DRUG_DISEASE_QUERY = """
-query DrugDiseaseEvidence($drugId: String!, $diseaseId: String!, $size: Int!) {
+query DrugDiseaseEvidence($drugId: String!) {
   drug(chemblId: $drugId) {
     id
     name
+    maximumClinicalStage
     indications {
+      count
       rows {
         disease {
           id
           name
         }
-        maxPhaseForIndication
-      }
-    }
-  }
-  evidences(
-    drugIds: [$drugId]
-    diseaseIds: [$diseaseId]
-    size: $size
-  ) {
-    count
-    rows {
-      score
-      datatypeId
-      datasourceId
-      literature
-      drug {
-        id
-        name
-      }
-      disease {
-        id
-        name
-      }
-      target {
-        id
-        approvedSymbol
+        maxClinicalStage
       }
     }
   }
@@ -167,30 +167,29 @@ class OpenTargetsClient:
         self,
         drug_chembl_id: str,
         disease_efo_id: str,
-        *,
-        size: int = 25,
     ) -> dict[str, Any]:
-        """Return drug → disease evidence + indication phase info.
+        """Return the drug's declared indications, for the caller to filter.
 
-        The output dict has two top-level keys:
-            - ``drug``: drug record with declared indications and phase
-            - ``evidences``: list of evidence rows with literature PMIDs
+        The output dict has one top-level key, ``drug``, carrying the drug
+        record and its full ``indications`` list with ``maxClinicalStage``.
+
+        ``disease_efo_id`` is accepted because it is what the caller is asking
+        about and it keeps call sites readable, but it is NOT a query variable:
+        the v4 schema returns the indication list whole and
+        ``KnowledgeGraphQuerier.query_drug_disease_edges`` filters it. It is
+        therefore deliberately excluded from the cache key — see
+        ``_drug_disease_cached``.
+
+        There is no ``size`` parameter. The pre-v4 query had one; the current
+        ``Drug.indications`` field accepts no arguments at all, so a ``size``
+        knob here would have been an inert lie in the API surface. The list is
+        returned complete (verified live, and pinned by
+        ``test_drug_indications_are_returned_whole_not_paginated``).
         """
-        return _drug_disease_cached(
-            self, drug_chembl_id=drug_chembl_id, disease_efo_id=disease_efo_id, size=size
-        )
+        return _drug_disease_cached(self, drug_chembl_id=drug_chembl_id)
 
-    def _drug_disease_uncached(
-        self,
-        *,
-        drug_chembl_id: str,
-        disease_efo_id: str,
-        size: int,
-    ) -> dict[str, Any]:
-        return self.query_raw(
-            _DRUG_DISEASE_QUERY,
-            {"drugId": drug_chembl_id, "diseaseId": disease_efo_id, "size": size},
-        )
+    def _drug_disease_uncached(self, *, drug_chembl_id: str) -> dict[str, Any]:
+        return self.query_raw(_DRUG_DISEASE_QUERY, {"drugId": drug_chembl_id})
 
     def search_drug(self, name: str) -> Optional[str]:
         """Return the top ChEMBL ID for a drug name, or None."""
@@ -228,12 +227,13 @@ def _drug_disease_cached(
     client: OpenTargetsClient,
     *,
     drug_chembl_id: str,
-    disease_efo_id: str,
-    size: int,
 ) -> dict[str, Any]:
-    return client._drug_disease_uncached(
-        drug_chembl_id=drug_chembl_id, disease_efo_id=disease_efo_id, size=size
-    )
+    # Keyed on the drug ALONE, because the v4 query takes only ``$drugId``: it
+    # returns the drug's whole indication list and the caller filters it. Keying
+    # on the disease too meant a cache build over N features fetched the
+    # identical payload N times (74 round-trips on the Optum manifest where 1
+    # suffices).
+    return client._drug_disease_uncached(drug_chembl_id=drug_chembl_id)
 
 
 @lru_cache(maxsize=_LRU_MAXSIZE)
