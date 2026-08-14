@@ -25,6 +25,31 @@ Data contracts (F7 — there are exactly TWO, do not invent variants):
 
 Anti-mocking invariant (CLAUDE.md): every tool either computes from real inputs
 or fail-closes cleanly. No silent placeholder values.
+
+Fail-closed exception types (#1600). Every ``Raises: RuntimeError`` below is
+still accurate, because the guards raise :class:`~.errors.ToolRefusalError`,
+which SUBCLASSES ``RuntimeError``. The subclass carries one extra property: the
+executor does not retry it. The dividing line, applied site by site:
+
+* **``ToolRefusalError`` (non-retryable)** — the refusal is a property of the
+  resolved INPUTS, so re-running the identical call is futile by construction:
+  no DataFrame supplied, a missing metric/treatment/id column, a treatment
+  column with one class, fewer than 2 comparable entity groups, a non-finite
+  upstream value threaded in as an input. This is the large majority of the
+  guards.
+* **plain ``RuntimeError`` (still retried)** — the failure reports the OUTCOME
+  of a computation rather than a property of the inputs:
+  ``causal_effect_estimator``'s pipeline ``status='failed'`` / absent or
+  non-finite ``consensus_effect``, and ``refutation_runner``'s DoWhy-executor
+  failure / missing refutation suite. That machinery resamples (bootstrap,
+  placebo, random-common-cause) with no pinned ``random_state``, so a retry is
+  not futile by construction. Each such site carries an inline note.
+
+``cohort_builder``'s two guards are non-retryable despite sitting downstream of
+the ``cohort_resolution`` service: that service returns ``None`` only for an
+unrecognized brand/region or a genuinely empty result — both stable across a
+retry — while real infrastructure faults PROPAGATE as their own exception types
+and therefore still reach the executor's retrying arm unchanged.
 """
 
 from __future__ import annotations
@@ -47,7 +72,7 @@ from src.tool_registry import (
     composable_tool,
 )
 
-from .errors import ToolInputError
+from .errors import ToolInputError, ToolRefusalError
 
 # Canonical kwargs keys under which callers may supply the real DataFrame for
 # causal_effect_estimator. Listed in priority order; the first non-None value
@@ -342,7 +367,7 @@ def cohort_builder(
         region = kwargs.get("region")
         df = cohort_resolution.resolve_cohort_frame(brand, region)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cohort_builder: no real patient population available for "
             f"brand={brand!r} (region={kwargs.get('region')!r}) — the "
             "cohort_resolution service returned no cohort and no DataFrame was "
@@ -352,7 +377,7 @@ def cohort_builder(
     # --- 2. Locate a real patient-id column (fail closed if absent). ---
     id_col = _find_patient_id_column(df)
     if id_col is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cohort_builder: resolved cohort has no recognizable patient-id "
             f"column (columns={list(df.columns)!r}). Refusing to fabricate "
             "patient IDs from row positions."
@@ -526,14 +551,14 @@ def cohort_validator(
     - No DataFrame supplied -> ``RuntimeError`` (cannot measure completeness).
     """
     if not isinstance(cohort_result, dict):
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cohort_validator: `cohort_result` must be a dict (the output of "
             f"cohort_builder); got {type(cohort_result).__name__}={cohort_result!r}. "
             "Refusing to proceed."
         )
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cohort_validator requires a real cohort DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
             f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate a "
@@ -619,7 +644,7 @@ def cohort_statistics(
     - No DataFrame supplied -> ``RuntimeError``.
     """
     if not isinstance(cohort_result, dict):
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cohort_statistics: `cohort_result` must be a dict (the output of "
             f"cohort_builder); got {type(cohort_result).__name__}={cohort_result!r}. "
             "Refusing to proceed — pass the structured cohort result, not a "
@@ -627,7 +652,7 @@ def cohort_statistics(
         )
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cohort_statistics requires a real cohort DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
             f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate "
@@ -797,7 +822,7 @@ def causal_effect_estimator(
     # --- 1. Locate the caller's real DataFrame (fail-closed if missing). ---
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "causal_effect_estimator requires a real DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got "
             f"kwargs keys={sorted(kwargs.keys())!r}. The tool does not "
@@ -841,6 +866,14 @@ def causal_effect_estimator(
     pipeline_output = _run_pipeline_sync(pipeline, pipeline_input)
 
     # --- 4. Validate the pipeline produced a usable consensus effect. ---
+    #
+    # These three stay plain ``RuntimeError`` (i.e. RETRYABLE) while the input
+    # guards above became ``ToolRefusalError`` (#1600). They do not describe the
+    # inputs — they report the OUTCOME of an estimation run, and that machinery
+    # is genuinely stochastic (bootstrap resampling, placebo simulations, no
+    # pinned ``random_state``), so a second attempt over the same frame is not
+    # futile by construction. Only refusals that cannot succeed on retry BY
+    # CONSTRUCTION are made non-retryable.
     status = pipeline_output.get("status")
     consensus_effect = pipeline_output.get("consensus_effect")
 
@@ -1072,7 +1105,7 @@ def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "refutation_runner requires the real source DataFrame supplied via "
             f"one of {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r} (estimate_id={estimate_id!r}). The live "
@@ -1084,7 +1117,7 @@ def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
     treatment = _first_kwarg(kwargs, ("treatment", "treatment_var"))
     outcome = _first_kwarg(kwargs, ("outcome", "outcome_var"))
     if not treatment or not outcome:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "refutation_runner requires the planner-bound treatment and outcome "
             f"column names to run real DoWhy refutation; got treatment={treatment!r}, "
             f"outcome={outcome!r}. Refusing to fabricate refutation results."
@@ -1177,14 +1210,14 @@ def _run_dowhy_refutation(
     try:
         columns = set(df.columns)
     except Exception as exc:  # noqa: BLE001 - non-DataFrame input
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"refutation_runner: supplied data is not a DataFrame ({exc}). "
             "Refusing to fabricate refutation results."
         ) from exc
 
     missing = [c for c in [treatment, outcome, *confounders] if c not in columns]
     if missing:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"refutation_runner: columns {missing!r} are not in the DataFrame "
             f"(columns={sorted(columns)!r}). Refusing to fabricate refutation "
             "results."
@@ -1206,6 +1239,11 @@ def _run_dowhy_refutation(
 
     result = _run_coro_sync(DoWhyExecutor().execute(state, config))  # type: ignore[arg-type]
 
+    # Both guards below stay plain ``RuntimeError`` (RETRYABLE) while the input
+    # guards above became ``ToolRefusalError`` (#1600): they report what the
+    # DoWhy run PRODUCED, not what was supplied. The refutation suite resamples
+    # (bootstrap, placebo, random-common-cause, data-subset) with no pinned
+    # ``random_state``, so a retry can legitimately reach a different outcome.
     if not result.get("success"):
         raise RuntimeError(
             "refutation_runner: DoWhy executor failed -- "
@@ -1275,7 +1313,7 @@ def sensitivity_analyzer(ate: float, ci_lower: float, **kwargs) -> Dict[str, Any
             refuses to emit a fabricated E-value.
     """
     if not (math.isfinite(ate) and math.isfinite(ci_lower)):
-        raise RuntimeError(
+        raise ToolRefusalError(
             "sensitivity_analyzer requires finite `ate` and `ci_lower`; got "
             f"ate={ate!r}, ci_lower={ci_lower!r}. Refusing to fabricate an "
             "E-value — per anti-mocking discipline non-finite inputs surface "
@@ -1354,7 +1392,7 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cate_analyzer requires a real DataFrame supplied via one of the "
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate segment "
@@ -1362,14 +1400,14 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             "as a structured error rather than a plausible-but-fake placeholder."
         )
     if not segments:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "cate_analyzer requires at least one segmentation column in "
             "`segments`; got an empty list."
         )
     segment_col = segments[0]
     for col in (treatment, outcome, segment_col):
         if col not in df.columns:
-            raise RuntimeError(
+            raise ToolRefusalError(
                 f"cate_analyzer: column {col!r} not found in the supplied "
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
                 "fabricate a result."
@@ -1439,7 +1477,7 @@ def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> SegmentRanking:
         elif isinstance(cate_results.get("entity_values"), dict):
             effect_map = cate_results["entity_values"]
     if not effect_map:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "segment_ranker requires an upstream result carrying a non-empty "
             "`effect_by_segment` (from cate_analyzer) or `entity_values` (from "
             f"gap_calculator); got {cate_results!r}. Refusing to fabricate a "
@@ -1508,12 +1546,20 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     values (real filtering — not fabrication).
 
     Fail-closed: no DataFrame, missing metric column, no resolvable grouping
-    column, or fewer than 2 distinct entity groups after filtering (#1574) ->
-    ``RuntimeError``. The last guard is what keeps a single-brand estimation
-    frame from being reported as a comparison of the focal brand against
-    itself; its reason carries an ``estimation_data_scope`` payload so
-    synthesis can disclose the scope actually covered
-    (see :func:`_gap_comparability_reason`).
+    column, or fewer than 2 entity groups with a FINITE metric mean after
+    filtering (#1574, tightened by #1599) -> ``ToolRefusalError`` (a
+    ``RuntimeError`` subclass the executor does not retry, since the refusal is
+    deterministic over the resolved inputs). The last guard is what keeps a
+    single-brand estimation frame from being reported as a comparison of the
+    focal brand against itself, and keeps a group whose metric is entirely null
+    from hijacking the top/bottom selection; its reason carries an
+    ``estimation_data_scope`` payload so synthesis can disclose the scope
+    actually covered (see :func:`_gap_comparability_reason`).
+
+    Groups whose metric mean is non-finite are excluded from the comparison
+    basis and from ``entity_values`` — a gap is a spread between two MEASURED
+    values, and ``max``/``min`` silently return the first key when a NaN is in
+    play (#1599).
 
     Args:
         metric: Numeric column to compare across entities.
@@ -1525,7 +1571,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "gap_calculator requires a real DataFrame supplied via one of the "
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate entity "
@@ -1533,33 +1579,56 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             "a structured error rather than a plausible-but-fake placeholder."
         )
     if metric not in df.columns:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"gap_calculator: metric column {metric!r} not found in the supplied "
             f"DataFrame (columns={list(df.columns)!r})."
         )
 
     group_col = _resolve_grouping_column(df, kwargs.get("group_by"), entity_type)
     if group_col is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "gap_calculator: could not resolve a grouping column from group_by="
             f"{kwargs.get('group_by')!r} / entity_type={entity_type!r}; "
             f"DataFrame columns={list(df.columns)!r}. Refusing to fabricate."
         )
 
     grouped = df.groupby(group_col, dropna=False)[metric].mean()
-    entity_values: Dict[str, float] = {str(k): float(v) for k, v in grouped.items()}
-    groups_present = sorted(entity_values)
+    group_means: Dict[str, float] = {str(k): float(v) for k, v in grouped.items()}
+    groups_present = sorted(group_means)
     if entities:
         wanted = {str(e) for e in entities}
-        entity_values = {k: v for k, v in entity_values.items() if k in wanted}
+        group_means = {k: v for k, v in group_means.items() if k in wanted}
+    groups_matched = sorted(group_means)
+
+    # #1599. A group whose metric column is entirely null WITHIN the group still
+    # counts as a group -- ``mean()`` yields NaN for it -- so the #1574 count
+    # guard passed it through. Two consequences, both measured:
+    #
+    #   * two all-NaN groups produced ``gap=nan``; and
+    #   * a SINGLE non-finite group hijacked ``max``/``min``. Every comparison
+    #     against NaN is false, so the first-iterated key wins BOTH slots:
+    #     ``{'AAA': nan, 'Ibrance': 0.7, 'Kisqali': 0.5}`` returned
+    #     ``top == bottom == 'AAA'`` with ``gap=nan``, discarding a real 0.20
+    #     spread. That is the #1574 top-equals-bottom shape through another
+    #     door, so raising the COUNT threshold alone would not have fixed it.
+    #
+    # A gap is a spread between two MEASURED values, so non-finite groups are
+    # excluded from the comparison basis outright -- and therefore from
+    # ``entity_values``, which must stay self-consistent with the gap it
+    # explains (a NaN there is also not JSON-compliant for strict consumers).
+    entity_values: Dict[str, float] = {k: v for k, v in group_means.items() if math.isfinite(v)}
+    groups_non_finite = [k for k in groups_matched if k not in entity_values]
+
     if len(entity_values) < 2:
-        raise RuntimeError(
+        raise ToolRefusalError(
             _gap_comparability_reason(
                 entity_type=entity_type,
                 group_col=group_col,
                 groups_present=groups_present,
-                groups_matched=sorted(entity_values),
+                groups_matched=groups_matched,
+                groups_non_finite=groups_non_finite,
                 entities=entities,
+                metric=metric,
                 row_count=len(df),
             )
         )
@@ -1586,14 +1655,31 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
 # as a complete one.
 _MAX_LISTED_ENTITY_GROUPS = 8
 _MAX_ENTITY_LABEL_CHARS = 28
+# #1599's non-finite list is the FOURTH entity list the reason can carry, and it
+# is a SUBSET of ``entity_groups_matched`` (already listed), so it gets a tighter
+# cap: naming a few examples is what the reader needs, and the ``_count``
+# companion still reports the true total. Measured worst case with this cap:
+# see ``test_non_finite_reason_stays_inside_the_composer_carry_limit``.
+_MAX_LISTED_NON_FINITE_GROUPS = 4
+# The metric name is planner/frame-supplied, so it is clipped like any other
+# untrusted label before it enters a length-bounded message.
+_MAX_METRIC_LABEL_CHARS = 32
 
 
-def _clip_entity_labels(values: List[str]) -> List[str]:
-    """Cap an entity list to ``_MAX_LISTED_ENTITY_GROUPS`` clipped labels."""
+def _clip_entity_labels(values: List[str], *, limit: int = _MAX_LISTED_ENTITY_GROUPS) -> List[str]:
+    """Cap an entity list to ``limit`` labels, each clipped in length."""
     return [
         v if len(v) <= _MAX_ENTITY_LABEL_CHARS else v[: _MAX_ENTITY_LABEL_CHARS - 1] + "…"
-        for v in values[:_MAX_LISTED_ENTITY_GROUPS]
+        for v in values[:limit]
     ]
+
+
+def _clip_metric_label(metric: Optional[str]) -> str:
+    """Clip a metric column name for inclusion in a bounded failure reason."""
+    text = str(metric or "")
+    if len(text) <= _MAX_METRIC_LABEL_CHARS:
+        return text
+    return text[: _MAX_METRIC_LABEL_CHARS - 1] + "…"
 
 
 def _gap_comparability_reason(
@@ -1604,6 +1690,8 @@ def _gap_comparability_reason(
     groups_matched: List[str],
     entities: List[str],
     row_count: int,
+    groups_non_finite: Optional[List[str]] = None,
+    metric: Optional[str] = None,
 ) -> str:
     """Build the #1574 fail-closed reason for an uncomparable gap request.
 
@@ -1635,16 +1723,56 @@ def _gap_comparability_reason(
     """
     label = (entity_type or group_col or "entity").strip().lower() or "entity"
     requested = [str(e) for e in entities]
-    scope = {
+    non_finite = list(groups_non_finite or [])
+    # The reason has a FIXED total list budget, because it is carried verbatim
+    # into the composer's total-failure envelope, which truncates from the END —
+    # where ``estimation_data_scope`` sits. The #1599 branch carries a FOURTH
+    # entity list, so in that branch every list gets a smaller per-list cap
+    # rather than the payload growing past the carry limit and eliding itself.
+    # Measured: 8-wide in the new branch = 2315 chars (over); halved = see
+    # ``test_non_finite_reason_stays_inside_the_composer_carry_limit``. The
+    # ``_count`` companions always report the true totals, so a tighter cap
+    # narrows the examples, never the disclosed magnitude.
+    listed = _MAX_LISTED_ENTITY_GROUPS // 2 if non_finite else _MAX_LISTED_ENTITY_GROUPS
+    scope: Dict[str, Any] = {
         "grouping_column": group_col,
         "row_count": int(row_count),
-        "entity_groups_present": _clip_entity_labels(groups_present),
+        "entity_groups_present": _clip_entity_labels(groups_present, limit=listed),
         "entity_groups_present_count": len(groups_present),
-        "entity_groups_matched": _clip_entity_labels(groups_matched),
-        "entities_requested": _clip_entity_labels(requested),
-        "entities_requested_count": len(requested),
+        "entity_groups_matched": _clip_entity_labels(groups_matched, limit=listed),
     }
-    if groups_matched:
+    if non_finite:
+        # Placed next to ``entity_groups_matched`` (the set it is a subset of)
+        # rather than appended, so the two are read together.
+        scope["entity_groups_non_finite"] = _clip_entity_labels(
+            non_finite, limit=_MAX_LISTED_NON_FINITE_GROUPS
+        )
+        scope["entity_groups_non_finite_count"] = len(non_finite)
+    scope["entities_requested"] = _clip_entity_labels(requested, limit=listed)
+    scope["entities_requested_count"] = len(requested)
+
+    requirement = f"at least 2 distinct {label} groups"
+    verdict = "a plausible-but-fake finding"
+    if non_finite:
+        # #1599. The groups are real and distinct; their metric means are not
+        # numbers, so there is nothing to take a spread BETWEEN. The list is
+        # deliberately NOT re-rendered here — it is in the scope payload below,
+        # and a second rendering is what pushes a wide list past the composer's
+        # carry limit (the same call the no-match branch makes).
+        metric_label = f"{_clip_metric_label(metric)!r} " if metric else ""
+        comparable = len(groups_matched) - len(non_finite)
+        requirement = f"at least 2 distinct {label} groups with a finite {metric_label}mean"
+        observed = (
+            f"{comparable} of the {len(groups_matched)} matched {label} groups qualify — the "
+            f"rest carry no non-null {metric_label}values in the supplied estimation data, so "
+            "their group mean is NaN"
+        )
+        refusal = (
+            "reporting a spread against a NaN group mean, which also silently mirrors one "
+            "group into both the top and the bottom slot"
+        )
+        verdict = "a broken, uninterpretable finding"
+    elif groups_matched:
         observed = (
             f"only 1 distinct {label} group "
             f"({_clip_entity_labels(groups_matched)[0]!r}) is present "
@@ -1661,13 +1789,13 @@ def _gap_comparability_reason(
         observed = f"no {label} group matched the requested entities on column {group_col!r}"
         refusal = "reporting a spread over groups this estimation data does not contain"
     return (
-        f"gap_calculator: comparing requires at least 2 distinct {label} groups, but "
+        f"gap_calculator: comparing requires {requirement}, but "
         f"{observed}. The requested comparison entities are not modeled as comparable "
         f"{label} entities in this estimation data, which covers "
         f"{scope['entity_groups_present']!r} on column {group_col!r} — that is a "
         "statement about the scope of THIS estimation frame, NOT a claim that the "
         f"requested entities have no data anywhere on the platform. Refusing to "
-        f"fabricate a comparison: {refusal} would be a plausible-but-fake finding, so "
+        f"fabricate a comparison: {refusal} would be {verdict}, so "
         "an uncomparable request surfaces as a structured error. Report the covered "
         f"scope instead. estimation_data_scope={scope!r}"
     )
@@ -1786,7 +1914,7 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
             unit of gap into monetary value).
     """
     if not isinstance(gap_analysis, dict) or "gap" not in gap_analysis:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "roi_estimator requires an upstream gap_analysis carrying a `gap` "
             f"value (from gap_calculator); got {gap_analysis!r}. Refusing to "
             "fabricate an ROI — per anti-mocking discipline, missing upstream "
@@ -1794,9 +1922,11 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
         )
     gap_raw = gap_analysis.get("gap")
     if not isinstance(gap_raw, (int, float)) or not math.isfinite(float(gap_raw)):
-        raise RuntimeError(f"roi_estimator: gap value is not a finite number (got {gap_raw!r}).")
+        raise ToolRefusalError(
+            f"roi_estimator: gap value is not a finite number (got {gap_raw!r})."
+        )
     if not isinstance(investment, (int, float)) or investment <= 0:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"roi_estimator requires investment > 0; got {investment!r}. ROI is "
             "undefined for a non-positive investment; refusing to fabricate."
         )
@@ -2012,7 +2142,7 @@ def psi_calculator(
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "psi_calculator requires a real DataFrame supplied via one of the "
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate a PSI — "
@@ -2020,7 +2150,7 @@ def psi_calculator(
         )
     for col in (feature, period_column):
         if col not in df.columns:
-            raise RuntimeError(
+            raise ToolRefusalError(
                 f"psi_calculator: column {col!r} not found in the supplied "
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
                 "fabricate a result."
@@ -2028,7 +2158,7 @@ def psi_calculator(
     baseline = df.loc[df[period_column] == baseline_period, feature].dropna()
     current = df.loc[df[period_column] == current_period, feature].dropna()
     if len(baseline) == 0 or len(current) == 0:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"psi_calculator: baseline_period={baseline_period!r} matched "
             f"{len(baseline)} rows and current_period={current_period!r} matched "
             f"{len(current)} rows in column {period_column!r}; both must be "
@@ -2085,21 +2215,21 @@ def distribution_comparator(
 
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "distribution_comparator requires a real DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
             f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate KS "
             "statistics — missing data must surface as a structured error."
         )
     if period_column not in df.columns:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"distribution_comparator: period column {period_column!r} not found "
             f"in the supplied DataFrame (columns={list(df.columns)!r})."
         )
     p1_mask = df[period_column] == period_1
     p2_mask = df[period_column] == period_2
     if int(p1_mask.sum()) == 0 or int(p2_mask.sum()) == 0:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"distribution_comparator: period_1={period_1!r} matched "
             f"{int(p1_mask.sum())} rows and period_2={period_2!r} matched "
             f"{int(p2_mask.sum())} rows in column {period_column!r}; both must "
@@ -2109,7 +2239,7 @@ def distribution_comparator(
     any_drift = False
     for feature in features:
         if feature not in df.columns:
-            raise RuntimeError(
+            raise ToolRefusalError(
                 f"distribution_comparator: feature {feature!r} not found in the "
                 f"supplied DataFrame (columns={list(df.columns)!r})."
             )
@@ -2198,7 +2328,7 @@ def risk_scorer(
 
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "risk_scorer requires a real DataFrame supplied via one of the "
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate entity IDs "
@@ -2211,12 +2341,12 @@ def risk_scorer(
     id_column = kwargs.get("id_column", "patient_id")
     outcome = kwargs.get("outcome", "discontinuation_flag")
     if outcome not in df.columns:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"risk_scorer: outcome column {outcome!r} not found in the supplied "
             f"DataFrame (columns={list(df.columns)!r})."
         )
     if id_column not in df.columns:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"risk_scorer: id_column {id_column!r} not found in the supplied "
             f"DataFrame (columns={list(df.columns)!r}). Refusing to fabricate "
             "entity IDs."
@@ -2227,21 +2357,21 @@ def risk_scorer(
         wanted = {str(e) for e in entity_ids}
         work = df[df[id_column].astype(str).isin(wanted)]
         if len(work) == 0:
-            raise RuntimeError(
+            raise ToolRefusalError(
                 f"risk_scorer: no rows matched entity_ids={entity_ids!r} on "
                 f"column {id_column!r}. Refusing to fabricate."
             )
 
     feature_cols = [c for c in work.select_dtypes(include="number").columns if c != outcome]
     if not feature_cols:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "risk_scorer: no usable numeric feature columns to fit a model "
             f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
         )
 
     y = work[outcome].astype(int)
     if y.nunique() < 2:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "risk_scorer: the outcome column has fewer than 2 classes in the "
             "supplied data; cannot fit a discriminative risk model. Refusing to "
             "fabricate scores."
@@ -2327,7 +2457,7 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
 
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "propensity_estimator requires a real DataFrame supplied via one of "
             f"the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate propensity "
@@ -2335,24 +2465,24 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
             "a structured error rather than a plausible-but-fake placeholder."
         )
     if treatment not in df.columns:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"propensity_estimator: treatment column {treatment!r} not found in "
             f"the supplied DataFrame (columns={list(df.columns)!r})."
         )
     if not covariates:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "propensity_estimator requires at least one covariate column; got an empty list."
         )
     missing = [c for c in covariates if c not in df.columns]
     if missing:
-        raise RuntimeError(
+        raise ToolRefusalError(
             f"propensity_estimator: covariate columns {missing!r} not found in "
             f"the supplied DataFrame (columns={list(df.columns)!r})."
         )
 
     t = df[treatment].astype(int)
     if t.nunique() < 2:
-        raise RuntimeError(
+        raise ToolRefusalError(
             "propensity_estimator: the treatment column has fewer than 2 classes; "
             "cannot fit a propensity model. Refusing to fabricate."
         )
