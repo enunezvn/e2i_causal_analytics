@@ -108,10 +108,14 @@ class TestKpiFastPathReadsTheSSOT:
         fast path may only ever raise this domain."""
         from src.agents.orchestrator.classifier.domain_mapper import KPI_LOOKUP_CONFIDENCE
 
-        query = "whats TRx mean? explain how"
-        keyword_only = DomainMapper()._score_domain(
-            Domain.EXPLANATION, FeatureExtractor().extract(query)
-        )[0]
+        # describe / how / understand — three explanation keywords, one
+        # sentence, no connector, so neither veto fires and the fast path is
+        # reached with a stronger keyword score already in hand.
+        query = "what is the TRx, describe how it is calculated to help me understand"
+        features = FeatureExtractor().extract(query)
+        assert features.structural.has_compound_question is False, "fixture trips the compound veto"
+
+        keyword_only = DomainMapper()._score_domain(Domain.EXPLANATION, features)[0]
         assert keyword_only > KPI_LOOKUP_CONFIDENCE, "fixture no longer exercises the floor"
 
         top = _map(query).domains_detected[0]
@@ -223,6 +227,32 @@ class TestNarrowingKeepsContestedRowsAbstaining:
     def test_compound_veto_covers_imperative_second_facets(self, query):
         feats = FeatureExtractor().extract(query)
         assert feats.structural.has_compound_question is True, query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # A connector is not the only way to ask twice. KPI_VALUE_LOOKUP_RE
+            # is \\A-anchored but NOT end-anchored, so it matches the first
+            # sentence and the whole query would take the fast path, dropping
+            # the second facet (codex iter-4 HIGH).
+            "What is TRx for Kisqali? Which region has the largest gap opportunity?",
+            "What is TRx for Kisqali; which region has the largest gap?",
+            "What is TRx for Kisqali. Show me the top regions.",
+        ],
+    )
+    def test_compound_veto_covers_second_sentence_asks(self, query):
+        assert FeatureExtractor().extract(query).structural.has_compound_question is True, query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Two segments, ONE ask — must stay a single lookup.
+            "whats TRx mean? total rx's?",  # bench-0253
+            "What is TRx for Kisqali? Thanks.",
+        ],
+    )
+    def test_a_second_segment_without_an_ask_is_not_compound(self, query):
+        assert FeatureExtractor().extract(query).structural.has_compound_question is False, query
 
     def test_two_metrics_joined_by_and_is_not_compound(self):
         """ "kisqali and remibrutinib" is one ask over two entities, not two asks."""

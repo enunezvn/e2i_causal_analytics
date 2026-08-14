@@ -38,6 +38,32 @@ COMPOUND_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A connector is not the only way to ask twice. "What is TRx for Kisqali? Which
+# region has the largest gap?" is two SENTENCES with no "and" anywhere, and the
+# KPI SSOT pattern is \A-anchored but not end-anchored, so it matches the first
+# sentence and the whole query would take the fast path (codex iter-4 HIGH).
+# Detected structurally: two or more sentence-like segments that each open an
+# ask. The head list is what makes this safe — "whats TRx mean? total rx's?"
+# (gold bench-0253) has two segments but only ONE ask, so it stays a single
+# lookup.
+_SENTENCE_SPLIT_RE = re.compile(r"[?;.!\n]+")
+_ASK_HEAD_RE = re.compile(
+    r"\b(what'?s?|which|how|why|where|who|whose|when"
+    r"|compare|contrast|show|list|display|give|tell|find|identify|rank|break)\b",
+    re.IGNORECASE,
+)
+
+
+def has_second_sentence_ask(query: str) -> bool:
+    """Two or more sentence-like segments that each open an ask."""
+    asks = 0
+    for segment in _SENTENCE_SPLIT_RE.split(query):
+        if len(segment.split()) >= 2 and _ASK_HEAD_RE.search(segment):
+            asks += 1
+            if asks >= 2:
+                return True
+    return False
+
 
 class FeatureExtractor:
     """
@@ -288,7 +314,7 @@ class FeatureExtractor:
 
         return StructuralFeatures(
             question_count=question_count,
-            has_compound_question=compound_matches > 0,
+            has_compound_question=compound_matches > 0 or has_second_sentence_ask(query),
             clause_count=max(clause_count, 1),
             has_conditional=has_conditional,
             has_comparison=has_comparison,
