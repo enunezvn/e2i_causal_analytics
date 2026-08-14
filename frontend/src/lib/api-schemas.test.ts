@@ -280,12 +280,50 @@ describe('Chat Schemas', () => {
         intent_confidence: 0.95,
         routing_rationale: 'Causal keywords with high pattern confidence',
         routing_pattern: 'SINGLE_AGENT',
+        routing_authority: 'pipeline',
         classification_latency_ms: 2.4,
         used_llm_layer: false,
       };
 
       const result = ChatResponseSchema.safeParse(fullResponse);
       expect(result.success).toBe(true);
+    });
+
+    // #1582: the object schema strips unknown keys, so routing_authority only
+    // reaches callers if it is declared. These pin that it survives parsing on
+    // the shape that motivated the field — a shadow-mode turn whose
+    // routing_pattern says CLARIFICATION_NEEDED while legacy routing answered.
+    it('should preserve routing_authority on an abstaining-pattern turn', () => {
+      const shadowTurn = {
+        success: true,
+        session_id: 'sess-123',
+        response: 'TRx in west: 7,128',
+        orchestrator_used: true,
+        agents_dispatched: ['explainer'],
+        routed_agent: 'explainer',
+        intent: 'kpi_query',
+        routing_pattern: 'CLARIFICATION_NEEDED',
+        routing_authority: 'legacy',
+      };
+
+      const result = ChatResponseSchema.safeParse(shadowTurn);
+      expect(result.success).toBe(true);
+      expect(result.success && result.data.routing_authority).toBe('legacy');
+      // the pipeline's own decision is preserved verbatim, not relabeled
+      expect(result.success && result.data.routing_pattern).toBe('CLARIFICATION_NEEDED');
+    });
+
+    it('should accept a missing or null routing_authority', () => {
+      const base = {
+        success: true,
+        session_id: 'sess-123',
+        response: 'ok',
+      };
+
+      expect(ChatResponseSchema.safeParse(base).success).toBe(true);
+      expect(ChatResponseSchema.safeParse({ ...base, routing_authority: null }).success).toBe(
+        true
+      );
     });
 
     it('should handle error response', () => {
