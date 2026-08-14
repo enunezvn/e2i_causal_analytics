@@ -1,20 +1,28 @@
-"""Integration test for ChEMBL drug-disease evidence enrichment (#245).
+"""Integration test for the imatinib <-> CML drug-disease edge (#245, #1607).
 
-Pins the imatinib ↔ chronic myeloid leukemia (ABL1 target) end-to-end
-flow through ``KnowledgeGraphQuerier.query_drug_disease_edges``:
+Pins the end-to-end flow through
+``KnowledgeGraphQuerier.query_drug_disease_edges``: Open Targets returns the
+drug's indication list, and the querier emits one ``KGEdge`` with
+``predicate="treats"`` because the indication is approved.
 
-  - Open Targets returns one ``known_drug`` evidence row with literature
-    PMIDs and the drug's target gene symbol (ABL1).
-  - The querier emits one ``KGEdge`` with ``predicate="treats"``.
-  - The ChEMBL cross-walk resolves ABL1 → CHEMBL1862.
-  - Every ``EvidenceItem`` on the edge carries (1) one of the PMIDs, (2)
-    the Open Targets datasource score, and (3) ``chembl_target_id =
-    "CHEMBL1862"``.
+**What this test used to pin, and why it no longer can.** Issue #245 threaded
+per-PMID provenance onto each edge: literature PMIDs and a ChEMBL target id
+cross-walked from the evidence row's target gene (ABL1 -> CHEMBL1862). Open
+Targets has since REMOVED the top-level ``evidences`` field that supplied all
+three, and ``Drug`` no longer exposes ``linkedTargets``, so there is no
+drug->gene path left. The enrichment is not reachable and the assertions for it
+have been dropped rather than mocked into looking alive — a mocked assertion for
+an impossible code path is exactly what let the underlying query rot unnoticed
+(it returned HTTP 400 on every live call while this suite stayed green).
+
+The removal is pinned by
+``test_kg_layer2_live_contracts.test_open_targets_graphql_rejects_the_removed_evidences_field``,
+which fails if Open Targets restores the field — at which point the #245
+enrichment becomes implementable again.
 
 The HTTP layer is mocked via ``httpx.MockTransport`` so this test is
-deterministic on CI (no live ChEMBL or Open Targets dependency).
-Unit-level transport behaviour is covered in
-``tests/unit/test_data/test_kg/test_chembl.py``.
+deterministic on CI. The live schema is exercised by
+``tests/integration/test_kg/test_kg_layer2_live_contracts.py``.
 """
 
 from __future__ import annotations
@@ -49,7 +57,6 @@ def _ot_handler() -> Any:
         body = json.loads(request.content.decode("utf-8"))
         variables = body.get("variables", {})
         assert variables.get("drugId") == "CHEMBL941"
-        assert variables.get("diseaseId") == "EFO_0000222"
         return httpx.Response(
             200,
             json={
@@ -57,38 +64,20 @@ def _ot_handler() -> Any:
                     "drug": {
                         "id": "CHEMBL941",
                         "name": "IMATINIB",
+                        "maximumClinicalStage": "APPROVAL",
                         "indications": {
+                            "count": 1,
                             "rows": [
                                 {
                                     "disease": {
                                         "id": "EFO_0000222",
                                         "name": "chronic myeloid leukemia",
                                     },
-                                    "maxPhaseForIndication": 4,
+                                    "maxClinicalStage": "APPROVAL",
                                 }
-                            ]
+                            ],
                         },
-                    },
-                    "evidences": {
-                        "count": 1,
-                        "rows": [
-                            {
-                                "score": 0.95,
-                                "datatypeId": "known_drug",
-                                "datasourceId": "chembl",
-                                "literature": ["16480739", "11287973"],
-                                "drug": {"id": "CHEMBL941", "name": "IMATINIB"},
-                                "disease": {
-                                    "id": "EFO_0000222",
-                                    "name": "chronic myeloid leukemia",
-                                },
-                                "target": {
-                                    "id": "ENSG00000097007",
-                                    "approvedSymbol": "ABL1",
-                                },
-                            }
-                        ],
-                    },
+                    }
                 }
             },
         )
@@ -154,18 +143,18 @@ def test_imatinib_cml_evidence_enrichment_end_to_end() -> None:
     )
     edges = querier.query_drug_disease_edges("CHEMBL941", "EFO_0000222")
     assert len(edges) == 1, "imatinib/CML must produce exactly one drug-disease edge"
-    edge: KGEdge = edges[0]
-    # 1. Edge shape contract.
+    edge = edges[0]
+    assert isinstance(edge, KGEdge)
     assert edge.subject_id == "CHEMBL941"
+    assert edge.subject_name == "IMATINIB"
     assert edge.object_id == "EFO_0000222"
-    assert edge.predicate == "treats"
+    assert edge.object_name == "chronic myeloid leukemia"
+    assert edge.predicate == "treats", "an APPROVAL-stage indication must read as 'treats'"
     assert edge.evidence_source == "open_targets"
-    assert edge.pmids == ("16480739", "11287973")
-    # 2. Evidence threading.
-    assert len(edge.evidence) == 2
-    assert {ev.pmid for ev in edge.evidence} == {"16480739", "11287973"}
-    for ev in edge.evidence:
-        assert ev.source == "open_targets"
-        assert ev.datasource_score == pytest.approx(0.95)
-        # 3. Cross-walk ran and populated chembl_target_id.
-        assert ev.chembl_target_id == "CHEMBL1862"
+    assert edge.datasource == "chembl_indications"
+    # Honest emptiness. See the module docstring: the fields below had their
+    # upstream source removed, and asserting fabricated values here would hide
+    # that from the next reader.
+    assert edge.pmids == ()
+    assert edge.evidence == ()
+    assert edge.score is None

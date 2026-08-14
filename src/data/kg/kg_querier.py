@@ -12,10 +12,13 @@ Design:
     cache hits for free.
 
 Surface:
-    - ``query_drug_disease_edges(drug_id, disease_id)`` — Open Targets
-      evidence rows mapped to ``KGEdge`` records with PMID provenance and
-      evidence score. ``drug_id`` accepts ChEMBL IDs (preferred) or RxCUIs;
-      ``disease_id`` accepts EFO/MONDO IDs (preferred) or UMLS CUIs.
+    - ``query_drug_disease_edges(drug_id, disease_id)`` — the drug's Open
+      Targets INDICATION list, filtered to ``disease_id`` and mapped to
+      ``KGEdge`` records, with the predicate gated on clinical stage so only
+      an approved indication reads as ``treats``. ``drug_id`` is a ChEMBL ID;
+      ``disease_id`` an EFO/MONDO ID (resolve via ``OpenTargetsClient
+      .search_drug`` / ``.search_disease``). See #1607 for the schema
+      migration that replaced the removed ``evidences`` field.
     - ``query_disease_hierarchy(cui)`` — UMLS relations endpoint filtered to
       ``isa``/``parent``/``child``-shaped relations. Returns subclass and
       superclass edges so the LLM can reason about taxonomic relationships
@@ -35,16 +38,23 @@ Reference: `.claude/plans/adaptive_temporal_validity_redesign.md` Phase 2.3.
 from __future__ import annotations
 
 import logging
-import math
 from typing import Iterable, Optional
 
 from src.data.kg.chembl import ChEMBLClient
 from src.data.kg.entity_linker import EntityLinker
 from src.data.kg.open_targets import OpenTargetsClient, OpenTargetsError
-from src.data.kg.types import EvidenceItem, KGEdge
+from src.data.kg.types import KGEdge
 from src.data.kg.umls_uts import UMLSAuthError, UMLSClient, UMLSError
 
 logger = logging.getLogger(__name__)
+
+# ``maxClinicalStage`` values that constitute a regulator-approved therapeutic
+# claim. Only these earn ``predicate="treats"`` — everything else (PHASE_1 ..
+# PHASE_3, and any future stage token) degrades to ``associated_with`` so an
+# investigational pairing cannot promote a feature to
+# ``leak_drug_treats_disease`` in the voter. Unknown/absent stages fall to the
+# conservative side by construction (#1607).
+_APPROVED_CLINICAL_STAGES: frozenset[str] = frozenset({"APPROVAL", "APPROVED"})
 
 
 class KnowledgeGraphQuerier:
@@ -55,13 +65,12 @@ class KnowledgeGraphQuerier:
             None, a default client is constructed (which reads the
             ``UMLS_UTS_API_KEY`` env var).
         open_targets: A constructed OpenTargetsClient. Same fallback rules.
-        chembl: Optional ChEMBLClient. When provided, drug-disease edges
-            populate ``KGEdge.evidence[i].chembl_target_id`` by
-            cross-walking the Open Targets target gene symbol → ChEMBL
-            target ID. When ``None``, evidence is still threaded from
-            Open Targets but ``chembl_target_id`` is left ``None`` on
-            every item. v1 callers that pre-date #245 keep working
-            unchanged.
+        chembl: Optional ChEMBLClient. Accepted and closed like the other
+            clients, but no longer consulted by ``query_drug_disease_edges``:
+            the #245 enrichment it fed (``KGEdge.evidence[i].chembl_target_id``,
+            cross-walked from an Open Targets evidence row's target gene) lost
+            its input when Open Targets removed the ``evidences`` field. Kept in
+            the signature so existing callers are unaffected (#1607).
         entity_linker: Optional pre-constructed ``EntityLinker``; if
             provided, its UMLS + Open Targets clients are reused so caching
             and connection pooling are shared with the linker.
@@ -135,27 +144,39 @@ class KnowledgeGraphQuerier:
         ``EntityLinker`` + ``OpenTargetsClient.search_drug``/``search_disease``
         before invoking this method.
 
-        Each evidence row produces ONE edge whose:
+        Sourced from the drug's INDICATION list, filtered to ``disease_id``.
+        Each matching indication row produces ONE edge whose:
             - subject_id   = drug ChEMBL ID
             - object_id    = disease EFO/MONDO ID
-            - predicate    = ``"treats"`` when the row's
-                             ``datatypeId == "known_drug"`` (Open Targets'
-                             unique drug-indication datatype, Ochoa 2021
-                             NAR), else ``"associated_with"``. The voter's
-                             ``classify_kg_signal`` consumes the predicate
-                             to drive the ``leak_drug_treats_disease``
-                             classification — see PR-0 reconciliation
-                             design (docs/superpowers/specs/2026-05-08-
-                             kg-predicate-reconciliation-design.md).
+            - predicate    = ``"treats"`` when the row's ``maxClinicalStage``
+                             is an approved stage, else ``"associated_with"``.
+                             The voter's ``classify_kg_signal`` consumes the
+                             predicate to drive the
+                             ``leak_drug_treats_disease`` classification — see
+                             docs/superpowers/specs/2026-05-08-kg-predicate-
+                             reconciliation-design.md.
             - evidence_source = ``"open_targets"``
-            - score        = the evidence row's ``score`` (0–1)
-            - pmids        = literature list (Europe PMC IDs)
-            - datasource   = the row's ``datasourceId``
+            - datasource   = ``"chembl_indications"``
+            - score        = ``None``
+            - pmids        = ``()``
 
-        Returns an empty list if Open Targets has no evidence. ``OpenTargetsError``
-        is logged and re-raised so callers can distinguish "no evidence" from
-        a transport / GraphQL failure (codex H1 from PR #102 review). Drug and
-        disease names are populated from the response when available.
+        Schema migration (#1607): this previously read a top-level
+        ``evidences(drugIds:, diseaseIds:)`` field that supplied a per-row
+        ``score``, ``literature`` PMIDs and a ``target`` gene for ChEMBL
+        cross-walk enrichment. Open Targets REMOVED that field — evidence now
+        requires a gene ``ensemblIds`` argument and ``Drug`` no longer exposes
+        ``linkedTargets``, so no drug->gene path remains. The query returned
+        HTTP 400 on every live call until this migration, so ``score``/``pmids``
+        are not a regression against a working baseline: they were unreachable.
+        In exchange, ``maxClinicalStage`` supplies the phase gate that a
+        deferred codex review (PR-0 M1) asked for, so an investigational
+        pairing can no longer masquerade as a therapeutic claim.
+
+        Returns an empty list if the drug has no matching indication.
+        ``OpenTargetsError`` is logged and re-raised so callers can distinguish
+        "no evidence" from a transport / GraphQL failure (codex H1 from PR #102
+        review) — the distinction that would have surfaced the dead query
+        sooner. Drug and disease names are populated from the response.
         """
         try:
             data = self.open_targets.drug_disease_evidence(drug_id, disease_id, size=size)
@@ -167,134 +188,65 @@ class KnowledgeGraphQuerier:
                 exc,
             )
             raise
-        evidences = data.get("evidences", {})
-        # ``evidences.rows`` is a GraphQL nullable-list field (`[Evidence!]`,
-        # not `[Evidence!]!`), so the resolver may legitimately return null
-        # on partial failure. ``dict.get("rows", [])`` returns the explicit
-        # null value rather than the default ``[]``; ``or []`` collapses both
-        # the absent-key AND null-value cases to an empty list. Without
-        # this, ``for row in rows`` would raise ``TypeError: 'NoneType' is
-        # not iterable``, propagating to downstream Phase 2.5 callers.
-        rows = (evidences.get("rows") or []) if isinstance(evidences, dict) else []
+        drug = data.get("drug") or {}
+        indications = drug.get("indications") or {}
+        # ``indications.rows`` is a nullable GraphQL list, so ``or []``
+        # collapses both the absent-key and explicit-null cases; without it
+        # ``for row in rows`` would raise TypeError on a partial response.
+        rows = (indications.get("rows") or []) if isinstance(indications, dict) else []
+
         edges: list[KGEdge] = []
         for row in rows:
-            drug = row.get("drug") or {}
+            if not isinstance(row, dict):
+                continue
             disease = row.get("disease") or {}
-            literature = row.get("literature") or []
-            pmids = tuple(str(p) for p in literature if p)
-            score_raw = row.get("score")
-            # ``isinstance(float('nan'), (int, float))`` is True, so a NaN
-            # score (possible from numpy-backed JSON parsers or upstream
-            # numeric corruption) would silently propagate into KGEdge.score.
-            # NaN comparisons return False for all orderings, which would
-            # poison Phase 2.5/2.6 selection logic (max/sort/threshold) by
-            # making the broken edge invisible to ranking. ``math.isfinite``
-            # rejects NaN and ±inf; both belong as ``None`` in the public
-            # KGEdge contract.
-            score = (
-                float(score_raw)
-                if isinstance(score_raw, (int, float)) and math.isfinite(score_raw)
-                else None
-            )
-            # Open Targets datatypeId taxonomy (Ochoa 2021, NAR): the
-            # ONLY datatype carrying drug-treats-disease semantics is
-            # ``known_drug``. All other datatypes (literature,
-            # genetic_association, affected_pathway, rna_expression,
-            # somatic_mutation, animal_model) are gene/target-disease
-            # association, not therapeutic claim. Keying on
-            # ``datatypeId`` (the data-model invariant) rather than
-            # ``datasourceId`` (a contributing-pipeline detail) is
-            # future-proof: new sources Open Targets adds with
-            # ``datatypeId="known_drug"`` (e.g., ``fda_label``,
-            # ``clinical_trials_v2``) are picked up automatically.
-            #
-            # DEFERRED — phase-gating refinement (codex PR-0 review M1,
-            # 2026-05-08). A ``known_drug`` row's
-            # ``drug.indications.maxPhaseForIndication`` (already pulled
-            # by the GraphQL query at ``open_targets.py:53``) ranges from
-            # 0 (preclinical) to 4 (regulatory-approved indication). This
-            # implementation emits ``predicate="treats"`` for ANY
-            # known_drug row regardless of phase — so a Phase I
-            # exploratory trial is treated identically to an FDA-
-            # approved label. The voter's ``classify_kg_signal`` will
-            # therefore promote a Phase I row to
-            # ``leak_drug_treats_disease`` if it connects feature/target,
-            # which can produce false-positive leak verdicts for
-            # exploratory drug-disease pairings. A future PR should gate
-            # ``predicate="treats"`` on
-            # ``maxPhaseForIndication >= 4`` (or surface phase as a
-            # KGEdge field for the voter to weight). Tracked in spec
-            # ``docs/superpowers/specs/2026-05-08-kg-predicate-
-            # reconciliation-design.md`` §"Out of scope (future work)".
-            datatype_id = str(row.get("datatypeId") or "")
-            predicate = "treats" if datatype_id == "known_drug" else "associated_with"
-            # ----------------------------------------------------------
-            # Issue #245: per-evidence-item provenance threading.
-            # The KGEdge.pmids tuple remains a coarse list of PMIDs for
-            # backwards compat; KGEdge.evidence carries the structured
-            # per-PMID provenance with optional ChEMBL target cross-walk.
-            # ----------------------------------------------------------
-            chembl_target_id = self._resolve_chembl_target(row)
-            evidence_items = tuple(
-                EvidenceItem(
-                    pmid=pmid,
-                    source="open_targets",
-                    chembl_target_id=chembl_target_id,
-                    datasource_score=score,
-                )
-                for pmid in pmids
-            )
+            row_disease_id = str(disease.get("id") or "")
+            # The API returns the drug's WHOLE indication list; keep only the
+            # disease the caller asked about, so an edge always encodes the
+            # (drug, disease) pair the voter is reasoning about.
+            if row_disease_id != disease_id:
+                continue
+
+            # Phase gating (deferred codex PR-0 review M1, now implementable).
+            # ``maxClinicalStage`` is APPROVAL for a regulator-approved
+            # indication and PHASE_1/2/3 for one still under investigation.
+            # Only an approved indication is a therapeutic CLAIM; emitting
+            # ``treats`` for a Phase I pairing would let an exploratory trial
+            # promote a feature to ``leak_drug_treats_disease`` in the voter
+            # and produce a false-positive leak verdict.
+            stage = str(row.get("maxClinicalStage") or "").upper()
+            predicate = "treats" if stage in _APPROVED_CLINICAL_STAGES else "associated_with"
+
             edges.append(
                 KGEdge(
                     subject_id=str(drug.get("id") or drug_id),
                     subject_name=str(drug.get("name") or ""),
                     predicate=predicate,
-                    object_id=str(disease.get("id") or disease_id),
+                    object_id=row_disease_id or disease_id,
                     object_name=str(disease.get("name") or ""),
                     evidence_source="open_targets",
-                    score=score,
-                    pmids=pmids,
-                    datasource=row.get("datasourceId"),
-                    evidence=evidence_items,
+                    # The removed ``evidences`` field was the only source of
+                    # per-row scores and literature PMIDs; the indication list
+                    # carries neither. Left explicitly empty rather than
+                    # fabricated (see the schema note in open_targets.py).
+                    score=None,
+                    pmids=(),
+                    datasource="chembl_indications",
+                    evidence=(),
                     raw=row,
                 )
             )
         return edges
 
-    def _resolve_chembl_target(self, row: dict[str, object]) -> Optional[str]:
-        """Resolve an Open Targets evidence row's target → ChEMBL target ID.
-
-        Returns ``None`` when (a) no ChEMBL client is attached, (b) the
-        row exposes no ``target.approvedSymbol``, or (c) the ChEMBL
-        cross-walk returns no match. Errors from the ChEMBL client are
-        logged at warning level and swallowed to ``None`` so a transient
-        ChEMBL outage does not break the Open Targets evidence path
-        (the v1 contract is "ChEMBL enrichment is best-effort, not a
-        gating dependency").
-
-        Silent-miss observability: when the cross-walk returns ``None``
-        for a gene that was present in the Open Targets payload, a
-        debug-level log line is emitted so future regressions on the
-        ChEMBL filter shape are visible without escalating into the
-        warning channel (the silent-miss contract is acceptable per
-        the best-effort enrichment policy, but it must be greppable).
-        """
-        if self.chembl is None:
-            return None
-        target = row.get("target")
-        if not isinstance(target, dict):
-            return None
-        gene_symbol = target.get("approvedSymbol")
-        if not isinstance(gene_symbol, str) or not gene_symbol:
-            return None
-        try:
-            result = self.chembl.open_targets_target_to_chembl(gene_symbol)
-        except Exception as exc:  # noqa: BLE001 — best-effort enrichment
-            logger.warning("ChEMBL cross-walk failed for gene %s: %s", gene_symbol, exc)
-            return None
-        if result is None:
-            logger.debug("chembl cross-walk: no target for gene_symbol=%s", gene_symbol)
-        return result
+    # ``_resolve_chembl_target`` lived here until #1607. It cross-walked an Open
+    # Targets evidence row's target gene to a ChEMBL target id for the per-PMID
+    # provenance of issue #245. Its input — the top-level ``evidences`` Query
+    # field carrying ``target.approvedSymbol`` — was REMOVED from the Open
+    # Targets v4 schema, and ``Drug`` no longer exposes ``linkedTargets``, so
+    # there is no drug->gene path left to feed it. Removed rather than left
+    # unreachable; `test_open_targets_graphql_rejects_the_removed_evidences_field`
+    # fails if Open Targets restores the field, at which point the
+    # implementation is recoverable from git history.
 
     def query_disease_hierarchy(self, cui: str) -> list[KGEdge]:
         """UMLS taxonomic relations for a disease CUI.

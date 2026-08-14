@@ -1,0 +1,3206 @@
+[
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C2607914",
+        "object_name": "allergic disease",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79532",
+        "object_name": "Allergic Rhinitis",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C0018621",
+        "subject_name": ""
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0018621",
+        "object_name": "seasonal allergic rhinitis",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "J30.9"
+      ],
+      [
+        "UMLS",
+        "C0018621"
+      ]
+    ],
+    "feature_name": "allergic_rhinitis_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:25.380000+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "5048-4"
+      ]
+    ],
+    "feature_name": "ana_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.941430+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "5048-4"
+      ]
+    ],
+    "feature_name": "ana_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.941214+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "5048-4"
+      ]
+    ],
+    "feature_name": "ana_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.941042+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0002994",
+        "object_name": "angioedema",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "T78.3"
+      ],
+      [
+        "UMLS",
+        "C0002994"
+      ]
+    ],
+    "feature_name": "angioedema_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.322628+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F41.9"
+      ],
+      [
+        "UMLS",
+        "C0003467"
+      ]
+    ],
+    "feature_name": "anxiety_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:26.201530+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0004096",
+        "object_name": "asthma",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "J45.909"
+      ],
+      [
+        "UMLS",
+        "C0004096"
+      ]
+    ],
+    "feature_name": "asthma_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:24.530192+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2242769",
+        "object_name": "Besnier's prurigo",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "subject_id": "C0011615",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L20.9"
+      ],
+      [
+        "UMLS",
+        "C0011615"
+      ]
+    ],
+    "feature_name": "atopic_dermatitis_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:24.115616+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "58410-2"
+      ]
+    ],
+    "feature_name": "cbc_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:30.153651+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "58410-2"
+      ]
+    ],
+    "feature_name": "cbc_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:30.153521+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "58410-2"
+      ]
+    ],
+    "feature_name": "cbc_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:30.153206+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "1988-5"
+      ]
+    ],
+    "feature_name": "crp_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.346713+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "1988-5"
+      ]
+    ],
+    "feature_name": "crp_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.346580+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "1988-5"
+      ]
+    ],
+    "feature_name": "crp_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.346399+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C97163",
+        "object_name": "Childhood Depression",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0011570",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F33.9"
+      ],
+      [
+        "UMLS",
+        "C0011581"
+      ]
+    ],
+    "feature_name": "depression_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:26.889485+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0002994",
+        "object_name": "angioedema",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "T78.3"
+      ],
+      [
+        "UMLS",
+        "C0002994"
+      ]
+    ],
+    "feature_name": "dx_angioedema_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:23.806466+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L50.1"
+      ],
+      [
+        "UMLS",
+        "C0042109"
+      ]
+    ],
+    "feature_name": "dx_l50_1_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:22.798219+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L50.8"
+      ],
+      [
+        "UMLS",
+        "C0042109"
+      ]
+    ],
+    "feature_name": "dx_l50_8_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:23.102488+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L50.9"
+      ],
+      [
+        "UMLS",
+        "C0042109"
+      ]
+    ],
+    "feature_name": "dx_l50_9_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:23.102702+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0042109"
+      ]
+    ],
+    "feature_name": "dx_total_csu",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:23.102846+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "711-2"
+      ]
+    ],
+    "feature_name": "eosinophil_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.160699+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "711-2"
+      ]
+    ],
+    "feature_name": "eosinophil_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.160618+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "711-2"
+      ]
+    ],
+    "feature_name": "eosinophil_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.160453+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "3024-7"
+      ]
+    ],
+    "feature_name": "free_t4_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.562340+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "3024-7"
+      ]
+    ],
+    "feature_name": "free_t4_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.562228+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "3024-7"
+      ]
+    ],
+    "feature_name": "free_t4_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.562020+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0066896"
+      ]
+    ],
+    "feature_name": "h1_1g_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.481841+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0066896"
+      ]
+    ],
+    "feature_name": "h1_1g_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.481808+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0066896"
+      ]
+    ],
+    "feature_name": "h1_1g_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.481687+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0066896"
+      ]
+    ],
+    "feature_name": "h1_1g_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.481772+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2718076"
+      ]
+    ],
+    "feature_name": "h1_2g_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.644823+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2718076"
+      ]
+    ],
+    "feature_name": "h1_2g_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.644752+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2718076"
+      ]
+    ],
+    "feature_name": "h1_2g_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.644520+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2718076"
+      ]
+    ],
+    "feature_name": "h1_2g_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.644674+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0019613"
+      ]
+    ],
+    "feature_name": "h2_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.817199+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0019613"
+      ]
+    ],
+    "feature_name": "h2_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.817095+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0019613"
+      ]
+    ],
+    "feature_name": "h2_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.816781+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0019613"
+      ]
+    ],
+    "feature_name": "h2_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.817000+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C2607914",
+        "object_name": "allergic disease",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79532",
+        "object_name": "Allergic Rhinitis",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C0018621",
+        "subject_name": ""
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0018621",
+        "object_name": "seasonal allergic rhinitis",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "J30.9"
+      ],
+      [
+        "UMLS",
+        "C0018621"
+      ]
+    ],
+    "feature_name": "has_allergic_rhinitis",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:25.379566+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0002994",
+        "object_name": "angioedema",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "T78.3"
+      ],
+      [
+        "UMLS",
+        "C0002994"
+      ]
+    ],
+    "feature_name": "has_angioedema",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.322259+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F41.9"
+      ],
+      [
+        "UMLS",
+        "C0003467"
+      ]
+    ],
+    "feature_name": "has_anxiety",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:26.201259+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0004096",
+        "object_name": "asthma",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "J45.909"
+      ],
+      [
+        "UMLS",
+        "C0004096"
+      ]
+    ],
+    "feature_name": "has_asthma",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:24.529905+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2242769",
+        "object_name": "Besnier's prurigo",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "subject_id": "C0011615",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L20.9"
+      ],
+      [
+        "UMLS",
+        "C0011615"
+      ]
+    ],
+    "feature_name": "has_atopic_dermatitis",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:24.115346+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C97163",
+        "object_name": "Childhood Depression",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0011570",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F33.9"
+      ],
+      [
+        "UMLS",
+        "C0011581"
+      ]
+    ],
+    "feature_name": "has_depression",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:26.888974+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [
+      "UMLS CUI 'C2266824' not found: UTS 404: /content/current/CUI/C2266824"
+    ],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2266824"
+      ]
+    ],
+    "feature_name": "has_nsaid_hypersensitivity",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.300737+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "entity_unresolved",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0178468",
+        "object_name": "Autoimmune thyroid disease",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0677606",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0021376",
+        "object_name": "Chronic inflammation",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0677606",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E06.3"
+      ],
+      [
+        "UMLS",
+        "C0856243"
+      ]
+    ],
+    "feature_name": "has_thyroid_autoimmune",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.279560+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "6106-9"
+      ],
+      [
+        "UMLS",
+        "C0922951"
+      ]
+    ],
+    "feature_name": "ige_total_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.957683+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "6106-9"
+      ],
+      [
+        "UMLS",
+        "C0922951"
+      ]
+    ],
+    "feature_name": "ige_total_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.957548+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "6106-9"
+      ],
+      [
+        "UMLS",
+        "C0922951"
+      ]
+    ],
+    "feature_name": "ige_total_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.957327+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C81166",
+        "object_name": "Atacicept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MSH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C529000",
+        "object_name": "golimumab",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29333",
+        "object_name": "Prospidium Chloride",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2486",
+        "object_name": "Recombinant Interleukin-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C77593",
+        "object_name": "Anisperimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76694",
+        "object_name": "Napirimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79822",
+        "object_name": "Delmitide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79823",
+        "object_name": "Delmitide Acetate",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76692",
+        "object_name": "Firategrast",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C152902",
+        "object_name": "Voclosporin",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C80255",
+        "object_name": "Belatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C28898",
+        "object_name": "Abatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0021081"
+      ]
+    ],
+    "feature_name": "immunosupp_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.583668+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C81166",
+        "object_name": "Atacicept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MSH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C529000",
+        "object_name": "golimumab",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29333",
+        "object_name": "Prospidium Chloride",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2486",
+        "object_name": "Recombinant Interleukin-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C77593",
+        "object_name": "Anisperimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76694",
+        "object_name": "Napirimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79822",
+        "object_name": "Delmitide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79823",
+        "object_name": "Delmitide Acetate",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76692",
+        "object_name": "Firategrast",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C152902",
+        "object_name": "Voclosporin",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C80255",
+        "object_name": "Belatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C28898",
+        "object_name": "Abatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0021081"
+      ]
+    ],
+    "feature_name": "immunosupp_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.583461+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C81166",
+        "object_name": "Atacicept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MSH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C529000",
+        "object_name": "golimumab",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29333",
+        "object_name": "Prospidium Chloride",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2486",
+        "object_name": "Recombinant Interleukin-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C77593",
+        "object_name": "Anisperimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76694",
+        "object_name": "Napirimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79822",
+        "object_name": "Delmitide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79823",
+        "object_name": "Delmitide Acetate",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76692",
+        "object_name": "Firategrast",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C152902",
+        "object_name": "Voclosporin",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C80255",
+        "object_name": "Belatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C28898",
+        "object_name": "Abatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0021081"
+      ]
+    ],
+    "feature_name": "immunosupp_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.582929+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C81166",
+        "object_name": "Atacicept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MSH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C529000",
+        "object_name": "golimumab",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29333",
+        "object_name": "Prospidium Chloride",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2486",
+        "object_name": "Recombinant Interleukin-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C77593",
+        "object_name": "Anisperimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76694",
+        "object_name": "Napirimus",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79822",
+        "object_name": "Delmitide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C79823",
+        "object_name": "Delmitide Acetate",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C76692",
+        "object_name": "Firategrast",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C152902",
+        "object_name": "Voclosporin",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C80255",
+        "object_name": "Belatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C28898",
+        "object_name": "Abatacept",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0021081",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0021081"
+      ]
+    ],
+    "feature_name": "immunosupp_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.583252+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0876129"
+      ]
+    ],
+    "feature_name": "ltra_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.979120+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0876129"
+      ]
+    ],
+    "feature_name": "ltra_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.979096+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0876129"
+      ]
+    ],
+    "feature_name": "ltra_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.978974+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0876129"
+      ]
+    ],
+    "feature_name": "ltra_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.979067+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [
+      "UMLS CUI 'C2266824' not found: UTS 404: /content/current/CUI/C2266824"
+    ],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2266824"
+      ]
+    ],
+    "feature_name": "nsaid_hypersensitivity_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.321581+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "entity_unresolved",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L50.9"
+      ],
+      [
+        "UMLS",
+        "C0042109"
+      ]
+    ],
+    "feature_name": "primary_diagnosis_code",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:22.458798+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29578",
+        "object_name": "Histamine-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C2825472",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2825472"
+      ]
+    ],
+    "feature_name": "sys_steroid_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.139688+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29578",
+        "object_name": "Histamine-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C2825472",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2825472"
+      ]
+    ],
+    "feature_name": "sys_steroid_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.139654+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29578",
+        "object_name": "Histamine-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C2825472",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2825472"
+      ]
+    ],
+    "feature_name": "sys_steroid_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.139502+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C29578",
+        "object_name": "Histamine-1 Receptor Antagonist",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C2825472",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C2825472"
+      ]
+    ],
+    "feature_name": "sys_steroid_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.139614+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0178468",
+        "object_name": "Autoimmune thyroid disease",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0677606",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0021376",
+        "object_name": "Chronic inflammation",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0677606",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E06.3"
+      ],
+      [
+        "UMLS",
+        "C0856243"
+      ]
+    ],
+    "feature_name": "thyroid_autoimmune_claim_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:27.279904+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C74402",
+        "object_name": "Amelometasone",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C65994",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1881287",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0019932",
+        "object_name": "Hormones",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2264",
+        "object_name": "Adrenal Hormone",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0001617"
+      ]
+    ],
+    "feature_name": "top_steroid_days_since_last_fill",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.424183+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C74402",
+        "object_name": "Amelometasone",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C65994",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1881287",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0019932",
+        "object_name": "Hormones",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2264",
+        "object_name": "Adrenal Hormone",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0001617"
+      ]
+    ],
+    "feature_name": "top_steroid_days_supply_total",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.423971+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C74402",
+        "object_name": "Amelometasone",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C65994",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1881287",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0019932",
+        "object_name": "Hormones",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2264",
+        "object_name": "Adrenal Hormone",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0001617"
+      ]
+    ],
+    "feature_name": "top_steroid_ever_filled",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.423485+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C74402",
+        "object_name": "Amelometasone",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C65994",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1881287",
+        "object_name": "Itrocinonide",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0019932",
+        "object_name": "Hormones",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2264",
+        "object_name": "Adrenal Hormone",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "subject_id": "C0001617",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0001617"
+      ]
+    ],
+    "feature_name": "top_steroid_fill_count",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:28.423763+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [
+      "(LOINC, 9362-4) failed to resolve: no concept"
+    ],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "9362-4"
+      ]
+    ],
+    "feature_name": "tpo_ab_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.371006+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "entity_unresolved",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [
+      "(LOINC, 9362-4) failed to resolve: no concept"
+    ],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "9362-4"
+      ]
+    ],
+    "feature_name": "tpo_ab_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.370976+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "entity_unresolved",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [
+      "(LOINC, 9362-4) failed to resolve: no concept"
+    ],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "9362-4"
+      ]
+    ],
+    "feature_name": "tpo_ab_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.370895+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "entity_unresolved",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "3016-3"
+      ]
+    ],
+    "feature_name": "tsh_abnormal_flag",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.748058+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "3016-3"
+      ]
+    ],
+    "feature_name": "tsh_result_last",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.747979+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "LOINC",
+        "3016-3"
+      ]
+    ],
+    "feature_name": "tsh_tested",
+    "manifest_fingerprint_sha8": "1cdaa038",
+    "queried_at": "2026-08-14T17:16:29.747770+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "96bfd2e0",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ]
+    ]
+  }
+]

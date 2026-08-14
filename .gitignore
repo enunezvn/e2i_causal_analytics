@@ -242,6 +242,12 @@ backups/
 # Phase 2.9 Stage 2 KG cache (raw caches gitignored; .summary.md committed)
 data/kg_cache/*.json
 !data/kg_cache/.gitkeep
+# The Optum/CSU KG Layer-2 cache IS committed (#1607). An artifact the
+# pipeline depends on that exists only on one laptop repeats #600, where a
+# gitignored tier0 cache silently skipped agent execution in CI. Rebuild
+# with scripts/build_kg_cache.py --live (see docs/runbooks/kg_cache.md);
+# ad-hoc builds under other fingerprints stay ignored by the rule above.
+!data/kg_cache/1cdaa038__96bfd2e0.json
 .codex
 
 # Layer-4 A/B compile intermediates (only the winning artifact is committed
