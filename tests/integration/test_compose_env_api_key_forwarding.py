@@ -21,6 +21,12 @@ The compose file itself already names this failure class ("the same never-forwar
 gap as OPIK_ENABLED/OPENAI_API_KEY"), which is why this guard is derived from the
 CODE rather than from a hand-maintained list — a curated list goes stale exactly the
 way the thing it guards does.
+
+Known bound (stated rather than left implicit): the detector matches *literal* env
+reads — ``os.environ.get("X_API_KEY")``, ``os.getenv(...)``, ``os.environ[...]``. It
+cannot see an indirect read such as ``KEY = "X_API_KEY"; os.getenv(KEY)`` or a
+Pydantic settings alias. Verified 2026-08-14 that no current key hides that way, but
+a future one could; this guard raises the floor, it does not prove completeness.
 """
 
 from __future__ import annotations
