@@ -58,7 +58,6 @@ import asyncio
 import math
 import re
 import time
-from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -1609,19 +1608,34 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
         ) from exc
 
     # Group KEYS are coerced with ``str`` because ``GapAnalysis.entity_values``
-    # is a ``Dict[str, float]``. Distinct raw keys can collide under that
-    # coercion -- measured: raw groups ``1``, ``"1"``, ``"Kisqali"`` (means
-    # 0.1 / 0.9 / 0.5) collapsed to ``{'1': 0.9, 'Kisqali': 0.5}`` and reported
-    # gap=0.4, silently dropping the 0.1 group when the true spread was 0.8.
-    # A gap over a basis that is not the one it claims is exactly the
-    # fabricated-finding shape #1574 exists to forbid, and the ambiguity cannot
-    # be represented in the output type, so this fails closed.
-    labels = [str(k) for k in grouped.index]
-    collisions = sorted({label for label, n in Counter(labels).items() if n > 1})
+    # is a ``Dict[str, float]``, so distinct raw keys can collide under that
+    # coercion. Keep every raw mean per label rather than letting the last one
+    # win: measured, raw groups ``1``, ``"1"``, ``"Kisqali"`` (means
+    # 0.1 / 0.9 / 0.5) silently became ``{'1': 0.9, 'Kisqali': 0.5}`` and
+    # reported gap=0.4, dropping the 0.1 group when the true spread was 0.8 --
+    # a gap over a basis that is not the one it claims, which is the
+    # fabricated-finding shape #1574 exists to forbid.
+    by_label: Dict[str, List[Any]] = {}
+    for raw_key, raw_mean in grouped.items():
+        by_label.setdefault(str(raw_key), []).append(raw_mean)
+
+    groups_present = sorted(by_label)
+    selected = by_label
+    if entities:
+        wanted = {str(e) for e in entities}
+        selected = {k: v for k, v in by_label.items() if k in wanted}
+    groups_matched = sorted(selected)
+
+    # Collisions are only disqualifying for labels that can actually enter THIS
+    # comparison, so the check runs AFTER the entity filter: an ambiguous label
+    # elsewhere in the grouping column says nothing about a requested pair that
+    # is itself unambiguous (codex iter-2 -- refusing that was an over-refusal).
+    collisions = sorted(label for label, means in selected.items() if len(means) > 1)
     if collisions:
+        raw_in_basis = sum(len(means) for means in selected.values())
         raise ToolRefusalError(
-            f"gap_calculator: {len(labels)} distinct {group_col!r} groups collapse to "
-            f"{len(set(labels))} labels under string coercion — "
+            f"gap_calculator: {raw_in_basis} distinct {group_col!r} groups entering this "
+            f"comparison collapse to {len(selected)} labels under string coercion — "
             f"{_clip_entity_labels(collisions)!r} each name more than one raw group, so a "
             "per-group mean cannot be attributed unambiguously. Refusing to fabricate: "
             "comparing the surviving labels would silently drop a real group and report "
@@ -1634,13 +1648,8 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     # ``NaN`` — which would otherwise escape this tool as a bare ``TypeError``
     # into the executor's RETRYING arm, bypassing the #1599 guard entirely.
     group_means: Dict[str, Optional[float]] = {
-        str(k): _coerce_finite(v) for k, v in grouped.items()
+        label: _coerce_finite(means[0]) for label, means in selected.items()
     }
-    groups_present = sorted(group_means)
-    if entities:
-        wanted = {str(e) for e in entities}
-        group_means = {k: v for k, v in group_means.items() if k in wanted}
-    groups_matched = sorted(group_means)
 
     # #1599. A group whose metric column is entirely null WITHIN the group still
     # counts as a group -- ``mean()`` yields NaN for it -- so the #1574 count

@@ -392,8 +392,51 @@ def test_string_coerced_group_labels_that_collide_fail_closed():
         )
     msg = str(exc_info.value)
     assert "collapse to 2 labels under string coercion" in msg
-    assert "3 distinct 'brand' groups" in msg
+    assert "3 distinct 'brand' groups entering this comparison" in msg
     assert "'1'" in msg
+
+
+def test_collision_outside_the_requested_entities_does_not_refuse():
+    """A label collision elsewhere in the column says nothing about a requested
+    pair that is itself unambiguous — refusing it was an over-refusal.
+
+    Raw groups 1, '1', 'A', 'B'; the requested basis {'A','B'} is unambiguous
+    and finite, so the comparison must proceed.
+    """
+    df = pd.DataFrame(
+        {
+            "brand": [1, 1, "1", "1", "A", "A", "B", "B"],
+            "market_share": [0.1, 0.1, 0.9, 0.9, 0.2, 0.2, 0.7, 0.7],
+        }
+    )
+    result = tr.gap_calculator(
+        metric="market_share",
+        entity_type="brand",
+        entities=["A", "B"],
+        estimation_data=df,
+    )
+    assert result.gap == pytest.approx(0.5)
+    assert result.entity_values == {"A": 0.2, "B": 0.7}
+
+
+def test_collision_inside_the_requested_entities_still_refuses():
+    """...but an ambiguous label the caller actually asked for must fail closed."""
+    from src.agents.tool_composer.errors import ToolRefusalError
+
+    df = pd.DataFrame(
+        {
+            "brand": [1, 1, "1", "1", "A", "A"],
+            "market_share": [0.1, 0.1, 0.9, 0.9, 0.2, 0.2],
+        }
+    )
+    with pytest.raises(ToolRefusalError) as exc_info:
+        tr.gap_calculator(
+            metric="market_share",
+            entity_type="brand",
+            entities=["1", "A"],
+            estimation_data=df,
+        )
+    assert "collapse to 2 labels under string coercion" in str(exc_info.value)
 
 
 def test_infinite_group_mean_is_excluded_like_nan():
