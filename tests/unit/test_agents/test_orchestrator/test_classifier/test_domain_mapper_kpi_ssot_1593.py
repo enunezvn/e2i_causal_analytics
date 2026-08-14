@@ -165,10 +165,32 @@ class TestNarrowingKeepsContestedRowsAbstaining:
     @pytest.mark.parametrize(
         "query",
         [
+            # Non-population axes are the same functional shape (codex iter-2
+            # HIGH): a KPI split across geography / brand / time / provider is
+            # no more a single scalar than one split across segments.
+            "what is TRx by region for Kisqali",
+            "what is TRx across regions for Kisqali",
+            "give me NRx per territory for Remibrutinib",
+            "what is the TRx for each region",
+            "show me market share by brand",
+            "what is the TRx by month",
+            "show me NRx by specialty",
+        ],
+    )
+    def test_decomposition_veto_covers_non_population_axes(self, query):
+        from src.agents.orchestrator.classifier import domain_mapper
+
+        assert domain_mapper._is_decomposition_ask(query) is True, query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
             # A scalar SCOPED to one group is a filter, not a decomposition —
             # the explainer resolver binds these fine.
             "what is the TRx for the West segment",
             "show me the market share for Kisqali in the northeast",
+            "what is the TRx in the northeast region",
+            "what is the trx for kisqali in the west",
             "What is the conversion rate metric for Remibrutinib across our patient population?",
         ],
     )

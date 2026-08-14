@@ -62,16 +62,27 @@ KPI_LOOKUP_EVIDENCE = "kpi_value_lookup"
 #     group ("TRx for the West segment") — a filter, not a decomposition — so
 #     the axis alternatives are anchored on by/per/across and on explicit
 #     plural-enumerating determiners, never on a bare noun or on "for".
+#
+#     The axis nouns span every dimension this platform actually decomposes a
+#     KPI along — population, geography, brand, time and provider — not just
+#     the population axis the gold rows happen to use (codex iter-2 HIGH):
+#     "what is TRx by region" is the same functional shape as "NRx by segment",
+#     and gap_analyzer, not a lone explainer, owns the regional cut.
+_AXIS_NOUNS = (
+    r"(?:segments?|cohorts?|sub-?groups?|tiers?|deciles?|quartiles?|buckets?|strata"
+    r"|regions?|territor(?:y|ies)|geograph(?:y|ies)|states?|markets?|zips?|districts?"
+    r"|brands?|products?|drugs?|skus?"
+    r"|months?|quarters?|weeks?|years?|periods?"
+    r"|hcps?|physicians?|prescribers?|providers?|specialt(?:y|ies))"
+)
 _DECOMPOSITION_RE = re.compile(
     r"\bbreak(?:\s|-)?downs?\b"
     r"|\bbroken(?:\s+|-)(?:down|out)\b"
     r"|\bbreak(?:\s+|-)out\b"
     r"|\bsplits?\b"
     r"|\bsegmented\s+by\b"
-    r"|\b(?:by|per|across)\s+(?:[\w'-]+\s+){0,3}?"
-    r"(?:segments?|cohorts?|sub-?groups?|tiers?|deciles?|quartiles?|buckets?|strata)\b"
-    r"|\b(?:different|each|every|all)\s+(?:[\w'-]+\s+){0,3}?"
-    r"(?:segments|cohorts|sub-?groups|tiers|deciles|quartiles|buckets)\b",
+    r"|\b(?:by|per|across)\s+(?:[\w'-]+\s+){0,3}?" + _AXIS_NOUNS + r"\b"
+    r"|\b(?:different|each|every|all)\s+(?:[\w'-]+\s+){0,3}?" + _AXIS_NOUNS + r"\b",
     re.IGNORECASE,
 )
 
