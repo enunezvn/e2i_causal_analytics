@@ -574,6 +574,14 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
     canonical_keys = {
         "feature",
         "layer",
+        # Phase 2.6 citation channel (#1608). Additive; sidecar schema 1.8.
+        # Emitted unconditionally so the verdict schema stays UNIFORM — which
+        # is exactly what this guard exists to protect.
+        "citations_checked",
+        "citations_verified",
+        "citations_unverified",
+        "cited_pmids",
+        "verified_citation_ids",
         "z_score",
         "actual_auc",
         "null_mean",
@@ -1187,6 +1195,14 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
     expected_keys = {
         "feature",
         "layer",
+        # Phase 2.6 citation channel (#1608). Additive; sidecar schema 1.8.
+        # Emitted unconditionally so the verdict schema stays UNIFORM — which
+        # is exactly what this guard exists to protect.
+        "citations_checked",
+        "citations_verified",
+        "citations_unverified",
+        "cited_pmids",
+        "verified_citation_ids",
         "z_score",
         "actual_auc",
         "null_mean",
@@ -2289,6 +2305,14 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
     expected_keys = {
         "feature",
         "layer",
+        # Phase 2.6 citation channel (#1608). Additive; sidecar schema 1.8.
+        # Emitted unconditionally so the verdict schema stays UNIFORM — which
+        # is exactly what this guard exists to protect.
+        "citations_checked",
+        "citations_verified",
+        "citations_unverified",
+        "cited_pmids",
+        "verified_citation_ids",
         "z_score",
         "actual_auc",
         "null_mean",

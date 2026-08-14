@@ -46,6 +46,10 @@ _LRU_MAXSIZE = 4096
 # leaks would prevent entity matches and confuse downstream consumers.
 _ALL_TAGS = re.compile(r"<[^>]+>")
 
+# Closing punctuation that should never be preceded by whitespace once tags
+# have been replaced with spaces (see ``_fetch_doi_uncached``).
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?%)\]])")
+
 
 class CrossrefError(Exception):
     """Crossref request failed."""
@@ -114,9 +118,24 @@ class CrossrefClient:
         # simple substring matcher can find entity names. Multiple
         # consecutive whitespace runs (left over after tag removal) are
         # collapsed to a single space so word-boundary matching works.
-        abstract_stripped = _ALL_TAGS.sub("", abstract_raw or "")
+        # Substitute a SPACE, not the empty string: tags separate adjacent text
+        # nodes, and deleting them fuses them. ``<jats:title>Background
+        # </jats:title><jats:p>Breast cancer ...`` collapsed to
+        # "BackgroundBreast cancer", and since ``_first_match`` matches on WORD
+        # BOUNDARIES the fused term could never match — making the first entity
+        # after every section heading invisible to verification. JATS abstracts
+        # are almost always structured, so this systematically produced false
+        # "unverified" verdicts (#1608; measured against the live record for
+        # 10.1186/s13058-023-01623-6). The whitespace collapse below removes the
+        # extra spaces this introduces.
+        abstract_stripped = _ALL_TAGS.sub(" ", abstract_raw or "")
         abstract_unescaped = html.unescape(abstract_stripped)
         abstract = re.sub(r"\s+", " ", abstract_unescaped).strip()
+        # The tag->space substitution above leaves a space wherever a tag sat
+        # directly before punctuation (``<p>vivo</p>.`` -> ``vivo .``). Re-join
+        # so the text reads naturally and terms ending at a punctuation mark
+        # (e.g. "C-reactive protein (CRP)") keep their expected shape.
+        abstract = _SPACE_BEFORE_PUNCT.sub(r"\1", abstract)
         if not abstract:
             # Many publishers don't deposit abstracts; degrade to None so
             # CitationResolver records "abstract not retrieved".

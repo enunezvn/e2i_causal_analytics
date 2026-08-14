@@ -90,6 +90,7 @@ abstain on these inputs, which would change the downstream contract.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, cast
 
@@ -132,7 +133,13 @@ from src.ml.causal_role_dgp.extractor import derive_structural_role
 # keeps adaptive_validity_check.py's import surface free of httpx.
 if TYPE_CHECKING:
     from src.data.kg.ensemble_voter import EnsembleVoter
-    from src.data.kg.types import CausalRole, EnsembleVerdict, KGEdge, LLMVerdict
+    from src.data.kg.types import (
+        CausalRole,
+        CitationVerdict,
+        EnsembleVerdict,
+        KGEdge,
+        LLMVerdict,
+    )
 
 
 class _HblpRoutingViolationError(RuntimeError):
@@ -160,6 +167,177 @@ def _get_ensemble_voter_class() -> type:
     from src.data.kg.ensemble_voter import EnsembleVoter as _EnsembleVoter
 
     return _EnsembleVoter
+
+
+# --------------------------------------------------------------------------
+# Phase 2.6 citation channel (#1608)
+#
+# Layer 4 extracts PMIDs from the LLM's mechanism text into
+# ``LLMVerdict.cited_pmids``; ``EnsembleVoter`` has always accepted
+# ``citation_verdicts``. Nothing connected the two, so we surfaced LLM-cited
+# PMIDs in the audit trail with no verification that the abstract behind the
+# PMID actually co-mentions the entities and a causal cue — the voter's own
+# evidence line read "LLM cited N PMIDs but no CitationVerdicts supplied".
+#
+# Measured 2026-08-14: the compiled classifier DOES cite (129 of 192 demo
+# mechanism strings carry PMIDs, 57 distinct), those PMIDs resolve (14/14
+# sampled), and at least one is topically bogus (PMID 27176981 is a graphene
+# physics paper). Resolution alone therefore proves nothing; the entity +
+# causal-cue check is what adds signal.
+#
+# Cost is bounded on two axes so a wide feature sweep cannot fan out into
+# hundreds of serial HTTP calls: a per-run budget and a per-feature cap. The
+# clients' module-level lru_caches absorb repeats across features.
+_CITATION_RESOLUTION_BUDGET_DEFAULT = 25
+_CITATION_MAX_PMIDS_PER_FEATURE = 3
+_CITATION_BUDGET_ENV = "ADAPTIVE_CITATION_RESOLUTION_BUDGET"
+
+
+class _CitationBudget:
+    """A per-node-run cap on how many citations may be resolved.
+
+    Shared across every feature in one ``adaptive_validity_check`` invocation.
+    Not thread-safe by design: the node resolves features serially.
+    """
+
+    __slots__ = ("limit", "used")
+
+    def __init__(self, limit: int) -> None:
+        self.limit = max(0, int(limit))
+        self.used = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def take(self, n: int) -> int:
+        """Reserve up to ``n`` resolutions; return how many were granted."""
+        granted = min(max(0, n), self.remaining)
+        self.used += granted
+        return granted
+
+
+def _resolve_citation_budget_limit() -> int:
+    """Read the per-run budget from env, falling back to the default."""
+    raw = os.environ.get(_CITATION_BUDGET_ENV)
+    if raw is None:
+        return _CITATION_RESOLUTION_BUDGET_DEFAULT
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "%s=%r is not an integer; using default %d",
+            _CITATION_BUDGET_ENV,
+            raw,
+            _CITATION_RESOLUTION_BUDGET_DEFAULT,
+        )
+        return _CITATION_RESOLUTION_BUDGET_DEFAULT
+
+
+def _try_build_citation_resolver() -> Optional[Any]:
+    """Lazily construct a :class:`CitationResolver`; ``None`` when unavailable.
+
+    Imported inside the function so the KG client stack stays off this
+    module's import-time surface, mirroring ``_try_load_layer_4_classifier``.
+    Returns ``None`` on any construction failure so the citation channel is
+    strictly best-effort — it must never block the pipeline (#1608 AC3).
+
+    Europe PMC and Crossref are zero-auth, so a resolver is normally
+    constructible even without ``UMLS_UTS_API_KEY`` (synonym expansion is
+    simply disabled).
+    """
+    try:
+        from src.data.kg.citation_resolver import CitationResolver
+
+        return CitationResolver()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "adaptive_validity_check: CitationResolver unavailable (%s); "
+            "citation verification skipped",
+            exc,
+        )
+        return None
+
+
+def _citation_entity_names(
+    feature: str,
+    contract: Optional["FeatureContract"],
+    target: str,
+) -> tuple[str, str, Optional[str], Optional[str]]:
+    """Derive (subject_name, object_name, subject_cui, object_cui).
+
+    The relation under test is "does this FEATURE causally relate to the
+    prediction TARGET", so the feature is the subject and the target is the
+    object. When the feature contract carries a UMLS entity code it is passed
+    as ``subject_cui`` to widen matching with the concept's preferred name.
+    """
+    subject_cui: Optional[str] = None
+    if contract is not None:
+        for system, code in getattr(contract, "kg_entity_codes", ()) or ():
+            if str(system).upper() == "UMLS" and str(code).startswith("C"):
+                subject_cui = str(code)
+                break
+    return feature, target, subject_cui, None
+
+
+def _resolve_citation_verdicts(
+    llm_verdict: Optional["LLMVerdict"],
+    *,
+    feature: str,
+    contract: Optional["FeatureContract"],
+    target: str,
+    resolver: Optional[Any],
+    budget: "_CitationBudget",
+) -> tuple["CitationVerdict", ...]:
+    """Verify the PMIDs an LLM verdict cited, bounded and fail-open.
+
+    Returns ``()`` — never raises — when there is no resolver, no LLM verdict,
+    no cited PMIDs, or the budget is exhausted. Any Europe PMC / Crossref
+    failure degrades that single citation to "not verified" rather than
+    propagating, mirroring the Layer-4 try/except contract (#1608 AC3).
+    """
+    if resolver is None or llm_verdict is None:
+        return ()
+    pmids = tuple(getattr(llm_verdict, "cited_pmids", ()) or ())
+    if not pmids:
+        return ()
+
+    # Per-feature cap first, then the shared per-run budget.
+    candidates = pmids[:_CITATION_MAX_PMIDS_PER_FEATURE]
+    granted = budget.take(len(candidates))
+    if granted <= 0:
+        logger.debug(
+            "adaptive_validity_check: citation budget exhausted; skipping %d PMID(s) for %s",
+            len(candidates),
+            feature,
+        )
+        return ()
+
+    subject_name, object_name, subject_cui, object_cui = _citation_entity_names(
+        feature, contract, target
+    )
+    verdicts: list["CitationVerdict"] = []
+    for pmid in candidates[:granted]:
+        try:
+            verdicts.append(
+                resolver.verify_citation(
+                    pmid,
+                    identifier_kind="pmid",
+                    subject_name=subject_name,
+                    object_name=object_name,
+                    subject_cui=subject_cui,
+                    object_cui=object_cui,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort by contract
+            logger.warning(
+                "adaptive_validity_check: citation verification failed for PMID %s "
+                "on %s: %s — continuing without it",
+                pmid,
+                feature,
+                exc,
+            )
+    return tuple(verdicts)
 
 
 def _try_load_layer_4_classifier() -> Optional[Any]:
@@ -1470,6 +1648,18 @@ def _ensemble_to_legacy_dict(
     return {
         "feature": verdict.feature_name,
         "layer": layer_str,
+        # Phase 2.6 citation channel (#1608). Sidecar schema 1.8. Without
+        # these the verification would run and be discarded at the legacy
+        # adaptation boundary, leaving the audit trail exactly as it was:
+        # LLM-cited PMIDs with no evidence they were ever checked.
+        # ``citations_checked`` distinguishes "0 of 0 verified because the
+        # LLM cited nothing" from "0 verified because all of them failed" —
+        # a distinction the two counts alone cannot express.
+        "citations_checked": len(verdict.verified_citations) + len(verdict.unverified_citations),
+        "citations_verified": len(verdict.verified_citations),
+        "citations_unverified": len(verdict.unverified_citations),
+        "cited_pmids": list(getattr(llm_in, "cited_pmids", ()) or ()),
+        "verified_citation_ids": [c.identifier for c in verdict.verified_citations],
         # Numeric fields from the adversarial probe (None when no
         # adversarial input was supplied or it was malformed).
         "z_score": adv.get("z_score"),
@@ -1703,6 +1893,16 @@ def _legacy_adversarial_alone_verdict(
         "structural_remediation_override": None,
         "structural_gate_fired": None,
         "structural_unclassifiable": None,
+        # Phase 2.6 citation channel (#1608). These bypass paths carry no
+        # LLM verdict at all, so nothing was cited and nothing was checked.
+        # Emitted explicitly rather than omitted so the verdict schema stays
+        # UNIFORM across every path (pinned by
+        # test_verdict_schema_is_uniform_across_layer_1_and_layer_3).
+        "citations_checked": 0,
+        "citations_verified": 0,
+        "citations_unverified": 0,
+        "cited_pmids": [],
+        "verified_citation_ids": [],
     }
 
 
@@ -1793,6 +1993,16 @@ def _legacy_info_verdict(
         "structural_remediation_override": None,
         "structural_gate_fired": None,
         "structural_unclassifiable": None,
+        # Phase 2.6 citation channel (#1608). These bypass paths carry no
+        # LLM verdict at all, so nothing was cited and nothing was checked.
+        # Emitted explicitly rather than omitted so the verdict schema stays
+        # UNIFORM across every path (pinned by
+        # test_verdict_schema_is_uniform_across_layer_1_and_layer_3).
+        "citations_checked": 0,
+        "citations_verified": 0,
+        "citations_unverified": 0,
+        "cited_pmids": [],
+        "verified_citation_ids": [],
     }
 
 
@@ -1880,6 +2090,16 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "structural_remediation_override": None,
         "structural_gate_fired": None,
         "structural_unclassifiable": None,
+        # Phase 2.6 citation channel (#1608). These bypass paths carry no
+        # LLM verdict at all, so nothing was cited and nothing was checked.
+        # Emitted explicitly rather than omitted so the verdict schema stays
+        # UNIFORM across every path (pinned by
+        # test_verdict_schema_is_uniform_across_layer_1_and_layer_3).
+        "citations_checked": 0,
+        "citations_verified": 0,
+        "citations_unverified": 0,
+        "cited_pmids": [],
+        "verified_citation_ids": [],
     }
 
 
@@ -1990,6 +2210,7 @@ def _compose_legacy_verdict(
     n_train_pos: Optional[int] = None,
     layer_1_declared_safe: Optional[bool] = None,
     llm_verdict: Optional["LLMVerdict"] = None,
+    citation_verdicts: Iterable["CitationVerdict"] = (),
     structural_role: Optional["CausalRole"] = None,
     structural_unclassifiable: bool = False,
 ) -> dict[str, Any]:
@@ -2024,6 +2245,18 @@ def _compose_legacy_verdict(
     ``llm_verdict is None`` so a moderate adversarial signal paired with
     an LLM verdict routes through the voter (which is the only path that
     can emit ``decided_by="llm"`` for the audit trail).
+
+    Phase 2.6 citation channel (#1608): ``citation_verdicts`` carries the
+    :class:`src.data.kg.types.CitationVerdict` records produced by
+    ``_resolve_citation_verdicts`` for the PMIDs this feature's LLM verdict
+    cited. They are forwarded to ``voter.vote(...)``, which partitions them
+    into verified/unverified. The empty default preserves prior behaviour
+    exactly — the voter then records "LLM cited N PMIDs but no
+    CitationVerdicts supplied", which is what every cited verdict said before
+    this channel had a producer. Note that citations only *modulate*
+    confidence when ``ADAPTIVE_LAYER4_LLM_DECIDES=1``; in the default
+    audit-only mode the counts are still recorded on the ``EnsembleVerdict``
+    and surfaced in the legacy dict so the audit trail carries them.
 
     Plan v4 §2 G3 wiring (post-2026-05-10):
       * ``n_train_pos`` and ``layer_1_declared_safe`` are threaded from
@@ -2154,6 +2387,7 @@ def _compose_legacy_verdict(
         feature_entity_ids=feature_ids_tuple,
         target_entity_ids=target_ids_tuple,
         llm_verdict=llm_verdict,
+        citation_verdicts=tuple(citation_verdicts),
         structural_role=structural_role,
         structural_unclassifiable=structural_unclassifiable,
     )
@@ -3383,6 +3617,13 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # adversarial-alone bypass.
     layer_4_classifier = _try_load_layer_4_classifier()
 
+    # Phase 2.6 citation channel (#1608): build the resolver once per node
+    # invocation and share one budget across every feature, so a wide sweep
+    # cannot fan out into hundreds of serial HTTP calls. Both are inert when
+    # Layer 4 never fires (no LLM verdict -> no cited PMIDs -> no resolution).
+    citation_resolver = _try_build_citation_resolver() if layer_4_classifier is not None else None
+    citation_budget = _CitationBudget(limit=_resolve_citation_budget_limit())
+
     def _kg_inputs(
         feat: str, contract: Optional[FeatureContract]
     ) -> tuple[tuple[Any, ...], tuple[str, ...]]:
@@ -3797,6 +4038,20 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 )
                 llm_verdict = None
 
+        # Phase 2.6 citation channel (#1608): verify the PMIDs the LLM cited
+        # before they reach the audit trail as if they were evidence. Bounded
+        # by ``citation_budget`` + the per-feature cap, and fail-open — any
+        # Europe PMC / Crossref problem yields no verdicts rather than
+        # blocking, mirroring the Layer-4 try/except above.
+        citation_verdicts = _resolve_citation_verdicts(
+            llm_verdict,
+            feature=feat,
+            contract=contract,
+            target=target,
+            resolver=citation_resolver,
+            budget=citation_budget,
+        )
+
         verdict = _compose_legacy_verdict(
             feat,
             voter=voter,
@@ -3808,6 +4063,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             n_train_pos=n_train_pos,
             layer_1_declared_safe=layer_1_declared_safe,
             llm_verdict=llm_verdict,
+            citation_verdicts=citation_verdicts,
             structural_role=structural_role,
             structural_unclassifiable=structural_unclassifiable,
         )
