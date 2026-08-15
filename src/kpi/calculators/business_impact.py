@@ -612,6 +612,12 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # Provenance reflects whichever source actually answered (the two
             # probes' frontiers diverge; that is why ROI has no static
             # reporting_window note in the chatbot map).
+            #
+            # #1640: record WHICH, not just that it varies. The registry's
+            # `tables` is a union of POSSIBLE sources, so a scoped ROI that
+            # really did come from business_metrics was being fenced off from
+            # stored business_metrics rows.
+            context["measure_basis_substrate"] = ["business_metrics"]
             self._stash_data_through(context, result)
             self._stash_roi_temporal_band(context, brand=brand, region=region)
             return float(result[0]["avg_roi"])
@@ -632,6 +638,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         # would pair a figure with dispersion from a different substrate.
         result = self._execute_query("business_impact_roi_agent_activities", [])
         if result and result[0].get("avg_roi") is not None:
+            context["measure_basis_substrate"] = ["agent_activities"]  # #1640
             self._stash_data_through(context, result)
             return float(result[0]["avg_roi"])
 

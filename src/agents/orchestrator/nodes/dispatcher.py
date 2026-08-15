@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 from src.repositories.provenance import coerce_provenance_flag, deployment_includes_synthetic
-from src.services.measure_basis import measure_basis_for_kpi
+from src.kpi.measure_basis import measure_basis_for_kpi
 from src.utils.llm_content import normalize_llm_content
 
 from .._agent_method_map import get_method_spec

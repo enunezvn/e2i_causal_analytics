@@ -243,7 +243,7 @@ class TestTheFenceIsFunctionalNotJustLabelled:
         """If the comparability rule ever says these DO agree, the notice must
         vanish — it must be a consequence of the rule, not a hardcoded string."""
         import src.api.routes.chatbot_tools as ct
-        import src.services.measure_basis as mb
+        import src.kpi.measure_basis as mb
 
         # Patch where the name is RESOLVED (the service), not where it is
         # re-exported — the re-export is a binding, not an indirection.
@@ -285,7 +285,7 @@ class TestTheBasisSsotIsCheapToImport:
     """
 
     def test_the_ssot_module_carries_the_rule(self):
-        from src.services.measure_basis import (
+        from src.kpi.measure_basis import (
             BUSINESS_METRICS_BASIS,
             bases_are_comparable,
             cross_substrate_conflict,
@@ -298,42 +298,187 @@ class TestTheBasisSsotIsCheapToImport:
         assert callable(measure_basis_for_kpi)
 
     def test_importing_it_does_not_drag_in_the_heavy_stacks(self):
-        """A basis lookup must not cost what importing chatbot_tools costs."""
+        """A basis lookup must not cost what importing chatbot_tools costs.
+
+        The first version of this test listed three module names I had picked
+        and asserted their absence — which passed while the module was under
+        ``src.services``, whose ``__init__`` eagerly imports ``alert_routing``
+        and pulls in ``aiohttp`` (measured: 0.54s / 394 modules vs 0.43s / 344).
+        A test that checks the names you thought of is not a cheapness test.
+
+        ``src.services`` itself is now the assertion: any transitive import of
+        that package means the whole service layer came along.
+        """
         import subprocess
         import sys
 
         code = (
-            "import sys; import src.services.measure_basis as m; "
-            "heavy=[n for n in ('dspy','langgraph','src.api.routes.chatbot_tools') "
-            "if n in sys.modules]; print(heavy)"
+            "import sys; import src.kpi.measure_basis as m; "
+            "print([n for n in sorted(sys.modules) if n in "
+            "('aiohttp','dspy','langgraph','src.services','src.api.routes.chatbot_tools') "
+            "or n.startswith('src.services.')])"
         )
         out = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
         )
         assert out.returncode == 0, out.stderr[-2000:]
-        assert out.stdout.strip().endswith("[]"), out.stdout
+        assert out.stdout.strip() == "[]", out.stdout
 
     def test_chatbot_tools_reexports_the_same_objects(self):
         import src.api.routes.chatbot_tools as ct
-        import src.services.measure_basis as mb
+        import src.kpi.measure_basis as mb
 
         assert ct.bases_are_comparable is mb.bases_are_comparable
         assert ct._BUSINESS_METRICS_BASIS is mb.BUSINESS_METRICS_BASIS
 
 
 class TestEveryKpiEmitterDeclaresItsBasis:
-    def test_orchestrator_kpi_lookup_payload(self):
+    """Asserted against the dict LITERAL, not the source text.
+
+    A grep for "measure_basis" passes if the payload key is deleted and only the
+    comment above it survives — which is exactly the shape of an accidental
+    revert. Parsing the AST and looking for the key inside a dict literal cannot
+    be satisfied by a comment.
+    """
+
+    @staticmethod
+    def _dict_literals_with_key(module, key):
+        import ast
         import inspect
 
+        tree = ast.parse(inspect.getsource(module))
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            and any(
+                isinstance(k, ast.Constant) and k.value == key for k in node.keys if k is not None
+            )
+        ]
+
+    def test_orchestrator_kpi_lookup_payload(self):
         from src.agents.orchestrator.nodes import dispatcher
 
-        src = inspect.getsource(dispatcher)
-        assert "measure_basis" in src, "the kpi_lookup payload carries no substrate"
+        assert self._dict_literals_with_key(dispatcher, "measure_basis"), (
+            "no dict literal in the dispatcher carries a measure_basis key"
+        )
 
     def test_home_kpi_summary_payload(self):
-        import inspect
-
         from src.api.routes import copilotkit
 
-        src = inspect.getsource(copilotkit)
-        assert "measure_basis" in src, "the KPI summary tiles carry no substrate"
+        assert self._dict_literals_with_key(copilotkit, "measure_basis"), (
+            "no dict literal in copilotkit carries a measure_basis key"
+        )
+
+    def test_a_comment_alone_would_not_satisfy_this(self):
+        """Guard the guard: prove the assertion is structural, not textual."""
+        import ast
+
+        tree = ast.parse('x = 1  # measure_basis\ny = {"other": 1}\n')
+        dicts = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Dict)
+            and any(isinstance(k, ast.Constant) and k.value == "measure_basis" for k in n.keys)
+        ]
+        assert not dicts
+
+
+class TestTheBasisPrefersTheSourceThatActuallyAnswered:
+    """codex MED: the registry's ``tables`` is a UNION of POSSIBLE sources.
+
+    ROI declares ``['agent_activities', 'business_metrics']`` because its
+    calculator tries `business_impact_roi_business_metrics_scoped` first and
+    only falls back to `agent_activities` when unscoped and empty
+    (business_impact.py). The calculator's own comment already says "provenance
+    reflects whichever source actually answered" — it just never recorded which.
+
+    So a scoped ROI that genuinely came from business_metrics WAS being fenced
+    off from stored business_metrics rows. Over-fencing is the mirror of
+    over-claiming, and both are wrong for the same reason: the payload asserting
+    something it does not know.
+    """
+
+    def test_runtime_metadata_overrides_the_static_union(self):
+        from src.kpi.measure_basis import measure_basis_for_kpi
+        from src.kpi.registry import get_registry
+
+        roi = get_registry().get("WS3-BI-010")
+        static = measure_basis_for_kpi(roi)
+        assert set(static["substrate"]) == {"agent_activities", "business_metrics"}
+
+        actual = measure_basis_for_kpi(
+            roi, {"context": {"measure_basis_substrate": ["business_metrics"]}}
+        )
+        assert actual["substrate"] == ["business_metrics"]
+        assert actual["source_known"] is True
+
+    def test_the_static_union_is_marked_as_unconfirmed(self):
+        from src.kpi.measure_basis import measure_basis_for_kpi
+        from src.kpi.registry import get_registry
+
+        static = measure_basis_for_kpi(get_registry().get("WS3-BI-010"))
+        assert static["source_known"] is False
+
+    def test_a_single_source_kpi_is_known_either_way(self):
+        """TRx declares one table, so the union IS the actual source."""
+        from src.kpi.measure_basis import measure_basis_for_kpi
+        from src.services.kpi_resolution import recognize_kpi
+
+        basis = measure_basis_for_kpi(recognize_kpi("TRx"))
+        assert basis["substrate"] == ["treatment_events"]
+        assert basis["source_known"] is True
+
+    def test_a_scoped_roi_becomes_comparable_with_stored_rows(self):
+        from src.kpi.measure_basis import (
+            BUSINESS_METRICS_BASIS,
+            bases_are_comparable,
+            measure_basis_for_kpi,
+        )
+        from src.kpi.registry import get_registry
+
+        roi = get_registry().get("WS3-BI-010")
+        assert not bases_are_comparable(measure_basis_for_kpi(roi), BUSINESS_METRICS_BASIS)
+        assert bases_are_comparable(
+            measure_basis_for_kpi(
+                roi, {"context": {"measure_basis_substrate": ["business_metrics"]}}
+            ),
+            BUSINESS_METRICS_BASIS,
+        )
+
+    def test_the_calculator_records_which_branch_answered(self):
+        import ast
+        import inspect
+
+        from src.kpi.calculators import business_impact
+
+        tree = ast.parse(inspect.getsource(business_impact))
+        assigns = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Subscript)
+            and isinstance(n.slice, ast.Constant)
+            and n.slice.value == "measure_basis_substrate"
+        ]
+        assert len(assigns) >= 2, "both ROI branches must record their own source"
+
+    def test_a_cached_pre_change_result_fails_closed(self):
+        """Observed live: a KPIResult cached BEFORE this change carries no
+        ``measure_basis_substrate``, so the basis falls back to the declared
+        union and `source_known` is False.
+
+        That is the safe direction — an unconfirmed multi-source basis is not
+        comparable with anything — and it self-heals as the cache expires. Pinned
+        so nobody "fixes" it by assuming the first declared table."""
+        from src.kpi.measure_basis import (
+            BUSINESS_METRICS_BASIS,
+            bases_are_comparable,
+            measure_basis_for_kpi,
+        )
+        from src.kpi.registry import get_registry
+
+        roi = get_registry().get("WS3-BI-010")
+        stale = measure_basis_for_kpi(roi, {"context": {"data_through": "2026-08-01"}})
+        assert stale["source_known"] is False
+        assert stale["substrate"] == ["agent_activities", "business_metrics"]
+        assert not bases_are_comparable(stale, BUSINESS_METRICS_BASIS)

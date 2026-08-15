@@ -4,9 +4,17 @@ Deliberately cheap to import. Every surface that emits a KPI figure needs this
 -- the chat tools, the orchestrator's ``kpi_lookup`` payload, the Home KPI
 summary tiles -- and none of them can afford to import
 ``src.api.routes.chatbot_tools`` to get it (~30s: orchestrator/tool_composer/RAG
-stacks). Same precedent as #1475, which moved ``KPI_SEMANTIC_NOTES`` here for
-exactly this reason. This module imports nothing heavier than the KPI registry,
-and resolves KPI names function-locally.
+stacks). Same spirit as #1475, which moved ``KPI_SEMANTIC_NOTES`` out of that
+module for exactly this reason.
+
+It lives under ``src.kpi`` rather than ``src.services`` because
+``src/services/__init__.py`` eagerly imports ``alert_routing`` and friends, so
+anything under that package drags in ``aiohttp`` (measured: 0.54s / 394 modules
+vs 0.43s / 344 without). An orchestrator or chat runtime that has the KPI deps
+but not the alert-routing ones could not import the dispatcher. ``src.kpi`` is
+also where ``KPIMetadata`` -- the declaration this rule is derived FROM --
+already lives. KPI-name resolution stays function-local, so the ``src.services``
+cost is paid only on the conflict path that needs it.
 
 The rule: two figures are comparable only if their substrate declarations are
 EQUAL, and an undeclared substrate is never comparable with anything.
@@ -47,7 +55,9 @@ BUSINESS_METRICS_BASIS: Dict[str, Any] = {
 }
 
 
-def measure_basis_for_kpi(kpi: Any) -> Dict[str, Any]:
+def measure_basis_for_kpi(
+    kpi: Any, result_metadata: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Declare what a computed KPI figure measures, DERIVED from the registry.
 
     ``KPIMetadata.tables`` is the existing SSOT for a KPI's substrate (measured:
@@ -57,9 +67,19 @@ def measure_basis_for_kpi(kpi: Any) -> Dict[str, Any]:
     ``e2i_data_query_tool``'s stored ROI, where a blanket "the KPI tool means
     treatment_events" rule would wrongly fence it off.
     """
-    tables = sorted(getattr(kpi, "tables", None) or [])
+    declared = sorted(getattr(kpi, "tables", None) or [])
+    # A calculator that recorded which branch answered wins over the registry's
+    # union of POSSIBLE sources (#1640). ROI is the case that matters: it tries
+    # business_metrics first and only falls back to agent_activities when
+    # unscoped and empty, so the union both over-claims and over-fences.
+    actual = ((result_metadata or {}).get("context") or {}).get("measure_basis_substrate")
+    tables = sorted(actual) if actual else declared
     return {
         "substrate": tables,
+        # False means "these are the sources it COULD have used" — the payload
+        # says so rather than implying a precision it does not have.
+        "source_known": bool(actual) or len(declared) == 1,
+        "declared_sources": declared,
         "computed": True,
         "measure": (
             f"computed on demand from {', '.join(tables)}"

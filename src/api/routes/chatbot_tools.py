@@ -425,20 +425,20 @@ _REGION_CLARIFY_HINT = (
 _normalize_brand = resolve_brand_label
 
 
-# #1640: the measure-basis rule is an SSOT in src/services/measure_basis.py so
+# #1640: the measure-basis rule is an SSOT in src/kpi/measure_basis.py so
 # the orchestrator and the Home KPI summary can import it without paying this
 # module's ~30s import cost (#1475 precedent). Private aliases kept so existing
 # consumers and tests read unchanged.
-from src.services.measure_basis import (  # noqa: E402,F401
+from src.kpi.measure_basis import (  # noqa: E402,F401
     BUSINESS_METRICS_BASIS as _BUSINESS_METRICS_BASIS,
 )
-from src.services.measure_basis import (  # noqa: E402,F401
+from src.kpi.measure_basis import (  # noqa: E402,F401
     bases_are_comparable,  # re-exported under its public name for consumers
 )
-from src.services.measure_basis import (  # noqa: E402,F401
+from src.kpi.measure_basis import (  # noqa: E402,F401
     cross_substrate_conflict as _cross_substrate_conflict,
 )
-from src.services.measure_basis import (  # noqa: E402,F401
+from src.kpi.measure_basis import (  # noqa: E402,F401
     measure_basis_for_kpi as _measure_basis_for_kpi,
 )
 
@@ -1962,7 +1962,7 @@ def _kpi_result_to_response(
         # `tables` declaration. Without it, an event-ledger count and a
         # business_metrics level both arrive labelled "TRx" and read as a
         # contradiction (or worse, as a reconciliation).
-        "measure_basis": _measure_basis_for_kpi(kpi),
+        "measure_basis": _measure_basis_for_kpi(kpi, metadata),
         "brand": brand,
         "region": region_applied if region_status == "applied" else None,
         "region_status": region_status,
