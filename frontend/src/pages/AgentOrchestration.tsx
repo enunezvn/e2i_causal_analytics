@@ -456,7 +456,7 @@ export default function AgentOrchestration() {
               <CardHeader>
                 <CardTitle>Tier Architecture</CardTitle>
                 <CardDescription>
-                  6-tier hierarchy with 21 specialized agents
+                  6-tier hierarchy with 22 specialized agents
                 </CardDescription>
               </CardHeader>
               <CardContent>

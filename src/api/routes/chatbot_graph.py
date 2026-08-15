@@ -31,6 +31,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from src.agents.factory import build_agent_roster_block
 from src.agents.multi_faceted import is_multi_faceted_facet_score
 from src.api.routes.chat_bridge import build_bridge_preamble, run_conversational_bridge
 from src.api.routes.chatbot_dspy import (
@@ -432,7 +433,7 @@ E2I_CHATBOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intellige
 You help users with:
 1. **KPI Analysis** - TRx, NRx, market share, conversion rates, patient starts
 2. **Causal Analysis** - Understanding WHY metrics change and what drives performance
-3. **Agent System** - Information about the 22-agent tiered architecture
+3. **Agent System** - Information about the tiered agent architecture (roster below)
 4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
 5. **Insights Search** - Finding trends, causal paths, and historical patterns
 
@@ -470,8 +471,33 @@ Use tools proactively:
 - Include confidence scores for causal claims
 - Suggest follow-up questions when appropriate
 
+## Agent Roster
+
+{agent_roster}
+
+When asked which agents exist, answer from THIS roster. These are agents, not
+tools — do not substitute tool names for agent names.
+
 {context}
 """
+
+# #1638: the SECOND answering surface. Fixing only the AG-UI prompt would have
+# left /chat answering "what agents are available" from a bare count with no
+# roster in context — the same defect on the other chat brain. Interpolated from
+# src.agents.factory, never transcribed, so one registry edit updates both.
+E2I_CHATBOT_SYSTEM_PROMPT = E2I_CHATBOT_SYSTEM_PROMPT.replace(
+    "{agent_roster}", build_agent_roster_block()
+)
+
+
+#: Registry-derived answer for the AGENT_STATUS intent fallback (#1638). The
+#: previous string asserted a bare count and named no agent, so the one canned
+#: reply for "which agents are there" could not answer the question it exists for
+#: — and its count had already gone stale once.
+_AGENT_STATUS_FALLBACK = (
+    build_agent_roster_block() + "\n\nI can show you agent status and recent analyses. "
+    "Which agent or tier interests you?"
+)
 
 
 def _render_system_prompt(context_str: str) -> str:
@@ -2040,7 +2066,7 @@ def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
         IntentType.HELP: "I can help you with:\n\n1. **KPI Analysis** - Get metrics like TRx, NRx, market share\n2. **Causal Analysis** - Understand why metrics change\n3. **Agent Status** - Check the 22-agent system\n4. **Recommendations** - Get AI-powered suggestions\n5. **Search** - Find trends and insights\n\nTry asking about a specific brand (Kisqali, Fabhalta, Remibrutinib) or metric!",
         IntentType.KPI_QUERY: "I can help with KPI analysis! I track metrics like TRx volume, NRx volume, market share, conversion rates, HCP reach, and patient starts. Which brand and metric would you like to explore?",
         IntentType.CAUSAL_ANALYSIS: "For causal analysis, I use DoWhy/EconML to identify factors driving your metrics. Tell me which KPI you'd like to analyze and I'll find the key drivers.",
-        IntentType.AGENT_STATUS: "The E2I platform uses a 22-agent tiered architecture across 6 tiers. I can show you agent status and recent analyses. Which agent or tier interests you?",
+        IntentType.AGENT_STATUS: _AGENT_STATUS_FALLBACK,
         IntentType.RECOMMENDATION: "I can provide AI-powered recommendations for HCP targeting, patient journey optimization, and market access strategies. Which brand would you like recommendations for?",
         IntentType.SEARCH: "I can search the E2I knowledge base for insights, causal paths, and trends. What would you like me to find?",
     }

@@ -132,7 +132,7 @@ class E2IRegion(str, Enum):
 class E2IAgentName(str, Enum):
     """E2I 22-agent architecture names (6 tiers)."""
 
-    # Tier 0: ML Foundation (8 agents)
+    # Tier 0: ML Foundation (9 agents)
     SCOPE_DEFINER = "scope_definer"
     DATA_PREPARER = "data_preparer"
     FEATURE_ANALYZER = "feature_analyzer"
@@ -141,6 +141,9 @@ class E2IAgentName(str, Enum):
     MODEL_DEPLOYER = "model_deployer"
     OBSERVABILITY_CONNECTOR = "observability_connector"
     COHORT_CONSTRUCTOR = "cohort_constructor"
+    # #1638: absent while the docstring claimed the full architecture, so
+    # episodic memory could not represent a real registry agent at all.
+    COHORT_PROFILER = "cohort_profiler"
     # Tier 1: Coordination (2 agents)
     ORCHESTRATOR = "orchestrator"
     TOOL_COMPOSER = "tool_composer"

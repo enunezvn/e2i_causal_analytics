@@ -4,8 +4,8 @@
  * src/agents/factory.py AGENT_REGISTRY_CONFIG.
  *
  * The heading COUNTS the roster rather than restating it (#1638): it used to
- * read "21 agents in 6 tiers" while AGENT_TIERS held a different number, so the
- * page contradicted its own list. Python-side, the registry is pinned against
+ * state a fixed number while AGENT_TIERS held a different one, so the page
+ * contradicted its own list. Python-side, the registry is pinned against
  * this file by tests/unit/test_agents/test_agent_roster_ssot_1638.py.
  */
 import { useState } from 'react';

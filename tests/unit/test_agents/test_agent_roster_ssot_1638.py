@@ -55,36 +55,94 @@ class TestNoStaleAgentCountStrings:
     """A hardcoded count in prose is a fact that rots the moment an agent is
     added. Any literal count anywhere in src/ must equal the registry's."""
 
-    def test_no_source_file_states_a_wrong_whole_roster_count(self):
-        """Only counts that claim to describe the WHOLE architecture.
+    #: Substrings whose lines the sweep must NOT flag, each with its reason.
+    #:
+    #: An ALLOWLIST rather than a cleverer regex, deliberately. Separating "this
+    #: number describes the roster" from "this number is a mock fixture, a row
+    #: count, or a note about something already deleted" is not a lexical
+    #: property, and chasing it with lookarounds produced false positives faster
+    #: than it removed them. Every entry states why it is not roster drift; a NEW
+    #: stale string still trips the sweep because it will not be in this set.
+    #:
+    #: This sweep SUPPLEMENTS the structural guarantees (three rosters pinned
+    #: against the registry, plus prompt derivation) — those are what actually
+    #: prevent drift; this only catches prose that repeats a count by hand.
+    ALLOWED_SCOPED_COUNTS = {
+        # True statement about a SUBSET: the Tier 1-5 dispatcher contract,
+        # deliberately excluding Tier 0, pinned by its own test.
+        "13 agents",
+        # Home.test.tsx asserts a FABRICATED summary does NOT render — a prior
+        # guardrail. "Fixing" the number would break the guard it encodes.
+        "15/21 agents",
+        # DB row counts, not agents.
+        "133 of 356 agent",
+        # AgentOrchestration.test.tsx renders from a 15-agent MOCK fixture; the
+        # assertion pins the component against its mock, not against the roster.
+        "All 15 agents",
+        # Comments recording values that were DELETED as fabricated (the hardcoded
+        # health summary and the always-on badge). Restating them is the point.
+        "97.5% / 21 agents",
+        '"21 Agents Active"',
+    }
 
-        A bare ``\\d+ agents`` sweep is too broad and would flag legitimately
-        SCOPED counts — ``_agent_method_map.py`` says "13 agents" about the Tier
-        1-5 dispatcher contract, deliberately excluding Tier 0, and is pinned by
-        its own test. That is a true statement about a subset, not roster drift.
+    def test_no_source_file_states_a_wrong_whole_roster_count(self):
+        """Sweeps BOTH src/ and frontend/ (codex iter-1).
+
+        The first version of this test scanned only ``src/**/*.py`` and required
+        the count to sit adjacent to its noun, so it gave FALSE ASSURANCE twice
+        over: it could not see the frontend at all, and "21 **specialized**
+        agents" walked straight through the adjective gap. A tripwire that misses
+        the drift it exists to catch is worse than none, because it is quoted as
+        evidence the sweep was complete.
+
+        It still must not flag legitimately SCOPED counts — see
+        ``ALLOWED_SCOPED_COUNTS`` for each and why.
         """
         expected = len(AGENT_REGISTRY_CONFIG)
         whole_roster = re.compile(
             # (?<!tier ) — "Tier 0 Agent Orchestration" names a TIER, not a count.
-            r"(?<!tier )(\d+)[- ]agents?\b\s*(?:tiered|architecture|system|orchestrat\w*|roster)"
-            r"|(?:all|the full)\s+(\d+)\s+agents\b"
-            r"|(\d+)\s+agents\s+(?:organized|with tier)",
+            # (?:\w+\s+){0,2} — tolerate intervening adjectives ("21 specialized
+            # agents"), which is exactly what the narrow version missed.
+            r"(?<!tier )\b(\d+)[- ](?:\w+\s+){0,2}agents?\b"
+            r"\s*(?:tiered|architecture|system|orchestrat\w*|roster|hierarchy)?",
             re.IGNORECASE,
         )
+        roots = [
+            (REPO_ROOT / "src", ("*.py",)),
+            (REPO_ROOT / "frontend/src", ("*.ts", "*.tsx")),
+            (REPO_ROOT / "frontend/e2e", ("*.ts",)),
+        ]
         offenders = []
-        for path in sorted((REPO_ROOT / "src").rglob("*.py")):
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+        for root, globs in roots:
+            if not root.exists():
                 continue
-            for lineno, line in enumerate(text.splitlines(), start=1):
-                for m in whole_roster.finditer(line):
-                    count = int(next(g for g in m.groups() if g))
-                    if count != expected:
-                        rel = path.relative_to(REPO_ROOT)
-                        offenders.append(
-                            f"{rel}:{lineno}: {m.group(0)!r} (registry has {expected})"
-                        )
+            for pattern in globs:
+                for path in sorted(root.rglob(pattern)):
+                    try:
+                        text = path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    for lineno, line in enumerate(text.splitlines(), start=1):
+                        for m in whole_roster.finditer(line):
+                            hit = m.group(0).strip()
+                            if any(a in line for a in self.ALLOWED_SCOPED_COUNTS):
+                                continue
+                            before = line[: m.start(1)]
+                            # "#876 agents" is an ISSUE REFERENCE; "133 of 356
+                            # agent rows" and "46/54 agents-exact" are ratios over
+                            # rows or benchmark queries. None are roster claims,
+                            # and a tripwire that cries wolf on them gets muted.
+                            if before.endswith(("#", "/")):
+                                continue
+                            if re.search(r"\b(?:of|\d)\s*$", before) or "/" in hit:
+                                continue
+                            count = int(m.group(1))
+                            # Below 10 is ordinary prose ("2-agent handoff"), and
+                            # tier subcounts are checked by the roster tests.
+                            if count < 10 or count == expected:
+                                continue
+                            rel = path.relative_to(REPO_ROOT)
+                            offenders.append(f"{rel}:{lineno}: {hit!r} (registry has {expected})")
         assert not offenders, "stale whole-roster agent counts:\n  " + "\n  ".join(offenders)
 
 
@@ -121,6 +179,43 @@ class TestAnsweringPromptCarriesTheRoster:
             "the prompt does not embed the generated roster block verbatim, so it "
             "is transcribed rather than derived"
         )
+
+    def test_chat_stream_prompt_also_carries_the_roster(self):
+        """There are TWO chat brains, and 5.2 can be asked of either.
+
+        codex iter-1 caught this: fixing only the AG-UI prompt left ``/chat``
+        answering "what agents are available" from a bare count with no roster in
+        context — the same defect on the other surface. Both prompts now
+        interpolate the same generated block.
+        """
+        from src.agents.factory import build_agent_roster_block
+        from src.api.routes.chatbot_graph import E2I_CHATBOT_SYSTEM_PROMPT
+
+        assert build_agent_roster_block() in E2I_CHATBOT_SYSTEM_PROMPT
+        assert "{agent_roster}" not in E2I_CHATBOT_SYSTEM_PROMPT
+        # The other substitution slot must survive untouched — it is filled per
+        # request, and _render_system_prompt uses .replace precisely because the
+        # prompt contains literal braces that .format would crash on (#1332).
+        assert "{context}" in E2I_CHATBOT_SYSTEM_PROMPT
+
+    def test_agent_status_fallback_names_agents_rather_than_a_count(self):
+        """The one canned reply for "which agents are there" must be able to
+        answer it. It previously asserted a bare count and named no agent — and
+        that count had already gone stale once."""
+        from src.api.routes.chatbot_graph import _AGENT_STATUS_FALLBACK
+
+        missing = [n for n in AGENT_REGISTRY_CONFIG if n not in _AGENT_STATUS_FALLBACK]
+        assert not missing, f"agents absent from the AGENT_STATUS fallback: {missing}"
+
+    def test_episodic_memory_enum_can_represent_every_agent(self):
+        """Roster drift with teeth (codex iter-1): ``E2IAgentName`` is an ENUM, so
+        an omitted agent is not a stale docstring — episodic memory simply cannot
+        represent that agent at all."""
+        from src.memory.episodic_memory import E2IAgentName
+
+        values = {e.value for e in E2IAgentName}
+        missing = sorted(set(AGENT_REGISTRY_CONFIG) - values)
+        assert not missing, f"agents E2IAgentName cannot represent: {missing}"
 
     def test_routing_signature_roster_agrees_with_the_registry(self):
         """The other surface that carries a roster (#1638): the /chat routing
