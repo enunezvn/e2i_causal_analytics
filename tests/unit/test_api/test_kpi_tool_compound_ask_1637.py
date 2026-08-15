@@ -303,9 +303,36 @@ class TestAggressiveCoordinatorsStayHarmless:
         result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
         assert not _is_compound_refusal(result), result.get("error")
 
+    def test_every_separator_is_also_readable_as_a_coordinator(self):
+        """The invariant, pinned directly instead of case by case.
+
+        Rounds 10, 11 and 12 of the codex loop were the SAME defect in three
+        costumes: a character that separates words for MATCHING but is invisible
+        to COORDINATION lets two metrics be answered as one. Enumerating cases
+        found "/" then "-.–—" then "_". Asserting the property closes the class.
+        """
+        from src.api.routes.chatbot_tools import _KPI_COORDINATOR_RE
+        from src.services.kpi_resolution import _SEPARATOR_CHARS
+
+        unreadable = [c for c in _SEPARATOR_CHARS if not _KPI_COORDINATOR_RE.search(c)]
+        assert not unreadable, (
+            f"separators that coordination cannot read: {unreadable!r} — two metrics "
+            f"joined by one of these would be answered as one"
+        )
+
     @pytest.mark.parametrize(
         "kpi_name",
-        ["TRx-NRx", "TRx - NRx", "TRx–NRx", "TRx—NRx", "TRx.NRx", "TRx. NRx", "TRx+NRx"],
+        [
+            "TRx-NRx",
+            "TRx - NRx",
+            "TRx–NRx",
+            "TRx—NRx",
+            "TRx.NRx",
+            "TRx. NRx",
+            "TRx+NRx",
+            "TRx_NRx",
+            "TRx _ NRx",
+        ],
     )
     async def test_punctuation_between_two_metrics_coordinates(self, kpi_name):
         """codex iter-11. Making "-" "." "–" "—" SEPARATORS for matching (so

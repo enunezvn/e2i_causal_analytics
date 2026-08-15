@@ -2102,7 +2102,7 @@ _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-
 _KPI_COORDINATOR_RE = re.compile(
     r"(?:\band\b|\bor\b|\bplus\b|\bas well as\b|\balongside\b"
     r"|\b(?:along|together) with\b|\bvs\.?\b|\bversus\b"
-    r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/|\+|-|–|—|\.)"
+    r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/|\+|-|–|—|\.|_)"
 )
 
 #: Backstop on the multi-mention scan. The scan ends naturally once every mention
