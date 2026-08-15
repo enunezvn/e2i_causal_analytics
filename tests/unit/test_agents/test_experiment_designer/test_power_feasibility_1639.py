@@ -1141,3 +1141,57 @@ class TestAllStatedCapsMustBeSatisfied:
         )
         assert out["feasibility_warnings"]
         assert "56" in " ".join(out["feasibility_warnings"])
+
+
+class TestTheMachineFieldCarriesTheStatusNotTheProse:
+    """codex iter-10 HIGH: I reused the human phrasing as the machine value.
+
+    ``_audit_verdict`` returns ``(completed, phrasing)`` where phrasing is prose
+    for a sentence — "was skipped", "reported status 'completed'". The
+    monitoring spec put that phrasing into ``validity_audit_status``, whose
+    documented values are ``completed | skipped | timed_out | failed |
+    not_run``. A consumer filtering on the enum matched nothing.
+    """
+
+    def _spec(self, state_extra):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        state = {"power_analysis": {}, "stratification_variables": []}
+        state.update(state_extra)
+        return TemplateGeneratorNode()._generate_monitoring_spec(state)
+
+    @pytest.mark.parametrize("status", ["completed", "skipped", "timed_out", "failed", "not_run"])
+    def test_every_documented_status_survives_verbatim(self, status):
+        assert self._spec({"validity_audit_status": status})["validity_audit_status"] == status
+
+    def test_an_absent_status_is_inferred_not_phrased(self):
+        """The same evidence-based inference as the document, but the VALUE."""
+        assert (
+            self._spec({"validity_threats": [{"threat_name": "x"}], "overall_validity_score": 0.6})[
+                "validity_audit_status"
+            ]
+            == "completed"
+        )
+        assert (
+            self._spec({"validity_threats": [], "overall_validity_score": 0.0})[
+                "validity_audit_status"
+            ]
+            == "not_run"
+        )
+
+    def test_the_document_still_reads_as_prose(self):
+        """The prose path must not regress into emitting a bare enum value."""
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        doc = TemplateGeneratorNode()._generate_preregistration(
+            {
+                "preregistration_formality": "heavy",
+                "power_analysis": {},
+                "validity_audit_status": "skipped",
+            }
+        )
+        assert "was skipped" in doc, "the human sentence lost its phrasing"

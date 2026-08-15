@@ -439,6 +439,28 @@ print("Results saved to analysis_results.json")
         return f"{value:.6g}"
 
     @staticmethod
+    def _audit_status(state: ExperimentDesignState) -> str:
+        """The MACHINE value: completed | skipped | timed_out | failed | not_run.
+
+        Kept separate from :meth:`_audit_verdict`, which returns prose for a
+        sentence. The monitoring spec published the prose under this field name
+        for a round, so a consumer filtering on the documented values matched
+        nothing (#1639, codex iter-10).
+
+        A checkpoint written before the field existed carries audit RESULTS but
+        no status, and calling that "never ran" is a false provenance claim --
+        the mirror image of the defect being fixed here -- so it is inferred
+        from the evidence an audit leaves behind.
+        """
+        status = state.get("validity_audit_status")
+        if status is not None:
+            return str(status)
+        has_verdict = bool(state.get("validity_threats")) or bool(
+            state.get("overall_validity_score")
+        )
+        return "completed" if has_verdict else "not_run"
+
+    @staticmethod
     def _audit_verdict(state: ExperimentDesignState) -> tuple[bool, str]:
         """Did the validity audit reach a verdict, and if not, in what words (#1639).
 
@@ -447,16 +469,7 @@ print("Results saved to analysis_results.json")
         here as "None identified", i.e. this document asserted a clean bill of
         health it had never obtained. Absent status means the node never ran.
         """
-        status = state.get("validity_audit_status")
-        if status is None:
-            # A checkpoint written before this field existed carries audit
-            # RESULTS but no status, and calling that "never ran" is a false
-            # provenance claim -- the mirror image of the defect being fixed
-            # here. Infer from the evidence the audit leaves behind.
-            has_verdict = bool(state.get("validity_threats")) or bool(
-                state.get("overall_validity_score")
-            )
-            status = "completed" if has_verdict else "not_run"
+        status = TemplateGeneratorNode._audit_status(state)
         phrasing = {
             "skipped": "was skipped",
             "timed_out": "timed out",
@@ -714,7 +727,7 @@ Comparison of {outcome} between treatment and control groups.
             # only the dashboard would otherwise see a 672,206 target and an end
             # date centuries out with no caveat anywhere in reach.
             "feasibility_warnings": list(state.get("feasibility_warnings") or []),
-            "validity_audit_status": self._audit_verdict(state)[1],
+            "validity_audit_status": self._audit_status(state),
             "refresh_interval_minutes": 60,
             "panels": [
                 {
