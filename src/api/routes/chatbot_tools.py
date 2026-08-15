@@ -504,7 +504,16 @@ async def _query_kpis(
                 "window_start": window_start,
                 "data_source": "synthetic" if kpi_include_synthetic() else "database",
                 "measure_basis": _BUSINESS_METRICS_BASIS,
-                "cross_substrate_conflict": _cross_substrate_conflict(kpi_name),
+                # No rows, so no stored figure to be confused with anything.
+                # The notice is a caveat ON the rows above it (#1640 codex
+                # iter-3): _query_kpis filters metric_name with
+                # _normalize_metric_name while the notice resolves through
+                # recognize_kpi, and those diverge -- "total prescriptions"
+                # filters 'total_prescriptions', which is never a stored key,
+                # yet resolved to TRx. Gating on rows closes that: a key the
+                # table does not use cannot return rows, so the mismatch can
+                # never reach a reader.
+                "cross_substrate_conflict": None,
                 "note": "; ".join(unmatched) + "; returned 0 rows",
             }
             if region and "region" not in filters:
@@ -530,7 +539,7 @@ async def _query_kpis(
             "window_start": window_start,
             "data_source": "synthetic" if kpi_include_synthetic() else "database",
             "measure_basis": _BUSINESS_METRICS_BASIS,
-            "cross_substrate_conflict": _cross_substrate_conflict(kpi_name),
+            "cross_substrate_conflict": (_cross_substrate_conflict(kpi_name) if metrics else None),
         }
     except Exception as e:
         logger.error(f"KPI query failed: {e}")

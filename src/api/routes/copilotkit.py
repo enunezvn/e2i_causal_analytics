@@ -1773,6 +1773,41 @@ _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
 }
 
 
+#: Which registry KPI each summary tile reports. Sits beside
+#: ``_KPI_SUMMARY_QUERIES`` because it is the same hand-authored field mapping;
+#: the SUBSTRATE itself is still derived from the registry, never written here.
+_KPI_SUMMARY_KPI_IDS: dict[str, str] = {
+    "trx_volume": "WS3-BI-005",
+    "nrx_volume": "WS3-BI-006",
+    "market_share": "WS3-BI-008",
+    "conversion_rate": "WS3-BI-009",
+    "hcp_reach": "WS3-BI-004",
+    "patient_starts": "WS3-BI-007",
+}
+
+
+def _kpi_summary_measure_bases() -> dict[str, dict]:
+    """Per-tile substrate for the Home KPI summary (#1640).
+
+    The first version declared one block-level object with a ``not_substrate``
+    key and no ``substrate`` — which kept the label while dropping the contract,
+    since the comparability rule is defined ON ``substrate``. These six tiles
+    have genuinely different substrates (TRx is ``treatment_events``, conversion
+    joins ``triggers``, HCP coverage reads ``hcp_profiles``), so each declares
+    its own rather than sharing a union that would over-claim.
+    """
+    from src.kpi.measure_basis import measure_basis_for_kpi
+    from src.kpi.registry import get_registry
+
+    registry = get_registry()
+    bases: dict[str, dict] = {}
+    for field, kpi_id in _KPI_SUMMARY_KPI_IDS.items():
+        kpi = registry.get(kpi_id)
+        if kpi is not None:
+            bases[field] = measure_basis_for_kpi(kpi)
+    return bases
+
+
 def _kpi_summary_query(
     base_query_id: str, brand_param: Optional[str], region: Optional[str], brand_scoped: bool
 ) -> tuple[str, list]:
@@ -1925,22 +1960,12 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # not wall-clock now — "of data" keeps the tile label honest.
         "period": "Last 30 days of data",
         "metrics": metrics,
-        # #1640: every tile here is COMPUTED from the operational substrate via
-        # the kpi_query registry — none is a stored business_metrics row. Saying
-        # so stops a tile figure being read as a check on, or a correction to, a
-        # business_metrics value under the same name (measured ~73x apart for
-        # TRx). Substrates are per-metric, so this declares the property they
-        # all share rather than a union that would over-claim.
-        "measure_basis": {
-            "computed": True,
-            "not_substrate": ["business_metrics"],
-            "note": (
-                "Every figure here is computed on demand from the operational substrate "
-                "(the kpi_query registry), NOT read from the stored business_metrics "
-                "table. Do not compare these with business_metrics values of the same "
-                "name — they measure different things."
-            ),
-        },
+        # #1640: per-tile substrate, derived from the registry. Every figure
+        # here is COMPUTED from the operational substrate via the kpi_query
+        # registry — none is a stored business_metrics row — so a tile must not
+        # be read as a check on, or a correction to, a business_metrics value
+        # under the same name (measured ~73x apart for TRx).
+        "measure_basis": _kpi_summary_measure_bases(),
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
         # than real-world data -> surface "synthetic" so the FE badges them

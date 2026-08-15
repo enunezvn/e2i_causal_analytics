@@ -247,16 +247,22 @@ class TestTheFenceIsFunctionalNotJustLabelled:
 
         # Patch where the name is RESOLVED (the service), not where it is
         # re-exported — the re-export is a binding, not an indirection.
-        original = mb.bases_are_comparable
+        original = mb.substrates_agree
         try:
-            mb.bases_are_comparable = lambda a, b: True
+            mb.substrates_agree = lambda a, b: True
             assert ct._cross_substrate_conflict("TRx") is None
         finally:
-            mb.bases_are_comparable = original
+            mb.substrates_agree = original
 
-    def test_the_zero_row_path_carries_it_too(self):
-        """This path needs no DB, and it is the one a bad brand/region hits —
-        the answer layer must not read an empty result as agreement."""
+    def test_the_zero_row_path_carries_the_basis_but_not_a_notice(self):
+        """This asserted the notice fired here too, on the reasoning that an
+        empty result must not read as agreement. codex iter-3 showed that was
+        backwards: with no rows there is no stored figure to confuse, and the
+        notice could name a KPI the query never actually filtered for (see
+        ``TestTheNoticeDescribesTheRowsItSitsBeside``).
+
+        The BASIS still rides along — the substrate is a property of the query,
+        not of whether it matched."""
         import asyncio
         import datetime
 
@@ -273,7 +279,7 @@ class TestTheFenceIsFunctionalNotJustLabelled:
         )
         assert out["count"] == 0
         assert out["measure_basis"]["substrate"] == ["business_metrics"]
-        assert out["cross_substrate_conflict"], sorted(out)
+        assert out["cross_substrate_conflict"] is None
 
 
 class TestTheBasisSsotIsCheapToImport:
@@ -411,23 +417,28 @@ class TestTheBasisPrefersTheSourceThatActuallyAnswered:
             roi, {"context": {"measure_basis_substrate": ["business_metrics"]}}
         )
         assert actual["substrate"] == ["business_metrics"]
-        assert actual["source_known"] is True
+        assert actual["runtime_confirmed"] is True
 
     def test_the_static_union_is_marked_as_unconfirmed(self):
         from src.kpi.measure_basis import measure_basis_for_kpi
         from src.kpi.registry import get_registry
 
         static = measure_basis_for_kpi(get_registry().get("WS3-BI-010"))
-        assert static["source_known"] is False
+        assert static["runtime_confirmed"] is False
 
-    def test_a_single_source_kpi_is_known_either_way(self):
-        """TRx declares one table, so the union IS the actual source."""
+    def test_a_single_source_kpi_needs_no_runtime_record(self):
+        """TRx declares one table, so the declared set is already exact —
+        ``runtime_confirmed`` is False because no calculator recorded anything,
+        NOT because the substrate is in doubt. The earlier ``source_known`` name
+        conflated those two and reported False for the 11 registry KPIs whose
+        two tables are JOINED in one query, where the union is exact."""
         from src.kpi.measure_basis import measure_basis_for_kpi
         from src.services.kpi_resolution import recognize_kpi
 
         basis = measure_basis_for_kpi(recognize_kpi("TRx"))
         assert basis["substrate"] == ["treatment_events"]
-        assert basis["source_known"] is True
+        assert basis["declared_sources"] == ["treatment_events"]
+        assert basis["runtime_confirmed"] is False
 
     def test_a_scoped_roi_becomes_comparable_with_stored_rows(self):
         from src.kpi.measure_basis import (
@@ -479,6 +490,146 @@ class TestTheBasisPrefersTheSourceThatActuallyAnswered:
 
         roi = get_registry().get("WS3-BI-010")
         stale = measure_basis_for_kpi(roi, {"context": {"data_through": "2026-08-01"}})
-        assert stale["source_known"] is False
+        assert stale["runtime_confirmed"] is False
         assert stale["substrate"] == ["agent_activities", "business_metrics"]
         assert not bases_are_comparable(stale, BUSINESS_METRICS_BASIS)
+
+
+class TestTheHelperAnswersSubstrateNotMeasure:
+    """Measured limit, pinned so it is not mistaken for a bug — or for a
+    guarantee the helper does not make.
+
+    Trigger Recall (WS2-TR-002) and Conversion Rate (WS3-BI-009) both declare
+    ``['treatment_events', 'triggers']``. ``substrates_agree`` returns True for
+    them, correctly: they DO share a substrate. But a recall and a conversion
+    rate are not interchangeable figures, so this is not a general "may I
+    compare these numbers" oracle, and the one production caller only ever asks
+    it about ONE metric surfaced two ways.
+    """
+
+    def test_two_different_metrics_can_share_a_substrate(self):
+        from src.kpi.measure_basis import measure_basis_for_kpi, substrates_agree
+        from src.kpi.registry import get_registry
+
+        reg = get_registry()
+        recall = measure_basis_for_kpi(reg.get("WS2-TR-002"))
+        conversion = measure_basis_for_kpi(reg.get("WS3-BI-009"))
+        assert recall["substrate"] == conversion["substrate"]
+        assert substrates_agree(recall, conversion)
+
+    def test_the_production_caller_only_asks_about_one_metric(self):
+        """`cross_substrate_conflict` resolves ONE kpi_name and compares its
+        computed basis against the stored-row basis — never two metrics."""
+        import ast
+        import inspect
+
+        from src.kpi import measure_basis
+
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(inspect.getsource(measure_basis)))
+            if isinstance(n, ast.FunctionDef) and n.name == "cross_substrate_conflict"
+        )
+        calls = [
+            n
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "measure_basis_for_kpi"
+        ]
+        assert len(calls) == 1, "more than one KPI resolved — the helper cannot judge that"
+
+    def test_the_old_name_still_resolves(self):
+        from src.kpi.measure_basis import bases_are_comparable, substrates_agree
+
+        assert bases_are_comparable is substrates_agree
+
+
+class TestTheNoticeDescribesTheRowsItSitsBeside:
+    """codex iter-3 HIGH: the notice and the query disagreed on what was asked.
+
+    ``_query_kpis`` filters ``business_metrics.metric_name`` with
+    ``_normalize_metric_name(kpi_name)``, while the notice resolved the RAW name
+    through ``recognize_kpi``. Measured, they diverge:
+
+        "total prescriptions" -> filter key 'total_prescriptions'  (never stored)
+                              -> notice claimed WS3-BI-005 TRx
+        "hcp coverage"        -> filter key 'hcp_coverage'         (never stored)
+                              -> notice claimed WS3-BI-004
+
+    So a TRx cross-substrate warning could be attached to zero rows for a key
+    that was never queried as TRx. The notice is a caveat ON the rows above it,
+    so it now fires only when there ARE rows: with none, there is no stored
+    figure to be confused with anything, and naming one is worse than silence.
+    """
+
+    def test_no_rows_means_no_notice(self):
+        import asyncio
+        import datetime
+
+        from src.api.routes.chatbot_tools import _query_kpis
+
+        out = asyncio.run(
+            _query_kpis(
+                brand="NotARealBrand",
+                region=None,
+                kpi_name="TRx",
+                since=datetime.datetime(2026, 1, 1),
+                limit=5,
+            )
+        )
+        assert out["count"] == 0
+        assert out["cross_substrate_conflict"] is None
+        # The BASIS still rides along — the rows' substrate is a property of the
+        # query, not of whether it matched anything.
+        assert out["measure_basis"]["substrate"] == ["business_metrics"]
+
+    def test_the_helper_still_answers_for_a_real_metric(self):
+        from src.api.routes.chatbot_tools import _cross_substrate_conflict
+
+        assert _cross_substrate_conflict("TRx")["kpi_id"] == "WS3-BI-005"
+
+    def test_a_name_that_is_not_a_stored_key_cannot_produce_rows(self):
+        """Why gating on rows is sufficient rather than a second name check:
+        if the filter key is not a stored metric_name, the query returns
+        nothing, so the mismatch can never reach a reader."""
+        from src.api.routes.chatbot_tools import _normalize_metric_name
+
+        assert _normalize_metric_name("total prescriptions") == "total_prescriptions"
+        assert _normalize_metric_name("TRx") == "trx"
+
+
+class TestTheHomeSummaryDeclaresPerTileSubstrates:
+    """codex iter-3 HIGH: the summary emitted a ``measure_basis`` with no
+    ``substrate`` key at all — just ``not_substrate`` — while the rule the prompt
+    states is defined ON ``substrate``. That kept the label and dropped the
+    contract, and its six tiles have genuinely different substrates."""
+
+    def test_each_tile_declares_its_own_substrate(self):
+        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+
+        bases = _kpi_summary_measure_bases()
+        assert set(bases) >= {
+            "trx_volume",
+            "nrx_volume",
+            "market_share",
+            "conversion_rate",
+            "hcp_reach",
+            "patient_starts",
+        }, sorted(bases)
+        assert bases["trx_volume"]["substrate"] == ["treatment_events"]
+        assert bases["conversion_rate"]["substrate"] == ["treatment_events", "triggers"]
+        assert bases["hcp_reach"]["substrate"] == ["hcp_profiles"]
+
+    def test_no_tile_claims_business_metrics(self):
+        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+
+        for field, basis in _kpi_summary_measure_bases().items():
+            assert "business_metrics" not in basis["substrate"], field
+
+    def test_a_tile_is_not_comparable_with_stored_rows(self):
+        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+        from src.kpi.measure_basis import BUSINESS_METRICS_BASIS, substrates_agree
+
+        bases = _kpi_summary_measure_bases()
+        assert not substrates_agree(bases["trx_volume"], BUSINESS_METRICS_BASIS)

@@ -76,9 +76,15 @@ def measure_basis_for_kpi(
     tables = sorted(actual) if actual else declared
     return {
         "substrate": tables,
-        # False means "these are the sources it COULD have used" — the payload
-        # says so rather than implying a precision it does not have.
-        "source_known": bool(actual) or len(declared) == 1,
+        # Whether a CALCULATOR recorded the branch that answered. False does not
+        # mean the substrate is wrong: for a single-source KPI, and for the 11
+        # registry KPIs whose two tables are JOINED in one query (measured), the
+        # declared set is exact. It is a superset only for a KPI whose
+        # calculator falls back between sources -- ROI is the one such case in
+        # the registry today, and it now records which branch answered. Nothing
+        # here can derive fallback-ness statically, so the payload states what
+        # it knows instead of guessing.
+        "runtime_confirmed": bool(actual),
         "declared_sources": declared,
         "computed": True,
         "measure": (
@@ -96,11 +102,24 @@ def measure_basis_for_kpi(
     }
 
 
-def bases_are_comparable(left: Optional[Dict[str, Any]], right: Optional[Dict[str, Any]]) -> bool:
-    """Two figures are comparable only when they rest on the same substrate.
+def substrates_agree(left: Optional[Dict[str, Any]], right: Optional[Dict[str, Any]]) -> bool:
+    """Do these two figures rest on the same substrate?
 
-    Deliberately fails CLOSED on a missing declaration: an undeclared basis is
-    not evidence of agreement.
+    **This answers "same source", NOT "same measure", and is only meaningful for
+    ONE metric surfaced two ways** -- which is the only way it is called
+    (:func:`cross_substrate_conflict`, comparing a metric's computed form
+    against the stored rows for that same metric).
+
+    The limit is real and measured: Trigger Recall (WS2-TR-002) and Conversion
+    Rate (WS3-BI-009) both declare ``['treatment_events', 'triggers']``, so this
+    returns True for them -- correctly, they DO share a substrate -- while a
+    recall and a conversion rate are obviously not interchangeable figures. Do
+    not reach for this as a general "may I compare these two numbers" oracle;
+    it cannot answer that and does not claim to.
+
+    Fails CLOSED on a missing declaration: an undeclared substrate is not
+    evidence of agreement, and two undeclared ones are not evidence of agreement
+    with each other.
     """
     if not left or not right:
         return False
@@ -144,7 +163,7 @@ def cross_substrate_conflict(kpi_name: Optional[str]) -> Optional[Dict[str, Any]
     if kpi is None:
         return None
     computed = measure_basis_for_kpi(kpi)
-    if bases_are_comparable(computed, BUSINESS_METRICS_BASIS):
+    if substrates_agree(computed, BUSINESS_METRICS_BASIS):
         return None
     return {
         "this_tool": "e2i_data_query_tool",
@@ -161,3 +180,9 @@ def cross_substrate_conflict(kpi_name: Optional[str]) -> Optional[Dict[str, Any]
             "correction or share-of for the other."
         ),
     }
+
+
+#: Superseded name. `bases_are_comparable` read as a general comparability
+#: oracle, which this is not -- it compares SUBSTRATES, for one metric surfaced
+#: two ways. Kept so existing imports keep working.
+bases_are_comparable = substrates_agree
