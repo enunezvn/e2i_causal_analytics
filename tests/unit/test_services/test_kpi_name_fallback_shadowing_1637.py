@@ -185,6 +185,61 @@ class TestSecondMetricProbeIsInflectionConsistent:
         assert got_singular[0].id == got_plural[0].id
 
 
+class TestRealInputShapesStillResolve:
+    """Moving to word boundaries made punctuation that JOINS words into a hard
+    stop, and each shape below regressed against main before being fixed
+    (#1637 codex iter-8/9):
+
+        conversion_rate  WS3-BI-009 -> None        (15 real tool calls)
+        market_share     WS3-BI-008 -> None        (6 real tool calls)
+        ROI's trend      WS3-BI-010 -> None
+        TRx's drivers    WS3-BI-005 -> None        (a #1475 causal-ask shape)
+        conversion-rate  WS3-BI-009 -> WS2-TR-009  (a DIFFERENT metric, not None)
+
+    The tell that these were accidents rather than decisions: the CURLY
+    apostrophe resolved while the ASCII one did not, purely because one happened
+    to be in the character class and the other did not.
+    """
+
+    @pytest.mark.parametrize(
+        "query,expected_id",
+        [
+            # snake_case — ids the model really passes
+            ("conversion_rate", "WS3-BI-009"),
+            ("market_share", "WS3-BI-008"),
+            # hyphenated
+            ("conversion-rate", "WS3-BI-009"),
+            ("TRx-share", "WS3-BI-008"),
+            ("time-to-release", "WS1-DQ-009"),
+            ("roc-auc", "WS1-MP-001"),
+            # possessive, both apostrophes
+            ("ROI's trend", "WS3-BI-010"),
+            ("TRx's drivers", "WS3-BI-005"),
+            ("F1 score's value", "WS1-MP-003"),
+            ("roi’s trend", "WS3-BI-010"),
+            ("trx’s drivers", "WS3-BI-005"),
+        ],
+    )
+    def test_joined_and_possessive_forms_resolve(self, query, expected_id):
+        kpi = recognize_kpi(query)
+        assert kpi is not None, f"{query!r} did not resolve"
+        assert kpi.id == expected_id, f"{query!r} -> {kpi.id}, wanted {expected_id}"
+
+    @pytest.mark.parametrize(
+        "query",
+        ["conversion_rate", "TRx-share", "ROI's trend", "time-to-release", "market_share"],
+    )
+    def test_normalization_preserves_length(self, query):
+        """The spans are offsets into the normalized string, and the #1475
+        governing-head guards slice it. A normalization that changed length would
+        make every span silently point at the wrong token."""
+        match = recognize_kpi_span(query)
+        assert match is not None
+        _kpi, normalized, start, end = match
+        assert len(normalized) == len(" ".join(query.lower().split()))
+        assert 0 <= start < end <= len(normalized)
+
+
 class TestSpanContractPreserved:
     """``recognize_kpi_span`` feeds the #1475 governing-head guards, which slice
     the query around the returned span. A span that does not actually cover the

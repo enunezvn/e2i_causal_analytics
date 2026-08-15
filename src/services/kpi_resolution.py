@@ -261,8 +261,14 @@ _NAME_TOKEN_STOP = frozenset(
 #: KPIs whose names are ENTIRELY such tokens carry explicit aliases instead.
 _MIN_NAME_TOKEN = 4
 
+#: Characters that JOIN words in real input but separate concepts for matching:
+#: "conversion_rate", "TRx-share". Normalized to spaces so boundary matching sees
+#: the words (#1637 codex iter-8/9). Replacement is one character for one, so the
+#: normalized string keeps the LENGTH its spans are measured against.
+_SEPARATOR_CHARS = "_-"
+
 #: How a metric phrase may be inflected in prose — "override rate" also appears
-#: as "override rates", "patient touch" as "patient touches".
+#: as "override rates", "patient touch" as "patient touches", "ROI" as "ROI's".
 #:
 #: SHARED DELIBERATELY (#1637 codex iter-2). Two matchers decide whether a phrase
 #: names a metric — :func:`_alias_pattern` (which metric is being asked about)
@@ -271,7 +277,13 @@ _MIN_NAME_TOKEN = 4
 #: the first KPI, failed to see the second, and answered one metric as complete —
 #: the exact fail-silent the multi-metric guard exists to prevent. One constant
 #: so the two cannot drift apart again.
-_PLURAL_SUFFIX = r"(?:e?s)?"
+#: Possessives are included because the boundary rule otherwise rejects them
+#: outright: "ROI's trend" and "TRx's drivers" resolved on main and stopped
+#: resolving here — and "TRx drivers" is one of the very shapes the #1475
+#: governing-head guards exist to read. The curly apostrophe resolved while the
+#: ASCII one did not, which is the tell that this was an accident of the
+#: character class rather than a decision.
+_PLURAL_SUFFIX = r"(?:'s|’s|e?s)?"
 
 
 @lru_cache(maxsize=1024)
@@ -373,16 +385,20 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
     """
     if not query:
         return None
-    # Underscores are separators here, not word characters (#1637 codex iter-8).
-    # The model really does pass snake_case ids -- "conversion_rate" (15 calls)
-    # and "market_share" (6) appear in the 51-turn eval -- and once matching moved
-    # to word boundaries, "_" being a \w char made both resolve to NOTHING.
+    # Separators are separators, not word characters (#1637 codex iter-8/9). The
+    # model really does pass snake_case ids -- "conversion_rate" (15 calls) and
+    # "market_share" (6) appear in the 51-turn eval -- and once matching moved to
+    # word boundaries, "_" being a \w char made both resolve to NOTHING. Hyphens
+    # were worse than nothing: "conversion-rate" resolved to Trigger Funnel
+    # Conversion instead of Conversion Rate.
     #
     # Normalized AFTER the whitespace collapse and one character for one, so the
     # result is the same LENGTH as the string the spans are measured against; the
     # #1475 governing-head guards slice this string and would silently misread a
     # shorter one.
-    q = " ".join(str(query).lower().split()).replace("_", " ")
+    q = " ".join(str(query).lower().split())
+    for _sep in _SEPARATOR_CHARS:
+        q = q.replace(_sep, " ")
     registry = get_registry()
 
     # 0) reverse-share phrasing with a brand/modifier gap (#1475 codex iter-4):
