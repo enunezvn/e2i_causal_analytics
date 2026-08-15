@@ -589,7 +589,7 @@ Comparison of {outcome} between treatment and control groups.
         threat_summary = ", ".join([t.get("threat_name", "") for t in threats[:3]]) or (
             "None identified"
             if audit_completed
-            else f"Not assessed \u2014 the validity audit {audit_status}"
+            else f"Not reported \u2014 the validity audit {audit_status}"
         )
         # A 0.00 printed as a score reads as "audited and scored zero". When the
         # audit did not complete, the number is a default, not a measurement.
@@ -658,8 +658,14 @@ Comparison of {outcome} between treatment and control groups.
         ) or (
             "No significant threats identified"
             if audit_completed
-            else f"**Not assessed** \u2014 the validity audit {audit_status}; "
-            "this section is empty because no audit verdict exists, "
+            # "Not reported", not "Not assessed", and no claim that a verdict
+            # does not EXIST (codex iter-15). For status "unknown" -- a state
+            # carrying no threats and a 0.0 score -- an audit may well have
+            # completed cleanly; what is missing is the record of it. Asserting
+            # absence there is the same class of overstatement this section
+            # exists to prevent, pointed the other way.
+            else f"**Not reported** \u2014 the validity audit {audit_status}; "
+            "this section is empty because no audit verdict is RECORDED, "
             "not because the design is free of threats."
         )
 

@@ -32,7 +32,7 @@ from src.agents.experiment_designer.graph import (
 from src.agents.experiment_designer.memory_hooks import contribute_to_memory
 from src.agents.experiment_designer.state import (
     ExperimentDesignState,
-    normalize_audit_status,
+    infer_audit_status,
 )
 
 if TYPE_CHECKING:
@@ -688,8 +688,10 @@ class ExperimentDesignerAgent(SkillsMixin):
             # Normalized, not passed through: a replayed checkpoint can carry
             # the old prose value or a typo, and this is the field every
             # consumer reads (#1639).
-            validity_audit_status=normalize_audit_status(
-                state.get("validity_audit_status", "not_run")
+            validity_audit_status=infer_audit_status(
+                state.get("validity_audit_status"),
+                has_threats=bool(threats),
+                score=state.get("overall_validity_score"),
             ),
             # Generated templates
             causal_graph_dot=state.get("causal_graph_dot", ""),

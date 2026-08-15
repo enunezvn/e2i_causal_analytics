@@ -291,12 +291,34 @@ def _retract_stale_verdict(state: ExperimentDesignState) -> None:
     # `dag_validation_warnings` is the exact record of what this node
     # contributed, so the withdrawal is precise -- warnings from other nodes
     # are none of its business and stay.
+    _clear_previous_dag_verdict(state)
+
+
+def _clear_previous_dag_verdict(state: ExperimentDesignState) -> None:
+    """Withdraw the previous audit's DAG prose AND drop its structured results.
+
+    Used on every exit that replaces a verdict, and at the START of a completed
+    pass -- codex iter-15: doing it only inside the DAG-evidence branch left a
+    completed rerun WITHOUT DAG evidence (or whose gate is no longer
+    accept/review) carrying iteration 0's warnings and `dag_*` fields as though
+    they described the new design. The branch that would have cleaned up is
+    exactly the branch that does not run.
+    """
     _withdraw_previous_dag_warnings(state)
-    state["dag_validation_warnings"] = []
-    state["dag_missing_confounders"] = []
-    state["dag_latent_confounders"] = []
-    state["dag_instrument_candidates"] = []
-    state["dag_effect_modifiers"] = []
+    # REMOVED, not emptied. Absence is this module's established meaning for
+    # "DAG validation did not run" -- test_dag_validation pins
+    # `"dag_confounders_validated" not in result` on the skip paths -- so
+    # writing `[]` would announce a validation that never happened. Popping
+    # retracts a previous pass's fields and leaves a first pass untouched.
+    for key in (
+        "dag_validation_warnings",
+        "dag_confounders_validated",
+        "dag_missing_confounders",
+        "dag_latent_confounders",
+        "dag_instrument_candidates",
+        "dag_effect_modifiers",
+    ):
+        state.pop(key, None)  # type: ignore[misc]
 
 
 def _withdraw_previous_dag_warnings(state: ExperimentDesignState) -> None:
@@ -444,16 +466,17 @@ class ValidityAuditNode:
             state["redesign_needed"] = audit.get("redesign_needed", False)
             state["redesign_recommendations"] = audit.get("redesign_recommendations", [])
 
+            # The previous pass's DAG verdict is withdrawn HERE, before the
+            # evidence check -- not inside it (#1639). A redesign can leave
+            # iteration 1 with no DAG evidence at all, and then the branch that
+            # would have replaced iteration 0's warnings never runs, so they
+            # survive describing a design that no longer exists. Repopulated
+            # below only when new validation actually produces a verdict.
+            _clear_previous_dag_verdict(state)
+
             # V4.4: DAG-aware validity validation
             if self._has_dag_evidence(state):
                 dag_results, dag_warnings = self._perform_dag_validation(state)
-
-                # Withdraw the PREVIOUS audit's prose before overwriting the
-                # record of it (#1639). Without this, a completed rerun that
-                # finds nothing leaves iteration 0's DAG sentence in
-                # `warnings` forever -- and destroys `dag_validation_warnings`,
-                # which is what any later retraction would have used.
-                _withdraw_previous_dag_warnings(state)
 
                 # Store DAG validation results in state
                 state["dag_confounders_validated"] = dag_results.get("confounders_validated", [])

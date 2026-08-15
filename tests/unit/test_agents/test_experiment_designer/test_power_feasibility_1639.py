@@ -1344,7 +1344,7 @@ class TestTheAuditStatusIsNormalizedWhereItLeaves:
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
-        assert "normalize_audit_status" in called, (
+        assert called & {"normalize_audit_status", "infer_audit_status"}, (
             "_create_output publishes validity_audit_status without normalizing it"
         )
 
@@ -1394,8 +1394,13 @@ class TestRetractionAlsoDropsTheAuditsProse:
 
     def test_the_dag_findings_are_cleared_too(self):
         _, out = self._run_skipped_after_a_completed_audit()
-        assert out.get("dag_validation_warnings") == []
-        assert out.get("dag_missing_confounders") == []
+        # ABSENT, not empty: `"dag_confounders_validated" not in result` is
+        # what test_dag_validation already pins for a skipped validation, so an
+        # empty list here would announce one that never ran. My first version
+        # of this assertion chose `== []` and would have forced the wrong
+        # semantic on the module.
+        assert "dag_validation_warnings" not in out
+        assert "dag_missing_confounders" not in out
 
 
 class TestANonCompletedAuditEarnsNoValidityCredit:
@@ -1702,7 +1707,8 @@ class TestACompletedRerunAlsoWithdrawsTheOldProse:
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "_withdraw_previous_dag_warnings"
+                and node.func.id
+                in {"_withdraw_previous_dag_warnings", "_clear_previous_dag_verdict"}
                 and withdraw_line is None
             ):
                 withdraw_line = node.lineno
@@ -1718,3 +1724,75 @@ class TestACompletedRerunAlsoWithdrawsTheOldProse:
         assert withdraw_line < overwrite_line, (
             "withdrawal must precede the overwrite that destroys the record"
         )
+
+
+class TestACompletedRerunWithoutDagEvidenceStillRetracts:
+    """codex iter-15 HIGH + LOW: the cleanup lived inside the branch that skips.
+
+    Iteration 0 has DAG evidence and appends "Assumed confounder region ...".
+    The redesign changes state so iteration 1 completes with NO DAG evidence
+    (or a gate no longer accept/review). The DAG branch never runs — so the
+    branch that would have replaced iteration 0's warnings is exactly the one
+    that is skipped, and its `dag_*` fields survive describing the old design.
+
+    My iter-14 order test passed anyway: it only checked that the withdrawal
+    call precedes the overwrite INSIDE that branch.
+    """
+
+    def test_the_retraction_is_not_inside_the_dag_evidence_branch(self):
+        import ast
+        import inspect
+
+        from src.agents.experiment_designer.nodes import validity_audit
+
+        tree = ast.parse(inspect.getsource(validity_audit.ValidityAuditNode.execute).lstrip())
+
+        def calls_within(node):
+            return {
+                inner.func.id
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+            }
+
+        guarded = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If) and "_has_dag_evidence" in calls_within(node.test):
+                for stmt in node.body:
+                    guarded |= calls_within(stmt)
+        all_calls = calls_within(tree)
+        assert "_clear_previous_dag_verdict" in all_calls, "the completed path never retracts"
+        assert "_clear_previous_dag_verdict" not in guarded, (
+            "the retraction sits inside the DAG-evidence branch, so a rerun "
+            "without DAG evidence keeps the previous design's verdict"
+        )
+
+    def test_a_previous_passes_dag_fields_do_not_survive(self):
+        from src.agents.experiment_designer.nodes.validity_audit import (
+            _clear_previous_dag_verdict,
+        )
+
+        stale = "Assumed confounder region was NOT discovered in causal DAG"
+        state = {
+            "warnings": ["An unrelated upstream warning", stale],
+            "dag_validation_warnings": [stale],
+            "dag_missing_confounders": ["region"],
+            "dag_confounders_validated": ["age"],
+        }
+        _clear_previous_dag_verdict(state)
+        assert state["warnings"] == ["An unrelated upstream warning"]
+        for key in (
+            "dag_validation_warnings",
+            "dag_missing_confounders",
+            "dag_confounders_validated",
+        ):
+            assert key not in state, key
+
+    def test_a_first_pass_is_left_alone(self):
+        """Popping absent keys must not introduce them."""
+        from src.agents.experiment_designer.nodes.validity_audit import (
+            _clear_previous_dag_verdict,
+        )
+
+        state = {"warnings": ["upstream"]}
+        _clear_previous_dag_verdict(state)
+        assert state == {"warnings": ["upstream"]}
