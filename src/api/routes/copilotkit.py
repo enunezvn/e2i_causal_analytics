@@ -270,9 +270,9 @@ import logging
 import operator
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import (
     Annotated,
     Any,
@@ -1778,24 +1778,52 @@ _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
 def _tables_in_sql(sql: str) -> list[str]:
     """Real tables a registry query reads, derived from the SQL itself (#1640).
 
+    A PHANTOM table is a wrong basis, which is worse than a narrow one, so the
+    forms that produce one are handled explicitly:
+
+    * ``FROM public.treatment_events`` yields ``treatment_events``, not
+      ``public`` -- measured, 12 of the 306 registry queries are
+      schema-qualified today;
+    * ``JOIN LATERAL (...)`` and ``FROM (SELECT ...)`` name no table here, and
+      the inner query's own FROM clauses are picked up on their own;
+    * quoted identifiers are read.
+
     CTE names are excluded: ``WITH first_brand AS (...) SELECT ... FROM
     first_brand`` reads ``treatment_events``, not a table called
     ``first_brand``.
     """
+    ident = r'(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))'
     ctes = {
-        m.group(1).lower()
-        for m in re.finditer(r"(?:with|,)\s+([a-z_][a-z0-9_]*)\s+as\s*\(", sql, re.IGNORECASE)
+        (m.group(1) or m.group(2)).lower()
+        for m in re.finditer(rf"(?:with|,)\s+{ident}\s+as\s*\(", sql, re.IGNORECASE)
     }
-    found = {
-        m.group(1).lower()
-        for m in re.finditer(r"(?:from|join)\s+([a-z_][a-z0-9_]*)", sql, re.IGNORECASE)
-    }
+    found: set[str] = set()
+    for m in re.finditer(
+        rf"(?:from|join)\s+(?:lateral\s+)?(?:{ident}\s*\.\s*)?{ident}",
+        sql,
+        re.IGNORECASE,
+    ):
+        # groups: 1/2 = optional schema (quoted/bare), 3/4 = table (quoted/bare)
+        name = (m.group(3) or m.group(4) or "").lower()
+        if name and name not in {"lateral", "select"}:
+            found.add(name)
     return sorted(found - ctes)
 
 
-@lru_cache(maxsize=1)
-def _kpi_summary_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
-    """``{query_id: [table, ...]}`` read once from ``kpi_query_registry``."""
+#: How long a registry read stays good. Short enough that a migration is picked
+#: up without a restart, long enough that Home does not re-query per render.
+_SUBSTRATE_CACHE_TTL_SECONDS = 300
+
+_SUBSTRATE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, list[str]]]] = {}
+
+
+def _reset_substrate_cache() -> None:
+    """Drop the memoized registry reads (tests, and after a migration)."""
+    _SUBSTRATE_CACHE.clear()
+
+
+def _read_query_substrates(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
+    """``{query_id: [table, ...]}`` read from ``kpi_query_registry``."""
     from src.api.dependencies.supabase_client import get_supabase
 
     client = get_supabase()
@@ -1812,6 +1840,23 @@ def _kpi_summary_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list
         logger.warning(f"[CopilotKit] kpi_query_registry unreadable, omitting measure_basis: {e}")
         return {}
     return {r["query_id"]: _tables_in_sql(r.get("sql") or "") for r in rows}
+
+
+def _kpi_summary_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
+    """Memoized registry read, with a TTL and NO caching of failures.
+
+    An ``lru_cache`` here meant a single transient read failure cached ``{}``
+    for the life of the process, so Home would emit numeric tiles with no basis
+    until restart — and a registry migration could never be picked up either.
+    A failure is not a result; only a non-empty read is remembered.
+    """
+    entry = _SUBSTRATE_CACHE.get(query_ids)
+    if entry is not None and (time.monotonic() - entry[0]) < _SUBSTRATE_CACHE_TTL_SECONDS:
+        return entry[1]
+    result = _read_query_substrates(query_ids)
+    if result:
+        _SUBSTRATE_CACHE[query_ids] = (time.monotonic(), result)
+    return result
 
 
 def _kpi_summary_measure_bases(

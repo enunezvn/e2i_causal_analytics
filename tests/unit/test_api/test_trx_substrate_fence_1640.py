@@ -769,3 +769,116 @@ class TestTheBasisFollowsTheQueryThatActuallyRan:
     def test_the_declared_query_id_is_the_resolved_one(self):
         scoped = self._bases("northeast")["hcp_reach"]
         assert scoped["query_id"] == "business_impact_hcp_reach_region", scoped
+
+
+class TestTheSqlExtractorDoesNotInventTables:
+    """codex iter-5 HIGH: a PHANTOM table is a wrong basis, not a narrow one.
+
+    Measured on the live registry: **12 of 306** queries are schema-qualified
+    (``public.data_source_tracking``, ``public.v_patient_eligibility``, ...).
+    None is a summary tile today, so no shipped label was wrong — but the
+    helper is general, and the first schema-qualified tile query would have
+    declared a substrate called ``public``.
+    """
+
+    def test_schema_qualified_names_report_the_table(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        assert _tables_in_sql("SELECT 1 FROM public.treatment_events") == ["treatment_events"]
+        assert _tables_in_sql("SELECT 1 FROM public.a JOIN public.b ON 1=1") == ["a", "b"]
+
+    def test_lateral_is_not_a_table(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        sql = "SELECT 1 FROM triggers t JOIN LATERAL (SELECT 1 FROM treatment_events) x ON true"
+        tables = _tables_in_sql(sql)
+        assert "lateral" not in tables, tables
+        assert tables == ["treatment_events", "triggers"]
+
+    def test_a_subquery_is_not_a_table(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        assert _tables_in_sql("SELECT 1 FROM (SELECT 1 FROM triggers) x") == ["triggers"]
+
+    def test_quoted_identifiers_are_read(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        assert _tables_in_sql('SELECT 1 FROM "treatment_events"') == ["treatment_events"]
+
+    def test_the_live_registry_produces_no_phantom_schema_names(self):
+        """Every real query, checked against the actual table list."""
+        import pytest as _pytest
+
+        from src.api.dependencies.supabase_client import get_supabase, init_supabase
+
+        if get_supabase() is None:
+            init_supabase()
+        client = get_supabase()
+        if client is None:
+            _pytest.skip("no Supabase client available")
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        try:
+            rows = (client.table("kpi_query_registry").select("query_id,sql").execute()).data or []
+        except Exception:
+            _pytest.skip("kpi_query_registry unreadable")
+        offenders = {
+            r["query_id"]: t
+            for r in rows
+            for t in _tables_in_sql(r.get("sql") or "")
+            if t in {"public", "lateral", "select"}
+        }
+        assert not offenders, offenders
+
+
+class TestTheRegistryCacheCannotWedge:
+    """codex iter-5 HIGH: an `lru_cache` for process lifetime meant a transient
+    registry read failure cached ``{}`` forever, so Home would emit numeric KPI
+    tiles with no basis until restart — and a registry migration could not be
+    picked up either."""
+
+    def test_a_failed_read_is_not_cached(self):
+        import src.api.routes.copilotkit as ck
+
+        ck._reset_substrate_cache()
+        calls = {"n": 0}
+
+        def _boom(_ids):
+            calls["n"] += 1
+            return {}
+
+        original = ck._read_query_substrates
+        try:
+            ck._read_query_substrates = _boom
+            assert ck._kpi_summary_substrates_cached(("a",)) == {}
+            assert ck._kpi_summary_substrates_cached(("a",)) == {}
+            assert calls["n"] == 2, "an empty read was cached and never retried"
+        finally:
+            ck._read_query_substrates = original
+            ck._reset_substrate_cache()
+
+    def test_a_successful_read_is_cached(self):
+        import src.api.routes.copilotkit as ck
+
+        ck._reset_substrate_cache()
+        calls = {"n": 0}
+
+        def _ok(_ids):
+            calls["n"] += 1
+            return {"a": ["treatment_events"]}
+
+        original = ck._read_query_substrates
+        try:
+            ck._read_query_substrates = _ok
+            assert ck._kpi_summary_substrates_cached(("a",)) == {"a": ["treatment_events"]}
+            assert ck._kpi_summary_substrates_cached(("a",)) == {"a": ["treatment_events"]}
+            assert calls["n"] == 1
+        finally:
+            ck._read_query_substrates = original
+            ck._reset_substrate_cache()
+
+    def test_the_cache_expires_so_a_migration_is_picked_up(self):
+        import src.api.routes.copilotkit as ck
+
+        assert ck._SUBSTRATE_CACHE_TTL_SECONDS > 0
+        assert ck._SUBSTRATE_CACHE_TTL_SECONDS <= 3600, "a day-long TTL is a restart in disguise"
