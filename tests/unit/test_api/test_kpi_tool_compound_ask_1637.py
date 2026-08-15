@@ -303,6 +303,39 @@ class TestAggressiveCoordinatorsStayHarmless:
         result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
         assert not _is_compound_refusal(result), result.get("error")
 
+    @pytest.mark.parametrize(
+        "kpi_name",
+        ["TRx-NRx", "TRx - NRx", "TRx–NRx", "TRx—NRx", "TRx.NRx", "TRx. NRx", "TRx+NRx"],
+    )
+    async def test_punctuation_between_two_metrics_coordinates(self, kpi_name):
+        """codex iter-11. Making "-" "." "–" "—" SEPARATORS for matching (so
+        "TRx-share" resolves) left them unreadable as COORDINATION, so "TRx-NRx"
+        computed NRx alone. Anything that separates words for matching must also
+        be readable as coordination between two metrics."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert _is_compound_refusal(result), (
+            f"{kpi_name!r} names two metrics but was answered as one: "
+            f"kpi={result.get('kpi_id')} value={result.get('value')}"
+        )
+
+    @pytest.mark.parametrize(
+        "kpi_name,expected_id",
+        [
+            ("TRx-share", "WS3-BI-008"),
+            ("conversion-rate", "WS3-BI-009"),
+            ("time-to-release", "WS1-DQ-009"),
+            ("roc-auc", "WS1-MP-001"),
+        ],
+    )
+    async def test_punctuation_inside_one_label_still_computes(self, kpi_name, expected_id):
+        """The other half of the same rule. Punctuation INSIDE one recognized
+        phrase is not coordination: the gap is measured between distinct metric
+        spans, and these match a single span covering the whole label, so there is
+        no gap to read at all."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert not _is_compound_refusal(result), result.get("error")
+        assert result.get("kpi_id") == expected_id, result
+
     async def test_slash_is_both_a_separator_and_a_coordinator(self):
         """codex iter-10. "/" has to do two opposite jobs: it JOINS a single KPI
         label ("TRx/share" is WS3-BI-008) and it COORDINATES two ("TRx/NRx").

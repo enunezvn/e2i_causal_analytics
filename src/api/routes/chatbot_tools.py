@@ -2090,10 +2090,19 @@ _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-
 #: Bare "with" is excluded for exactly that reason -- it is a preposition that
 #: forms MODIFIER relationships, and "market share with respect to TRx" names one
 #: KPI, not two. The explicitly additive compounds are safe.
+#: Punctuation joiners are here too (codex iter-11). kpi_resolution normalizes
+#: "-", ".", "–", "—" as SEPARATORS so a single label like "TRx-share" resolves;
+#: left out of this list, the same characters BETWEEN two distinct metrics let
+#: "TRx-NRx" and "TRx.NRx" be answered as one. Anything that separates words for
+#: matching must also be readable as coordination between two metrics.
+#:
+#: Punctuation inside ONE recognized phrase is unaffected: the gap is measured
+#: between distinct metric spans, and "TRx-share" matches a single alias covering
+#: both words, so there is no second span and no gap to read.
 _KPI_COORDINATOR_RE = re.compile(
     r"(?:\band\b|\bor\b|\bplus\b|\bas well as\b|\balongside\b"
     r"|\b(?:along|together) with\b|\bvs\.?\b|\bversus\b"
-    r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/)"
+    r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/|\+|-|–|—|\.)"
 )
 
 #: Backstop on the multi-mention scan. The scan ends naturally once every mention
