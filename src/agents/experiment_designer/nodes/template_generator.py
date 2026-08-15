@@ -414,6 +414,45 @@ print("Results saved to analysis_results.json")
             monitoring_checkpoints=checkpoints,
         )
 
+    @staticmethod
+    def _format_effect(value: Any) -> str:
+        """Render an effect at a precision a reader can use.
+
+        ``0.0015000000000000013`` is binary-float noise from the solve, not
+        significant digits, and printing it verbatim in a document meant for a
+        human made the figure look unserious next to a clean ``0.030``.
+        """
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return str(value)
+        return f"{value:.6g}"
+
+    @staticmethod
+    def _audit_verdict(state: ExperimentDesignState) -> tuple[bool, str]:
+        """Did the validity audit reach a verdict, and if not, in what words (#1639).
+
+        ``validity_threats: []`` beside ``overall_validity_score: 0.0`` is what a
+        skipped, timed-out or failed audit leaves in state -- and it rendered
+        here as "None identified", i.e. this document asserted a clean bill of
+        health it had never obtained. Absent status means the node never ran.
+        """
+        status = state.get("validity_audit_status", "not_run")
+        phrasing = {
+            "skipped": "was skipped",
+            "timed_out": "timed out",
+            "failed": "failed",
+            "not_run": "never ran",
+        }
+        return status == "completed", phrasing.get(status, f"reported status {status!r}")
+
+    @staticmethod
+    def _feasibility_section(state: ExperimentDesignState) -> str:
+        """Render feasibility warnings, or nothing at all when there are none."""
+        warnings = state.get("feasibility_warnings") or []
+        if not warnings:
+            return ""
+        body = "\n".join(f"- {w}" for w in warnings)
+        return f"\n## Feasibility\n\n> **This design is not executable as specified.**\n\n{body}\n"
+
     def _generate_preregistration(self, state: ExperimentDesignState) -> str:
         """Generate pre-registration document.
 
@@ -496,8 +535,18 @@ Comparison of {outcome} between treatment and control groups.
         """Generate medium pre-registration."""
         validity_score = state.get("overall_validity_score", 0.5)
         threats = state.get("validity_threats", [])
-        threat_summary = (
-            ", ".join([t.get("threat_name", "") for t in threats[:3]]) or "None identified"
+        audit_completed, audit_status = self._audit_verdict(state)
+        threat_summary = ", ".join([t.get("threat_name", "") for t in threats[:3]]) or (
+            "None identified"
+            if audit_completed
+            else f"Not assessed \u2014 the validity audit {audit_status}"
+        )
+        # A 0.00 printed as a score reads as "audited and scored zero". When the
+        # audit did not complete, the number is a default, not a measurement.
+        validity_line = (
+            f"{validity_score:.2f}"
+            if audit_completed
+            else f"not assessed \u2014 the validity audit {audit_status}"
         )
 
         return f"""# Experiment Pre-Registration
@@ -505,7 +554,7 @@ Comparison of {outcome} between treatment and control groups.
 ## Study Information
 - **Registration Date:** {datetime.now().strftime("%Y-%m-%d")}
 - **Design Type:** {state.get("design_type", "RCT")}
-- **Validity Score:** {validity_score:.2f}
+- **Validity Score:** {validity_line}
 
 ## Hypotheses
 **Primary Hypothesis:**
@@ -518,7 +567,7 @@ Comparison of {outcome} between treatment and control groups.
 - **Sample Size:** {power.get("required_sample_size", "TBD")} (Power: {power.get("achieved_power", 0.8) * 100:.0f}%)
 - **Duration:** {state.get("duration_estimate_days", "TBD")} days
 - **Randomization:** {state.get("randomization_method", "simple")} at {state.get("randomization_unit", "individual")} level
-
+{self._feasibility_section(state)}
 ## Validity Considerations
 - **Identified Threats:** {threat_summary}
 - **Stratification Variables:** {", ".join(state.get("stratification_variables", [])) or "None"}
@@ -550,14 +599,18 @@ Comparison of {outcome} between treatment and control groups.
         threats = state.get("validity_threats", [])
         mitigations = state.get("mitigations", [])
 
-        threat_details = (
-            "\n".join(
-                [
-                    f"- **{t.get('threat_name', 'Unknown')}** ({t.get('severity', 'medium')}): {t.get('description', '')}"
-                    for t in threats
-                ]
-            )
-            or "No significant threats identified"
+        audit_completed, audit_status = self._audit_verdict(state)
+        threat_details = "\n".join(
+            [
+                f"- **{t.get('threat_name', 'Unknown')}** ({t.get('severity', 'medium')}): {t.get('description', '')}"
+                for t in threats
+            ]
+        ) or (
+            "No significant threats identified"
+            if audit_completed
+            else f"**Not assessed** \u2014 the validity audit {audit_status}; "
+            "this section is empty because no audit verdict exists, "
+            "not because the design is free of threats."
         )
 
         mitigation_details = (
@@ -591,7 +644,7 @@ Comparison of {outcome} between treatment and control groups.
 {mitigation_details}
 
 ## Power Analysis Details
-- **Effect Size:** {power.get("minimum_detectable_effect", "TBD")} ({power.get("effect_size_type", "cohens_d")})
+- **Minimum Detectable Effect:** {self._format_effect(power.get("minimum_detectable_effect", "TBD"))} ({power.get("minimum_detectable_effect_scale") or power.get("effect_size_type", "cohens_d")})
 - **Alpha:** {power.get("alpha", 0.05)}
 - **Power:** {power.get("achieved_power", 0.8) * 100:.0f}%
 - **N per arm:** {power.get("required_sample_size_per_arm", "TBD")}

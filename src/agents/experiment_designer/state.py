@@ -117,6 +117,11 @@ class PowerAnalysisResult(TypedDict):
     minimum_detectable_effect: float
     alpha: float
     effect_size_type: Literal["cohens_d", "odds_ratio", "rate_ratio", "percentage_change"]
+    #: What ``minimum_detectable_effect`` is measured in (#1639). Distinct from
+    #: ``effect_size_type``, which describes the INPUT effect and cannot express
+    #: an absolute risk difference — leaving a reader to compare a 0.0015
+    #: absolute MDE against a 0.030 RELATIVE effect and see a contradiction.
+    minimum_detectable_effect_scale: NotRequired[str]
     assumptions: list[str]
     sensitivity_analysis: NotRequired[dict[str, Any]]
 
@@ -250,6 +255,9 @@ class ExperimentDesignState(TypedDict):
     power_analysis: NotRequired[PowerAnalysisResult]
     sample_size_justification: NotRequired[str]
     duration_estimate_days: NotRequired[int]
+    #: #1639. Set unconditionally by the power-analysis node, so an empty list
+    #: means "checked, feasible" rather than "never checked".
+    feasibility_warnings: NotRequired[list[str]]
     interim_analysis_schedule: NotRequired[list[dict[str, Any]]]
 
     # Top-level exposure for quality gates and easy access (v4.3)
@@ -259,6 +267,10 @@ class ExperimentDesignState(TypedDict):
     # ===== Validity Audit Outputs =====
     # Note: Required outputs from validity audit node
     validity_threats: list[ValidityThreat]
+    #: #1639. Whether the audit reached a verdict: completed | skipped |
+    #: timed_out | failed. Absent means the node never executed. Without this,
+    #: an empty ``validity_threats`` is indistinguishable from a clean audit.
+    validity_audit_status: NotRequired[str]
     mitigations: NotRequired[list[MitigationRecommendation]]
     overall_validity_score: float
     validity_confidence: NotRequired[ConfidenceLevel]

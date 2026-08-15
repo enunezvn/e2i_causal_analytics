@@ -196,6 +196,13 @@ class ExperimentDesignerOutput(BaseModel):
     )
     sample_size_justification: str = Field("", description="Justification for sample size")
     duration_estimate_days: int = Field(0, description="Estimated experiment duration")
+    #: #1639. Empty means "checked and feasible". The orchestrator's synthesizer
+    #: finds no narrative field on this model and stringifies the whole dict, so
+    #: a caveat that lives only in the pre-registration markdown never reaches
+    #: the answer layer -- which is how a 257-year duration got quoted as fact.
+    feasibility_warnings: list[str] = Field(
+        default_factory=list, description="Reasons the design is not executable as specified"
+    )
 
     # Validity audit outputs
     validity_threats: list[ValidityThreatOutput] = Field(
@@ -203,6 +210,12 @@ class ExperimentDesignerOutput(BaseModel):
     )
     overall_validity_score: float = Field(0.0, ge=0.0, le=1.0, description="Overall validity score")
     validity_confidence: str = Field("low", description="Confidence in validity assessment")
+    #: #1639. completed | skipped | timed_out | failed | not_run. Without it an
+    #: empty ``validity_threats`` beside ``overall_validity_score: 0.0`` reads as
+    #: a clean bill of health when in fact no audit verdict exists.
+    validity_audit_status: str = Field(
+        "not_run", description="Whether the validity audit reached a verdict"
+    )
 
     # Generated templates
     causal_graph_dot: str = Field("", description="DOT format causal graph")
@@ -649,10 +662,12 @@ class ExperimentDesignerAgent(SkillsMixin):
             power_analysis=power_analysis,
             sample_size_justification=state.get("sample_size_justification", ""),
             duration_estimate_days=state.get("duration_estimate_days", 0),
+            feasibility_warnings=state.get("feasibility_warnings", []),
             # Validity audit outputs
             validity_threats=threats,
             overall_validity_score=state.get("overall_validity_score", 0.0),
             validity_confidence=state.get("validity_confidence", "low"),
+            validity_audit_status=state.get("validity_audit_status", "not_run"),
             # Generated templates
             causal_graph_dot=state.get("causal_graph_dot", ""),
             analysis_code=state.get("analysis_code", ""),

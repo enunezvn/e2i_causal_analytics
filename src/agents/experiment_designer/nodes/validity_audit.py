@@ -306,6 +306,12 @@ class ValidityAuditNode:
         # Skip if validity audit is disabled
         if not state.get("enable_validity_audit", True):
             state["warnings"] = state.get("warnings", []) + ["Validity audit skipped (disabled)"]
+            # #1639: an audit that never ran leaves validity_threats=[] and
+            # overall_validity_score=0.0 -- byte-identical to an audit that ran
+            # and found nothing. Downstream (the pre-registration document) then
+            # states "None identified" as fact. Record the reason so a consumer
+            # can tell a clean bill of health from an absent one.
+            state["validity_audit_status"] = "skipped"
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"
@@ -326,6 +332,7 @@ class ValidityAuditNode:
                 )
             except asyncio.TimeoutError:
                 state["warnings"] = state.get("warnings", []) + ["Validity audit timed out"]
+                state["validity_audit_status"] = "timed_out"
                 state["validity_confidence"] = "low"
                 state["redesign_needed"] = False
                 state["status"] = "generating"
@@ -368,6 +375,7 @@ class ValidityAuditNode:
 
             # Update state with audit results
             state["validity_threats"] = threats
+            state["validity_audit_status"] = "completed"
             state["mitigations"] = mitigations
             state["overall_validity_score"] = audit.get("overall_validity_score", 0.5)
             state["validity_confidence"] = audit.get("validity_confidence", "medium")
@@ -430,6 +438,7 @@ class ValidityAuditNode:
             state["warnings"] = state.get("warnings", []) + [f"Validity audit failed: {str(e)}"]
             # Set required output defaults on failure
             state["validity_threats"] = state.get("validity_threats", [])
+            state["validity_audit_status"] = "failed"
             state["overall_validity_score"] = state.get("overall_validity_score", 0.0)
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
