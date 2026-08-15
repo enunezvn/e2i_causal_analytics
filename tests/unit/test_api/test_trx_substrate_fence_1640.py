@@ -599,17 +599,115 @@ class TestTheNoticeDescribesTheRowsItSitsBeside:
         assert _normalize_metric_name("TRx") == "trx"
 
 
-class TestTheHomeSummaryDeclaresPerTileSubstrates:
-    """codex iter-3 HIGH: the summary emitted a ``measure_basis`` with no
-    ``substrate`` key at all — just ``not_substrate`` — while the rule the prompt
-    states is defined ON ``substrate``. That kept the label and dropped the
-    contract, and its six tiles have genuinely different substrates."""
+class TestTheSummaryDerivesSubstrateFromTheQueryItRuns:
+    """codex iter-4 HIGH, and the strongest argument against my own hand map.
 
-    def test_each_tile_declares_its_own_substrate(self):
+    I mapped the ``hcp_reach`` tile to WS3-BI-004 (HCP Coverage,
+    ``['hcp_profiles']``). Measured, the tile runs::
+
+        business_impact_hcp_reach
+          SELECT COUNT(DISTINCT hcp_id) FROM treatment_events WHERE ...
+
+    — an event-ledger count. **No registry KPI corresponds to it**: WS3-BI-004
+    is a coverage FRACTION over a different table
+    (``tests/integration/test_kpi_summary_realdb.py`` pins hcp_reach as a whole
+    number, not that fraction). So the tile was labelled with a confident WRONG
+    substrate, which is worse than none — and my previous test blessed it.
+
+    The tiles run QUERIES, not KPIs. The substrate now comes from the registry
+    SQL those queries are made of, so no correspondence has to be invented.
+    """
+
+    def test_substrates_come_from_the_registry_sql(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        assert _tables_in_sql(
+            "SELECT COUNT(DISTINCT hcp_id) AS hcp_reach FROM treatment_events WHERE x"
+        ) == ["treatment_events"]
+
+    def test_cte_aliases_are_not_mistaken_for_tables(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        sql = (
+            "WITH first_brand AS (SELECT patient_id, MIN(event_date) FROM treatment_events "
+            "GROUP BY 1) SELECT COUNT(*) FROM first_brand JOIN treatment_events USING (patient_id)"
+        )
+        assert _tables_in_sql(sql) == ["treatment_events"]
+
+    def test_a_join_reports_both_tables(self):
+        from src.api.routes.copilotkit import _tables_in_sql
+
+        sql = "SELECT 1 FROM triggers t JOIN treatment_events e ON e.id = t.id"
+        assert _tables_in_sql(sql) == ["treatment_events", "triggers"]
+
+    def test_an_unreadable_registry_yields_no_basis_rather_than_a_wrong_one(self):
         from src.api.routes.copilotkit import _kpi_summary_measure_bases
 
-        bases = _kpi_summary_measure_bases()
-        assert set(bases) >= {
+        assert _kpi_summary_measure_bases(client=None) == {}
+
+    def test_the_hand_written_kpi_id_map_is_gone(self):
+        import src.api.routes.copilotkit as ck
+
+        assert not hasattr(ck, "_KPI_SUMMARY_KPI_IDS"), (
+            "the map that invented a KPI correspondence for hcp_reach is back"
+        )
+
+
+class TestTheRestKpiApiDeclaresItsBasis:
+    """codex iter-4 HIGH: `GET /api/kpis/{id}` and `POST /api/kpis/calculate`
+    return a numeric KPI value with no substrate, and the schema had no field to
+    carry one. Frontend and chart code read these, so a TRx value from the REST
+    API could sit beside a business_metrics figure with none of the fence
+    metadata this branch added to the chat payloads."""
+
+    def test_the_response_schema_has_the_field(self):
+        from src.api.schemas.kpi import KPIResultResponse
+
+        assert "measure_basis" in KPIResultResponse.model_fields, sorted(
+            KPIResultResponse.model_fields
+        )
+
+    def test_it_is_populated_from_the_registry(self):
+        from src.api.schemas.kpi import KPIResultResponse
+
+        field = KPIResultResponse.model_fields["measure_basis"]
+        assert field.default is None or field.default_factory is not None
+
+
+@pytest.mark.integration
+class TestTheTileSubstratesMatchTheLiveRegistry:
+    """Runs against the real ``kpi_query_registry`` when one is reachable.
+
+    This is the assertion the hand-written map could not make, and the reason it
+    shipped a wrong ``hcp_reach`` label: nothing tied the declared substrate to
+    the SQL the tile actually runs. Skips rather than fails without a DB — a
+    unit lane with no database must not turn into a false green OR a false red.
+    """
+
+    def _bases(self):
+        from src.api.dependencies.supabase_client import get_supabase, init_supabase
+
+        if get_supabase() is None:
+            init_supabase()
+        if get_supabase() is None:
+            pytest.skip("no Supabase client available")
+        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+
+        bases = _kpi_summary_measure_bases(get_supabase())
+        if not bases:
+            pytest.skip("kpi_query_registry unreadable")
+        return bases
+
+    def test_hcp_reach_is_the_event_ledger_not_hcp_profiles(self):
+        """The exact label that was wrong: the tile runs
+        ``COUNT(DISTINCT hcp_id) FROM treatment_events``, not a coverage
+        fraction over ``hcp_profiles``."""
+        bases = self._bases()
+        assert bases["hcp_reach"]["substrate"] == ["treatment_events"], bases["hcp_reach"]
+
+    def test_every_tile_declares_a_substrate(self):
+        bases = self._bases()
+        assert set(bases) == {
             "trx_volume",
             "nrx_volume",
             "market_share",
@@ -617,19 +715,12 @@ class TestTheHomeSummaryDeclaresPerTileSubstrates:
             "hcp_reach",
             "patient_starts",
         }, sorted(bases)
-        assert bases["trx_volume"]["substrate"] == ["treatment_events"]
-        assert bases["conversion_rate"]["substrate"] == ["treatment_events", "triggers"]
-        assert bases["hcp_reach"]["substrate"] == ["hcp_profiles"]
 
     def test_no_tile_claims_business_metrics(self):
-        from src.api.routes.copilotkit import _kpi_summary_measure_bases
-
-        for field, basis in _kpi_summary_measure_bases().items():
-            assert "business_metrics" not in basis["substrate"], field
+        for field, basis in self._bases().items():
+            assert "business_metrics" not in basis["substrate"], (field, basis["substrate"])
 
     def test_a_tile_is_not_comparable_with_stored_rows(self):
-        from src.api.routes.copilotkit import _kpi_summary_measure_bases
         from src.kpi.measure_basis import BUSINESS_METRICS_BASIS, substrates_agree
 
-        bases = _kpi_summary_measure_bases()
-        assert not substrates_agree(bases["trx_volume"], BUSINESS_METRICS_BASIS)
+        assert not substrates_agree(self._bases()["trx_volume"], BUSINESS_METRICS_BASIS)

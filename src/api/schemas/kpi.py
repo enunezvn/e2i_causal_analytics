@@ -180,6 +180,14 @@ class KPIResultResponse(BaseModel):
     cached: bool = Field(False, description="Whether result was from cache")
     cache_expires_at: datetime | None = Field(None, description="When cache entry expires")
     error: str | None = Field(None, description="Error message if calculation failed")
+    #: #1640: what the value MEASURES, derived from the KPI registry's own
+    #: `tables` (and from the calculator's runtime branch where it records one).
+    #: Frontend and chart code read this endpoint, so a TRx value from here could
+    #: otherwise sit beside a business_metrics figure -- measured ~73x apart --
+    #: with nothing saying they are different quantities.
+    measure_basis: dict[str, Any] | None = Field(
+        None, description="Substrate this value was computed from, and what it may be compared with"
+    )
     data_source: str = Field(
         default="database",
         description=(

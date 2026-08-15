@@ -269,8 +269,10 @@ import json
 import logging
 import operator
 import os
+import re
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import (
     Annotated,
     Any,
@@ -1773,38 +1775,82 @@ _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
 }
 
 
-#: Which registry KPI each summary tile reports. Sits beside
-#: ``_KPI_SUMMARY_QUERIES`` because it is the same hand-authored field mapping;
-#: the SUBSTRATE itself is still derived from the registry, never written here.
-_KPI_SUMMARY_KPI_IDS: dict[str, str] = {
-    "trx_volume": "WS3-BI-005",
-    "nrx_volume": "WS3-BI-006",
-    "market_share": "WS3-BI-008",
-    "conversion_rate": "WS3-BI-009",
-    "hcp_reach": "WS3-BI-004",
-    "patient_starts": "WS3-BI-007",
-}
+def _tables_in_sql(sql: str) -> list[str]:
+    """Real tables a registry query reads, derived from the SQL itself (#1640).
 
-
-def _kpi_summary_measure_bases() -> dict[str, dict]:
-    """Per-tile substrate for the Home KPI summary (#1640).
-
-    The first version declared one block-level object with a ``not_substrate``
-    key and no ``substrate`` — which kept the label while dropping the contract,
-    since the comparability rule is defined ON ``substrate``. These six tiles
-    have genuinely different substrates (TRx is ``treatment_events``, conversion
-    joins ``triggers``, HCP coverage reads ``hcp_profiles``), so each declares
-    its own rather than sharing a union that would over-claim.
+    CTE names are excluded: ``WITH first_brand AS (...) SELECT ... FROM
+    first_brand`` reads ``treatment_events``, not a table called
+    ``first_brand``.
     """
-    from src.kpi.measure_basis import measure_basis_for_kpi
-    from src.kpi.registry import get_registry
+    ctes = {
+        m.group(1).lower()
+        for m in re.finditer(r"(?:with|,)\s+([a-z_][a-z0-9_]*)\s+as\s*\(", sql, re.IGNORECASE)
+    }
+    found = {
+        m.group(1).lower()
+        for m in re.finditer(r"(?:from|join)\s+([a-z_][a-z0-9_]*)", sql, re.IGNORECASE)
+    }
+    return sorted(found - ctes)
 
-    registry = get_registry()
+
+@lru_cache(maxsize=1)
+def _kpi_summary_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
+    """``{query_id: [table, ...]}`` read once from ``kpi_query_registry``."""
+    from src.api.dependencies.supabase_client import get_supabase
+
+    client = get_supabase()
+    if client is None:
+        return {}
+    try:
+        rows = (
+            client.table("kpi_query_registry")
+            .select("query_id,sql")
+            .in_("query_id", list(query_ids))
+            .execute()
+        ).data or []
+    except Exception as e:  # fail closed: no basis beats a wrong basis
+        logger.warning(f"[CopilotKit] kpi_query_registry unreadable, omitting measure_basis: {e}")
+        return {}
+    return {r["query_id"]: _tables_in_sql(r.get("sql") or "") for r in rows}
+
+
+def _kpi_summary_measure_bases(client: Any = "__default__") -> dict[str, dict]:
+    """Per-tile substrate for the Home KPI summary, derived from the SQL (#1640).
+
+    Two earlier shapes were wrong in instructive ways. The first declared one
+    block-level object with a ``not_substrate`` key and no ``substrate``, which
+    kept the label and dropped the contract. The second mapped each tile to a
+    registry KPI id by hand -- and got ``hcp_reach`` wrong, labelling an
+    event-ledger ``COUNT(DISTINCT hcp_id) FROM treatment_events`` as WS3-BI-004
+    HCP Coverage (a fraction over ``hcp_profiles``). A confident WRONG substrate
+    is worse than none, and no registry KPI corresponds to that tile at all.
+
+    The tiles run QUERIES, so the substrate comes from the registry SQL those
+    queries are made of. Nothing here is hand-written, and an unreadable
+    registry yields no basis rather than a guess.
+    """
+    if client is None:
+        return {}
+    base_ids = tuple(sorted({spec[0] for spec in _KPI_SUMMARY_QUERIES.values()}))
+    by_query = _kpi_summary_substrates_cached(base_ids)
+    if not by_query:
+        return {}
     bases: dict[str, dict] = {}
-    for field, kpi_id in _KPI_SUMMARY_KPI_IDS.items():
-        kpi = registry.get(kpi_id)
-        if kpi is not None:
-            bases[field] = measure_basis_for_kpi(kpi)
+    for field, spec in _KPI_SUMMARY_QUERIES.items():
+        tables = by_query.get(spec[0])
+        if tables:
+            bases[field] = {
+                "substrate": tables,
+                "computed": True,
+                "runtime_confirmed": True,
+                "declared_sources": tables,
+                "measure": f"computed on demand from {', '.join(tables)}",
+                "note": (
+                    "Computed on demand from the operational substrate via the kpi_query "
+                    "registry — NOT read from the stored business_metrics table. Only "
+                    "compare with a figure whose substrate matches."
+                ),
+            }
     return bases
 
 
@@ -1965,7 +2011,7 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # registry — none is a stored business_metrics row — so a tile must not
         # be read as a check on, or a correction to, a business_metrics value
         # under the same name (measured ~73x apart for TRx).
-        "measure_basis": _kpi_summary_measure_bases(),
+        "measure_basis": _kpi_summary_measure_bases(client),
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
         # than real-world data -> surface "synthetic" so the FE badges them

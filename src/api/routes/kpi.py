@@ -206,9 +206,18 @@ def _result_to_response(result: Any) -> KPIResultResponse:
     metadata = result.metadata or {}
     data_source = "synthetic" if metadata.get("include_synthetic") else "database"
 
+    # #1640: derived from the registry, and from the calculator's runtime branch
+    # when it recorded one (ROI is the case that needs it).
+    from src.kpi.measure_basis import measure_basis_for_kpi
+    from src.kpi.registry import get_registry
+
+    kpi_meta = get_registry().get(result.kpi_id)
+    measure_basis = measure_basis_for_kpi(kpi_meta, metadata) if kpi_meta else None
+
     return KPIResultResponse(
         kpi_id=result.kpi_id,
         value=result.value,
+        measure_basis=measure_basis,
         status=result.status.value if hasattr(result.status, "value") else result.status,
         calculated_at=result.calculated_at,
         cached=result.cached,
