@@ -94,8 +94,14 @@ class TestBothToolsDeclareTheirBasis:
             _measure_basis_for_kpi(recognize_kpi("TRx")), _BUSINESS_METRICS_BASIS
         )
 
-    def test_roi_and_stored_rows_ARE_comparable(self):
-        """The derived rule must not fence off a genuine match."""
+    def test_roi_is_not_certified_comparable_either(self):
+        """ROI declares ['agent_activities', 'business_metrics'] — a UNION of
+        possible sources, not the one a given call used: the calculator can fall
+        back to agent_activities. An earlier version of this fence used set
+        INTERSECTION and certified ROI comparable with stored business_metrics
+        rows on that overlap. That was over-confident — the declaration cannot
+        tell us which leg actually ran — so comparability now requires the
+        substrate sets to be EQUAL, and ROI fails closed."""
         from src.api.routes.chatbot_tools import (
             _BUSINESS_METRICS_BASIS,
             _measure_basis_for_kpi,
@@ -103,9 +109,21 @@ class TestBothToolsDeclareTheirBasis:
         )
         from src.kpi.registry import get_registry
 
-        assert bases_are_comparable(
+        assert not bases_are_comparable(
             _measure_basis_for_kpi(get_registry().get("WS3-BI-010")), _BUSINESS_METRICS_BASIS
         )
+
+    def test_a_shared_leg_is_not_comparability(self):
+        """codex: conversion_rate declares ['triggers', 'treatment_events'] and
+        TRx declares ['treatment_events']. A ratio and a count are not
+        comparable just because one SQL leg overlaps."""
+        from src.api.routes.chatbot_tools import _measure_basis_for_kpi, bases_are_comparable
+        from src.services.kpi_resolution import recognize_kpi
+
+        conv = _measure_basis_for_kpi(recognize_kpi("conversion rate"))
+        trx = _measure_basis_for_kpi(recognize_kpi("TRx"))
+        assert set(conv["substrate"]) & set(trx["substrate"]), "precondition: they DO overlap"
+        assert not bases_are_comparable(conv, trx)
 
     def test_a_basis_is_comparable_with_itself(self):
         from src.api.routes.chatbot_tools import _measure_basis_for_kpi, bases_are_comparable
@@ -182,3 +200,140 @@ class TestTheBasisIsNotSelfReferential:
         assert basis["substrate"] == []
         assert not bases_are_comparable(basis, _BUSINESS_METRICS_BASIS)
         assert not bases_are_comparable(basis, basis)
+
+
+class TestTheFenceIsFunctionalNotJustLabelled:
+    """codex HIGH, and the finding I explicitly invited: the first version added
+    a `measure_basis` label, a prompt rule, and a `bases_are_comparable` helper
+    that NOTHING CALLED outside its own tests. A helper with no caller does not
+    fence anything — it makes the fix look functional while leaving compliance
+    entirely to the model.
+
+    The seam that needs no cross-tool state: when ``e2i_data_query_tool`` is
+    asked for a ``kpi_name`` the registry can COMPUTE from a different
+    substrate, that single call already knows both bases. It says so in the
+    payload, in code, at that moment.
+    """
+
+    def test_asking_for_trx_declares_the_conflict(self):
+        from src.api.routes.chatbot_tools import _cross_substrate_conflict
+
+        conflict = _cross_substrate_conflict("TRx")
+        assert conflict, "TRx is computable from a different substrate"
+        assert conflict["other_tool"] == "kpi_calculate_tool"
+        assert conflict["other_substrate"] == ["treatment_events"]
+        assert conflict["this_substrate"] == ["business_metrics"]
+        assert "not comparable" in conflict["note"].lower()
+
+    def test_the_metric_name_is_normalized_like_the_query_is(self):
+        """``trx`` is what reaches the column filter; the notice must fire on
+        the same spellings the tool actually serves."""
+        from src.api.routes.chatbot_tools import _cross_substrate_conflict
+
+        for spelling in ("TRx", "trx", "total prescriptions", "NRx"):
+            assert _cross_substrate_conflict(spelling), spelling
+
+    def test_an_unrecognized_metric_declares_nothing(self):
+        from src.api.routes.chatbot_tools import _cross_substrate_conflict
+
+        assert _cross_substrate_conflict("not a metric at all") is None
+        assert _cross_substrate_conflict(None) is None
+
+    def test_the_conflict_is_decided_by_the_helper_not_a_literal(self):
+        """If the comparability rule ever says these DO agree, the notice must
+        vanish — it must be a consequence of the rule, not a hardcoded string."""
+        import src.api.routes.chatbot_tools as ct
+        import src.services.measure_basis as mb
+
+        # Patch where the name is RESOLVED (the service), not where it is
+        # re-exported — the re-export is a binding, not an indirection.
+        original = mb.bases_are_comparable
+        try:
+            mb.bases_are_comparable = lambda a, b: True
+            assert ct._cross_substrate_conflict("TRx") is None
+        finally:
+            mb.bases_are_comparable = original
+
+    def test_the_zero_row_path_carries_it_too(self):
+        """This path needs no DB, and it is the one a bad brand/region hits —
+        the answer layer must not read an empty result as agreement."""
+        import asyncio
+        import datetime
+
+        from src.api.routes.chatbot_tools import _query_kpis
+
+        out = asyncio.run(
+            _query_kpis(
+                brand="NotARealBrand",
+                region=None,
+                kpi_name="TRx",
+                since=datetime.datetime(2026, 1, 1),
+                limit=5,
+            )
+        )
+        assert out["count"] == 0
+        assert out["measure_basis"]["substrate"] == ["business_metrics"]
+        assert out["cross_substrate_conflict"], sorted(out)
+
+
+class TestTheBasisSsotIsCheapToImport:
+    """codex HIGH: other surfaces emit KPI figures with no basis — the
+    orchestrator's ``kpi_lookup`` payload and the Home KPI summary. They cannot
+    import ``chatbot_tools`` to get it: that module costs ~30s to import
+    (orchestrator/tool_composer/RAG stacks), which is exactly why #1475 moved
+    ``KPI_SEMANTIC_NOTES`` to ``src.services.kpi_resolution``. Same precedent.
+    """
+
+    def test_the_ssot_module_carries_the_rule(self):
+        from src.services.measure_basis import (
+            BUSINESS_METRICS_BASIS,
+            bases_are_comparable,
+            cross_substrate_conflict,
+            measure_basis_for_kpi,
+        )
+
+        assert BUSINESS_METRICS_BASIS["substrate"] == ["business_metrics"]
+        assert callable(bases_are_comparable)
+        assert callable(cross_substrate_conflict)
+        assert callable(measure_basis_for_kpi)
+
+    def test_importing_it_does_not_drag_in_the_heavy_stacks(self):
+        """A basis lookup must not cost what importing chatbot_tools costs."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys; import src.services.measure_basis as m; "
+            "heavy=[n for n in ('dspy','langgraph','src.api.routes.chatbot_tools') "
+            "if n in sys.modules]; print(heavy)"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+        )
+        assert out.returncode == 0, out.stderr[-2000:]
+        assert out.stdout.strip().endswith("[]"), out.stdout
+
+    def test_chatbot_tools_reexports_the_same_objects(self):
+        import src.api.routes.chatbot_tools as ct
+        import src.services.measure_basis as mb
+
+        assert ct.bases_are_comparable is mb.bases_are_comparable
+        assert ct._BUSINESS_METRICS_BASIS is mb.BUSINESS_METRICS_BASIS
+
+
+class TestEveryKpiEmitterDeclaresItsBasis:
+    def test_orchestrator_kpi_lookup_payload(self):
+        import inspect
+
+        from src.agents.orchestrator.nodes import dispatcher
+
+        src = inspect.getsource(dispatcher)
+        assert "measure_basis" in src, "the kpi_lookup payload carries no substrate"
+
+    def test_home_kpi_summary_payload(self):
+        import inspect
+
+        from src.api.routes import copilotkit
+
+        src = inspect.getsource(copilotkit)
+        assert "measure_basis" in src, "the KPI summary tiles carry no substrate"

@@ -1925,6 +1925,22 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # not wall-clock now — "of data" keeps the tile label honest.
         "period": "Last 30 days of data",
         "metrics": metrics,
+        # #1640: every tile here is COMPUTED from the operational substrate via
+        # the kpi_query registry — none is a stored business_metrics row. Saying
+        # so stops a tile figure being read as a check on, or a correction to, a
+        # business_metrics value under the same name (measured ~73x apart for
+        # TRx). Substrates are per-metric, so this declares the property they
+        # all share rather than a union that would over-claim.
+        "measure_basis": {
+            "computed": True,
+            "not_substrate": ["business_metrics"],
+            "note": (
+                "Every figure here is computed on demand from the operational substrate "
+                "(the kpi_query registry), NOT read from the stored business_metrics "
+                "table. Do not compare these with business_metrics values of the same "
+                "name — they measure different things."
+            ),
+        },
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
         # than real-world data -> surface "synthetic" so the FE badges them

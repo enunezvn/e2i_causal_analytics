@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 from src.repositories.provenance import coerce_provenance_flag, deployment_includes_synthetic
+from src.services.measure_basis import measure_basis_for_kpi
 from src.utils.llm_content import normalize_llm_content
 
 from .._agent_method_map import get_method_spec
@@ -2041,6 +2042,11 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         # data_summary.
         "agent": "kpi_calculator",
         "analysis_type": "kpi_lookup",
+        # #1640: what this figure MEASURES, derived from the registry's own
+        # `tables`. Without it an orchestrator-computed KPI and a stored
+        # business_metrics row arrive under the same name and read as
+        # comparable — measured, they differ ~73x for TRx.
+        "measure_basis": measure_basis_for_kpi(kpi),
         "key_findings": key_findings,
         "warnings": warnings,
         # The registry definition rides along so a definition-seeking reading of
