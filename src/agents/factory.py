@@ -70,7 +70,14 @@ def _require_full_default() -> bool:
 
 
 # Agent metadata for lazy instantiation
-AGENT_REGISTRY_CONFIG = {
+#: Annotated because the value dicts mix int/str/bool, so mypy infers
+#: ``dict[str, object]`` and every read has to be re-narrowed at the call
+#: site -- `int(cfg["tier"])` in :func:`agent_roster_summary` was a
+#: call-overload error against the ceiling (#1638). Declaring the shape
+#: once is the fix; narrowing per read would have meant a fallback value,
+#: and a roster that silently drops an agent is the exact defect this
+#: function exists to prevent.
+AGENT_REGISTRY_CONFIG: Dict[str, Dict[str, Any]] = {
     # Tier 0: ML Foundation
     "scope_definer": {
         "tier": 0,

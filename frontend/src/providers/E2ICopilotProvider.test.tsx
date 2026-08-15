@@ -436,7 +436,11 @@ describe('CopilotHooksConnector', () => {
       call[0]?.description?.includes('agent tier hierarchy')
     );
     expect(agentsCall).toBeDefined();
-    expect(agentsCall![0].value.length).toBe(21);
+    // #1638: 22, not 21 — this readable's value IS the roster the model
+    // reads, and its own description one file over already says 22.
+    // Missed in the first pass: the count was aligned everywhere it was
+    // WRITTEN and not where it was ASSERTED.
+    expect(agentsCall![0].value.length).toBe(22);
 
     // Check preferences readable
     const prefsCall = mockUseCopilotReadable.mock.calls.find((call) =>
