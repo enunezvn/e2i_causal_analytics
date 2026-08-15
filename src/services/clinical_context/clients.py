@@ -192,12 +192,19 @@ class PubMedClient:
         client: Optional[httpx.Client] = None,
         max_retries: int = PUBMED_DEFAULT_MAX_RETRIES,
         retry_backoff_s: float = PUBMED_DEFAULT_RETRY_BACKOFF_S,
+        api_key: Optional[str] = None,
     ) -> None:
         self._base = base.rstrip("/")
         self._client = client if client is not None else httpx.Client(timeout=timeout)
         self._owns_client = client is None
         self._max_retries = max_retries
         self._retry_backoff_s = retry_backoff_s
+        # Read from env if not provided — never log the key (#1628). An empty or
+        # whitespace-only value is normalised to None so a blank `.env` line
+        # cannot produce `api_key=`, which NCBI rejects as malformed rather than
+        # serving the anonymous tier.
+        _key = api_key if api_key is not None else os.environ.get("NCBI_API_KEY")
+        self._api_key: Optional[str] = _key.strip() if _key and _key.strip() else None
 
     def _get(self, path: str, params: dict[str, Any], *, op: str) -> dict[str, Any]:
         """GET ``{base}{path}`` with HTTP-429 retry.
@@ -211,7 +218,15 @@ class PubMedClient:
 
         Only 429 is retried: other 4xx/5xx are not throttles, and re-querying an
         unhealthy endpoint would just double the load on it.
+
+        An ``api_key`` raises the ceiling to 10 req/s and is attached here — the
+        single choke point for both esearch and esummary — so neither call can be
+        left anonymous. Measured 2026-08-15 over 8 rapid esearch calls: 5 of 8
+        throttled without the key, 0 of 8 with it (#1628). The retry above stays:
+        the key raises the limit, it does not remove it.
         """
+        if self._api_key:
+            params = {**params, "api_key": self._api_key}
         url = f"{self._base}{path}"
         attempts = 0
         last_error: Optional[str] = None

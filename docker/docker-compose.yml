@@ -180,10 +180,17 @@ x-common-env: &common-env
   # unauthenticated client, which returns NO rate-limit headers at all; with the
   # key openFDA reports x-ratelimit-limit: 240.
   #
-  # Both use `:-` so an unset host value stays a soft degrade (fail-open clients)
-  # rather than blocking container start.
+  # NCBI: src/services/clinical_context/clients.py PubMedClient runs on the
+  # anonymous 3 req/s E-utilities tier without it. Measured 2026-08-15 over 8
+  # rapid esearch calls, same host and params: 5 of 8 throttled (HTTP 429)
+  # unauthenticated versus 0 of 8 with the key (#1628). #1612's retry absorbs a
+  # burst but each 429 still costs a round trip and a backoff sleep.
+  #
+  # All three use `:-` so an unset host value stays a soft degrade (fail-open
+  # clients) rather than blocking container start.
   UMLS_UTS_API_KEY: ${UMLS_UTS_API_KEY:-}
   OPENFDA_API_KEY: ${OPENFDA_API_KEY:-}
+  NCBI_API_KEY: ${NCBI_API_KEY:-}
   # LLM model selection (model refresh 2026-07-18). src/utils/llm_factory reads
   # LLM_PROVIDER (factory lane provider) and LLM_MODEL (OpenAI workhorse pin);
   # src/optimization/dspy_lm reads DSPY_LM_MODEL (verbatim litellm model string,
