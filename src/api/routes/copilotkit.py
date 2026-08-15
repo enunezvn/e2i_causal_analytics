@@ -632,11 +632,15 @@ def _execute_bridge_agui_messages(messages: Optional[List[Any]]) -> List[Any]:
     return converted
 
 
-# Name of the graph's ToolNode (see create_e2i_chat_agent). Chat-model streams
-# raised INSIDE this node are tool-internal machinery (e.g. tool_composer's
-# decompose/plan LLM calls) and must never render as answer text (#1547).
-# LangGraphAgent._is_tool_internal_llm_event keys on this constant, so the
-# graph builder uses it too — keep them coupled.
+# Name of the graph's ToolNode (see create_e2i_chat_agent). Used for graph
+# construction and routing only.
+#
+# NOTE (#1636): the stream filter no longer keys on this constant. It was
+# decoupled when `_is_tool_internal_llm_event` moved to an allow-list —
+# tool-internal chat-model streams do not actually report this node name
+# (nested graphs report their INNERMOST node, and `"tools"` was measured 0
+# times across a 51-turn run), so keying on it caught nothing. See
+# `_ANSWER_NODE_NAMES` for the filter's actual contract.
 _TOOL_NODE_NAME = "tools"
 
 #: The ONLY nodes whose chat-model streams are answer text. Everything else is
@@ -3722,9 +3726,13 @@ def create_e2i_chat_agent(
     # Build the graph with tool calling support
     workflow = StateGraph(E2IAgentState)
 
-    # Add nodes. The tools-node name is the shared constant because
-    # LangGraphAgent._is_tool_internal_llm_event filters tool-internal
-    # chat-model streams by this node name (#1547).
+    # Add nodes. "chat" and "synthesize" are the ONLY answer-producing nodes;
+    # `_ANSWER_NODE_NAMES` allow-lists them so every other chat-model stream
+    # (this graph's tools node, and any nested graph reached through it) is
+    # suppressed before AG-UI translation (#1636). Adding an answer-producing
+    # node here without adding it there would silently mute it — the assertion
+    # in test_copilotkit_classifier_stream_leak_1636.py fails loudly if the two
+    # drift apart.
     workflow.add_node("chat", chat_node)
     workflow.add_node(_TOOL_NODE_NAME, ToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
