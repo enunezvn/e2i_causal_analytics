@@ -107,13 +107,19 @@ class PowerAnalysisNode:
     def _stated_max_duration_days(constraints: dict[str, Any]) -> Optional[float]:
         """The caller's own duration limit, in days, if they stated one.
 
-        ``constraints`` is a free-form dict and callers state a timeline in FOUR
-        shapes, three of which predate this code:
+        ``constraints`` is a free-form dict and callers state a timeline in THREE
+        shapes, two of which predate this code:
 
         * ``timeline_weeks: 12`` -- the contract's own worked example
         * ``timeline: {"max_duration_days": 90}`` -- tier0_output_mapper.py
-        * ``max_duration_days: 180``
-        * ``timeline: {"weeks": 12}``
+        * ``max_duration_days: 180`` -- added by #1639 as an explicit affordance
+          and declared in ``validate_constraints`` + the Tier 3 contract, so it
+          is a documented key rather than a private convention
+
+        (An earlier round also read ``timeline: {"weeks": 12}``. That shape has
+        no caller, no contract entry and no test but my own -- invented, so
+        removed. Reading a key nobody writes is not free: it reads as evidence
+        the shape is supported.)
 
         Reading only the last of those (as this first did) means a caller who
         states a limit in a documented shape is told nothing.
@@ -158,9 +164,6 @@ class PowerAnalysisNode:
             nested = _num(timeline.get("max_duration_days"))
             if nested is not None:
                 return nested
-            weeks = _num(timeline.get("weeks"))
-            if weeks is not None:
-                return weeks * 7
         weeks_key = _num(constraints.get("timeline_weeks"))
         if weeks_key is not None:
             return weeks_key * 7

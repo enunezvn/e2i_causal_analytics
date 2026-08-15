@@ -117,6 +117,7 @@ class ExperimentDesignerInput(BaseModel):
                 "constraints": {
                     "budget": 500000,
                     "timeline_weeks": 12,
+                    "max_duration_days": 90,
                     "ethical_constraints": ["No patient data", "HCP consent required"],
                     "expected_effect_size": 0.3,
                     "power": 0.80,

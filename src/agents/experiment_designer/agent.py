@@ -111,6 +111,11 @@ class ExperimentDesignerInput(BaseModel):
             "alpha",
             "power",
             "weekly_accrual",
+            # #1639: an explicit upper bound on study duration. The design is
+            # flagged (never clamped) when it cannot fit. `timeline` /
+            # `timeline_weeks` remain supported; free-text `timeline` prose is
+            # deliberately NOT parsed -- see power_analysis._stated_max_duration_days.
+            "max_duration_days",
             "cluster_size",
             "expected_icc",
             "baseline_rate",

@@ -995,7 +995,6 @@ class TestFreeTextTimelinesAreNotParsedAtAll:
         assert self._warnings({"max_duration_days": 90})
         assert self._warnings({"timeline": {"max_duration_days": 90}})
         assert self._warnings({"timeline_weeks": 12})
-        assert self._warnings({"timeline": {"weeks": 12}})
 
     def test_a_generous_structured_limit_stays_quiet(self):
         assert self._warnings({"max_duration_days": 720}) == []
@@ -1026,3 +1025,45 @@ class TestFreeTextTimelinesAreNotParsedAtAll:
         )
         assert out["duration_estimate_days"] == 94115
         assert out["feasibility_warnings"]
+
+
+class TestOnlyDeclaredConstraintShapesAreRead:
+    """Two of the four shapes I claimed to "read" were my own inventions.
+
+    codex caught this at iter-3 for ``max_duration_days``; I then added
+    ``timeline: {"weeks": 12}`` speculatively and it survived four more rounds
+    because my own test was the only thing that wrote it. Grep is the check:
+
+    * ``timeline_weeks``                  — the Tier 3 contract's worked example
+    * ``timeline: {"max_duration_days"}`` — src/testing/tier0_output_mapper.py
+    * ``max_duration_days``               — invented; KEPT, but now declared in
+      ``validate_constraints`` and the contract example, so it is a supported
+      key rather than a private convention
+    * ``timeline: {"weeks"}``             — invented; REMOVED
+    """
+
+    def test_max_duration_days_is_a_declared_constraint_key(self):
+        import inspect
+
+        from src.agents.experiment_designer.agent import ExperimentDesignerInput
+
+        src = inspect.getsource(ExperimentDesignerInput.validate_constraints)
+        assert '"max_duration_days"' in src, "read but never declared"
+
+    def test_the_contract_example_shows_it(self):
+        from pathlib import Path
+
+        text = Path(".claude/contracts/tier3-contracts.md").read_text()
+        assert "max_duration_days" in text
+
+    def test_the_invented_nested_weeks_shape_is_gone(self):
+        import inspect
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        # It is a staticmethod on the node, not a module-level function — the
+        # first version of this test looked it up on the module, so it failed
+        # with AttributeError and would have "caught" anything at all.
+        src = inspect.getsource(PowerAnalysisNode._stated_max_duration_days)
+        assert 'timeline.get("weeks")' not in src, "a shape nobody writes is still read"
+        assert 'constraints.get("timeline_weeks")' in src, "a real shape was dropped"
