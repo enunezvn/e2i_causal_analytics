@@ -67,6 +67,15 @@ _MDE_SCALES = {
 }
 
 
+def _append_unique(existing: list[str], additions: list[str]) -> list[str]:
+    """Append only messages not already present, preserving order."""
+    out = list(existing)
+    for message in additions:
+        if message not in out:
+            out.append(message)
+    return out
+
+
 class PowerAnalysisNode:
     """Statistical power analysis for experiment design.
 
@@ -127,17 +136,24 @@ class PowerAnalysisNode:
                     r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", timeline, flags=re.IGNORECASE
                 )
             ]
-            if found:
-                # MAX, not first. "2 month recruitment ramp; total study no
-                # longer than 24 months" parsed first-match to 61 days and
-                # branded a 476-day design not executable -- a false warning,
-                # the failure this bound was corrected for one round earlier.
-                #
-                # Max is safe by CONSTRUCTION: whatever the real stated limit
-                # is, it is one of the numbers in the string, so max >= it and
-                # the error can only ever be a MISSED warning. That is the
-                # direction this design accepts; the reverse is not.
-                return max(found)
+            # Exactly one duration, or none. A string carrying SEVERAL is
+            # ambiguous and is not guessed at.
+            #
+            # This replaced first-match, then max. Both were wrong. I argued max
+            # was safe by construction because the real limit had to be one of
+            # the numbers present -- false for an ADDITIVE composite:
+            # "12 months recruitment plus 6 months follow-up" states an
+            # 18-month window, which is the SUM and larger than the max, so a
+            # 476-day design that fits was flagged anyway.
+            #
+            # Nothing about the string says whether its durations are
+            # alternatives, phases to add, or context ("6 month study; 24 month
+            # historical baseline"). So the rule that already covers
+            # "as soon as possible" applies: an ambiguous timeline is an
+            # UNSTATED one. That costs enforcement on composite strings -- a
+            # missed warning, the direction this design accepts.
+            if len(found) == 1:
+                return found[0]
         return None
 
     def _assess_feasibility(
@@ -310,7 +326,10 @@ class PowerAnalysisNode:
             # already knows. Deliberate duplication: ``feasibility_warnings`` is
             # the structured field, ``warnings`` is the one consumers look at.
             if feasibility_warnings:
-                state["warnings"] = state.get("warnings", []) + feasibility_warnings
+                # Deduped: the redesign loop re-runs this node, and a redesign
+                # that leaves the power inputs unchanged would otherwise stack
+                # the same sentence once per iteration.
+                state["warnings"] = _append_unique(state.get("warnings", []), feasibility_warnings)
             state["node_latencies_ms"] = node_latencies
 
             state["required_sample_size"] = forward.sample_size
@@ -327,7 +346,16 @@ class PowerAnalysisNode:
                 "recoverable": False,
             }
             state["errors"] = state.get("errors", []) + [error]
-            state["warnings"] = state.get("warnings", []) + [f"Power analysis failed: {str(e)}"]
+            state["warnings"] = _append_unique(
+                state.get("warnings", []), [f"Power analysis failed: {str(e)}"]
+            )
+            # Never leave iteration N's verdict attached to iteration N+1's
+            # failed, changed design -- and never leave it EMPTY either, which
+            # would read as "checked, feasible". A failed assessment is not a
+            # clean bill of health.
+            state["feasibility_warnings"] = [
+                f"Feasibility was not assessed \u2014 power analysis failed: {str(e)}"
+            ]
             state["status"] = "failed"
 
             latency_ms = int((time.time() - start_time) * 1000)

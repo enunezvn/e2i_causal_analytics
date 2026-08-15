@@ -715,9 +715,11 @@ class TestAMultiDurationTimelineNeverFalseWarns:
     was branded "not executable as specified" — exactly the false warning the
     bound was corrected for one round earlier.
 
-    Taking the MAXIMUM parsed duration is safe by construction: the real stated
-    limit is one of the numbers in the string, so max >= it, and the failure can
-    only ever be a MISSED warning — the direction this design accepts.
+    The fix was MAX for one round, on the claim that the real limit is always
+    one of the numbers present. codex iter-5 refuted that (see
+    ``TestCompositeTimelinesAreNotGuessedAt``): an additive composite's limit is
+    the SUM. The shipped rule is therefore "exactly one duration, or none".
+    These cases are kept because they are the ones that motivated each step.
     """
 
     def _warnings(self, timeline):
@@ -749,8 +751,11 @@ class TestAMultiDurationTimelineNeverFalseWarns:
             self._warnings("2 month recruitment ramp; total study no longer than 24 months") == []
         )
 
-    def test_the_binding_limit_is_still_enforced_when_it_is_the_largest(self):
-        assert self._warnings("1 week setup, then a 3 month study")
+    def test_a_two_duration_string_is_not_guessed_at(self):
+        """Under the max rule this warned, because 3 months < 476 days. But
+        "1 week setup, then a 3 month study" plausibly means a 3-month-and-a-bit
+        window, and nothing in the string settles it — so it is unstated."""
+        assert self._warnings("1 week setup, then a 3 month study") == []
 
     def test_a_single_duration_still_works(self):
         assert self._warnings("3 months")
@@ -794,3 +799,133 @@ class TestTheAnalysisCodeTemplateCarriesTheCaveat:
         }
         code = node._generate_analysis_code(state, node._build_dowhy_spec(state))
         assert "NOT EXECUTABLE" not in code.upper()
+
+
+class TestCompositeTimelinesAreNotGuessedAt:
+    """codex iter-5 HIGH refuted my "safe by construction" claim, correctly.
+
+    I argued max could never false-warn because the real limit is one of the
+    numbers in the string. That is false for an ADDITIVE composite:
+    ``"12 months recruitment plus 6 months follow-up"`` states an 18-month
+    window, which is the SUM — larger than the max. A 476-day design fits it and
+    was flagged anyway.
+
+    A string carrying more than one duration is therefore ambiguous, and the
+    rule that already covers "as soon as possible" applies: do not guess.
+    """
+
+    def _warnings(self, timeline):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        out = asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": 0.15,
+                            "baseline_value": 0.30,
+                        }
+                    ],
+                }
+            )
+        )
+        assert out["duration_estimate_days"] == 476
+        return out["feasibility_warnings"]
+
+    def test_an_additive_composite_is_not_flagged(self):
+        assert self._warnings("12 months recruitment plus 6 months follow-up") == []
+
+    def test_a_ramp_phase_composite_is_still_not_flagged(self):
+        assert (
+            self._warnings("2 month recruitment ramp; total study no longer than 24 months") == []
+        )
+
+    def test_an_unambiguous_single_duration_is_still_enforced(self):
+        assert self._warnings("3 months")
+        assert self._warnings("24 months") == []
+
+
+class TestTheAuditorSeesTheCaveat:
+    """codex iter-5 HIGH: the validity-audit prompt re-renders the sample size
+    and asks an LLM whether the design is sound. Without the caveat it can drive
+    a REDESIGN decision from an uncaveated projection."""
+
+    def test_audit_prompt_carries_duration_and_feasibility(self):
+        from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
+
+        prompt = ValidityAuditNode._build_audit_prompt(
+            ValidityAuditNode.__new__(ValidityAuditNode),
+            {
+                "power_analysis": {"required_sample_size": 672206},
+                "duration_estimate_days": 94115,
+                "feasibility_warnings": ["Estimated duration 94,115 days (257.7 years) ..."],
+            },
+        )
+        assert "672206" in prompt
+        assert "94115" in prompt or "94,115" in prompt
+        assert "257.7 years" in prompt
+
+    def test_a_feasible_design_gets_no_feasibility_block(self):
+        from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
+
+        prompt = ValidityAuditNode._build_audit_prompt(
+            ValidityAuditNode.__new__(ValidityAuditNode),
+            {
+                "power_analysis": {"required_sample_size": 1930},
+                "duration_estimate_days": 70,
+                "feasibility_warnings": [],
+            },
+        )
+        assert "NOT EXECUTABLE" not in prompt.upper()
+
+
+class TestStaleWarningsDoNotSurviveARedesign:
+    def _run(self, state):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        return asyncio.run(PowerAnalysisNode().execute(state))
+
+    def test_the_error_path_does_not_leave_a_stale_verdict(self):
+        """codex iter-5 MED: iteration N flags infeasible, the redesign changes
+        inputs, iteration N+1 errors before assignment — a consumer then reads
+        the OLD warning attached to a different, failed design."""
+        out = self._run(
+            {
+                "design_type": "RCT",
+                "constraints": {"weekly_accrual": "not-a-number"},
+                "outcomes": [{"is_primary": True, "metric_type": "binary"}],
+                "feasibility_warnings": ["STALE from iteration N"],
+            }
+        )
+        assert out["status"] == "failed"
+        assert "STALE from iteration N" not in out["feasibility_warnings"]
+        assert out["feasibility_warnings"], "a failed assessment is not a clean bill of health"
+
+    def test_the_warning_is_not_duplicated_across_iterations(self):
+        """codex iter-5 LOW: power analysis appends to the generic ``warnings``
+        channel, so a redesign that leaves power inputs unchanged stacks the
+        same sentence twice."""
+        state = {
+            "design_type": "RCT",
+            "constraints": {"weekly_accrual": 50},
+            "outcomes": [
+                {
+                    "is_primary": True,
+                    "metric_type": "binary",
+                    "expected_effect_size": 0.030,
+                    "baseline_value": 0.05,
+                }
+            ],
+        }
+        first = self._run(state)
+        second = self._run(dict(first, status="calculating"))
+        duration_warnings = [w for w in second.get("warnings", []) if "duration" in w.lower()]
+        assert len(duration_warnings) == 1, duration_warnings

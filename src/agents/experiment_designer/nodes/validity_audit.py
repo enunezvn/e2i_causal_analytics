@@ -464,6 +464,16 @@ class ValidityAuditNode:
 
         power_analysis = state.get("power_analysis", {})
 
+        # #1639: this prompt asks an LLM whether the design is sound, and its
+        # verdict drives the REDESIGN decision. Showing it "Sample Size: 672206"
+        # with no duration and no feasibility verdict asks it to judge an
+        # uncaveated projection.
+        feasibility = state.get("feasibility_warnings") or []
+        feasibility_block = "\n".join(f"- {w}" for w in feasibility)
+        feasibility_section = (
+            f"\n**!! NOT EXECUTABLE AS SPECIFIED !!**\n{feasibility_block}\n" if feasibility else ""
+        )
+
         return f"""You are a methodological critic reviewing an experiment design. Your job is to find weaknesses.
 
 ## Proposed Experiment
@@ -478,7 +488,8 @@ class ValidityAuditNode:
 {outcome_json}
 
 **Sample Size:** {power_analysis.get("required_sample_size", "Not calculated")}
-**Randomization Unit:** {state.get("randomization_unit", "individual")}
+**Estimated Duration (days):** {state.get("duration_estimate_days", "Not calculated")}
+{feasibility_section}**Randomization Unit:** {state.get("randomization_unit", "individual")}
 **Randomization Method:** {state.get("randomization_method", "simple")}
 **Stratification:** {state.get("stratification_variables", [])}
 **Blocking Variables:** {state.get("blocking_variables", [])}
