@@ -11,7 +11,6 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 from __future__ import annotations
 
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -51,9 +50,6 @@ from src.utils.power_analysis_lib import (
 #: stated (``_stated_max_duration_days``).
 _IMPLAUSIBLE_DURATION_DAYS = 3650
 
-#: Days per unit for a free-text timeline ("3 months"). Calendar-average, since
-#: a stated timeline is a planning statement, not an exact interval.
-_DURATION_UNIT_DAYS = {"day": 1.0, "week": 7.0, "month": 30.44, "year": 365.25}
 
 #: What ``PowerResult.mde`` actually measures, per analysis branch. The Tier 3
 #: ``effect_size_type`` enum cannot express this (#1639): it has no member for an
@@ -65,73 +61,6 @@ _MDE_SCALES = {
     "hazard_ratio": "hazard_ratio",
     "absolute_risk_difference": "absolute_risk_difference",
 }
-
-
-#: How much text immediately before a duration can modify it. A marker further
-#: away is modifying something else in the sentence.
-_MODIFIER_WINDOW_CHARS = 32
-
-#: Phrases that make the duration they precede an upper bound. A BARE duration
-#: ("3 months") is also a cap -- that is what a lone duration means in a
-#: constraints dict.
-_CAP_MARKERS = (
-    "within",
-    "no longer than",
-    "not longer than",
-    "no more than",
-    "not more than",
-    "at most",
-    "up to",
-    "under",
-    "maximum",
-    "must not exceed",
-    "not exceed",
-    "limited to",
-    "no later than",
-)
-
-#: Phrases that make the duration they precede a LOWER bound. Checked first and
-#: they veto: a sentence carrying both is not a cap we can act on.
-_FLOOR_MARKERS = (
-    "at least",
-    "no less than",
-    "not less than",
-    "no earlier than",
-    "not earlier than",
-    "at minimum",
-    "minimum of",
-    "minimum",
-    "more than",
-    "over",
-    "beyond",
-)
-
-
-def _reads_as_a_cap(timeline: str, span: tuple[int, int]) -> bool:
-    """Is this single stated duration an upper bound (#1639)?
-
-    Two rounds of this were wrong in the same direction, so the reasoning is
-    worth keeping:
-
-    * reading any single duration as a cap turned "at least 3 months" into a
-      maximum the caller never set;
-    * scanning the WHOLE string for cap words re-broke it, because
-      "patients **under** observation for at least 3 months" and "at least 3
-      months of follow-up **within** the study" both contain a cap word that
-      modifies something else entirely.
-
-    So a marker only counts inside the short window immediately BEFORE the
-    duration, and a floor phrase there vetoes. Anything ambiguous is treated as
-    an unstated limit -- a missed warning, the direction this design accepts.
-    """
-    before = timeline[: span[0]]
-    remainder = (before + timeline[span[1] :]).strip()
-    if not any(ch.isalpha() for ch in remainder):
-        return True  # a bare duration IS a cap
-    window = before[-_MODIFIER_WINDOW_CHARS:].lower()
-    if any(marker in window for marker in _FLOOR_MARKERS):
-        return False
-    return any(marker in window for marker in _CAP_MARKERS)
 
 
 def _append_unique(existing: list[str], additions: list[str]) -> list[str]:
@@ -182,17 +111,38 @@ class PowerAnalysisNode:
         shapes, three of which predate this code:
 
         * ``timeline_weeks: 12`` -- the contract's own worked example
-        * ``timeline: "3 months"`` -- free text, used across the agent tests
         * ``timeline: {"max_duration_days": 90}`` -- tier0_output_mapper.py
         * ``max_duration_days: 180``
+        * ``timeline: {"weeks": 12}``
 
         Reading only the last of those (as this first did) means a caller who
-        states a limit in any of the documented shapes is told nothing.
+        states a limit in a documented shape is told nothing.
 
-        An unparseable timeline returns None -- "no stated limit" -- rather than
-        a guess. "as soon as possible" is not a number, and inventing one
-        produces a FALSE warning, which is the failure this bound exists to
-        avoid.
+        **Free-text ``timeline: "3 months"`` is deliberately NOT parsed**, and
+        that decision is the most important thing in this function.
+
+        Five rounds of review went into trying, and every round produced a new
+        counter-example in one direction or the other: first-match took a ramp
+        phase for the limit; MAX broke on additive composites ("12 months
+        recruitment plus 6 months follow-up" is 18, not 12); single-duration
+        read "at least 3 months" as a cap; scoping cap words to the duration's
+        neighbourhood still mis-read "not under 3 months" as a cap, made
+        "no more than" dead (the floor list's "more than" matched first),
+        dropped the real cap in "at least 2 and at most 6 months", and ignored
+        postposed forms like "3 months maximum".
+
+        Each fix traded one wrong reading for another because the underlying
+        task -- inferring a bound's DIRECTION from prose with substring lists --
+        is not something this code can do reliably. A false warning is the worst
+        outcome available here: it tells a caller their design is unrunnable
+        against a limit they never set, and it discredits every real warning
+        beside it.
+
+        Free text is also not load-bearing. The defect in #1639 stated no
+        timeline at all; it is caught by the plausibility bound. So a stated
+        limit is honoured only in the shapes that state it unambiguously, and
+        prose yields "no stated limit" -- a missed warning, the direction this
+        design accepts.
         """
         timeline = constraints.get("timeline")
 
@@ -214,32 +164,6 @@ class PowerAnalysisNode:
         weeks_key = _num(constraints.get("timeline_weeks"))
         if weeks_key is not None:
             return weeks_key * 7
-        if isinstance(timeline, str):
-            matches = list(
-                re.finditer(
-                    r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", timeline, flags=re.IGNORECASE
-                )
-            )
-            found = [float(m.group(1)) * _DURATION_UNIT_DAYS[m.group(2).lower()] for m in matches]
-            match_spans = [m.span() for m in matches]
-            # Exactly one duration, or none. A string carrying SEVERAL is
-            # ambiguous and is not guessed at.
-            #
-            # This replaced first-match, then max. Both were wrong. I argued max
-            # was safe by construction because the real limit had to be one of
-            # the numbers present -- false for an ADDITIVE composite:
-            # "12 months recruitment plus 6 months follow-up" states an
-            # 18-month window, which is the SUM and larger than the max, so a
-            # 476-day design that fits was flagged anyway.
-            #
-            # Nothing about the string says whether its durations are
-            # alternatives, phases to add, or context ("6 month study; 24 month
-            # historical baseline"). So the rule that already covers
-            # "as soon as possible" applies: an ambiguous timeline is an
-            # UNSTATED one. That costs enforcement on composite strings -- a
-            # missed warning, the direction this design accepts.
-            if len(found) == 1 and _reads_as_a_cap(timeline, match_spans[0]):
-                return found[0]
         return None
 
     def _assess_feasibility(

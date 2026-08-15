@@ -627,8 +627,12 @@ class TestEveryStatedTimelineShapeIsRead:
     def test_timeline_weeks_from_the_contract_example(self):
         assert self._warnings({"timeline_weeks": 12}), "the contract's own shape was ignored"
 
-    def test_timeline_as_free_text_months(self):
-        assert self._warnings({"timeline": "3 months"}), "the shape the agent tests use"
+    def test_timeline_as_free_text_is_deliberately_NOT_enforced(self):
+        """This asserted enforcement for four rounds. Prose parsing was removed
+        after five rounds of counter-examples — see
+        ``TestFreeTextTimelinesAreNotParsedAtAll`` for the evidence and the
+        reasoning. The capability survives in the structured shapes below."""
+        assert self._warnings({"timeline": "3 months"}) == []
 
     def test_timeline_as_a_dict(self):
         assert self._warnings({"timeline": {"max_duration_days": 90}})
@@ -637,14 +641,14 @@ class TestEveryStatedTimelineShapeIsRead:
         assert self._warnings({"max_duration_days": 90})
 
     def test_a_generous_stated_timeline_stays_quiet(self):
-        assert self._warnings({"timeline": "24 months"}) == []
         assert self._warnings({"timeline_weeks": 100}) == []
+        assert self._warnings({"max_duration_days": 720}) == []
 
-    def test_an_unparseable_timeline_is_not_guessed_at(self):
-        """'as soon as possible' is not a number. Inventing one would produce a
-        FALSE warning, which is the failure this bound was just corrected for."""
+    def test_no_prose_timeline_is_guessed_at(self):
+        """Originally about unparseable strings; now the rule for ALL prose."""
         assert self._warnings({"timeline": "as soon as possible"}) == []
         assert self._warnings({"timeline": "Q3"}) == []
+        assert self._warnings({"timeline": "3 months"}) == []
 
 
 class TestEpisodicPrecedentsCarryTheCaveat:
@@ -707,61 +711,6 @@ class TestTheContractNamesWhatTheRuntimeActuallyEmits:
         assert 'validity_audit_status=result.get("validity_audit_status"' in src
 
 
-class TestAMultiDurationTimelineNeverFalseWarns:
-    """codex iter-4 HIGH: first-match parsing broke my own asymmetry.
-
-    ``"2 month recruitment ramp; total study no longer than 24 months"`` parsed
-    to 61 days, so a 476-day design that comfortably fits the stated 24 months
-    was branded "not executable as specified" — exactly the false warning the
-    bound was corrected for one round earlier.
-
-    The fix was MAX for one round, on the claim that the real limit is always
-    one of the numbers present. codex iter-5 refuted that (see
-    ``TestCompositeTimelinesAreNotGuessedAt``): an additive composite's limit is
-    the SUM. The shipped rule is therefore "exactly one duration, or none".
-    These cases are kept because they are the ones that motivated each step.
-    """
-
-    def _warnings(self, timeline):
-        import asyncio
-
-        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
-
-        out = asyncio.run(
-            PowerAnalysisNode().execute(
-                {
-                    "design_type": "RCT",
-                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
-                    "outcomes": [
-                        {
-                            "is_primary": True,
-                            "metric_type": "binary",
-                            "expected_effect_size": 0.15,
-                            "baseline_value": 0.30,
-                        }
-                    ],
-                }
-            )
-        )
-        assert out["duration_estimate_days"] == 476
-        return out["feasibility_warnings"]
-
-    def test_a_ramp_phase_does_not_become_the_limit(self):
-        assert (
-            self._warnings("2 month recruitment ramp; total study no longer than 24 months") == []
-        )
-
-    def test_a_two_duration_string_is_not_guessed_at(self):
-        """Under the max rule this warned, because 3 months < 476 days. But
-        "1 week setup, then a 3 month study" plausibly means a 3-month-and-a-bit
-        window, and nothing in the string settles it — so it is unstated."""
-        assert self._warnings("1 week setup, then a 3 month study") == []
-
-    def test_a_single_duration_still_works(self):
-        assert self._warnings("3 months")
-        assert self._warnings("24 months") == []
-
-
 class TestTheAnalysisCodeTemplateCarriesTheCaveat:
     """codex iter-4 HIGH: the generated analysis script prints
     ``Sample Size: 672206`` in its header. Someone who opens only that file gets
@@ -799,56 +748,6 @@ class TestTheAnalysisCodeTemplateCarriesTheCaveat:
         }
         code = node._generate_analysis_code(state, node._build_dowhy_spec(state))
         assert "NOT EXECUTABLE" not in code.upper()
-
-
-class TestCompositeTimelinesAreNotGuessedAt:
-    """codex iter-5 HIGH refuted my "safe by construction" claim, correctly.
-
-    I argued max could never false-warn because the real limit is one of the
-    numbers in the string. That is false for an ADDITIVE composite:
-    ``"12 months recruitment plus 6 months follow-up"`` states an 18-month
-    window, which is the SUM — larger than the max. A 476-day design fits it and
-    was flagged anyway.
-
-    A string carrying more than one duration is therefore ambiguous, and the
-    rule that already covers "as soon as possible" applies: do not guess.
-    """
-
-    def _warnings(self, timeline):
-        import asyncio
-
-        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
-
-        out = asyncio.run(
-            PowerAnalysisNode().execute(
-                {
-                    "design_type": "RCT",
-                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
-                    "outcomes": [
-                        {
-                            "is_primary": True,
-                            "metric_type": "binary",
-                            "expected_effect_size": 0.15,
-                            "baseline_value": 0.30,
-                        }
-                    ],
-                }
-            )
-        )
-        assert out["duration_estimate_days"] == 476
-        return out["feasibility_warnings"]
-
-    def test_an_additive_composite_is_not_flagged(self):
-        assert self._warnings("12 months recruitment plus 6 months follow-up") == []
-
-    def test_a_ramp_phase_composite_is_still_not_flagged(self):
-        assert (
-            self._warnings("2 month recruitment ramp; total study no longer than 24 months") == []
-        )
-
-    def test_an_unambiguous_single_duration_is_still_enforced(self):
-        assert self._warnings("3 months")
-        assert self._warnings("24 months") == []
 
 
 class TestTheAuditorSeesTheCaveat:
@@ -929,72 +828,6 @@ class TestStaleWarningsDoNotSurviveARedesign:
         second = self._run(dict(first, status="calculating"))
         duration_warnings = [w for w in second.get("warnings", []) if "duration" in w.lower()]
         assert len(duration_warnings) == 1, duration_warnings
-
-
-class TestDirectionalityIsNotAssumed:
-    """codex iter-6 HIGH: a single parsed duration is not necessarily a CAP.
-
-    ``"at least 3 months"``, ``"no earlier than 6 months"`` and ``"6 months of
-    follow-up after the last patient in"`` each carry exactly one duration, and
-    each was read as a maximum — so a 476-day design was told it exceeded a
-    limit the caller never set. A minimum is not a maximum.
-
-    A bare duration ("3 months") still reads as a cap, because that is what it
-    means in a constraints dict. Anything else must SAY it is a cap.
-    """
-
-    def _warnings(self, timeline):
-        import asyncio
-
-        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
-
-        out = asyncio.run(
-            PowerAnalysisNode().execute(
-                {
-                    "design_type": "RCT",
-                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
-                    "outcomes": [
-                        {
-                            "is_primary": True,
-                            "metric_type": "binary",
-                            "expected_effect_size": 0.15,
-                            "baseline_value": 0.30,
-                        }
-                    ],
-                }
-            )
-        )
-        assert out["duration_estimate_days"] == 476
-        return out["feasibility_warnings"]
-
-    @pytest.mark.parametrize(
-        "timeline",
-        [
-            "at least 3 months",
-            "no earlier than 6 months",
-            "6 months of follow-up after the last patient in",
-            "minimum 3 months",
-            "no less than 6 months",
-        ],
-    )
-    def test_a_floor_is_never_read_as_a_cap(self, timeline):
-        assert self._warnings(timeline) == [], timeline
-
-    @pytest.mark.parametrize(
-        "timeline",
-        [
-            "3 months",
-            "  3 months  ",
-            "within 3 months",
-            "no longer than 3 months",
-            "at most 90 days",
-        ],
-    )
-    def test_a_cap_is_still_enforced(self, timeline):
-        assert self._warnings(timeline), timeline
-
-    def test_a_generous_cap_stays_quiet(self):
-        assert self._warnings("within 24 months") == []
 
 
 class TestARedesignClearsTheOldVerdict:
@@ -1078,30 +911,49 @@ class TestARedesignClearsTheOldVerdict:
         assert any("not assessed" in w for w in out["feasibility_warnings"])
 
 
-class TestCapMarkersMustModifyTheDuration:
-    """codex iter-7 HIGH: scanning the WHOLE string for cap words re-broke the
-    directionality fix one round after making it.
+class TestFreeTextTimelinesAreNotParsedAtAll:
+    """The decision that ended five rounds of parser defects.
 
-    ``"patients under observation for at least 3 months"`` states a MINIMUM, but
-    ``"under"`` matched inside ``"under observation"`` and the design was told it
-    exceeded a 91-day maximum nobody set. ``"at least 3 months of follow-up
-    within the study"`` fails the same way — ``"within"`` modifies "the study",
-    not the duration.
+    Every attempt to infer a bound's DIRECTION from prose produced a new
+    counter-example, in both directions:
 
-    A marker only counts if it sits immediately before the duration it is meant
-    to modify, and a floor phrase there vetoes outright.
+    ======================================  =========================================
+    phrasing                                what the parser of the day did
+    ======================================  =========================================
+    "2 month ramp; no longer than 24 months" first-match took 61 days -> FALSE warning
+    "12 months recruitment plus 6 months     MAX took 12, but the stated window is
+     follow-up"                              the SUM (18) -> FALSE warning
+    "at least 3 months"                      single-duration read it as a cap
+    "patients under observation for at       "under" matched inside "under
+     least 3 months"                          observation" -> FALSE warning
+    "not under 3 months"                     "under" matched -> FALSE warning
+    "no more than 3 months"                  dead: floor list's "more than" won first
+    "at least 2 and at most 6 months"        floor veto dropped the real 6-month cap
+    "3 months maximum" / "3 months or less"  postposed cap ignored
+    ======================================  =========================================
+
+    A false warning is the worst outcome available here: it tells a caller their
+    design is unrunnable against a limit they never set, and it discredits every
+    real warning printed beside it. Free text is also not load-bearing — eval
+    turn 3.6 stated no timeline at all and is caught by the plausibility bound.
+
+    So prose is treated as "no stated limit". These cases are kept as tests
+    because they are the evidence for the decision, not because prose parsing is
+    coming back.
     """
 
-    def _warnings(self, timeline):
+    def _warnings(self, constraints):
         import asyncio
 
         from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
 
+        c = {"weekly_accrual": 50}
+        c.update(constraints)
         out = asyncio.run(
             PowerAnalysisNode().execute(
                 {
                     "design_type": "RCT",
-                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
+                    "constraints": c,
                     "outcomes": [
                         {
                             "is_primary": True,
@@ -1113,21 +965,8 @@ class TestCapMarkersMustModifyTheDuration:
                 }
             )
         )
-        assert out["duration_estimate_days"] == 476
+        assert out["duration_estimate_days"] == 476, out["duration_estimate_days"]
         return out["feasibility_warnings"]
-
-    @pytest.mark.parametrize(
-        "timeline",
-        [
-            "patients under observation for at least 3 months",
-            "at least 3 months of follow-up within the study",
-            "subjects followed up to and beyond at least 3 months",
-            "a minimum of 3 months",
-            "3 months or more",
-        ],
-    )
-    def test_a_cap_word_elsewhere_in_the_sentence_does_not_make_a_cap(self, timeline):
-        assert self._warnings(timeline) == [], timeline
 
     @pytest.mark.parametrize(
         "timeline",
@@ -1135,10 +974,55 @@ class TestCapMarkersMustModifyTheDuration:
             "3 months",
             "within 3 months",
             "no longer than 3 months",
-            "at most 90 days",
-            "study must not exceed 3 months",
-            "completed in under 90 days",
+            "no more than 3 months",
+            "3 months maximum",
+            "3 months or less",
+            "at least 2 and at most 6 months",
+            "at least 3 months",
+            "not under 3 months",
+            "patients under observation for at least 3 months",
+            "12 months recruitment plus 6 months follow-up",
+            "2 month recruitment ramp; total study no longer than 24 months",
+            "as soon as possible",
+            "Q3",
         ],
     )
-    def test_a_marker_modifying_the_duration_is_still_a_cap(self, timeline):
-        assert self._warnings(timeline), timeline
+    def test_no_prose_timeline_is_ever_enforced(self, timeline):
+        assert self._warnings({"timeline": timeline}) == [], timeline
+
+    def test_the_structured_shapes_are_still_enforced(self):
+        """The capability is not lost — it is only expressed unambiguously."""
+        assert self._warnings({"max_duration_days": 90})
+        assert self._warnings({"timeline": {"max_duration_days": 90}})
+        assert self._warnings({"timeline_weeks": 12})
+        assert self._warnings({"timeline": {"weeks": 12}})
+
+    def test_a_generous_structured_limit_stays_quiet(self):
+        assert self._warnings({"max_duration_days": 720}) == []
+        assert self._warnings({"timeline_weeks": 100}) == []
+
+    def test_the_absurd_design_is_still_caught_with_no_timeline_at_all(self):
+        """#1639's actual payload stated no timeline. This is why prose parsing
+        was never load-bearing."""
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        out = asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": {},
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": 0.030,
+                            "baseline_value": 0.05,
+                        }
+                    ],
+                }
+            )
+        )
+        assert out["duration_estimate_days"] == 94115
+        assert out["feasibility_warnings"]
