@@ -375,3 +375,91 @@ def test_pubmed_does_not_retry_non_429_errors() -> None:
             client.top_article("ribociclib")
 
     assert len(calls) == 1, "a 503 must not be retried"
+
+
+# ---------------------------------------------------------------------------
+# NCBI api_key authentication (#1628)
+#
+# NCBI E-utilities allows 3 req/s unauthenticated and 10 req/s with an API key.
+# Measured live 2026-08-15, 8 rapid esearch calls, same host and same params,
+# only the key differing:
+#   no key   -> [200, 200, 200, 429, 429, 429, 429, 429]  (5/8 throttled)
+#   with key -> [200, 200, 200, 200, 200, 200, 200, 200]  (0/8)
+#
+# `NCBI_API_KEY` was present and valid in the droplet `.env`, but nothing in
+# `src/` ever read it, so every production PubMed call ran on the 3 req/s tier.
+# The key must reach BOTH E-utilities calls (esearch and esummary): they are
+# separate HTTP requests and either one can be what trips the throttle.
+# ---------------------------------------------------------------------------
+
+
+def _capture_pubmed_params(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str | None,
+    **client_kwargs: object,
+) -> list[dict[str, str]]:
+    """Drive one top_article() round-trip, returning each request's params."""
+    if env_value is None:
+        monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("NCBI_API_KEY", env_value)
+
+    seen: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        if "esearch" in request.url.path:
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["33730455"]}})
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "33730455": {
+                        "title": "A title",
+                        "source": "J Test",
+                        "pubdate": "2021",
+                        "articleids": [],
+                    }
+                }
+            },
+        )
+
+    client = PubMedClient(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        **client_kwargs,  # type: ignore[arg-type]
+    )
+    with client:
+        assert client.top_article("ribociclib breast cancer") is not None
+    assert len(seen) == 2, "expected an esearch followed by an esummary"
+    return seen
+
+
+def test_pubmed_sends_api_key_on_every_call_when_env_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NCBI_API_KEY reaches both esearch and esummary."""
+    seen = _capture_pubmed_params(monkeypatch, "k" * 36)
+    for i, params in enumerate(seen):
+        assert params.get("api_key") == "k" * 36, f"request {i} unauthenticated: {params}"
+
+
+def test_pubmed_omits_api_key_entirely_when_env_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No key -> the parameter is ABSENT, not an empty string.
+
+    ``api_key=`` with an empty value is not the same as omitting it: NCBI
+    rejects a malformed key rather than serving the anonymous tier.
+    """
+    seen = _capture_pubmed_params(monkeypatch, None)
+    for i, params in enumerate(seen):
+        assert "api_key" not in params, f"request {i} sent an empty api_key: {params}"
+
+
+def test_pubmed_explicit_api_key_overrides_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly-passed key wins over the env var (mirrors _OpenFDAClient)."""
+    seen = _capture_pubmed_params(monkeypatch, "env-key", api_key="explicit-key")
+    for params in seen:
+        assert params.get("api_key") == "explicit-key"
