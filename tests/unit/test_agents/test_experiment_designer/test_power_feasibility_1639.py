@@ -403,3 +403,179 @@ class TestTheScaleReachesThePublicOutputModel:
         )
         blob = str(out.model_dump())
         assert "absolute_risk_difference" in blob
+
+
+class TestTheBoundDoesNotSlanderLegitimateTrials:
+    """codex iter-2 HIGH: a FALSE "not executable" is worse than a missing one.
+
+    My first bound reused the ``7 <= duration <= 365`` GEPA reward term from
+    dspy_integration.py:112 as an output-path validator. That reasoning was
+    wrong: the reward term SCORES an optimizer, where preferring short designs
+    is a legitimate bias, whereas the output path makes an ASSERTION ABOUT
+    REALITY, where a 16-month oncology trial is routine.
+
+    Measured on the real node: effect 0.15 on a 0.30 baseline at 50/week is
+    n=3,388 over 476 days. That is a normal study, and it was being labelled
+    not executable.
+    """
+
+    def _run(self, effect, baseline, accrual, constraints=None):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        c = {"weekly_accrual": accrual}
+        c.update(constraints or {})
+        return asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": c,
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": effect,
+                            "baseline_value": baseline,
+                        }
+                    ],
+                }
+            )
+        )
+
+    def test_a_sixteen_month_trial_is_not_slandered(self):
+        out = self._run(0.15, 0.30, 50)
+        assert 366 <= out["duration_estimate_days"] <= 3650, out["duration_estimate_days"]
+        assert out["feasibility_warnings"] == [], out["feasibility_warnings"]
+
+    def test_a_three_year_trial_is_not_slandered(self):
+        out = self._run(0.10, 0.30, 50)
+        assert 1000 <= out["duration_estimate_days"] <= 3650, out["duration_estimate_days"]
+        assert out["feasibility_warnings"] == [], out["feasibility_warnings"]
+
+    def test_the_257_year_design_is_still_flagged(self):
+        out = self._run(0.030, 0.05, 50)
+        assert out["duration_estimate_days"] == 94115
+        assert out["feasibility_warnings"], "the absurd case must survive the loosened bound"
+
+    def test_a_stated_maximum_is_enforced_however_short(self):
+        """When the CALLER states a limit, exceeding it is a fact, not a guess —
+        and that is the only way a 476-day design should ever be flagged."""
+        out = self._run(0.15, 0.30, 50, {"max_duration_days": 180})
+        assert out["duration_estimate_days"] > 180
+        assert out["feasibility_warnings"], out["duration_estimate_days"]
+        blob = " ".join(out["feasibility_warnings"])
+        assert "180" in blob, blob
+
+    def test_a_stated_maximum_that_is_met_stays_quiet(self):
+        out = self._run(0.15, 0.30, 50, {"max_duration_days": 720})
+        assert out["feasibility_warnings"] == [], out["feasibility_warnings"]
+
+    def test_the_timeline_constraint_is_also_read(self):
+        """``timeline`` is the documented constraint key (agent.py valid_keys)."""
+        out = self._run(0.15, 0.30, 50, {"timeline": {"max_duration_days": 180}})
+        assert out["feasibility_warnings"], out["duration_estimate_days"]
+
+
+class TestAnAuditWithEvidenceIsNotCalledNeverRun:
+    """codex iter-2 HIGH: a checkpoint written before this change carries audit
+    RESULTS but no status, and defaulting to "not_run" is then a false
+    provenance claim — the mirror image of the defect being fixed."""
+
+    def _doc(self, state_extra):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        state = {"preregistration_formality": "heavy", "power_analysis": {}}
+        state.update(state_extra)
+        return TemplateGeneratorNode()._generate_preregistration(state)
+
+    def test_threats_present_without_status_is_not_never_ran(self):
+        doc = self._doc(
+            {
+                "validity_threats": [{"threat_name": "selection bias", "severity": "high"}],
+                "overall_validity_score": 0.62,
+            }
+        )
+        assert "never ran" not in doc
+        assert "selection bias" in doc
+        assert "0.62" in doc
+
+    def test_a_score_without_threats_or_status_is_not_never_ran(self):
+        doc = self._doc({"validity_threats": [], "overall_validity_score": 0.82})
+        assert "never ran" not in doc
+
+    def test_a_genuinely_empty_state_still_says_never_ran(self):
+        doc = self._doc({"validity_threats": [], "overall_validity_score": 0.0})
+        assert "never ran" in doc
+
+
+class TestTheOtherArtifactsCarryTheCaveat:
+    """codex iter-2 HIGH: the monitoring spec and experiment template
+    re-project the infeasible sample size and duration into an execution plan.
+    A consumer of only those gets enrollment target 672,206 and a timeline
+    centuries out, with no caveat anywhere."""
+
+    def _state(self):
+        return {
+            "power_analysis": {"required_sample_size": 672206},
+            "duration_estimate_days": 94115,
+            "feasibility_warnings": ["Estimated duration 94,115 days ..."],
+            "validity_audit_status": "skipped",
+            "stratification_variables": [],
+        }
+
+    def test_monitoring_spec_carries_the_warnings(self):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        spec = TemplateGeneratorNode()._generate_monitoring_spec(self._state())
+        assert spec.get("feasibility_warnings"), sorted(spec)
+
+    def test_experiment_template_carries_the_warnings(self):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        tpl = TemplateGeneratorNode()._build_experiment_template(self._state())
+        assert dict(tpl).get("feasibility_warnings"), sorted(dict(tpl))
+
+
+class TestEveryReProjectionCarriesTheProvenance:
+    """codex iter-2: each surface that re-projects the design is its own chance
+    to drop the caveat. Four were found; this pins all four so the next one
+    added has to answer the same question."""
+
+    def test_training_signal_carries_scale_and_reasons(self):
+        from src.agents.experiment_designer.dspy_integration import (
+            ExperimentDesignTrainingSignal,
+        )
+
+        sig = ExperimentDesignTrainingSignal()
+        sig.minimum_detectable_effect = 0.0015
+        sig.minimum_detectable_effect_scale = "absolute_risk_difference"
+        sig.duration_estimate_days = 94115
+        sig.feasibility_warnings = ["Estimated duration 94,115 days ..."]
+        sig.validity_audit_status = "skipped"
+        d = sig.to_dict()
+        assert d["power_analysis"]["minimum_detectable_effect_scale"] == "absolute_risk_difference"
+        assert d["power_analysis"]["feasibility_warnings"]
+        assert d["validity_audit"]["validity_audit_status"] == "skipped"
+
+    def test_mlflow_metrics_count_the_warnings(self):
+        from src.agents.experiment_designer.mlflow_tracker import (
+            ExperimentDesignerMLflowTracker,
+        )
+
+        tracker = ExperimentDesignerMLflowTracker.__new__(ExperimentDesignerMLflowTracker)
+        metrics = tracker._extract_metrics(
+            {
+                "duration_estimate_days": 94115,
+                "feasibility_warnings": ["a", "b"],
+                "validity_threats": [],
+            },
+            None,
+        )
+        assert metrics.feasibility_warnings_count == 2

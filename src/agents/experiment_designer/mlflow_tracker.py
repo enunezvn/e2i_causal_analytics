@@ -51,6 +51,12 @@ class ExperimentDesignerMetrics:
     minimum_detectable_effect: float = 0.0
     alpha: float = 0.05
     duration_estimate_days: int = 0
+    #: #1639. The third re-projection of the same design. MLflow metrics are
+    #: numeric, so the reasons live on the output model and this carries the
+    #: COUNT -- enough to chart or alert on, and enough that a run recorded as
+    #: "n=672,206 over 94,115 days" is not silently indistinguishable from a
+    #: runnable one.
+    feasibility_warnings_count: int = 0
 
     # Validity metrics
     validity_threats_count: int = 0
@@ -269,6 +275,7 @@ class ExperimentDesignerMLflowTracker:
             "minimum_detectable_effect": metrics.minimum_detectable_effect,
             "alpha": metrics.alpha,
             "duration_estimate_days": metrics.duration_estimate_days,
+            "feasibility_warnings_count": metrics.feasibility_warnings_count,
             # Validity
             "validity_threats_count": metrics.validity_threats_count,
             "critical_threats_count": metrics.critical_threats_count,
@@ -372,6 +379,7 @@ class ExperimentDesignerMLflowTracker:
                 metrics.alpha = getattr(power_analysis, "alpha", 0.05)
 
         metrics.duration_estimate_days = output_dict.get("duration_estimate_days", 0)
+        metrics.feasibility_warnings_count = len(output_dict.get("feasibility_warnings") or [])
 
         # Validity metrics
         validity_threats = output_dict.get("validity_threats", [])

@@ -161,6 +161,10 @@ class ExperimentTemplate(TypedDict):
     pre_registration_document: NotRequired[str]
     analysis_code_template: NotRequired[str]
     monitoring_checkpoints: list[dict[str, Any]]
+    #: #1639. This template is the EXECUTION artifact: it carries sample_size
+    #: and duration_days into checkpoints and timelines. A consumer holding only
+    #: the template must be able to see that the design cannot be run.
+    feasibility_warnings: NotRequired[list[str]]
 
 
 class ErrorDetails(TypedDict):

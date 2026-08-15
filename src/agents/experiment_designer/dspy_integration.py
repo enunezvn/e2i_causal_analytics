@@ -52,13 +52,24 @@ class ExperimentDesignTrainingSignal:
     required_sample_size: int = 0
     achieved_power: float = 0.0
     minimum_detectable_effect: float = 0.0
+    #: #1639. Without this, a stored example carries an UNLABELED MDE and prompt
+    #: optimization learns from provenance-blind data -- teaching the model the
+    #: same ambiguity the output path was just fixed to avoid.
+    minimum_detectable_effect_scale: str = "unknown"
     duration_estimate_days: int = 0
+    #: #1639. The reward term below penalizes duration outside 7..365, but the
+    #: example did not record WHY a design was caveated, so the signal could not
+    #: distinguish "long but intentional" from "arithmetically absurd".
+    feasibility_warnings: list[str] = field(default_factory=list)
 
     # === Validity Audit Phase ===
     validity_threats_identified: int = 0
     critical_threats: int = 0
     mitigations_proposed: int = 0
     overall_validity_score: float = 0.0
+    #: #1639. A 0.0 score from a skipped audit and a 0.0 from a scathing one are
+    #: the same number; only this says which the optimizer is learning from.
+    validity_audit_status: str = "not_run"
     redesign_iterations: int = 0
 
     # === Template Generation ===
@@ -174,13 +185,16 @@ class ExperimentDesignTrainingSignal:
                 "required_sample_size": self.required_sample_size,
                 "achieved_power": self.achieved_power,
                 "minimum_detectable_effect": self.minimum_detectable_effect,
+                "minimum_detectable_effect_scale": self.minimum_detectable_effect_scale,
                 "duration_estimate_days": self.duration_estimate_days,
+                "feasibility_warnings": list(self.feasibility_warnings),
             },
             "validity_audit": {
                 "validity_threats_identified": self.validity_threats_identified,
                 "critical_threats": self.critical_threats,
                 "mitigations_proposed": self.mitigations_proposed,
                 "overall_validity_score": self.overall_validity_score,
+                "validity_audit_status": self.validity_audit_status,
                 "redesign_iterations": self.redesign_iterations,
             },
             "template_generation": {
@@ -335,12 +349,16 @@ class ExperimentDesignerSignalCollector:
         achieved_power: float,
         minimum_detectable_effect: float,
         duration_estimate_days: int,
+        minimum_detectable_effect_scale: str = "unknown",
+        feasibility_warnings: Optional[list[str]] = None,
     ) -> ExperimentDesignTrainingSignal:
         """Update signal with power analysis results."""
         signal.required_sample_size = required_sample_size
         signal.achieved_power = achieved_power
         signal.minimum_detectable_effect = minimum_detectable_effect
+        signal.minimum_detectable_effect_scale = minimum_detectable_effect_scale
         signal.duration_estimate_days = duration_estimate_days
+        signal.feasibility_warnings = list(feasibility_warnings or [])
         return signal
 
     def update_validity_audit(
@@ -351,8 +369,10 @@ class ExperimentDesignerSignalCollector:
         mitigations_proposed: int,
         overall_validity_score: float,
         redesign_iterations: int,
+        validity_audit_status: str = "not_run",
     ) -> ExperimentDesignTrainingSignal:
         """Update signal with validity audit results."""
+        signal.validity_audit_status = validity_audit_status
         signal.validity_threats_identified = validity_threats_identified
         signal.critical_threats = critical_threats
         signal.mitigations_proposed = mitigations_proposed

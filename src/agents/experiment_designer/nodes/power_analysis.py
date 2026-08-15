@@ -32,11 +32,23 @@ from src.utils.power_analysis_lib import (
     time_to_event_power,
 )
 
-#: Longest duration a served design may report without being flagged. A trial
-#: running beyond a year is a planning decision, not an arithmetic result; beyond
-#: that the number is a symptom of an undetectable effect, not a schedule.
-#: Deliberately NOT a clamp — see the flagging site for why.
-_MAX_PLAUSIBLE_DURATION_DAYS = 365
+#: Beyond ANY realistic planning horizon (10 years). Not "long" -- absurd.
+#:
+#: This was 365 for one round, on the reasoning that a ``7 <= duration <= 365``
+#: range already exists at dspy_integration.py:112 and could be reused as an
+#: output-path validator. That reasoning was wrong, and the correction matters
+#: more than the constant: the GEPA term SCORES an optimizer, where preferring
+#: short designs is a legitimate bias, while this site makes an ASSERTION ABOUT
+#: REALITY, where a 16-month oncology trial is routine. Measured on this node,
+#: effect 0.15 on a 0.30 baseline at 50/week is n=3,388 over 476 days -- a
+#: normal study that the 365 bound branded "not executable as specified".
+#:
+#: A FALSE warning is worse than a missing one: the missing warning leaves the
+#: old behaviour, the false one destroys trust in every warning beside it. So
+#: the unconditional bound is set where no honest schedule reaches, and a design
+#: that is merely long is flagged ONLY against a limit the caller actually
+#: stated (``_stated_max_duration_days``).
+_IMPLAUSIBLE_DURATION_DAYS = 3650
 
 #: What ``PowerResult.mde`` actually measures, per analysis branch. The Tier 3
 #: ``effect_size_type`` enum cannot express this (#1639): it has no member for an
@@ -62,6 +74,66 @@ class PowerAnalysisNode:
         self._default_alpha = 0.05
         self._default_power = 0.80
         self._default_effect_size = 0.25
+
+    @staticmethod
+    def _stated_max_duration_days(constraints: dict[str, Any]) -> Any:
+        """The caller's own duration limit, if they gave one.
+
+        Read from ``max_duration_days`` or from the documented ``timeline``
+        constraint key (agent.py ``validate_constraints``), which callers use to
+        carry schedule limits.
+        """
+        for candidate in (
+            constraints.get("max_duration_days"),
+            (constraints.get("timeline") or {}).get("max_duration_days")
+            if isinstance(constraints.get("timeline"), dict)
+            else None,
+        ):
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+                return candidate
+        return None
+
+    def _assess_feasibility(
+        self,
+        duration_days: int,
+        sample_size: int,
+        accrual_rate: Any,
+        constraints: dict[str, Any],
+    ) -> list[str]:
+        """Reasons this design cannot be run as specified (#1639).
+
+        Two tiers, because they are two different claims:
+
+        * a **stated** limit exceeded is a FACT about the caller's own
+          constraint -- flagged however short the overrun;
+        * absent any stated limit, only a duration past
+          ``_IMPLAUSIBLE_DURATION_DAYS`` is flagged, because without a limit
+          "too long" is the caller's judgement to make, not ours.
+
+        Flags rather than clamps: eval turn 3.6's 94,115 days was arithmetically
+        exact (``ceil(672206/50)*7 == 94115``), and a silently capped duration
+        would be a fabricated number where the real one is merely unwelcome.
+        """
+        warnings: list[str] = []
+        years = duration_days / 365.25
+        stated_max = self._stated_max_duration_days(constraints)
+
+        if stated_max is not None and duration_days > stated_max:
+            warnings.append(
+                f"Estimated duration {duration_days:,} days ({years:.1f} years) exceeds the "
+                f"stated maximum of {stated_max:,.0f} days. The design requires "
+                f"n={sample_size:,} at the assumed accrual of {accrual_rate}/week; to fit the "
+                f"stated window, either accrual must rise or the effect size the study is "
+                f"powered to detect must be larger."
+            )
+        elif stated_max is None and duration_days > _IMPLAUSIBLE_DURATION_DAYS:
+            warnings.append(
+                f"Estimated duration {duration_days:,} days ({years:.1f} years) is far beyond "
+                f"any realistic planning horizon. The design requires n={sample_size:,} at the "
+                f"assumed accrual of {accrual_rate}/week; this is a symptom of an effect too "
+                f"small for the study to practically detect, not a schedule."
+            )
+        return warnings
 
     async def execute(self, state: ExperimentDesignState) -> ExperimentDesignState:
         """Execute power analysis."""
@@ -129,16 +201,9 @@ class PowerAnalysisNode:
             # Flag rather than clamp: the numbers are correct and a silently
             # capped duration would be a fabricated one. The caller gets the real
             # figure plus the reason it cannot be run.
-            feasibility_warnings: list[str] = []
-            if duration_days > _MAX_PLAUSIBLE_DURATION_DAYS:
-                feasibility_warnings.append(
-                    f"Estimated duration {duration_days:,} days "
-                    f"({duration_days / 365.25:.1f} years) exceeds the "
-                    f"{_MAX_PLAUSIBLE_DURATION_DAYS}-day plausibility bound at the "
-                    f"assumed accrual of {accrual_rate}/week. The design requires "
-                    f"n={forward.sample_size:,}; either the effect size is smaller "
-                    f"than the study can practically detect, or accrual must rise."
-                )
+            feasibility_warnings = self._assess_feasibility(
+                duration_days, forward.sample_size, accrual_rate, constraints
+            )
 
             sensitivity = sensitivity_variations(
                 effect_size,

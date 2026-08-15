@@ -412,6 +412,7 @@ print("Results saved to analysis_results.json")
             pre_registration_document=prereg_doc,
             analysis_code_template=state.get("analysis_code") or "",
             monitoring_checkpoints=checkpoints,
+            feasibility_warnings=list(state.get("feasibility_warnings") or []),
         )
 
     @staticmethod
@@ -435,7 +436,16 @@ print("Results saved to analysis_results.json")
         here as "None identified", i.e. this document asserted a clean bill of
         health it had never obtained. Absent status means the node never ran.
         """
-        status = state.get("validity_audit_status", "not_run")
+        status = state.get("validity_audit_status")
+        if status is None:
+            # A checkpoint written before this field existed carries audit
+            # RESULTS but no status, and calling that "never ran" is a false
+            # provenance claim -- the mirror image of the defect being fixed
+            # here. Infer from the evidence the audit leaves behind.
+            has_verdict = bool(state.get("validity_threats")) or bool(
+                state.get("overall_validity_score")
+            )
+            status = "completed" if has_verdict else "not_run"
         phrasing = {
             "skipped": "was skipped",
             "timed_out": "timed out",
@@ -688,6 +698,12 @@ Comparison of {outcome} between treatment and control groups.
 
         return {
             "dashboard_id": f"monitor_{uuid.uuid4().hex[:8]}",
+            # #1639: this spec re-projects the sample size and duration into an
+            # execution plan (enrollment target, timeline). A consumer holding
+            # only the dashboard would otherwise see a 672,206 target and an end
+            # date centuries out with no caveat anywhere in reach.
+            "feasibility_warnings": list(state.get("feasibility_warnings") or []),
+            "validity_audit_status": self._audit_verdict(state)[1],
             "refresh_interval_minutes": 60,
             "panels": [
                 {
