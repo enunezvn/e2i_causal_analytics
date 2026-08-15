@@ -121,6 +121,18 @@ _ALIASES: Dict[str, str] = {
     "funnel conversion": "WS2-TR-009",
     "conversion funnel": "WS2-TR-009",
     "trigger funnel": "WS2-TR-009",
+    # Model-performance KPIs whose names are ENTIRELY sub-4-char abbreviations
+    # ("ROC-AUC", "PR-AUC", "F1 Score" — "score" is a stop token). The name-token
+    # fallback has nothing it can see, so before #1637 these resolved to None and
+    # the chat tool answered "did not resolve to a defined KPI" for three fully
+    # implemented KPIs. Aliased rather than lowering the token floor, which would
+    # admit "ttr"/"cfr"/"ate" and collide with ordinary prose (_ABBREV_BLOCKLIST).
+    # Multi-character forms only — a bare "f1" would match inside unrelated words.
+    "roc-auc": "WS1-MP-001",
+    "roc auc": "WS1-MP-001",
+    "pr-auc": "WS1-MP-002",
+    "pr auc": "WS1-MP-002",
+    "f1 score": "WS1-MP-003",
 }
 
 # Registry abbreviations that are ordinary English words: admitting them to
@@ -238,6 +250,87 @@ KPI_SEMANTIC_NOTES = {
 # ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
+#: Name tokens too generic to identify a KPI on their own — they appear in many
+#: registry names and in ordinary analytics prose.
+_NAME_TOKEN_STOP = frozenset(
+    {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
+)
+
+#: Shortest name token allowed to drive a match. Below this, tokens are
+#: abbreviations ("ttr", "cfr", "auc") that collide with ordinary words; the
+#: KPIs whose names are ENTIRELY such tokens carry explicit aliases instead.
+_MIN_NAME_TOKEN = 4
+
+
+@lru_cache(maxsize=1024)
+def _name_tokens(name: str) -> Tuple[str, ...]:
+    """Distinctive lowercase tokens of a KPI name, in order of appearance."""
+    normalized = name.lower().replace("-", " ").replace("(", " ").replace(")", " ")
+    seen: Dict[str, None] = {}
+    for tok in normalized.split():
+        tok = tok.strip()
+        if len(tok) >= _MIN_NAME_TOKEN and tok not in _NAME_TOKEN_STOP:
+            seen.setdefault(tok, None)
+    return tuple(seen)
+
+
+@lru_cache(maxsize=1024)
+def _token_pattern(token: str) -> re.Pattern[str]:
+    """Word-boundary matcher for a name token.
+
+    Boundaries matter (#1637): plain substring search let WS1-DQ-004 "Stacking
+    Lift" claim every query containing "up|lift|", so "action rate uplift"
+    resolved to Stacking Lift instead of WS2-TR-003 Action Rate Uplift.
+    """
+    return re.compile(r"\b" + re.escape(token) + r"\b")
+
+
+def _best_name_match(
+    q: str, kpis: List[KPIMetadata]
+) -> Optional[Tuple[KPIMetadata, str, int, int]]:
+    """Resolve ``q`` to the KPI whose NAME the query covers best.
+
+    Before #1637 this was "return the first registry KPI holding any name token
+    found as a substring of the query". Both halves of that were defects:
+
+    * **substring, not word boundary** — "lift" matched inside "uplift".
+    * **registry order standing in for relevance** — a one-token brush beat an
+      exact full-name match, so ``WS2-TR-001 Trigger Precision`` owned every
+      query containing the word "trigger" (the reported 4.6 symptom: "what is
+      the false alert rate for triggers" resolved to Trigger Precision), and
+      ``WS1-DQ-009 Time-to-Release`` owned "lead time" via its "time" token.
+
+    Measured over the 45-KPI registry, ten KPIs resolved to a DIFFERENT KPI when
+    asked by their own name. Scoring by coverage takes that to zero.
+
+    Ranking, best first: most distinct name tokens matched, then the most query
+    characters matched, then registry order — which keeps the previous winner on
+    a genuine tie, so this narrows resolution rather than reshuffling it.
+
+    The returned span is the EARLIEST matched token, so it points at the start
+    of the KPI mention for the #1475 governing-head guards.
+    """
+    best: Optional[Tuple[Tuple[int, int, int], KPIMetadata, int, int]] = None
+    for order, kpi in enumerate(kpis):
+        starts: List[int] = []
+        ends: List[int] = []
+        for tok in _name_tokens(str(kpi.name)):
+            m = _token_pattern(tok).search(q)
+            if m is not None:
+                starts.append(m.start())
+                ends.append(m.end())
+        if not starts:
+            continue
+        # Negated so that "more is better" sorts first under plain tuple order.
+        key = (-len(starts), -sum(e - s for s, e in zip(starts, ends, strict=True)), order)
+        if best is None or key < best[0]:
+            first = min(range(len(starts)), key=lambda i: starts[i])
+            best = (key, kpi, starts[first], ends[first])
+    if best is None:
+        return None
+    return best[1], q, best[2], best[3]
+
+
 def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int, int]]:
     """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
@@ -273,18 +366,10 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
             if kpi is not None:
                 return kpi, q, idx, idx + len(alias)
 
-    # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
-    stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
-    for kpi in registry.get_all():
-        for tok in (
-            str(kpi.name).lower().replace("-", " ").replace("(", " ").replace(")", " ").split()
-        ):
-            tok = tok.strip()
-            if len(tok) >= 4 and tok not in stop:
-                idx = q.find(tok)
-                if idx != -1:
-                    return kpi, q, idx, idx + len(tok)
-    return None
+    # 2) dynamic fallback: score every KPI by how much of its NAME the query
+    # covers, and take the best (#1637). See _best_name_match for why coverage
+    # replaced "first registry KPI holding any matching token".
+    return _best_name_match(q, registry.get_all())
 
 
 @lru_cache(maxsize=1)
