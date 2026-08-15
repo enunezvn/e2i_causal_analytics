@@ -2,7 +2,7 @@
 E2I Causal Analytics - FastAPI Application
 ==========================================
 
-Main FastAPI application with 21-agent orchestration layer.
+Main FastAPI application with 22-agent orchestration layer.
 
 Components:
 -----------
@@ -578,7 +578,7 @@ openapi_tags = [
     },
     {
         "name": "Agent Orchestration",
-        "description": "Manage the 21-agent architecture: status, dispatch, and tier information.",
+        "description": "Manage the 22-agent architecture: status, dispatch, and tier information.",
     },
     {
         "name": "Analytics",
@@ -701,7 +701,7 @@ API_VERSION = "4.2.1"
 
 app = FastAPI(
     title="E2I Causal Analytics Platform",
-    description="21-Agent architecture for causal inference, ML interpretability, and digital twin generation",
+    description="22-Agent architecture for causal inference, ML interpretability, and digital twin generation",
     version=API_VERSION,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

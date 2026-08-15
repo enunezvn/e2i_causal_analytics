@@ -245,7 +245,9 @@ export interface AgentTier {
   agents: AgentDef[];
 }
 
-/** Roster source: src/agents/factory.py AGENT_REGISTRY_CONFIG (21 agents). */
+/** Roster source: src/agents/factory.py AGENT_REGISTRY_CONFIG (22 agents).
+ * Pinned against the registry by tests/unit/test_agents/test_agent_roster_ssot_1638.py —
+ * cohort_profiler was missing here, so this page under-reported the system (#1638). */
 export const AGENT_TIERS: AgentTier[] = [
   {
     tier: 0,
@@ -260,6 +262,7 @@ export const AGENT_TIERS: AgentTier[] = [
       { id: 'model_deployer', role: 'Promotes models to serving' },
       { id: 'observability_connector', role: 'Wires telemetry for every run' },
       { id: 'cohort_constructor', role: 'Builds indication-specific eligible populations' },
+      { id: 'cohort_profiler', role: 'Profiles cohorts from chat with real KPI counts' },
     ],
   },
   {

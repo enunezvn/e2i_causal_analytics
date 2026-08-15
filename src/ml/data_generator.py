@@ -13,7 +13,7 @@ Features:
 - Chronological train/validation/test/holdout splits
 - Patient-level isolation (no patient in multiple splits)
 - Complete field population for 100% KPI calculability
-- 11-agent tiered architecture support
+- 22-agent tiered architecture support
 """
 
 import hashlib

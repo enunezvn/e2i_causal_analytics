@@ -1,7 +1,7 @@
 """GEPA Optimizer Factory for E2I Agents.
 
 This module provides factory functions to create configured GEPA optimizers
-for different agent types in the E2I 21-agent 6-tier architecture.
+for different agent types in the E2I 22-agent 6-tier architecture.
 
 GEPA (Genetic-Pareto) provides:
 - 10+ percentage-point gains over MIPROv2 (Agrawal et al., 2025, arXiv:2507.19457)

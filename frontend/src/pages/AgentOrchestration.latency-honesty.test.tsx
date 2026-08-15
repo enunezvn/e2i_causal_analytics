@@ -68,7 +68,7 @@ function createWrapper() {
   );
 }
 
-// A real 21-agent roster (only 3 shown for brevity); `total` is the alias the
+// A real roster (only 3 shown for brevity); `total` is the alias the
 // backend now emits and the frontend reads.
 const realAgentStatus = {
   agents: [

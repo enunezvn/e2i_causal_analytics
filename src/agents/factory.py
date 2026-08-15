@@ -70,7 +70,14 @@ def _require_full_default() -> bool:
 
 
 # Agent metadata for lazy instantiation
-AGENT_REGISTRY_CONFIG = {
+#: Annotated because the value dicts mix int/str/bool, so mypy infers
+#: ``dict[str, object]`` and every read has to be re-narrowed at the call
+#: site -- `int(cfg["tier"])` in :func:`agent_roster_summary` was a
+#: call-overload error against the ceiling (#1638). Declaring the shape
+#: once is the fix; narrowing per read would have meant a fallback value,
+#: and a roster that silently drops an agent is the exact defect this
+#: function exists to prevent.
+AGENT_REGISTRY_CONFIG: Dict[str, Dict[str, Any]] = {
     # Tier 0: ML Foundation
     "scope_definer": {
         "tier": 0,
@@ -214,6 +221,49 @@ AGENT_REGISTRY_CONFIG = {
         "enabled": True,
     },
 }
+
+#: Display names for the tiers in :data:`AGENT_REGISTRY_CONFIG`. The tier NUMBERS
+#: are already SSOT in the registry above; only their human labels were missing,
+#: which is why every surface that wanted to describe the architecture typed its
+#: own prose and drifted (#1638).
+#: Taken from the registry's own section comments above rather than from any
+#: consumer's prose -- those had drifted apart too (the frontend called tier 1
+#: "Coordination" and tier 5 "Learning"; the routing signature called them
+#: "Orchestration" and "Learning"; the registry says "Coordination" and
+#: "Self-Improvement"). Adjacent-to-the-data wins.
+AGENT_TIER_NAMES: Dict[int, str] = {
+    0: "ML Foundation",
+    1: "Coordination",
+    2: "Causal Analytics",
+    3: "Monitoring",
+    4: "ML Predictions",
+    5: "Self-Improvement",
+}
+
+
+def build_agent_roster_block() -> str:
+    """Render the agent roster as prompt-ready text, derived from the registry.
+
+    #1638: turn 5.2 ("what agents are available") answered with TOOL names because
+    the AG-UI answering prompt carried no roster at all -- only the phrase "the
+    tiered architecture" with a count that had gone stale. A hand-written list
+    would have fixed that turn and rotted at the next agent; this is generated, so
+    adding an agent to :data:`AGENT_REGISTRY_CONFIG` updates every consumer with
+    no second edit.
+
+    Only ENABLED agents are listed: a disabled agent cannot be dispatched, so
+    naming it as available would be the same class of untruth in reverse.
+    """
+    enabled = {n: c for n, c in AGENT_REGISTRY_CONFIG.items() if c.get("enabled")}
+    by_tier: Dict[int, List[str]] = {}
+    for name, cfg in enabled.items():
+        by_tier.setdefault(int(cfg["tier"]), []).append(name)
+
+    lines = [f"The E2I system has {len(enabled)} agents organized in {len(by_tier)} tiers:"]
+    for tier in sorted(by_tier):
+        label = AGENT_TIER_NAMES.get(tier, f"Tier {tier}")
+        lines.append(f"- Tier {tier}: {label} ({', '.join(sorted(by_tier[tier]))})")
+    return "\n".join(lines)
 
 
 def create_agent_registry(

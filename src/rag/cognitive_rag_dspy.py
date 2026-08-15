@@ -860,7 +860,7 @@ class ReflectorModule(dspy.Module):
                 #     produced this synthesized response). Verified against the
                 #     live DB enum.
                 #   - agent_name maps to ``e2i_agent_name`` (nullable), whose
-                #     vocabulary is the 23 registered E2I agents. The cognitive
+                #     vocabulary is the 22 registered E2I agents. The cognitive
                 #     RAG cycle is NOT one of them, so we OMIT agent_name (the
                 #     writer drops None keys -> column left NULL) rather than
                 #     invent a fake-but-valid agent.

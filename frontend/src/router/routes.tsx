@@ -241,7 +241,7 @@ export const routeConfigs: RouteConfig[] = [
   {
     path: '/agent-orchestration',
     title: 'Agent Orchestration',
-    description: '21-agent tiered orchestration system',
+    description: '22-agent tiered orchestration system',
     icon: 'bot',
     section: 'system',
     showInNav: true,

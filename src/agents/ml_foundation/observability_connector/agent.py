@@ -1,6 +1,6 @@
 """Observability Connector Agent - STANDARD.
 
-Provides telemetry and monitoring across all 21 agents.
+Provides telemetry and monitoring across all 22 agents.
 
 Responsibilities:
 - Span emission to Opik SDK

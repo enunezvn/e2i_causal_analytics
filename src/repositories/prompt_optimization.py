@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 # Agent profiles (prompt_optimization_runs.agent_tier / agent_type NOT NULLs)
 # ---------------------------------------------------------------------------
 
-#: (tier, type) per the 21-agent 6-tier architecture, mirroring the tier
+#: (tier, type) per the 22-agent 6-tier architecture, mirroring the tier
 #: comments on src/optimization/gepa/optimizer_setup.AGENT_BUDGETS. Kept as a
 #: local table rather than imported: importing src.optimization.gepa eagerly
 #: loads dspy (see module docstring), and the runs table needs only this pair.

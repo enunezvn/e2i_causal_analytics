@@ -901,7 +901,7 @@ function SystemHealth() {
                 <Bot className="h-5 w-5" />
                 Agent Health by Tier
               </CardTitle>
-              <CardDescription>21-agent tiered orchestration system status</CardDescription>
+              <CardDescription>22-agent tiered orchestration system status</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               {agents.length === 0 && (

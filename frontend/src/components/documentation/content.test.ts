@@ -34,11 +34,16 @@ describe('content invariants', () => {
     expect(orphans).toEqual([]);
   });
 
-  it('models exactly 21 agents across 6 tiers with unique ids', () => {
+  // #1638: was 21, and cohort_profiler — a real, dispatched agent — was missing,
+  // so this page under-reported the system. The Python-side pin
+  // (tests/unit/test_agents/test_agent_roster_ssot_1638.py) compares this roster
+  // against factory.AGENT_REGISTRY_CONFIG, so adding an agent there fails HERE.
+  it('models exactly 22 agents across 6 tiers with unique ids', () => {
     expect(AGENT_TIERS).toHaveLength(6);
     const ids = AGENT_TIERS.flatMap((t) => t.agents.map((a) => a.id));
-    expect(ids).toHaveLength(21);
-    expect(new Set(ids).size).toBe(21);
+    expect(ids).toHaveLength(22);
+    expect(new Set(ids).size).toBe(22);
+    expect(ids).toContain('cohort_profiler');
   });
 
   it('lists five clinical sources with UMLS and OpenFDA prominent', () => {
