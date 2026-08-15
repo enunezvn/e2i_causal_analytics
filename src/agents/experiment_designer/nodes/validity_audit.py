@@ -266,6 +266,23 @@ class MockValidityResponse:
         self.content = content
 
 
+def _retract_stale_verdict(state: ExperimentDesignState) -> None:
+    """Drop a previous iteration's audit findings (#1639).
+
+    The redesign loop re-runs this node against a CHANGED design. When the new
+    audit does not complete, iteration N's threats, mitigations, score and
+    recommendations describe a design that no longer exists -- and
+    ``_create_output`` would publish them beside a "timed_out"/"skipped" status
+    as though they applied. Same class as the feasibility verdict in
+    power_analysis; a no-op on the first pass, where there is nothing to
+    retract.
+    """
+    state["validity_threats"] = []
+    state["mitigations"] = []
+    state["overall_validity_score"] = 0.0
+    state["redesign_recommendations"] = []
+
+
 class ValidityAuditNode:
     """Adversarial validity assessment for experiment design.
 
@@ -312,6 +329,7 @@ class ValidityAuditNode:
             # states "None identified" as fact. Record the reason so a consumer
             # can tell a clean bill of health from an absent one.
             state["validity_audit_status"] = "skipped"
+            _retract_stale_verdict(state)
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"
@@ -333,6 +351,7 @@ class ValidityAuditNode:
             except asyncio.TimeoutError:
                 state["warnings"] = state.get("warnings", []) + ["Validity audit timed out"]
                 state["validity_audit_status"] = "timed_out"
+                _retract_stale_verdict(state)
                 state["validity_confidence"] = "low"
                 state["redesign_needed"] = False
                 state["status"] = "generating"
@@ -437,9 +456,8 @@ class ValidityAuditNode:
             state["errors"] = state.get("errors", []) + [error]
             state["warnings"] = state.get("warnings", []) + [f"Validity audit failed: {str(e)}"]
             # Set required output defaults on failure
-            state["validity_threats"] = state.get("validity_threats", [])
             state["validity_audit_status"] = "failed"
-            state["overall_validity_score"] = state.get("overall_validity_score", 0.0)
+            _retract_stale_verdict(state)
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"

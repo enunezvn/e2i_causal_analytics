@@ -1195,3 +1195,92 @@ class TestTheMachineFieldCarriesTheStatusNotTheProse:
             }
         )
         assert "was skipped" in doc, "the human sentence lost its phrasing"
+
+
+class TestAnAuditThatDidNotCompleteRetractsTheOldVerdict:
+    """codex iter-11 HIGH: the same staleness class I fixed in power_analysis,
+    left unfixed one node over.
+
+    Iteration 0 completes, finds "selection bias", triggers a redesign.
+    Iteration 1 changes the design and its audit TIMES OUT. The status became
+    "timed_out" while ``validity_threats``, ``mitigations``,
+    ``overall_validity_score`` and ``redesign_recommendations`` still held
+    iteration 0's findings — so `_create_output` published "timed_out" beside
+    threats belonging to a design that no longer exists.
+    """
+
+    def _run(self, **extra):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
+
+        state = {
+            "status": "auditing",
+            "enable_validity_audit": False,
+            "validity_threats": [{"threat_name": "selection bias", "severity": "high"}],
+            "mitigations": [{"threat_addressed": "selection bias", "strategy": "block"}],
+            "overall_validity_score": 0.62,
+            "redesign_recommendations": ["stratify by region"],
+        }
+        state.update(extra)
+        return asyncio.run(ValidityAuditNode().execute(state))
+
+    def test_a_skipped_audit_retracts_the_previous_findings(self):
+        out = self._run()
+        assert out["validity_audit_status"] == "skipped"
+        assert out["validity_threats"] == [], out["validity_threats"]
+        assert out.get("mitigations") == []
+        assert out["overall_validity_score"] == 0.0
+        assert out.get("redesign_recommendations") == []
+
+    def test_the_first_pass_is_unaffected(self):
+        """Nothing to retract when there was no previous verdict."""
+        out = self._run(
+            validity_threats=[],
+            mitigations=[],
+            overall_validity_score=0.0,
+            redesign_recommendations=[],
+        )
+        assert out["validity_threats"] == []
+        assert out["overall_validity_score"] == 0.0
+
+
+class TestTheStatusFieldRejectsValuesOutsideItsEnum:
+    """codex iter-11 HIGH: `_audit_status` returned whatever was in state.
+
+    A checkpoint carrying the previous BAD value ``"was skipped"`` — the exact
+    prose bug fixed one round earlier — or a typo like ``"timeout"`` flowed
+    straight into the documented machine enum, recreating the failure for any
+    consumer filtering on it.
+    """
+
+    def _status(self, value):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        return TemplateGeneratorNode._audit_status({"validity_audit_status": value})
+
+    @pytest.mark.parametrize("status", ["completed", "skipped", "timed_out", "failed", "not_run"])
+    def test_documented_values_pass_through(self, status):
+        assert self._status(status) == status
+
+    @pytest.mark.parametrize("bogus", ["was skipped", "timeout", "", "COMPLETED", 7, None])
+    def test_anything_else_becomes_unknown_not_a_guess(self, bogus):
+        if bogus is None:
+            pytest.skip("absent status is the inference path, covered elsewhere")
+        assert self._status(bogus) == "unknown"
+
+    def test_unknown_is_a_documented_value(self):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        completed, phrasing = TemplateGeneratorNode._audit_verdict(
+            {"validity_audit_status": "timeout"}
+        )
+        # Exact: pre-fix this said "reported status 'timeout'" — the typo
+        # echoed straight back. The `or "reported status"` I first wrote here
+        # passed both ways and proved nothing.
+        assert completed is False
+        assert phrasing == "reported status 'unknown'", phrasing

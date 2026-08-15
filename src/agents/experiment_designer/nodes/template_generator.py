@@ -19,6 +19,10 @@ from src.agents.experiment_designer.state import (
     ExperimentTemplate,
 )
 
+#: The documented values of ``validity_audit_status`` (#1639). ``unknown`` is
+#: the explicit out-of-band member: a status we did not write and cannot map.
+AUDIT_STATUSES = frozenset({"completed", "skipped", "timed_out", "failed", "not_run", "unknown"})
+
 
 class TemplateGeneratorNode:
     """Generates DoWhy-compatible outputs and pre-registration documents.
@@ -439,7 +443,7 @@ print("Results saved to analysis_results.json")
         return f"{value:.6g}"
 
     @staticmethod
-    def _audit_status(state: ExperimentDesignState) -> str:
+    def _audit_status(state: ExperimentDesignState) -> str:  # noqa: D401
         """The MACHINE value: completed | skipped | timed_out | failed | not_run.
 
         Kept separate from :meth:`_audit_verdict`, which returns prose for a
@@ -454,7 +458,15 @@ print("Results saved to analysis_results.json")
         """
         status = state.get("validity_audit_status")
         if status is not None:
-            return str(status)
+            # Validated, not passed through. A checkpoint carrying the previous
+            # BAD value ("was skipped" — the prose bug fixed one round earlier)
+            # or a typo ("timeout") would otherwise land straight in the
+            # documented enum and recreate the failure for any consumer
+            # filtering on it. Out-of-band values become "unknown", which is
+            # honest: we know the audit's state was recorded, just not as
+            # something we recognise. Never silently coerced to "not_run" —
+            # that would ASSERT it never ran.
+            return status if status in AUDIT_STATUSES else "unknown"
         has_verdict = bool(state.get("validity_threats")) or bool(
             state.get("overall_validity_score")
         )
