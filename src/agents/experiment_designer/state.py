@@ -68,7 +68,10 @@ def normalize_audit_status(value: object) -> str:
     ASSERT that the audit did not run when all we know is that we cannot read
     what it said.
     """
-    return value if value in AUDIT_STATUSES else "unknown"
+    # `str(...)` rather than returning `value`: membership in AUDIT_STATUSES
+    # guarantees it IS one of those strings, so this is exact, and the
+    # declared `object` parameter otherwise leaks out as the return type.
+    return str(value) if value in AUDIT_STATUSES else "unknown"
 
 
 def infer_audit_status(
