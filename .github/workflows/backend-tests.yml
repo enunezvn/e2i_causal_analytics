@@ -314,7 +314,6 @@ jobs:
             tests/unit/test_optimization/ \
             tests/unit/test_serving/ \
             tests/unit/test_skills/ \
-            tests/unit/test_synthetic/ \
             tests/unit/test_testing/ \
             tests/unit/test_tests_meta/ \
             tests/unit/test_tool_registry/ \
@@ -445,6 +444,7 @@ jobs:
             tests/unit/test_ontology/ \
             tests/unit/test_rag/ \
             tests/unit/test_security/ \
+            tests/unit/test_synthetic/ \
             tests/unit/test_tasks/ \
             -n 2 \
             --dist=loadscope \
