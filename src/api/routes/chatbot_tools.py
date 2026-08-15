@@ -425,6 +425,84 @@ _REGION_CLARIFY_HINT = (
 _normalize_brand = resolve_brand_label
 
 
+#: What ``business_metrics.value`` actually is (#1640).
+#:
+#: Measured against the live DB 2026-08-15: the national ``business_metrics``
+#: TRx total for 2026-08 is 825,242, against 11,298 trailing-30-day
+#: ``treatment_events`` prescription events for the same brand — **73.0x**, and
+#: stable month over month (2026-07: 830,103; 2026-06: 812,266). Not a window,
+#: grain or bucket-width artifact: ``BusinessMetricsGenerator`` draws Kisqali
+#: TRx from a base of 50,000 per region per month with ``REGION_FACTORS``
+#: northeast 1.15 and 2% monthly trend, so national 50,000 x 4.00 x 4.26 =
+#: 852,000 against the measured 825,242. An event count cannot be fractional;
+#: these values are (min 5,923.95, max 307,229.18).
+#:
+#: So the two numbers are different QUANTITIES sharing the name "TRx", and no
+#: window or grain conversion maps one onto the other.
+_BUSINESS_METRICS_BASIS: Dict[str, Any] = {
+    "substrate": ["business_metrics"],
+    "computed": False,
+    "grain": "brand x region x calendar month",
+    "measure": "modeled market-scale monthly level",
+    "note": (
+        "business_metrics.value is a MODELED market-scale level, not a count of "
+        "observed events. Do NOT compare it with, sum it against, or divide it by a "
+        "figure computed from treatment_events (which is what kpi_calculate_tool "
+        "returns for volume KPIs): measured 2026-08-15, the national business_metrics "
+        "TRx total is ~73x the trailing-30-day treatment_events prescription count for "
+        "the same brand. If both appear in one answer, say plainly that they measure "
+        "different things and never present one as a check on the other."
+    ),
+}
+
+
+def _measure_basis_for_kpi(kpi: Any) -> Dict[str, Any]:
+    """Declare what a computed KPI figure measures, DERIVED from the registry.
+
+    ``KPIMetadata.tables`` is the existing SSOT for a KPI's substrate (measured:
+    all 45 registry KPIs populate it), so this needs no hand-maintained map —
+    and deriving gets the one genuine exception right for free. WS3-BI-010
+    (ROI) really does read ``business_metrics``, so it IS comparable with
+    ``e2i_data_query_tool``'s stored ROI, where a blanket "the KPI tool means
+    treatment_events" rule would wrongly fence it off.
+    """
+    tables = sorted(getattr(kpi, "tables", None) or [])
+    return {
+        "substrate": tables,
+        "computed": True,
+        "measure": (
+            f"computed on demand from {', '.join(tables)}"
+            if tables
+            else "computed on demand; substrate not declared"
+        ),
+        "note": (
+            "Computed from the operational substrate at query time — NOT read from the "
+            "business_metrics snapshot table. Only compare with another figure whose "
+            "substrate matches; e2i_data_query_tool(query_type='kpi') returns "
+            "business_metrics rows, which for volume KPIs measure something different "
+            "(see its measure_basis)."
+        ),
+    }
+
+
+def bases_are_comparable(left: Optional[Dict[str, Any]], right: Optional[Dict[str, Any]]) -> bool:
+    """Two figures are comparable only when they rest on the same substrate.
+
+    Deliberately fails CLOSED on a missing declaration: an undeclared basis is
+    not evidence of agreement.
+    """
+    if not left or not right:
+        return False
+    left_tables = set(left.get("substrate") or [])
+    right_tables = set(right.get("substrate") or [])
+    if not left_tables or not right_tables:
+        # An UNDECLARED substrate is not evidence of agreement, and two
+        # undeclared ones are not evidence of agreement with each other --
+        # `sorted([]) == sorted([])` would have said they matched.
+        return False
+    return bool(left_tables & right_tables)
+
+
 async def _query_kpis(
     brand: Optional[str],
     region: Optional[str],
@@ -485,6 +563,7 @@ async def _query_kpis(
                 "filters_applied": requested,
                 "window_start": window_start,
                 "data_source": "synthetic" if kpi_include_synthetic() else "database",
+                "measure_basis": _BUSINESS_METRICS_BASIS,
                 "note": "; ".join(unmatched) + "; returned 0 rows",
             }
             if region and "region" not in filters:
@@ -509,6 +588,7 @@ async def _query_kpis(
             "filters_applied": filters,
             "window_start": window_start,
             "data_source": "synthetic" if kpi_include_synthetic() else "database",
+            "measure_basis": _BUSINESS_METRICS_BASIS,
         }
     except Exception as e:
         logger.error(f"KPI query failed: {e}")
@@ -1936,6 +2016,11 @@ def _kpi_result_to_response(
         "value": result.value,
         "status": result.status,
         "data_source": "synthetic" if include_synthetic else "database",
+        # #1640: what this number MEASURES, derived from the registry's own
+        # `tables` declaration. Without it, an event-ledger count and a
+        # business_metrics level both arrive labelled "TRx" and read as a
+        # contradiction (or worse, as a reconciliation).
+        "measure_basis": _measure_basis_for_kpi(kpi),
         "brand": brand,
         "region": region_applied if region_status == "applied" else None,
         "region_status": region_status,
