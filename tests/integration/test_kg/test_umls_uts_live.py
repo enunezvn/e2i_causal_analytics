@@ -10,8 +10,18 @@ present, this test hits the real UTS endpoint and asserts:
 3. EntityLinker.resolve_icd10 returns a resolved EntityLink end-to-end.
 
 This test exercises the full ``EntityLinker → UMLSClient → UTS REST``
-chain. It is marked ``@pytest.mark.integration`` so the default unit-CI
-run skips it; the slow-tests workflow opts in.
+chain. It is marked ``slow`` (alongside ``integration``) so it runs on
+``slow-tests.yml`` and NOT on the PR lane — the same marking as every
+sibling live-contract file.
+
+``integration`` alone did not achieve that (#1629). The PR lane runs
+``pytest tests/integration/ -m "not slow"`` and Job A of slow-tests runs
+``pytest tests/ -m slow``, so an ``integration``-only file is selected by
+the PR lane and excluded from slow-tests — the exact opposite of the
+intent. It went unnoticed because CI holds no ``UMLS_UTS_API_KEY``, so the
+skipif below fired on every run: the test had never actually executed
+anywhere, and would have started hitting the live network on the
+PR-blocking lane the moment a key was added.
 
 UTS calls are gentle (3 endpoints, single round-trip each) and each is
 covered by an in-process LRU cache, so re-runs in the same process are
@@ -42,6 +52,7 @@ _REASON = "UMLS_UTS_API_KEY not set; skipping live UMLS test."
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.slow,
     pytest.mark.skipif(not _API_KEY, reason=_REASON),
 ]
 
