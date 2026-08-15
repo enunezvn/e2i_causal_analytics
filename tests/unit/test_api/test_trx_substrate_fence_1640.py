@@ -1143,3 +1143,108 @@ class TestAMixedProvenanceSeriesFailsClosed:
         assert "not comparable" in basis["note"].lower(), basis["note"]
         # Both are still named — hiding one would be a different lie.
         assert basis["materialized_from"] == ["agent_activities", "business_metrics.roi"]
+
+
+class TestComparabilityRestsOnOneKey:
+    """codex iter-9 HIGH x2: `substrate` had come to mean two different things.
+
+    Making materialized history `substrate: ["kpi_history"]` — right, because
+    that IS where the series is read from — broke the stated rule in BOTH
+    directions:
+
+    * TRx history and ROI history both say `["kpi_history"]`, so a rule of
+      "compare when substrate matches" calls a prescription count and a return
+      ratio comparable;
+    * stored ROI says `["business_metrics"]` while ROI history is materialized
+      FROM `business_metrics.roi`, and the note says they are comparable — the
+      substrate rule says they are not.
+
+    `comparison_key` is the one thing a comparison may rest on: the underlying
+    TABLES, whatever surface the figure came from.
+    """
+
+    def _keys(self):
+        from src.kpi.measure_basis import (
+            BUSINESS_METRICS_BASIS,
+            materialized_history_basis,
+            measure_basis_for_kpi,
+        )
+        from src.services.kpi_resolution import recognize_kpi
+
+        return {
+            "roi_history": materialized_history_basis(
+                recognize_kpi("ROI"), rows=[{"source": "business_metrics.roi"}]
+            ),
+            "trx_history": materialized_history_basis(
+                recognize_kpi("TRx"), rows=[{"source": "treatment_events.event_date"}]
+            ),
+            "stored_roi": BUSINESS_METRICS_BASIS,
+            "computed_trx": measure_basis_for_kpi(recognize_kpi("TRx")),
+        }
+
+    def test_two_histories_of_different_measures_are_not_comparable(self):
+        from src.kpi.measure_basis import substrates_agree
+
+        b = self._keys()
+        assert not substrates_agree(b["roi_history"], b["trx_history"]), (
+            "both read from kpi_history, but one is a return ratio and one a "
+            "prescription count"
+        )
+
+    def test_roi_history_and_stored_roi_are_comparable(self):
+        from src.kpi.measure_basis import substrates_agree
+
+        b = self._keys()
+        assert substrates_agree(b["roi_history"], b["stored_roi"]), (
+            "both rest on business_metrics; fencing them is a FALSE fence"
+        )
+
+    def test_trx_history_and_computed_trx_are_comparable(self):
+        from src.kpi.measure_basis import substrates_agree
+
+        b = self._keys()
+        assert substrates_agree(b["trx_history"], b["computed_trx"])
+
+    def test_trx_history_and_stored_business_metrics_are_not(self):
+        """The original defect: ~73x apart, and the whole point of the fence."""
+        from src.kpi.measure_basis import substrates_agree
+
+        b = self._keys()
+        assert not substrates_agree(b["trx_history"], b["stored_roi"])
+
+    def test_a_mixed_series_is_comparable_with_nothing(self):
+        """codex iter-9 HIGH: the flag has to reach the COMPARATOR.
+
+        My iter-8 test only asserted the flag and the note existed, so
+        `substrates_agree` happily matched a mixed basis against a clean one
+        on the shared `kpi_history` substrate.
+        """
+        from src.kpi.measure_basis import materialized_history_basis, substrates_agree
+        from src.services.kpi_resolution import recognize_kpi
+
+        mixed = materialized_history_basis(
+            recognize_kpi("ROI"),
+            rows=[{"source": "business_metrics.roi"}, {"source": "agent_activities"}],
+        )
+        clean = materialized_history_basis(
+            recognize_kpi("ROI"), rows=[{"source": "business_metrics.roi"}]
+        )
+        assert not substrates_agree(mixed, clean)
+        assert not substrates_agree(mixed, mixed)
+
+    def test_the_prompt_states_the_rule_that_is_actually_enforced(self):
+        """A prompt that names the wrong field is a labeling defect."""
+        from pathlib import Path
+
+        for path in (
+            "src/api/routes/copilotkit.py",
+            "src/api/routes/chatbot_graph.py",
+        ):
+            text = Path(path).read_text()
+            marker = "SCALE GUARD"
+            assert marker in text, path
+            guard = text[text.index(marker) : text.index(marker) + 1400]
+            assert "comparison_key" in guard, (
+                f"{path} still tells the model to compare on a field the "
+                "comparator does not use"
+            )

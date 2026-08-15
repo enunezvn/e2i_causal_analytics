@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 #: window or grain conversion maps one onto the other.
 BUSINESS_METRICS_BASIS: Dict[str, Any] = {
     "substrate": ["business_metrics"],
+    "comparison_key": ["business_metrics"],
     "computed": False,
     "grain": "brand x region x calendar month",
     "measure": "modeled market-scale monthly level",
@@ -59,6 +60,23 @@ BUSINESS_METRICS_BASIS: Dict[str, Any] = {
         "different things and never present one as a check on the other."
     ),
 }
+
+
+#: The ONE field a comparison may rest on (#1640, codex iter-9).
+#:
+#: ``substrate`` came to mean two different things: "the tables this figure is
+#: computed from" for a live calculation, but "the table this SERIES is read
+#: from" (``kpi_history``) for materialized history -- which is the honest
+#: answer to a different question. Stating a comparability rule over
+#: ``substrate`` was then false in BOTH directions: TRx history and ROI history
+#: both read ``kpi_history``, and stored ROI (``business_metrics``) does not
+#: match ROI history's substrate even though they rest on the same rows.
+#:
+#: ``comparison_key`` is the underlying TABLES, whatever surface the figure
+#: arrived on. It is the only field :func:`substrates_agree` reads.
+def _tables_of(source_tags: list) -> list:
+    """`business_metrics.roi` -> `business_metrics`; the table, not the column."""
+    return sorted({str(tag).split(".", 1)[0] for tag in source_tags if tag})
 
 
 def measure_basis_for_kpi(
@@ -82,6 +100,9 @@ def measure_basis_for_kpi(
     tables = sorted(actual) if actual else declared
     return {
         "substrate": tables,
+        # For a live calculation the two coincide: what it reads IS what it
+        # rests on.
+        "comparison_key": tables,
         # Whether a CALCULATOR recorded the branch that answered. False does not
         # mean the substrate is wrong: for a single-source KPI, and for the 11
         # registry KPIs whose two tables are JOINED in one query (measured), the
@@ -333,6 +354,11 @@ def materialized_history_basis(kpi: Any, rows: Optional[list] = None) -> Dict[st
         sources = [registered] if registered else []
     return {
         "substrate": ["kpi_history"],
+        # Read from kpi_history, but it RESTS on whatever the backfill drew it
+        # from -- which is what makes ROI history comparable with stored ROI and
+        # TRx history comparable with a computed TRx. Empty when mixed: a line
+        # spanning two substrates rests on neither.
+        "comparison_key": [] if mixed else _tables_of(sources),
         "computed": False,
         "materialized_from": sources,
         "runtime_confirmed": runtime_confirmed,
@@ -382,6 +408,7 @@ async def registry_query_basis(query_id: str) -> Optional[Dict[str, Any]]:
         return None
     return {
         "substrate": list(tables),
+        "comparison_key": list(tables),
         "computed": True,
         # Not a declaration read off the registry metadata: these are the
         # tables of the SQL this request ran.
@@ -418,8 +445,18 @@ def substrates_agree(left: Optional[Dict[str, Any]], right: Optional[Dict[str, A
     """
     if not left or not right:
         return False
-    left_tables = set(left.get("substrate") or [])
-    right_tables = set(right.get("substrate") or [])
+    if left.get("mixed_sources") or right.get("mixed_sources"):
+        # A series spanning two substrates rests on neither, so it is
+        # comparable with nothing -- including another copy of itself. The
+        # iter-8 fix set this flag and wrote a note; it never reached the
+        # comparator, so a mixed basis still matched a clean one on their
+        # shared `kpi_history` substrate (codex iter-9).
+        return False
+    # `comparison_key`, NOT `substrate`. See the note on `_tables_of`.
+    # Older payloads without the key fall back to `substrate`, where the two
+    # coincide.
+    left_tables = set(left.get("comparison_key") or left.get("substrate") or [])
+    right_tables = set(right.get("comparison_key") or right.get("substrate") or [])
     if not left_tables or not right_tables:
         # An UNDECLARED substrate is not evidence of agreement, and two
         # undeclared ones are not evidence of agreement with each other --
