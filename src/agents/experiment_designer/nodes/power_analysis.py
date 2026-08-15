@@ -67,8 +67,13 @@ _MDE_SCALES = {
 }
 
 
-#: Phrases that make a duration an upper bound. A BARE duration ("3 months") is
-#: also a cap -- that is what a lone duration means in a constraints dict.
+#: How much text immediately before a duration can modify it. A marker further
+#: away is modifying something else in the sentence.
+_MODIFIER_WINDOW_CHARS = 32
+
+#: Phrases that make the duration they precede an upper bound. A BARE duration
+#: ("3 months") is also a cap -- that is what a lone duration means in a
+#: constraints dict.
 _CAP_MARKERS = (
     "within",
     "no longer than",
@@ -79,33 +84,54 @@ _CAP_MARKERS = (
     "up to",
     "under",
     "maximum",
-    "max ",
     "must not exceed",
     "not exceed",
     "limited to",
-    "by no later than",
     "no later than",
+)
+
+#: Phrases that make the duration they precede a LOWER bound. Checked first and
+#: they veto: a sentence carrying both is not a cap we can act on.
+_FLOOR_MARKERS = (
+    "at least",
+    "no less than",
+    "not less than",
+    "no earlier than",
+    "not earlier than",
+    "at minimum",
+    "minimum of",
+    "minimum",
+    "more than",
+    "over",
+    "beyond",
 )
 
 
 def _reads_as_a_cap(timeline: str, span: tuple[int, int]) -> bool:
     """Is this single stated duration an upper bound (#1639)?
 
-    "at least 3 months", "no earlier than 6 months" and "6 months of follow-up
-    after the last patient in" each carry exactly one duration, and reading any
-    of them as a maximum tells the caller their design exceeds a limit they
-    never set. A minimum is not a maximum.
+    Two rounds of this were wrong in the same direction, so the reasoning is
+    worth keeping:
 
-    Allowlist, not denylist: the string must either be BARE (the duration is its
-    entire meaningful content) or SAY it is a cap. An unlisted floor phrase then
-    yields a missed warning rather than a false one -- the direction this design
-    accepts. A denylist would fail the other way.
+    * reading any single duration as a cap turned "at least 3 months" into a
+      maximum the caller never set;
+    * scanning the WHOLE string for cap words re-broke it, because
+      "patients **under** observation for at least 3 months" and "at least 3
+      months of follow-up **within** the study" both contain a cap word that
+      modifies something else entirely.
+
+    So a marker only counts inside the short window immediately BEFORE the
+    duration, and a floor phrase there vetoes. Anything ambiguous is treated as
+    an unstated limit -- a missed warning, the direction this design accepts.
     """
-    remainder = (timeline[: span[0]] + timeline[span[1] :]).strip()
+    before = timeline[: span[0]]
+    remainder = (before + timeline[span[1] :]).strip()
     if not any(ch.isalpha() for ch in remainder):
-        return True
-    lowered = timeline.lower()
-    return any(marker in lowered for marker in _CAP_MARKERS)
+        return True  # a bare duration IS a cap
+    window = before[-_MODIFIER_WINDOW_CHARS:].lower()
+    if any(marker in window for marker in _FLOOR_MARKERS):
+        return False
+    return any(marker in window for marker in _CAP_MARKERS)
 
 
 def _append_unique(existing: list[str], additions: list[str]) -> list[str]:

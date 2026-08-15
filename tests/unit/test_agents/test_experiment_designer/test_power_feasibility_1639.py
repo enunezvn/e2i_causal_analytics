@@ -1076,3 +1076,69 @@ class TestARedesignClearsTheOldVerdict:
         assert not any("94,115" in w for w in out["warnings"]), out["warnings"]
         assert "keep me" in out["warnings"]
         assert any("not assessed" in w for w in out["feasibility_warnings"])
+
+
+class TestCapMarkersMustModifyTheDuration:
+    """codex iter-7 HIGH: scanning the WHOLE string for cap words re-broke the
+    directionality fix one round after making it.
+
+    ``"patients under observation for at least 3 months"`` states a MINIMUM, but
+    ``"under"`` matched inside ``"under observation"`` and the design was told it
+    exceeded a 91-day maximum nobody set. ``"at least 3 months of follow-up
+    within the study"`` fails the same way — ``"within"`` modifies "the study",
+    not the duration.
+
+    A marker only counts if it sits immediately before the duration it is meant
+    to modify, and a floor phrase there vetoes outright.
+    """
+
+    def _warnings(self, timeline):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        out = asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": 0.15,
+                            "baseline_value": 0.30,
+                        }
+                    ],
+                }
+            )
+        )
+        assert out["duration_estimate_days"] == 476
+        return out["feasibility_warnings"]
+
+    @pytest.mark.parametrize(
+        "timeline",
+        [
+            "patients under observation for at least 3 months",
+            "at least 3 months of follow-up within the study",
+            "subjects followed up to and beyond at least 3 months",
+            "a minimum of 3 months",
+            "3 months or more",
+        ],
+    )
+    def test_a_cap_word_elsewhere_in_the_sentence_does_not_make_a_cap(self, timeline):
+        assert self._warnings(timeline) == [], timeline
+
+    @pytest.mark.parametrize(
+        "timeline",
+        [
+            "3 months",
+            "within 3 months",
+            "no longer than 3 months",
+            "at most 90 days",
+            "study must not exceed 3 months",
+            "completed in under 90 days",
+        ],
+    )
+    def test_a_marker_modifying_the_duration_is_still_a_cap(self, timeline):
+        assert self._warnings(timeline), timeline
