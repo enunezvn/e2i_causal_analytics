@@ -710,6 +710,7 @@ async def test_refutation_suite_offloaded_to_bounded_pool(monkeypatch):
     whichever helper it routes through.
     """
     import threading
+    import time as _t
 
     from src.agents.causal_impact.nodes import refutation as _ref_mod
 
@@ -751,6 +752,13 @@ async def test_refutation_suite_offloaded_to_bounded_pool(monkeypatch):
             "heterogeneity_detected": False,
         },
         "estimation_data": _make_estimation_data(true_ate=ate),
+        # A far-future deadline is REQUIRED for coverage, not incidental: the
+        # per-refit calibration off-load at refutation.py:1282 sits behind
+        # ``if deadline is not None and time.monotonic() + per_refit_hint <=
+        # deadline``, and ``deadline`` comes from this key. Without it that third
+        # call site never executes, so a regression replacing it with an inline
+        # ``causal_model.refute_estimate(...)`` would slip through green.
+        "compute_deadline": _t.monotonic() + 10_000.0,
         "status": "pending",
         "errors": [],
         "warnings": [],
@@ -758,8 +766,13 @@ async def test_refutation_suite_offloaded_to_bounded_pool(monkeypatch):
 
     result = await node.execute(state)
 
-    # Both heavy DoWhy steps went through the bounded agent-compute pool...
+    # ALL THREE heavy DoWhy steps went through the bounded agent-compute pool —
+    # reconstruction, the per-refit calibration probe, and the suite itself.
     assert "_reconstruct_dowhy_artifacts" in offloaded
+    assert "refute_estimate" in offloaded, (
+        "the per-refit calibration probe (refutation.py:1282) did not reach the "
+        f"bounded pool; observed off-loads: {offloaded}"
+    )
     assert "run_all_tests" in offloaded
     # ...and genuinely executed OFF the event loop thread, not merely routed
     # through the helper. This is the assertion that survives a refactor.
