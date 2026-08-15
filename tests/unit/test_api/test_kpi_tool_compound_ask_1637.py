@@ -166,6 +166,47 @@ class TestCoordinatorFormsAreCovered:
         )
 
 
+class TestEveryMentionIsExamined:
+    """#1637 codex iter-4 HIGH — stopping at the FIRST further mention re-created
+    the same fail-silent one mention along.
+
+    ``recognize_distinct_metric`` returns a single match in vocabulary order. For
+    "TRx market share and ROI" that is the ADJACENT "TRx" (gap " ", no
+    coordinator), so the guard passed and the tool computed TRx share while
+    silently dropping ROI — with ROI sitting right there behind an "and".
+    """
+
+    @pytest.mark.parametrize(
+        "kpi_name",
+        [
+            "TRx market share and ROI",
+            "TRx market share, ROI",
+            "TRx market share and conversion rate",
+        ],
+    )
+    async def test_coordinated_metric_behind_an_adjacent_mention_is_caught(self, kpi_name):
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert _is_compound_refusal(result), (
+            f"{kpi_name!r} has a coordinated metric behind an adjacent modifier "
+            f"mention and was answered as one: kpi={result.get('kpi_id')} "
+            f"value={result.get('value')}"
+        )
+
+    async def test_refusal_names_the_coordinated_metric_not_the_adjacent_one(self):
+        """The message must name the metric the caller actually also asked for
+        (ROI) — naming only the adjacent modifier mention would send the caller
+        after the wrong second call."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx market share and ROI"})
+        blob = f"{result.get('error', '')} {result.get('hint', '')}"
+        assert "ROI" in blob or "Return on Investment" in blob, blob
+
+    async def test_adjacent_mention_alone_still_computes(self):
+        """The fix must not turn the 32-call modifier chain into a refusal."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx market share"})
+        assert not _is_compound_refusal(result), result.get("error")
+        assert result.get("kpi_id") == "WS3-BI-008", result
+
+
 class TestAggressiveCoordinatorsStayHarmless:
     """`against` and `/` are the widest tokens in the gate — pinned here because
     they are the ones most likely to over-fire (codex iter-3)."""

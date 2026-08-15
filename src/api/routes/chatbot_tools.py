@@ -2201,34 +2201,54 @@ async def kpi_calculate_tool(
     # never asked for. Refuse instead, naming both, so the caller issues one call
     # per metric.
     #
-    # Gated on an explicit coordinator between the two mentions, because bare
-    # two-mention detection is NOT sufficient: measured against the 20 distinct
+    # Gated on an explicit coordinator between the mentions, because bare
+    # multi-mention detection is NOT sufficient: measured against the 20 distinct
     # kpi_name values the model actually passed across the 51-turn 2026-08-15 run,
     # an ungated guard refuses "TRx market share" (32 calls) -- a MODIFIER chain
     # naming the single KPI WS3-BI-008, not two metrics. Adjacency means one
-    # metric; "and"/"&"/"," between the spans means two.
-    _second = kpi_resolution.recognize_distinct_metric(
-        _normalized[:_kpi_start] + " " * (_kpi_end - _kpi_start) + _normalized[_kpi_end:],
-        exclude_id=kpi.id,
-        original_query=kpi_name,
-    )
-    if _second is not None:
-        _second_kpi, _second_start, _second_end = _second
-        _gap = _normalized[min(_kpi_end, _second_end) : max(_kpi_start, _second_start)]
+    # metric; "and"/"vs"/"&"/"," between the spans means two.
+    #
+    # EVERY further mention is examined, not just the first (codex iter-4).
+    # recognize_distinct_metric returns one match in vocabulary order, so
+    # "TRx market share and ROI" handed back the ADJACENT "TRx" -- gap " ", no
+    # coordinator -- and the tool computed TRx share while silently dropping ROI.
+    # Stopping at the first mention re-created the exact fail-silent this guard
+    # exists to close, just one mention further along.
+    _masked = _normalized[:_kpi_start] + " " * (_kpi_end - _kpi_start) + _normalized[_kpi_end:]
+    _coordinated: List[str] = []
+    _seen_ids = {kpi.id}
+    # Bounded: a real ask names a handful of metrics, and the bound also stops
+    # the case-sensitive abbreviation branch (which reads the UNMASKED original)
+    # from returning the same mention forever.
+    for _ in range(5):
+        _other = kpi_resolution.recognize_distinct_metric(
+            _masked, exclude_id=kpi.id, original_query=kpi_name
+        )
+        if _other is None:
+            break
+        _other_kpi, _other_start, _other_end = _other
+        if _other_kpi.id in _seen_ids or _other_end <= _other_start:
+            break
+        _seen_ids.add(_other_kpi.id)
+        _gap = _normalized[min(_kpi_end, _other_end) : max(_kpi_start, _other_start)]
         if _KPI_COORDINATOR_RE.search(_gap):
-            _both = sorted({kpi.name, _second_kpi.name})
-            return {
-                "success": False,
-                "query_type": "kpi_calculate",
-                "error": (
-                    f"{kpi_name!r} names more than one KPI ({' and '.join(_both)}); "
-                    f"this tool computes one KPI per call."
-                ),
-                "hint": (
-                    "Call kpi_calculate_tool once per metric — e.g. "
-                    f"{_both[0]!r}, then {_both[1]!r} — and report both."
-                ),
-            }
+            _coordinated.append(str(_other_kpi.name))
+        _masked = _masked[:_other_start] + " " * (_other_end - _other_start) + _masked[_other_end:]
+
+    if _coordinated:
+        _all_named = sorted({str(kpi.name), *_coordinated})
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "error": (
+                f"{kpi_name!r} names more than one KPI ({' and '.join(_all_named)}); "
+                f"this tool computes one KPI per call."
+            ),
+            "hint": (
+                "Call kpi_calculate_tool once per metric — e.g. "
+                f"{_all_named[0]!r}, then {_all_named[1]!r} — and report each."
+            ),
+        }
 
     # #1360: only the trigger-effectiveness calculators read
     # context['trigger_type']; on any other KPI the key would be silently
