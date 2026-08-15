@@ -295,8 +295,16 @@ def _retract_stale_verdict(state: ExperimentDesignState) -> None:
     if withdrawn:
         remaining = list(state.get("warnings") or [])
         for message in withdrawn:
-            if message in remaining:
-                remaining.remove(message)
+            # The LAST occurrence, not the first. `list.remove` takes the
+            # first, so an identical sentence already present from another
+            # node would be the one deleted -- withdrawing someone else's
+            # warning and leaving the stale audit copy in place, the exact
+            # inversion of the intent. The audit appends its own copy, so its
+            # contribution is the most recent one.
+            for index in range(len(remaining) - 1, -1, -1):
+                if remaining[index] == message:
+                    del remaining[index]
+                    break
         state["warnings"] = remaining
     state["dag_validation_warnings"] = []
     state["dag_missing_confounders"] = []

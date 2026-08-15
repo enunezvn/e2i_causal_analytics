@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
+from src.agents.experiment_designer.state import normalize_audit_status
+
 logger = logging.getLogger(__name__)
 
 
@@ -378,10 +380,20 @@ class ExperimentDesignerSignalCollector:
         mitigations_proposed: int,
         overall_validity_score: float,
         redesign_iterations: int,
-        validity_audit_status: str = "not_run",
+        validity_audit_status: Optional[str] = None,
     ) -> ExperimentDesignTrainingSignal:
-        """Update signal with validity audit results."""
-        signal.validity_audit_status = validity_audit_status
+        """Update signal with validity audit results.
+
+        ``validity_audit_status`` defaulted to ``"not_run"``, which LIED about
+        concrete results: a caller passing five threats and a 0.8 score got a
+        signal labeled as if no audit had happened (#1639). Now inferred from
+        the evidence when not stated -- the same rule the template generator
+        uses -- and an explicit status always wins.
+        """
+        if validity_audit_status is None:
+            has_verdict = bool(validity_threats_identified) or bool(overall_validity_score)
+            validity_audit_status = "completed" if has_verdict else "not_run"
+        signal.validity_audit_status = normalize_audit_status(validity_audit_status)
         signal.validity_threats_identified = validity_threats_identified
         signal.critical_threats = critical_threats
         signal.mitigations_proposed = mitigations_proposed

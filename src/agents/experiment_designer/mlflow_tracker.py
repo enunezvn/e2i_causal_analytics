@@ -250,6 +250,44 @@ class ExperimentDesignerMLflowTracker:
             finally:
                 self._current_context = None
 
+    def _log_output_tags(self, output: Any) -> None:
+        """Write the per-run tags for one design output (#1639).
+
+        Extracted so the tagging is reachable on its own: the previous test
+        for this grepped the module source, which would have passed on a
+        comment. Tags are what a run set is filtered by, so getting them wrong
+        is invisible until someone filters.
+        """
+        mlflow = self._get_mlflow()
+        if mlflow is None:
+            return
+
+        # Log design type as tag
+        if hasattr(output, "design_type"):
+            mlflow.set_tag("design_type", output.design_type)
+        elif isinstance(output, dict) and "design_type" in output:
+            mlflow.set_tag("design_type", output["design_type"])
+
+        # Log validity confidence as tag
+        if hasattr(output, "validity_confidence"):
+            mlflow.set_tag("validity_confidence", output.validity_confidence)
+        elif isinstance(output, dict) and "validity_confidence" in output:
+            mlflow.set_tag("validity_confidence", output["validity_confidence"])
+
+        # Without this, a retracted `overall_validity_score=0.0` (an audit that
+        # was skipped, timed out or failed) is indistinguishable in MLflow from
+        # a completed audit that genuinely scored 0.0 -- so a dashboard
+        # averaging the metric counts non-verdicts as real zero-score verdicts
+        # (#1639). Tagged, not logged as a metric: it is a category, and it is
+        # what you filter a run set by.
+        audit_status = (
+            getattr(output, "validity_audit_status", None)
+            if not isinstance(output, dict)
+            else output.get("validity_audit_status")
+        )
+        if audit_status:
+            mlflow.set_tag("validity_audit_status", normalize_audit_status(audit_status))
+
     async def log_design_result(
         self,
         output: Any,
@@ -307,31 +345,7 @@ class ExperimentDesignerMLflowTracker:
 
         mlflow.log_metrics(metric_dict)
 
-        # Log design type as tag
-        if hasattr(output, "design_type"):
-            mlflow.set_tag("design_type", output.design_type)
-        elif isinstance(output, dict) and "design_type" in output:
-            mlflow.set_tag("design_type", output["design_type"])
-
-        # Log validity confidence as tag
-        if hasattr(output, "validity_confidence"):
-            mlflow.set_tag("validity_confidence", output.validity_confidence)
-        elif isinstance(output, dict) and "validity_confidence" in output:
-            mlflow.set_tag("validity_confidence", output["validity_confidence"])
-
-        # Without this, a retracted `overall_validity_score=0.0` (an audit that
-        # was skipped, timed out or failed) is indistinguishable in MLflow from
-        # a completed audit that genuinely scored 0.0 -- so a dashboard
-        # averaging the metric counts non-verdicts as real zero-score verdicts
-        # (#1639). Tagged, not logged as a metric: it is a category, and it is
-        # what you filter a run set by.
-        audit_status = (
-            getattr(output, "validity_audit_status", None)
-            if not isinstance(output, dict)
-            else output.get("validity_audit_status")
-        )
-        if audit_status:
-            mlflow.set_tag("validity_audit_status", normalize_audit_status(audit_status))
+        self._log_output_tags(output)
 
         # Log warnings count
         if metrics.warnings:
@@ -496,6 +510,11 @@ class ExperimentDesignerMLflowTracker:
                 # Log design summary
                 summary = {
                     "design_type": output_dict.get("design_type", "unknown"),
+                    # Whoever downloads only this file gets the score; without
+                    # the status a retracted 0.0 reads as a real verdict (#1639).
+                    "validity_audit_status": normalize_audit_status(
+                        output_dict.get("validity_audit_status", "not_run")
+                    ),
                     "design_rationale": output_dict.get("design_rationale", ""),
                     "randomization_unit": output_dict.get("randomization_unit", ""),
                     "randomization_method": output_dict.get("randomization_method", ""),
@@ -649,6 +668,10 @@ class ExperimentDesignerMLflowTracker:
                 "brand": row.get("params.brand"),
                 "design_type": row.get("tags.design_type"),
                 "validity_confidence": row.get("tags.validity_confidence"),
+                # Same reason as the artifact: `overall_validity_score` below
+                # is 0.0 both for a genuine zero and for a retracted
+                # non-verdict (#1639).
+                "validity_audit_status": row.get("tags.validity_audit_status"),
                 "status": row.get("tags.status"),
                 # Key metrics
                 "required_sample_size": row.get("metrics.required_sample_size"),

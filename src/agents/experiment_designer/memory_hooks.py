@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
+from src.agents.experiment_designer.state import normalize_audit_status
+
 logger = logging.getLogger(__name__)
 
 
@@ -674,7 +676,12 @@ class ExperimentDesignerMemoryHooks:
                 total_latency_ms=result.get("total_latency_ms", 0),
                 warnings=result.get("warnings", []),
                 feasibility_warnings=result.get("feasibility_warnings") or [],
-                validity_audit_status=result.get("validity_audit_status", "not_run"),
+                # Normalized here too: this is a public persistence API that
+                # tests and callers reach directly, so it cannot rely on having
+                # come through the agent output (#1639).
+                validity_audit_status=normalize_audit_status(
+                    result.get("validity_audit_status", "not_run")
+                ),
             )
 
             # Prepare validity threats for storage

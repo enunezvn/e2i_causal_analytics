@@ -32,6 +32,8 @@ computed. The defects are therefore about REPORTING, not solving:
    because the audit timed out, reads identically to "no threats found".
 """
 
+import ast
+
 import pytest
 
 from src.utils.power_analysis_lib import binary_outcome_power
@@ -701,14 +703,34 @@ class TestTheContractNamesWhatTheRuntimeActuallyEmits:
 
     def test_the_record_is_built_from_the_result_not_left_at_defaults(self):
         """A field wired into the dataclass but never populated is worse than
-        absent: it reports "no warnings" for every design ever stored."""
+        absent: it reports "no warnings" for every design ever stored.
+
+        codex iter-13 LOW, taken: this asserted the literal source text
+        ``validity_audit_status=result.get(...)``, so it pinned one exact
+        SPELLING of the wiring — and duly broke the moment the value was
+        (correctly) normalized on the way through. It now asserts that each
+        field is populated FROM the result, whatever it is wrapped in.
+        """
+        import ast
         import inspect
 
         from src.agents.experiment_designer import memory_hooks
 
-        src = inspect.getsource(memory_hooks)
-        assert 'feasibility_warnings=result.get("feasibility_warnings")' in src
-        assert 'validity_audit_status=result.get("validity_audit_status"' in src
+        tree = ast.parse(inspect.getsource(memory_hooks))
+        sourced_from_result = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.keyword) or node.arg is None:
+                continue
+            reads = {
+                inner.func.attr
+                for inner in ast.walk(node.value)
+                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+            }
+            names = {inner.id for inner in ast.walk(node.value) if isinstance(inner, ast.Name)}
+            if "get" in reads and "result" in names:
+                sourced_from_result.add(node.arg)
+        for field in ("feasibility_warnings", "validity_audit_status"):
+            assert field in sourced_from_result, f"{field} is not populated from the result dict"
 
 
 class TestTheAnalysisCodeTemplateCarriesTheCaveat:
@@ -1399,14 +1421,201 @@ class TestMlflowCanTellARetractedZeroFromARealOne:
 
     A dashboard averaging `overall_validity_score` counts a retracted
     non-completing audit as a genuine zero-score verdict.
+
+    codex iter-13 LOW, taken: the first version of this test grepped the
+    module source, so it would have passed on a comment or an unrelated
+    mention. It now drives the real tagging path through a recorder and reads
+    what was actually tagged.
     """
 
-    def test_the_status_is_logged_beside_the_score(self):
+    class _Recorder:
+        """Stands in for the lazily-imported mlflow module, recording calls."""
+
+        def __init__(self):
+            self.tags: dict = {}
+            self.metrics: dict = {}
+
+        def set_tag(self, key, value):
+            self.tags[key] = value
+
+        def log_metrics(self, values):
+            self.metrics.update(values)
+
+    def _tags_for(self, output):
+        from src.agents.experiment_designer.mlflow_tracker import (
+            ExperimentDesignerMLflowTracker,
+        )
+
+        tracker = ExperimentDesignerMLflowTracker()
+        recorder = self._Recorder()
+        tracker._mlflow = recorder
+        tracker._log_output_tags(output)
+        return recorder.tags
+
+    def test_the_status_is_tagged_beside_the_score(self):
+        tags = self._tags_for({"validity_audit_status": "timed_out", "overall_validity_score": 0.0})
+        assert tags.get("validity_audit_status") == "timed_out", tags
+
+    def test_an_out_of_band_status_is_normalized_before_it_is_tagged(self):
+        tags = self._tags_for({"validity_audit_status": "was skipped"})
+        assert tags.get("validity_audit_status") == "unknown", tags
+
+    def test_the_downloadable_artifact_carries_it_too(self):
+        """A run set filtered in the UI is not the only consumer.
+
+        Someone who downloads `design_summary.json`, or reads
+        `get_design_history()`, sees the score with no way to tell a retracted
+        zero from a real one.
+        """
         import inspect
 
         from src.agents.experiment_designer import mlflow_tracker
 
-        src = inspect.getsource(mlflow_tracker)
-        assert "validity_audit_status" in src, (
-            "mlflow logs overall_validity_score with no way to tell a retracted 0.0 apart"
+        summary_src = inspect.getsource(mlflow_tracker.ExperimentDesignerMLflowTracker)
+        for consumer in ("design_summary", "get_design_history"):
+            assert consumer in summary_src
+        # Both dicts must carry the key, not just the module somewhere.
+        tree = ast.parse(summary_src.lstrip())
+        dict_keys = {
+            key.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        assert "validity_audit_status" in dict_keys, (
+            "neither the artifact nor the history rows carry the audit status"
         )
+
+
+class TestTheTrainingSignalDoesNotLabelARealAuditAsNotRun:
+    """codex iter-13 HIGH: the default lied about concrete results.
+
+    `update_validity_audit(validity_threats_identified=5, ...)` with no status
+    persisted `validity_audit_status: "not_run"` beside five real threats.
+    """
+
+    def test_concrete_results_are_not_labeled_not_run(self):
+        from src.agents.experiment_designer.dspy_integration import (
+            ExperimentDesignerSignalCollector,
+            ExperimentDesignTrainingSignal,
+        )
+
+        collector = ExperimentDesignerSignalCollector()
+        updated = collector.update_validity_audit(
+            ExperimentDesignTrainingSignal(),
+            validity_threats_identified=5,
+            critical_threats=2,
+            mitigations_proposed=2,
+            overall_validity_score=0.8,
+            redesign_iterations=1,
+        )
+        assert updated.validity_audit_status == "completed", (
+            "five threats and a 0.8 score, labeled as if the audit never ran"
+        )
+
+    def test_an_explicit_status_still_wins(self):
+        from src.agents.experiment_designer.dspy_integration import (
+            ExperimentDesignerSignalCollector,
+            ExperimentDesignTrainingSignal,
+        )
+
+        collector = ExperimentDesignerSignalCollector()
+        updated = collector.update_validity_audit(
+            ExperimentDesignTrainingSignal(),
+            validity_threats_identified=5,
+            critical_threats=2,
+            mitigations_proposed=2,
+            overall_validity_score=0.8,
+            redesign_iterations=1,
+            validity_audit_status="timed_out",
+        )
+        assert updated.validity_audit_status == "timed_out"
+
+    def test_no_evidence_stays_not_run(self):
+        from src.agents.experiment_designer.dspy_integration import (
+            ExperimentDesignerSignalCollector,
+            ExperimentDesignTrainingSignal,
+        )
+
+        collector = ExperimentDesignerSignalCollector()
+        updated = collector.update_validity_audit(
+            ExperimentDesignTrainingSignal(),
+            validity_threats_identified=0,
+            critical_threats=0,
+            mitigations_proposed=0,
+            overall_validity_score=0.0,
+            redesign_iterations=0,
+        )
+        assert updated.validity_audit_status == "not_run"
+
+
+class TestTheMemoryPathNormalizesToo:
+    """codex iter-13 HIGH: the third raw escape, into persisted storage.
+
+    `memory_hooks` writes `validity_audit_status` to Supabase
+    `analysis_results` straight off the result dict, so a hydrated pre-fix
+    result persists an out-of-enum label that later filters miss.
+    """
+
+    def test_the_persistence_path_uses_the_normalizer(self):
+        import inspect
+
+        from src.agents.experiment_designer import memory_hooks
+
+        src = inspect.getsource(memory_hooks)
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.keyword) or node.arg != "validity_audit_status":
+                continue
+            called = {
+                inner.func.id
+                for inner in ast.walk(node.value)
+                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+            }
+            assert "normalize_audit_status" in called, (
+                "memory_hooks persists validity_audit_status without normalizing it"
+            )
+            return
+        raise AssertionError("no validity_audit_status keyword found in memory_hooks")
+
+
+class TestRetractionRemovesTheAuditsOwnCopy:
+    """codex iter-13 HIGH: `list.remove` takes the FIRST match.
+
+    The code now removes the LAST occurrence — the audit appends its own copy,
+    so its contribution is the most recent one.
+
+    But be precise about what this test can prove: when the duplicate texts are
+    IDENTICAL, removing the first and removing the last are observationally
+    equivalent — one copy remains either way, and nothing in the payload says
+    which node put it there. So this pins the COUNT (exactly one withdrawn,
+    not both and not zero), which is real, and NOT the ownership, which is not
+    observable by value. The last-occurrence rule is kept because it is
+    correct by construction, not because this test distinguishes it.
+
+    A related hazard neither ordering fixes: if `dag_validation_warnings`
+    survives in state from a previous iteration while `warnings` holds only an
+    upstream copy of the same sentence, the retraction withdraws that upstream
+    copy. Recording the audit's contribution positionally rather than by value
+    is the fix for that, and it is not in this change.
+    """
+
+    def test_a_duplicate_from_another_source_is_not_the_one_removed(self):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
+
+        shared = "Assumed confounder region was NOT discovered in causal DAG"
+        state = {
+            "status": "auditing",
+            "enable_validity_audit": False,
+            "dag_validation_warnings": [shared],
+            # Index 0 belongs to an upstream node; index 1 is the audit's copy.
+            "warnings": [shared, shared],
+        }
+        out = asyncio.run(ValidityAuditNode().execute(state))
+        # Exactly ONE of the two copies withdrawn -- the audit's own. The skip
+        # branch also adds its own notice, which is not part of this claim.
+        warnings = out.get("warnings", [])
+        assert warnings.count(shared) == 1, warnings
