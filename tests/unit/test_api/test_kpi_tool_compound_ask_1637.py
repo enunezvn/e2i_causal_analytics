@@ -166,6 +166,28 @@ class TestCoordinatorFormsAreCovered:
         )
 
 
+class TestAggressiveCoordinatorsStayHarmless:
+    """`against` and `/` are the widest tokens in the gate — pinned here because
+    they are the ones most likely to over-fire (codex iter-3)."""
+
+    @pytest.mark.parametrize(
+        "kpi_name", ["market share against competitors", "conversion rate against target"]
+    )
+    async def test_coordinator_word_without_a_second_metric_computes(self, kpi_name):
+        """The gate is only consulted AFTER a second metric is found, so a
+        coordinator word with an ordinary noun after it changes nothing."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert not _is_compound_refusal(result), result.get("error")
+
+    async def test_slash_between_two_metrics_refuses_rather_than_answering_one(self):
+        """ "TRx/NRx ratio" is not a defined KPI. Without the guard it resolves to
+        NRx alone and reports that single number AS the ratio — a wrong answer.
+        Refusing and naming both lets the caller fetch each and divide."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx/NRx ratio"})
+        assert _is_compound_refusal(result), result
+        assert result.get("value") is None
+
+
 class TestPluralAsksAreDetectedOnBothSides:
     """#1637 codex iter-2 HIGH — the asymmetry that reopened the fail-silent.
 
