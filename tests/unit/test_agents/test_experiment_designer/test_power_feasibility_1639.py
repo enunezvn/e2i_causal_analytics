@@ -579,3 +579,129 @@ class TestEveryReProjectionCarriesTheProvenance:
             None,
         )
         assert metrics.feasibility_warnings_count == 2
+
+
+class TestEveryStatedTimelineShapeIsRead:
+    """codex iter-3 HIGH, and the sharpest miss of the run: I invented
+    ``max_duration_days``, tested the shape I invented, and it passed.
+
+    The shapes callers actually use are FOUR, and three of them predate this
+    change:
+
+    * ``timeline_weeks: 12`` — the contract's own worked example
+      (.claude/contracts/tier3-contracts.md)
+    * ``timeline: "3 months"`` — free text, used across the agent tests
+    * ``timeline: {"max_duration_days": 90}`` — src/testing/tier0_output_mapper.py
+    * ``max_duration_days: 180`` — the one I added
+
+    A caller stating ``timeline_weeks: 12`` against a 476-day design was told
+    nothing, because 476 days is under the 10-year absurdity bound.
+    """
+
+    def _warnings(self, constraints):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        c = {"weekly_accrual": 50}
+        c.update(constraints)
+        out = asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": c,
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": 0.15,
+                            "baseline_value": 0.30,
+                        }
+                    ],
+                }
+            )
+        )
+        assert out["duration_estimate_days"] == 476, out["duration_estimate_days"]
+        return out["feasibility_warnings"]
+
+    def test_timeline_weeks_from_the_contract_example(self):
+        assert self._warnings({"timeline_weeks": 12}), "the contract's own shape was ignored"
+
+    def test_timeline_as_free_text_months(self):
+        assert self._warnings({"timeline": "3 months"}), "the shape the agent tests use"
+
+    def test_timeline_as_a_dict(self):
+        assert self._warnings({"timeline": {"max_duration_days": 90}})
+
+    def test_direct_max_duration_days(self):
+        assert self._warnings({"max_duration_days": 90})
+
+    def test_a_generous_stated_timeline_stays_quiet(self):
+        assert self._warnings({"timeline": "24 months"}) == []
+        assert self._warnings({"timeline_weeks": 100}) == []
+
+    def test_an_unparseable_timeline_is_not_guessed_at(self):
+        """'as soon as possible' is not a number. Inventing one would produce a
+        FALSE warning, which is the failure this bound was just corrected for."""
+        assert self._warnings({"timeline": "as soon as possible"}) == []
+        assert self._warnings({"timeline": "Q3"}) == []
+
+
+class TestEpisodicPrecedentsCarryTheCaveat:
+    """codex iter-3 HIGH: an infeasible design is stored as a PRECEDENT that
+    later designs learn from. Storing 94,115 days with no first-class reason
+    teaches the next design that it was acceptable."""
+
+    def test_record_carries_the_structured_fields(self):
+        from src.agents.experiment_designer.memory_hooks import ExperimentDesignRecord
+
+        names = set(ExperimentDesignRecord.__dataclass_fields__)
+        assert {"feasibility_warnings", "validity_audit_status"} <= names, sorted(names)
+
+    def test_to_dict_serializes_them(self):
+        from src.agents.experiment_designer.memory_hooks import ExperimentDesignRecord
+
+        fields = ExperimentDesignRecord.__dataclass_fields__
+        kwargs = {}
+        for name, f in fields.items():
+            if name == "timestamp":
+                from datetime import datetime, timezone
+
+                kwargs[name] = datetime.now(timezone.utc)
+            elif f.type in ("int",):
+                kwargs[name] = 0
+            elif f.type in ("float",):
+                kwargs[name] = 0.0
+            else:
+                kwargs[name] = None
+        kwargs["feasibility_warnings"] = ["Estimated duration 94,115 days ..."]
+        kwargs["validity_audit_status"] = "skipped"
+        kwargs["warnings"] = []
+        kwargs["constraints"] = {}
+        d = ExperimentDesignRecord(**kwargs).to_dict()
+        assert d["feasibility_warnings"] == ["Estimated duration 94,115 days ..."]
+        assert d["validity_audit_status"] == "skipped"
+
+
+class TestTheContractNamesWhatTheRuntimeActuallyEmits:
+    """codex iter-3 HIGH: I documented ``achievable_mde_scale``, a name that
+    exists nowhere in the runtime. Inventing a contract name and then marking
+    it compliant by translation is a labeling fix, not a functional one."""
+
+    def test_contract_uses_the_runtime_field_name(self):
+        from pathlib import Path
+
+        text = Path(".claude/contracts/tier3-contracts.md").read_text()
+        assert "achievable_mde_scale" not in text, "an invented contract-only name"
+        assert "minimum_detectable_effect_scale" in text
+
+    def test_the_record_is_built_from_the_result_not_left_at_defaults(self):
+        """A field wired into the dataclass but never populated is worse than
+        absent: it reports "no warnings" for every design ever stored."""
+        import inspect
+
+        from src.agents.experiment_designer import memory_hooks
+
+        src = inspect.getsource(memory_hooks)
+        assert 'feasibility_warnings=result.get("feasibility_warnings")' in src
+        assert 'validity_audit_status=result.get("validity_audit_status"' in src

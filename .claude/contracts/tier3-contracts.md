@@ -192,7 +192,7 @@ class ExperimentDesignerOutput(BaseModel):
     # RELATIVE (p2 = p1*(1+effect)) while the binary-outcome MDE is an ABSOLUTE risk
     # difference, so 0.0015 beside 0.030 reads as a 20x contradiction when it is the
     # same quantity on two scales (0.0015/0.030 == the 0.05 baseline, exactly).
-    achievable_mde_scale: str = Field(
+    minimum_detectable_effect_scale: str = Field(
         ..., description="Scale of achievable_mde: absolute_risk_difference | cohens_d | ..."
     )
     power: float = Field(..., ge=0.5, le=0.99, description="Statistical power")

@@ -59,7 +59,7 @@
 | `required_sample_size` | `int` | `PowerAnalysisOutput.required_sample_size: int` | ✅ Compliant |
 | `achieved_power` | `float` | `PowerAnalysisOutput.achieved_power: float` | ✅ Compliant |
 | `minimum_detectable_effect` | `float` | `PowerAnalysisOutput.minimum_detectable_effect: float` | ✅ Compliant |
-| `achievable_mde_scale` | `str` | `PowerAnalysisOutput.minimum_detectable_effect_scale: str` | ✅ Compliant (#1639) |
+| `minimum_detectable_effect_scale` | `str` | `PowerAnalysisOutput.minimum_detectable_effect_scale: str` | ✅ Compliant (#1639) |
 | `alpha` | `float` | `PowerAnalysisOutput.alpha: float` | ✅ Compliant |
 | `feasibility_warnings` | `List[str]` | `ExperimentDesignerOutput.feasibility_warnings: list[str]` | ✅ Compliant (#1639) |
 

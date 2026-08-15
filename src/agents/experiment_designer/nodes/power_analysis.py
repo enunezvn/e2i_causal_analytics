@@ -11,9 +11,10 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -50,6 +51,10 @@ from src.utils.power_analysis_lib import (
 #: stated (``_stated_max_duration_days``).
 _IMPLAUSIBLE_DURATION_DAYS = 3650
 
+#: Days per unit for a free-text timeline ("3 months"). Calendar-average, since
+#: a stated timeline is a planning statement, not an exact interval.
+_DURATION_UNIT_DAYS = {"day": 1.0, "week": 7.0, "month": 30.44, "year": 365.25}
+
 #: What ``PowerResult.mde`` actually measures, per analysis branch. The Tier 3
 #: ``effect_size_type`` enum cannot express this (#1639): it has no member for an
 #: absolute risk difference, so binary and time-to-event designs both surface as
@@ -76,21 +81,51 @@ class PowerAnalysisNode:
         self._default_effect_size = 0.25
 
     @staticmethod
-    def _stated_max_duration_days(constraints: dict[str, Any]) -> Any:
-        """The caller's own duration limit, if they gave one.
+    def _stated_max_duration_days(constraints: dict[str, Any]) -> Optional[float]:
+        """The caller's own duration limit, in days, if they stated one.
 
-        Read from ``max_duration_days`` or from the documented ``timeline``
-        constraint key (agent.py ``validate_constraints``), which callers use to
-        carry schedule limits.
+        ``constraints`` is a free-form dict and callers state a timeline in FOUR
+        shapes, three of which predate this code:
+
+        * ``timeline_weeks: 12`` -- the contract's own worked example
+        * ``timeline: "3 months"`` -- free text, used across the agent tests
+        * ``timeline: {"max_duration_days": 90}`` -- tier0_output_mapper.py
+        * ``max_duration_days: 180``
+
+        Reading only the last of those (as this first did) means a caller who
+        states a limit in any of the documented shapes is told nothing.
+
+        An unparseable timeline returns None -- "no stated limit" -- rather than
+        a guess. "as soon as possible" is not a number, and inventing one
+        produces a FALSE warning, which is the failure this bound exists to
+        avoid.
         """
-        for candidate in (
-            constraints.get("max_duration_days"),
-            (constraints.get("timeline") or {}).get("max_duration_days")
-            if isinstance(constraints.get("timeline"), dict)
-            else None,
-        ):
-            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
-                return candidate
+        timeline = constraints.get("timeline")
+
+        def _num(value: Any) -> Optional[float]:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value)
+
+        direct = _num(constraints.get("max_duration_days"))
+        if direct is not None:
+            return direct
+        if isinstance(timeline, dict):
+            nested = _num(timeline.get("max_duration_days"))
+            if nested is not None:
+                return nested
+            weeks = _num(timeline.get("weeks"))
+            if weeks is not None:
+                return weeks * 7
+        weeks_key = _num(constraints.get("timeline_weeks"))
+        if weeks_key is not None:
+            return weeks_key * 7
+        if isinstance(timeline, str):
+            match = re.search(
+                r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", timeline, flags=re.IGNORECASE
+            )
+            if match:
+                return float(match.group(1)) * _DURATION_UNIT_DAYS[match.group(2).lower()]
         return None
 
     def _assess_feasibility(
