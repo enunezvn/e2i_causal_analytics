@@ -67,6 +67,47 @@ _MDE_SCALES = {
 }
 
 
+#: Phrases that make a duration an upper bound. A BARE duration ("3 months") is
+#: also a cap -- that is what a lone duration means in a constraints dict.
+_CAP_MARKERS = (
+    "within",
+    "no longer than",
+    "not longer than",
+    "no more than",
+    "not more than",
+    "at most",
+    "up to",
+    "under",
+    "maximum",
+    "max ",
+    "must not exceed",
+    "not exceed",
+    "limited to",
+    "by no later than",
+    "no later than",
+)
+
+
+def _reads_as_a_cap(timeline: str, span: tuple[int, int]) -> bool:
+    """Is this single stated duration an upper bound (#1639)?
+
+    "at least 3 months", "no earlier than 6 months" and "6 months of follow-up
+    after the last patient in" each carry exactly one duration, and reading any
+    of them as a maximum tells the caller their design exceeds a limit they
+    never set. A minimum is not a maximum.
+
+    Allowlist, not denylist: the string must either be BARE (the duration is its
+    entire meaningful content) or SAY it is a cap. An unlisted floor phrase then
+    yields a missed warning rather than a false one -- the direction this design
+    accepts. A denylist would fail the other way.
+    """
+    remainder = (timeline[: span[0]] + timeline[span[1] :]).strip()
+    if not any(ch.isalpha() for ch in remainder):
+        return True
+    lowered = timeline.lower()
+    return any(marker in lowered for marker in _CAP_MARKERS)
+
+
 def _append_unique(existing: list[str], additions: list[str]) -> list[str]:
     """Append only messages not already present, preserving order."""
     out = list(existing)
@@ -74,6 +115,24 @@ def _append_unique(existing: list[str], additions: list[str]) -> list[str]:
         if message not in out:
             out.append(message)
     return out
+
+
+def _replace_feasibility_verdict(state: ExperimentDesignState, verdict: list[str]) -> None:
+    """Publish THIS run's feasibility verdict, retracting the previous one.
+
+    The structured field was already replaced each run, but the copy pushed onto
+    the generic ``warnings`` channel was only ever appended -- so a redesign
+    that FIXED the design still shipped iteration 1's "94,115 days" sentence in
+    the user-visible warnings, and the error path could show "not assessed"
+    beside an obsolete verdict for a design that was never assessed.
+
+    Retracts by exact string (the previous verdict is known verbatim), so
+    unrelated warnings are untouched.
+    """
+    superseded = set(state.get("feasibility_warnings") or [])
+    remaining = [w for w in state.get("warnings", []) if w not in superseded]
+    state["feasibility_warnings"] = verdict
+    state["warnings"] = _append_unique(remaining, verdict)
 
 
 class PowerAnalysisNode:
@@ -130,12 +189,13 @@ class PowerAnalysisNode:
         if weeks_key is not None:
             return weeks_key * 7
         if isinstance(timeline, str):
-            found = [
-                float(n) * _DURATION_UNIT_DAYS[unit.lower()]
-                for n, unit in re.findall(
+            matches = list(
+                re.finditer(
                     r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", timeline, flags=re.IGNORECASE
                 )
-            ]
+            )
+            found = [float(m.group(1)) * _DURATION_UNIT_DAYS[m.group(2).lower()] for m in matches]
+            match_spans = [m.span() for m in matches]
             # Exactly one duration, or none. A string carrying SEVERAL is
             # ambiguous and is not guessed at.
             #
@@ -152,7 +212,7 @@ class PowerAnalysisNode:
             # "as soon as possible" applies: an ambiguous timeline is an
             # UNSTATED one. That costs enforcement on composite strings -- a
             # missed warning, the direction this design accepts.
-            if len(found) == 1:
+            if len(found) == 1 and _reads_as_a_cap(timeline, match_spans[0]):
                 return found[0]
         return None
 
@@ -321,15 +381,10 @@ class PowerAnalysisNode:
             # Always set, so a consumer can distinguish "checked, feasible" from
             # "never checked" — the same trap as an empty validity_threats list
             # that is empty because the audit timed out.
-            state["feasibility_warnings"] = feasibility_warnings
-            # Also raise it on the generic channel every downstream reader
-            # already knows. Deliberate duplication: ``feasibility_warnings`` is
-            # the structured field, ``warnings`` is the one consumers look at.
-            if feasibility_warnings:
-                # Deduped: the redesign loop re-runs this node, and a redesign
-                # that leaves the power inputs unchanged would otherwise stack
-                # the same sentence once per iteration.
-                state["warnings"] = _append_unique(state.get("warnings", []), feasibility_warnings)
+            # Also raised on the generic channel every downstream reader already
+            # knows. Deliberate duplication: ``feasibility_warnings`` is the
+            # structured field, ``warnings`` is the one consumers look at.
+            _replace_feasibility_verdict(state, feasibility_warnings)
             state["node_latencies_ms"] = node_latencies
 
             state["required_sample_size"] = forward.sample_size
@@ -346,16 +401,16 @@ class PowerAnalysisNode:
                 "recoverable": False,
             }
             state["errors"] = state.get("errors", []) + [error]
+            # Never leave iteration N's verdict attached to iteration N+1's
+            # failed, changed design -- on EITHER channel -- and never leave it
+            # empty, which would read as "checked, feasible". A failed
+            # assessment is not a clean bill of health.
+            _replace_feasibility_verdict(
+                state, [f"Feasibility was not assessed \u2014 power analysis failed: {str(e)}"]
+            )
             state["warnings"] = _append_unique(
                 state.get("warnings", []), [f"Power analysis failed: {str(e)}"]
             )
-            # Never leave iteration N's verdict attached to iteration N+1's
-            # failed, changed design -- and never leave it EMPTY either, which
-            # would read as "checked, feasible". A failed assessment is not a
-            # clean bill of health.
-            state["feasibility_warnings"] = [
-                f"Feasibility was not assessed \u2014 power analysis failed: {str(e)}"
-            ]
             state["status"] = "failed"
 
             latency_ms = int((time.time() - start_time) * 1000)

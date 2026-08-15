@@ -929,3 +929,150 @@ class TestStaleWarningsDoNotSurviveARedesign:
         second = self._run(dict(first, status="calculating"))
         duration_warnings = [w for w in second.get("warnings", []) if "duration" in w.lower()]
         assert len(duration_warnings) == 1, duration_warnings
+
+
+class TestDirectionalityIsNotAssumed:
+    """codex iter-6 HIGH: a single parsed duration is not necessarily a CAP.
+
+    ``"at least 3 months"``, ``"no earlier than 6 months"`` and ``"6 months of
+    follow-up after the last patient in"`` each carry exactly one duration, and
+    each was read as a maximum — so a 476-day design was told it exceeded a
+    limit the caller never set. A minimum is not a maximum.
+
+    A bare duration ("3 months") still reads as a cap, because that is what it
+    means in a constraints dict. Anything else must SAY it is a cap.
+    """
+
+    def _warnings(self, timeline):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        out = asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": 0.15,
+                            "baseline_value": 0.30,
+                        }
+                    ],
+                }
+            )
+        )
+        assert out["duration_estimate_days"] == 476
+        return out["feasibility_warnings"]
+
+    @pytest.mark.parametrize(
+        "timeline",
+        [
+            "at least 3 months",
+            "no earlier than 6 months",
+            "6 months of follow-up after the last patient in",
+            "minimum 3 months",
+            "no less than 6 months",
+        ],
+    )
+    def test_a_floor_is_never_read_as_a_cap(self, timeline):
+        assert self._warnings(timeline) == [], timeline
+
+    @pytest.mark.parametrize(
+        "timeline",
+        [
+            "3 months",
+            "  3 months  ",
+            "within 3 months",
+            "no longer than 3 months",
+            "at most 90 days",
+        ],
+    )
+    def test_a_cap_is_still_enforced(self, timeline):
+        assert self._warnings(timeline), timeline
+
+    def test_a_generous_cap_stays_quiet(self):
+        assert self._warnings("within 24 months") == []
+
+
+class TestARedesignClearsTheOldVerdict:
+    """codex iter-6 HIGH x2: `feasibility_warnings` is replaced on each run, but
+    the copy pushed onto the generic `warnings` channel was not — so an answer
+    could show a design that is now feasible beside iteration 1's
+    "94,115 days" sentence, or show "not assessed" beside an obsolete verdict."""
+
+    def _run(self, state):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        return asyncio.run(PowerAnalysisNode().execute(state))
+
+    def _state(self, effect, baseline, **extra):
+        s = {
+            "design_type": "RCT",
+            "constraints": {"weekly_accrual": 50},
+            "outcomes": [
+                {
+                    "is_primary": True,
+                    "metric_type": "binary",
+                    "expected_effect_size": effect,
+                    "baseline_value": baseline,
+                }
+            ],
+        }
+        s.update(extra)
+        return s
+
+    def test_becoming_feasible_removes_the_old_warning(self):
+        infeasible = self._run(self._state(0.030, 0.05))
+        assert infeasible["feasibility_warnings"]
+        assert any("94,115" in w for w in infeasible["warnings"])
+
+        redesigned = self._run(
+            self._state(
+                0.15,
+                0.30,
+                **{
+                    "warnings": infeasible["warnings"],
+                    "feasibility_warnings": infeasible["feasibility_warnings"],
+                    "status": "calculating",
+                },
+            )
+        )
+        assert redesigned["feasibility_warnings"] == []
+        assert not any("94,115" in w for w in redesigned["warnings"]), redesigned["warnings"]
+
+    def test_unrelated_warnings_are_preserved(self):
+        out = self._run(
+            self._state(
+                0.15,
+                0.30,
+                **{
+                    "warnings": ["Validity audit skipped (disabled)"],
+                    "feasibility_warnings": ["Estimated duration 94,115 days ..."],
+                    "status": "calculating",
+                },
+            )
+        )
+        assert "Validity audit skipped (disabled)" in out["warnings"]
+        assert not any("94,115" in w for w in out["warnings"])
+
+    def test_the_error_path_also_clears_the_old_generic_warning(self):
+        out = self._run(
+            self._state(
+                0.15,
+                0.30,
+                **{
+                    "constraints": {"weekly_accrual": "not-a-number"},
+                    "warnings": ["Estimated duration 94,115 days ...", "keep me"],
+                    "feasibility_warnings": ["Estimated duration 94,115 days ..."],
+                },
+            )
+        )
+        assert out["status"] == "failed"
+        assert not any("94,115" in w for w in out["warnings"]), out["warnings"]
+        assert "keep me" in out["warnings"]
+        assert any("not assessed" in w for w in out["feasibility_warnings"])
