@@ -667,12 +667,18 @@ async def get_kpi_history(
         for r in rows
         if r.get("value") is not None and r.get("metric_date")
     ]
+    # The chart surface #1640 is about: `renderKpiTrend` plots these points, and
+    # the same answer can carry a business_metrics TRx figure (~73x apart).
+    from src.kpi.measure_basis import materialized_history_basis
+
+    kpi_meta = get_registry().get(kpi_id)
     return KPIHistoryResponse(
         kpi_id=kpi_id,
         brand=brand or "",
         region=region or "",
         count=len(points),
         points=points,
+        measure_basis=materialized_history_basis(kpi_meta) if kpi_meta else None,
     )
 
 
@@ -747,7 +753,11 @@ async def get_kpi_history_segmented(
     series, data_through = shape_segmented_series(
         rows, axis=axis, value=value, start_date=start_date, end_date=end_date
     )
+    from src.kpi.measure_basis import registry_query_basis
+    from src.kpi.segmented_history import segmented_query_id
+
     return KPISegmentedHistoryResponse(
+        measure_basis=await registry_query_basis(segmented_query_id(kpi_id, axis)),
         kpi_id=kpi_id,
         brand=brand or "",
         axis=axis,
@@ -838,7 +848,11 @@ async def get_kpi_history_nowcast(
         if (start_date is None or p.month.isoformat() >= start_date)
         and (end_date is None or p.month.isoformat() <= end_date)
     ]
+    from src.kpi.measure_basis import registry_query_basis
+    from src.kpi.nowcast.completion_factor import nowcast_query_id
+
     return KPINowcastHistoryResponse(
+        measure_basis=await registry_query_basis(nowcast_query_id(kpi_id)),
         kpi_id=kpi_id,
         brand=brand or "",
         data_through=result.frontier.isoformat() if result.frontier else None,

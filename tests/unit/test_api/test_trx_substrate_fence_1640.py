@@ -619,14 +619,14 @@ class TestTheSummaryDerivesSubstrateFromTheQueryItRuns:
     """
 
     def test_substrates_come_from_the_registry_sql(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         assert _tables_in_sql(
             "SELECT COUNT(DISTINCT hcp_id) AS hcp_reach FROM treatment_events WHERE x"
         ) == ["treatment_events"]
 
     def test_cte_aliases_are_not_mistaken_for_tables(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         sql = (
             "WITH first_brand AS (SELECT patient_id, MIN(event_date) FROM treatment_events "
@@ -635,7 +635,7 @@ class TestTheSummaryDerivesSubstrateFromTheQueryItRuns:
         assert _tables_in_sql(sql) == ["treatment_events"]
 
     def test_a_join_reports_both_tables(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         sql = "SELECT 1 FROM triggers t JOIN treatment_events e ON e.id = t.id"
         assert _tables_in_sql(sql) == ["treatment_events", "triggers"]
@@ -782,13 +782,13 @@ class TestTheSqlExtractorDoesNotInventTables:
     """
 
     def test_schema_qualified_names_report_the_table(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         assert _tables_in_sql("SELECT 1 FROM public.treatment_events") == ["treatment_events"]
         assert _tables_in_sql("SELECT 1 FROM public.a JOIN public.b ON 1=1") == ["a", "b"]
 
     def test_lateral_is_not_a_table(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         sql = "SELECT 1 FROM triggers t JOIN LATERAL (SELECT 1 FROM treatment_events) x ON true"
         tables = _tables_in_sql(sql)
@@ -796,12 +796,12 @@ class TestTheSqlExtractorDoesNotInventTables:
         assert tables == ["treatment_events", "triggers"]
 
     def test_a_subquery_is_not_a_table(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         assert _tables_in_sql("SELECT 1 FROM (SELECT 1 FROM triggers) x") == ["triggers"]
 
     def test_quoted_identifiers_are_read(self):
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         assert _tables_in_sql('SELECT 1 FROM "treatment_events"') == ["treatment_events"]
 
@@ -816,7 +816,7 @@ class TestTheSqlExtractorDoesNotInventTables:
         client = get_supabase()
         if client is None:
             _pytest.skip("no Supabase client available")
-        from src.api.routes.copilotkit import _tables_in_sql
+        from src.kpi.measure_basis import tables_in_sql as _tables_in_sql
 
         try:
             rows = (client.table("kpi_query_registry").select("query_id,sql").execute()).data or []
@@ -838,47 +838,156 @@ class TestTheRegistryCacheCannotWedge:
     picked up either."""
 
     def test_a_failed_read_is_not_cached(self):
-        import src.api.routes.copilotkit as ck
+        import src.kpi.measure_basis as mb
 
-        ck._reset_substrate_cache()
+        mb.reset_substrate_cache()
         calls = {"n": 0}
 
         def _boom(_ids):
             calls["n"] += 1
             return {}
 
-        original = ck._read_query_substrates
+        original = mb.read_query_substrates
         try:
-            ck._read_query_substrates = _boom
-            assert ck._kpi_summary_substrates_cached(("a",)) == {}
-            assert ck._kpi_summary_substrates_cached(("a",)) == {}
+            mb.read_query_substrates = _boom
+            assert mb.query_substrates_cached(("a",)) == {}
+            assert mb.query_substrates_cached(("a",)) == {}
             assert calls["n"] == 2, "an empty read was cached and never retried"
         finally:
-            ck._read_query_substrates = original
-            ck._reset_substrate_cache()
+            mb.read_query_substrates = original
+            mb.reset_substrate_cache()
 
     def test_a_successful_read_is_cached(self):
-        import src.api.routes.copilotkit as ck
+        import src.kpi.measure_basis as mb
 
-        ck._reset_substrate_cache()
+        mb.reset_substrate_cache()
         calls = {"n": 0}
 
         def _ok(_ids):
             calls["n"] += 1
             return {"a": ["treatment_events"]}
 
-        original = ck._read_query_substrates
+        original = mb.read_query_substrates
         try:
-            ck._read_query_substrates = _ok
-            assert ck._kpi_summary_substrates_cached(("a",)) == {"a": ["treatment_events"]}
-            assert ck._kpi_summary_substrates_cached(("a",)) == {"a": ["treatment_events"]}
+            mb.read_query_substrates = _ok
+            assert mb.query_substrates_cached(("a",)) == {"a": ["treatment_events"]}
+            assert mb.query_substrates_cached(("a",)) == {"a": ["treatment_events"]}
             assert calls["n"] == 1
         finally:
-            ck._read_query_substrates = original
-            ck._reset_substrate_cache()
+            mb.read_query_substrates = original
+            mb.reset_substrate_cache()
 
     def test_the_cache_expires_so_a_migration_is_picked_up(self):
-        import src.api.routes.copilotkit as ck
+        import src.kpi.measure_basis as mb
 
-        assert ck._SUBSTRATE_CACHE_TTL_SECONDS > 0
-        assert ck._SUBSTRATE_CACHE_TTL_SECONDS <= 3600, "a day-long TTL is a restart in disguise"
+        assert mb.SUBSTRATE_CACHE_TTL_SECONDS > 0
+        assert mb.SUBSTRATE_CACHE_TTL_SECONDS <= 3600, "a day-long TTL is a restart in disguise"
+
+
+class TestCteFormsThatWouldOtherwiseBecomePhantomTables:
+    """codex iter-6 HIGH: `WITH RECURSIVE` / `AS MATERIALIZED` escape the CTE regex.
+
+    Not reachable today — measured against the live registry 2026-08-15,
+    0 of 306 rows use either form — but the migration-044 CHECK admits them
+    (it only requires the text to start with `with` or `select`), and the
+    failure mode is a PHANTOM substrate, which is a wrong basis rather than a
+    narrow one.
+    """
+
+    @pytest.mark.parametrize(
+        "sql, expected",
+        [
+            (
+                "WITH RECURSIVE months AS (SELECT 1) "
+                "SELECT * FROM months JOIN treatment_events ON true",
+                ["treatment_events"],
+            ),
+            (
+                "WITH m AS MATERIALIZED (SELECT 1) SELECT * FROM m, patient_journeys",
+                ["patient_journeys"],
+            ),
+            (
+                "WITH m AS NOT MATERIALIZED (SELECT 1) SELECT * FROM m JOIN triggers ON true",
+                ["triggers"],
+            ),
+            (
+                "WITH RECURSIVE a AS (SELECT 1), b AS MATERIALIZED (SELECT 2) "
+                "SELECT * FROM a JOIN b ON true JOIN hcp_profiles ON true",
+                ["hcp_profiles"],
+            ),
+        ],
+    )
+    def test_the_cte_name_is_never_reported_as_a_table(self, sql, expected):
+        from src.kpi.measure_basis import tables_in_sql
+
+        assert tables_in_sql(sql) == expected
+
+
+class TestEveryChartableSeriesCarriesItsBasis:
+    """codex iter-6 HIGH: the trend chart is the surface the issue is ABOUT.
+
+    `renderKpiTrend` fetches real history through `getKPIHistory` ->
+    GET /api/kpis/{id}/history (E2ICopilotProvider.tsx:1008), so a TRx trend
+    can be charted beside a business_metrics TRx figure from
+    e2i_data_query_tool. Point values got a basis in the first pass; the
+    SERIES did not.
+    """
+
+    def test_the_materialized_history_basis_names_kpi_history_not_the_source(self):
+        from src.kpi.measure_basis import materialized_history_basis
+        from src.services.kpi_resolution import recognize_kpi
+
+        kpi = recognize_kpi("TRx")
+        assert kpi is not None
+        basis = materialized_history_basis(kpi)
+        # The series is READ from kpi_history. Saying "treatment_events" would
+        # claim it was computed live, which is what the segmented endpoint
+        # does and this one explicitly does not.
+        assert basis["substrate"] == ["kpi_history"]
+        assert basis["computed"] is False
+        assert basis["materialized_from"] == sorted(kpi.tables)
+        assert "business_metrics" in basis["note"]
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ["KPIHistoryResponse", "KPISegmentedHistoryResponse", "KPINowcastHistoryResponse"],
+    )
+    def test_the_response_model_can_carry_a_basis(self, model_name):
+        import src.api.schemas.kpi as kpi_schemas
+
+        model = getattr(kpi_schemas, model_name)
+        assert "measure_basis" in model.model_fields, (
+            f"{model_name} emits numeric KPI figures with no substrate field"
+        )
+
+    def test_the_history_route_populates_it_from_the_registry(self):
+        """The field existing is not the fix; the route filling it is."""
+        import ast
+        import inspect
+
+        from src.api.routes import kpi as kpi_routes
+
+        for fn_name in ("get_kpi_history", "get_kpi_history_segmented", "get_kpi_history_nowcast"):
+            fn = getattr(kpi_routes, fn_name)
+            tree = ast.parse(inspect.getsource(fn).lstrip())
+            keywords = {
+                kw.arg
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                for kw in node.keywords
+            }
+            assert "measure_basis" in keywords, f"{fn_name} never passes measure_basis"
+
+    def test_a_set_returning_function_is_not_reported_as_a_table(self):
+        """`FROM generate_series(...)` is a function call, not a substrate.
+
+        The pre-existing scan added it. Latent, not live — measured
+        2026-08-15, no registry query uses the form — but a phantom is a wrong
+        basis, which is the thing this helper exists to avoid.
+        """
+        from src.kpi.measure_basis import tables_in_sql
+
+        assert tables_in_sql("SELECT * FROM generate_series(1, 3)") == []
+        assert tables_in_sql(
+            "SELECT * FROM treatment_events JOIN generate_series(1,3) ON true"
+        ) == ["treatment_events"]

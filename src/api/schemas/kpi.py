@@ -542,6 +542,13 @@ class KPIHistoryResponse(BaseModel):
     """Date-ordered KPI history for one KPI (empty when no real series exists)."""
 
     kpi_id: str
+    #: The trend chart reads these SERIES (`renderKpiTrend` -> `getKPIHistory`),
+    #: so a TRx series can land beside a business_metrics TRx figure -- measured
+    #: ~73x apart -- in one answer (#1640).
+    measure_basis: dict[str, Any] | None = Field(
+        None,
+        description="Substrate these points rest on, and what they may be compared with",
+    )
     brand: str = Field("", description="'' = global / all brands")
     region: str = Field("", description="'' = all regions")
     count: int = Field(..., description="Number of points")
@@ -583,6 +590,13 @@ class KPISegmentedHistoryResponse(BaseModel):
     """
 
     kpi_id: str
+    #: The trend chart reads these SERIES (`renderKpiTrend` -> `getKPIHistory`),
+    #: so a TRx series can land beside a business_metrics TRx figure -- measured
+    #: ~73x apart -- in one answer (#1640).
+    measure_basis: dict[str, Any] | None = Field(
+        None,
+        description="Substrate these points rest on, and what they may be compared with",
+    )
     brand: str = Field("", description="'' = global / all brands")
     axis: str = Field(..., description="'segment' (severity tier) or 'therapy_line' (LOT)")
     data_through: str | None = Field(
@@ -674,6 +688,13 @@ class KPINowcastHistoryResponse(BaseModel):
     """
 
     kpi_id: str
+    #: The trend chart reads these SERIES (`renderKpiTrend` -> `getKPIHistory`),
+    #: so a TRx series can land beside a business_metrics TRx figure -- measured
+    #: ~73x apart -- in one answer (#1640).
+    measure_basis: dict[str, Any] | None = Field(
+        None,
+        description="Substrate these points rest on, and what they may be compared with",
+    )
     brand: str = Field("", description="'' = global / all brands")
     data_through: str | None = Field(
         None, description="Prescription frontier (max event_date) backing the as-of view"

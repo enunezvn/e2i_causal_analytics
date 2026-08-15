@@ -22,7 +22,13 @@ EQUAL, and an undeclared substrate is never comparable with anything.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import re
+import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 #: What ``business_metrics.value`` actually is (#1640).
 #:
@@ -98,6 +104,250 @@ def measure_basis_for_kpi(
             "substrate matches; e2i_data_query_tool(query_type='kpi') returns "
             "business_metrics rows, which for volume KPIs measure something different "
             "(see its measure_basis)."
+        ),
+    }
+
+
+# --------------------------------------------------------------------------
+# Deriving a substrate from the registry SQL a KPI actually runs (#1640).
+#
+# These live here rather than in the CopilotKit route because three surfaces
+# need them -- the Home summary tiles, the KPI point-value endpoint, and the
+# history/segmented/nowcast series that back the chat trend chart. The chart
+# is the surface the issue is about: `renderKpiTrend` fetches real history
+# through `getKPIHistory` (E2ICopilotProvider.tsx:1008), so a TRx series can
+# land beside a business_metrics TRx figure in one answer.
+#
+# The DB import is function-local, so this module stays cheap for callers that
+# only need the constants above.
+# --------------------------------------------------------------------------
+
+
+#: Words that can follow FROM/JOIN or an alias but are never a table name.
+#: `LATERAL` and `SELECT` head a subquery; the rest end the table list, and
+#: treating one as a table (or as an alias to skip past) yields a phantom.
+_CLAUSE_KEYWORDS = frozenset(
+    {
+        "where",
+        "group",
+        "order",
+        "having",
+        "limit",
+        "offset",
+        "union",
+        "intersect",
+        "except",
+        "on",
+        "using",
+        "window",
+        "left",
+        "right",
+        "full",
+        "inner",
+        "outer",
+        "cross",
+        "join",
+        "lateral",
+        "natural",
+        "fetch",
+        "for",
+        "returning",
+        "with",
+    }
+)
+_NOT_A_TABLE = _CLAUSE_KEYWORDS | {"select", ""}
+
+
+def tables_in_sql(sql: str) -> list[str]:
+    """Real tables a registry query reads, derived from the SQL itself (#1640).
+
+    A PHANTOM table is a wrong basis, which is worse than a narrow one, so the
+    forms that produce one are handled explicitly:
+
+    * ``FROM public.treatment_events`` yields ``treatment_events``, not
+      ``public`` -- measured, 12 of the 306 registry queries are
+      schema-qualified today;
+    * ``JOIN LATERAL (...)`` and ``FROM (SELECT ...)`` name no table here, and
+      the inner query's own FROM clauses are picked up on their own;
+    * quoted identifiers are read.
+
+    CTE names are excluded: ``WITH first_brand AS (...) SELECT ... FROM
+    first_brand`` reads ``treatment_events``, not a table called
+    ``first_brand``.
+    """
+    ident = r'(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))'
+    ctes = {
+        (m.group(1) or m.group(2)).lower()
+        for m in re.finditer(
+            # RECURSIVE follows WITH; MATERIALIZED / NOT MATERIALIZED follow AS.
+            # Missing either does not merely narrow the basis -- the CTE name
+            # then survives as a PHANTOM table. Measured against the live
+            # registry 2026-08-15: 0 of 306 rows use either form today, but the
+            # migration-044 CHECK admits them (it only requires the text to
+            # start with `with` or `select`).
+            rf"(?:with\s+(?:recursive\s+)?|,\s*){ident}\s+as\s*"
+            r"(?:not\s+)?(?:materialized\s+)?\(",
+            sql,
+            re.IGNORECASE,
+        )
+    }
+    # A FROM clause can list several tables: `FROM a, b` and `FROM a x, b y`
+    # are old-style cross joins, and 40 of the 306 registry queries use the
+    # form (measured 2026-08-15) -- `FROM oncologists, engaged`,
+    # `FROM triggered, converted`. Matching only the FIRST reference after the
+    # keyword drops the rest.
+    #
+    # Today that costs nothing: in all 40, every reference past the first is a
+    # CTE, so first-only and full-list agree on all 306 queries (measured: 0
+    # differences, 0 phantoms either way). The scan is fixed anyway because
+    # the agreement is a property of the current SQL, not of the rule.
+    table_ref = rf"(?:{ident}\s*\.\s*)?{ident}"
+    found: set[str] = set()
+    for m in re.finditer(r"\b(?:from|join)\b", sql, re.IGNORECASE):
+        rest = sql[m.end() :]
+        while True:
+            ref = re.match(rf"\s*(?:lateral\s+)?{table_ref}", rest, re.IGNORECASE)
+            if not ref:
+                # A subquery or `(` -- it names no table here, and its own FROM
+                # clauses are picked up by the outer scan on their own.
+                break
+            # groups: 1/2 = optional schema (quoted/bare), 3/4 = table
+            name = (ref.group(3) or ref.group(4) or "").lower()
+            if name in _NOT_A_TABLE:
+                break
+            tail = rest[ref.end() :]
+            if re.match(r"\s*\(", tail):
+                # `FROM generate_series(...)` -- a set-returning function, not a
+                # table. Adding it is a phantom (the pre-existing scan did), so
+                # stop this clause rather than guess past the argument list.
+                # Measured 2026-08-15: no registry query uses the form, so this
+                # closes a latent case rather than a live one.
+                break
+            found.add(name)
+            # Continue ONLY across a comma, and only after skipping an optional
+            # alias -- anything else (WHERE, ON, GROUP BY, a closing paren)
+            # ends the table list. Scanning past those would pull column names
+            # in as phantom tables.
+            alias = re.match(r"\s+(?:as\s+)?[a-z_][a-z0-9_]*", tail, re.IGNORECASE)
+            if alias and alias.group(0).strip().lower().split()[-1] not in _CLAUSE_KEYWORDS:
+                tail = tail[alias.end() :]
+            comma = re.match(r"\s*,", tail)
+            if not comma:
+                break
+            rest = tail[comma.end() :]
+    return sorted(found - ctes)
+
+
+#: How long a registry read stays good. Short enough that a migration is picked
+#: up without a restart, long enough that Home does not re-query per render.
+SUBSTRATE_CACHE_TTL_SECONDS = 300
+
+_CACHE: dict[tuple[str, ...], tuple[float, dict[str, list[str]]]] = {}
+
+
+def reset_substrate_cache() -> None:
+    """Drop the memoized registry reads (tests, and after a migration)."""
+    _CACHE.clear()
+
+
+def read_query_substrates(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
+    """``{query_id: [table, ...]}`` read from ``kpi_query_registry``."""
+    from src.api.dependencies.supabase_client import get_supabase
+
+    client = get_supabase()
+    if client is None:
+        return {}
+    try:
+        rows = (
+            client.table("kpi_query_registry")
+            .select("query_id,sql")
+            .in_("query_id", list(query_ids))
+            .execute()
+        ).data or []
+    except Exception as e:  # fail closed: no basis beats a wrong basis
+        logger.warning(
+            f"[measure_basis] kpi_query_registry unreadable, omitting measure_basis: {e}"
+        )
+        return {}
+    return {r["query_id"]: tables_in_sql(r.get("sql") or "") for r in rows}
+
+
+def query_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
+    """Memoized registry read, with a TTL and NO caching of failures.
+
+    An ``lru_cache`` here meant a single transient read failure cached ``{}``
+    for the life of the process, so Home would emit numeric tiles with no basis
+    until restart — and a registry migration could never be picked up either.
+    A failure is not a result; only a non-empty read is remembered.
+    """
+    entry = _CACHE.get(query_ids)
+    if entry is not None and (time.monotonic() - entry[0]) < SUBSTRATE_CACHE_TTL_SECONDS:
+        return entry[1]
+    result = read_query_substrates(query_ids)
+    if result:
+        _CACHE[query_ids] = (time.monotonic(), result)
+    return result
+
+
+def materialized_history_basis(kpi: Any) -> Dict[str, Any]:
+    """Declare what a ``kpi_history`` SERIES measures (#1640).
+
+    ``/api/kpis/{id}/history`` reads the materialized ``kpi_history`` table,
+    not the calculator -- so the substrate is ``kpi_history``, and saying
+    ``treatment_events`` here would claim the series was computed live, which
+    is what the SEGMENTED endpoint does and this one explicitly does not.
+    ``materialized_from`` keeps the provenance without overstating it.
+
+    This is the surface #1640 is about: `renderKpiTrend` charts this series,
+    and the same answer can carry a business_metrics TRx figure from
+    ``e2i_data_query_tool`` -- measured ~73x apart.
+    """
+    declared = sorted(getattr(kpi, "tables", None) or [])
+    return {
+        "substrate": ["kpi_history"],
+        "computed": False,
+        "materialized_from": declared,
+        "grain": "kpi x brand x region x calendar month",
+        "measure": (
+            "monthly materialized history of the computed KPI"
+            + (f" (materialized from {', '.join(declared)})" if declared else "")
+        ),
+        "note": (
+            "Read from the materialized kpi_history table -- the stored form of the "
+            "COMPUTED KPI, not the business_metrics snapshot. Do NOT plot or compare "
+            "it against e2i_data_query_tool(query_type='kpi') values for a volume KPI: "
+            "measured 2026-08-15, those are ~73x larger because they are a modeled "
+            "market-scale level rather than a count of observed events."
+        ),
+    }
+
+
+async def registry_query_basis(query_id: str) -> Optional[Dict[str, Any]]:
+    """The basis of a series computed live by one registry query (#1640).
+
+    Returns ``None`` when the registry cannot be read: no basis beats a wrong
+    basis, and a caller that omits the field is honest about not knowing.
+
+    Off the event loop -- the reader is the sync supabase client, and the
+    routes that need this are async. The 300s cache means the hop is paid at
+    most once per query per worker per window.
+    """
+    tables = (await asyncio.to_thread(query_substrates_cached, (query_id,))).get(query_id)
+    if not tables:
+        return None
+    return {
+        "substrate": list(tables),
+        "computed": True,
+        # Not a declaration read off the registry metadata: these are the
+        # tables of the SQL this request ran.
+        "runtime_confirmed": True,
+        "query_id": query_id,
+        "measure": f"computed live from {', '.join(tables)}",
+        "note": (
+            "Computed from the operational substrate at query time. Do NOT plot or "
+            "compare it against e2i_data_query_tool(query_type='kpi') values for a "
+            "volume KPI: measured 2026-08-15, those are ~73x larger because they are a "
+            "modeled market-scale level rather than a count of observed events."
         ),
     }
 

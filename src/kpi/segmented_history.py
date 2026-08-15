@@ -72,6 +72,18 @@ def bucket_label(axis: str, key: str) -> str:
     return f"{key} prior line{'' if key == '1' else 's'}"
 
 
+def segmented_query_id(kpi_id: str, axis: str) -> str:
+    """The registry query this KPI/axis pair actually runs (#1640).
+
+    Shared with the route so the substrate it declares comes from the query
+    that RAN -- including the ``_include_synthetic`` variant, which reads a
+    different set of tables. Two copies of this derivation could drift into a
+    label that names the wrong query.
+    """
+    base = SEGMENTED_KPI_QUERY_FAMILIES[kpi_id]
+    return monthly_axis_query_id(base, axis=AXIS_SUFFIXES[axis])
+
+
 async def fetch_segmented_rows(
     kpi_id: str, *, axis: str, brand: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -82,8 +94,7 @@ async def fetch_segmented_rows(
     """
     import inspect
 
-    base = SEGMENTED_KPI_QUERY_FAMILIES[kpi_id]
-    query_id = monthly_axis_query_id(base, axis=AXIS_SUFFIXES[axis])
+    query_id = segmented_query_id(kpi_id, axis)
     try:
         from src.memory.services.factories import get_async_supabase_client
 

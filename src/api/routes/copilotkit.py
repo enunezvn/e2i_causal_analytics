@@ -269,7 +269,6 @@ import json
 import logging
 import operator
 import os
-import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -408,7 +407,6 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
     Returns:
         Fixed event dictionary with all required fields
     """
-    import time
 
     event_type = event_dict.get("type", "")
 
@@ -747,7 +745,6 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         it triggers regenerate mode which fails when message IDs don't exist in history.
         By using a fresh thread_id, the checkpointer always returns empty state.
         """
-        import time
         from datetime import datetime
 
         start_time = time.time()
@@ -1775,88 +1772,10 @@ _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
 }
 
 
-def _tables_in_sql(sql: str) -> list[str]:
-    """Real tables a registry query reads, derived from the SQL itself (#1640).
-
-    A PHANTOM table is a wrong basis, which is worse than a narrow one, so the
-    forms that produce one are handled explicitly:
-
-    * ``FROM public.treatment_events`` yields ``treatment_events``, not
-      ``public`` -- measured, 12 of the 306 registry queries are
-      schema-qualified today;
-    * ``JOIN LATERAL (...)`` and ``FROM (SELECT ...)`` name no table here, and
-      the inner query's own FROM clauses are picked up on their own;
-    * quoted identifiers are read.
-
-    CTE names are excluded: ``WITH first_brand AS (...) SELECT ... FROM
-    first_brand`` reads ``treatment_events``, not a table called
-    ``first_brand``.
-    """
-    ident = r'(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))'
-    ctes = {
-        (m.group(1) or m.group(2)).lower()
-        for m in re.finditer(rf"(?:with|,)\s+{ident}\s+as\s*\(", sql, re.IGNORECASE)
-    }
-    found: set[str] = set()
-    for m in re.finditer(
-        rf"(?:from|join)\s+(?:lateral\s+)?(?:{ident}\s*\.\s*)?{ident}",
-        sql,
-        re.IGNORECASE,
-    ):
-        # groups: 1/2 = optional schema (quoted/bare), 3/4 = table (quoted/bare)
-        name = (m.group(3) or m.group(4) or "").lower()
-        if name and name not in {"lateral", "select"}:
-            found.add(name)
-    return sorted(found - ctes)
-
-
-#: How long a registry read stays good. Short enough that a migration is picked
-#: up without a restart, long enough that Home does not re-query per render.
-_SUBSTRATE_CACHE_TTL_SECONDS = 300
-
-_SUBSTRATE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, list[str]]]] = {}
-
-
-def _reset_substrate_cache() -> None:
-    """Drop the memoized registry reads (tests, and after a migration)."""
-    _SUBSTRATE_CACHE.clear()
-
-
-def _read_query_substrates(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
-    """``{query_id: [table, ...]}`` read from ``kpi_query_registry``."""
-    from src.api.dependencies.supabase_client import get_supabase
-
-    client = get_supabase()
-    if client is None:
-        return {}
-    try:
-        rows = (
-            client.table("kpi_query_registry")
-            .select("query_id,sql")
-            .in_("query_id", list(query_ids))
-            .execute()
-        ).data or []
-    except Exception as e:  # fail closed: no basis beats a wrong basis
-        logger.warning(f"[CopilotKit] kpi_query_registry unreadable, omitting measure_basis: {e}")
-        return {}
-    return {r["query_id"]: _tables_in_sql(r.get("sql") or "") for r in rows}
-
-
-def _kpi_summary_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
-    """Memoized registry read, with a TTL and NO caching of failures.
-
-    An ``lru_cache`` here meant a single transient read failure cached ``{}``
-    for the life of the process, so Home would emit numeric tiles with no basis
-    until restart — and a registry migration could never be picked up either.
-    A failure is not a result; only a non-empty read is remembered.
-    """
-    entry = _SUBSTRATE_CACHE.get(query_ids)
-    if entry is not None and (time.monotonic() - entry[0]) < _SUBSTRATE_CACHE_TTL_SECONDS:
-        return entry[1]
-    result = _read_query_substrates(query_ids)
-    if result:
-        _SUBSTRATE_CACHE[query_ids] = (time.monotonic(), result)
-    return result
+# Moved to the measure-basis SSOT (#1640): the KPI history/segmented/nowcast
+# routes need the same derivation, and importing this route module to get it
+# is not an option (orchestrator/RAG stacks, ~30s).
+from src.kpi.measure_basis import query_substrates_cached  # noqa: E402
 
 
 def _kpi_summary_measure_bases(
@@ -1889,7 +1808,7 @@ def _kpi_summary_measure_bases(
         field: _kpi_summary_query(spec[0], brand_param, region, spec[2])[0]
         for field, spec in _KPI_SUMMARY_QUERIES.items()
     }
-    by_query = _kpi_summary_substrates_cached(tuple(sorted(set(resolved.values()))))
+    by_query = query_substrates_cached(tuple(sorted(set(resolved.values()))))
     if not by_query:
         return {}
     bases: dict[str, dict] = {}
@@ -3148,7 +3067,6 @@ def create_e2i_chat_agent(
 
     async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Process chat messages using Claude with bound tools."""
-        import time
         from datetime import datetime
 
         node_start = time.time()
@@ -3573,7 +3491,6 @@ def create_e2i_chat_agent(
 
     async def synthesize_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Synthesize tool results into a final response."""
-        import time
 
         node_start = time.time()
 
@@ -4628,7 +4545,6 @@ async def _stream_chat_response(
     - {"type": "done", "data": ""}
     - {"type": "error", "data": "..."}
     """
-    import time
 
     start_time = time.time()
 
@@ -4940,7 +4856,6 @@ async def chat(
     Note: request_id is optional. If not provided, it's extracted from the
     X-Request-ID header via TracingMiddleware (Phase 1 G08).
     """
-    import time
 
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed
