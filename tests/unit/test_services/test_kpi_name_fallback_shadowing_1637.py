@@ -144,6 +144,47 @@ class TestAbbreviationOnlyKpisAreReachable:
         assert kpi.id == expected_id, f"{query!r} -> {kpi.id}, wanted {expected_id}"
 
 
+class TestSecondMetricProbeIsInflectionConsistent:
+    """``recognize_distinct_metric`` must see a metric mention in either number.
+
+    codex iter-3 raised this as a fail-closed regression for the dispatcher,
+    whose causal-ask veto trips on any second metric without directional grammar:
+    "what drives conversion rates after patient touches" now detects
+    Patient Touch Rate as a second mention and vetoes, where before it did not.
+
+    Measured, that is the removal of an ACCIDENT rather than a new behaviour —
+    the SINGULAR spelling of the very same sentence already vetoed. The old
+    matcher's rule was "veto on 'patient touch', ignore 'patient touches'", which
+    is not a designed carve-out for contextual nouns; it is just the singular-only
+    regex showing through. Blast radius on real traffic: of the 48 distinct user
+    questions actually asked in the 2026-08-15 eval, ZERO change verdict.
+
+    Weakening the shared matcher for one caller would re-create precisely the
+    iter-2 defect (two matchers disagreeing about what names a metric), so the
+    rule stays shared and the two spellings are pinned to agree here. Whether the
+    #1475 veto is too aggressive for BOTH spellings is a separate question about
+    that guard, not about this one.
+    """
+
+    @pytest.mark.parametrize(
+        "singular,plural",
+        [
+            ("patient touch", "patient touches"),
+            ("override rate", "override rates"),
+            ("acceptance rate", "acceptance rates"),
+            ("conversion rate", "conversion rates"),
+        ],
+    )
+    def test_both_numbers_are_seen_as_the_same_metric(self, singular, plural):
+        from src.services.kpi_resolution import recognize_distinct_metric
+
+        got_singular = recognize_distinct_metric(singular, exclude_id="__none__")
+        got_plural = recognize_distinct_metric(plural, exclude_id="__none__")
+        assert got_singular is not None, f"{singular!r} is not seen as a metric at all"
+        assert got_plural is not None, f"{plural!r} was not seen while {singular!r} was"
+        assert got_singular[0].id == got_plural[0].id
+
+
 class TestSpanContractPreserved:
     """``recognize_kpi_span`` feeds the #1475 governing-head guards, which slice
     the query around the returned span. A span that does not actually cover the
