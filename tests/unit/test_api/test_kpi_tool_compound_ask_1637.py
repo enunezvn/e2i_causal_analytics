@@ -114,3 +114,39 @@ class TestRealEvalArgumentsAreNeverRefused:
         result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx market share"})
         assert not _is_compound_refusal(result), result.get("error")
         assert result.get("kpi_id") == "WS3-BI-008", result
+
+    @pytest.mark.parametrize(
+        "kpi_name",
+        [
+            # A coordinator token with a NON-metric right side is not two asks.
+            "conversion rate, by brand",
+            "conversion rate for Kisqali, west region",
+            "acceptance rate, last quarter",
+            # A second metric MENTION that is part of the first metric's own
+            # phrase — adjacency, so the gap holds no coordinator.
+            "TRx market share, Kisqali",
+        ],
+    )
+    async def test_punctuation_alone_does_not_trigger_the_guard(self, kpi_name):
+        """The gate reads the text BETWEEN the two mentions. A comma elsewhere in
+        the string — before a brand, a region, a period — is not coordination."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert not _is_compound_refusal(result), (
+            f"{kpi_name!r} is one metric with trailing scope, but was refused: "
+            f"{result.get('error')}"
+        )
+
+
+class TestCoordinatorFormsAreCovered:
+    """Coordination is not only the word 'and'."""
+
+    @pytest.mark.parametrize(
+        "kpi_name",
+        ["TRx, NRx", "conversion rate & ROI", "ROI as well as TRx", "NRx plus TRx"],
+    )
+    async def test_other_coordinators_also_refuse(self, kpi_name):
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert _is_compound_refusal(result), (
+            f"{kpi_name!r} coordinates two metrics but was answered as one: "
+            f"kpi={result.get('kpi_id')} value={result.get('value')}"
+        )
