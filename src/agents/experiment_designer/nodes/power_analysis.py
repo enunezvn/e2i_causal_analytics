@@ -121,11 +121,23 @@ class PowerAnalysisNode:
         if weeks_key is not None:
             return weeks_key * 7
         if isinstance(timeline, str):
-            match = re.search(
-                r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", timeline, flags=re.IGNORECASE
-            )
-            if match:
-                return float(match.group(1)) * _DURATION_UNIT_DAYS[match.group(2).lower()]
+            found = [
+                float(n) * _DURATION_UNIT_DAYS[unit.lower()]
+                for n, unit in re.findall(
+                    r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", timeline, flags=re.IGNORECASE
+                )
+            ]
+            if found:
+                # MAX, not first. "2 month recruitment ramp; total study no
+                # longer than 24 months" parsed first-match to 61 days and
+                # branded a 476-day design not executable -- a false warning,
+                # the failure this bound was corrected for one round earlier.
+                #
+                # Max is safe by CONSTRUCTION: whatever the real stated limit
+                # is, it is one of the numbers in the string, so max >= it and
+                # the error can only ever be a MISSED warning. That is the
+                # direction this design accepts; the reverse is not.
+                return max(found)
         return None
 
     def _assess_feasibility(

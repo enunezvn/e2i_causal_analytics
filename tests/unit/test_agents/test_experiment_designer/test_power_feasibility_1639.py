@@ -705,3 +705,92 @@ class TestTheContractNamesWhatTheRuntimeActuallyEmits:
         src = inspect.getsource(memory_hooks)
         assert 'feasibility_warnings=result.get("feasibility_warnings")' in src
         assert 'validity_audit_status=result.get("validity_audit_status"' in src
+
+
+class TestAMultiDurationTimelineNeverFalseWarns:
+    """codex iter-4 HIGH: first-match parsing broke my own asymmetry.
+
+    ``"2 month recruitment ramp; total study no longer than 24 months"`` parsed
+    to 61 days, so a 476-day design that comfortably fits the stated 24 months
+    was branded "not executable as specified" — exactly the false warning the
+    bound was corrected for one round earlier.
+
+    Taking the MAXIMUM parsed duration is safe by construction: the real stated
+    limit is one of the numbers in the string, so max >= it, and the failure can
+    only ever be a MISSED warning — the direction this design accepts.
+    """
+
+    def _warnings(self, timeline):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        out = asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": {"weekly_accrual": 50, "timeline": timeline},
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": 0.15,
+                            "baseline_value": 0.30,
+                        }
+                    ],
+                }
+            )
+        )
+        assert out["duration_estimate_days"] == 476
+        return out["feasibility_warnings"]
+
+    def test_a_ramp_phase_does_not_become_the_limit(self):
+        assert (
+            self._warnings("2 month recruitment ramp; total study no longer than 24 months") == []
+        )
+
+    def test_the_binding_limit_is_still_enforced_when_it_is_the_largest(self):
+        assert self._warnings("1 week setup, then a 3 month study")
+
+    def test_a_single_duration_still_works(self):
+        assert self._warnings("3 months")
+        assert self._warnings("24 months") == []
+
+
+class TestTheAnalysisCodeTemplateCarriesTheCaveat:
+    """codex iter-4 HIGH: the generated analysis script prints
+    ``Sample Size: 672206`` in its header. Someone who opens only that file gets
+    the uncaveated execution artifact this issue exists to prevent."""
+
+    def test_analysis_code_header_flags_an_infeasible_design(self):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        node = TemplateGeneratorNode()
+        state = {
+            "power_analysis": {"required_sample_size": 672206},
+            "duration_estimate_days": 94115,
+            "feasibility_warnings": ["Estimated duration 94,115 days (257.7 years) ..."],
+            "treatments": [{"name": "detailing"}],
+            "outcomes": [{"name": "conversion", "is_primary": True}],
+        }
+        code = node._generate_analysis_code(state, node._build_dowhy_spec(state))
+        assert "672206" in code
+        assert "NOT EXECUTABLE" in code.upper() or "FEASIBILITY" in code.upper(), code[:500]
+
+    def test_a_feasible_design_gets_no_banner(self):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        node = TemplateGeneratorNode()
+        state = {
+            "power_analysis": {"required_sample_size": 1930},
+            "duration_estimate_days": 70,
+            "feasibility_warnings": [],
+            "treatments": [{"name": "detailing"}],
+            "outcomes": [{"name": "conversion", "is_primary": True}],
+        }
+        code = node._generate_analysis_code(state, node._build_dowhy_spec(state))
+        assert "NOT EXECUTABLE" not in code.upper()

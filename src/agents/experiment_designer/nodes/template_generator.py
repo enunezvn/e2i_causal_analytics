@@ -205,6 +205,17 @@ class TemplateGeneratorNode:
         else:
             estimator = "backdoor.linear_regression"
 
+        # #1639: this header prints the sample size, so the script is an
+        # execution artifact in its own right. Someone who opens only this file
+        # must not see 672,206 presented as a plan.
+        feasibility = state.get("feasibility_warnings") or []
+        feasibility_banner = ""
+        if feasibility:
+            reasons = "\n".join(f"  - {w}" for w in feasibility)
+            feasibility_banner = (
+                "\n!! THIS DESIGN IS NOT EXECUTABLE AS SPECIFIED !!\n" + reasons + "\n"
+            )
+
         return f'''"""
 E2I Experiment Analysis Template
 ================================
@@ -213,7 +224,7 @@ Treatment: {dag_spec["treatment_variable"]} - {treatment_desc}
 Outcome: {dag_spec["outcome_variable"]}
 Sample Size: {power_analysis.get("required_sample_size", "Not calculated")}
 Generated: {datetime.now().isoformat()}
-
+{feasibility_banner}
 This template provides a starting point for causal analysis.
 Modify as needed for your specific experiment.
 """
