@@ -2,7 +2,7 @@
  * Agent Orchestration Page
  * ========================
  *
- * Comprehensive dashboard for the 21-agent tiered orchestration system.
+ * Comprehensive dashboard for the 22-agent tiered orchestration system.
  * Displays agent status, activity feeds, tier overview, and recent insights.
  *
  * @module pages/AgentOrchestration
@@ -397,7 +397,7 @@ export default function AgentOrchestration() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Agent Orchestration</h1>
           <p className="text-muted-foreground">
-            Monitor and manage the 21-agent tiered orchestration system
+            Monitor and manage the 22-agent tiered orchestration system
           </p>
         </div>
         <div className="flex items-center gap-2">

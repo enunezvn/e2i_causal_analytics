@@ -7,7 +7,7 @@ Provides LangGraph-compatible tools for the E2I chatbot agent:
 - agent_routing_tool: Route to specific tier agents (keyword-based)
 - conversation_memory_tool: Retrieve chat history
 - document_retrieval_tool: Hybrid RAG search
-- orchestrator_tool: Execute queries through the full 21-agent orchestrator system
+- orchestrator_tool: Execute queries through the full 22-agent orchestrator system
 - tool_composer_tool: Process multi-faceted queries via Tool Composer pipeline
 
 Adapted from Pydantic AI patterns to LangGraph @tool decorators.
@@ -271,7 +271,7 @@ class OrchestratorToolInput(BaseModel):
     """Input schema for orchestrator_tool."""
 
     query: str = Field(
-        description="The query to process through the E2I orchestrator and 21-agent system"
+        description="The query to process through the E2I orchestrator and 22-agent system"
     )
     target_agent: Optional[str] = Field(
         default=None,
@@ -870,7 +870,7 @@ async def e2i_data_query_tool(
       from the real substrate, whereas this returns the raw stored rows (and 0 for
       a derived KPI like NBRx that is not materialized here).
     - Causal chains: Discovered cause-effect relationships
-    - Agent analyses: Outputs from the 21-agent system
+    - Agent analyses: Outputs from the 22-agent system
     - Triggers: Alerts and explanations for metric changes
     - Experiments: A/B test designs and results
     - Predictions: ML model predictions
@@ -1378,7 +1378,7 @@ async def orchestrator_tool(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Execute a query through the E2I orchestrator and 21-agent system.
+    Execute a query through the E2I orchestrator and 22-agent system.
 
     This tool provides access to the full E2I multi-agent architecture:
     - Tier 0: ML Foundation (data prep, feature analysis, model training)

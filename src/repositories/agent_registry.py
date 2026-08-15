@@ -1,7 +1,7 @@
 """
 Agent Registry Repository.
 
-Handles the agent_registry table (21-agent roster; source of truth = src/agents/factory.py AGENT_REGISTRY_CONFIG).
+Handles the agent_registry table (22-agent roster; source of truth = src/agents/factory.py AGENT_REGISTRY_CONFIG).
 """
 
 from typing import Any, Dict, List, Optional, cast

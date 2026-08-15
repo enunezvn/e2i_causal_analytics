@@ -308,6 +308,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
+from src.agents.factory import build_agent_roster_block
 from src.agents.multi_faceted import is_multi_faceted_topic_count
 from src.api.dependencies.auth import (
     TEST_USER,
@@ -2867,7 +2868,7 @@ E2I_COPILOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intellige
 You help users with:
 1. **KPI Analysis** - TRx, NRx, market share, conversion rates, patient starts
 2. **Causal Analysis** - Understanding WHY metrics change and what drives performance
-3. **Agent System** - Information about the 21-agent tiered architecture
+3. **Agent System** - Information about the tiered agent architecture (roster below)
 4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
 5. **Insights Search** - Finding trends, causal paths, and historical patterns
 6. **Cohort Profiles** - Aggregate HCP/patient cohort profiles (counts and breakdowns by specialty, tier, severity) served through the orchestrator's cohort_profiler agent
@@ -2927,7 +2928,29 @@ When the user asks to chart / plot / graph / visualize a KPI's trend over time A
 - Highlight key metrics with **bold**
 - Include actual data values from tool results
 - Offer at most one genuinely useful follow-up, only when it adds value.
+
+## Agent Roster
+
+{agent_roster}
+
+When asked which agents exist, answer from THIS roster. These are agents, not
+tools — do not substitute tool names (`kpi_calculate_tool`, `causal_analysis_tool`,
+…) for agent names, and do not call `agent_routing_tool` to find out: that routes
+a single query to an agent, it is not a directory.
 """
+
+
+# #1638: the roster is INTERPOLATED from src.agents.factory, never transcribed.
+# Turn 5.2 ("what agents are available") answered with tool names because this
+# prompt carried no roster at all — only a hardcoded architecture phrase whose
+# count had gone stale against the registry. A
+# hand-written list would have fixed that turn and rotted at the next agent.
+#
+# factory imports only logging/os/typing at module scope (agents are loaded lazily
+# by module/class name), so this costs nothing at import time.
+E2I_COPILOT_SYSTEM_PROMPT = E2I_COPILOT_SYSTEM_PROMPT.replace(
+    "{agent_roster}", build_agent_roster_block()
+)
 
 
 class E2IAgentState(TypedDict, total=False):

@@ -130,7 +130,7 @@ class E2IRegion(str, Enum):
 
 
 class E2IAgentName(str, Enum):
-    """E2I 21-agent architecture names (6 tiers)."""
+    """E2I 22-agent architecture names (6 tiers)."""
 
     # Tier 0: ML Foundation (8 agents)
     SCOPE_DEFINER = "scope_definer"

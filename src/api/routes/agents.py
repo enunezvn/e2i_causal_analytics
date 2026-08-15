@@ -134,7 +134,7 @@ class AgentActivityResponse(BaseModel):
 # SAMPLE DATA
 # =============================================================================
 
-# Default agent configuration matching the 21-agent tier hierarchy
+# Default agent configuration matching the 22-agent tier hierarchy
 AGENT_REGISTRY = [
     # Tier 0 - ML Foundation (9 agents)
     AgentInfo(

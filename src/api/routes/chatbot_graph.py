@@ -13,7 +13,7 @@ Workflow (with orchestrator integration):
     init → load_context → classify_intent → retrieve_rag → orchestrator → generate → [tools] → finalize
 
 The orchestrator node routes complex queries (causal_analysis, kpi_query,
-recommendation, search, multi_faceted) through the 21-agent orchestrator
+recommendation, search, multi_faceted) through the 22-agent orchestrator
 for specialized processing. Simple queries (greeting, help, agent_status,
 general) skip orchestrator and generate responses directly.
 """
@@ -432,7 +432,7 @@ E2I_CHATBOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intellige
 You help users with:
 1. **KPI Analysis** - TRx, NRx, market share, conversion rates, patient starts
 2. **Causal Analysis** - Understanding WHY metrics change and what drives performance
-3. **Agent System** - Information about the 21-agent tiered architecture
+3. **Agent System** - Information about the 22-agent tiered architecture
 4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
 5. **Insights Search** - Finding trends, causal paths, and historical patterns
 
@@ -2037,10 +2037,10 @@ def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
 
     responses = {
         IntentType.GREETING: "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?",
-        IntentType.HELP: "I can help you with:\n\n1. **KPI Analysis** - Get metrics like TRx, NRx, market share\n2. **Causal Analysis** - Understand why metrics change\n3. **Agent Status** - Check the 21-agent system\n4. **Recommendations** - Get AI-powered suggestions\n5. **Search** - Find trends and insights\n\nTry asking about a specific brand (Kisqali, Fabhalta, Remibrutinib) or metric!",
+        IntentType.HELP: "I can help you with:\n\n1. **KPI Analysis** - Get metrics like TRx, NRx, market share\n2. **Causal Analysis** - Understand why metrics change\n3. **Agent Status** - Check the 22-agent system\n4. **Recommendations** - Get AI-powered suggestions\n5. **Search** - Find trends and insights\n\nTry asking about a specific brand (Kisqali, Fabhalta, Remibrutinib) or metric!",
         IntentType.KPI_QUERY: "I can help with KPI analysis! I track metrics like TRx volume, NRx volume, market share, conversion rates, HCP reach, and patient starts. Which brand and metric would you like to explore?",
         IntentType.CAUSAL_ANALYSIS: "For causal analysis, I use DoWhy/EconML to identify factors driving your metrics. Tell me which KPI you'd like to analyze and I'll find the key drivers.",
-        IntentType.AGENT_STATUS: "The E2I platform uses a 21-agent tiered architecture across 6 tiers. I can show you agent status and recent analyses. Which agent or tier interests you?",
+        IntentType.AGENT_STATUS: "The E2I platform uses a 22-agent tiered architecture across 6 tiers. I can show you agent status and recent analyses. Which agent or tier interests you?",
         IntentType.RECOMMENDATION: "I can provide AI-powered recommendations for HCP targeting, patient journey optimization, and market access strategies. Which brand would you like recommendations for?",
         IntentType.SEARCH: "I can search the E2I knowledge base for insights, causal paths, and trends. What would you like me to find?",
     }
@@ -2727,7 +2727,7 @@ def create_e2i_chatbot_graph() -> Any:
             └───────────────────────────────────────────────────────→ finalize → END
 
     The orchestrator node routes complex queries (causal_analysis, kpi_query,
-    recommendation, search, multi_faceted) through the 21-agent orchestrator.
+    recommendation, search, multi_faceted) through the 22-agent orchestrator.
     Simple queries (greeting, help, agent_status, general) skip orchestrator
     and generate responses directly.
 

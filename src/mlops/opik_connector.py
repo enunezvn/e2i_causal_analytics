@@ -2,7 +2,7 @@
 Opik Connector for E2I Causal Analytics.
 
 This module provides a centralized wrapper for the Opik SDK, enabling
-LLM and agent observability across all 21 agents in the E2I platform.
+LLM and agent observability across all 22 agents in the E2I platform.
 
 Features:
 - Singleton pattern for consistent configuration

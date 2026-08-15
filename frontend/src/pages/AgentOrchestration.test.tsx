@@ -128,7 +128,7 @@ describe('AgentOrchestration', () => {
     render(<AgentOrchestration />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Agent Orchestration')).toBeInTheDocument();
-    expect(screen.getByText(/Monitor and manage the 21-agent tiered orchestration system/)).toBeInTheDocument();
+    expect(screen.getByText(/Monitor and manage the 22-agent tiered orchestration system/)).toBeInTheDocument();
   });
 
   it('displays stat cards with correct data', () => {

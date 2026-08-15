@@ -93,9 +93,11 @@ interface AgentRegistryEntry {
   icon?: string;
 }
 
-/** Registry of available agents - all 21 agents in 6 tiers */
+/** Registry of available agents — mirrors src/agents/factory.py
+ * AGENT_REGISTRY_CONFIG (22 agents in 6 tiers). Pinned against it by
+ * tests/unit/test_agents/test_agent_roster_ssot_1638.py. */
 const AGENT_REGISTRY: Record<string, AgentRegistryEntry> = {
-  // Tier 0: ML Foundation (8 agents)
+  // Tier 0: ML Foundation (9 agents)
   'scope-definer': {
     id: 'scope-definer',
     name: 'Scope Definer',
@@ -111,6 +113,19 @@ const AGENT_REGISTRY: Record<string, AgentRegistryEntry> = {
     type: 'foundation',
     actions: ['construct_cohort', 'filter_patients', 'audit_trail'],
     icon: '👥',
+  },
+  // #1638: was absent while this registry claimed to hold "all" the agents, so
+  // the provider under-reported the system. Capabilities mirror the backend
+  // agent's documented behaviour (factory.AGENT_REGISTRY_CONFIG): profiles the
+  // eligible population by severity tier and line of therapy with real KPI
+  // counts, plus HCP-entity cohorts with KPI thresholds.
+  'cohort-profiler': {
+    id: 'cohort-profiler',
+    name: 'Cohort Profiler',
+    tier: 0,
+    type: 'foundation',
+    actions: ['profile_cohort', 'segment_breakdown', 'hcp_cohort_thresholds'],
+    icon: '🔎',
   },
   'data-preparer': {
     id: 'data-preparer',
@@ -722,7 +737,7 @@ const CopilotHooksInner: React.FC = () => {
 
   // 3. Agent tier hierarchy
   useCopilotReadable({
-    description: 'E2I agent tier hierarchy with 21 agents across 6 tiers',
+    description: 'E2I agent tier hierarchy with 22 agents across 6 tiers',
     value: context?.agents || [],
   });
 

@@ -255,7 +255,7 @@ describe('E2ICopilotProvider', () => {
       expect(screen.getByTestId('detail-level')).toHaveTextContent('detailed');
     });
 
-    it('provides sample agents (21 agents)', () => {
+    it('provides sample agents (22 agents)', () => {
       render(
         <CopilotKitWrapper enabled={false}>
           <E2ICopilotProvider>
@@ -264,7 +264,7 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('agent-count')).toHaveTextContent('21');
+      expect(screen.getByTestId('agent-count')).toHaveTextContent('22');
     });
 
     it('provides default chat state (closed)', () => {
@@ -1085,7 +1085,7 @@ describe('Type Exports', () => {
 // =============================================================================
 
 describe('Agent Data', () => {
-  it('provides all 21 agents across 6 tiers', () => {
+  it('provides all 22 agents across 6 tiers', () => {
     render(
       <CopilotKitWrapper enabled={false}>
         <E2ICopilotProvider>
@@ -1094,7 +1094,7 @@ describe('Agent Data', () => {
       </CopilotKitWrapper>
     );
 
-    expect(screen.getByTestId('agent-count')).toHaveTextContent('21');
+    expect(screen.getByTestId('agent-count')).toHaveTextContent('22');
   });
 
   it('agents have correct tier distribution', () => {
@@ -1114,8 +1114,8 @@ describe('Agent Data', () => {
       {} as Record<number, number>
     );
 
-    // Tier 0: 8 agents (ML Foundation)
-    expect(tierCounts[0]).toBe(8);
+    // Tier 0: 9 agents (ML Foundation) — cohort-profiler added in #1638
+    expect(tierCounts[0]).toBe(9);
     // Tier 1: 2 agents (Orchestration)
     expect(tierCounts[1]).toBe(2);
     // Tier 2: 3 agents (Causal Analytics)
@@ -1124,8 +1124,10 @@ describe('Agent Data', () => {
     expect(tierCounts[3]).toBe(4);
     // Tier 4: 2 agents (ML Predictions)
     expect(tierCounts[4]).toBe(2);
-    // Tier 5: 1 agent (Self-Improvement) - explainer only, feedback-learner may be elsewhere
-    expect(tierCounts[5]).toBeGreaterThanOrEqual(1);
+    // Tier 5: 2 agents (Self-Improvement) - explainer, feedback-learner. Was a
+    // >= 1 assertion hedged on "feedback-learner may be elsewhere"; it is right
+    // here, and the registry pin (#1638) makes the exact number checkable.
+    expect(tierCounts[5]).toBe(2);
   });
 
   it('includes expected agent IDs', () => {

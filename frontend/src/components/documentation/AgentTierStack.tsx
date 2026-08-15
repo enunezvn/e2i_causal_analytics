@@ -1,7 +1,12 @@
 /**
- * AgentTierStack — the 6-tier / 21-agent architecture. The corrected
- * successor to the deleted kpi/AgenticMethodology.tsx; roster source:
- * src/agents/factory.py AGENT_REGISTRY_CONFIG (content.test.ts enforces 21/6).
+ * AgentTierStack — the tiered agent architecture. The corrected successor to
+ * the deleted kpi/AgenticMethodology.tsx; roster source:
+ * src/agents/factory.py AGENT_REGISTRY_CONFIG.
+ *
+ * The heading COUNTS the roster rather than restating it (#1638): it used to
+ * read "21 agents in 6 tiers" while AGENT_TIERS held a different number, so the
+ * page contradicted its own list. Python-side, the registry is pinned against
+ * this file by tests/unit/test_agents/test_agent_roster_ssot_1638.py.
  */
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
@@ -13,7 +18,8 @@ export function AgentTierStack() {
   return (
     <div>
       <h3 className="mb-2 text-sm font-semibold text-[var(--color-foreground)]">
-        The agent system: 21 agents in 6 tiers
+        The agent system: {AGENT_TIERS.reduce((n, t) => n + t.agents.length, 0)} agents in{' '}
+        {AGENT_TIERS.length} tiers
       </h3>
       <div className="space-y-2">
         {AGENT_TIERS.map((tier) => {

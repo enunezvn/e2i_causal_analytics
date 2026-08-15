@@ -14,7 +14,7 @@ Core Repositories:
 
 V3 Repositories:
 - UserSessionRepository: MAU/WAU/DAU tracking
-- AgentRegistryRepository: 11 agents with tier assignments
+- AgentRegistryRepository: 22 agents with tier assignments
 - DataSourceTrackingRepository: Cross-source match rates
 
 V4.3 Repositories:
