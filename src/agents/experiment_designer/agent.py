@@ -163,6 +163,13 @@ class PowerAnalysisOutput(BaseModel):
     required_sample_size_per_arm: int
     achieved_power: float
     minimum_detectable_effect: float
+    #: #1639. What ``minimum_detectable_effect`` is measured in. This model is an
+    #: explicit field list, so a key added to the node's state dict is DROPPED
+    #: here unless the model is widened too -- and this is the surface the
+    #: synthesizer stringifies, i.e. exactly where the ambiguity was read.
+    minimum_detectable_effect_scale: str = Field(
+        "unknown", description="Scale of the MDE (absolute_risk_difference, cohens_d, ...)"
+    )
     alpha: float
     effect_size_type: str
     assumptions: list[str] = Field(default_factory=list)
@@ -628,6 +635,9 @@ class ExperimentDesignerAgent(SkillsMixin):
                 required_sample_size_per_arm=pa.get("required_sample_size_per_arm", 0),
                 achieved_power=pa.get("achieved_power", 0.0),
                 minimum_detectable_effect=pa.get("minimum_detectable_effect", 0.0),
+                minimum_detectable_effect_scale=pa.get(
+                    "minimum_detectable_effect_scale", "unknown"
+                ),
                 alpha=pa.get("alpha", 0.05),
                 effect_size_type=pa.get("effect_size_type", "cohens_d"),
                 assumptions=pa.get("assumptions", []),

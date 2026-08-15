@@ -100,7 +100,11 @@ class TestFeasibilityIsFlaggedOnTheOutputPath:
             constraints={"weekly_accrual": 200},
         )
         assert out["duration_estimate_days"] <= 365
-        assert not out.get("feasibility_warnings"), out.get("feasibility_warnings")
+        # Presence AND emptiness. `assert not out.get(...)` would pass just as
+        # happily if a future change stopped setting the key at all, which is the
+        # "checked, feasible" vs "never checked" distinction this field exists for.
+        assert "feasibility_warnings" in out, sorted(out)
+        assert out["feasibility_warnings"] == [], out["feasibility_warnings"]
 
     def test_mde_carries_its_scale(self):
         """0.0015 beside a relative 0.030 reads as a contradiction unless the
@@ -311,3 +315,91 @@ class TestReadablePrecision:
             {"preregistration_formality": "heavy", "validity_audit_status": "completed"}
         )
         assert "**Minimum Detectable Effect:** TBD" in doc
+
+
+class TestTheLightPreRegistrationIsNotAnEscapeHatch:
+    """Feasibility is not a formality-level concern.
+
+    ``light`` is a separate template, not a truncation of ``medium`` -- so
+    patching medium (which heavy inherits) left the shortest, most quotable
+    artifact silently reporting an unrunnable design.
+    """
+
+    def _doc(self, formality):
+        from src.agents.experiment_designer.nodes.template_generator import (
+            TemplateGeneratorNode,
+        )
+
+        return TemplateGeneratorNode()._generate_preregistration(
+            {
+                "preregistration_formality": formality,
+                "treatments": [{"name": "detailing"}],
+                "outcomes": [{"name": "conversion", "is_primary": True}],
+                "power_analysis": {"required_sample_size": 672206},
+                "duration_estimate_days": 94115,
+                "feasibility_warnings": [
+                    "Estimated duration 94,115 days (257.7 years) exceeds ..."
+                ],
+                "validity_audit_status": "completed",
+            }
+        )
+
+    def test_every_formality_carries_the_feasibility_warning(self):
+        missing = [f for f in ("light", "medium", "heavy") if "Feasibility" not in self._doc(f)]
+        assert not missing, f"formalities that hid an unrunnable design: {missing}"
+
+
+class TestTheScaleReachesThePublicOutputModel:
+    """The state dict is not the public surface.
+
+    ``PowerAnalysisOutput`` is an explicit field list, so a key added to the
+    node's dict is DROPPED unless the model is widened too -- which recreates
+    the labelling ambiguity on exactly the path this fix argued was the one
+    that mattered.
+    """
+
+    def test_power_analysis_output_carries_the_mde_scale(self):
+        from src.agents.experiment_designer.agent import PowerAnalysisOutput
+
+        assert "minimum_detectable_effect_scale" in PowerAnalysisOutput.model_fields, sorted(
+            PowerAnalysisOutput.model_fields
+        )
+
+    def test_create_output_propagates_the_scale(self):
+        from src.agents.experiment_designer.agent import ExperimentDesignerAgent
+
+        out = ExperimentDesignerAgent._create_output(
+            ExperimentDesignerAgent.__new__(ExperimentDesignerAgent),
+            {
+                "power_analysis": {
+                    "required_sample_size": 672206,
+                    "required_sample_size_per_arm": 336103,
+                    "achieved_power": 0.8,
+                    "minimum_detectable_effect": 0.0015,
+                    "minimum_detectable_effect_scale": "absolute_risk_difference",
+                    "alpha": 0.05,
+                    "effect_size_type": "rate_ratio",
+                    "assumptions": [],
+                }
+            },
+        )
+        assert out.power_analysis is not None
+        assert out.power_analysis.minimum_detectable_effect_scale == "absolute_risk_difference"
+
+    def test_the_serialized_output_is_not_ambiguous(self):
+        """The synthesizer stringifies the whole dump -- 0.0015 must not appear
+        there beside 'rate_ratio' with nothing to separate them."""
+        from src.agents.experiment_designer.agent import ExperimentDesignerAgent
+
+        out = ExperimentDesignerAgent._create_output(
+            ExperimentDesignerAgent.__new__(ExperimentDesignerAgent),
+            {
+                "power_analysis": {
+                    "minimum_detectable_effect": 0.0015,
+                    "minimum_detectable_effect_scale": "absolute_risk_difference",
+                    "effect_size_type": "rate_ratio",
+                }
+            },
+        )
+        blob = str(out.model_dump())
+        assert "absolute_risk_difference" in blob
