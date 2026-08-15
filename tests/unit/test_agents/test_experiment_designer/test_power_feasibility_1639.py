@@ -1067,3 +1067,77 @@ class TestOnlyDeclaredConstraintShapesAreRead:
         src = inspect.getsource(PowerAnalysisNode._stated_max_duration_days)
         assert 'timeline.get("weeks")' not in src, "a shape nobody writes is still read"
         assert 'constraints.get("timeline_weeks")' in src, "a real shape was dropped"
+
+
+class TestAllStatedCapsMustBeSatisfied:
+    """codex iter-9 HIGH: precedence silently ignored the stricter limit.
+
+    A caller supplying BOTH ``timeline_weeks: 8`` (56 days) and
+    ``timeline: {"max_duration_days": 90}`` had the 90 returned, so a 70-day
+    design passed clean while violating the explicitly stated 8-week limit.
+
+    These are MAXIMA. Satisfying all of them means the binding one is the
+    smallest, not the first in some arbitrary lookup order.
+    """
+
+    def _out(self, constraints, effect=0.15, baseline=0.30, accrual=50):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
+        c = {"weekly_accrual": accrual}
+        c.update(constraints)
+        return asyncio.run(
+            PowerAnalysisNode().execute(
+                {
+                    "design_type": "RCT",
+                    "constraints": c,
+                    "outcomes": [
+                        {
+                            "is_primary": True,
+                            "metric_type": "binary",
+                            "expected_effect_size": effect,
+                            "baseline_value": baseline,
+                        }
+                    ],
+                }
+            )
+        )
+
+    def test_the_strictest_cap_binds(self):
+        """Measured: effect 0.20 on a 0.30 baseline at 200/week is n=1,930 over
+        70 days — inside the 90-day cap, outside the 8-week (56-day) one."""
+        out = self._out(
+            {"timeline_weeks": 8, "timeline": {"max_duration_days": 90}},
+            effect=0.20,
+            accrual=200,
+        )
+        assert out["duration_estimate_days"] == 70
+        assert out["feasibility_warnings"], "the 8-week cap was ignored"
+        assert "56" in " ".join(out["feasibility_warnings"])
+
+    def test_a_design_inside_every_cap_stays_quiet(self):
+        out = self._out(
+            {"timeline_weeks": 8, "timeline": {"max_duration_days": 90}},
+            effect=0.20,
+            accrual=300,
+        )
+        assert out["duration_estimate_days"] <= 56, out["duration_estimate_days"]
+        assert out["feasibility_warnings"] == []
+
+    def test_a_single_cap_is_unchanged(self):
+        assert self._out({"max_duration_days": 90})["feasibility_warnings"]
+        assert self._out({"max_duration_days": 720})["feasibility_warnings"] == []
+
+    def test_all_three_shapes_together_take_the_minimum(self):
+        out = self._out(
+            {
+                "max_duration_days": 300,
+                "timeline_weeks": 8,
+                "timeline": {"max_duration_days": 120},
+            },
+            effect=0.20,
+            accrual=200,
+        )
+        assert out["feasibility_warnings"]
+        assert "56" in " ".join(out["feasibility_warnings"])

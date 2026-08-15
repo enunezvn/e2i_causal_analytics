@@ -157,17 +157,18 @@ class PowerAnalysisNode:
                 return None
             return float(value)
 
-        direct = _num(constraints.get("max_duration_days"))
-        if direct is not None:
-            return direct
-        if isinstance(timeline, dict):
-            nested = _num(timeline.get("max_duration_days"))
-            if nested is not None:
-                return nested
-        weeks_key = _num(constraints.get("timeline_weeks"))
-        if weeks_key is not None:
-            return weeks_key * 7
-        return None
+        stated = [
+            _num(constraints.get("max_duration_days")),
+            _num(timeline.get("max_duration_days")) if isinstance(timeline, dict) else None,
+            (lambda w: w * 7 if w is not None else None)(_num(constraints.get("timeline_weeks"))),
+        ]
+        caps = [c for c in stated if c is not None]
+        # MIN, not precedence. These are MAXIMA, so satisfying all of them means
+        # the binding one is the smallest. Returning the first found let a
+        # caller who stated both `timeline_weeks: 8` and
+        # `timeline: {max_duration_days: 90}` have a 70-day design pass clean
+        # while violating their own 8-week limit.
+        return min(caps) if caps else None
 
     def _assess_feasibility(
         self,
