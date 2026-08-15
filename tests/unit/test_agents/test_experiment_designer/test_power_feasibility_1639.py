@@ -1284,3 +1284,129 @@ class TestTheStatusFieldRejectsValuesOutsideItsEnum:
         # passed both ways and proved nothing.
         assert completed is False
         assert phrasing == "reported status 'unknown'", phrasing
+
+
+class TestTheAuditStatusIsNormalizedWhereItLeaves:
+    """codex iter-12 HIGH: I validated the leaf, not the source.
+
+    `_audit_status` guards the monitoring spec, but `_create_output` passed
+    `state["validity_audit_status"]` through raw — so the PRIMARY output, the
+    one every consumer reads, still published `"was skipped"` or `"timeout"`.
+    """
+
+    @pytest.mark.parametrize(
+        "bogus, expected", [("was skipped", "unknown"), ("timeout", "unknown")]
+    )
+    def test_the_public_output_cannot_carry_an_out_of_band_status(self, bogus, expected):
+        from src.agents.experiment_designer.state import normalize_audit_status
+
+        assert normalize_audit_status(bogus) == expected
+
+    def test_the_output_boundary_uses_the_normalizer(self):
+        import ast
+        import inspect
+
+        from src.agents.experiment_designer.agent import ExperimentDesignerAgent
+
+        src = inspect.getsource(ExperimentDesignerAgent._create_output)
+        tree = ast.parse(src.lstrip())
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "normalize_audit_status" in called, (
+            "_create_output publishes validity_audit_status without normalizing it"
+        )
+
+    def test_one_definition_of_the_enum(self):
+        """Two copies drift; the leaf guard and the output guard must agree."""
+        from src.agents.experiment_designer.nodes.template_generator import AUDIT_STATUSES
+        from src.agents.experiment_designer.state import AUDIT_STATUSES as CANONICAL
+
+        assert AUDIT_STATUSES is CANONICAL
+
+
+class TestRetractionAlsoDropsTheAuditsProse:
+    """codex iter-12 HIGH: the structured verdict was retracted, the words were not.
+
+    A completed iteration-0 audit appends DAG findings to `state["warnings"]`
+    ("Assumed confounder X was NOT discovered in causal DAG"). After a
+    redesign whose audit does not complete, clearing only the structured
+    fields left those sentences attached — so the user reads a DAG verdict
+    about a design that no longer exists, beside status "timed_out".
+    """
+
+    def _run_skipped_after_a_completed_audit(self):
+        import asyncio
+
+        from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
+
+        dag_warning = "Assumed confounder region was NOT discovered in causal DAG"
+        state = {
+            "status": "auditing",
+            "enable_validity_audit": False,
+            "validity_threats": [{"threat_name": "selection bias", "severity": "high"}],
+            "overall_validity_score": 0.62,
+            "dag_validation_warnings": [dag_warning],
+            "dag_missing_confounders": ["region"],
+            "warnings": ["An unrelated upstream warning", dag_warning],
+        }
+        return dag_warning, asyncio.run(ValidityAuditNode().execute(state))
+
+    def test_the_previous_audits_warnings_are_withdrawn(self):
+        dag_warning, out = self._run_skipped_after_a_completed_audit()
+        assert dag_warning not in out.get("warnings", []), out.get("warnings")
+
+    def test_warnings_from_other_sources_survive(self):
+        """Retraction, not a blanket wipe — the audit only withdraws its own."""
+        _, out = self._run_skipped_after_a_completed_audit()
+        assert "An unrelated upstream warning" in out.get("warnings", [])
+
+    def test_the_dag_findings_are_cleared_too(self):
+        _, out = self._run_skipped_after_a_completed_audit()
+        assert out.get("dag_validation_warnings") == []
+        assert out.get("dag_missing_confounders") == []
+
+
+class TestANonCompletedAuditEarnsNoValidityCredit:
+    """codex iter-12 MED: the training signal could not tell silence apart.
+
+    `compute_reward` gave the same partial validity credit for "the audit
+    found no threats" and "the audit never ran", so selection could learn to
+    prefer a design whose audit timed out.
+    """
+
+    def _reward(self, status):
+        from src.agents.experiment_designer.dspy_integration import (
+            ExperimentDesignTrainingSignal,
+        )
+
+        signal = ExperimentDesignTrainingSignal()
+        signal.validity_threats_identified = 0
+        signal.overall_validity_score = 0.0
+        signal.validity_audit_status = status
+        return signal.compute_reward()
+
+    def test_a_completed_audit_with_no_threats_scores_higher_than_one_that_never_ran(self):
+        assert self._reward("completed") > self._reward("timed_out")
+        assert self._reward("completed") > self._reward("skipped")
+        assert self._reward("completed") > self._reward("failed")
+
+
+class TestMlflowCanTellARetractedZeroFromARealOne:
+    """codex iter-12 MED: 0.0 means two different things without the status.
+
+    A dashboard averaging `overall_validity_score` counts a retracted
+    non-completing audit as a genuine zero-score verdict.
+    """
+
+    def test_the_status_is_logged_beside_the_score(self):
+        import inspect
+
+        from src.agents.experiment_designer import mlflow_tracker
+
+        src = inspect.getsource(mlflow_tracker)
+        assert "validity_audit_status" in src, (
+            "mlflow logs overall_validity_score with no way to tell a retracted 0.0 apart"
+        )

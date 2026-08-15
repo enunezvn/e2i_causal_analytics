@@ -282,6 +282,28 @@ def _retract_stale_verdict(state: ExperimentDesignState) -> None:
     state["overall_validity_score"] = 0.0
     state["redesign_recommendations"] = []
 
+    # The structured verdict is not all the audit wrote. A completed pass also
+    # appends its DAG findings to the shared `warnings` list ("Assumed
+    # confounder X was NOT discovered in causal DAG"), and those sentences are
+    # what the USER reads. Retracting the numbers while leaving the prose is
+    # the same half-retraction this function exists to prevent.
+    #
+    # `dag_validation_warnings` is the exact record of what this node
+    # contributed, so the withdrawal is precise -- warnings from other nodes
+    # are none of its business and stay.
+    withdrawn = list(state.get("dag_validation_warnings") or [])
+    if withdrawn:
+        remaining = list(state.get("warnings") or [])
+        for message in withdrawn:
+            if message in remaining:
+                remaining.remove(message)
+        state["warnings"] = remaining
+    state["dag_validation_warnings"] = []
+    state["dag_missing_confounders"] = []
+    state["dag_latent_confounders"] = []
+    state["dag_instrument_candidates"] = []
+    state["dag_effect_modifiers"] = []
+
 
 class ValidityAuditNode:
     """Adversarial validity assessment for experiment design.

@@ -45,6 +45,32 @@ ConfidenceLevel = Literal["low", "medium", "high"]
 # ===== NESTED TYPED DICTS =====
 
 
+#: The documented values of ``validity_audit_status`` (#1639). ``unknown`` is
+#: the explicit out-of-band member: a status we did not write and cannot map.
+#:
+#: Defined here rather than beside either consumer because BOTH the template
+#: generator and the agent's public output publish this field, and a second
+#: copy is a second thing to forget -- which is exactly how the raw
+#: passthrough at the output boundary survived the guard added one round
+#: earlier.
+AUDIT_STATUSES = frozenset({"completed", "skipped", "timed_out", "failed", "not_run", "unknown"})
+
+
+def normalize_audit_status(value: object) -> str:
+    """Coerce a recorded audit status onto :data:`AUDIT_STATUSES`.
+
+    A hydrated checkpoint can carry the previous BAD value ``"was skipped"``
+    (human prose in a machine field, fixed in this branch) or a typo like
+    ``"timeout"``. Either would land in the documented enum and match nothing
+    for a consumer filtering on it.
+
+    Out-of-band values become ``"unknown"`` -- never ``"not_run"``, which would
+    ASSERT that the audit did not run when all we know is that we cannot read
+    what it said.
+    """
+    return value if value in AUDIT_STATUSES else "unknown"
+
+
 class TreatmentDefinition(TypedDict):
     """Definition of a treatment arm in the experiment.
 

@@ -13,15 +13,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from src.agents.experiment_designer.state import (
+    AUDIT_STATUSES,
     DoWhySpec,
     ErrorDetails,
     ExperimentDesignState,
     ExperimentTemplate,
+    normalize_audit_status,
 )
 
-#: The documented values of ``validity_audit_status`` (#1639). ``unknown`` is
-#: the explicit out-of-band member: a status we did not write and cannot map.
-AUDIT_STATUSES = frozenset({"completed", "skipped", "timed_out", "failed", "not_run", "unknown"})
+__all__ = ["AUDIT_STATUSES", "TemplateGeneratorNode"]
 
 
 class TemplateGeneratorNode:
@@ -466,7 +466,7 @@ print("Results saved to analysis_results.json")
             # honest: we know the audit's state was recorded, just not as
             # something we recognise. Never silently coerced to "not_run" —
             # that would ASSERT it never ran.
-            return status if status in AUDIT_STATUSES else "unknown"
+            return normalize_audit_status(status)
         has_verdict = bool(state.get("validity_threats")) or bool(
             state.get("overall_validity_score")
         )

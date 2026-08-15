@@ -139,7 +139,16 @@ class ExperimentDesignTrainingSignal:
             if self.overall_validity_score >= 0.7:
                 validity_score += 0.3
         else:
-            validity_score = 0.5  # May have missed threats
+            # Zero threats is ambiguous: the audit looked and found nothing, or
+            # it never finished. Paying both the same taught selection that a
+            # timed-out audit is as good as a clean bill of health (#1639).
+            # Only the completed case earns the "may have missed threats"
+            # credit; silence earns nothing.
+            #
+            # Narrow deliberately: a signal reporting threats demonstrably HAS
+            # a verdict, whatever the status field says, so the gate applies
+            # only to the ambiguous branch.
+            validity_score = 0.5 if self.validity_audit_status == "completed" else 0.0
         reward += 0.20 * validity_score
 
         # Completeness

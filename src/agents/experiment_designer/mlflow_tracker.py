@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 
+from src.agents.experiment_designer.state import normalize_audit_status
+
 logger = logging.getLogger(__name__)
 
 # MLflow experiment prefix for this agent
@@ -316,6 +318,20 @@ class ExperimentDesignerMLflowTracker:
             mlflow.set_tag("validity_confidence", output.validity_confidence)
         elif isinstance(output, dict) and "validity_confidence" in output:
             mlflow.set_tag("validity_confidence", output["validity_confidence"])
+
+        # Without this, a retracted `overall_validity_score=0.0` (an audit that
+        # was skipped, timed out or failed) is indistinguishable in MLflow from
+        # a completed audit that genuinely scored 0.0 -- so a dashboard
+        # averaging the metric counts non-verdicts as real zero-score verdicts
+        # (#1639). Tagged, not logged as a metric: it is a category, and it is
+        # what you filter a run set by.
+        audit_status = (
+            getattr(output, "validity_audit_status", None)
+            if not isinstance(output, dict)
+            else output.get("validity_audit_status")
+        )
+        if audit_status:
+            mlflow.set_tag("validity_audit_status", normalize_audit_status(audit_status))
 
         # Log warnings count
         if metrics.warnings:
