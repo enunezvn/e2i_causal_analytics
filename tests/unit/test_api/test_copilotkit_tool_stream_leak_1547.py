@@ -13,8 +13,20 @@ TEXT_MESSAGE lifecycles carry ``rawEvent.metadata.langgraph_node == "tools"``,
 while the legitimate answer streams carry ``"chat"`` / ``"synthesize"``.
 
 Contract under test: ``LangGraphAgent._handle_single_event`` drops
-``on_chat_model_*`` events whose ``metadata.langgraph_node`` is the tools node
-BEFORE translation, and passes every other node's stream through unchanged.
+``on_chat_model_*`` events raised inside the tools node BEFORE translation, and
+passes the answer nodes' streams through unchanged.
+
+WIDENED BY #1636 — read this before trusting the paragraph above. The filter no
+longer matches the literal ``"tools"`` name; it allow-lists the answer nodes
+(``_ANSWER_NODE_NAMES``) and suppresses everything else. The reason is that the
+premise of this file's docstring turned out to be incomplete: ``astream_events``
+reports the INNERMOST node of a nested graph, so a tool-internal call surfaces
+under the nested graph's own node name rather than ``"tools"`` (measured 0
+occurrences of ``"tools"`` across the 51-turn 2026-08-15 run, against 6 for the
+orchestrator's ``"classify"``). These tests still pass unchanged because the
+tools node is not an answer node — but the mechanism they pin is now the
+allow-list, not the name match. See
+``test_copilotkit_classifier_stream_leak_1636.py``.
 """
 
 from typing import Any, Dict, List, Optional

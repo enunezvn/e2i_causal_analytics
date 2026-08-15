@@ -632,12 +632,38 @@ def _execute_bridge_agui_messages(messages: Optional[List[Any]]) -> List[Any]:
     return converted
 
 
-# Name of the graph's ToolNode (see create_e2i_chat_agent). Chat-model streams
-# raised INSIDE this node are tool-internal machinery (e.g. tool_composer's
-# decompose/plan LLM calls) and must never render as answer text (#1547).
-# LangGraphAgent._is_tool_internal_llm_event keys on this constant, so the
-# graph builder uses it too — keep them coupled.
+# Name of the graph's ToolNode (see create_e2i_chat_agent). Used for graph
+# construction and routing only.
+#
+# NOTE (#1636): the stream filter no longer keys on this constant. It was
+# decoupled when `_is_tool_internal_llm_event` moved to an allow-list —
+# tool-internal chat-model streams do not actually report this node name
+# (nested graphs report their INNERMOST node, and `"tools"` was measured 0
+# times across a 51-turn run), so keying on it caught nothing. See
+# `_ANSWER_NODE_NAMES` for the filter's actual contract.
 _TOOL_NODE_NAME = "tools"
+
+#: The ONLY nodes whose chat-model streams are answer text. Everything else is
+#: control plane (#1636).
+#:
+#: #1547 suppressed the literal node name ``"tools"``. That was too narrow twice
+#: over. LangGraph's ``astream_events`` propagates callbacks into NESTED graphs
+#: invoked inside a tool and reports the INNERMOST node name, so a tool-internal
+#: call does not surface as ``"tools"`` at all — it surfaces under whatever the
+#: nested graph called that node. The orchestrator's intent classifier arrived as
+#: ``"classify"``, matched neither the suppressed name nor the allowed ones, and
+#: fell through the fail-open branch into the answer stream (eval 2026-08-15 turn
+#: 2.1: the classifier's raw JSON delivered as the FIRST assistant message).
+#:
+#: Measured over all 51 turns of that run, ``langgraph_node`` on
+#: ``on_chat_model_*`` events takes exactly three values — ``chat`` (1372),
+#: ``synthesize`` (814), ``classify`` (6) — and ``"tools"`` appears ZERO times,
+#: confirming the old literal match had stopped catching anything.
+#:
+#: Allow-listing closes the class: any nested-graph node, present or future, is
+#: suppressed without needing to be enumerated first. Add a node here ONLY if it
+#: genuinely produces answer text.
+_ANSWER_NODE_NAMES = frozenset({"chat", "synthesize"})
 
 
 class LangGraphAgent(_LangGraphAGUIAgent):
@@ -689,16 +715,31 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         ``rawEvent.metadata.langgraph_node == "tools"``, the legitimate ones
         ``"chat"`` / ``"synthesize"``).
 
-        Tool-internal model streams are machinery, never answer text. Match
-        POSITIVELY on the tools node only — unknown/missing node metadata fails
-        open so no legitimate stream is ever silenced.
+        Tool-internal model streams are machinery, never answer text.
+
+        #1636 WIDENED THIS. The original matched positively on ``"tools"`` alone,
+        which failed twice: ``astream_events`` reports the INNERMOST node of a
+        nested graph, so a tool-internal call surfaces under the nested graph's
+        own node name (the orchestrator classifier arrived as ``"classify"``) and
+        ``"tools"`` was measured 0 times across a 51-turn run. Enumerating
+        offenders one at a time is how the same defect reached a third surface.
+
+        Now: suppress any chat-model event whose ``langgraph_node`` is NOT an
+        answer node. ABSENT metadata still fails open — #1547's safety property
+        that a legitimate stream is never silenced on missing information is
+        preserved deliberately, so a metadata regression degrades to noise rather
+        than to a mute chatbot.
         """
         if not isinstance(event, dict):
             return False
         if not str(event.get("event", "")).startswith("on_chat_model_"):
             return False
         metadata = event.get("metadata") or {}
-        return bool(metadata.get("langgraph_node") == _TOOL_NODE_NAME)
+        node = metadata.get("langgraph_node")
+        if node is None:
+            # Fail open on missing information (#1547 contract, unchanged).
+            return False
+        return node not in _ANSWER_NODE_NAMES
 
     async def _handle_single_event(self, event: Any, state: Any) -> AsyncGenerator[str, None]:
         """Drop tool-internal chat-model events BEFORE AG-UI translation (#1547).
@@ -3685,9 +3726,13 @@ def create_e2i_chat_agent(
     # Build the graph with tool calling support
     workflow = StateGraph(E2IAgentState)
 
-    # Add nodes. The tools-node name is the shared constant because
-    # LangGraphAgent._is_tool_internal_llm_event filters tool-internal
-    # chat-model streams by this node name (#1547).
+    # Add nodes. "chat" and "synthesize" are the ONLY answer-producing nodes;
+    # `_ANSWER_NODE_NAMES` allow-lists them so every other chat-model stream
+    # (this graph's tools node, and any nested graph reached through it) is
+    # suppressed before AG-UI translation (#1636). Adding an answer-producing
+    # node here without adding it there would silently mute it — the assertion
+    # in test_copilotkit_classifier_stream_leak_1636.py fails loudly if the two
+    # drift apart.
     workflow.add_node("chat", chat_node)
     workflow.add_node(_TOOL_NODE_NAME, ToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
