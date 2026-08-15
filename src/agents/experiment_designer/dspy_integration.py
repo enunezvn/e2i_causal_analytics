@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from src.agents.experiment_designer.state import normalize_audit_status
+from src.agents.experiment_designer.state import infer_audit_status
 
 logger = logging.getLogger(__name__)
 
@@ -390,10 +390,11 @@ class ExperimentDesignerSignalCollector:
         the evidence when not stated -- the same rule the template generator
         uses -- and an explicit status always wins.
         """
-        if validity_audit_status is None:
-            has_verdict = bool(validity_threats_identified) or bool(overall_validity_score)
-            validity_audit_status = "completed" if has_verdict else "not_run"
-        signal.validity_audit_status = normalize_audit_status(validity_audit_status)
+        signal.validity_audit_status = infer_audit_status(
+            validity_audit_status,
+            has_threats=bool(validity_threats_identified),
+            score=overall_validity_score,
+        )
         signal.validity_threats_identified = validity_threats_identified
         signal.critical_threats = critical_threats
         signal.mitigations_proposed = mitigations_proposed

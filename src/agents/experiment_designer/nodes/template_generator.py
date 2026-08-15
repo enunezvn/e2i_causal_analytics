@@ -18,6 +18,7 @@ from src.agents.experiment_designer.state import (
     ErrorDetails,
     ExperimentDesignState,
     ExperimentTemplate,
+    infer_audit_status,
     normalize_audit_status,
 )
 
@@ -467,10 +468,10 @@ print("Results saved to analysis_results.json")
             # something we recognise. Never silently coerced to "not_run" —
             # that would ASSERT it never ran.
             return normalize_audit_status(status)
-        has_verdict = bool(state.get("validity_threats")) or bool(
-            state.get("overall_validity_score")
+        return infer_audit_status(
+            has_threats=bool(state.get("validity_threats")),
+            score=state.get("overall_validity_score"),
         )
-        return "completed" if has_verdict else "not_run"
 
     @staticmethod
     def _audit_verdict(state: ExperimentDesignState) -> tuple[bool, str]:
@@ -487,6 +488,9 @@ print("Results saved to analysis_results.json")
             "timed_out": "timed out",
             "failed": "failed",
             "not_run": "never ran",
+            # Distinct from "never ran" on purpose: we know a status was
+            # recorded, we just cannot read it as one of ours (#1639).
+            "unknown": "could not be determined",
         }
         return status == "completed", phrasing.get(status, f"reported status {status!r}")
 

@@ -71,6 +71,31 @@ def normalize_audit_status(value: object) -> str:
     return value if value in AUDIT_STATUSES else "unknown"
 
 
+def infer_audit_status(
+    explicit: object = None, *, has_threats: bool = False, score: object = None
+) -> str:
+    """The ONE rule for deciding what an audit's status was (#1639).
+
+    An explicit status always wins. Otherwise the only honest readings are:
+
+    * threats were found, or a score above zero was recorded -> ``completed``;
+      something produced a verdict.
+    * nothing at all -> ``unknown``, NOT ``not_run``.
+
+    That last distinction is codex iter-14's point and it is right: ``0.0`` is a
+    VALID validity score, so `bool(score)` cannot tell "the audit completed and
+    scored zero with no threats" apart from "no audit happened". Reporting
+    ``not_run`` there asserts something we do not know. ``unknown`` says only
+    what is true -- which is the whole reason that member exists.
+    """
+    if explicit is not None:
+        return normalize_audit_status(explicit)
+    numeric = score if isinstance(score, (int, float)) and not isinstance(score, bool) else 0.0
+    if has_threats or numeric > 0:
+        return "completed"
+    return "unknown"
+
+
 class TreatmentDefinition(TypedDict):
     """Definition of a treatment arm in the experiment.
 

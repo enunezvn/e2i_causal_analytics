@@ -291,6 +291,24 @@ def _retract_stale_verdict(state: ExperimentDesignState) -> None:
     # `dag_validation_warnings` is the exact record of what this node
     # contributed, so the withdrawal is precise -- warnings from other nodes
     # are none of its business and stay.
+    _withdraw_previous_dag_warnings(state)
+    state["dag_validation_warnings"] = []
+    state["dag_missing_confounders"] = []
+    state["dag_latent_confounders"] = []
+    state["dag_instrument_candidates"] = []
+    state["dag_effect_modifiers"] = []
+
+
+def _withdraw_previous_dag_warnings(state: ExperimentDesignState) -> None:
+    """Remove the PREVIOUS audit's DAG prose from the shared warnings list.
+
+    Called on every exit that replaces a verdict -- including a COMPLETED
+    rerun, which codex iter-14 caught: iteration 0 appends "Assumed confounder
+    region ...", iteration 1 completes with no DAG warning, and the overwrite
+    of ``dag_validation_warnings`` destroyed the only record that could ever
+    have withdrawn it. The stale sentence then outlived every mechanism built
+    to retract it.
+    """
     withdrawn = list(state.get("dag_validation_warnings") or [])
     if withdrawn:
         remaining = list(state.get("warnings") or [])
@@ -306,11 +324,6 @@ def _retract_stale_verdict(state: ExperimentDesignState) -> None:
                     del remaining[index]
                     break
         state["warnings"] = remaining
-    state["dag_validation_warnings"] = []
-    state["dag_missing_confounders"] = []
-    state["dag_latent_confounders"] = []
-    state["dag_instrument_candidates"] = []
-    state["dag_effect_modifiers"] = []
 
 
 class ValidityAuditNode:
@@ -434,6 +447,13 @@ class ValidityAuditNode:
             # V4.4: DAG-aware validity validation
             if self._has_dag_evidence(state):
                 dag_results, dag_warnings = self._perform_dag_validation(state)
+
+                # Withdraw the PREVIOUS audit's prose before overwriting the
+                # record of it (#1639). Without this, a completed rerun that
+                # finds nothing leaves iteration 0's DAG sentence in
+                # `warnings` forever -- and destroys `dag_validation_warnings`,
+                # which is what any later retraction would have used.
+                _withdraw_previous_dag_warnings(state)
 
                 # Store DAG validation results in state
                 state["dag_confounders_validated"] = dag_results.get("confounders_validated", [])

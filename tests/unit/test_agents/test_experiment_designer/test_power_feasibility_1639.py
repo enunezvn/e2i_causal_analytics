@@ -510,7 +510,10 @@ class TestAnAuditWithEvidenceIsNotCalledNeverRun:
 
     def test_a_genuinely_empty_state_still_says_never_ran(self):
         doc = self._doc({"validity_threats": [], "overall_validity_score": 0.0})
-        assert "never ran" in doc
+        # "could not be determined", not "never ran": an empty state cannot
+        # distinguish a completed zero-score audit from no audit at all
+        # (codex iter-14).
+        assert "could not be determined" in doc
 
 
 class TestTheOtherArtifactsCarryTheCaveat:
@@ -1200,7 +1203,7 @@ class TestTheMachineFieldCarriesTheStatusNotTheProse:
             self._spec({"validity_threats": [], "overall_validity_score": 0.0})[
                 "validity_audit_status"
             ]
-            == "not_run"
+            == "unknown"
         )
 
     def test_the_document_still_reads_as_prose(self):
@@ -1305,7 +1308,11 @@ class TestTheStatusFieldRejectsValuesOutsideItsEnum:
         # echoed straight back. The `or "reported status"` I first wrote here
         # passed both ways and proved nothing.
         assert completed is False
-        assert phrasing == "reported status 'unknown'", phrasing
+        # "unknown" now has a sentence of its own rather than a repr fallback:
+        # a reader gets "could not be determined" instead of a quoted enum
+        # value. Still exact — the point of this assertion was that the typo
+        # ("timeout") must not echo back, and it does not.
+        assert phrasing == "could not be determined", phrasing
 
 
 class TestTheAuditStatusIsNormalizedWhereItLeaves:
@@ -1471,21 +1478,51 @@ class TestMlflowCanTellARetractedZeroFromARealOne:
 
         from src.agents.experiment_designer import mlflow_tracker
 
-        summary_src = inspect.getsource(mlflow_tracker.ExperimentDesignerMLflowTracker)
-        for consumer in ("design_summary", "get_design_history"):
-            assert consumer in summary_src
-        # Both dicts must carry the key, not just the module somewhere.
-        tree = ast.parse(summary_src.lstrip())
-        dict_keys = {
-            key.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Dict)
-            for key in node.keys
-            if isinstance(key, ast.Constant) and isinstance(key.value, str)
-        }
-        assert "validity_audit_status" in dict_keys, (
-            "neither the artifact nor the history rows carry the audit status"
+        # codex iter-14 LOW, taken: this asked whether SOME dict in the class
+        # had the key, so it passed while get_design_history() still returned
+        # the tag raw — the very defect it was meant to cover. Each consumer is
+        # now checked on its own function.
+        # `design_summary` is built in _log_artifacts, not log_design_result —
+        # I guessed the method name here too.
+        for fn_name in ("_log_artifacts", "get_design_history"):
+            fn = getattr(mlflow_tracker.ExperimentDesignerMLflowTracker, fn_name)
+            tree = ast.parse(inspect.getsource(fn).lstrip())
+            keys = {
+                key.value
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Dict)
+                for key in node.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+            assert "validity_audit_status" in keys, f"{fn_name} omits the audit status"
+
+    def test_the_history_row_normalizes_what_it_read(self):
+        """The fourth escape: a run logged before this branch carries the old
+        prose value, and a dashboard filtering the enum misses every one."""
+        import ast
+        import inspect
+
+        from src.agents.experiment_designer import mlflow_tracker
+
+        tree = ast.parse(
+            inspect.getsource(
+                mlflow_tracker.ExperimentDesignerMLflowTracker.get_design_history
+            ).lstrip()
         )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values, strict=False):
+                if not (isinstance(key, ast.Constant) and key.value == "validity_audit_status"):
+                    continue
+                called = {
+                    inner.func.id
+                    for inner in ast.walk(value)
+                    if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                }
+                assert "normalize_audit_status" in called, "get_design_history returns the tag raw"
+                return
+        raise AssertionError("get_design_history has no validity_audit_status key")
 
 
 class TestTheTrainingSignalDoesNotLabelARealAuditAsNotRun:
@@ -1532,7 +1569,7 @@ class TestTheTrainingSignalDoesNotLabelARealAuditAsNotRun:
         )
         assert updated.validity_audit_status == "timed_out"
 
-    def test_no_evidence_stays_not_run(self):
+    def test_zero_score_with_no_threats_is_unknown_not_a_verdict(self):
         from src.agents.experiment_designer.dspy_integration import (
             ExperimentDesignerSignalCollector,
             ExperimentDesignTrainingSignal,
@@ -1547,7 +1584,11 @@ class TestTheTrainingSignalDoesNotLabelARealAuditAsNotRun:
             overall_validity_score=0.0,
             redesign_iterations=0,
         )
-        assert updated.validity_audit_status == "not_run"
+        # NOT "not_run", which this asserted first. 0.0 is a VALID validity
+        # score, so no-threats-and-zero cannot distinguish "completed and found
+        # nothing" from "never ran" — and claiming the latter asserts something
+        # unknown. codex iter-14; "unknown" is why that member exists.
+        assert updated.validity_audit_status == "unknown"
 
 
 class TestTheMemoryPathNormalizesToo:
@@ -1619,3 +1660,61 @@ class TestRetractionRemovesTheAuditsOwnCopy:
         # branch also adds its own notice, which is not part of this claim.
         warnings = out.get("warnings", [])
         assert warnings.count(shared) == 1, warnings
+
+
+class TestACompletedRerunAlsoWithdrawsTheOldProse:
+    """codex iter-14 HIGH, and it answered the question I asked directly.
+
+    I had argued the positional-retraction hazard was acceptable to leave.
+    It is not, for a reason I had not seen: iteration 0 completes and appends
+    "Assumed confounder region ..."; iteration 1 redesigns and its audit
+    COMPLETES finding nothing. The old code overwrote `dag_validation_warnings`
+    with the new (empty) list — destroying the only record that could ever have
+    withdrawn the stale sentence, which then outlives every retraction
+    mechanism in the node.
+    """
+
+    def test_the_previous_prose_does_not_survive_a_clean_rerun(self):
+        from src.agents.experiment_designer.nodes.validity_audit import (
+            _withdraw_previous_dag_warnings,
+        )
+
+        stale = "Assumed confounder region was NOT discovered in causal DAG"
+        state = {
+            "warnings": ["An unrelated upstream warning", stale],
+            "dag_validation_warnings": [stale],
+        }
+        _withdraw_previous_dag_warnings(state)
+        assert stale not in state["warnings"]
+        assert "An unrelated upstream warning" in state["warnings"]
+
+    def test_the_completed_path_calls_it_before_overwriting_the_record(self):
+        """Order matters: withdrawing AFTER the overwrite withdraws nothing."""
+        import ast
+        import inspect
+
+        from src.agents.experiment_designer.nodes import validity_audit
+
+        src = inspect.getsource(validity_audit.ValidityAuditNode.execute)
+        tree = ast.parse(src.lstrip())
+        withdraw_line = overwrite_line = None
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_withdraw_previous_dag_warnings"
+                and withdraw_line is None
+            ):
+                withdraw_line = node.lineno
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == "dag_validation_warnings"
+                and isinstance(node.ctx, ast.Store)
+            ):
+                overwrite_line = node.lineno
+        assert withdraw_line is not None, "the completed path never withdraws"
+        assert overwrite_line is not None
+        assert withdraw_line < overwrite_line, (
+            "withdrawal must precede the overwrite that destroys the record"
+        )

@@ -671,7 +671,12 @@ class ExperimentDesignerMLflowTracker:
                 # Same reason as the artifact: `overall_validity_score` below
                 # is 0.0 both for a genuine zero and for a retracted
                 # non-verdict (#1639).
-                "validity_audit_status": row.get("tags.validity_audit_status"),
+                # Normalized on READ too (codex iter-14): runs logged before this
+                # branch carry the old prose value, and a dashboard filtering the
+                # documented enum would miss every one of them.
+                "validity_audit_status": normalize_audit_status(
+                    row.get("tags.validity_audit_status")
+                ),
                 "status": row.get("tags.status"),
                 # Key metrics
                 "required_sample_size": row.get("metrics.required_sample_size"),
