@@ -1054,3 +1054,92 @@ class TestHistoryProvenanceComesFromTheRowsNotTheRegistry:
                 )
                 return
         raise AssertionError("get_kpi_history never calls materialized_history_basis")
+
+
+class TestTheDispatcherUsesTheRuntimeSubstrate:
+    """codex iter-8 HIGH: the orchestrator payload still read the registry.
+
+    Its LOW is the sharper half: my existing dispatcher test only asserts the
+    payload HAS a measure_basis key, so `measure_basis_for_kpi(kpi)` satisfied
+    it while dropping the branch the calculator actually ran. For ROI that
+    means reporting the static union ['agent_activities', 'business_metrics']
+    with runtime_confirmed=false — a FALSE fence against stored ROI, which is
+    business_metrics on both sides.
+    """
+
+    def test_the_call_passes_the_result_metadata(self):
+        import ast
+        import inspect
+
+        from src.agents.orchestrator.nodes import dispatcher
+
+        src = inspect.getsource(dispatcher)
+        tree = ast.parse(src)
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "measure_basis_for_kpi"
+        ]
+        assert calls, "the dispatcher no longer declares a measure basis at all"
+        for call in calls:
+            assert len(call.args) + len(call.keywords) >= 2, (
+                "measure_basis_for_kpi(kpi) drops the runtime substrate the "
+                "calculator recorded"
+            )
+
+    def test_runtime_metadata_beats_the_declared_union(self):
+        from src.kpi.measure_basis import measure_basis_for_kpi
+        from src.services.kpi_resolution import recognize_kpi
+
+        roi = recognize_kpi("ROI")
+        assert roi is not None
+        metadata = {"context": {"measure_basis_substrate": ["business_metrics"]}}
+        basis = measure_basis_for_kpi(roi, metadata)
+        assert basis["substrate"] == ["business_metrics"]
+        assert basis["runtime_confirmed"] is True
+        # The union is still reported, as the declaration it is.
+        assert "agent_activities" in basis["declared_sources"]
+
+
+class TestAMixedProvenanceSeriesFailsClosed:
+    """codex iter-8 HIGH: two source tags in one series is not confirmation.
+
+    A reseed or handler change could leave ROI history with older
+    `agent_activities` rows beside newer `business_metrics.roi` ones. Returning
+    both with runtime_confirmed=True, under a note that says "compare on
+    materialized_from", lets one mixed line read as comparable with stored ROI
+    because ONE of its sources matches.
+
+    Latent, not live: measured 2026-08-15, no kpi_id in kpi_history carries
+    more than one distinct source tag (32 KPIs).
+    """
+
+    def _basis(self, rows):
+        from src.kpi.measure_basis import materialized_history_basis
+        from src.services.kpi_resolution import recognize_kpi
+
+        return materialized_history_basis(recognize_kpi("ROI"), rows=rows)
+
+    def test_a_single_source_series_is_confirmed(self):
+        basis = self._basis([{"source": "business_metrics.roi"}])
+        assert basis["runtime_confirmed"] is True
+        assert basis.get("mixed_sources") is not True
+
+    def test_two_sources_are_not_confirmation(self):
+        basis = self._basis(
+            [{"source": "business_metrics.roi"}, {"source": "agent_activities"}]
+        )
+        assert basis["mixed_sources"] is True
+        assert basis["runtime_confirmed"] is False, (
+            "a series spanning two substrates confirms nothing about either"
+        )
+
+    def test_the_note_says_the_line_cannot_be_compared_as_a_unit(self):
+        basis = self._basis(
+            [{"source": "business_metrics.roi"}, {"source": "agent_activities"}]
+        )
+        assert "not comparable" in basis["note"].lower(), basis["note"]
+        # Both are still named — hiding one would be a different lie.
+        assert basis["materialized_from"] == ["agent_activities", "business_metrics.roi"]

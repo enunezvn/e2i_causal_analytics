@@ -312,7 +312,18 @@ def materialized_history_basis(kpi: Any, rows: Optional[list] = None) -> Dict[st
     # `business_metrics.roi`; all 720 WS3-BI-005 rows are
     # `treatment_events.event_date`.
     sources = sorted({str(row.get("source")) for row in (rows or []) if row.get("source")})
-    runtime_confirmed = bool(sources)
+    # Two source tags in ONE series is not confirmation of either (codex
+    # iter-8). A reseed or handler change could leave ROI history with older
+    # agent_activities rows beside newer business_metrics.roi ones; reporting
+    # both as confirmed, under a note that says "compare on materialized_from",
+    # lets a mixed line read as comparable with stored ROI because ONE of its
+    # sources matches. Fails closed instead: both are still NAMED, because
+    # hiding one would be a different lie, but the series confirms nothing.
+    #
+    # Latent, not live: measured 2026-08-15, no kpi_id in kpi_history carries
+    # more than one distinct source tag (32 KPIs).
+    mixed = len(sources) > 1
+    runtime_confirmed = bool(sources) and not mixed
     if not sources:
         # An empty series is not "provenance unknown": the backfill registers a
         # tag per KPI, and that is what these rows WOULD carry.
@@ -325,12 +336,23 @@ def materialized_history_basis(kpi: Any, rows: Optional[list] = None) -> Dict[st
         "computed": False,
         "materialized_from": sources,
         "runtime_confirmed": runtime_confirmed,
+        "mixed_sources": mixed,
         "grain": "kpi x brand x region x calendar month",
         "measure": (
             "monthly materialized history of the computed KPI"
             + (f" (materialized from {', '.join(sources)})" if sources else "")
         ),
         "note": (
+            (
+                "This series spans MORE THAN ONE source "
+                f"({', '.join(sources)}), so it is not comparable as a unit with "
+                "anything: part of the line rests on one substrate and part on "
+                "another. Say so rather than comparing it. "
+            )
+            if mixed
+            else ""
+        )
+        + (
             "Read from the materialized kpi_history table -- the stored form of the "
             "COMPUTED KPI. Compare only with a figure resting on the same source: "
             "`materialized_from` names it, and it is NOT always the same one "

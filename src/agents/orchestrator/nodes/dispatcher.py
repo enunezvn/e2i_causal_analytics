@@ -2042,11 +2042,16 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         # data_summary.
         "agent": "kpi_calculator",
         "analysis_type": "kpi_lookup",
-        # #1640: what this figure MEASURES, derived from the registry's own
-        # `tables`. Without it an orchestrator-computed KPI and a stored
+        # #1640: what this figure MEASURES. The result METADATA is passed, not
+        # just the registry `tables`: for a KPI whose calculator falls back
+        # between sources, the declaration is a union of what it MIGHT have
+        # read. ROI is the case — reporting the union
+        # ['agent_activities', 'business_metrics'] would FALSELY fence it
+        # against a stored ROI row that is business_metrics on both sides.
+        # Without any basis, an orchestrator-computed KPI and a stored
         # business_metrics row arrive under the same name and read as
         # comparable — measured, they differ ~73x for TRx.
-        "measure_basis": measure_basis_for_kpi(kpi),
+        "measure_basis": measure_basis_for_kpi(kpi, metadata),
         "key_findings": key_findings,
         "warnings": warnings,
         # The registry definition rides along so a definition-seeking reading of
