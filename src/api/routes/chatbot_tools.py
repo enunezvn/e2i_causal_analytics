@@ -2088,6 +2088,12 @@ _KPI_COORDINATOR_RE = re.compile(
     r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/)"
 )
 
+#: Backstop on the multi-mention scan. The scan ends naturally once every mention
+#: is masked; this only bounds the case-sensitive abbreviation branch, which reads
+#: the UNMASKED original. Set well above any realistic ask, and hitting it is
+#: logged rather than silently truncating the scan.
+_MAX_KPI_MENTION_SCANS = 8
+
 
 @tool(args_schema=KpiCalculateInput)
 async def kpi_calculate_tool(
@@ -2217,23 +2223,47 @@ async def kpi_calculate_tool(
     _masked = _normalized[:_kpi_start] + " " * (_kpi_end - _kpi_start) + _normalized[_kpi_end:]
     _coordinated: List[str] = []
     _seen_ids = {kpi.id}
-    # Bounded: a real ask names a handful of metrics, and the bound also stops
-    # the case-sensitive abbreviation branch (which reads the UNMASKED original)
-    # from returning the same mention forever.
-    for _ in range(5):
+    # The loop terminates on its own: each pass masks the span it found, so the
+    # probe runs out of mentions. _MAX_KPI_MENTION_SCANS is a backstop for the
+    # case-sensitive abbreviation branch, which reads the UNMASKED original and
+    # would otherwise keep returning the same mention. Exhausting it is logged
+    # rather than silently truncating the scan.
+    _scan_complete = True
+    for _ in range(_MAX_KPI_MENTION_SCANS):
         _other = kpi_resolution.recognize_distinct_metric(
             _masked, exclude_id=kpi.id, original_query=kpi_name
         )
         if _other is None:
             break
         _other_kpi, _other_start, _other_end = _other
-        if _other_kpi.id in _seen_ids or _other_end <= _other_start:
+        # Only lack of PROGRESS may end the scan (codex iter-5). A repeated id
+        # must not: "TRx market share for TRx and ROI" mentions TRx twice, and
+        # breaking on the repeat abandoned the scan before reaching the
+        # coordinated ROI -- answering one KPI as complete, the same fail-silent
+        # one mention further along again. A zero-width span cannot be masked, so
+        # that is the genuine no-progress case (the case-sensitive abbreviation
+        # branch reports (0, 0) once its lowercase occurrence is masked away).
+        if _other_end <= _other_start:
             break
+        _masked = _masked[:_other_start] + " " * (_other_end - _other_start) + _masked[_other_end:]
+        if _other_kpi.id in _seen_ids:
+            continue
         _seen_ids.add(_other_kpi.id)
         _gap = _normalized[min(_kpi_end, _other_end) : max(_kpi_start, _other_start)]
         if _KPI_COORDINATOR_RE.search(_gap):
             _coordinated.append(str(_other_kpi.name))
-        _masked = _masked[:_other_start] + " " * (_other_end - _other_start) + _masked[_other_end:]
+    else:
+        # for/else: the loop ran the full range without breaking, i.e. it never
+        # ran out of mentions -- the cap stopped it, not the text.
+        _scan_complete = False
+    if not _scan_complete:
+        logger.warning(
+            "kpi_calculate: metric-mention scan hit its %d-scan cap for %r "
+            "(found %s); a further coordinated metric could be unexamined",
+            _MAX_KPI_MENTION_SCANS,
+            kpi_name,
+            sorted(_seen_ids),
+        )
 
     if _coordinated:
         _all_named = sorted({str(kpi.name), *_coordinated})
@@ -2244,9 +2274,13 @@ async def kpi_calculate_tool(
                 f"{kpi_name!r} names more than one KPI ({' and '.join(_all_named)}); "
                 f"this tool computes one KPI per call."
             ),
+            # Enumerate EVERY named metric, not the first two: with three or more
+            # the caller would otherwise be steered into dropping the rest, which
+            # is the failure this guard exists to prevent.
             "hint": (
-                "Call kpi_calculate_tool once per metric — e.g. "
-                f"{_all_named[0]!r}, then {_all_named[1]!r} — and report each."
+                "Call kpi_calculate_tool once per metric — "
+                + ", then ".join(repr(n) for n in _all_named)
+                + " — and report each."
             ),
         }
 

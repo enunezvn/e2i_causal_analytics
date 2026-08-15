@@ -200,6 +200,28 @@ class TestEveryMentionIsExamined:
         blob = f"{result.get('error', '')} {result.get('hint', '')}"
         assert "ROI" in blob or "Return on Investment" in blob, blob
 
+    async def test_a_repeated_mention_does_not_abort_the_scan(self):
+        """codex iter-5: breaking on a repeated id abandoned the scan before the
+        coordinated metric. "TRx market share for TRx and ROI" mentions TRx twice
+        and ROI once — stopping at the repeat answered TRx share as complete and
+        dropped ROI. Only lack of PROGRESS may end the scan."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx market share for TRx and ROI"})
+        assert _is_compound_refusal(result), (
+            f"a repeated mention aborted the scan before the coordinated metric: {result}"
+        )
+        blob = f"{result.get('error', '')} {result.get('hint', '')}"
+        assert "ROI" in blob or "Return on Investment" in blob, blob
+
+    async def test_three_metrics_are_all_named_in_the_hint(self):
+        """Naming only the first two would steer the caller into dropping the
+        third — the very failure this guard exists to prevent (codex iter-5)."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx and NRx and ROI"})
+        assert _is_compound_refusal(result), result
+        hint = str(result.get("hint", ""))
+        assert "TRx" in hint, hint
+        assert "NRx" in hint, hint
+        assert "Return on Investment" in hint or "ROI" in hint, hint
+
     async def test_adjacent_mention_alone_still_computes(self):
         """The fix must not turn the 32-call modifier chain into a refusal."""
         result = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx market share"})
