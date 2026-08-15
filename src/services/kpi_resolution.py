@@ -275,6 +275,23 @@ def _name_tokens(name: str) -> Tuple[str, ...]:
 
 
 @lru_cache(maxsize=1024)
+def _alias_pattern(alias: str) -> re.Pattern[str]:
+    """Alias matcher: bounded on both sides, tolerating a plural suffix.
+
+    Aliases were matched by bare substring, which let a short alias fire from
+    inside an unrelated word — "roc auc" matched "p|roc auc|tion" and "f1 score"
+    matched "f1 score|card" (#1637 codex iter-1). Bounding both sides fixes that.
+
+    The plural suffix is not decoration: a plain ``\\b...\\b`` rule silently LOST
+    "override rates", "acceptance rates" and "patient touches", none of which the
+    187-test regression corpus covered. ``(?:e?s)?`` keeps those while still
+    rejecting "f1 score|card", since "card" matches neither the optional suffix
+    nor the closing boundary.
+    """
+    return re.compile(rf"(?<![\w'-]){re.escape(alias)}(?:e?s)?(?![\w'-])")
+
+
+@lru_cache(maxsize=1024)
 def _token_pattern(token: str) -> re.Pattern[str]:
     """Word-boundary matcher for a name token.
 
@@ -360,11 +377,11 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
 
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
-        idx = q.find(alias)
-        if idx != -1:
+        m = _alias_pattern(alias).search(q)
+        if m is not None:
             kpi = registry.get(_ALIASES[alias])
             if kpi is not None:
-                return kpi, q, idx, idx + len(alias)
+                return kpi, q, m.start(), m.end()
 
     # 2) dynamic fallback: score every KPI by how much of its NAME the query
     # covers, and take the best (#1637). See _best_name_match for why coverage

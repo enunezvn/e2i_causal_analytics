@@ -16,6 +16,7 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -2073,6 +2074,12 @@ async def _window_coverage_probe(
 # silently dropping on any other KPI.
 _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"})
 
+#: Coordinators that turn two KPI mentions into two SEPARATE asks (#1637). Two
+#: mentions alone do not: "TRx market share" is a modifier chain naming exactly
+#: one KPI (WS3-BI-008). Only an explicit coordinator between the mentions means
+#: the caller asked for both.
+_KPI_COORDINATOR_RE = re.compile(r"(?:\band\b|\bplus\b|\bas well as\b|&|,|/)")
+
 
 @tool(args_schema=KpiCalculateInput)
 async def kpi_calculate_tool(
@@ -2169,14 +2176,51 @@ async def kpi_calculate_tool(
     "unknown" = the status could not be evaluated (missing data or calculation
     error) — do not speculate about causes beyond any error field present.
     """
-    kpi = kpi_resolution.recognize_kpi(kpi_name)
-    if kpi is None:
+    _span = kpi_resolution.recognize_kpi_span(kpi_name)
+    if _span is None:
         return {
             "success": False,
             "query_type": "kpi_calculate",
             "error": f"'{kpi_name}' did not resolve to a defined KPI.",
             "hint": "Try a defined KPI like NBRx, TRx, NRx, market share, conversion rate, or ROI.",
         }
+    kpi, _normalized, _kpi_start, _kpi_end = _span
+
+    # #1637: this tool computes ONE KPI, but ``kpi_name`` is free text. A
+    # COORDINATED ask ("false alert rate and override rate") silently resolved to
+    # whichever alias matched first and was answered as if complete -- the eval's
+    # turn 4.6 shape, where the answer then blamed the tool for the metric it
+    # never asked for. Refuse instead, naming both, so the caller issues one call
+    # per metric.
+    #
+    # Gated on an explicit coordinator between the two mentions, because bare
+    # two-mention detection is NOT sufficient: measured against the 20 distinct
+    # kpi_name values the model actually passed across the 51-turn 2026-08-15 run,
+    # an ungated guard refuses "TRx market share" (32 calls) -- a MODIFIER chain
+    # naming the single KPI WS3-BI-008, not two metrics. Adjacency means one
+    # metric; "and"/"&"/"," between the spans means two.
+    _second = kpi_resolution.recognize_distinct_metric(
+        _normalized[:_kpi_start] + " " * (_kpi_end - _kpi_start) + _normalized[_kpi_end:],
+        exclude_id=kpi.id,
+        original_query=kpi_name,
+    )
+    if _second is not None:
+        _second_kpi, _second_start, _second_end = _second
+        _gap = _normalized[min(_kpi_end, _second_end) : max(_kpi_start, _second_start)]
+        if _KPI_COORDINATOR_RE.search(_gap):
+            _both = sorted({kpi.name, _second_kpi.name})
+            return {
+                "success": False,
+                "query_type": "kpi_calculate",
+                "error": (
+                    f"{kpi_name!r} names more than one KPI ({' and '.join(_both)}); "
+                    f"this tool computes one KPI per call."
+                ),
+                "hint": (
+                    "Call kpi_calculate_tool once per metric — e.g. "
+                    f"{_both[0]!r}, then {_both[1]!r} — and report both."
+                ),
+            }
 
     # #1360: only the trigger-effectiveness calculators read
     # context['trigger_type']; on any other KPI the key would be silently
