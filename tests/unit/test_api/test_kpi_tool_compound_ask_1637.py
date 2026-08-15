@@ -200,6 +200,17 @@ class TestEveryMentionIsExamined:
         blob = f"{result.get('error', '')} {result.get('hint', '')}"
         assert "ROI" in blob or "Return on Investment" in blob, blob
 
+    async def test_scan_cap_exhaustion_fails_closed(self):
+        """codex iter-6: hitting the scan cap used to log and then compute. Once
+        the code has established that a further coordinated metric may be
+        unexamined, returning success is a false-complete — the warning would
+        document the wrong answer rather than avoid it. Adversarial input, but
+        the contract is the point: never answer an ask you did not fully read."""
+        stuffed = "TRx market share for " + "TRx " * 10 + "and ROI"
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": stuffed})
+        assert result.get("success") is False, result
+        assert result.get("value") is None, result
+
     async def test_a_repeated_mention_does_not_abort_the_scan(self):
         """codex iter-5: breaking on a repeated id abandoned the scan before the
         coordinated metric. "TRx market share for TRx and ROI" mentions TRx twice

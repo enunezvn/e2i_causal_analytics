@@ -2257,13 +2257,27 @@ async def kpi_calculate_tool(
         # ran out of mentions -- the cap stopped it, not the text.
         _scan_complete = False
     if not _scan_complete:
+        # Fail CLOSED, not just loudly (codex iter-6). Having established that a
+        # further coordinated metric may be unexamined, computing one KPI and
+        # returning success is exactly the false-complete this guard exists to
+        # prevent -- the warning would document the wrong answer, not avoid it.
         logger.warning(
             "kpi_calculate: metric-mention scan hit its %d-scan cap for %r "
-            "(found %s); a further coordinated metric could be unexamined",
+            "(found %s); refusing rather than answering a possibly-partial ask",
             _MAX_KPI_MENTION_SCANS,
             kpi_name,
             sorted(_seen_ids),
         )
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "error": (
+                f"{kpi_name!r} contains too many metric mentions to determine "
+                f"reliably whether more than one KPI was asked for; this tool "
+                f"computes one KPI per call."
+            ),
+            "hint": "Call kpi_calculate_tool once per metric, naming each metric on its own.",
+        }
 
     if _coordinated:
         _all_named = sorted({str(kpi.name), *_coordinated})
