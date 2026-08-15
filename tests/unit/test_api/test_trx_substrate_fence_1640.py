@@ -1085,8 +1085,7 @@ class TestTheDispatcherUsesTheRuntimeSubstrate:
         assert calls, "the dispatcher no longer declares a measure basis at all"
         for call in calls:
             assert len(call.args) + len(call.keywords) >= 2, (
-                "measure_basis_for_kpi(kpi) drops the runtime substrate the "
-                "calculator recorded"
+                "measure_basis_for_kpi(kpi) drops the runtime substrate the calculator recorded"
             )
 
     def test_runtime_metadata_beats_the_declared_union(self):
@@ -1128,18 +1127,14 @@ class TestAMixedProvenanceSeriesFailsClosed:
         assert basis.get("mixed_sources") is not True
 
     def test_two_sources_are_not_confirmation(self):
-        basis = self._basis(
-            [{"source": "business_metrics.roi"}, {"source": "agent_activities"}]
-        )
+        basis = self._basis([{"source": "business_metrics.roi"}, {"source": "agent_activities"}])
         assert basis["mixed_sources"] is True
         assert basis["runtime_confirmed"] is False, (
             "a series spanning two substrates confirms nothing about either"
         )
 
     def test_the_note_says_the_line_cannot_be_compared_as_a_unit(self):
-        basis = self._basis(
-            [{"source": "business_metrics.roi"}, {"source": "agent_activities"}]
-        )
+        basis = self._basis([{"source": "business_metrics.roi"}, {"source": "agent_activities"}])
         assert "not comparable" in basis["note"].lower(), basis["note"]
         # Both are still named — hiding one would be a different lie.
         assert basis["materialized_from"] == ["agent_activities", "business_metrics.roi"]
@@ -1187,8 +1182,7 @@ class TestComparabilityRestsOnOneKey:
 
         b = self._keys()
         assert not substrates_agree(b["roi_history"], b["trx_history"]), (
-            "both read from kpi_history, but one is a return ratio and one a "
-            "prescription count"
+            "both read from kpi_history, but one is a return ratio and one a prescription count"
         )
 
     def test_roi_history_and_stored_roi_are_comparable(self):
@@ -1245,6 +1239,192 @@ class TestComparabilityRestsOnOneKey:
             assert marker in text, path
             guard = text[text.index(marker) : text.index(marker) + 1400]
             assert "comparison_key" in guard, (
-                f"{path} still tells the model to compare on a field the "
-                "comparator does not use"
+                f"{path} still tells the model to compare on a field the comparator does not use"
             )
+
+
+class TestSourceTagsAreParsedNotSplitOnADot:
+    """codex iter-10 HIGH: `_tables_of` reintroduced the phantom class.
+
+    Splitting a backfill tag on "." assumes every tag is `table.column`. It is
+    not. Measured against the live DB 2026-08-15, the ten distinct tags in
+    kpi_history include `triggers+treatment_events`,
+    `patient_journeys+treatment_events.pnh`, `treatment_events+patient_journeys`
+    and `weekly_capture` — so four of ten produced a comparison key naming a
+    table that does not exist, which is the exact defect `tables_in_sql` spent
+    several rounds eliminating.
+
+    The consequence is a FALSE fence: conversion-rate history
+    (`triggers+treatment_events`) never matched computed conversion rate
+    (`['treatment_events', 'triggers']`), though they are the same measure.
+    """
+
+    @pytest.mark.parametrize(
+        "tag, expected",
+        [
+            ("business_metrics.roi", ["business_metrics"]),
+            ("treatment_events.event_date", ["treatment_events"]),
+            ("triggers+treatment_events", ["treatment_events", "triggers"]),
+            ("treatment_events+patient_journeys", ["patient_journeys", "treatment_events"]),
+            ("patient_journeys+treatment_events.pnh", ["patient_journeys", "treatment_events"]),
+            ("hcp_intent_surveys.survey_date", ["hcp_intent_surveys"]),
+            # Not a table at all — a capture MECHANISM. Fails closed rather
+            # than claiming a substrate named after the mechanism.
+            ("weekly_capture", []),
+        ],
+    )
+    def test_every_live_tag_resolves_to_real_tables(self, tag, expected):
+        from src.kpi.measure_basis import _tables_of
+
+        assert _tables_of([tag]) == expected
+
+    def test_one_unrecognized_component_voids_the_whole_key(self):
+        """Narrow beats wrong: a partially-understood tag confirms nothing."""
+        from src.kpi.measure_basis import _tables_of
+
+        assert _tables_of(["treatment_events+weekly_capture"]) == []
+
+    def test_conversion_rate_history_matches_its_computed_form(self):
+        """codex iter-10's fifth comparability case, and it was failing."""
+        from src.kpi.measure_basis import (
+            materialized_history_basis,
+            measure_basis_for_kpi,
+            substrates_agree,
+        )
+        from src.services.kpi_resolution import recognize_kpi
+
+        kpi = recognize_kpi("Conversion Rate")
+        assert kpi is not None
+        history = materialized_history_basis(kpi, rows=[{"source": "triggers+treatment_events"}])
+        computed = measure_basis_for_kpi(kpi)
+        assert substrates_agree(history, computed), (
+            f"same KPI, falsely fenced: {history['comparison_key']} vs {computed['comparison_key']}"
+        )
+
+
+class TestEveryBasisDeclaresTheKeyThePromptNames:
+    """codex iter-10 HIGH: the Home tiles never set `comparison_key`.
+
+    Both prompts now say `comparison_key` is the only field a comparison may
+    rest on. A basis that omits it forces a consumer following that instruction
+    to treat a live computed tile as incomparable with anything.
+    """
+
+    def test_the_home_tile_basis_carries_it(self):
+        import ast
+        import inspect
+
+        from src.api.routes import copilotkit
+
+        src = inspect.getsource(copilotkit._kpi_summary_measure_bases)
+        tree = ast.parse(src.lstrip())
+        keys = {
+            key.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        assert "comparison_key" in keys, (
+            "Home tiles declare a basis without the field the prompt names"
+        )
+
+
+class TestAConfirmedRoiIsNotFalselyFenced:
+    """codex iter-10 HIGH: the conflict notice used the static union.
+
+    `cross_substrate_conflict` recognized the KPI and compared the registry's
+    UNION of ROI's possible sources against business_metrics — so a scoped ROI
+    that actually ran on business_metrics still got a "NOT comparable" notice
+    attached to the stored rows it genuinely matches.
+    """
+
+    def test_a_business_metrics_confirmed_roi_raises_no_conflict(self):
+        from src.kpi.measure_basis import cross_substrate_conflict
+
+        confirmed = {"context": {"measure_basis_substrate": ["business_metrics"]}}
+        assert cross_substrate_conflict("ROI", result_metadata=confirmed) is None
+
+    def test_an_unconfirmed_roi_still_warns(self):
+        """Fail closed when the branch that answered was not recorded."""
+        from src.kpi.measure_basis import cross_substrate_conflict
+
+        assert cross_substrate_conflict("ROI") is not None
+
+    def test_a_volume_kpi_always_warns(self):
+        from src.kpi.measure_basis import cross_substrate_conflict
+
+        conflict = cross_substrate_conflict("TRx")
+        assert conflict is not None
+        assert "treatment_events" in conflict["other_substrate"]
+
+    def test_a_union_containing_business_metrics_is_stated_as_conditional(self):
+        """ROI's declared substrate is ['agent_activities', 'business_metrics'].
+
+        The stored rows ARE business_metrics, so whether a computed ROI matches
+        them depends on which branch answered — something the tool cannot know
+        at this point, because nothing has been computed yet. Asserting "NOT
+        comparable" there overstates in the fencing direction, which is the
+        same defect as understating, pointed the other way.
+        """
+        from src.kpi.measure_basis import cross_substrate_conflict
+
+        conflict = cross_substrate_conflict("ROI")
+        assert conflict is not None
+        note = conflict["note"].lower()
+        assert conflict.get("conditional") is True, conflict
+        assert "depend" in note or "may" in note, conflict["note"]
+        # And it must not flatly assert the two are different quantities.
+        assert "~73x" not in note
+
+    def test_a_disjoint_substrate_is_still_stated_flatly(self):
+        """TRx has no business_metrics leg — nothing conditional about it."""
+        from src.kpi.measure_basis import cross_substrate_conflict
+
+        conflict = cross_substrate_conflict("TRx")
+        assert conflict is not None
+        assert conflict.get("conditional") is not True
+        assert "73x" in conflict["note"]
+
+
+class TestTheSuggestionsPromptWillNotCompareUnlabelledNumbers:
+    """codex iter-10 HIGH: the Home prose path was the fifth emitter.
+
+    Home publishes tile numbers as PROSE into `pageChatSummary`, which
+    `/chat/suggestions` feeds to an LLM whose prompt asks for a trend or
+    comparison pill whenever numeric KPIs are on screen. A bare
+    `Total TRx (MTD): 11298` could therefore seed a comparison against a
+    business_metrics figure ~73x larger.
+
+    Prose has nowhere to attach a structured basis, so the substrate is printed
+    inline and the prompt is told what the marks mean.
+    """
+
+    def test_the_prompt_forbids_cross_source_comparison_pills(self):
+        from pathlib import Path
+
+        # Normalized the way the MODEL receives it: the source uses backslash
+        # line-continuations, so raw-text asserts break across them and prove
+        # nothing about the assembled prompt. (My first version of this did
+        # exactly that and failed on its own wrapping.)
+        raw = Path("src/api/routes/chat.py").read_text()
+        prompt = " ".join(raw.replace("\\\n", " ").split()).lower()
+        assert "source unstated" in prompt, "the prompt never explains the marks"
+        assert "never propose comparing" in prompt
+        # A single-figure trend pill stays allowed — this must not become a
+        # blanket ban on the feature.
+        assert "trend pill for one figure is always safe" in prompt
+
+    def test_the_marks_the_prompt_relies_on_are_the_ones_home_emits(self):
+        """A prompt that describes a mark the page never prints is a lie.
+
+        Both halves are checked together because they are one contract across
+        two languages, and nothing else would catch them drifting apart.
+        """
+        from pathlib import Path
+
+        prompt = Path("src/api/routes/chat.py").read_text()
+        home = Path("frontend/src/pages/Home.tsx").read_text()
+        for mark in ("[from ", "source unstated"):
+            assert mark in home, f"Home never emits {mark!r}"
+            assert mark.strip("[") in prompt, f"the prompt never mentions {mark!r}"

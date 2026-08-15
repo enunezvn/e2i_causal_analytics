@@ -75,8 +75,54 @@ BUSINESS_METRICS_BASIS: Dict[str, Any] = {
 #: ``comparison_key`` is the underlying TABLES, whatever surface the figure
 #: arrived on. It is the only field :func:`substrates_agree` reads.
 def _tables_of(source_tags: list) -> list:
-    """`business_metrics.roi` -> `business_metrics`; the table, not the column."""
-    return sorted({str(tag).split(".", 1)[0] for tag in source_tags if tag})
+    """Real substrate tables behind a set of backfill source tags.
+
+    A tag is NOT reliably ``table.column``. Measured against the live DB
+    2026-08-15, the ten distinct tags in ``kpi_history`` include
+    ``triggers+treatment_events``, ``patient_journeys+treatment_events.pnh``,
+    ``treatment_events+patient_journeys`` and ``weekly_capture`` -- so a plain
+    ``split(".")`` produced a key naming a table that does not exist, which is
+    the phantom class ``tables_in_sql`` spent several rounds eliminating, and
+    it FALSELY fenced conversion-rate history against its own computed form.
+
+    Components are split on ``+``, reduced to the part before any ``.``, and
+    then VALIDATED against the tables the KPI registry actually declares --
+    no hand-maintained list, and ``weekly_capture`` (a capture mechanism, not a
+    table) is excluded for free. One unrecognized component voids the whole
+    key: narrow beats wrong, and a partially-understood tag confirms nothing.
+    """
+    known = _registry_tables()
+    tables = set()
+    for tag in source_tags:
+        if not tag:
+            continue
+        for part in str(tag).split("+"):
+            name = part.split(".", 1)[0].strip()
+            if name not in known:
+                return []
+            tables.add(name)
+    return sorted(tables)
+
+
+def _registry_tables() -> frozenset:
+    """Every table some registry KPI declares -- the SSOT for "is this a table".
+
+    Function-local import and cached: the registry is the same declaration
+    ``measure_basis_for_kpi`` already derives from.
+    """
+    global _REGISTRY_TABLES
+    if _REGISTRY_TABLES is None:
+        from src.kpi.registry import get_registry
+
+        _REGISTRY_TABLES = frozenset(
+            table
+            for kpi in get_registry().get_all()
+            for table in (getattr(kpi, "tables", None) or [])
+        )
+    return _REGISTRY_TABLES
+
+
+_REGISTRY_TABLES: Optional[frozenset] = None
 
 
 def measure_basis_for_kpi(
@@ -473,7 +519,9 @@ def substrates_agree(left: Optional[Dict[str, Any]], right: Optional[Dict[str, A
     return left_tables == right_tables
 
 
-def cross_substrate_conflict(kpi_name: Optional[str]) -> Optional[Dict[str, Any]]:
+def cross_substrate_conflict(
+    kpi_name: Optional[str], result_metadata: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     """State, in code, that a stored figure is not the computed one (#1640).
 
     Called on every ``e2i_data_query_tool(query_type='kpi')`` return. If the
@@ -494,9 +542,39 @@ def cross_substrate_conflict(kpi_name: Optional[str]) -> Optional[Dict[str, Any]
     kpi = recognize_kpi(kpi_name)
     if kpi is None:
         return None
-    computed = measure_basis_for_kpi(kpi)
+    # The RECORDED branch wins over the registry union (codex iter-10). ROI is
+    # the case: a scoped calculation that actually ran on business_metrics is
+    # comparable with the stored rows, and warning anyway is a FALSE fence
+    # attached to the very figure it matches. With nothing recorded the union
+    # still fails closed.
+    computed = measure_basis_for_kpi(kpi, result_metadata)
     if substrates_agree(computed, BUSINESS_METRICS_BASIS):
         return None
+    # A declared substrate that CONTAINS business_metrics without being exactly
+    # it is a union of possible sources -- ROI's ['agent_activities',
+    # 'business_metrics'] is the one in the registry. Whether a computed figure
+    # matches these stored rows then depends on which branch answers, and
+    # nothing has computed anything at this point. Asserting "NOT comparable"
+    # there overstates in the fencing direction, which is the same defect as
+    # understating, pointed the other way (codex iter-10).
+    conditional = "business_metrics" in set(computed["comparison_key"] or [])
+    if conditional:
+        return {
+            "this_tool": "e2i_data_query_tool",
+            "this_substrate": list(BUSINESS_METRICS_BASIS["substrate"]),
+            "other_tool": "kpi_calculate_tool",
+            "other_substrate": list(computed["substrate"]),
+            "kpi_id": kpi.id,
+            "conditional": True,
+            "note": (
+                f"The rows above are stored business_metrics values. {kpi.name} can also "
+                "be COMPUTED by kpi_calculate_tool, and whether the two are comparable "
+                f"DEPENDS on which source answered: its possible sources are "
+                f"{', '.join(computed['declared_sources'])}. If you compute it, read the "
+                "`measure_basis.comparison_key` on that result and compare only when it "
+                "matches ['business_metrics']. Do not assume either way here."
+            ),
+        }
     return {
         "this_tool": "e2i_data_query_tool",
         "this_substrate": list(BUSINESS_METRICS_BASIS["substrate"]),

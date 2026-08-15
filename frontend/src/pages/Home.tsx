@@ -932,10 +932,23 @@ function Home() {
     ];
     if (kpiSummary?.metrics) {
       const m = kpiSummary.metrics;
+      // #1640: a bare number here reaches the suggestions LLM as prose, and the
+      // prompt asks for a trend/comparison pill whenever numeric KPIs are on
+      // screen — so an unlabelled TRx could seed a comparison against a
+      // business_metrics figure measured ~73x larger. Each tile carries its
+      // substrate inline; this summary is prose, so there is nowhere else to
+      // put it.
+      const basis = kpiSummary.measure_basis ?? {};
+      const label = (key: string) => {
+        const tables = basis[key]?.comparison_key ?? basis[key]?.substrate;
+        return tables && tables.length > 0 ? ` [from ${tables.join('+')}]` : ' [source unstated]';
+      };
       const parts: string[] = [];
-      if (m.trx_volume != null) parts.push(`Total TRx (MTD): ${m.trx_volume}`);
-      if (m.market_share != null) parts.push(`market share: ${m.market_share}%`);
-      if (m.hcp_reach != null) parts.push(`HCPs reached: ${m.hcp_reach}`);
+      if (m.trx_volume != null)
+        parts.push(`Total TRx (MTD): ${m.trx_volume}${label('trx_volume')}`);
+      if (m.market_share != null)
+        parts.push(`market share: ${m.market_share}%${label('market_share')}`);
+      if (m.hcp_reach != null) parts.push(`HCPs reached: ${m.hcp_reach}${label('hcp_reach')}`);
       if (parts.length > 0) lines.push(`KPI tiles — ${parts.join('; ')}.`);
     }
     if (activeExp?.active_count != null) {

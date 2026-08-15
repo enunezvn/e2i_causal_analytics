@@ -24,6 +24,13 @@ export interface KpiSummaryResponse {
     patient_starts?: number;
     [key: string]: number | string | string[] | undefined;
   };
+  /**
+   * What each tile's figure rests on, keyed by metric name (#1640). The
+   * backend has returned this since the substrate fence landed; without it
+   * declared here the page has no typed access to the provenance, which is how
+   * the on-screen summary came to publish bare numbers.
+   */
+  measure_basis?: Record<string, { comparison_key?: string[]; substrate?: string[] }>;
   /** 'database' = real DB values; 'synthetic' = computed over synthetic-gold
    *  rows (E2I_KPI_INCLUDE_SYNTHETIC demo/review mode); 'fallback' = sample data. */
   data_source: 'database' | 'synthetic' | 'fallback' | string;

@@ -1818,6 +1818,9 @@ def _kpi_summary_measure_bases(
         if tables:
             bases[field] = {
                 "substrate": tables,
+                # The field both prompts name as the only comparability key
+                # (#1640). For a live computed tile it equals the SQL's tables.
+                "comparison_key": tables,
                 "query_id": query_id,
                 "computed": True,
                 "runtime_confirmed": True,
