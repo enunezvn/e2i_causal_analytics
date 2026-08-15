@@ -261,6 +261,18 @@ _NAME_TOKEN_STOP = frozenset(
 #: KPIs whose names are ENTIRELY such tokens carry explicit aliases instead.
 _MIN_NAME_TOKEN = 4
 
+#: How a metric phrase may be inflected in prose — "override rate" also appears
+#: as "override rates", "patient touch" as "patient touches".
+#:
+#: SHARED DELIBERATELY (#1637 codex iter-2). Two matchers decide whether a phrase
+#: names a metric — :func:`_alias_pattern` (which metric is being asked about)
+#: and :func:`recognize_distinct_metric` (is a SECOND metric also named). When
+#: only the first learned plurals, "acceptance rates and override rates" resolved
+#: the first KPI, failed to see the second, and answered one metric as complete —
+#: the exact fail-silent the multi-metric guard exists to prevent. One constant
+#: so the two cannot drift apart again.
+_PLURAL_SUFFIX = r"(?:e?s)?"
+
 
 @lru_cache(maxsize=1024)
 def _name_tokens(name: str) -> Tuple[str, ...]:
@@ -284,11 +296,11 @@ def _alias_pattern(alias: str) -> re.Pattern[str]:
 
     The plural suffix is not decoration: a plain ``\\b...\\b`` rule silently LOST
     "override rates", "acceptance rates" and "patient touches", none of which the
-    187-test regression corpus covered. ``(?:e?s)?`` keeps those while still
-    rejecting "f1 score|card", since "card" matches neither the optional suffix
-    nor the closing boundary.
+    187-test regression corpus covered. :data:`_PLURAL_SUFFIX` keeps those while
+    still rejecting "f1 score|card", since "card" matches neither the optional
+    suffix nor the closing boundary.
     """
-    return re.compile(rf"(?<![\w'-]){re.escape(alias)}(?:e?s)?(?![\w'-])")
+    return re.compile(rf"(?<![\w'-]){re.escape(alias)}{_PLURAL_SUFFIX}(?![\w'-])")
 
 
 @lru_cache(maxsize=1024)
@@ -457,7 +469,14 @@ def recognize_distinct_metric(
     for phrase, kpi_id in _strict_metric_vocabulary():
         if kpi_id == exclude_id:
             continue
-        m = re.search(rf"(?<![\w'-]){re.escape(phrase)}(?![\w'-])", normalized_query)
+        # Plural-tolerant, matching _alias_pattern (#1637 codex iter-2): a probe
+        # that only saw singulars missed the second metric in "acceptance rates
+        # and override rates" and let it be answered as one. The case-sensitive
+        # abbreviation branch below stays exact — "TRx"/"ATE" are not pluralized,
+        # and loosening initialisms is how they start matching ordinary prose.
+        m = re.search(
+            rf"(?<![\w'-]){re.escape(phrase)}{_PLURAL_SUFFIX}(?![\w'-])", normalized_query
+        )
         if m is not None:
             kpi = registry.get(kpi_id)
             if kpi is not None:

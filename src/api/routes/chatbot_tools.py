@@ -2078,7 +2078,15 @@ _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-
 #: mentions alone do not: "TRx market share" is a modifier chain naming exactly
 #: one KPI (WS3-BI-008). Only an explicit coordinator between the mentions means
 #: the caller asked for both.
-_KPI_COORDINATOR_RE = re.compile(r"(?:\band\b|\bplus\b|\bas well as\b|&|,|/)")
+#:
+#: Includes COMPARISON forms (codex iter-2): "TRx vs NRx" is two metrics just as
+#: much as "TRx and NRx" is, and comparison is the more natural phrasing for the
+#: ask — omitting it left the original single-call failure intact for exactly the
+#: shape most likely to produce it.
+_KPI_COORDINATOR_RE = re.compile(
+    r"(?:\band\b|\bplus\b|\bas well as\b|\bvs\.?\b|\bversus\b"
+    r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/)"
+)
 
 
 @tool(args_schema=KpiCalculateInput)

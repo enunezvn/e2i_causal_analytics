@@ -150,3 +150,54 @@ class TestCoordinatorFormsAreCovered:
             f"{kpi_name!r} coordinates two metrics but was answered as one: "
             f"kpi={result.get('kpi_id')} value={result.get('value')}"
         )
+
+    @pytest.mark.parametrize(
+        "kpi_name",
+        ["TRx vs NRx", "TRx vs. NRx", "TRx versus NRx", "TRx compared to NRx"],
+    )
+    async def test_comparison_phrasing_also_refuses(self, kpi_name):
+        """Comparison is the MOST natural way to ask for two metrics at once, so
+        omitting it would have left the single-call failure intact for the very
+        shape most likely to produce it (codex iter-2)."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert _is_compound_refusal(result), (
+            f"{kpi_name!r} compares two metrics but was answered as one: "
+            f"kpi={result.get('kpi_id')} value={result.get('value')}"
+        )
+
+
+class TestPluralAsksAreDetectedOnBothSides:
+    """#1637 codex iter-2 HIGH — the asymmetry that reopened the fail-silent.
+
+    Primary recognition learned plurals (``_alias_pattern``) while the
+    second-metric probe (``recognize_distinct_metric``) still matched singulars
+    only, so a fully-plural coordinated ask resolved the first KPI, never saw the
+    second, and answered one metric as complete. Both now share
+    ``_PLURAL_SUFFIX``.
+    """
+
+    @pytest.mark.parametrize(
+        "kpi_name",
+        [
+            "acceptance rates and override rates",
+            "override rates and acceptance rates",
+            "conversion rates and ROI",
+        ],
+    )
+    async def test_plural_coordinated_asks_are_refused(self, kpi_name):
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert _is_compound_refusal(result), (
+            f"{kpi_name!r} names two metrics in plural form but was answered as "
+            f"one: kpi={result.get('kpi_id')} value={result.get('value')}"
+        )
+
+    async def test_singular_and_plural_forms_agree(self):
+        """The singular and plural spellings of one ask must reach the same
+        verdict — divergence there IS the bug."""
+        singular = await kpi_calculate_tool.ainvoke(
+            {"kpi_name": "acceptance rate and override rate"}
+        )
+        plural = await kpi_calculate_tool.ainvoke(
+            {"kpi_name": "acceptance rates and override rates"}
+        )
+        assert _is_compound_refusal(singular) == _is_compound_refusal(plural)
