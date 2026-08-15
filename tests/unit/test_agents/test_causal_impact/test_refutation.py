@@ -689,25 +689,47 @@ class TestStandaloneFunction:
 
 
 @pytest.mark.asyncio
-async def test_refutation_suite_offloaded_to_thread(monkeypatch):
+async def test_refutation_suite_offloaded_to_bounded_pool(monkeypatch):
     """The CPU-bound DoWhy reconstruction + refutation suite (each refuter
-    re-estimates many times) must run OFF the event loop (asyncio.to_thread) so
-    they cannot block the gunicorn worker past --timeout and get it KILLED
-    mid-run (orphaning async jobs at status='running'). The module's autouse
-    fast-sim fixture keeps the real refuters quick."""
-    import asyncio as _aio
+    re-estimates many times) must run OFF the event loop so it cannot block the
+    gunicorn worker past --timeout and get it KILLED mid-run (orphaning async
+    jobs at status='running'). The module's autouse fast-sim fixture keeps the
+    real refuters quick.
+
+    #1601 moved all three off-loads from ``asyncio.to_thread`` to the BOUNDED
+    agent-compute pool (``run_bounded_with_budget``) and dropped the module-level
+    ``asyncio`` import. This test used to monkeypatch ``_ref_mod.asyncio.to_thread``
+    and so died with ``AttributeError`` before asserting anything (#1630) — the
+    off-loop guarantee it exists to protect was silently unguarded in the
+    nightly.
+
+    Asserting the THREAD rather than only the helper name is deliberate: a
+    name-only spy passes as long as the helper is called, even if a future
+    refactor makes it run inline. Comparing against the event loop's own thread
+    id fails on any regression that puts this compute back on the loop,
+    whichever helper it routes through.
+    """
+    import threading
+    import time as _t
 
     from src.agents.causal_impact.nodes import refutation as _ref_mod
 
     node = RefutationNode()
     offloaded: list = []
-    real_to_thread = _aio.to_thread
+    ran_on_thread: list[int] = []
+    loop_thread_id = threading.get_ident()
+    real_bounded = _ref_mod.run_bounded_with_budget
 
     async def _spy(func, *args, **kwargs):
         offloaded.append(getattr(func, "__name__", str(func)))
-        return await real_to_thread(func, *args, **kwargs)
 
-    monkeypatch.setattr(_ref_mod.asyncio, "to_thread", _spy)
+        def _record_thread(*inner_args, **inner_kwargs):
+            ran_on_thread.append(threading.get_ident())
+            return func(*inner_args, **inner_kwargs)
+
+        return await real_bounded(_record_thread, *args, **kwargs)
+
+    monkeypatch.setattr(_ref_mod, "run_bounded_with_budget", _spy)
 
     ate = 0.5
     state: CausalImpactState = {
@@ -730,6 +752,13 @@ async def test_refutation_suite_offloaded_to_thread(monkeypatch):
             "heterogeneity_detected": False,
         },
         "estimation_data": _make_estimation_data(true_ate=ate),
+        # A far-future deadline is REQUIRED for coverage, not incidental: the
+        # per-refit calibration off-load at refutation.py:1282 sits behind
+        # ``if deadline is not None and time.monotonic() + per_refit_hint <=
+        # deadline``, and ``deadline`` comes from this key. Without it that third
+        # call site never executes, so a regression replacing it with an inline
+        # ``causal_model.refute_estimate(...)`` would slip through green.
+        "compute_deadline": _t.monotonic() + 10_000.0,
         "status": "pending",
         "errors": [],
         "warnings": [],
@@ -737,9 +766,22 @@ async def test_refutation_suite_offloaded_to_thread(monkeypatch):
 
     result = await node.execute(state)
 
-    # Both heavy DoWhy steps ran in worker threads (offloaded)...
+    # ALL THREE heavy DoWhy steps went through the bounded agent-compute pool —
+    # reconstruction, the per-refit calibration probe, and the suite itself.
     assert "_reconstruct_dowhy_artifacts" in offloaded
+    assert "refute_estimate" in offloaded, (
+        "the per-refit calibration probe (refutation.py:1282) did not reach the "
+        f"bounded pool; observed off-loads: {offloaded}"
+    )
     assert "run_all_tests" in offloaded
+    # ...and genuinely executed OFF the event loop thread, not merely routed
+    # through the helper. This is the assertion that survives a refactor.
+    assert ran_on_thread, "no off-loaded call actually executed"
+    assert loop_thread_id not in ran_on_thread, (
+        f"CPU-bound refutation ran ON the event loop thread ({loop_thread_id}); "
+        "a multi-minute suite there trips gunicorn --timeout and the worker is "
+        "killed mid-run"
+    )
     # ...and the suite still ran to a real gate decision (offload is transparent).
     assert "refutation_results" in result or "gate_decision" in result
 
