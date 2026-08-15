@@ -108,6 +108,30 @@ class TestRealEvalArgumentsAreNeverRefused:
             f"but the compound guard refused it: {result.get('error')}"
         )
 
+    @pytest.mark.parametrize(
+        "kpi_name,expected_id",
+        [
+            ("conversion_rate", "WS3-BI-009"),
+            ("market_share", "WS3-BI-008"),
+            ("conversion rate", "WS3-BI-009"),
+            ("TRx", "WS3-BI-005"),
+        ],
+    )
+    async def test_observed_names_still_RESOLVE_not_merely_escape_the_guard(
+        self, kpi_name, expected_id
+    ):
+        """#1637 codex iter-8. The must-not-refuse fixture above asserts only that
+        the COMPOUND guard stays quiet — which passes trivially when a name stops
+        resolving at all, and that is exactly what happened: moving to word
+        boundaries made "_" a word character, so the snake_case ids the model
+        really passes ("conversion_rate", 15 calls; "market_share", 6) resolved to
+        None instead of their KPI. A weak assertion hid a live regression, so this
+        pins the resolution itself."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert result.get("kpi_id") == expected_id, (
+            f"{kpi_name!r} no longer resolves to {expected_id}: {result.get('error')}"
+        )
+
     async def test_trx_market_share_is_a_modifier_chain_not_two_asks(self):
         """The specific 32-call case an ungated guard breaks. It must still
         resolve to WS3-BI-008 and compute."""

@@ -373,7 +373,16 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
     """
     if not query:
         return None
-    q = " ".join(str(query).lower().split())
+    # Underscores are separators here, not word characters (#1637 codex iter-8).
+    # The model really does pass snake_case ids -- "conversion_rate" (15 calls)
+    # and "market_share" (6) appear in the 51-turn eval -- and once matching moved
+    # to word boundaries, "_" being a \w char made both resolve to NOTHING.
+    #
+    # Normalized AFTER the whitespace collapse and one character for one, so the
+    # result is the same LENGTH as the string the spans are measured against; the
+    # #1475 governing-head guards slice this string and would silently misread a
+    # shorter one.
+    q = " ".join(str(query).lower().split()).replace("_", " ")
     registry = get_registry()
 
     # 0) reverse-share phrasing with a brand/modifier gap (#1475 codex iter-4):
