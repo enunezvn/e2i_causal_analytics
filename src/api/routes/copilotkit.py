@@ -1814,7 +1814,9 @@ def _kpi_summary_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list
     return {r["query_id"]: _tables_in_sql(r.get("sql") or "") for r in rows}
 
 
-def _kpi_summary_measure_bases(client: Any = "__default__") -> dict[str, dict]:
+def _kpi_summary_measure_bases(
+    client: Any = "__default__", brand: str | None = None, region: str | None = None
+) -> dict[str, dict]:
     """Per-tile substrate for the Home KPI summary, derived from the SQL (#1640).
 
     Two earlier shapes were wrong in instructive ways. The first declared one
@@ -1831,16 +1833,28 @@ def _kpi_summary_measure_bases(client: Any = "__default__") -> dict[str, dict]:
     """
     if client is None:
         return {}
-    base_ids = tuple(sorted({spec[0] for spec in _KPI_SUMMARY_QUERIES.values()}))
-    by_query = _kpi_summary_substrates_cached(base_ids)
+    # The RESOLVED query id, not the base: a region filter routes each tile to a
+    # `*_region` variant, and those read more tables (measured:
+    # business_impact_hcp_reach reads {treatment_events} while
+    # business_impact_hcp_reach_region reads {patient_journeys,
+    # treatment_events}). Deriving from the base would understate the substrate
+    # under a region filter — the hcp_reach defect one level down.
+    brand_param = None if brand in (None, "All") else brand
+    resolved: dict[str, str] = {
+        field: _kpi_summary_query(spec[0], brand_param, region, spec[2])[0]
+        for field, spec in _KPI_SUMMARY_QUERIES.items()
+    }
+    by_query = _kpi_summary_substrates_cached(tuple(sorted(set(resolved.values()))))
     if not by_query:
         return {}
     bases: dict[str, dict] = {}
     for field, spec in _KPI_SUMMARY_QUERIES.items():
-        tables = by_query.get(spec[0])
+        query_id = resolved[field]
+        tables = by_query.get(query_id)
         if tables:
             bases[field] = {
                 "substrate": tables,
+                "query_id": query_id,
                 "computed": True,
                 "runtime_confirmed": True,
                 "declared_sources": tables,
@@ -2011,7 +2025,7 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # registry — none is a stored business_metrics row — so a tile must not
         # be read as a check on, or a correction to, a business_metrics value
         # under the same name (measured ~73x apart for TRx).
-        "measure_basis": _kpi_summary_measure_bases(client),
+        "measure_basis": _kpi_summary_measure_bases(client, brand=brand, region=region),
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
         # than real-world data -> surface "synthetic" so the FE badges them

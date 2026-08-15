@@ -724,3 +724,48 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
         from src.kpi.measure_basis import BUSINESS_METRICS_BASIS, substrates_agree
 
         assert not substrates_agree(self._bases()["trx_volume"], BUSINESS_METRICS_BASIS)
+
+
+@pytest.mark.integration
+class TestTheBasisFollowsTheQueryThatActuallyRan:
+    """Found by checking codex's own question before it reported: a region
+    filter routes each tile to a ``*_region`` variant, and those read MORE
+    tables than the base.
+
+    Measured on the live registry::
+
+        business_impact_hcp_reach         -> {treatment_events}
+        business_impact_hcp_reach_region  -> {patient_journeys, treatment_events}
+        business_impact_conversion_rate_region
+                                          -> adds patient_journeys
+
+    Deriving from the BASE id would understate the substrate under a region
+    filter — the same shape as the hcp_reach defect, one level down.
+    """
+
+    def _bases(self, region):
+        from src.api.dependencies.supabase_client import get_supabase, init_supabase
+
+        if get_supabase() is None:
+            init_supabase()
+        if get_supabase() is None:
+            pytest.skip("no Supabase client available")
+        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+
+        bases = _kpi_summary_measure_bases(get_supabase(), brand="Kisqali", region=region)
+        if not bases:
+            pytest.skip("kpi_query_registry unreadable")
+        return bases
+
+    def test_unscoped_hcp_reach_is_the_event_ledger_alone(self):
+        assert self._bases(None)["hcp_reach"]["substrate"] == ["treatment_events"]
+
+    def test_region_scoped_hcp_reach_reports_the_variant_it_ran(self):
+        assert self._bases("northeast")["hcp_reach"]["substrate"] == [
+            "patient_journeys",
+            "treatment_events",
+        ]
+
+    def test_the_declared_query_id_is_the_resolved_one(self):
+        scoped = self._bases("northeast")["hcp_reach"]
+        assert scoped["query_id"] == "business_impact_hcp_reach_region", scoped
