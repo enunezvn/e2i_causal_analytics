@@ -265,7 +265,14 @@ _MIN_NAME_TOKEN = 4
 #: "conversion_rate", "TRx-share". Normalized to spaces so boundary matching sees
 #: the words (#1637 codex iter-8/9). Replacement is one character for one, so the
 #: normalized string keeps the LENGTH its spans are measured against.
-_SEPARATOR_CHARS = "_-"
+#:
+#: Slash is here even though it is ALSO a multi-KPI coordinator in
+#: ``chatbot_tools._KPI_COORDINATOR_RE`` (#1637 codex iter-10). The two roles do
+#: not conflict, because this replacement is length-preserving: matching runs on
+#: the separator-normalized string, while the coordinator gap is sliced from the
+#: punctuation-preserving one at the SAME offsets. So "TRx/share" resolves as one
+#: KPI and "TRx/NRx" is still refused as two.
+_SEPARATOR_CHARS = "_-/.–—"
 
 #: How a metric phrase may be inflected in prose — "override rate" also appears
 #: as "override rates", "patient touch" as "patient touches", "ROI" as "ROI's".

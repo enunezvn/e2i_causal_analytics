@@ -212,6 +212,16 @@ class TestRealInputShapesStillResolve:
             ("TRx-share", "WS3-BI-008"),
             ("time-to-release", "WS1-DQ-009"),
             ("roc-auc", "WS1-MP-001"),
+            # other separators (codex iter-10) — each of these produced a
+            # CONFIDENT WRONG KPI before, not a None
+            ("trx/share", "WS3-BI-008"),
+            ("trx.share", "WS3-BI-008"),
+            ("trx–share", "WS3-BI-008"),
+            ("trx—share", "WS3-BI-008"),
+            ("trigger/funnel/conversion", "WS2-TR-009"),
+            ("trigger.funnel.conversion", "WS2-TR-009"),
+            ("hcp/coverage", "WS3-BI-004"),
+            ("hcp.coverage", "WS3-BI-004"),
             # possessive, both apostrophes
             ("ROI's trend", "WS3-BI-010"),
             ("TRx's drivers", "WS3-BI-005"),

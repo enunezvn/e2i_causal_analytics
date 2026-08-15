@@ -303,6 +303,21 @@ class TestAggressiveCoordinatorsStayHarmless:
         result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
         assert not _is_compound_refusal(result), result.get("error")
 
+    async def test_slash_is_both_a_separator_and_a_coordinator(self):
+        """codex iter-10. "/" has to do two opposite jobs: it JOINS a single KPI
+        label ("TRx/share" is WS3-BI-008) and it COORDINATES two ("TRx/NRx").
+
+        Resolution matching normalizes "/" to a space; the coordinator gap is
+        sliced from the punctuation-PRESERVING normalization at the same offsets.
+        Both normalizations are length-preserving, which is what makes reading the
+        same spans out of two different strings sound."""
+        joined = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx/share"})
+        assert not _is_compound_refusal(joined), joined.get("error")
+        assert joined.get("kpi_id") == "WS3-BI-008", joined
+
+        coordinated = await kpi_calculate_tool.ainvoke({"kpi_name": "TRx/NRx"})
+        assert _is_compound_refusal(coordinated), coordinated
+
     async def test_slash_between_two_metrics_refuses_rather_than_answering_one(self):
         """ "TRx/NRx ratio" is not a defined KPI. Without the guard it resolves to
         NRx alone and reports that single number AS the ratio — a wrong answer.

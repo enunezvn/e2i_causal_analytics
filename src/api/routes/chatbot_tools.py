@@ -2228,6 +2228,14 @@ async def kpi_calculate_tool(
     # coordinator -- and the tool computed TRx share while silently dropping ROI.
     # Stopping at the first mention re-created the exact fail-silent this guard
     # exists to close, just one mention further along.
+    # The gap is read from the PUNCTUATION-PRESERVING normalization, not from
+    # _normalized (#1637 codex iter-10). kpi_resolution normalizes "/" to a space
+    # so "TRx/share" resolves as the single KPI WS3-BI-008 rather than falling
+    # through to a token match on TRx alone -- but "/" is also a coordinator, and
+    # reading the gap from the normalized string would erase it and let "TRx/NRx"
+    # be answered as one metric. Both normalizations are length-preserving, so the
+    # spans index into either string identically.
+    _punctuated = " ".join(kpi_name.lower().split())
     _masked = _normalized[:_kpi_start] + " " * (_kpi_end - _kpi_start) + _normalized[_kpi_end:]
     _coordinated: List[str] = []
     _seen_ids = {kpi.id}
@@ -2257,7 +2265,7 @@ async def kpi_calculate_tool(
         if _other_kpi.id in _seen_ids:
             continue
         _seen_ids.add(_other_kpi.id)
-        _gap = _normalized[min(_kpi_end, _other_end) : max(_kpi_start, _other_start)]
+        _gap = _punctuated[min(_kpi_end, _other_end) : max(_kpi_start, _other_start)]
         if _KPI_COORDINATOR_RE.search(_gap):
             _coordinated.append(str(_other_kpi.name))
     else:
