@@ -678,7 +678,7 @@ async def get_kpi_history(
         region=region or "",
         count=len(points),
         points=points,
-        measure_basis=materialized_history_basis(kpi_meta) if kpi_meta else None,
+        measure_basis=materialized_history_basis(kpi_meta, rows=rows) if kpi_meta else None,
     )
 
 

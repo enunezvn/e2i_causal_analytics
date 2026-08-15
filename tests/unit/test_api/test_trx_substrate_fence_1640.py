@@ -945,7 +945,11 @@ class TestEveryChartableSeriesCarriesItsBasis:
         # does and this one explicitly does not.
         assert basis["substrate"] == ["kpi_history"]
         assert basis["computed"] is False
-        assert basis["materialized_from"] == sorted(kpi.tables)
+        # NOT `sorted(kpi.tables)`, which is what this asserted first: that is
+        # the registry's union of the calculator's POSSIBLE sources, and for
+        # ROI it names agent_activities, which never backfilled a single row.
+        # Provenance comes from the backfill tag (codex iter-7).
+        assert basis["materialized_from"] == ["treatment_events.event_date"]
         assert "business_metrics" in basis["note"]
 
     @pytest.mark.parametrize(
@@ -991,3 +995,62 @@ class TestEveryChartableSeriesCarriesItsBasis:
         assert tables_in_sql(
             "SELECT * FROM treatment_events JOIN generate_series(1,3) ON true"
         ) == ["treatment_events"]
+
+
+class TestHistoryProvenanceComesFromTheRowsNotTheRegistry:
+    """codex iter-7 HIGH: `materialized_from` named the wrong source for ROI.
+
+    Deriving it from `KPIMetadata.tables` gave ROI the UNION of its calculator's
+    possible sources, but the stored history is backfilled from
+    `business_metrics.roi` specifically (`HANDLER_SOURCES`, and measured live
+    2026-08-15: all 3,280 WS3-BI-010 rows carry `source='business_metrics.roi'`,
+    all 720 WS3-BI-005 rows carry `source='treatment_events.event_date'`).
+
+    That over-claim is not cosmetic: it would fence a history-vs-current ROI
+    comparison that is business-metrics-backed on BOTH sides — the exact kind
+    of false fence `measure_basis_for_kpi` was written to avoid.
+    """
+
+    def _basis(self, kpi_name, rows=None):
+        from src.kpi.measure_basis import materialized_history_basis
+        from src.services.kpi_resolution import recognize_kpi
+
+        return materialized_history_basis(recognize_kpi(kpi_name), rows=rows)
+
+    def test_roi_history_names_business_metrics_not_the_calculators_union(self):
+        basis = self._basis("ROI", rows=[{"source": "business_metrics.roi", "value": 1.8}])
+        assert basis["materialized_from"] == ["business_metrics.roi"], basis
+        assert basis["runtime_confirmed"] is True
+
+    def test_trx_history_names_the_event_ledger(self):
+        basis = self._basis("TRx", rows=[{"source": "treatment_events.event_date", "value": 11298}])
+        assert basis["materialized_from"] == ["treatment_events.event_date"]
+
+    def test_an_empty_series_falls_back_to_the_registered_handler(self):
+        """No rows is not "no provenance" — the backfill's tag is still known."""
+        basis = self._basis("ROI", rows=[])
+        assert basis["materialized_from"] == ["business_metrics.roi"], basis
+        assert basis["runtime_confirmed"] is False
+
+    def test_the_read_path_is_still_kpi_history(self):
+        for name in ("ROI", "TRx"):
+            assert self._basis(name)["substrate"] == ["kpi_history"]
+
+    def test_the_route_passes_the_rows_it_returned(self):
+        import ast
+        import inspect
+
+        from src.api.routes import kpi as kpi_routes
+
+        tree = ast.parse(inspect.getsource(kpi_routes.get_kpi_history).lstrip())
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "materialized_history_basis"
+            ):
+                assert any(kw.arg == "rows" for kw in node.keywords), (
+                    "the route computes the basis without the rows it just read"
+                )
+                return
+        raise AssertionError("get_kpi_history never calls materialized_history_basis")

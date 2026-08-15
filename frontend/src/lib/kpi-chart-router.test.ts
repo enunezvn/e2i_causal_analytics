@@ -594,3 +594,70 @@ describe('region-aware current values (#1538)', () => {
     expect(data.emptyReason).toMatch(/global/i);
   });
 });
+
+describe('measure_basis reaches the model (#1640)', () => {
+  // codex iter-7 HIGH: `renderChart` is a fourth model-visible numeric KPI
+  // surface. The backend responses carry a basis, but the router returned only
+  // rows + chart metadata, so the action result handed back to CopilotKit had
+  // numeric values with nothing saying what they measure. A TRx series from
+  // treatment_events could then sit beside a business_metrics TRx figure —
+  // measured ~73x apart — with the model unable to tell them apart.
+  const BASIS = {
+    substrate: ['kpi_history'],
+    computed: false,
+    materialized_from: ['treatment_events.event_date'],
+    note: 'Read from the materialized kpi_history table.',
+  };
+
+  it('carries the basis through the history branch', async () => {
+    mockGetKPIHistory.mockResolvedValue({
+      kpi_id: 'WS3-BI-005',
+      brand: 'Kisqali',
+      region: '',
+      count: 2,
+      points: [
+        { metric_date: '2026-07-01', value: 11000, status: 'good' },
+        { metric_date: '2026-08-01', value: 11298, status: 'good' },
+      ],
+      measure_basis: BASIS,
+    });
+    const spec = await routeKpiChart({ kpis: ['WS3-BI-005'], brand: 'Kisqali' });
+    expect(spec.rows.length).toBe(2);
+    expect(spec.measureBasis).toEqual({ 'WS3-BI-005': BASIS });
+  });
+
+  it('carries the basis through the current-value branch', async () => {
+    mockGetKPIHistory.mockResolvedValue({ ...NO_HISTORY });
+    mockGetKPIValue.mockResolvedValue({
+      kpi_id: 'WS3-BI-005',
+      value: 11298,
+      status: 'good',
+      calculated_at: '2026-08-15T00:00:00Z',
+      cached: false,
+      metadata: {},
+      measure_basis: { substrate: ['treatment_events'], computed: true },
+    });
+    const spec = await routeKpiChart({ kpis: ['WS3-BI-005'], brand: 'Kisqali' });
+    expect(spec.measureBasis?.['WS3-BI-005']).toEqual({
+      substrate: ['treatment_events'],
+      computed: true,
+    });
+  });
+
+  it('omits the key entirely when the backend sent no basis', async () => {
+    // Absent means "unknown", and unknown must not read as "declared empty" —
+    // which is a distinction `substrates_agree` also makes on the backend.
+    // (The first version of this test asserted `hasOwnProperty` on a literal
+    // `{}`, which was true of any object and proved nothing about the router.)
+    mockGetKPIHistory.mockResolvedValue({
+      kpi_id: 'WS3-BI-005',
+      brand: 'Kisqali',
+      region: '',
+      count: 1,
+      points: [{ metric_date: '2026-08-01', value: 11298, status: 'good' }],
+    });
+    const spec = await routeKpiChart({ kpis: ['WS3-BI-005'], brand: 'Kisqali' });
+    expect(spec.rows.length).toBe(1);
+    expect('measureBasis' in spec).toBe(false);
+  });
+});

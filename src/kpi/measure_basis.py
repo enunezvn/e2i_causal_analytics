@@ -289,7 +289,7 @@ def query_substrates_cached(query_ids: tuple[str, ...]) -> dict[str, list[str]]:
     return result
 
 
-def materialized_history_basis(kpi: Any) -> Dict[str, Any]:
+def materialized_history_basis(kpi: Any, rows: Optional[list] = None) -> Dict[str, Any]:
     """Declare what a ``kpi_history`` SERIES measures (#1640).
 
     ``/api/kpis/{id}/history`` reads the materialized ``kpi_history`` table,
@@ -302,22 +302,45 @@ def materialized_history_basis(kpi: Any) -> Dict[str, Any]:
     and the same answer can carry a business_metrics TRx figure from
     ``e2i_data_query_tool`` -- measured ~73x apart.
     """
-    declared = sorted(getattr(kpi, "tables", None) or [])
+    # Provenance comes from the ROWS, not from the registry declaration. Every
+    # kpi_history row carries the backfill's `source` tag, and for ROI that tag
+    # is `business_metrics.roi` -- while `KPIMetadata.tables` is the UNION of
+    # its calculator's POSSIBLE sources, which includes agent_activities.
+    # Declaring the union would both over-claim provenance and FENCE a
+    # history-vs-current ROI comparison that is business-metrics-backed on both
+    # sides. Measured live 2026-08-15: all 3,280 WS3-BI-010 rows are
+    # `business_metrics.roi`; all 720 WS3-BI-005 rows are
+    # `treatment_events.event_date`.
+    sources = sorted({str(row.get("source")) for row in (rows or []) if row.get("source")})
+    runtime_confirmed = bool(sources)
+    if not sources:
+        # An empty series is not "provenance unknown": the backfill registers a
+        # tag per KPI, and that is what these rows WOULD carry.
+        from src.kpi.history_backfill import HANDLER_SOURCES
+
+        registered = HANDLER_SOURCES.get(str(getattr(kpi, "id", "")), "")
+        sources = [registered] if registered else []
     return {
         "substrate": ["kpi_history"],
         "computed": False,
-        "materialized_from": declared,
+        "materialized_from": sources,
+        "runtime_confirmed": runtime_confirmed,
         "grain": "kpi x brand x region x calendar month",
         "measure": (
             "monthly materialized history of the computed KPI"
-            + (f" (materialized from {', '.join(declared)})" if declared else "")
+            + (f" (materialized from {', '.join(sources)})" if sources else "")
         ),
         "note": (
             "Read from the materialized kpi_history table -- the stored form of the "
-            "COMPUTED KPI, not the business_metrics snapshot. Do NOT plot or compare "
-            "it against e2i_data_query_tool(query_type='kpi') values for a volume KPI: "
-            "measured 2026-08-15, those are ~73x larger because they are a modeled "
-            "market-scale level rather than a count of observed events."
+            "COMPUTED KPI. Compare only with a figure resting on the same source: "
+            "`materialized_from` names it, and it is NOT always the same one "
+            "(ROI history is backfilled from business_metrics.roi, so it IS "
+            "comparable with stored ROI; the Rx-volume family is backfilled from "
+            "treatment_events, so it is NOT). For a treatment_events-backed series, "
+            "do NOT plot or compare it against e2i_data_query_tool(query_type='kpi') "
+            "business_metrics values -- measured 2026-08-15, those are ~73x larger "
+            "because they are a modeled market-scale level rather than a count of "
+            "observed events."
         ),
     }
 
