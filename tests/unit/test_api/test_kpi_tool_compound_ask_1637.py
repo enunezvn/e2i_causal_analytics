@@ -153,6 +153,32 @@ class TestCoordinatorFormsAreCovered:
 
     @pytest.mark.parametrize(
         "kpi_name",
+        [
+            "TRx or NRx",
+            "conversion rate or ROI",
+            "TRx alongside NRx",
+            "TRx together with NRx",
+            "TRx along with NRx",
+        ],
+    )
+    async def test_additive_and_disjunctive_phrasings_refuse(self, kpi_name):
+        """codex iter-7. "or" is as much a two-metric ask as "and"."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": kpi_name})
+        assert _is_compound_refusal(result), (
+            f"{kpi_name!r} names two metrics but was answered as one: "
+            f"kpi={result.get('kpi_id')} value={result.get('value')}"
+        )
+
+    async def test_bare_with_is_not_a_coordinator(self):
+        """The deliberate omission. "with" is a preposition that forms MODIFIER
+        relationships — "market share with respect to TRx" names ONE KPI. The
+        asymmetry justifies the caution: a missed coordinator degrades to the
+        pre-guard behaviour, while a false one refuses an answerable question."""
+        result = await kpi_calculate_tool.ainvoke({"kpi_name": "market share with respect to TRx"})
+        assert not _is_compound_refusal(result), result.get("error")
+
+    @pytest.mark.parametrize(
+        "kpi_name",
         ["TRx vs NRx", "TRx vs. NRx", "TRx versus NRx", "TRx compared to NRx"],
     )
     async def test_comparison_phrasing_also_refuses(self, kpi_name):

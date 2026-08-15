@@ -2083,8 +2083,16 @@ _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-
 #: much as "TRx and NRx" is, and comparison is the more natural phrasing for the
 #: ask — omitting it left the original single-call failure intact for exactly the
 #: shape most likely to produce it.
+#: Asymmetric by design: a MISSED coordinator degrades to the behaviour that
+#: shipped before this guard existed (one metric answered), while a FALSE
+#: coordinator refuses a question the tool can actually answer. So the list is
+#: grown deliberately and each addition is measured against the observed corpus.
+#: Bare "with" is excluded for exactly that reason -- it is a preposition that
+#: forms MODIFIER relationships, and "market share with respect to TRx" names one
+#: KPI, not two. The explicitly additive compounds are safe.
 _KPI_COORDINATOR_RE = re.compile(
-    r"(?:\band\b|\bplus\b|\bas well as\b|\bvs\.?\b|\bversus\b"
+    r"(?:\band\b|\bor\b|\bplus\b|\bas well as\b|\balongside\b"
+    r"|\b(?:along|together) with\b|\bvs\.?\b|\bversus\b"
     r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/)"
 )
 
