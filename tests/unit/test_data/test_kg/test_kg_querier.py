@@ -29,6 +29,9 @@ class _StubUMLS:
         self._raise_auth = raise_auth
         self._raise_error = raise_error
         self.calls: list[tuple[str, ...]] = []
+        # Ownership contract: a borrowed client must never be closed by the
+        # querier (#1629 pins this alongside lazy construction).
+        self.closed = False
 
     def cui_relations(self, cui: str, *, page_size: int = 50) -> list[dict[str, Any]]:
         self.calls.append(("cui_relations", cui))
@@ -39,7 +42,7 @@ class _StubUMLS:
         return self._relations
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
 
 class _StubOT:
@@ -532,3 +535,82 @@ def test_query_drug_disease_edges_propagates_open_targets_error() -> None:
     ot = _StubOT(raise_error=True)
     with pytest.raises(OpenTargetsError):
         _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
+
+
+# ---------------------------------------------------------------------------
+# UMLS is constructed lazily (#1629)
+#
+# `__init__` used to build `UMLSClient()` eagerly whenever no client was passed.
+# `UMLSClient()` raises `UMLSAuthError` without a key, so a MISSING UMLS
+# CREDENTIAL made the whole querier unconstructable — including
+# `query_drug_disease_edges`, which is pure Open Targets and never touches UMLS.
+#
+# That is what turned the two #1607 Open-Targets live contracts red in the
+# nightly (#1627): CI has no UMLS secret, so `KnowledgeGraphQuerier(
+# open_targets=OpenTargetsClient())` raised before any assertion ran.
+#
+# Deferring construction to first USE keeps `query_concept_relations`' documented
+# contract intact — `UMLSAuthError` still surfaces to the caller, just at the
+# point of use rather than at construction — while letting zero-auth paths run
+# without a credential they never needed. This deliberately differs from
+# `CitationResolver`, which degrades to `umls=None`: there UMLS is an optional
+# enrichment, here it is load-bearing and must fail loudly, never return zero
+# edges as if the graph were empty.
+# ---------------------------------------------------------------------------
+
+
+def test_querier_constructs_without_a_umls_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No UMLS key -> constructing is fine; the Open Targets path still works."""
+    monkeypatch.delenv("UMLS_UTS_API_KEY", raising=False)
+    ot = _StubOT(
+        evidence={
+            "drug": {
+                "name": "omalizumab",
+                "indications": {
+                    "rows": [
+                        {
+                            "disease": {"id": "MONDO_0005492", "name": "urticaria"},
+                            "maxClinicalStage": "APPROVAL",
+                        }
+                    ]
+                },
+            }
+        }
+    )
+    querier = KnowledgeGraphQuerier(open_targets=ot)  # type: ignore[arg-type]
+    edges = querier.query_drug_disease_edges("CHEMBL1201589", "MONDO_0005492")
+    assert [e.predicate for e in edges] == ["treats"]
+
+
+def test_umls_path_still_raises_auth_error_without_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Laziness must not soften the UMLS contract — it moves, it does not vanish.
+
+    A silent empty result here would be worse than the crash it replaced: the
+    KG cache build reads these relations (84 of 99 cached edges came from
+    ``umls_relations``), so "no key" must never look like "no relations".
+    """
+    monkeypatch.delenv("UMLS_UTS_API_KEY", raising=False)
+    querier = KnowledgeGraphQuerier(open_targets=_StubOT())  # type: ignore[arg-type]
+    with pytest.raises(UMLSAuthError):
+        querier.query_concept_relations("C0011615")
+
+
+def test_close_does_not_construct_a_umls_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """close() on a never-used querier must not build (and thus fail on) UMLS."""
+    monkeypatch.delenv("UMLS_UTS_API_KEY", raising=False)
+    querier = KnowledgeGraphQuerier(open_targets=_StubOT())  # type: ignore[arg-type]
+    querier.close()  # must not raise
+
+
+def test_injected_umls_is_returned_not_replaced() -> None:
+    """An explicitly-passed client is still the one used, and is never closed."""
+    umls = _StubUMLS()
+    querier = KnowledgeGraphQuerier(
+        umls=umls,  # type: ignore[arg-type]
+        open_targets=_StubOT(),  # type: ignore[arg-type]
+    )
+    assert querier.umls is umls
+    querier.close()
+    assert umls.closed is False, "a borrowed UMLS client must not be closed"

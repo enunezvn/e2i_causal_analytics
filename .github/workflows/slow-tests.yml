@@ -77,6 +77,19 @@ jobs:
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
       OPENAI_API_KEY: 'test-key'
+      # Real external-API credentials for the live-contract tests (#1629).
+      # These are the ONLY lane that should hold them: Job A is `pytest -m
+      # slow`, and every live-contract file is `slow`-marked so none of them
+      # reaches the PR-blocking lane.
+      #
+      # Before this, CI held no external-API secret at all, so every
+      # live-contract test skipped on its `skipif(not _API_KEY)` guard and had
+      # never executed in CI — a green that proved nothing. Each stays
+      # skip-on-absent rather than fail-on-absent, so a fork PR or an expired
+      # secret degrades to "not run", never to a false red.
+      UMLS_UTS_API_KEY: ${{ secrets.UMLS_UTS_API_KEY }}
+      OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
+      NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
       # Pin BLAS/OpenMP thread counts to 1 — same reasoning as the
       # integration-tests job (synthetic baseline e2e is sensitive to
       # multi-core BLAS reduction order). Matches local-dev measurement.

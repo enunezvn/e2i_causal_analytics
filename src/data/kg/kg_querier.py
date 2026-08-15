@@ -90,17 +90,29 @@ class KnowledgeGraphQuerier:
         self._owns_open_targets = False
         # ChEMBL is never auto-constructed; the path is opt-in.
         self._owns_chembl = False
+        # UMLS is held as Optional and built LAZILY by the ``umls`` property
+        # (#1629). Building it here made a MISSING CREDENTIAL fatal to the whole
+        # querier: ``UMLSClient()`` raises ``UMLSAuthError`` without a key, so
+        # ``query_drug_disease_edges`` — pure Open Targets, zero-auth, never
+        # touches UMLS — could not run without one. That is what turned the two
+        # #1607 live contracts red in the nightly (#1627), where no UMLS secret
+        # exists.
+        #
+        # Deferring to first use preserves ``query_concept_relations``'
+        # documented contract exactly: ``UMLSAuthError`` still reaches the
+        # caller, just at the point of use. It deliberately does NOT follow
+        # ``CitationResolver``'s degrade-to-None pattern — there UMLS is an
+        # optional enrichment, here it is load-bearing (84 of 99 cached edges
+        # come from ``umls_relations``), so a missing key must never be
+        # indistinguishable from "this concept has no relations".
+        self._umls: Optional[UMLSClient] = umls
         if entity_linker is not None:
-            self.umls = umls if umls is not None else entity_linker.umls
+            if self._umls is None:
+                self._umls = entity_linker.umls
             self.open_targets = (
                 open_targets if open_targets is not None else entity_linker.open_targets
             )
         else:
-            if umls is None:
-                self.umls = UMLSClient()
-                self._owns_umls = True
-            else:
-                self.umls = umls
             if open_targets is None:
                 self.open_targets = OpenTargetsClient()
                 self._owns_open_targets = True
@@ -109,6 +121,21 @@ class KnowledgeGraphQuerier:
         # Optional ChEMBL client. Borrowed only — KGQuerier never
         # auto-constructs ChEMBL (would surprise existing callers).
         self.chembl: Optional[ChEMBLClient] = chembl
+
+    @property
+    def umls(self) -> UMLSClient:
+        """The UMLS client, constructed on first use (#1629).
+
+        Raises ``UMLSAuthError`` here rather than in ``__init__`` when no
+        credential is available, so zero-auth paths (Open Targets drug-disease
+        edges) stay usable without one while the UMLS paths still fail loudly.
+        Ownership is recorded at construction time, so a querier that never
+        touches UMLS neither builds nor closes a client.
+        """
+        if self._umls is None:
+            self._umls = UMLSClient()
+            self._owns_umls = True
+        return self._umls
 
     def __enter__(self) -> "KnowledgeGraphQuerier":
         return self
@@ -122,8 +149,10 @@ class KnowledgeGraphQuerier:
         Borrowed clients (passed in by the caller or via ``entity_linker``)
         are NOT closed here — their lifetime is the caller's responsibility.
         """
-        if self._owns_umls:
-            self.umls.close()
+        # Guarded on ``_umls`` rather than the property: closing must never be
+        # what triggers lazy construction (#1629).
+        if self._owns_umls and self._umls is not None:
+            self._umls.close()
         if self._owns_open_targets:
             self.open_targets.close()
         if self._owns_chembl and self.chembl is not None:

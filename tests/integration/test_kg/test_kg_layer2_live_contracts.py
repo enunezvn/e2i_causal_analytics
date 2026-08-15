@@ -21,6 +21,13 @@ Measured against the live API on 2026-08-14:
 Gated on network only (Open Targets and RxNav are both zero-auth) and marked
 ``slow`` so they run on the ``slow-tests.yml`` schedule rather than the
 PR-blocking lane.
+
+That zero-auth premise was true of the clients but not, until #1629, of
+``KnowledgeGraphQuerier``: its ``__init__`` built a ``UMLSClient`` eagerly, so
+the two drug-disease tests below — which never touch UMLS — raised
+``UMLSAuthError`` in CI, where no UMLS secret exists. They are the two failures
+in nightly #1627. UMLS is now constructed lazily, so these run on a bare runner
+with no credential at all; the gate above stays network-only by design.
 """
 
 from __future__ import annotations
