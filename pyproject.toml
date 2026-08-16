@@ -205,6 +205,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 # Global timeout: 30 seconds per test (safety net against hanging)
 timeout = 30
+# "thread" never interrupts the running call: pytest_timeout.timeout_timer dumps
+# the stacks and then calls os._exit(1) on the worker, unconditionally. So a test
+# that outlives its lane's --timeout does not fail -- it KILLS its xdist worker.
+# That is why addopts below must disable worker restarts (#1648).
 timeout_method = "thread"
 # Custom markers for test categorization
 markers = [
@@ -232,7 +236,22 @@ filterwarnings = [
 # IMPORTANT: Limit parallel workers to prevent memory exhaustion
 # System has 7.5GB RAM, heavy ML imports use ~500MB/worker
 # Safe default: 4 workers = ~2GB for tests + ~4GB for OS/services
-addopts = "-v --tb=short -n 4 --dist=loadscope"
+#
+# --max-worker-restart=0 (#1648): end the session on the FIRST worker death
+# instead of replacing the worker. Paired with timeout_method="thread" above,
+# the default is actively harmful: xdist.dsession.get_default_max_worker_restart
+# returns numprocesses * 4 (8 on the -n 2 CI lanes) when the flag is absent, and
+# each replacement re-runs the test that killed its predecessor. A timeout kill
+# is deterministic, so the offending test executes 9 times, each costing a full
+# lane timeout plus a worker respawn -- measured locally at 9 kills / 206.5s
+# against a 5s cap, versus 1 kill / 37.0s with restarts off. On PR #1643 that
+# turned 4.8 min of real work into a 30-min cap cancel with no failure message.
+# Restarting buys nothing in exchange: xdist reports the crashed test as FAILED
+# whether or not it is retried (measured: "1 failed, 6 passed" with restarts vs
+# "1 failed, 4 passed" without), so the only cost of 0 is the tail of the dead
+# worker's queue, in a run that was already failing.
+# Guarded by tests/unit/test_tests_meta/test_xdist_worker_crash_fast_fail.py.
+addopts = "-v --tb=short -n 4 --dist=loadscope --max-worker-restart=0"
 # Enable test authentication bypass mode
 env = [
     "E2I_TESTING_MODE=true",

@@ -435,19 +435,27 @@ jobs:
       # generates every dataset and measures 20.2s bare but 38.6s under --cov,
       # i.e. OVER the unit lane's cap.
       #
-      # Exceeding the cap there is not a soft failure. pytest-timeout runs with
-      # ``timeout method: thread`` under xdist, which cannot preempt the call and
-      # so calls os._exit(1) on the worker. xdist reports that as
-      # "[gwN] node down: Not properly terminated" + "replacing crashed worker",
-      # then replaces the worker and the SESSION NEVER TERMINATES -- the job
-      # sits at 99% until its cap cancels it (measured: 4.8 min of tests
-      # followed by 19.5 min of silence). #1648 tracks that hang; a crashed
-      # worker should fail the job fast rather than burn the cap.
+      # Exceeding the cap here is not a soft failure. pytest-timeout's
+      # ``timeout method: thread`` never interrupts the running call --
+      # pytest_timeout.timeout_timer dumps the stacks and then calls os._exit(1)
+      # on the worker, so the test does not fail, its WORKER dies:
+      # "[gwN] node down: Not properly terminated".
+      #
+      # #1648: the expensive part was what xdist did next. Absent
+      # --max-worker-restart, get_default_max_worker_restart returns
+      # numprocesses * 4 = 8 here, and each replacement re-runs the test that
+      # killed its predecessor. A timeout kill is deterministic, so the offender
+      # executes 9 times -- 9 x (60s cap + worker respawn) -- and the job hits
+      # its cap mid-loop, presenting as a hang at 99% with no failure message
+      # (measured on PR #1643: 4.8 min of tests, 19.5 min of silence, 30-min
+      # cancel). pyproject's addopts now sets --max-worker-restart=0, so the
+      # first death ends the session and names the test. Do NOT re-add a nonzero
+      # --max-worker-restart to any lane; a guard test enforces this.
       #
       # Diagnosing this class: measure the gap from the test's start line to
       # "node down" and compare it to the lane's --timeout. If they match, it is
-      # a timeout kill, NOT an OOM -- the gap tracked 37.1s against a 30s cap
-      # here and 60.1s against a 60s cap in this lane, which is what proved it.
+      # a timeout kill, NOT an OOM -- the gap tracked 37.1s against a 30s cap in
+      # the unit lane and 60.1s against a 60s cap here, which is what proved it.
       - name: Run heavy unit tests
         run: |
           pytest \
