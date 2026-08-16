@@ -146,9 +146,15 @@ STREAMING_RATIO = 1 / 3
 #: be genuinely multi-second.
 MIN_TURN_SECONDS = 3.0
 
-#: ~2.6 KB per token chunk x 30 chunks x 150 ms => a ~4.6 s turn of ~240 KB.
-#: Sized against the real thing: the production turn measured for #1673 was
-#: 181,125 bytes over 81 chunks in 7.7 s.
+#: 2,700 B of text per token chunk x 30 chunks x 150 ms apart. Measured on the
+#: wire rather than derived: a ~4.6 s turn of 974,926 uncompressed bytes. That is
+#: far more than the 81,000 B of raw text, because ``astream_events`` also emits a
+#: ``RAW`` frame carrying the same content for every ``TEXT_MESSAGE_CONTENT`` one
+#: and the payloads are JSON-escaped.
+#:
+#: Sized to be comfortably ABOVE the real thing, which was 181,125 bytes over 81
+#: chunks in 7.7 s: the buffered case must not be an artefact of a response small
+#: enough to fit anywhere by luck.
 _CHUNK_TEXT = "Kisqali TRx grew twelve percent quarter over quarter. " * 50
 _N_CHUNKS = 30
 _CHUNK_DELAY = 0.15
@@ -650,8 +656,26 @@ class TestTheFixIsWhatIsDoingTheWork:
         assert timeline.ratio >= STREAMING_RATIO, (
             f"WITHOUT the X-Accel-Buffering header the edge STREAMED anyway "
             f"(ttfb/total={timeline.ratio:.4f}) — so something other than this fix is "
-            f"keeping the stream alive and the fix may now be inert. Re-derive the "
-            f"cause before trusting the passing tests above. {timeline!r}"
+            f"keeping the stream alive, and the fix may now be inert.\n"
+            f"\n"
+            f"THIS IS PROBABLY GOOD NEWS, NOT A BUG. Do not start by 'fixing' this "
+            f"test. Work out WHICH of these changed, then decide whether "
+            f"X-Accel-Buffering is still earning its place:\n"
+            f"  1. content-type is now {timeline.headers.get('content-type', '-')!r} — "
+            f"if the CopilotKit SDK started labelling the stream 'text/event-stream' "
+            f"instead of 'application/json', it is no longer in gzip_types and the "
+            f"gzip filter never engages. The header becomes redundant here.\n"
+            f"  2. content-encoding is now "
+            f"{timeline.headers.get('content-encoding', '-')!r} — if absent, gzip did "
+            f"not apply. Check `gzip`, `gzip_types`, `gzip_proxied` and "
+            f"`gzip_min_length` in _NGINX_CONF against the live `nginx -T`; a replica "
+            f"that has drifted from production proves nothing either way.\n"
+            f"  3. nginx or zlib changed their flush semantics, so `proxy_buffering "
+            f"on` no longer holds a compressed chunked response.\n"
+            f"\n"
+            f"If (1) or (3), production is healthier than when #1673 was filed and "
+            f"this whole guard can be retired ON PURPOSE. If (2), the replica is "
+            f"wrong and the suite has been proving nothing. {timeline!r}"
         )
 
     def test_identity_encoding_streams_even_without_the_header(self, edge):
