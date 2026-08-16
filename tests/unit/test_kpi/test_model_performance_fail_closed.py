@@ -18,10 +18,16 @@ All paths route through the existing `_evaluate_status:120-121`
 `value is None -> KPIStatus.UNKNOWN` primitive (UNCHANGED in this PR).
 """
 
+import os
+import socket
+import threading
+import time
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
+from src.kpi.calculators import model_performance as mp
 from src.kpi.calculators.model_performance import ModelPerformanceCalculator
 from src.kpi.models import (
     CalculationType,
@@ -627,6 +633,207 @@ class TestFeatureDriftUnavailability:
         assert result.value is None
         assert result.error is not None
         assert result.status == KPIStatus.UNKNOWN
+
+
+# ===========================================================================
+# #1650: the MLflow leg must fail CLOSED in seconds, not hang
+# ===========================================================================
+
+# Hard ceiling for the wall-clock probes below. The leg is exercised on a
+# daemon thread and joined with this bound, so a REGRESSED (unbounded) leg
+# fails the test at ~this mark instead of running until pytest-timeout kills
+# the xdist worker — which is the #1648 "node down" shape that #1650 caused
+# three times on PR #1643. Comfortably under the 30s global `timeout` in
+# pyproject.toml, and comfortably over the ~6s worst case the fix allows.
+_PROBE_CEILING_SECONDS = 20.0
+
+
+def _dead_port() -> int:
+    """A localhost port with nothing listening -> connection REFUSED.
+
+    This is the faithful CI shape: the lanes export
+    ``MLFLOW_TRACKING_URI: http://localhost:5000`` but only start a real
+    tracking server in a DIFFERENT job, so the URI is populated and the
+    endpoint is dead.
+    """
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = int(sock.getsockname()[1])
+    sock.close()
+    return port
+
+
+def _silent_server_port() -> tuple[int, socket.socket]:
+    """A socket that ACCEPTS and then never writes a byte -> read hangs.
+
+    Distinct from `_dead_port`: connection-refused fails fast per attempt (so
+    only the retry/backoff cap binds), whereas a silent peer hangs per attempt
+    (so the connect/read timeout is the binding term). Both must be bounded.
+    """
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    held: list[socket.socket] = []
+
+    def _accept_forever() -> None:
+        while True:
+            try:
+                conn, _ = srv.accept()
+                held.append(conn)  # hold open, never respond
+            except OSError:
+                return
+
+    threading.Thread(target=_accept_forever, daemon=True).start()
+    return int(srv.getsockname()[1]), srv
+
+
+def _time_the_leg(tracking_uri: str) -> tuple[float, Any]:
+    """Call the real MLflow leg against `tracking_uri`, hard-bounded.
+
+    Runs on a daemon thread joined at `_PROBE_CEILING_SECONDS`. Returns
+    `(elapsed, (value, error))`, or raises AssertionError if the leg is still
+    running at the ceiling — i.e. it is unbounded, which is the #1650 defect.
+    """
+    import mlflow
+
+    calc = ModelPerformanceCalculator(db_client=Mock())
+    calc._mlflow_client = mlflow.tracking.MlflowClient(tracking_uri=tracking_uri)
+
+    out: dict[str, Any] = {}
+
+    def _work() -> None:
+        started = time.monotonic()
+        out["result"] = calc._get_metric_from_mlflow("default_model", "roc_auc")
+        out["elapsed"] = time.monotonic() - started
+
+    worker = threading.Thread(target=_work, daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(_PROBE_CEILING_SECONDS)
+    if worker.is_alive():
+        raise AssertionError(
+            f"#1650: the MLflow leg was STILL RUNNING after "
+            f"{time.monotonic() - started:.1f}s against an unreachable tracking "
+            f"server at {tracking_uri}. Fail-closed must take seconds, not "
+            f"minutes — an unbounded leg is a hang, not a refusal."
+        )
+    return float(out["elapsed"]), out["result"]
+
+
+class TestMlflowLegIsTimeBounded:
+    """WS1-MP-001/002/003 (#1650): an unreachable tracking server must resolve
+    to `value=None` + an `mlflow_exception:` reason in SECONDS.
+
+    The leg already refuses to fabricate a value — that property is asserted
+    here too and must never be traded away. What was broken is how LONG the
+    refusal took to establish: mlflow's REST store retries every request with
+    urllib3 exponential backoff (`MLFLOW_HTTP_REQUEST_MAX_RETRIES=7`,
+    `BACKOFF_FACTOR=2`, `TIMEOUT=120` by default), which is ~126s of sleep per
+    endpoint. Measured on the pre-fix tree: still running at 75s with no
+    result. None of these tests need a live MLflow server.
+    """
+
+    def test_budget_stays_small_enough_to_be_a_refusal(self):
+        """Forcing function: nobody may quietly restore mlflow's own defaults.
+
+        mlflow ships `max_retries=7, backoff_factor=2` precisely so a rate-
+        limited backend is retried for ~4 minutes. That is the right default
+        for the `mlflow_tracker` WRITE paths and the wrong one for a KPI READ
+        that a user's question is waiting on.
+        """
+        assert mp.MLFLOW_LEG_MAX_RETRIES <= 2
+        assert mp.MLFLOW_LEG_TIMEOUT_SECONDS <= 5
+        assert (
+            mp.MLFLOW_LEG_WORST_CASE_SECONDS
+            == (mp.MLFLOW_LEG_MAX_RETRIES + 1) * mp.MLFLOW_LEG_TIMEOUT_SECONDS
+        )
+        assert mp.MLFLOW_LEG_WORST_CASE_SECONDS <= 10, (
+            "The MLflow leg's worst case must stay well inside a request "
+            "budget and inside the 30s pytest timeout (#1650/#1648)."
+        )
+
+    def test_refused_connection_fails_closed_fast(self):
+        """Dead localhost port — the exact CI shape. Pre-fix: >75s."""
+        elapsed, (value, error) = _time_the_leg(f"http://127.0.0.1:{_dead_port()}")
+        assert value is None, "no-fabrication: an unreachable server must not yield a value"
+        assert error is not None and error.startswith("mlflow_exception:"), error
+        assert elapsed < mp.MLFLOW_LEG_WORST_CASE_SECONDS + 4.0, (
+            f"refused-connection leg took {elapsed:.2f}s, over the "
+            f"{mp.MLFLOW_LEG_WORST_CASE_SECONDS}s budget (#1650)"
+        )
+
+    def test_silent_server_fails_closed_fast(self):
+        """Peer accepts but never replies — the connect/read timeout binds here.
+
+        A retry cap alone does NOT bound this mode; without a short timeout
+        each attempt sits for `MLFLOW_HTTP_REQUEST_TIMEOUT` (120s default).
+        """
+        port, srv = _silent_server_port()
+        try:
+            elapsed, (value, error) = _time_the_leg(f"http://127.0.0.1:{port}")
+        finally:
+            srv.close()
+        assert value is None, "no-fabrication: a silent server must not yield a value"
+        assert error is not None and error.startswith("mlflow_exception:"), error
+        assert elapsed < mp.MLFLOW_LEG_WORST_CASE_SECONDS + 4.0, (
+            f"silent-server leg took {elapsed:.2f}s, over the "
+            f"{mp.MLFLOW_LEG_WORST_CASE_SECONDS}s budget (#1650)"
+        )
+
+    def test_bound_is_in_force_at_the_moment_mlflow_is_called(self):
+        """The bound must be live WHEN we call in — not merely defined.
+
+        Reads the knobs back through mlflow's own environment-variable
+        accessors (the same objects `mlflow.utils.rest_utils.http_request`
+        consults at call time), so this pins the real seam rather than our
+        own bookkeeping. No sockets involved.
+        """
+        from mlflow.environment_variables import (
+            MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR,
+            MLFLOW_HTTP_REQUEST_MAX_RETRIES,
+            MLFLOW_HTTP_REQUEST_TIMEOUT,
+        )
+
+        seen: dict[str, Any] = {}
+
+        def _observe(*_args: Any, **_kwargs: Any):
+            seen["max_retries"] = MLFLOW_HTTP_REQUEST_MAX_RETRIES.get()
+            seen["timeout"] = MLFLOW_HTTP_REQUEST_TIMEOUT.get()
+            seen["backoff_factor"] = MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR.get()
+            return []
+
+        calc = ModelPerformanceCalculator(db_client=Mock(), mlflow_client=Mock())
+        calc._mlflow_client.get_latest_versions.side_effect = _observe
+
+        value, error = calc._get_metric_from_mlflow("default_model", "roc_auc")
+
+        assert value is None and error == "model_not_found:default_model"
+        assert seen["max_retries"] == mp.MLFLOW_LEG_MAX_RETRIES
+        assert seen["timeout"] == mp.MLFLOW_LEG_TIMEOUT_SECONDS
+        assert seen["backoff_factor"] == 0, "exponential backoff must be off for this read"
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_bound_does_not_leak_into_the_rest_of_the_process(self, raises, monkeypatch):
+        """The knobs are process-global, so the scope must restore them.
+
+        The `mlflow_tracker` WRITE paths (`src/agents/*/mlflow_tracker.py`)
+        legitimately want mlflow's generous retries; this KPI read must not
+        quietly shorten them. Checked on both the clean and the raising path.
+        """
+        monkeypatch.setenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "7")
+        monkeypatch.delenv("MLFLOW_HTTP_REQUEST_TIMEOUT", raising=False)
+
+        calc = ModelPerformanceCalculator(db_client=Mock(), mlflow_client=Mock())
+        if raises:
+            calc._mlflow_client.get_latest_versions.side_effect = RuntimeError("boom")
+        else:
+            calc._mlflow_client.get_latest_versions.return_value = []
+
+        calc._get_metric_from_mlflow("default_model", "roc_auc")
+
+        assert os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] == "7"
+        assert "MLFLOW_HTTP_REQUEST_TIMEOUT" not in os.environ
 
 
 # ===========================================================================
