@@ -87,18 +87,51 @@ SSE_KEEPALIVE_INTERVAL_SECONDS = 15
 #: it sees.
 SSE_KEEPALIVE_FRAME = ": keepalive\n\n"
 
-T = TypeVar("T", bound=str)
+#: What a streaming HTTP body may carry. Mirrors starlette's own ``Content``
+#: alias (``starlette/responses.py``: ``Content = str | bytes | memoryview``),
+#: because a ``StreamingResponse.body_iterator`` is exactly an
+#: ``AsyncIterable[Content]`` and #1669 wraps one that a third-party package
+#: built — so this wrapper must accept whatever starlette accepts.
+#:
+#: Deliberately a MIRROR rather than an import: this module is transport-
+#: agnostic on purpose and pulling starlette into it would invert that. The two
+#: are pinned together by ``test_sse_frame_mirrors_starlettes_content_alias``,
+#: so a starlette widening fails loudly here instead of drifting.
+SSEFrame = str | bytes | memoryview
+
+#: Bounded by :data:`SSEFrame`, NOT by ``str``.
+#:
+#: The bound describes what this function actually accepts, and it accepts
+#: anything: frames are re-yielded untouched — never decoded, concatenated or
+#: inspected — so their type is irrelevant to the logic. The original ``str``
+#: bound was an over-restriction that only held because the first call site
+#: (``stream_chat``) happened to yield ``str``. #1669's second call site wraps a
+#: ``body_iterator``, whose declared element type is the full union.
+T = TypeVar("T", bound=SSEFrame)
 
 
 async def with_sse_keepalive(
     source: AsyncIterable[T],
     interval_seconds: float = SSE_KEEPALIVE_INTERVAL_SECONDS,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[T | str, None]:
     """Yield everything ``source`` yields, interleaving keepalives when it is quiet.
+
+    The yield type is ``T | str`` because the ONLY value this function creates is
+    :data:`SSE_KEEPALIVE_FRAME`, which is a ``str``. A ``str`` interleaved into a
+    ``bytes`` body is safe for the sink this exists to serve: starlette's
+    ``StreamingResponse.stream_response`` does ``if not isinstance(chunk, bytes |
+    memoryview): chunk = chunk.encode(self.charset)`` before every ``send``
+    (``starlette/responses.py``), so mixed chunk types are encoded per chunk
+    rather than concatenated. ``test_bytes_body_survives_a_real_asgi_round_trip``
+    proves that end to end rather than trusting the reading.
+
+    A consumer that instead joins frames without encoding would need to
+    normalise; none exists in this repo, and both call sites are
+    ``StreamingResponse``.
 
     Args:
         source: the real SSE body generator. Its frames pass through untouched
-            and in order.
+            and in order — whatever their type.
         interval_seconds: emit a keepalive after this long without an upstream
             frame. Must be well under :data:`PROXY_READ_TIMEOUT_SECONDS`.
 
@@ -155,5 +188,6 @@ __all__ = [
     "PROXY_READ_TIMEOUT_SECONDS",
     "SSE_KEEPALIVE_FRAME",
     "SSE_KEEPALIVE_INTERVAL_SECONDS",
+    "SSEFrame",
     "with_sse_keepalive",
 ]

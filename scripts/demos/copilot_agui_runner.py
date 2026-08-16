@@ -114,6 +114,10 @@ def run_turn(
         "total_ms": None,
         "error": None,
         "http_status": None,
+        # How many frames actually reached us. Recorded in the raw jsonl rather
+        # than the CSV because CSV_COLUMNS is shared with copilot_chat_perf_runner;
+        # the CSV already surfaces the outcome via `error` + `response_chars`.
+        "stream_frames": 0,
     }
     current_text = ""
     t0 = time.monotonic()
@@ -170,6 +174,8 @@ def run_turn(
     if current_text:
         record["messages_out"].append(current_text)
     record["response_text"] = "\n\n".join(record["messages_out"])
+    record["stream_frames"] = len(record["events"])
+    _grade_stream_health(record)
     # Mirror the frontend: the assistant's reply joins the resent history.
     if record["response_text"]:
         history.append(
@@ -182,6 +188,44 @@ def run_turn(
             }
         )
     return record
+
+
+def _grade_stream_health(record: Dict[str, Any]) -> None:
+    """Fail a turn that returned HTTP 200 and delivered nothing (#1667).
+
+    ``StreamingResponse`` commits the status line before the body generator is
+    iterated, so an exception inside ``LangGraphAgent.execute`` produces a
+    well-formed **HTTP 200 with an empty body**. #1662 did exactly that to every
+    AG-UI run for a full day, and because this runner only ever set ``error``
+    from a transport exception or an explicit ``RUN_ERROR`` frame, a 51-turn
+    sweep would have reported **51/51 OK with every answer empty** — our
+    headline quality metric, green throughout.
+
+    Two distinct failures, graded separately because they mean different things:
+
+    * **zero frames** — the stream never produced anything. This is the #1662
+      signature and is unambiguous.
+    * **frames but no answer text** — the run streamed machinery and no prose.
+      Safe to fail HERE because this runner sends ``"actions": []``: with no
+      frontend actions registered there is no legitimate way for a turn to
+      deliver its answer other than ``TEXT_MESSAGE_CONTENT``. A runner that
+      starts registering actions must revisit this.
+
+    Never overwrites an existing ``error`` — a transport failure or ``RUN_ERROR``
+    is the more specific diagnosis and already fails the turn.
+    """
+    if record.get("error"):
+        return
+    if record.get("http_status") != 200:
+        return
+    if not record.get("stream_frames"):
+        record["error"] = "empty stream: HTTP 200 with 0 frames — the run is dead (#1667)"
+        return
+    if not (record.get("response_text") or "").strip():
+        record["error"] = (
+            f"no answer delivered: HTTP 200 with {record['stream_frames']} frames but "
+            "zero TEXT_MESSAGE_CONTENT text (#1667)"
+        )
 
 
 def to_csv_row(record: Dict[str, Any]) -> Dict[str, Any]:

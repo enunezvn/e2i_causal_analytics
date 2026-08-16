@@ -283,6 +283,7 @@ from typing import (
     Optional,
     Sequence,
     TypedDict,
+    TypeVar,
     cast,
 )
 
@@ -301,7 +302,7 @@ from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
 from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
@@ -4068,6 +4069,66 @@ async def _require_auth_for_copilotkit_execution(request: Request) -> Dict[str, 
     return user
 
 
+#: Anything ``copilotkit_custom_handler`` or the delegated ``sdk_handler`` may
+#: return. Bound as a TypeVar so ``_bound_silent_window`` is transparent to the
+#: caller's declared return type instead of widening it to ``Any``.
+_SDKResponse = TypeVar("_SDKResponse", bound=Response)
+
+
+def _bound_silent_window(response: _SDKResponse) -> _SDKResponse:
+    """Bound the SILENT window of a streaming response the SDK handler built (#1669).
+
+    The AG-UI surface has two entry points and only one of them constructs its
+    own ``StreamingResponse`` in this module:
+
+    * ``POST /api/copilotkit`` with body ``{"method": "agent/run"}`` -> the
+      custom ``stream_agent_events`` branch above, wrapped inline at its
+      ``StreamingResponse(...)`` call;
+    * ``POST /api/copilotkit/agent/{name}`` -> delegated to the third-party
+      ``sdk_handler``, which builds ``StreamingResponse(events,
+      media_type="application/json")`` itself
+      (``copilotkit/integrations/fastapi.py::handle_execute_agent``). We cannot
+      pass a wrapper into a response we do not construct, so the body iterator
+      is replaced on the way out.
+
+    Both carry the SAME bytes: ``copilotkit/sdk.py::execute_agent`` returns this
+    module's ``LangGraphAgent.execute`` unchanged, and ``execute`` yields
+    ``data: {json}\\n\\n`` records. The SDK's ``application/json`` media type is
+    therefore a mislabel, not a different protocol.
+
+    That the keepalive is safe on the mislabelled branch was VERIFIED against
+    the real client, not inferred from the SSE spec.
+    ``@copilotkit/react-core@1.51.2`` reads this stream via
+    ``@ag-ui/client@0.0.42``, whose ``transformHttpEventStream`` routes any
+    content-type OTHER than ``application/vnd.ag-ui.event+proto`` to its SSE
+    parser, and whose SSE parser collects only lines matching ``startsWith("data:
+    ")`` and calls ``JSON.parse`` only when at least one such line exists. A
+    comment-only record is dropped without error. Driving that parser directly
+    with the keepalive interleaved, leading, trailing, and split across chunk
+    boundaries produced event sequences identical to baseline. See
+    ``test_keepalive_frame_is_an_ignorable_sse_comment`` for the full citation.
+
+    Keyed on the response TYPE, not on the path: ``sdk_handler`` also returns
+    ``JSONResponse`` (info, agent state, errors) and those must pass through
+    untouched.
+
+    Why this is not left to ``#1659``'s AST guard: that guard can only see
+    literal ``StreamingResponse(...)`` calls, and this one is built inside a
+    third-party package. ``tests/unit/test_api/test_agui_stream_health_1667_1669.py``
+    covers it behaviourally instead, by draining the real response body.
+
+    No ``type: ignore`` here, deliberately. ``body_iterator`` is an
+    ``AsyncIterable[str | bytes | memoryview]`` and ``with_sse_keepalive`` is
+    bounded by that same union (``sse_keepalive.SSEFrame``), so the assignment
+    type-checks on its own. It previously needed a suppression only because the
+    wrapper's TypeVar was over-restricted to ``str`` — a suppression would have
+    hidden the mismatch rather than resolved it (#1672 CI).
+    """
+    if isinstance(response, StreamingResponse):
+        response.body_iterator = with_sse_keepalive(response.body_iterator)
+    return response
+
+
 async def copilotkit_custom_handler(
     request: Request, sdk: CopilotKitRemoteEndpoint, path: str = ""
 ) -> JSONResponse | StreamingResponse:
@@ -4278,7 +4339,7 @@ async def copilotkit_custom_handler(
                     sdbg(f"Stream complete, yielded {event_count} events")
 
                 return StreamingResponse(
-                    stream_agent_events(),
+                    with_sse_keepalive(stream_agent_events()),
                     media_type="text/event-stream",  # SSE format for CopilotKit SDK
                     headers={
                         "Cache-Control": "no-cache",
@@ -4303,7 +4364,7 @@ async def copilotkit_custom_handler(
             scope_with_path = dict(request.scope)
             scope_with_path["path_params"] = {**request.path_params, "path": path}
             new_request = Request(scope_with_path, receive)
-            return await sdk_handler(new_request, sdk)  # type: ignore[no-any-return]
+            return _bound_silent_window(await sdk_handler(new_request, sdk))  # type: ignore[no-any-return]
 
         except Exception as e:
             logger.warning(f"[CopilotKit] Error parsing POST body: {e}")
@@ -4364,7 +4425,7 @@ async def copilotkit_custom_handler(
     scope_with_path = dict(request.scope)
     scope_with_path["path_params"] = {**request.path_params, "path": path}
     new_request = Request(scope_with_path, receive_fallback)
-    return await sdk_handler(new_request, sdk)  # type: ignore[no-any-return]
+    return _bound_silent_window(await sdk_handler(new_request, sdk))  # type: ignore[no-any-return]
 
 
 def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None:
