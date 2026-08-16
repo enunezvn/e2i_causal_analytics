@@ -11,7 +11,7 @@ Tests cover:
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 
@@ -633,6 +633,9 @@ class TestSignalCollectorAdapter:
         mock_query.gte = Mock(return_value=mock_query)
         mock_query.limit = Mock(return_value=mock_query)
         mock_query.eq = Mock(return_value=mock_query)
+        # #1661: the read is ordered newest-first before it is limited, so two
+        # readers of the same table take the same slice.
+        mock_query.order = Mock(return_value=mock_query)
 
         mock_client.table.return_value.select = Mock(return_value=mock_query)
 
@@ -642,6 +645,10 @@ class TestSignalCollectorAdapter:
 
         assert len(signals) == 1
         assert signals[0]["reward"] == 0.9
+        assert mock_query.order.call_args_list == [
+            call("created_at", desc=True),
+            call("signal_id", desc=True),  # PK tiebreak: created_at is not unique
+        ]
 
     @pytest.mark.asyncio
     async def test_get_signals_no_client(self, adapter):

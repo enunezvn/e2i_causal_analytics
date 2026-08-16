@@ -10026,6 +10026,8 @@ export interface components {
              * @default 0
              */
             pending_updates: number;
+            /** @description Daily prompt-optimization trigger state (#1661) */
+            optimizer?: components["schemas"]["OptimizerGateStatus"] | null;
         };
         /**
          * FeedbackItem
@@ -13819,6 +13821,61 @@ export interface components {
          * @enum {string}
          */
         OptimizationStatus: "pending" | "formulating" | "optimizing" | "analyzing" | "projecting" | "completed" | "failed";
+        /**
+         * OptimizerGateStatus
+         * @description State of the daily DSPy prompt-optimization trigger (#1661).
+         *
+         *     The beat that drives prompt optimization returns ``{"status": "skipped"}``
+         *     whenever its trigger is unsatisfied — a legitimate return, so nothing fails
+         *     and nothing alerts while the self-improvement loop stays inert. These are
+         *     the trigger's own inputs, so an operator watching this page can see whether
+         *     the loop is actually doing anything.
+         *
+         *     Counts are ``None`` (not 0) when the read fails: a fabricated zero on a
+         *     health surface is indistinguishable from a measured one.
+         */
+        OptimizerGateStatus: {
+            /**
+             * Eligible Signals
+             * @description feedback_learner signals clearing the reward floor
+             */
+            eligible_signals?: number | null;
+            /**
+             * Total Signals
+             * @description All feedback_learner signals ever — the yield denominator
+             */
+            total_signals?: number | null;
+            /**
+             * Last Eligible Signal At
+             * @description When an eligible signal was last recorded
+             */
+            last_eligible_signal_at?: string | null;
+            /**
+             * Optimization Runs
+             * @description prompt_optimization_runs rows; 0 means never optimized
+             */
+            optimization_runs?: number | null;
+            /**
+             * Min Signals
+             * @description Eligible signals the trigger requires
+             */
+            min_signals: number;
+            /**
+             * Min Reward
+             * @description Reward floor a signal must clear
+             */
+            min_reward: number;
+            /**
+             * Would Trigger
+             * @description Whether the count gate is satisfied right now
+             */
+            would_trigger?: boolean | null;
+            /**
+             * Reason
+             * @description Human-readable gate verdict
+             */
+            reason: string;
+        };
         /**
          * ParallelPipelineRequest
          * @description Request for parallel multi-library analysis.

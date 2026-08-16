@@ -424,3 +424,145 @@ describe('FeedbackLearning — #1244 Recent Activity pattern attribution', () =>
     expect(screen.queryByText(/N\/A\s*•/)).not.toBeInTheDocument();
   });
 });
+
+describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
+  const baseMocks = () => {
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { patterns: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { updates: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useQuickLearningCycle as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+    (useApplyUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useRollbackUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useFeedbackLearningInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      data: undefined,
+      error: null,
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    baseMocks();
+  });
+
+  it('surfaces an inert optimizer with its yield denominator, not just the shortfall', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: 8,
+          total_signals: 218,
+          last_eligible_signal_at: '2026-08-08T07:09:02.686027+00:00',
+          optimization_runs: 0,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: false,
+          // Verbatim from the beat's own trigger — not a re-worded copy.
+          reason: 'Insufficient signals: 8 < 20',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    // The shortfall AND the denominator — "8" alone reads as a volume problem.
+    expect(screen.getByText('8 / 20')).toBeInTheDocument();
+    expect(screen.getByText(/218 signals/i)).toBeInTheDocument();
+    // "Never optimized" is the fact the page currently hides behind "Online".
+    expect(screen.getByText(/never optimized/i)).toBeInTheDocument();
+    expect(screen.getByText('Insufficient signals: 8 < 20')).toBeInTheDocument();
+    expect(screen.getByText('Inert')).toBeInTheDocument();
+  });
+
+  it('surfaces the cooldown gate once the signal gate opens', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: 25,
+          total_signals: 300,
+          last_eligible_signal_at: '2026-08-16T00:00:00+00:00',
+          optimization_runs: 1,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: false,
+          reason: 'Cooldown active: 2.0h < 24h',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    // Count gate satisfied, yet still not running — the page must say WHY.
+    expect(screen.getByText('25 / 20')).toBeInTheDocument();
+    expect(screen.getByText('Cooldown active: 2.0h < 24h')).toBeInTheDocument();
+    expect(screen.getByText('Inert')).toBeInTheDocument();
+  });
+
+  it('shows a ready optimizer once the gate is satisfied', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: 25,
+          total_signals: 300,
+          last_eligible_signal_at: '2026-08-16T00:00:00+00:00',
+          optimization_runs: 3,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: true,
+          reason: 'Reward improved: 0.600 >= 0.05',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('25 / 20')).toBeInTheDocument();
+    expect(screen.getByText(/3 optimization runs/i)).toBeInTheDocument();
+    expect(screen.queryByText(/never optimized/i)).not.toBeInTheDocument();
+  });
+
+  it('renders unknown — never a fabricated zero — when the gate read failed', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: null,
+          total_signals: null,
+          last_eligible_signal_at: null,
+          optimization_runs: null,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: null,
+          reason: 'Optimizer gate status unavailable (db down)',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('— / 20')).toBeInTheDocument();
+    expect(screen.getByText(/status unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/never optimized/i)).not.toBeInTheDocument();
+  });
+});

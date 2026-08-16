@@ -57,7 +57,8 @@ class _SignalReturningClient:
     """A client whose select() returns a fixed list of emitted signal rows.
 
     Mirrors the surface SignalCollectorAdapter.get_signals_for_optimization uses:
-    client.table(...).select(...).eq(...).gte(...).limit(...).execute().data
+    client.table(...).select(...).eq(...).gte(...).order(...).limit(...).execute().data
+    (#1661 added the newest-first order so two readers take the same slice.)
     """
 
     def __init__(self, rows: List[Dict[str, Any]]):
@@ -73,6 +74,9 @@ class _SignalReturningClient:
         return self
 
     def gte(self, *_a, **_k):
+        return self
+
+    def order(self, *_a, **_k):
         return self
 
     def limit(self, *_a, **_k):

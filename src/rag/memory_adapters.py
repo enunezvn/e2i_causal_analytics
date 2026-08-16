@@ -819,7 +819,23 @@ class SignalCollectorAdapter:
             if source_agent:
                 query = query.eq("source_agent", source_agent)
 
-            query = query.gte("reward", min_reward).limit(limit)
+            # #1661: order BEFORE limiting. An unordered `limit` makes the
+            # returned slice arbitrary once more than `limit` rows qualify, so
+            # two readers of the same table (the optimization beat here, and
+            # the operator-facing gate status in
+            # feedback_learner.signal_store.get_optimizer_gate_status) could
+            # compute different mean rewards and disagree about whether the
+            # optimizer would trigger. Newest-first is also the right slice on
+            # its own terms: training on the most recent signals.
+            # `created_at` is NOT unique, so it alone leaves ties free to come
+            # back in different physical orders across plans — the PK breaks
+            # them and makes the two readers' slices exactly equal.
+            query = (
+                query.gte("reward", min_reward)
+                .order("created_at", desc=True)
+                .order("signal_id", desc=True)
+                .limit(limit)
+            )
 
             response = await asyncio.get_event_loop().run_in_executor(None, lambda: query.execute())
 

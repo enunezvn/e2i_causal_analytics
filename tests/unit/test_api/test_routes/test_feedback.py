@@ -1062,6 +1062,101 @@ async def test_get_feedback_health():
         assert isinstance(result.cycles_24h, int)
 
 
+# --- #1661: the optimizer gate must be reported here ------------------------
+#
+# The daily prompt-optimization beat skips at its trigger every time and
+# returns a legitimate ``{"status": "skipped"}``, so nothing fails and nothing
+# alerts. This page's health poll is the surface an operator actually watches;
+# it must carry the gate's own numbers or the inertness stays invisible.
+
+
+@pytest.fixture
+def _stub_async_supabase(monkeypatch):
+    """Pin the async client factory the health route resolves before reading.
+
+    The suite's autouse guard only disarms the SYNC ``get_supabase_client``. The
+    async factory RAISES ``ServiceConnectionError`` when SUPABASE_URL is unset,
+    which is CI's state — the route would then degrade before the stubbed status
+    reader ran, and these assertions would be graded against the fallback. This
+    box hides that because pytest autoloads a real ``.env``.
+    """
+
+    async def _client():
+        return object()
+
+    monkeypatch.setattr("src.memory.services.factories.get_async_supabase_client", _client)
+
+
+@pytest.mark.asyncio
+async def test_health_carries_the_optimizer_gate_status(monkeypatch, _stub_async_supabase):
+    from src.api.routes import feedback as feedback_routes
+
+    async def _status(client=None):
+        return {
+            "eligible_signals": 8,
+            "total_signals": 218,
+            "last_eligible_signal_at": "2026-08-08T07:09:02.686027+00:00",
+            "optimization_runs": 0,
+            "min_signals": 20,
+            "min_reward": 0.5,
+            "would_trigger": False,
+            "reason": "Optimizer inert: 8 of 218 ...",
+        }
+
+    monkeypatch.setattr(
+        "src.agents.feedback_learner.signal_store.get_optimizer_gate_status", _status
+    )
+    with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
+        result = await feedback_routes.get_feedback_health()
+
+    assert result.optimizer is not None
+    assert result.optimizer.eligible_signals == 8
+    assert result.optimizer.total_signals == 218
+    assert result.optimizer.min_signals == 20
+    assert result.optimizer.optimization_runs == 0
+    assert result.optimizer.would_trigger is False
+    assert result.optimizer.reason.startswith("Optimizer inert")
+
+
+@pytest.mark.asyncio
+async def test_health_survives_an_unreadable_optimizer_gate(monkeypatch, _stub_async_supabase):
+    """A failed gate read must degrade the block, never 500 the health check."""
+    from src.api.routes import feedback as feedback_routes
+
+    async def _boom(client=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("src.agents.feedback_learner.signal_store.get_optimizer_gate_status", _boom)
+    with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
+        result = await feedback_routes.get_feedback_health()
+
+    assert result.status in ["healthy", "degraded"]
+    # Unknown, never a fabricated zero that reads as a measurement.
+    assert result.optimizer is not None
+    assert result.optimizer.eligible_signals is None
+    assert result.optimizer.would_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_health_degrades_when_the_async_client_cannot_be_built(monkeypatch):
+    """CI's real shape: no SUPABASE_URL, so the client factory raises."""
+    from src.api.routes import feedback as feedback_routes
+
+    async def _raise():
+        raise RuntimeError("SUPABASE_URL not configured")
+
+    monkeypatch.setattr("src.memory.services.factories.get_async_supabase_client", _raise)
+    with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
+        result = await feedback_routes.get_feedback_health()
+
+    assert result.optimizer is not None
+    assert result.optimizer.eligible_signals is None
+    assert result.optimizer.would_trigger is None
+    assert "unavailable" in result.optimizer.reason.lower()
+    # The threshold is still reported — it comes from config, not the DB.
+    assert result.optimizer.min_signals == 20
+
+
 # =============================================================================
 # TESTS - Opik Trace Feedback (G23)
 # =============================================================================
