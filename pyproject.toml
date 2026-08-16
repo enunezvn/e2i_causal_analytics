@@ -238,18 +238,24 @@ filterwarnings = [
 # Safe default: 4 workers = ~2GB for tests + ~4GB for OS/services
 #
 # --max-worker-restart=0 (#1648): end the session on the FIRST worker death
-# instead of replacing the worker. Paired with timeout_method="thread" above,
-# the default is actively harmful: xdist.dsession.get_default_max_worker_restart
-# returns numprocesses * 4 (8 on the -n 2 CI lanes) when the flag is absent, and
-# each replacement re-runs the test that killed its predecessor. A timeout kill
-# is deterministic, so the offending test executes 9 times, each costing a full
-# lane timeout plus a worker respawn -- measured locally at 9 kills / 206.5s
-# against a 5s cap, versus 1 kill / 37.0s with restarts off. On PR #1643 that
-# turned 4.8 min of real work into a 30-min cap cancel with no failure message.
-# Restarting buys nothing in exchange: xdist reports the crashed test as FAILED
-# whether or not it is retried (measured: "1 failed, 6 passed" with restarts vs
-# "1 failed, 4 passed" without), so the only cost of 0 is the tail of the dead
-# worker's queue, in a run that was already failing.
+# instead of replacing the worker. timeout_method="thread" above means any test
+# over its lane's --timeout kills its worker outright, and continuing past that
+# has twice bought us a job cancelled at its cap instead of a failure:
+#
+#  * the replacement can re-run the test that killed its predecessor. Absent
+#    this flag, xdist.dsession.get_default_max_worker_restart returns
+#    numprocesses * 4 (8 on the -n 2 lanes), and a timeout kill is deterministic,
+#    so the offender executes 9 times. Measured locally against this config with
+#    a real 5s cap: 9 kills / 130.7s vs 1 kill / 25.8s. The retries recovered
+#    ZERO extra tests ("9 failed, 340 passed" vs "1 failed, 340 passed").
+#  * or the session limps on and stalls elsewhere. That is what PR #1643's Unit
+#    Tests actually did: ONE crash, ONE replacement, then 19.5 min of silence
+#    waiting on a single test that never reported, cancelled at the 30-min cap.
+#
+# Stopping at the first crash cures both, and costs almost nothing: xdist reports
+# a crashed test as FAILED whether or not it is retried (measured: "1 failed, 6
+# passed" with restarts vs "1 failed, 4 passed" without), so the only price is
+# the tail of the dead worker's queue, in a run that was already failing.
 # Guarded by tests/unit/test_tests_meta/test_xdist_worker_crash_fast_fail.py.
 addopts = "-v --tb=short -n 4 --dist=loadscope --max-worker-restart=0"
 # Enable test authentication bypass mode

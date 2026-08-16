@@ -443,13 +443,17 @@ jobs:
       #
       # #1648: the expensive part was what xdist did next. Absent
       # --max-worker-restart, get_default_max_worker_restart returns
-      # numprocesses * 4 = 8 here, and each replacement re-runs the test that
-      # killed its predecessor. A timeout kill is deterministic, so the offender
-      # executes 9 times -- 9 x (60s cap + worker respawn) -- and the job hits
-      # its cap mid-loop, presenting as a hang at 99% with no failure message
-      # (measured on PR #1643: 4.8 min of tests, 19.5 min of silence, 30-min
-      # cancel). pyproject's addopts now sets --max-worker-restart=0, so the
-      # first death ends the session and names the test. Do NOT re-add a nonzero
+      # numprocesses * 4 = 8 here, so the session carries on after a kill. On
+      # PR #1643's Unit Tests that produced ONE crash, ONE replacement, and then
+      # 19.5 min of silence waiting on a single test that never reported --
+      # cancelled at the 30-min cap with no failure message, after 4.8 min of
+      # real work. Continuing can also re-run the test that killed the previous
+      # worker: because a timeout kill is deterministic that loops to the full
+      # restart budget (measured locally against this config: 9 kills / 130.7s
+      # vs 1 kill / 25.8s, recovering zero extra tests).
+      #
+      # pyproject's addopts now sets --max-worker-restart=0, so the first death
+      # ends the session and names the test. Do NOT re-add a nonzero
       # --max-worker-restart to any lane; a guard test enforces this.
       #
       # Diagnosing this class: measure the gap from the test's start line to

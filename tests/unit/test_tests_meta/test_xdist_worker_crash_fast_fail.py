@@ -7,18 +7,23 @@ to interrupt the running call -- :func:`pytest_timeout.timeout_timer` dumps the
 stacks and then calls ``os._exit(1)`` on the xdist worker, unconditionally. So
 *any* test that outlives its lane's ``--timeout`` kills its worker outright.
 
-xdist then replaces the worker and re-runs the offending test. Because a
-timeout kill is deterministic, the replacement dies the same way, and the cycle
-repeats until xdist's restart budget is exhausted. That budget is not zero by
-default: ``xdist.dsession.get_default_max_worker_restart`` returns
-``numprocesses * 4`` when ``--max-worker-restart`` is not given, i.e. **8** for
-the ``-n 2`` lanes -- so the offending test is executed **9 times**, each
-costing a full lane timeout plus a worker respawn. On PR #1643's Unit Tests
-that presented as 4.8 min of tests followed by 19.5 min of silence and a
-30-min cap cancel, with no failure message.
+xdist does not stop there. ``xdist.dsession.get_default_max_worker_restart``
+returns ``numprocesses * 4`` when ``--max-worker-restart`` is not given -- **8**
+on the ``-n 2`` lanes -- so the session carries on past the kill, and that has
+cost a full job cap in two different ways:
 
-Measured locally with a 5s cap (see the PR for #1648): 9 kills / 8 restarts /
-206.5s wall, versus 1 kill / 0 restarts / 37.0s wall once restarts are off.
+* The replacement can be handed the very test that killed its predecessor.
+  Because a timeout kill is deterministic it dies the same way, looping to the
+  full budget: **9 executions** of one test, each costing a lane timeout plus a
+  worker respawn. Measured against this repo's own config with a real 5s cap:
+  9 kills / 130.7s versus 1 kill / 25.8s, and the retries recovered *zero*
+  extra tests ("9 failed, 340 passed" either way).
+* Or the session limps on and stalls somewhere else. That is what PR #1643's
+  Unit Tests actually did -- ONE crash, ONE replacement, then 19.5 min of
+  silence waiting on a single test that never reported, cancelled at the
+  30-min cap.
+
+Ending the session at the first crash covers both.
 
 The fix is ``--max-worker-restart=0`` in ``pyproject.toml``'s ``addopts``. It
 is set there rather than on each CI lane's command line because ``addopts``
