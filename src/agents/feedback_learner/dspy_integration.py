@@ -217,6 +217,9 @@ class FeedbackLearnerTrainingSignal:
         labels available), the term is skipped and its weight is redistributed
         proportionally across the remaining present terms — rather than
         substituted with 0.0 (which would penalize an unmeasurable property).
+        `update_effectiveness` (F15, #837/#838) and `efficiency` (#1668, when
+        `total_latency_ms` is 0 and throughput is therefore undefined) follow
+        the same rule: omit, never anchor.
 
         Returns:
             Float reward in range [0.0, 1.0]
@@ -248,12 +251,32 @@ class FeedbackLearnerTrainingSignal:
 
         # Efficiency: feedback processed per second
         # Target: 100 feedback items in <30s = 3.33 items/s
+        #
+        # #1668: `total_latency_ms` is the sum of four node timers, each stamped
+        # as `int((time.time() - start) * 1000)`, so a cycle whose nodes all
+        # finish in under a millisecond sums to 0 and the throughput is
+        # UNDEFINED, not zero. The original fallback (initial platform commit
+        # 3e1c70cf4, no issue, no comment) fabricated an anchor for that case —
+        # `1.0 if feedback_count == 0 else 0.5` — which made two cycles that did
+        # identical work score differently on nothing but timer granularity:
+        # measured over 219 real prod signals, 40 zero-feedback cycles summed to
+        # 0 ms and stored 0.2/0.3 while 108 IDENTICAL zero-feedback cycles summed
+        # to >0 ms and stored 0.0. Same nothing collected, nothing detected,
+        # nothing recommended, nothing applied.
+        #
+        # An unmeasurable term is omitted and its weight redistributed — the
+        # convention this module already applies to `pattern_accuracy` (F-015,
+        # #424) and `update_effectiveness` (F15, #837/#838) — never anchored on
+        # a fabricated value. This does NOT move any signal across the
+        # optimizer's `reward >= 0.5` floor (every affected row tops out at 0.3);
+        # who is eligible to train is a reward-semantics question, not this fix.
         target_throughput = 3.33
+        efficiency_score: Optional[float]
         if self.total_latency_ms > 0:
             actual_throughput = (self.feedback_count * 1000) / self.total_latency_ms
             efficiency_score = min(1.0, actual_throughput / target_throughput)
         else:
-            efficiency_score = 1.0 if self.feedback_count == 0 else 0.5
+            efficiency_score = None
 
         # Coverage: patterns detected per feedback item
         # Target: 1 pattern per 10 feedback items
@@ -275,9 +298,11 @@ class FeedbackLearnerTrainingSignal:
         # Pattern accuracy is omitted entirely when None (F-015).
         weight_score_pairs: list[tuple[float, float]] = [
             (weights["recommendation_actionability"], actionability_score),
-            (weights["efficiency"], efficiency_score),
             (weights["coverage"], coverage_score),
         ]
+        # #1668: omit efficiency when the cycle had no measurable duration.
+        if efficiency_score is not None:
+            weight_score_pairs.append((weights["efficiency"], efficiency_score))
         if self.pattern_accuracy is not None:
             accuracy_score = min(1.0, max(0.0, self.pattern_accuracy))
             weight_score_pairs.append((weights["pattern_accuracy"], accuracy_score))
