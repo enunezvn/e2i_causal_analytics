@@ -666,6 +666,29 @@ _TOOL_NODE_NAME = "tools"
 #: genuinely produces answer text.
 _ANSWER_NODE_NAMES = frozenset({"chat", "synthesize"})
 
+#: LangGraph's ``NS_SEP`` — it joins each nesting level of
+#: ``metadata.langgraph_checkpoint_ns`` (``graph|subgraph|subsubgraph``), so a
+#: namespace containing it belongs to an event raised INSIDE a nested graph.
+#:
+#: Duplicated as a literal rather than imported: upstream defines it in the
+#: private ``langgraph._internal._constants``, and importing a private module
+#: into a request path trades a loud test failure for a hard ImportError on
+#: upgrade. ``TestLangGraphCoupling`` in
+#: ``test_copilotkit_nested_graph_stream_leak_1641.py`` pins the two together.
+_CHECKPOINT_NS_SEPARATOR = "|"
+
+
+def _is_nested_graph_event(checkpoint_ns: Any) -> bool:
+    """True when ``checkpoint_ns`` shows the event came from a NESTED graph (#1641).
+
+    Fails open on anything that is not a string: an absent or malformed
+    namespace must never be read as evidence, preserving #1547's property that
+    a legitimate stream is not silenced on missing information.
+    """
+    if not isinstance(checkpoint_ns, str):
+        return False
+    return _CHECKPOINT_NS_SEPARATOR in checkpoint_ns
+
 
 class LangGraphAgent(_LangGraphAGUIAgent):
     """
@@ -725,11 +748,38 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         ``"tools"`` was measured 0 times across a 51-turn run. Enumerating
         offenders one at a time is how the same defect reached a third surface.
 
-        Now: suppress any chat-model event whose ``langgraph_node`` is NOT an
-        answer node. ABSENT metadata still fails open — #1547's safety property
+        #1641 ADDED THE DEPTH TEST. The allow-list above was the right move, but
+        it keys on an identifier that is NOT UNIQUE ACROSS GRAPHS. The
+        orchestrator graph (``src/agents/orchestrator/graph.py``) also ends
+        ``dispatch -> synthesize -> END``, so when ``orchestrator_tool`` ran
+        inside this graph's tools node its dispatch summary surfaced as
+        ``langgraph_node == "synthesize"``, matched the allow-list, and was
+        delivered as the FIRST assistant message — a generic "# Strategic
+        Insights Summary" claiming "Both analyses returned null results" ahead of
+        the real answer (eval 2026-08-15 turn A.9-followup: 3472 chars of
+        template, then 2552 chars of answer opening "Straight answer:").
+
+        A nested graph's stream is machinery whatever its innermost node is
+        called, and ``langgraph_checkpoint_ns`` records that nesting directly.
+
+        BOTH RULES ARE LOAD-BEARING — neither subsumes the other, and each catches
+        leaks the other misses (measured, not assumed):
+
+        * name-only misses NESTED answer names — this issue, 32 chat-model events
+          at ``tools:<id>|synthesize:<id>`` in the 2026-08-15 run;
+        * depth-only misses DEPTH-0 machinery — the #1547 leak carried
+          ``langgraph_node == "tools"`` with ``langgraph_checkpoint_ns ==
+          "tools"`` (no separator, 4063 chars on 2026-08-11 turn 2.6), because a
+          direct LLM call inside the tools node enters no subgraph; likewise the
+          separately-invoked explainer graph reports ``assemble`` / ``reason`` /
+          ``generate`` at depth 0.
+
+        ABSENT metadata still fails open at BOTH levels — #1547's safety property
         that a legitimate stream is never silenced on missing information is
         preserved deliberately, so a metadata regression degrades to noise rather
-        than to a mute chatbot.
+        than to a mute chatbot. This is safe against blanking a turn only because
+        every answer the outer graph produces is raised at depth 0; verified over
+        all 51 turns of the 2026-08-15 run, each has non-zero depth-0 answer text.
         """
         if not isinstance(event, dict):
             return False
@@ -740,7 +790,11 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         if node is None:
             # Fail open on missing information (#1547 contract, unchanged).
             return False
-        return node not in _ANSWER_NODE_NAMES
+        if node not in _ANSWER_NODE_NAMES:
+            return True
+        # An answer NAME is not proof of an answer ORIGIN: only this graph's own
+        # nodes produce answer text, and those are always at depth 0 (#1641).
+        return _is_nested_graph_event(metadata.get("langgraph_checkpoint_ns"))
 
     async def _handle_single_event(self, event: Any, state: Any) -> AsyncGenerator[str, None]:
         """Drop tool-internal chat-model events BEFORE AG-UI translation (#1547).
