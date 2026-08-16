@@ -121,6 +121,18 @@ _ALIASES: Dict[str, str] = {
     "funnel conversion": "WS2-TR-009",
     "conversion funnel": "WS2-TR-009",
     "trigger funnel": "WS2-TR-009",
+    # Model-performance KPIs whose names are ENTIRELY sub-4-char abbreviations
+    # ("ROC-AUC", "PR-AUC", "F1 Score" — "score" is a stop token). The name-token
+    # fallback has nothing it can see, so before #1637 these resolved to None and
+    # the chat tool answered "did not resolve to a defined KPI" for three fully
+    # implemented KPIs. Aliased rather than lowering the token floor, which would
+    # admit "ttr"/"cfr"/"ate" and collide with ordinary prose (_ABBREV_BLOCKLIST).
+    # Multi-character forms only — a bare "f1" would match inside unrelated words.
+    "roc-auc": "WS1-MP-001",
+    "roc auc": "WS1-MP-001",
+    "pr-auc": "WS1-MP-002",
+    "pr auc": "WS1-MP-002",
+    "f1 score": "WS1-MP-003",
 }
 
 # Registry abbreviations that are ordinary English words: admitting them to
@@ -238,6 +250,135 @@ KPI_SEMANTIC_NOTES = {
 # ---------------------------------------------------------------------------
 # KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
+#: Name tokens too generic to identify a KPI on their own — they appear in many
+#: registry names and in ordinary analytics prose.
+_NAME_TOKEN_STOP = frozenset(
+    {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
+)
+
+#: Shortest name token allowed to drive a match. Below this, tokens are
+#: abbreviations ("ttr", "cfr", "auc") that collide with ordinary words; the
+#: KPIs whose names are ENTIRELY such tokens carry explicit aliases instead.
+_MIN_NAME_TOKEN = 4
+
+#: Characters that JOIN words in real input but separate concepts for matching:
+#: "conversion_rate", "TRx-share". Normalized to spaces so boundary matching sees
+#: the words (#1637 codex iter-8/9). Replacement is one character for one, so the
+#: normalized string keeps the LENGTH its spans are measured against.
+#:
+#: Slash is here even though it is ALSO a multi-KPI coordinator in
+#: ``chatbot_tools._KPI_COORDINATOR_RE`` (#1637 codex iter-10). The two roles do
+#: not conflict, because this replacement is length-preserving: matching runs on
+#: the separator-normalized string, while the coordinator gap is sliced from the
+#: punctuation-preserving one at the SAME offsets. So "TRx/share" resolves as one
+#: KPI and "TRx/NRx" is still refused as two.
+_SEPARATOR_CHARS = "_-/.–—"
+
+#: How a metric phrase may be inflected in prose — "override rate" also appears
+#: as "override rates", "patient touch" as "patient touches", "ROI" as "ROI's".
+#:
+#: SHARED DELIBERATELY (#1637 codex iter-2). Two matchers decide whether a phrase
+#: names a metric — :func:`_alias_pattern` (which metric is being asked about)
+#: and :func:`recognize_distinct_metric` (is a SECOND metric also named). When
+#: only the first learned plurals, "acceptance rates and override rates" resolved
+#: the first KPI, failed to see the second, and answered one metric as complete —
+#: the exact fail-silent the multi-metric guard exists to prevent. One constant
+#: so the two cannot drift apart again.
+#: Possessives are included because the boundary rule otherwise rejects them
+#: outright: "ROI's trend" and "TRx's drivers" resolved on main and stopped
+#: resolving here — and "TRx drivers" is one of the very shapes the #1475
+#: governing-head guards exist to read. The curly apostrophe resolved while the
+#: ASCII one did not, which is the tell that this was an accident of the
+#: character class rather than a decision.
+_PLURAL_SUFFIX = r"(?:'s|’s|e?s)?"
+
+
+@lru_cache(maxsize=1024)
+def _name_tokens(name: str) -> Tuple[str, ...]:
+    """Distinctive lowercase tokens of a KPI name, in order of appearance."""
+    normalized = name.lower().replace("-", " ").replace("(", " ").replace(")", " ")
+    seen: Dict[str, None] = {}
+    for tok in normalized.split():
+        tok = tok.strip()
+        if len(tok) >= _MIN_NAME_TOKEN and tok not in _NAME_TOKEN_STOP:
+            seen.setdefault(tok, None)
+    return tuple(seen)
+
+
+@lru_cache(maxsize=1024)
+def _alias_pattern(alias: str) -> re.Pattern[str]:
+    """Alias matcher: bounded on both sides, tolerating a plural suffix.
+
+    Aliases were matched by bare substring, which let a short alias fire from
+    inside an unrelated word — "roc auc" matched "p|roc auc|tion" and "f1 score"
+    matched "f1 score|card" (#1637 codex iter-1). Bounding both sides fixes that.
+
+    The plural suffix is not decoration: a plain ``\\b...\\b`` rule silently LOST
+    "override rates", "acceptance rates" and "patient touches", none of which the
+    187-test regression corpus covered. :data:`_PLURAL_SUFFIX` keeps those while
+    still rejecting "f1 score|card", since "card" matches neither the optional
+    suffix nor the closing boundary.
+    """
+    return re.compile(rf"(?<![\w'-]){re.escape(alias)}{_PLURAL_SUFFIX}(?![\w'-])")
+
+
+@lru_cache(maxsize=1024)
+def _token_pattern(token: str) -> re.Pattern[str]:
+    """Word-boundary matcher for a name token.
+
+    Boundaries matter (#1637): plain substring search let WS1-DQ-004 "Stacking
+    Lift" claim every query containing "up|lift|", so "action rate uplift"
+    resolved to Stacking Lift instead of WS2-TR-003 Action Rate Uplift.
+    """
+    return re.compile(r"\b" + re.escape(token) + r"\b")
+
+
+def _best_name_match(
+    q: str, kpis: List[KPIMetadata]
+) -> Optional[Tuple[KPIMetadata, str, int, int]]:
+    """Resolve ``q`` to the KPI whose NAME the query covers best.
+
+    Before #1637 this was "return the first registry KPI holding any name token
+    found as a substring of the query". Both halves of that were defects:
+
+    * **substring, not word boundary** — "lift" matched inside "uplift".
+    * **registry order standing in for relevance** — a one-token brush beat an
+      exact full-name match, so ``WS2-TR-001 Trigger Precision`` owned every
+      query containing the word "trigger" (the reported 4.6 symptom: "what is
+      the false alert rate for triggers" resolved to Trigger Precision), and
+      ``WS1-DQ-009 Time-to-Release`` owned "lead time" via its "time" token.
+
+    Measured over the 45-KPI registry, ten KPIs resolved to a DIFFERENT KPI when
+    asked by their own name. Scoring by coverage takes that to zero.
+
+    Ranking, best first: most distinct name tokens matched, then the most query
+    characters matched, then registry order — which keeps the previous winner on
+    a genuine tie, so this narrows resolution rather than reshuffling it.
+
+    The returned span is the EARLIEST matched token, so it points at the start
+    of the KPI mention for the #1475 governing-head guards.
+    """
+    best: Optional[Tuple[Tuple[int, int, int], KPIMetadata, int, int]] = None
+    for order, kpi in enumerate(kpis):
+        starts: List[int] = []
+        ends: List[int] = []
+        for tok in _name_tokens(str(kpi.name)):
+            m = _token_pattern(tok).search(q)
+            if m is not None:
+                starts.append(m.start())
+                ends.append(m.end())
+        if not starts:
+            continue
+        # Negated so that "more is better" sorts first under plain tuple order.
+        key = (-len(starts), -sum(e - s for s, e in zip(starts, ends, strict=True)), order)
+        if best is None or key < best[0]:
+            first = min(range(len(starts)), key=lambda i: starts[i])
+            best = (key, kpi, starts[first], ends[first])
+    if best is None:
+        return None
+    return best[1], q, best[2], best[3]
+
+
 def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str, int, int]]:
     """Like :func:`recognize_kpi`, but also expose WHERE the vocabulary hit.
 
@@ -251,7 +392,20 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
     """
     if not query:
         return None
+    # Separators are separators, not word characters (#1637 codex iter-8/9). The
+    # model really does pass snake_case ids -- "conversion_rate" (15 calls) and
+    # "market_share" (6) appear in the 51-turn eval -- and once matching moved to
+    # word boundaries, "_" being a \w char made both resolve to NOTHING. Hyphens
+    # were worse than nothing: "conversion-rate" resolved to Trigger Funnel
+    # Conversion instead of Conversion Rate.
+    #
+    # Normalized AFTER the whitespace collapse and one character for one, so the
+    # result is the same LENGTH as the string the spans are measured against; the
+    # #1475 governing-head guards slice this string and would silently misread a
+    # shorter one.
     q = " ".join(str(query).lower().split())
+    for _sep in _SEPARATOR_CHARS:
+        q = q.replace(_sep, " ")
     registry = get_registry()
 
     # 0) reverse-share phrasing with a brand/modifier gap (#1475 codex iter-4):
@@ -267,24 +421,16 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
 
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
-        idx = q.find(alias)
-        if idx != -1:
+        m = _alias_pattern(alias).search(q)
+        if m is not None:
             kpi = registry.get(_ALIASES[alias])
             if kpi is not None:
-                return kpi, q, idx, idx + len(alias)
+                return kpi, q, m.start(), m.end()
 
-    # 2) dynamic fallback: a distinctive KPI-name token appears in the query.
-    stop = {"rate", "score", "total", "new", "of", "the", "and", "to", "per", "median"}
-    for kpi in registry.get_all():
-        for tok in (
-            str(kpi.name).lower().replace("-", " ").replace("(", " ").replace(")", " ").split()
-        ):
-            tok = tok.strip()
-            if len(tok) >= 4 and tok not in stop:
-                idx = q.find(tok)
-                if idx != -1:
-                    return kpi, q, idx, idx + len(tok)
-    return None
+    # 2) dynamic fallback: score every KPI by how much of its NAME the query
+    # covers, and take the best (#1637). See _best_name_match for why coverage
+    # replaced "first registry KPI holding any matching token".
+    return _best_name_match(q, registry.get_all())
 
 
 @lru_cache(maxsize=1)
@@ -355,7 +501,14 @@ def recognize_distinct_metric(
     for phrase, kpi_id in _strict_metric_vocabulary():
         if kpi_id == exclude_id:
             continue
-        m = re.search(rf"(?<![\w'-]){re.escape(phrase)}(?![\w'-])", normalized_query)
+        # Plural-tolerant, matching _alias_pattern (#1637 codex iter-2): a probe
+        # that only saw singulars missed the second metric in "acceptance rates
+        # and override rates" and let it be answered as one. The case-sensitive
+        # abbreviation branch below stays exact — "TRx"/"ATE" are not pluralized,
+        # and loosening initialisms is how they start matching ordinary prose.
+        m = re.search(
+            rf"(?<![\w'-]){re.escape(phrase)}{_PLURAL_SUFFIX}(?![\w'-])", normalized_query
+        )
         if m is not None:
             kpi = registry.get(kpi_id)
             if kpi is not None:

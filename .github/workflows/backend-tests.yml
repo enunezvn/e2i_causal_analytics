@@ -314,7 +314,6 @@ jobs:
             tests/unit/test_optimization/ \
             tests/unit/test_serving/ \
             tests/unit/test_skills/ \
-            tests/unit/test_synthetic/ \
             tests/unit/test_testing/ \
             tests/unit/test_tests_meta/ \
             tests/unit/test_tool_registry/ \
@@ -430,6 +429,25 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-xdist pytest-timeout pytest-asyncio
 
+      # This lane runs WITHOUT --cov and with a 60s per-test timeout instead of
+      # the unit lane's 30s, which is what tests/unit/test_synthetic/ needs:
+      # test_provenance_stamp.py::test_all_datasets_stamped_is_synthetic
+      # generates every dataset and measures 20.2s bare but 38.6s under --cov,
+      # i.e. OVER the unit lane's cap.
+      #
+      # Exceeding the cap there is not a soft failure. pytest-timeout runs with
+      # ``timeout method: thread`` under xdist, which cannot preempt the call and
+      # so calls os._exit(1) on the worker. xdist reports that as
+      # "[gwN] node down: Not properly terminated" + "replacing crashed worker",
+      # then replaces the worker and the SESSION NEVER TERMINATES -- the job
+      # sits at 99% until its cap cancels it (measured: 4.8 min of tests
+      # followed by 19.5 min of silence). #1648 tracks that hang; a crashed
+      # worker should fail the job fast rather than burn the cap.
+      #
+      # Diagnosing this class: measure the gap from the test's start line to
+      # "node down" and compare it to the lane's --timeout. If they match, it is
+      # a timeout kill, NOT an OOM -- the gap tracked 37.1s against a 30s cap
+      # here and 60.1s against a 60s cap in this lane, which is what proved it.
       - name: Run heavy unit tests
         run: |
           pytest \
@@ -445,6 +463,7 @@ jobs:
             tests/unit/test_ontology/ \
             tests/unit/test_rag/ \
             tests/unit/test_security/ \
+            tests/unit/test_synthetic/ \
             tests/unit/test_tasks/ \
             -n 2 \
             --dist=loadscope \

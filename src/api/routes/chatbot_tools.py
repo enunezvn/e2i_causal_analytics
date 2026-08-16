@@ -16,6 +16,7 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -2109,6 +2110,43 @@ async def _window_coverage_probe(
 # silently dropping on any other KPI.
 _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"})
 
+#: Coordinators that turn two KPI mentions into two SEPARATE asks (#1637). Two
+#: mentions alone do not: "TRx market share" is a modifier chain naming exactly
+#: one KPI (WS3-BI-008). Only an explicit coordinator between the mentions means
+#: the caller asked for both.
+#:
+#: Includes COMPARISON forms (codex iter-2): "TRx vs NRx" is two metrics just as
+#: much as "TRx and NRx" is, and comparison is the more natural phrasing for the
+#: ask — omitting it left the original single-call failure intact for exactly the
+#: shape most likely to produce it.
+#: Asymmetric by design: a MISSED coordinator degrades to the behaviour that
+#: shipped before this guard existed (one metric answered), while a FALSE
+#: coordinator refuses a question the tool can actually answer. So the list is
+#: grown deliberately and each addition is measured against the observed corpus.
+#: Bare "with" is excluded for exactly that reason -- it is a preposition that
+#: forms MODIFIER relationships, and "market share with respect to TRx" names one
+#: KPI, not two. The explicitly additive compounds are safe.
+#: Punctuation joiners are here too (codex iter-11). kpi_resolution normalizes
+#: "-", ".", "–", "—" as SEPARATORS so a single label like "TRx-share" resolves;
+#: left out of this list, the same characters BETWEEN two distinct metrics let
+#: "TRx-NRx" and "TRx.NRx" be answered as one. Anything that separates words for
+#: matching must also be readable as coordination between two metrics.
+#:
+#: Punctuation inside ONE recognized phrase is unaffected: the gap is measured
+#: between distinct metric spans, and "TRx-share" matches a single alias covering
+#: both words, so there is no second span and no gap to read.
+_KPI_COORDINATOR_RE = re.compile(
+    r"(?:\band\b|\bor\b|\bplus\b|\bas well as\b|\balongside\b"
+    r"|\b(?:along|together) with\b|\bvs\.?\b|\bversus\b"
+    r"|\bcompared (?:to|with)\b|\bagainst\b|&|,|/|\+|-|–|—|\.|_)"
+)
+
+#: Backstop on the multi-mention scan. The scan ends naturally once every mention
+#: is masked; this only bounds the case-sensitive abbreviation branch, which reads
+#: the UNMASKED original. Set well above any realistic ask, and hitting it is
+#: logged rather than silently truncating the scan.
+_MAX_KPI_MENTION_SCANS = 8
+
 
 @tool(args_schema=KpiCalculateInput)
 async def kpi_calculate_tool(
@@ -2205,13 +2243,120 @@ async def kpi_calculate_tool(
     "unknown" = the status could not be evaluated (missing data or calculation
     error) — do not speculate about causes beyond any error field present.
     """
-    kpi = kpi_resolution.recognize_kpi(kpi_name)
-    if kpi is None:
+    _span = kpi_resolution.recognize_kpi_span(kpi_name)
+    if _span is None:
         return {
             "success": False,
             "query_type": "kpi_calculate",
             "error": f"'{kpi_name}' did not resolve to a defined KPI.",
             "hint": "Try a defined KPI like NBRx, TRx, NRx, market share, conversion rate, or ROI.",
+        }
+    kpi, _normalized, _kpi_start, _kpi_end = _span
+
+    # #1637: this tool computes ONE KPI, but ``kpi_name`` is free text. A
+    # COORDINATED ask ("false alert rate and override rate") silently resolved to
+    # whichever alias matched first and was answered as if complete -- the eval's
+    # turn 4.6 shape, where the answer then blamed the tool for the metric it
+    # never asked for. Refuse instead, naming both, so the caller issues one call
+    # per metric.
+    #
+    # Gated on an explicit coordinator between the mentions, because bare
+    # multi-mention detection is NOT sufficient: measured against the 20 distinct
+    # kpi_name values the model actually passed across the 51-turn 2026-08-15 run,
+    # an ungated guard refuses "TRx market share" (32 calls) -- a MODIFIER chain
+    # naming the single KPI WS3-BI-008, not two metrics. Adjacency means one
+    # metric; "and"/"vs"/"&"/"," between the spans means two.
+    #
+    # EVERY further mention is examined, not just the first (codex iter-4).
+    # recognize_distinct_metric returns one match in vocabulary order, so
+    # "TRx market share and ROI" handed back the ADJACENT "TRx" -- gap " ", no
+    # coordinator -- and the tool computed TRx share while silently dropping ROI.
+    # Stopping at the first mention re-created the exact fail-silent this guard
+    # exists to close, just one mention further along.
+    # The gap is read from the PUNCTUATION-PRESERVING normalization, not from
+    # _normalized (#1637 codex iter-10). kpi_resolution normalizes "/" to a space
+    # so "TRx/share" resolves as the single KPI WS3-BI-008 rather than falling
+    # through to a token match on TRx alone -- but "/" is also a coordinator, and
+    # reading the gap from the normalized string would erase it and let "TRx/NRx"
+    # be answered as one metric. Both normalizations are length-preserving, so the
+    # spans index into either string identically.
+    _punctuated = " ".join(kpi_name.lower().split())
+    _masked = _normalized[:_kpi_start] + " " * (_kpi_end - _kpi_start) + _normalized[_kpi_end:]
+    _coordinated: List[str] = []
+    _seen_ids = {kpi.id}
+    # The loop terminates on its own: each pass masks the span it found, so the
+    # probe runs out of mentions. _MAX_KPI_MENTION_SCANS is a backstop for the
+    # case-sensitive abbreviation branch, which reads the UNMASKED original and
+    # would otherwise keep returning the same mention. Exhausting it is logged
+    # rather than silently truncating the scan.
+    _scan_complete = True
+    for _ in range(_MAX_KPI_MENTION_SCANS):
+        _other = kpi_resolution.recognize_distinct_metric(
+            _masked, exclude_id=kpi.id, original_query=kpi_name
+        )
+        if _other is None:
+            break
+        _other_kpi, _other_start, _other_end = _other
+        # Only lack of PROGRESS may end the scan (codex iter-5). A repeated id
+        # must not: "TRx market share for TRx and ROI" mentions TRx twice, and
+        # breaking on the repeat abandoned the scan before reaching the
+        # coordinated ROI -- answering one KPI as complete, the same fail-silent
+        # one mention further along again. A zero-width span cannot be masked, so
+        # that is the genuine no-progress case (the case-sensitive abbreviation
+        # branch reports (0, 0) once its lowercase occurrence is masked away).
+        if _other_end <= _other_start:
+            break
+        _masked = _masked[:_other_start] + " " * (_other_end - _other_start) + _masked[_other_end:]
+        if _other_kpi.id in _seen_ids:
+            continue
+        _seen_ids.add(_other_kpi.id)
+        _gap = _punctuated[min(_kpi_end, _other_end) : max(_kpi_start, _other_start)]
+        if _KPI_COORDINATOR_RE.search(_gap):
+            _coordinated.append(str(_other_kpi.name))
+    else:
+        # for/else: the loop ran the full range without breaking, i.e. it never
+        # ran out of mentions -- the cap stopped it, not the text.
+        _scan_complete = False
+    if not _scan_complete:
+        # Fail CLOSED, not just loudly (codex iter-6). Having established that a
+        # further coordinated metric may be unexamined, computing one KPI and
+        # returning success is exactly the false-complete this guard exists to
+        # prevent -- the warning would document the wrong answer, not avoid it.
+        logger.warning(
+            "kpi_calculate: metric-mention scan hit its %d-scan cap for %r "
+            "(found %s); refusing rather than answering a possibly-partial ask",
+            _MAX_KPI_MENTION_SCANS,
+            kpi_name,
+            sorted(_seen_ids),
+        )
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "error": (
+                f"{kpi_name!r} contains too many metric mentions to determine "
+                f"reliably whether more than one KPI was asked for; this tool "
+                f"computes one KPI per call."
+            ),
+            "hint": "Call kpi_calculate_tool once per metric, naming each metric on its own.",
+        }
+
+    if _coordinated:
+        _all_named = sorted({str(kpi.name), *_coordinated})
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "error": (
+                f"{kpi_name!r} names more than one KPI ({' and '.join(_all_named)}); "
+                f"this tool computes one KPI per call."
+            ),
+            # Enumerate EVERY named metric, not the first two: with three or more
+            # the caller would otherwise be steered into dropping the rest, which
+            # is the failure this guard exists to prevent.
+            "hint": (
+                "Call kpi_calculate_tool once per metric — "
+                + ", then ".join(repr(n) for n in _all_named)
+                + " — and report each."
+            ),
         }
 
     # #1360: only the trigger-effectiveness calculators read
