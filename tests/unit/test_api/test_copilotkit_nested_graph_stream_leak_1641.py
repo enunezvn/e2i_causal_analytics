@@ -432,3 +432,49 @@ class TestLangGraphCoupling:
 
         source = inspect.getsource(consts)
         assert "separates each level" in source
+
+
+class TestAnswerGraphIsAlwaysTopLevel:
+    """The depth rule reads "nested == machinery". That is only sound while the
+    AG-UI graph is itself always the OUTERMOST graph — if it were ever compiled
+    INTO another graph, its own ``chat``/``synthesize`` would acquire a ``|`` and
+    the filter would MUTE the chatbot rather than merely leak.
+
+    Verified by inspection when the fix landed: ``create_e2i_chat_agent`` is
+    consumed only as a top-level graph (module-level ``e2i_chat_graph``, the
+    ``LangGraphAgent`` ``graph_factory``, and ``chat_bridge.py`` which streams it
+    directly). That is a property of the CALLERS, not of this module, so pin it
+    — a future ``add_node("...", e2i_chat_graph)`` anywhere in ``src/`` must fail
+    HERE instead of silently blanking every answer.
+    """
+
+    def test_chat_graph_is_never_embedded_as_a_subgraph(self):
+        import pathlib
+
+        import src
+
+        src_root = pathlib.Path(src.__file__).parent
+        symbols = ("create_e2i_chat_agent", "e2i_chat_graph")
+        offenders = []
+        for py in src_root.rglob("*.py"):
+            for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), start=1):
+                if "add_node" not in line:
+                    continue
+                if any(sym in line for sym in symbols):
+                    offenders.append(f"{py}:{lineno}: {line.strip()}")
+        assert not offenders, (
+            "the AG-UI chat graph is being embedded as a SUBGRAPH; its answer "
+            "nodes would then carry a nested checkpoint namespace and be "
+            "suppressed as machinery (#1641):\n" + "\n".join(offenders)
+        )
+
+    def test_graph_registers_the_answer_nodes_at_its_own_top_level(self):
+        """The other half of the invariant: the nodes the allow-list names really
+        are THIS graph's own nodes, so they are the ones running at depth 0."""
+        from src.api.routes.copilotkit import _TOOL_NODE_NAME, e2i_chat_graph
+
+        nodes = set(e2i_chat_graph.nodes)
+        assert _ANSWER_NODE_NAMES <= nodes, (
+            f"allow-listed answer nodes missing from the graph: {_ANSWER_NODE_NAMES - nodes}"
+        )
+        assert _TOOL_NODE_NAME in nodes
