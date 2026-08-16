@@ -115,11 +115,15 @@ COPY scripts/ ./scripts/
 # must exist in the image so a fresh named volume is initialized with e2i
 # ownership (the chown -R below) — otherwise the engine creates the
 # mountpoint root-owned and non-root worker saves fail silently.
+# data/celerybeat (#1645) is the same contract: it backs the celerybeat_state
+# named volume that holds beat's PersistentScheduler last_run_at shelve, and
+# beat runs as e2i under a read_only rootfs.
 RUN mkdir -p /app/data/ml_artifacts \
              /app/data/causal_outputs \
              /app/data/agent_outputs \
              /app/data/experiment_designs \
              /app/data/feature_cache \
+             /app/data/celerybeat \
              /app/optimized_modules \
              /app/optimized_prompts \
              /app/tmp
@@ -217,11 +221,15 @@ RUN /app/.venv/bin/python -m compileall -q -j 0 --invalidation-mode unchecked-ha
 # must exist in the image so a fresh named volume is initialized with e2i
 # ownership (the chown -R below) — otherwise the engine creates the
 # mountpoint root-owned and non-root worker saves fail silently.
+# data/celerybeat (#1645) is the same contract: it backs the celerybeat_state
+# named volume that holds beat's PersistentScheduler last_run_at shelve, and
+# beat runs as e2i under a read_only rootfs.
 RUN mkdir -p /app/data/ml_artifacts \
              /app/data/causal_outputs \
              /app/data/agent_outputs \
              /app/data/experiment_designs \
              /app/data/feature_cache \
+             /app/data/celerybeat \
              /app/optimized_modules \
              /app/optimized_prompts
 

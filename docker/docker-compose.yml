@@ -266,6 +266,16 @@ volumes:
   bentoml_models:
     driver: local
     name: e2i_bentoml_models
+  # celery beat's PersistentScheduler state file (#1645). It holds last_run_at
+  # for every beat_schedule entry, and it used to live in the scheduler's
+  # ephemeral /tmp tmpfs — so every deploy reset the clock and no 24-hour entry
+  # could ever come due (measured: in a 5h container life only the <=4h entries
+  # fired). On this volume a slot missed while the scheduler was down fires
+  # immediately on the next start. Scheduler-only: exactly one beat process may
+  # own this shelve, so do NOT mount it on api/workers.
+  celerybeat_state:
+    driver: local
+    name: e2i_celerybeat_state
 
   # Shared volumes (inter-container data exchange)
   ml_artifacts:
@@ -1055,6 +1065,15 @@ services:
     logging: *default-logging
     volumes:
       - causal_outputs:/app/data/causal_outputs:ro  # Read-only for monitoring
+      # #1645: celery beat's PersistentScheduler state (last_run_at per entry).
+      # MUST be a named volume, never the /tmp tmpfs below — the tmpfs dies with
+      # the container, and a reset last_run_at makes an interval schedule due
+      # only once uptime exceeds the interval, so on a box that deploys several
+      # times a day no 24h entry ever fires. /app/data/celerybeat is created in
+      # docker/Dockerfile (both stages) so the fresh volume inherits e2i:e2i
+      # ownership — without that mkdir the engine creates the mountpoint
+      # root-owned and beat cannot write it (same trap as optimized_modules).
+      - celerybeat_state:/app/data/celerybeat
     environment:
       # #528-A: the scheduler does NOT inherit <<: *common-env (unlike api/workers),
       # so set ENVIRONMENT=production explicitly. Pre-flip the dev overlay supplied
@@ -1071,7 +1090,7 @@ services:
       celery -A src.workers.celery_app beat
       --loglevel=INFO
       --scheduler=celery.beat:PersistentScheduler
-      --schedule=/tmp/celerybeat-schedule
+      --schedule=/app/data/celerybeat/celerybeat-schedule
     healthcheck:
       test: ["CMD-SHELL", "celery -A src.workers.celery_app inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1"]
       interval: 60s

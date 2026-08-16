@@ -416,13 +416,22 @@ def test_task_is_registered_with_expected_name() -> None:
 
 
 def test_beat_schedule_entry_present() -> None:
-    """The 24h beat entry routes the task to the analytics queue."""
+    """The daily beat entry routes the task to the analytics queue.
+
+    #1645: the cadence is a wall-clock crontab, not the old bare ``86400.0``
+    interval — an interval is measured from ``last_run_at``, which every deploy
+    reset, so a 24h entry never became due. 03:15 UTC also puts this head of the
+    ETL -> corpus chain after the Monday 03:00 host reseed; the full slot map is
+    in ``src/workers/celery_app.py``.
+    """
+    from celery.schedules import crontab
+
     from src.workers.celery_app import celery_app
 
     entry = celery_app.conf.beat_schedule.get("business-metrics-per-hcp-rollup")
     assert entry is not None, "beat schedule entry missing"
     assert entry["task"] == "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup"
-    assert entry["schedule"] == 86400.0
+    assert entry["schedule"] == crontab(hour=3, minute=15)
     assert entry["options"]["queue"] == "analytics"
 
 

@@ -206,6 +206,77 @@ celery_app.conf.task_routes = {
 # =============================================================================
 # BEAT SCHEDULE (for scheduler service)
 # =============================================================================
+#
+# WALL-CLOCK SLOT MAP (all times UTC — conf.timezone above is "UTC")
+#
+# #1645: every daily entry here used to be a bare ``86400.0`` interval. Celery's
+# interval form is measured from ``last_run_at``, which PersistentScheduler keeps
+# in its state file — and that file lived in the scheduler container's *ephemeral*
+# /tmp, so every deploy reset it. On a box that deploys several times a day a
+# 24-hour interval can therefore NEVER become due (measured in the issue: over a
+# 5-hour container life only the <=4h entries ever fired, and the two 4h entries
+# fired exactly once each). The observable casualty was #1649:
+# ``sync_operational_corpus`` is scheduled, implemented and its queue consumed,
+# and it had never run.
+#
+# The fix has two halves and needs both:
+#   1. docker/docker-compose.yml moves the beat state file onto the named volume
+#      ``celerybeat_state`` (--schedule=/app/data/celerybeat/celerybeat-schedule),
+#      so ``last_run_at`` survives a container recreate. A crontab slot missed
+#      while the scheduler was down then fires immediately on the next start
+#      (verified against celery 5.6.0: crontab.is_due() with a >24h-old
+#      last_run_at returns is_due=True).
+#   2. this map — daily work lands at a fixed hour instead of "deploy time + 24h",
+#      and dependency order between entries becomes real rather than incidental
+#      (with intervals every daily entry fired on the same tick, in dict order,
+#      which guarantees nothing about completion order).
+#
+# Half (2) is also load management, not cosmetics. Every entry in the live state
+# file carried last_run_at=02:03:53.7333xx — identical to the sub-millisecond,
+# because beat stamps them all at startup. Persistence alone (half 1) would leave
+# the eleven daily entries in that lockstep forever: all eleven come due at the
+# same instant every day, on a worker_medium running --concurrency=2. The slots
+# below are what breaks the lockstep.
+#
+# First-fire behaviour, measured against celery 5.6.0's PersistentScheduler:
+#   * FIRST deploy after this change -> the volume is empty, beat stamps every
+#     entry last_run_at=now, and 0 of 11 are immediately due. No catch-up burst;
+#     each task first runs at its own slot later that day.
+#   * routine redeploy (20 min / 2 h gap with no slot inside it) -> 0 of 11.
+#   * gap that spans a slot -> exactly the entries whose slot fell inside it.
+#   * multi-day outage -> 11 of 11 catch up, each exactly ONCE (crontab fires the
+#     missed slot, not one fire per missed day).
+#
+# Slots already spoken for — this map must stay clear of them (measured 2026-08-16):
+#   02:00-02:02  host cron, daily:   scripts/backup_cron.sh (pg_dump + RDB dumps)
+#   03:00-03:02  host cron, MONDAYS: scripts/reseed_synthetic.sh (frontier append)
+#   04:30        beat:               routing-label-nightly    (analytics, LLM judge)
+#   05:30        beat:               chatbot-optimization-drain (analytics, GEPA)
+#
+# Daily entries, in firing order:
+#   00:45  drift-history-cleanup            quick      prune before the 02:00 backup
+#   01:15  ab-interim-analysis-check        quick      quiet hours, clear of the backup
+#   02:10  feedback-loop-medium-window      analytics  "2 AM daily" per config, post-backup
+#   02:40  feedback-loop-drift-analysis     analytics  after medium-window
+#   03:15  business-metrics-per-hcp-rollup  analytics  after the Monday reseed
+#   03:30  patient-adherence-rollup         analytics
+#   03:45  territory-metrics-rollup         analytics  after per-HCP (hard dependency)
+#   04:00  sync-operational-corpus          analytics  after the rollups
+#   04:15  sync-chunk-corpus                analytics  after the rollups
+#   06:00  dspy-prompt-optimization-daily   analytics  after the 05:30 GEPA drain
+#   06:30  insight-lifecycle-consolidate    analytics
+#
+# The ETL -> corpus chain sits at 03:15-04:15 (not in the 00:xx quiet band) on
+# purpose: the Monday 03:00 reseed appends a fresh data frontier, and a chain that
+# ran before it would leave the corpus a full day behind every Monday.
+# worker_medium runs --concurrency=2 on the analytics queue, so the 15-minute
+# spacing buys determinism and ordering, not queue capacity.
+#
+# Guard: tests/unit/test_workers/test_beat_daily_wallclock_1645.py (no daily entry
+# may regress to a bare interval; slots must stay distinct and off the reserved
+# windows) and tests/unit/test_docker/test_compose_beat_state_volume_1645.py (the
+# state file must live on a named volume, never tmpfs).
+# =============================================================================
 
 celery_app.conf.beat_schedule = {
     # Drift monitoring every 6 hours. Targets check_all_production_models (the
@@ -226,9 +297,11 @@ celery_app.conf.beat_schedule = {
     # from drift_monitoring_tasks.py's removed on_after_finalize hook so all
     # beat scheduling lives in this one dict (see guard test
     # test_beat_schedule_registration.py).
+    # Slot 00:45 UTC (#1645): a pure retention prune with no upstream, placed
+    # ahead of the 02:00 host backup so the dump captures an already-pruned DB.
     "drift-history-cleanup": {
         "task": "src.tasks.cleanup_old_drift_history",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=0, minute=45),
         "options": {"queue": "quick"},
     },
     # NOTE (#897): the scaffolded "health-check" -> src.tasks.health_check and
@@ -274,62 +347,84 @@ celery_app.conf.beat_schedule = {
     # -------------------------------------------------------------------------
     # ETL Tasks (block 6B-infra-2*)
     # -------------------------------------------------------------------------
-    # Per-HCP business_metrics rollup every 24 hours (block 6B-infra-2a). Routed
-    # to `analytics`, which `task_routes` consumes via worker_medium.
+    # Per-HCP business_metrics rollup, daily at 03:15 UTC (block 6B-infra-2a).
+    # Routed to `analytics`, which `task_routes` consumes via worker_medium.
+    # Slot (#1645): head of the ETL -> corpus chain, and deliberately AFTER the
+    # Monday 03:00 host reseed (scripts/reseed_synthetic.sh, ~60s) so Monday's
+    # freshly appended frontier is rolled up the same morning.
     "business-metrics-per-hcp-rollup": {
         "task": "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=3, minute=15),
         "options": {"queue": "analytics"},
     },
-    # Per-patient adherence/refill/gap derivation every 24 hours (block
+    # Per-patient adherence/refill/gap derivation, daily at 03:30 UTC (block
     # 6B-infra-2b). Routed to `analytics` (worker_medium). Updates
     # patient_journeys.adherence_rate and gap_days; refill_count is left
     # NULL until a refill source lands -- see module docstring.
+    # Slot (#1645): no ordering dependency on the per-HCP rollup, but it shares
+    # the analytics queue, so it is offset 15 min rather than stacked.
     "patient-adherence-rollup": {
         "task": "src.etl.patient_adherence_etl.run_patient_adherence_rollup",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=3, minute=30),
         "options": {"queue": "analytics"},
     },
-    # Territory_metrics rollup every 24 hours (block 6B-infra-2c). Routed
+    # Territory_metrics rollup, daily at 03:45 UTC (block 6B-infra-2c). Routed
     # to `analytics` (worker_medium). Aggregates per-HCP business_metrics
     # rows produced by 6B-infra-2a -- in production the per-HCP rollup must
     # run first; see module docstring for the order dependency note.
     # market_potential / resource_allocation_score remain NULL until a real
     # Reltio/Veeva source lands.
+    # Slot (#1645): the "per-HCP must run first" note is only ENFORCEABLE with a
+    # wall-clock schedule. Under the previous 86400.0 intervals both entries
+    # became due on the same beat tick and their order was whatever the queue
+    # happened to do; 30 min after the per-HCP slot makes the dependency real.
     "territory-metrics-rollup": {
         "task": "src.etl.territory_metrics_etl.run_territory_rollup",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=3, minute=45),
         "options": {"queue": "analytics"},
     },
-    # Operational KPI corpus sync every 24 hours (audit F3b). Re-indexes the
+    # Operational KPI corpus sync, daily at 04:00 UTC (audit F3b). Re-indexes the
     # latest snapshot of every (brand, metric_name, region) combo from
     # business_metrics into the RAG substrate (episodic_memories). Scheduled
     # AFTER the business_metrics ETL rollups above so it picks up fresh facts;
     # idempotent prose dedup means only new/changed snapshots are embedded.
+    # Slot (#1645/#1649): this entry is the reason the issue was filed -- it was
+    # correctly implemented with a consumed queue and had still never run, because
+    # a reset 86400.0 interval never comes due. "AFTER the rollups" was previously
+    # only dict ordering; 04:00 makes it a real 45-min lag behind the 03:15 head
+    # of the chain.
     "sync-operational-corpus": {
         "task": "src.tasks.sync_operational_corpus",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=4, minute=0),
         "options": {"queue": "analytics"},
     },
-    # Chat-RAG chunk corpus sync every 24 hours (#1373). Re-indexes the latest
+    # Chat-RAG chunk corpus sync, daily at 04:15 UTC (#1373). Re-indexes the latest
     # snapshot of every (brand, metric_name, region) combo from business_metrics
     # into rag_document_chunks -- the OTHER RAG substrate, embedded in the
     # text-embedding-3-small space the chat HybridRetriever queries in (the
     # episodic corpus above is in the memory-path ada-002 space, invisible to
     # chat). Scheduled AFTER the business_metrics ETL rollups; idempotent
     # content-hash dedup means only new/changed snapshots are embedded.
+    # Slot (#1645): 04:15 UTC -- same post-rollup position as the episodic corpus
+    # sync above, offset 15 min so the two embedding passes do not contend, and
+    # clear of the 04:30 routing labeler.
     "sync-chunk-corpus": {
         "task": "src.tasks.sync_chunk_corpus",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=4, minute=15),
         "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------
-    # Daily interim analysis check at 2 AM
+    # Daily interim analysis check at 01:15 UTC. Slot (#1645): the comment here
+    # always said "2 AM" but the schedule was a bare 86400.0 interval, so it in
+    # fact fired at deploy-time + 24h -- i.e. never. Sequential-testing alpha
+    # spending assumes a regular cadence, so a fixed wall clock matters more here
+    # than for most entries. 01:15 keeps the intended quiet-hours placement while
+    # staying clear of the 02:00 host backup.
     "ab-interim-analysis-check": {
         "task": "src.tasks.check_all_active_experiments",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=1, minute=15),
         "options": {"queue": "quick"},
     },
     # Enrollment health check every 12 hours
@@ -359,10 +454,15 @@ celery_app.conf.beat_schedule = {
         "schedule": 14400.0,  # 4 hours
         "options": {"queue": "analytics"},
     },
-    # Medium-window feedback loop daily at 2 AM (churn)
+    # Medium-window feedback loop daily at 02:10 UTC (churn). Slot (#1645):
+    # config/outcome_truth_rules.yaml declares the intent as
+    # `medium_window_cron: "0 2 * * *"` (2 AM daily) -- that key has no code
+    # consumer, so this beat entry is the only thing that can honour it, and as a
+    # bare 86400.0 interval it never did. Offset 10 min past the 02:00 host backup
+    # (measured 02:00:01 -> 02:01:26) so the churn scan does not read under pg_dump.
     "feedback-loop-medium-window": {
         "task": "src.tasks.run_feedback_loop_medium_window",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=2, minute=10),
         "options": {"queue": "analytics"},
     },
     # Long-window feedback loop weekly on Sundays (market_share_impact, risk)
@@ -371,10 +471,14 @@ celery_app.conf.beat_schedule = {
         "schedule": 604800.0,  # 7 days
         "options": {"queue": "analytics"},
     },
-    # Concept drift analysis after feedback loop (daily at 3 AM)
+    # Concept drift analysis after the feedback loop, daily at 02:40 UTC.
+    # Slot (#1645): the "after feedback loop" ordering is the point of this
+    # entry, so it sits 30 min behind the medium-window slot above. The original
+    # comment said 3 AM; that hour now belongs to the Monday host reseed
+    # (scripts/reseed_synthetic.sh), so the slot moved earlier rather than later.
     "feedback-loop-drift-analysis": {
         "task": "src.tasks.analyze_concept_drift_from_truth",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=2, minute=40),
         "options": {"queue": "analytics"},
     },
     # DSPy signal-generation beat — every 6h. Runs FeedbackLearnerAgent.learn()
@@ -392,9 +496,14 @@ celery_app.conf.beat_schedule = {
     # DSPy prompt self-improvement loop (audit F1) — daily. Reads persisted
     # feedback_learner signals, gates on GEPAOptimizationTrigger, optimizes the
     # analysis prompts, and installs optimized recipient bundles.
+    # Slot (#1645): 06:00 UTC. The upstream freshness requirement is satisfied by
+    # the 6h feedback-learning-cycle regardless of hour (see its comment above),
+    # so the binding constraint here is cost/contention, not ordering: this is a
+    # GEPA run, and 06:00 puts it clear of the 05:30 chatbot-optimization drain
+    # (also GEPA) rather than racing it for the analytics queue.
     "dspy-prompt-optimization-daily": {
         "task": "src.tasks.run_dspy_prompt_optimization",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=6, minute=0),
         "options": {"queue": "analytics"},
     },
     # Routing-label loop (#1341 Phase 1) — nightly labeler for
@@ -440,11 +549,14 @@ celery_app.conf.beat_schedule = {
     # -------------------------------------------------------------------------
     # Insight Lifecycle subsystem (consolidation + sentinels)
     # -------------------------------------------------------------------------
-    # Daily consolidator: promotes confirmed causal_paths to semantic tier
-    # and high-success procedural_memories to procedural tier.
+    # Daily consolidator at 06:30 UTC: promotes confirmed causal_paths to
+    # semantic tier and high-success procedural_memories to procedural tier.
+    # Slot (#1645): no hard upstream — it reads accumulated memory tiers, not a
+    # same-morning ETL product — so it takes the tail of the daily band, after
+    # the 06:00 DSPy optimization.
     "insight-lifecycle-consolidate": {
         "task": "src.tasks.consolidate_insights",
-        "schedule": 86400.0,  # 24 hours
+        "schedule": crontab(hour=6, minute=30),
         "options": {"queue": "analytics"},
     },
     # Sentinel dispatcher: evaluates data-driven watchers (threshold, freshness, etc.)
