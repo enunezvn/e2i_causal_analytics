@@ -42,6 +42,8 @@ import pytest
 import pytest_asyncio
 from dotenv import load_dotenv
 
+from tests.stall_watchdog import install as _install_stall_watchdog
+
 # =============================================================================
 # LOAD ENVIRONMENT VARIABLES from .env file IMMEDIATELY
 # =============================================================================
@@ -657,6 +659,7 @@ def pytest_configure(config: pytest.Config) -> None:
     4. Check which services are available.
     5. Store results for skip decision making.
     6. Print service status to console.
+    7. Arm the session stall watchdog on the xdist controller (issue #1655).
     """
     global SERVICES_AVAILABLE
 
@@ -730,6 +733,17 @@ def pytest_configure(config: pytest.Config) -> None:
             print(f"  {icon} {service.upper()}: {status}")
         print(f"  (checked in {check_duration:.2f}s)")
         print("=" * 60 + "\n")
+
+    # Issue #1655: arm the session inactivity watchdog. This registers itself
+    # as a plugin on the CONTROLLER only (an xdist worker returns None) and is
+    # inert unless E2I_PYTEST_STALL_TIMEOUT is set — opt-in per lane, never
+    # inferred from CI, because a safe window depends on the lane's longest
+    # per-test budget and those span 30s to 2700s here. Local runs, including
+    # debugger sessions, are untouched. It exists because --timeout only arms a
+    # timer inside a worker's runtest protocol: a stall in the controller, or in
+    # a worker holding the GIL in native code, has no timer at all and burns the
+    # job's whole timeout-minutes cap with no diagnosis.
+    _install_stall_watchdog(config)
 
 
 # =============================================================================
