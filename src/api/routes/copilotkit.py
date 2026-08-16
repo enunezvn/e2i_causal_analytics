@@ -323,6 +323,7 @@ from src.api.dependencies.auth import (
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.api.utils.sse_keepalive import with_sse_keepalive
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
 from src.utils.llm_attribution import (
     drain_run_usage,
@@ -4934,8 +4935,17 @@ async def stream_chat(
     # Update the request with the effective request_id
     chat_request.request_id = effective_request_id
 
+    # #1659: every frame below originates from a LangGraph node-completion
+    # update, and the orchestrator is ONE node that ainvokes a nested graph — so
+    # without a keepalive this body is silent for the whole turn. Measured on
+    # prod 2026-08-16: one frame at 860.9 ms, then 34 395.7 ms of nothing (the
+    # sum of every node's wall time, 6 ms apart), on a turn that dispatched
+    # heterogeneous_optimizer. nginx's proxy_read_timeout bounds exactly that
+    # gap, so the pre-fix constraint was "total turn wall time < 300 s" — which
+    # the 420 s heterogeneous_optimizer budget in router.py blows on its own.
+    # The wrapper makes the bounded quantity a constant instead.
     return StreamingResponse(
-        _stream_chat_response(chat_request, authenticated_user_id),
+        with_sse_keepalive(_stream_chat_response(chat_request, authenticated_user_id)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
