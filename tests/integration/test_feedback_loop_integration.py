@@ -388,22 +388,32 @@ class TestFeedbackLoopScheduling:
             assert schedule_name in beat_schedule, f"Missing schedule: {schedule_name}"
 
     def test_beat_schedule_intervals(self):
-        """Test that schedule intervals match expected cadence."""
+        """Test that schedule cadences match the documented slot map."""
+        from celery.schedules import crontab
+
         from src.workers.celery_app import celery_app
 
         beat_schedule = celery_app.conf.beat_schedule
 
-        # Short window: every 4 hours (14400 seconds)
+        # Short window: every 4 hours (14400 seconds). Interval is fine here —
+        # 4h is inside a normal container lifetime (#1645).
         assert beat_schedule["feedback-loop-short-window"]["schedule"] == 14400.0
 
-        # Medium window: daily (86400 seconds)
-        assert beat_schedule["feedback-loop-medium-window"]["schedule"] == 86400.0
+        # Medium window: daily at 02:10 UTC (#1645 — was a bare 86400.0 interval
+        # that a deploy-reset last_run_at meant could never come due).
+        assert beat_schedule["feedback-loop-medium-window"]["schedule"] == crontab(
+            hour=2, minute=10
+        )
 
-        # Long window: weekly (604800 seconds)
+        # Long window: weekly (604800 seconds) — still an interval, rescued by the
+        # beat state file moving onto a named volume.
         assert beat_schedule["feedback-loop-long-window"]["schedule"] == 604800.0
 
-        # Drift analysis: daily (86400 seconds)
-        assert beat_schedule["feedback-loop-drift-analysis"]["schedule"] == 86400.0
+        # Drift analysis: daily at 02:40 UTC, 30 min behind the medium window it
+        # is documented to run "after" (#1645).
+        assert beat_schedule["feedback-loop-drift-analysis"]["schedule"] == crontab(
+            hour=2, minute=40
+        )
 
     def test_task_queue_routing(self):
         """Test that tasks are routed to correct queues."""

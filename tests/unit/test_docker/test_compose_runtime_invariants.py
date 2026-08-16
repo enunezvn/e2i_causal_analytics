@@ -165,13 +165,19 @@ def test_every_app_service_has_writable_app_tmp_tmpfs():
 
 
 def test_shared_tmp_tmpfs_is_sticky_world_writable():
-    """/tmp must be sticky world-writable (1777) so e2i can write celerybeat-schedule."""
+    """/tmp must be sticky world-writable (1777) so non-root e2i can use it at all.
+
+    (#1645 moved celery beat's PersistentScheduler state OFF this tmpfs onto the
+    celerybeat_state named volume — the tmpfs died with the container on every
+    deploy. /tmp still has to be e2i-writable for everything else that reaches for
+    the process temp dir: tempfile, joblib, matplotlib fallbacks, sklearn spills.)
+    """
     seen = list(_all_tmpfs_for_path("/tmp"))
     assert len(seen) >= 2, f"expected >=2 /tmp tmpfs declarations, parsed {len(seen)}"
     for label, name, opts in seen:
         assert opts.get("mode") != "1770", (
             f"{label}:{name} /tmp uses the reverted root-owned mode=1770 "
-            "(non-root e2i cannot write /tmp/celerybeat-schedule)"
+            "(non-root e2i cannot write the process temp dir)"
         )
         assert opts.get("mode") == "1777", (
             f"{label}:{name} /tmp must be sticky mode=1777, got mode={opts.get('mode')!r}"

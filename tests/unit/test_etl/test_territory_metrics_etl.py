@@ -439,13 +439,22 @@ def test_task_is_registered_with_expected_name() -> None:
 
 
 def test_beat_schedule_entry_present() -> None:
-    """The 24h beat entry routes the task to the analytics queue."""
+    """The daily beat entry routes the task to the analytics queue.
+
+    #1645: the cadence is a wall-clock crontab, not the old bare ``86400.0``
+    interval. The slot (03:45 UTC) is 30 min behind the per-HCP rollup, which is
+    what finally makes this module's documented "per-HCP must run first" ordering
+    real — under intervals both entries came due on the same beat tick. Slot map
+    in ``src/workers/celery_app.py``.
+    """
+    from celery.schedules import crontab
+
     from src.workers.celery_app import celery_app
 
     entry = celery_app.conf.beat_schedule.get("territory-metrics-rollup")
     assert entry is not None, "beat schedule entry missing"
     assert entry["task"] == "src.etl.territory_metrics_etl.run_territory_rollup"
-    assert entry["schedule"] == 86400.0
+    assert entry["schedule"] == crontab(hour=3, minute=45)
     assert entry["options"]["queue"] == "analytics"
 
 

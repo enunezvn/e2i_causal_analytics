@@ -646,18 +646,30 @@ class TestTaskConfiguration:
         assert "feedback-loop-drift-analysis" in beat_schedule
 
     def test_beat_schedule_correct_intervals(self):
-        """Test that beat schedule has correct intervals."""
+        """Test that beat schedule has the correct cadence for each window."""
+        from celery.schedules import crontab
+
         from src.workers.celery_app import celery_app
 
         beat_schedule = celery_app.conf.beat_schedule
 
-        # Short window: 4 hours = 14400 seconds
+        # Short window: 4 hours = 14400 seconds. Left as an interval: 4h is well
+        # inside a normal container lifetime, so it comes due regardless of when
+        # the last deploy reset last_run_at (#1645).
         assert beat_schedule["feedback-loop-short-window"]["schedule"] == 14400.0
 
-        # Medium window: 24 hours = 86400 seconds
-        assert beat_schedule["feedback-loop-medium-window"]["schedule"] == 86400.0
+        # Medium window: daily at 02:10 UTC. #1645 replaced the bare 86400.0 with
+        # a wall clock — an interval measured from a deploy-reset last_run_at
+        # never came due, so this task had effectively never run. 02:10 honours
+        # config/outcome_truth_rules.yaml's `medium_window_cron: "0 2 * * *"`
+        # while clearing the 02:00 host backup.
+        assert beat_schedule["feedback-loop-medium-window"]["schedule"] == crontab(
+            hour=2, minute=10
+        )
 
-        # Long window: 7 days = 604800 seconds
+        # Long window: 7 days = 604800 seconds. Still an interval — #1645 scoped
+        # the crontab conversion to the daily entries; this one is rescued by the
+        # beat state now living on a named volume (last_run_at survives a deploy).
         assert beat_schedule["feedback-loop-long-window"]["schedule"] == 604800.0
 
     def test_task_routes_analytics_queue(self):
