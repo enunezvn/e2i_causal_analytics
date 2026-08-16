@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
+from src.agents.experiment_designer.state import infer_audit_status
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,13 +54,24 @@ class ExperimentDesignTrainingSignal:
     required_sample_size: int = 0
     achieved_power: float = 0.0
     minimum_detectable_effect: float = 0.0
+    #: #1639. Without this, a stored example carries an UNLABELED MDE and prompt
+    #: optimization learns from provenance-blind data -- teaching the model the
+    #: same ambiguity the output path was just fixed to avoid.
+    minimum_detectable_effect_scale: str = "unknown"
     duration_estimate_days: int = 0
+    #: #1639. The reward term below penalizes duration outside 7..365, but the
+    #: example did not record WHY a design was caveated, so the signal could not
+    #: distinguish "long but intentional" from "arithmetically absurd".
+    feasibility_warnings: list[str] = field(default_factory=list)
 
     # === Validity Audit Phase ===
     validity_threats_identified: int = 0
     critical_threats: int = 0
     mitigations_proposed: int = 0
     overall_validity_score: float = 0.0
+    #: #1639. A 0.0 score from a skipped audit and a 0.0 from a scathing one are
+    #: the same number; only this says which the optimizer is learning from.
+    validity_audit_status: str = "not_run"
     redesign_iterations: int = 0
 
     # === Template Generation ===
@@ -128,7 +141,16 @@ class ExperimentDesignTrainingSignal:
             if self.overall_validity_score >= 0.7:
                 validity_score += 0.3
         else:
-            validity_score = 0.5  # May have missed threats
+            # Zero threats is ambiguous: the audit looked and found nothing, or
+            # it never finished. Paying both the same taught selection that a
+            # timed-out audit is as good as a clean bill of health (#1639).
+            # Only the completed case earns the "may have missed threats"
+            # credit; silence earns nothing.
+            #
+            # Narrow deliberately: a signal reporting threats demonstrably HAS
+            # a verdict, whatever the status field says, so the gate applies
+            # only to the ambiguous branch.
+            validity_score = 0.5 if self.validity_audit_status == "completed" else 0.0
         reward += 0.20 * validity_score
 
         # Completeness
@@ -174,13 +196,16 @@ class ExperimentDesignTrainingSignal:
                 "required_sample_size": self.required_sample_size,
                 "achieved_power": self.achieved_power,
                 "minimum_detectable_effect": self.minimum_detectable_effect,
+                "minimum_detectable_effect_scale": self.minimum_detectable_effect_scale,
                 "duration_estimate_days": self.duration_estimate_days,
+                "feasibility_warnings": list(self.feasibility_warnings),
             },
             "validity_audit": {
                 "validity_threats_identified": self.validity_threats_identified,
                 "critical_threats": self.critical_threats,
                 "mitigations_proposed": self.mitigations_proposed,
                 "overall_validity_score": self.overall_validity_score,
+                "validity_audit_status": self.validity_audit_status,
                 "redesign_iterations": self.redesign_iterations,
             },
             "template_generation": {
@@ -335,12 +360,16 @@ class ExperimentDesignerSignalCollector:
         achieved_power: float,
         minimum_detectable_effect: float,
         duration_estimate_days: int,
+        minimum_detectable_effect_scale: str = "unknown",
+        feasibility_warnings: Optional[list[str]] = None,
     ) -> ExperimentDesignTrainingSignal:
         """Update signal with power analysis results."""
         signal.required_sample_size = required_sample_size
         signal.achieved_power = achieved_power
         signal.minimum_detectable_effect = minimum_detectable_effect
+        signal.minimum_detectable_effect_scale = minimum_detectable_effect_scale
         signal.duration_estimate_days = duration_estimate_days
+        signal.feasibility_warnings = list(feasibility_warnings or [])
         return signal
 
     def update_validity_audit(
@@ -351,8 +380,21 @@ class ExperimentDesignerSignalCollector:
         mitigations_proposed: int,
         overall_validity_score: float,
         redesign_iterations: int,
+        validity_audit_status: Optional[str] = None,
     ) -> ExperimentDesignTrainingSignal:
-        """Update signal with validity audit results."""
+        """Update signal with validity audit results.
+
+        ``validity_audit_status`` defaulted to ``"not_run"``, which LIED about
+        concrete results: a caller passing five threats and a 0.8 score got a
+        signal labeled as if no audit had happened (#1639). Now inferred from
+        the evidence when not stated -- the same rule the template generator
+        uses -- and an explicit status always wins.
+        """
+        signal.validity_audit_status = infer_audit_status(
+            validity_audit_status,
+            has_threats=bool(validity_threats_identified),
+            score=overall_validity_score,
+        )
         signal.validity_threats_identified = validity_threats_identified
         signal.critical_threats = critical_threats
         signal.mitigations_proposed = mitigations_proposed

@@ -45,6 +45,60 @@ ConfidenceLevel = Literal["low", "medium", "high"]
 # ===== NESTED TYPED DICTS =====
 
 
+#: The documented values of ``validity_audit_status`` (#1639). ``unknown`` is
+#: the explicit out-of-band member: a status we did not write and cannot map.
+#:
+#: Defined here rather than beside either consumer because BOTH the template
+#: generator and the agent's public output publish this field, and a second
+#: copy is a second thing to forget -- which is exactly how the raw
+#: passthrough at the output boundary survived the guard added one round
+#: earlier.
+AUDIT_STATUSES = frozenset({"completed", "skipped", "timed_out", "failed", "not_run", "unknown"})
+
+
+def normalize_audit_status(value: object) -> str:
+    """Coerce a recorded audit status onto :data:`AUDIT_STATUSES`.
+
+    A hydrated checkpoint can carry the previous BAD value ``"was skipped"``
+    (human prose in a machine field, fixed in this branch) or a typo like
+    ``"timeout"``. Either would land in the documented enum and match nothing
+    for a consumer filtering on it.
+
+    Out-of-band values become ``"unknown"`` -- never ``"not_run"``, which would
+    ASSERT that the audit did not run when all we know is that we cannot read
+    what it said.
+    """
+    # `str(...)` rather than returning `value`: membership in AUDIT_STATUSES
+    # guarantees it IS one of those strings, so this is exact, and the
+    # declared `object` parameter otherwise leaks out as the return type.
+    return str(value) if value in AUDIT_STATUSES else "unknown"
+
+
+def infer_audit_status(
+    explicit: object = None, *, has_threats: bool = False, score: object = None
+) -> str:
+    """The ONE rule for deciding what an audit's status was (#1639).
+
+    An explicit status always wins. Otherwise the only honest readings are:
+
+    * threats were found, or a score above zero was recorded -> ``completed``;
+      something produced a verdict.
+    * nothing at all -> ``unknown``, NOT ``not_run``.
+
+    That last distinction is codex iter-14's point and it is right: ``0.0`` is a
+    VALID validity score, so `bool(score)` cannot tell "the audit completed and
+    scored zero with no threats" apart from "no audit happened". Reporting
+    ``not_run`` there asserts something we do not know. ``unknown`` says only
+    what is true -- which is the whole reason that member exists.
+    """
+    if explicit is not None:
+        return normalize_audit_status(explicit)
+    numeric = score if isinstance(score, (int, float)) and not isinstance(score, bool) else 0.0
+    if has_threats or numeric > 0:
+        return "completed"
+    return "unknown"
+
+
 class TreatmentDefinition(TypedDict):
     """Definition of a treatment arm in the experiment.
 
@@ -117,6 +171,11 @@ class PowerAnalysisResult(TypedDict):
     minimum_detectable_effect: float
     alpha: float
     effect_size_type: Literal["cohens_d", "odds_ratio", "rate_ratio", "percentage_change"]
+    #: What ``minimum_detectable_effect`` is measured in (#1639). Distinct from
+    #: ``effect_size_type``, which describes the INPUT effect and cannot express
+    #: an absolute risk difference — leaving a reader to compare a 0.0015
+    #: absolute MDE against a 0.030 RELATIVE effect and see a contradiction.
+    minimum_detectable_effect_scale: NotRequired[str]
     assumptions: list[str]
     sensitivity_analysis: NotRequired[dict[str, Any]]
 
@@ -156,6 +215,10 @@ class ExperimentTemplate(TypedDict):
     pre_registration_document: NotRequired[str]
     analysis_code_template: NotRequired[str]
     monitoring_checkpoints: list[dict[str, Any]]
+    #: #1639. This template is the EXECUTION artifact: it carries sample_size
+    #: and duration_days into checkpoints and timelines. A consumer holding only
+    #: the template must be able to see that the design cannot be run.
+    feasibility_warnings: NotRequired[list[str]]
 
 
 class ErrorDetails(TypedDict):
@@ -250,6 +313,9 @@ class ExperimentDesignState(TypedDict):
     power_analysis: NotRequired[PowerAnalysisResult]
     sample_size_justification: NotRequired[str]
     duration_estimate_days: NotRequired[int]
+    #: #1639. Set unconditionally by the power-analysis node, so an empty list
+    #: means "checked, feasible" rather than "never checked".
+    feasibility_warnings: NotRequired[list[str]]
     interim_analysis_schedule: NotRequired[list[dict[str, Any]]]
 
     # Top-level exposure for quality gates and easy access (v4.3)
@@ -259,6 +325,10 @@ class ExperimentDesignState(TypedDict):
     # ===== Validity Audit Outputs =====
     # Note: Required outputs from validity audit node
     validity_threats: list[ValidityThreat]
+    #: #1639. Whether the audit reached a verdict: completed | skipped |
+    #: timed_out | failed. Absent means the node never executed. Without this,
+    #: an empty ``validity_threats`` is indistinguishable from a clean audit.
+    validity_audit_status: NotRequired[str]
     mitigations: NotRequired[list[MitigationRecommendation]]
     overall_validity_score: float
     validity_confidence: NotRequired[ConfidenceLevel]

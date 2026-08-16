@@ -13,11 +13,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from src.agents.experiment_designer.state import (
+    AUDIT_STATUSES,
     DoWhySpec,
     ErrorDetails,
     ExperimentDesignState,
     ExperimentTemplate,
+    infer_audit_status,
+    normalize_audit_status,
 )
+
+__all__ = ["AUDIT_STATUSES", "TemplateGeneratorNode"]
 
 
 class TemplateGeneratorNode:
@@ -205,6 +210,17 @@ class TemplateGeneratorNode:
         else:
             estimator = "backdoor.linear_regression"
 
+        # #1639: this header prints the sample size, so the script is an
+        # execution artifact in its own right. Someone who opens only this file
+        # must not see 672,206 presented as a plan.
+        feasibility = state.get("feasibility_warnings") or []
+        feasibility_banner = ""
+        if feasibility:
+            reasons = "\n".join(f"  - {w}" for w in feasibility)
+            feasibility_banner = (
+                "\n!! THIS DESIGN IS NOT EXECUTABLE AS SPECIFIED !!\n" + reasons + "\n"
+            )
+
         return f'''"""
 E2I Experiment Analysis Template
 ================================
@@ -213,7 +229,7 @@ Treatment: {dag_spec["treatment_variable"]} - {treatment_desc}
 Outcome: {dag_spec["outcome_variable"]}
 Sample Size: {power_analysis.get("required_sample_size", "Not calculated")}
 Generated: {datetime.now().isoformat()}
-
+{feasibility_banner}
 This template provides a starting point for causal analysis.
 Modify as needed for your specific experiment.
 """
@@ -412,7 +428,80 @@ print("Results saved to analysis_results.json")
             pre_registration_document=prereg_doc,
             analysis_code_template=state.get("analysis_code") or "",
             monitoring_checkpoints=checkpoints,
+            feasibility_warnings=list(state.get("feasibility_warnings") or []),
         )
+
+    @staticmethod
+    def _format_effect(value: Any) -> str:
+        """Render an effect at a precision a reader can use.
+
+        ``0.0015000000000000013`` is binary-float noise from the solve, not
+        significant digits, and printing it verbatim in a document meant for a
+        human made the figure look unserious next to a clean ``0.030``.
+        """
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return str(value)
+        return f"{value:.6g}"
+
+    @staticmethod
+    def _audit_status(state: ExperimentDesignState) -> str:  # noqa: D401
+        """The MACHINE value: completed | skipped | timed_out | failed | not_run.
+
+        Kept separate from :meth:`_audit_verdict`, which returns prose for a
+        sentence. The monitoring spec published the prose under this field name
+        for a round, so a consumer filtering on the documented values matched
+        nothing (#1639, codex iter-10).
+
+        A checkpoint written before the field existed carries audit RESULTS but
+        no status, and calling that "never ran" is a false provenance claim --
+        the mirror image of the defect being fixed here -- so it is inferred
+        from the evidence an audit leaves behind.
+        """
+        status = state.get("validity_audit_status")
+        if status is not None:
+            # Validated, not passed through. A checkpoint carrying the previous
+            # BAD value ("was skipped" — the prose bug fixed one round earlier)
+            # or a typo ("timeout") would otherwise land straight in the
+            # documented enum and recreate the failure for any consumer
+            # filtering on it. Out-of-band values become "unknown", which is
+            # honest: we know the audit's state was recorded, just not as
+            # something we recognise. Never silently coerced to "not_run" —
+            # that would ASSERT it never ran.
+            return normalize_audit_status(status)
+        return infer_audit_status(
+            has_threats=bool(state.get("validity_threats")),
+            score=state.get("overall_validity_score"),
+        )
+
+    @staticmethod
+    def _audit_verdict(state: ExperimentDesignState) -> tuple[bool, str]:
+        """Did the validity audit reach a verdict, and if not, in what words (#1639).
+
+        ``validity_threats: []`` beside ``overall_validity_score: 0.0`` is what a
+        skipped, timed-out or failed audit leaves in state -- and it rendered
+        here as "None identified", i.e. this document asserted a clean bill of
+        health it had never obtained. Absent status means the node never ran.
+        """
+        status = TemplateGeneratorNode._audit_status(state)
+        phrasing = {
+            "skipped": "was skipped",
+            "timed_out": "timed out",
+            "failed": "failed",
+            "not_run": "never ran",
+            # Distinct from "never ran" on purpose: we know a status was
+            # recorded, we just cannot read it as one of ours (#1639).
+            "unknown": "could not be determined",
+        }
+        return status == "completed", phrasing.get(status, f"reported status {status!r}")
+
+    @staticmethod
+    def _feasibility_section(state: ExperimentDesignState) -> str:
+        """Render feasibility warnings, or nothing at all when there are none."""
+        warnings = state.get("feasibility_warnings") or []
+        if not warnings:
+            return ""
+        body = "\n".join(f"- {w}" for w in warnings)
+        return f"\n## Feasibility\n\n> **This design is not executable as specified.**\n\n{body}\n"
 
     def _generate_preregistration(self, state: ExperimentDesignState) -> str:
         """Generate pre-registration document.
@@ -479,7 +568,7 @@ n = {power.get("required_sample_size", "TBD")}
 
 ## Primary Analysis
 Comparison of {outcome} between treatment and control groups.
-
+{self._feasibility_section(state)}
 ---
 *Auto-generated by E2I Experiment Designer*
 """
@@ -496,8 +585,18 @@ Comparison of {outcome} between treatment and control groups.
         """Generate medium pre-registration."""
         validity_score = state.get("overall_validity_score", 0.5)
         threats = state.get("validity_threats", [])
-        threat_summary = (
-            ", ".join([t.get("threat_name", "") for t in threats[:3]]) or "None identified"
+        audit_completed, audit_status = self._audit_verdict(state)
+        threat_summary = ", ".join([t.get("threat_name", "") for t in threats[:3]]) or (
+            "None identified"
+            if audit_completed
+            else f"Not reported \u2014 the validity audit {audit_status}"
+        )
+        # A 0.00 printed as a score reads as "audited and scored zero". When the
+        # audit did not complete, the number is a default, not a measurement.
+        validity_line = (
+            f"{validity_score:.2f}"
+            if audit_completed
+            else f"not assessed \u2014 the validity audit {audit_status}"
         )
 
         return f"""# Experiment Pre-Registration
@@ -505,7 +604,7 @@ Comparison of {outcome} between treatment and control groups.
 ## Study Information
 - **Registration Date:** {datetime.now().strftime("%Y-%m-%d")}
 - **Design Type:** {state.get("design_type", "RCT")}
-- **Validity Score:** {validity_score:.2f}
+- **Validity Score:** {validity_line}
 
 ## Hypotheses
 **Primary Hypothesis:**
@@ -518,7 +617,7 @@ Comparison of {outcome} between treatment and control groups.
 - **Sample Size:** {power.get("required_sample_size", "TBD")} (Power: {power.get("achieved_power", 0.8) * 100:.0f}%)
 - **Duration:** {state.get("duration_estimate_days", "TBD")} days
 - **Randomization:** {state.get("randomization_method", "simple")} at {state.get("randomization_unit", "individual")} level
-
+{self._feasibility_section(state)}
 ## Validity Considerations
 - **Identified Threats:** {threat_summary}
 - **Stratification Variables:** {", ".join(state.get("stratification_variables", [])) or "None"}
@@ -550,14 +649,24 @@ Comparison of {outcome} between treatment and control groups.
         threats = state.get("validity_threats", [])
         mitigations = state.get("mitigations", [])
 
-        threat_details = (
-            "\n".join(
-                [
-                    f"- **{t.get('threat_name', 'Unknown')}** ({t.get('severity', 'medium')}): {t.get('description', '')}"
-                    for t in threats
-                ]
-            )
-            or "No significant threats identified"
+        audit_completed, audit_status = self._audit_verdict(state)
+        threat_details = "\n".join(
+            [
+                f"- **{t.get('threat_name', 'Unknown')}** ({t.get('severity', 'medium')}): {t.get('description', '')}"
+                for t in threats
+            ]
+        ) or (
+            "No significant threats identified"
+            if audit_completed
+            # "Not reported", not "Not assessed", and no claim that a verdict
+            # does not EXIST (codex iter-15). For status "unknown" -- a state
+            # carrying no threats and a 0.0 score -- an audit may well have
+            # completed cleanly; what is missing is the record of it. Asserting
+            # absence there is the same class of overstatement this section
+            # exists to prevent, pointed the other way.
+            else f"**Not reported** \u2014 the validity audit {audit_status}; "
+            "this section is empty because no audit verdict is RECORDED, "
+            "not because the design is free of threats."
         )
 
         mitigation_details = (
@@ -591,7 +700,7 @@ Comparison of {outcome} between treatment and control groups.
 {mitigation_details}
 
 ## Power Analysis Details
-- **Effect Size:** {power.get("minimum_detectable_effect", "TBD")} ({power.get("effect_size_type", "cohens_d")})
+- **Minimum Detectable Effect:** {self._format_effect(power.get("minimum_detectable_effect", "TBD"))} ({power.get("minimum_detectable_effect_scale") or power.get("effect_size_type", "cohens_d")})
 - **Alpha:** {power.get("alpha", 0.05)}
 - **Power:** {power.get("achieved_power", 0.8) * 100:.0f}%
 - **N per arm:** {power.get("required_sample_size_per_arm", "TBD")}
@@ -635,6 +744,12 @@ Comparison of {outcome} between treatment and control groups.
 
         return {
             "dashboard_id": f"monitor_{uuid.uuid4().hex[:8]}",
+            # #1639: this spec re-projects the sample size and duration into an
+            # execution plan (enrollment target, timeline). A consumer holding
+            # only the dashboard would otherwise see a 672,206 target and an end
+            # date centuries out with no caveat anywhere in reach.
+            "feasibility_warnings": list(state.get("feasibility_warnings") or []),
+            "validity_audit_status": self._audit_status(state),
             "refresh_interval_minutes": 60,
             "panels": [
                 {

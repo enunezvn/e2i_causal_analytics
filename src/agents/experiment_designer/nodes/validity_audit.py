@@ -266,6 +266,88 @@ class MockValidityResponse:
         self.content = content
 
 
+def _retract_stale_verdict(state: ExperimentDesignState) -> None:
+    """Drop a previous iteration's audit findings (#1639).
+
+    The redesign loop re-runs this node against a CHANGED design. When the new
+    audit does not complete, iteration N's threats, mitigations, score and
+    recommendations describe a design that no longer exists -- and
+    ``_create_output`` would publish them beside a "timed_out"/"skipped" status
+    as though they applied. Same class as the feasibility verdict in
+    power_analysis; a no-op on the first pass, where there is nothing to
+    retract.
+    """
+    state["validity_threats"] = []
+    state["mitigations"] = []
+    state["overall_validity_score"] = 0.0
+    state["redesign_recommendations"] = []
+
+    # The structured verdict is not all the audit wrote. A completed pass also
+    # appends its DAG findings to the shared `warnings` list ("Assumed
+    # confounder X was NOT discovered in causal DAG"), and those sentences are
+    # what the USER reads. Retracting the numbers while leaving the prose is
+    # the same half-retraction this function exists to prevent.
+    #
+    # `dag_validation_warnings` is the exact record of what this node
+    # contributed, so the withdrawal is precise -- warnings from other nodes
+    # are none of its business and stay.
+    _clear_previous_dag_verdict(state)
+
+
+def _clear_previous_dag_verdict(state: ExperimentDesignState) -> None:
+    """Withdraw the previous audit's DAG prose AND drop its structured results.
+
+    Used on every exit that replaces a verdict, and at the START of a completed
+    pass -- codex iter-15: doing it only inside the DAG-evidence branch left a
+    completed rerun WITHOUT DAG evidence (or whose gate is no longer
+    accept/review) carrying iteration 0's warnings and `dag_*` fields as though
+    they described the new design. The branch that would have cleaned up is
+    exactly the branch that does not run.
+    """
+    _withdraw_previous_dag_warnings(state)
+    # REMOVED, not emptied. Absence is this module's established meaning for
+    # "DAG validation did not run" -- test_dag_validation pins
+    # `"dag_confounders_validated" not in result` on the skip paths -- so
+    # writing `[]` would announce a validation that never happened. Popping
+    # retracts a previous pass's fields and leaves a first pass untouched.
+    for key in (
+        "dag_validation_warnings",
+        "dag_confounders_validated",
+        "dag_missing_confounders",
+        "dag_latent_confounders",
+        "dag_instrument_candidates",
+        "dag_effect_modifiers",
+    ):
+        state.pop(key, None)  # type: ignore[misc]
+
+
+def _withdraw_previous_dag_warnings(state: ExperimentDesignState) -> None:
+    """Remove the PREVIOUS audit's DAG prose from the shared warnings list.
+
+    Called on every exit that replaces a verdict -- including a COMPLETED
+    rerun, which codex iter-14 caught: iteration 0 appends "Assumed confounder
+    region ...", iteration 1 completes with no DAG warning, and the overwrite
+    of ``dag_validation_warnings`` destroyed the only record that could ever
+    have withdrawn it. The stale sentence then outlived every mechanism built
+    to retract it.
+    """
+    withdrawn = list(state.get("dag_validation_warnings") or [])
+    if withdrawn:
+        remaining = list(state.get("warnings") or [])
+        for message in withdrawn:
+            # The LAST occurrence, not the first. `list.remove` takes the
+            # first, so an identical sentence already present from another
+            # node would be the one deleted -- withdrawing someone else's
+            # warning and leaving the stale audit copy in place, the exact
+            # inversion of the intent. The audit appends its own copy, so its
+            # contribution is the most recent one.
+            for index in range(len(remaining) - 1, -1, -1):
+                if remaining[index] == message:
+                    del remaining[index]
+                    break
+        state["warnings"] = remaining
+
+
 class ValidityAuditNode:
     """Adversarial validity assessment for experiment design.
 
@@ -306,6 +388,13 @@ class ValidityAuditNode:
         # Skip if validity audit is disabled
         if not state.get("enable_validity_audit", True):
             state["warnings"] = state.get("warnings", []) + ["Validity audit skipped (disabled)"]
+            # #1639: an audit that never ran leaves validity_threats=[] and
+            # overall_validity_score=0.0 -- byte-identical to an audit that ran
+            # and found nothing. Downstream (the pre-registration document) then
+            # states "None identified" as fact. Record the reason so a consumer
+            # can tell a clean bill of health from an absent one.
+            state["validity_audit_status"] = "skipped"
+            _retract_stale_verdict(state)
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"
@@ -326,6 +415,8 @@ class ValidityAuditNode:
                 )
             except asyncio.TimeoutError:
                 state["warnings"] = state.get("warnings", []) + ["Validity audit timed out"]
+                state["validity_audit_status"] = "timed_out"
+                _retract_stale_verdict(state)
                 state["validity_confidence"] = "low"
                 state["redesign_needed"] = False
                 state["status"] = "generating"
@@ -368,11 +459,20 @@ class ValidityAuditNode:
 
             # Update state with audit results
             state["validity_threats"] = threats
+            state["validity_audit_status"] = "completed"
             state["mitigations"] = mitigations
             state["overall_validity_score"] = audit.get("overall_validity_score", 0.5)
             state["validity_confidence"] = audit.get("validity_confidence", "medium")
             state["redesign_needed"] = audit.get("redesign_needed", False)
             state["redesign_recommendations"] = audit.get("redesign_recommendations", [])
+
+            # The previous pass's DAG verdict is withdrawn HERE, before the
+            # evidence check -- not inside it (#1639). A redesign can leave
+            # iteration 1 with no DAG evidence at all, and then the branch that
+            # would have replaced iteration 0's warnings never runs, so they
+            # survive describing a design that no longer exists. Repopulated
+            # below only when new validation actually produces a verdict.
+            _clear_previous_dag_verdict(state)
 
             # V4.4: DAG-aware validity validation
             if self._has_dag_evidence(state):
@@ -429,8 +529,8 @@ class ValidityAuditNode:
             state["errors"] = state.get("errors", []) + [error]
             state["warnings"] = state.get("warnings", []) + [f"Validity audit failed: {str(e)}"]
             # Set required output defaults on failure
-            state["validity_threats"] = state.get("validity_threats", [])
-            state["overall_validity_score"] = state.get("overall_validity_score", 0.0)
+            state["validity_audit_status"] = "failed"
+            _retract_stale_verdict(state)
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"
@@ -455,6 +555,16 @@ class ValidityAuditNode:
 
         power_analysis = state.get("power_analysis", {})
 
+        # #1639: this prompt asks an LLM whether the design is sound, and its
+        # verdict drives the REDESIGN decision. Showing it "Sample Size: 672206"
+        # with no duration and no feasibility verdict asks it to judge an
+        # uncaveated projection.
+        feasibility = state.get("feasibility_warnings") or []
+        feasibility_block = "\n".join(f"- {w}" for w in feasibility)
+        feasibility_section = (
+            f"\n**!! NOT EXECUTABLE AS SPECIFIED !!**\n{feasibility_block}\n" if feasibility else ""
+        )
+
         return f"""You are a methodological critic reviewing an experiment design. Your job is to find weaknesses.
 
 ## Proposed Experiment
@@ -469,7 +579,8 @@ class ValidityAuditNode:
 {outcome_json}
 
 **Sample Size:** {power_analysis.get("required_sample_size", "Not calculated")}
-**Randomization Unit:** {state.get("randomization_unit", "individual")}
+**Estimated Duration (days):** {state.get("duration_estimate_days", "Not calculated")}
+{feasibility_section}**Randomization Unit:** {state.get("randomization_unit", "individual")}
 **Randomization Method:** {state.get("randomization_method", "simple")}
 **Stratification:** {state.get("stratification_variables", [])}
 **Blocking Variables:** {state.get("blocking_variables", [])}

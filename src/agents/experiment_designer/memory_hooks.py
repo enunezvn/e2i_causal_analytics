@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
+from src.agents.experiment_designer.state import normalize_audit_status
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,6 +93,14 @@ class ExperimentDesignRecord:
     total_latency_ms: int
     warnings: List[str]
 
+    # #1639. Defaulted, so they trail the required fields (dataclass ordering).
+    #: This record is a PRECEDENT later designs learn from. Storing 94,115 days
+    #: with no first-class reason teaches the next design that it was
+    #: acceptable; generic ``warnings`` is neither filterable nor rankable.
+    feasibility_warnings: List[str] = field(default_factory=list)
+    #: A 0.0 validity score from a skipped audit is not a precedent for anything.
+    validity_audit_status: str = "not_run"
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
@@ -107,7 +117,9 @@ class ExperimentDesignRecord:
             "required_sample_size": self.required_sample_size,
             "achieved_power": self.achieved_power,
             "duration_estimate_days": self.duration_estimate_days,
+            "feasibility_warnings": list(self.feasibility_warnings),
             "overall_validity_score": self.overall_validity_score,
+            "validity_audit_status": self.validity_audit_status,
             "validity_confidence": self.validity_confidence,
             "threat_count": self.threat_count,
             "critical_threat_count": self.critical_threat_count,
@@ -663,6 +675,13 @@ class ExperimentDesignerMemoryHooks:
                 redesign_iterations=result.get("redesign_iterations", 0),
                 total_latency_ms=result.get("total_latency_ms", 0),
                 warnings=result.get("warnings", []),
+                feasibility_warnings=result.get("feasibility_warnings") or [],
+                # Normalized here too: this is a public persistence API that
+                # tests and callers reach directly, so it cannot rely on having
+                # come through the agent output (#1639).
+                validity_audit_status=normalize_audit_status(
+                    result.get("validity_audit_status", "not_run")
+                ),
             )
 
             # Prepare validity threats for storage

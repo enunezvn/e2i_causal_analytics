@@ -59,13 +59,16 @@
 | `required_sample_size` | `int` | `PowerAnalysisOutput.required_sample_size: int` | ✅ Compliant |
 | `achieved_power` | `float` | `PowerAnalysisOutput.achieved_power: float` | ✅ Compliant |
 | `minimum_detectable_effect` | `float` | `PowerAnalysisOutput.minimum_detectable_effect: float` | ✅ Compliant |
+| `minimum_detectable_effect_scale` | `str` | `PowerAnalysisOutput.minimum_detectable_effect_scale: str` | ✅ Compliant (#1639) |
 | `alpha` | `float` | `PowerAnalysisOutput.alpha: float` | ✅ Compliant |
+| `feasibility_warnings` | `List[str]` | `ExperimentDesignerOutput.feasibility_warnings: list[str]` | ✅ Compliant (#1639) |
 
 ### 2.4 Validity Assessment ✅
 
 | Field | Contract Type | Implementation | Status |
 |-------|---------------|----------------|--------|
 | `validity_threats` | `List[ValidityThreat]` | `ExperimentDesignerOutput.validity_threats: list[ValidityThreatOutput]` | ✅ Compliant |
+| `validity_audit_status` | `str` | `ExperimentDesignerOutput.validity_audit_status: str` | ✅ Compliant (#1639) |
 | `validity_score` | `float` | `ExperimentDesignerOutput.validity_score: float` | ✅ Compliant |
 | `validity_confidence` | `str` | `ExperimentDesignerOutput.validity_confidence: str` | ✅ Compliant |
 | `mitigation_recommendations` | `List[MitigationRecommendation]` | `ExperimentDesignerOutput.mitigation_recommendations: list[MitigationOutput]` | ✅ Compliant |

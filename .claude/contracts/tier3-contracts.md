@@ -117,6 +117,7 @@ class ExperimentDesignerInput(BaseModel):
                 "constraints": {
                     "budget": 500000,
                     "timeline_weeks": 12,
+                    "max_duration_days": 90,
                     "ethical_constraints": ["No patient data", "HCP consent required"],
                     "expected_effect_size": 0.3,
                     "power": 0.80,
@@ -188,11 +189,27 @@ class ExperimentDesignerOutput(BaseModel):
     # Power analysis
     required_sample_size: int = Field(..., description="Required sample size")
     achievable_mde: float = Field(..., description="Minimum detectable effect given constraints")
+    # #1639: an MDE without its scale is not interpretable. The designed effect is
+    # RELATIVE (p2 = p1*(1+effect)) while the binary-outcome MDE is an ABSOLUTE risk
+    # difference, so 0.0015 beside 0.030 reads as a 20x contradiction when it is the
+    # same quantity on two scales (0.0015/0.030 == the 0.05 baseline, exactly).
+    minimum_detectable_effect_scale: str = Field(
+        ..., description="Scale of achievable_mde: absolute_risk_difference | cohens_d | ..."
+    )
     power: float = Field(..., ge=0.5, le=0.99, description="Statistical power")
     estimated_duration_weeks: int = Field(..., description="Expected experiment duration")
     power_analysis_details: Dict[str, Any] = Field(..., description="Detailed power analysis")
+    # #1639: empty means "checked and executable", NOT "never checked".
+    feasibility_warnings: List[str] = Field(
+        default_factory=list, description="Reasons the design cannot be run as specified"
+    )
 
     # Validity assessment
+    # #1639: an empty threat list from a skipped/timed-out audit is indistinguishable
+    # from a clean bill of health unless the status is carried alongside it.
+    validity_audit_status: str = Field(
+        ..., description="completed | skipped | timed_out | failed | not_run"
+    )
     internal_validity_threats: List[ValidityThreat] = Field(
         ...,
         description="Identified internal validity threats"
