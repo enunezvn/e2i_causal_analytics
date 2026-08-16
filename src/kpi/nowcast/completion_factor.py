@@ -137,6 +137,14 @@ class NowcastResult:
     months: List[MonthNowcast] = field(default_factory=list)
 
 
+def nowcast_query_id(kpi_id: str) -> str:
+    """The lag-triangle registry query this KPI actually runs (#1640).
+
+    Shared with the route, for the reason given on ``segmented_query_id``.
+    """
+    return nowcast_triangle_query_id(NOWCAST_KPI_QUERY_FAMILIES[kpi_id])
+
+
 async def fetch_nowcast_rows(kpi_id: str, *, brand: Optional[str] = None) -> List[Dict[str, Any]]:
     """Run the migration-116 lag-triangle query for one KPI via kpi_query.
 
@@ -145,8 +153,7 @@ async def fetch_nowcast_rows(kpi_id: str, *, brand: Optional[str] = None) -> Lis
     """
     import inspect
 
-    base = NOWCAST_KPI_QUERY_FAMILIES[kpi_id]
-    query_id = nowcast_triangle_query_id(base)
+    query_id = nowcast_query_id(kpi_id)
     try:
         from src.memory.services.factories import get_async_supabase_client
 

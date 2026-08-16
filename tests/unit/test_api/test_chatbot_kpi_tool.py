@@ -24,7 +24,7 @@ def test_recognize_kpi_resolves_nbrx():
 
 @pytest.mark.unit
 def test_kpi_result_to_response_value_badges_synthetic():
-    from src.api.routes.chatbot_tools import _kpi_result_to_response
+    from src.api.routes.chatbot_tools import _kpi_result_to_response, _measure_basis_for_kpi
 
     kpi = get_registry().get("WS3-BI-007")
     assert kpi is not None
@@ -43,6 +43,10 @@ def test_kpi_result_to_response_value_badges_synthetic():
         "value": 3298.0,
         "status": "unknown",  # KPIResult uses_enum_values -> status is the str value
         "data_source": "synthetic",
+        # #1640: what the figure MEASURES, derived from KPIMetadata.tables, so an
+        # event-ledger count is never silently compared with a business_metrics
+        # level. WS3-BI-007 (NBRx) counts first-brand Rx over treatment_events.
+        "measure_basis": _measure_basis_for_kpi(kpi),
         "brand": "Kisqali",
         "region": None,
         # #1538: no region requested -> provenance defaults.

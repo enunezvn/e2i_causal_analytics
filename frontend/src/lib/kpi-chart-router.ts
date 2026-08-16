@@ -97,6 +97,18 @@ export interface KpiChartData {
   subtitle: string;
   /** Set when there is nothing to draw — shown verbatim instead of a chart. */
   emptyReason?: string;
+  /**
+   * What each charted KPI's figures MEASURE, keyed by KPI id (#1640).
+   *
+   * This object is returned from the `renderChart` action handler, so it is
+   * what CopilotKit hands back to the MODEL. Without it the model receives
+   * numeric values with no substrate and cannot tell a treatment_events TRx
+   * count from a business_metrics TRx level — measured ~73x apart.
+   *
+   * Absent, never `{}`, when the backend sent no basis: unknown must not read
+   * as "declared empty", which `substrates_agree` would also refuse.
+   */
+  measureBasis?: Record<string, Record<string, unknown>>;
 }
 
 export interface KpiChartQuery {
@@ -228,6 +240,7 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
     }));
     const chartType = query.chartType ?? DEFAULT_TIME_SERIES_CHART;
     return {
+      ...basisField([[kpiId, history.measure_basis]]),
       rows,
       semanticTypes: { month: MONTH_SEMANTIC, value: valueSemantic(kpiId) },
       encoding: { axis: 'month', value: 'value' },
@@ -281,6 +294,7 @@ async function routeSegmented(
   const axisLabel = response.axis === 'segment' ? 'by severity tier' : 'by line of therapy';
   const chartType = query.chartType ?? DEFAULT_TIME_SERIES_CHART;
   return {
+    ...basisField([[kpiId, response.measure_basis]]),
     rows,
     semanticTypes: {
       month: MONTH_SEMANTIC,
@@ -369,6 +383,7 @@ async function routeCurrentValue(
   const chartType = query.chartType ?? (interval ? 'Bar Chart' : 'KPI Card');
 
   return {
+    ...basisField([[kpiId, result.measure_basis]]),
     rows,
     semanticTypes: {
       kpi: 'Category',
@@ -455,6 +470,9 @@ async function routeComparison(
   const skipped = kpiIds.length - results.length - regionOmitted;
   const chartType = query.chartType ?? DEFAULT_COMPARISON_CHART;
   return {
+    // Per KPI: a comparison is exactly where two substrates can end up on one
+    // axis, so a single shared basis would be the wrong shape (#1640).
+    ...basisField(results.map((r) => [r.kpi_id, r.measure_basis])),
     rows,
     semanticTypes: {
       kpi: 'Category',
@@ -475,6 +493,21 @@ async function routeComparison(
       (someMissing ? ' · intervals omitted (not reported for every KPI)' : '') +
       mixedNote,
   };
+}
+
+/**
+ * `{ measureBasis: {...} }` when at least one basis is known, `{}` otherwise
+ * (#1640). Spread into a KpiChartData literal so the key is absent — not
+ * empty — when nothing declared a substrate.
+ */
+function basisField(
+  entries: Array<[string, unknown]>
+): { measureBasis?: Record<string, Record<string, unknown>> } {
+  const known = entries.filter(
+    (entry): entry is [string, Record<string, unknown>] =>
+      entry[1] !== undefined && entry[1] !== null
+  );
+  return known.length > 0 ? { measureBasis: Object.fromEntries(known) } : {};
 }
 
 function formatBound(value: number): string {

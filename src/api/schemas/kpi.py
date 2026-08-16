@@ -180,6 +180,14 @@ class KPIResultResponse(BaseModel):
     cached: bool = Field(False, description="Whether result was from cache")
     cache_expires_at: datetime | None = Field(None, description="When cache entry expires")
     error: str | None = Field(None, description="Error message if calculation failed")
+    #: #1640: what the value MEASURES, derived from the KPI registry's own
+    #: `tables` (and from the calculator's runtime branch where it records one).
+    #: Frontend and chart code read this endpoint, so a TRx value from here could
+    #: otherwise sit beside a business_metrics figure -- measured ~73x apart --
+    #: with nothing saying they are different quantities.
+    measure_basis: dict[str, Any] | None = Field(
+        None, description="Substrate this value was computed from, and what it may be compared with"
+    )
     data_source: str = Field(
         default="database",
         description=(
@@ -534,6 +542,13 @@ class KPIHistoryResponse(BaseModel):
     """Date-ordered KPI history for one KPI (empty when no real series exists)."""
 
     kpi_id: str
+    #: The trend chart reads these SERIES (`renderKpiTrend` -> `getKPIHistory`),
+    #: so a TRx series can land beside a business_metrics TRx figure -- measured
+    #: ~73x apart -- in one answer (#1640).
+    measure_basis: dict[str, Any] | None = Field(
+        None,
+        description="Substrate these points rest on, and what they may be compared with",
+    )
     brand: str = Field("", description="'' = global / all brands")
     region: str = Field("", description="'' = all regions")
     count: int = Field(..., description="Number of points")
@@ -575,6 +590,13 @@ class KPISegmentedHistoryResponse(BaseModel):
     """
 
     kpi_id: str
+    #: The trend chart reads these SERIES (`renderKpiTrend` -> `getKPIHistory`),
+    #: so a TRx series can land beside a business_metrics TRx figure -- measured
+    #: ~73x apart -- in one answer (#1640).
+    measure_basis: dict[str, Any] | None = Field(
+        None,
+        description="Substrate these points rest on, and what they may be compared with",
+    )
     brand: str = Field("", description="'' = global / all brands")
     axis: str = Field(..., description="'segment' (severity tier) or 'therapy_line' (LOT)")
     data_through: str | None = Field(
@@ -666,6 +688,13 @@ class KPINowcastHistoryResponse(BaseModel):
     """
 
     kpi_id: str
+    #: The trend chart reads these SERIES (`renderKpiTrend` -> `getKPIHistory`),
+    #: so a TRx series can land beside a business_metrics TRx figure -- measured
+    #: ~73x apart -- in one answer (#1640).
+    measure_basis: dict[str, Any] | None = Field(
+        None,
+        description="Substrate these points rest on, and what they may be compared with",
+    )
     brand: str = Field("", description="'' = global / all brands")
     data_through: str | None = Field(
         None, description="Prescription frontier (max event_date) backing the as-of view"

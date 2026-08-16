@@ -88,7 +88,12 @@ Rules:
 start with a single emoji when it aids scanning (e.g. 📈 for a chart/trend follow-up).
 - "message": the full question the pill sends, one sentence.
 - When numeric KPIs were discussed or are shown on the page, at least one suggestion \
-should ask to chart a trend or comparison.
+should ask to chart a trend or comparison. NEVER propose comparing, summing, or \
+ratio-ing two figures whose sources differ or are unstated (#1640): page_content \
+marks each KPI with "[from <tables>]" or "[source unstated]", and figures resting on \
+different tables are different quantities that merely share a name — a TRx count from \
+treatment_events is ~73x smaller than a modelled business_metrics TRx level. A trend \
+pill for ONE figure is always safe; a comparison pill is only safe within one source.
 
 Respond with JSON only, no prose: \
 {"suggestions": [{"title": "...", "message": "..."}, ...]}"""

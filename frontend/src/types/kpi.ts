@@ -189,6 +189,11 @@ export interface KPIMetadata {
  * Result of a single KPI calculation
  */
 export interface KPIResult {
+  /**
+   * Substrate this figure rests on, and what it may be compared with (#1640).
+   * Absent on pre-#1640 backends.
+   */
+  measure_basis?: Record<string, unknown> | null;
   /** KPI identifier */
   kpi_id: string;
   /** Calculated KPI value */
@@ -332,6 +337,11 @@ export interface KPIHistoryPoint {
 
 /** Date-ordered KPI history for one KPI (empty when no real series exists). */
 export interface KPIHistoryResponse {
+  /**
+   * Substrate this figure rests on, and what it may be compared with (#1640).
+   * Absent on pre-#1640 backends.
+   */
+  measure_basis?: Record<string, unknown> | null;
   kpi_id: string;
   /** '' = global / all brands. */
   brand: string;
@@ -360,6 +370,11 @@ export interface KPIHistorySegmentSeries {
  * Rx-volume family (TRx/NRx/NBRx) supports axes.
  */
 export interface KPISegmentedHistoryResponse {
+  /**
+   * Substrate this figure rests on, and what it may be compared with (#1640).
+   * Absent on pre-#1640 backends.
+   */
+  measure_basis?: Record<string, unknown> | null;
   kpi_id: string;
   /** '' = global / all brands. */
   brand: string;
@@ -410,6 +425,11 @@ export interface KPINowcastPoint {
  * never a fabricated fallback completion factor.
  */
 export interface KPINowcastHistoryResponse {
+  /**
+   * Substrate this figure rests on, and what it may be compared with (#1640).
+   * Absent on pre-#1640 backends.
+   */
+  measure_basis?: Record<string, unknown> | null;
   kpi_id: string;
   /** '' = global / all brands. */
   brand: string;

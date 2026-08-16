@@ -215,6 +215,10 @@ export const KPIMetadataSchema = z.object({
  * KPI calculation result
  */
 export const KPIResultSchema = z.object({
+  // Substrate this figure rests on (#1640). MUST be declared or Zod strips it
+  // and the UI cannot tell a treatment_events TRx count from a business_metrics
+  // TRx level — measured ~73x apart. Optional: pre-#1640 backends omit it.
+  measure_basis: z.record(z.string(), z.unknown()).nullable().optional(),
   kpi_id: z.string(),
   value: z.number().optional(),
   status: z.string(),
@@ -767,6 +771,10 @@ export const KPIMetadataWireSchema = z.object({
 
 /** Faithful mirror of `KPIResult` (types/kpi.ts). */
 export const KPIResultWireSchema = z.object({
+  // Substrate this figure rests on (#1640). MUST be declared or Zod strips it
+  // and the UI cannot tell a treatment_events TRx count from a business_metrics
+  // TRx level — measured ~73x apart. Optional: pre-#1640 backends omit it.
+  measure_basis: z.record(z.string(), z.unknown()).nullable().optional(),
   kpi_id: z.string(),
   value: z.number().nullable().optional(),
   status: z.string(),

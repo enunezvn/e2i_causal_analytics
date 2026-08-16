@@ -166,6 +166,34 @@ describe('KPI Schemas', () => {
       expect(wire.success && wire.data.data_source).toBe('synthetic');
       expect(batch.success && batch.data.data_source).toBe('synthetic');
     });
+
+    it('preserves measure_basis on both KPI result schemas (no Zod strip)', () => {
+      // #1640. Same trap as data_source above, one field over: the backend now
+      // declares what substrate a KPI figure rests on, but Zod strips
+      // undeclared keys, so without this the field never reaches the UI and a
+      // TRx value can still be charted beside a business_metrics TRx figure —
+      // measured ~73x apart — with nothing saying they measure different
+      // things.
+      const fenced = {
+        kpi_id: 'WS3-BI-005',
+        value: 11298,
+        status: 'good',
+        calculated_at: '2026-08-15T10:30:00Z',
+        cached: false,
+        measure_basis: {
+          substrate: ['treatment_events'],
+          computed: true,
+          note: 'Computed from the operational substrate at query time.',
+        },
+        metadata: {},
+      };
+      const wire = KPIResultWireSchema.safeParse(fenced);
+      const batch = KPIResultSchema.safeParse(fenced);
+      expect(wire.success).toBe(true);
+      expect(batch.success).toBe(true);
+      expect(wire.success && wire.data.measure_basis).toEqual(fenced.measure_basis);
+      expect(batch.success && batch.data.measure_basis).toEqual(fenced.measure_basis);
+    });
   });
 
   describe('KPIListResponseSchema', () => {

@@ -269,6 +269,7 @@ import json
 import logging
 import operator
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import (
@@ -407,7 +408,6 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
     Returns:
         Fixed event dictionary with all required fields
     """
-    import time
 
     event_type = event_dict.get("type", "")
 
@@ -787,7 +787,6 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         it triggers regenerate mode which fails when message IDs don't exist in history.
         By using a fresh thread_id, the checkpointer always returns empty state.
         """
-        import time
         from datetime import datetime
 
         start_time = time.time()
@@ -1815,6 +1814,69 @@ _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
 }
 
 
+# Moved to the measure-basis SSOT (#1640): the KPI history/segmented/nowcast
+# routes need the same derivation, and importing this route module to get it
+# is not an option (orchestrator/RAG stacks, ~30s).
+from src.kpi.measure_basis import query_substrates_cached  # noqa: E402
+
+
+def _kpi_summary_measure_bases(
+    client: Any = "__default__", brand: str | None = None, region: str | None = None
+) -> dict[str, dict]:
+    """Per-tile substrate for the Home KPI summary, derived from the SQL (#1640).
+
+    Two earlier shapes were wrong in instructive ways. The first declared one
+    block-level object with a ``not_substrate`` key and no ``substrate``, which
+    kept the label and dropped the contract. The second mapped each tile to a
+    registry KPI id by hand -- and got ``hcp_reach`` wrong, labelling an
+    event-ledger ``COUNT(DISTINCT hcp_id) FROM treatment_events`` as WS3-BI-004
+    HCP Coverage (a fraction over ``hcp_profiles``). A confident WRONG substrate
+    is worse than none, and no registry KPI corresponds to that tile at all.
+
+    The tiles run QUERIES, so the substrate comes from the registry SQL those
+    queries are made of. Nothing here is hand-written, and an unreadable
+    registry yields no basis rather than a guess.
+    """
+    if client is None:
+        return {}
+    # The RESOLVED query id, not the base: a region filter routes each tile to a
+    # `*_region` variant, and those read more tables (measured:
+    # business_impact_hcp_reach reads {treatment_events} while
+    # business_impact_hcp_reach_region reads {patient_journeys,
+    # treatment_events}). Deriving from the base would understate the substrate
+    # under a region filter — the hcp_reach defect one level down.
+    brand_param = None if brand in (None, "All") else brand
+    resolved: dict[str, str] = {
+        field: _kpi_summary_query(spec[0], brand_param, region, spec[2])[0]
+        for field, spec in _KPI_SUMMARY_QUERIES.items()
+    }
+    by_query = query_substrates_cached(tuple(sorted(set(resolved.values()))))
+    if not by_query:
+        return {}
+    bases: dict[str, dict] = {}
+    for field, spec in _KPI_SUMMARY_QUERIES.items():
+        query_id = resolved[field]
+        tables = by_query.get(query_id)
+        if tables:
+            bases[field] = {
+                "substrate": tables,
+                # The field both prompts name as the only comparability key
+                # (#1640). For a live computed tile it equals the SQL's tables.
+                "comparison_key": tables,
+                "query_id": query_id,
+                "computed": True,
+                "runtime_confirmed": True,
+                "declared_sources": tables,
+                "measure": f"computed on demand from {', '.join(tables)}",
+                "note": (
+                    "Computed on demand from the operational substrate via the kpi_query "
+                    "registry — NOT read from the stored business_metrics table. Only "
+                    "compare with a figure whose substrate matches."
+                ),
+            }
+    return bases
+
+
 def _kpi_summary_query(
     base_query_id: str, brand_param: Optional[str], region: Optional[str], brand_scoped: bool
 ) -> tuple[str, list]:
@@ -1967,6 +2029,12 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # not wall-clock now — "of data" keeps the tile label honest.
         "period": "Last 30 days of data",
         "metrics": metrics,
+        # #1640: per-tile substrate, derived from the registry. Every figure
+        # here is COMPUTED from the operational substrate via the kpi_query
+        # registry — none is a stored business_metrics row — so a tile must not
+        # be read as a check on, or a correction to, a business_metrics value
+        # under the same name (measured ~73x apart for TRx).
+        "measure_basis": _kpi_summary_measure_bases(client, brand=brand, region=region),
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
         # than real-world data -> surface "synthetic" so the FE badges them
@@ -2937,6 +3005,7 @@ You MUST use tools proactively when users ask about data:
 - BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/TRx-share/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs and share, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates/shares don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx, TRx share, and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
 - HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region`. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
 - ROI DISPERSION (#1532): the ROI headline is a pooled point estimate and carries NO interval — never invent one. When the response includes `temporal_variability_band`, present each slice's band as "the range of its monthly ROI values over the past 12 months" with its `n` — it measures recent temporal variability, NOT a confidence interval and NOT uncertainty about the current value; for slices with `band_suppressed: true`, state only the n and that the band is suppressed.
+- SCALE GUARD (#1640): every KPI figure arrives with a `measure_basis` naming the substrate it was computed from. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate`. They differ on purpose: a materialized history series is READ from `kpi_history` (its `substrate`) but RESTS on whatever the backfill drew it from (`materialized_from`, reduced to tables in `comparison_key`). Comparing on `substrate` would call a TRx history and an ROI history comparable because both are read from the same table, and would wrongly fence ROI history against stored ROI when both rest on `business_metrics`. If `measure_basis.mixed_sources` is true the series spans more than one substrate and is comparable with NOTHING — say so rather than comparing it. `kpi_calculate_tool` computes volume KPIs from the `treatment_events` ledger; `e2i_data_query_tool(query_type='kpi')` returns stored `business_metrics` rows, whose `value` is a MODELED market-scale level — measured, the national business_metrics TRx total is ~73x the trailing-30-day event count for the same brand. They are different quantities sharing a name. NEVER present one as a check, correction, total, or share-of for the other; never divide or sum across them; and never call the gap a discontinuity or a data error. If an answer needs both, give each its own row with its substrate stated, and say plainly that they measure different things. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
 - Use `causal_analysis_tool` for understanding metric drivers
 - Use `clinical_context_tool` to fetch a brand's REAL FDA-label indications, mechanism of action, pivotal endpoints, and competitor landscape (OpenFDA / ChEMBL / ClinicalTrials.gov / PubMed) — call it for ANY label / indication / approved-use / mechanism / on-off-label / competitive-landscape question, then frame the answer commercially instead of deflecting.
 - Use `document_retrieval_tool` for searching the knowledge base
@@ -3065,7 +3134,6 @@ def create_e2i_chat_agent(
 
     async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Process chat messages using Claude with bound tools."""
-        import time
         from datetime import datetime
 
         node_start = time.time()
@@ -3490,7 +3558,6 @@ def create_e2i_chat_agent(
 
     async def synthesize_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Synthesize tool results into a final response."""
-        import time
 
         node_start = time.time()
 
@@ -4549,7 +4616,6 @@ async def _stream_chat_response(
     - {"type": "done", "data": ""}
     - {"type": "error", "data": "..."}
     """
-    import time
 
     start_time = time.time()
 
@@ -4861,7 +4927,6 @@ async def chat(
     Note: request_id is optional. If not provided, it's extracted from the
     X-Request-ID header via TracingMiddleware (Phase 1 G08).
     """
-    import time
 
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed

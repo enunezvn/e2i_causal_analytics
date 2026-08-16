@@ -11910,6 +11910,13 @@ export interface components {
             /** Kpi Id */
             kpi_id: string;
             /**
+             * Measure Basis
+             * @description Substrate these points rest on, and what they may be compared with
+             */
+            measure_basis?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Brand
              * @description '' = global / all brands
              * @default
@@ -12166,6 +12173,13 @@ export interface components {
             /** Kpi Id */
             kpi_id: string;
             /**
+             * Measure Basis
+             * @description Substrate these points rest on, and what they may be compared with
+             */
+            measure_basis?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Brand
              * @description '' = global / all brands
              * @default
@@ -12332,6 +12346,13 @@ export interface components {
              */
             error?: string | null;
             /**
+             * Measure Basis
+             * @description Substrate this value was computed from, and what it may be compared with
+             */
+            measure_basis?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Data Source
              * @description Provenance of the value: 'database' = real (synthetic-excluded) rows; 'synthetic' = computed over synthetic-gold rows in E2I_KPI_INCLUDE_SYNTHETIC demo/review mode (the FE badges these so a synthetic figure is never read as real-world data).
              * @default database
@@ -12427,6 +12448,13 @@ export interface components {
         KPISegmentedHistoryResponse: {
             /** Kpi Id */
             kpi_id: string;
+            /**
+             * Measure Basis
+             * @description Substrate these points rest on, and what they may be compared with
+             */
+            measure_basis?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Brand
              * @description '' = global / all brands
