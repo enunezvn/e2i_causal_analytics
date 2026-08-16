@@ -26,11 +26,37 @@ Unavailability reasons:
   - mlflow_client_unavailable    (no MLflow client wired in)
   - model_not_found:<name>       (registry returned no versions)
   - metric_not_found:<metric>    (run exists but metric key absent)
-  - mlflow_exception:<Class>:<msg>  (any other MLflow-side failure)
+  - mlflow_exception:<Class>:<msg>  (any other MLflow-side failure, INCLUDING
+    an unreachable, unroutable or silent tracking server — see the time bound
+    below. A connection/timeout failure is not a new category: mlflow raises
+    `MlflowException` and it lands on this existing reason, carrying the URL
+    and "failed with exception" / "failed with timeout exception" in <msg>.)
   - db_query_failed:<reason>     (SQL execution raised)
   - db_query_returned_empty[:<note>]  (no rows / NULL value)
+
+Time bound on the MLflow leg (#1650)
+------------------------------------
+Refusing to fabricate is only half the contract — the refusal also has to be
+PROMPT. mlflow's REST store retries every request with urllib3 exponential
+backoff, and its shipped defaults (`MLFLOW_HTTP_REQUEST_MAX_RETRIES=7`,
+`BACKOFF_FACTOR=2`, `TIMEOUT=120`) are deliberately generous: mlflow's own
+source comments that 7 retries "will take ~4 minutes", which is right for a
+rate-limited backend and wrong for a KPI read a user's question is waiting on.
+Measured pre-fix against a dead port: `_get_metric_from_mlflow` was still
+running at 75s with no result. A fail-closed that takes minutes is a hang, not
+a refusal — the same shape as the SHAP wedge in #1548.
+
+`_bounded_mlflow_http` scopes those knobs to this read only, capping it at
+`MLFLOW_LEG_WORST_CASE_SECONDS`. It is scoped rather than set globally because
+the `src/agents/*/mlflow_tracker.py` WRITE paths legitimately want mlflow's
+generous retry policy. The no-fabrication property is untouched: the bound
+changes only how long "unavailable" takes to establish, never what is returned.
 """
 
+import os
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Callable
 
 import numpy as np
@@ -43,6 +69,67 @@ from src.kpi.models import (
     Workstream,
 )
 from src.kpi.synthetic_mode import resolve_kpi_query_id
+
+# --------------------------------------------------------------------------- #
+# #1650: time bound for the MLflow fail-closed leg.
+#
+# Per-attempt connect AND read timeout. The prod tracking server is
+# `http://mlflow:5000` on the same compose network, so 3s is ~100x its expected
+# latency; a false "unavailable" here is fail-closed (KPIStatus.UNKNOWN), never
+# a wrong value.
+MLFLOW_LEG_TIMEOUT_SECONDS = 3
+# Retries AFTER the initial attempt. Combined with backoff_factor=0 below this
+# is what kills the ~126s of urllib3 sleep per endpoint.
+MLFLOW_LEG_MAX_RETRIES = 1
+# Worst case for the whole leg: every attempt hangs for the full timeout.
+# Measured 6.01s against both an unroutable address and a silent (accepts but
+# never replies) peer; ~0.08s against a refused connection.
+MLFLOW_LEG_WORST_CASE_SECONDS = (MLFLOW_LEG_MAX_RETRIES + 1) * MLFLOW_LEG_TIMEOUT_SECONDS
+
+# mlflow reads all four of these from the environment AT CALL TIME
+# (`mlflow/utils/rest_utils.py::http_request` — verified identical in the
+# installed 3.11.1 and in the 3.15.1 that requirements.lock pins for CI), which
+# is what makes an env scope a real seam rather than a hopeful one.
+_MLFLOW_HTTP_BOUND = {
+    "MLFLOW_HTTP_REQUEST_TIMEOUT": str(MLFLOW_LEG_TIMEOUT_SECONDS),
+    "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(MLFLOW_LEG_MAX_RETRIES),
+    "MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR": "0",
+    "MLFLOW_HTTP_REQUEST_BACKOFF_JITTER": "0",
+}
+
+# `os.environ` is process-global and KPI reads can run concurrently (FastAPI
+# runs sync endpoints in a threadpool). Depth-count so only the OUTERMOST scope
+# restores; without it two interleaved readers can leave the bound values
+# installed permanently, silently shortening the mlflow_tracker write paths.
+# The lock guards only the counter, never the HTTP call, so concurrent KPI
+# reads still overlap.
+_MLFLOW_ENV_LOCK = threading.Lock()
+_MLFLOW_ENV_SAVED: dict[str, str | None] = {}
+_MLFLOW_ENV_DEPTH = 0
+
+
+@contextmanager
+def _bounded_mlflow_http() -> Iterator[None]:
+    """Scope mlflow's HTTP retry/timeout knobs to one KPI read (#1650)."""
+    global _MLFLOW_ENV_DEPTH
+    with _MLFLOW_ENV_LOCK:
+        if _MLFLOW_ENV_DEPTH == 0:
+            _MLFLOW_ENV_SAVED.clear()
+            _MLFLOW_ENV_SAVED.update({k: os.environ.get(k) for k in _MLFLOW_HTTP_BOUND})
+            os.environ.update(_MLFLOW_HTTP_BOUND)
+        _MLFLOW_ENV_DEPTH += 1
+    try:
+        yield
+    finally:
+        with _MLFLOW_ENV_LOCK:
+            _MLFLOW_ENV_DEPTH -= 1
+            if _MLFLOW_ENV_DEPTH == 0:
+                for key, previous in _MLFLOW_ENV_SAVED.items():
+                    if previous is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = previous
+                _MLFLOW_ENV_SAVED.clear()
 
 
 class ModelPerformanceCalculator(KPICalculatorBase):
@@ -375,30 +462,40 @@ class ModelPerformanceCalculator(KPICalculatorBase):
               - `(None, "metric_not_found:<metric>")` when the latest run
                 does not have the requested metric key.
               - `(None, "mlflow_exception:<ExceptionClass>:<msg[:200]>")`
-                on any other MLflow-side failure.
+                on any other MLflow-side failure — including an unreachable,
+                unroutable or silent tracking server, which mlflow surfaces as
+                `MlflowException`.
 
         This method NEVER returns a plausible-fake default like 0.5 or 1.0
         when the metric is unavailable — that was the #439 anti-pattern.
+
+        It is also bounded in TIME (#1650): the whole leg runs inside
+        `_bounded_mlflow_http`, so an unreachable tracking server resolves to
+        an `mlflow_exception:` reason within `MLFLOW_LEG_WORST_CASE_SECONDS`
+        instead of retrying for minutes. The scope covers the `mlflow_client`
+        property too, so a client that reaches the network while constructing
+        itself is bounded as well.
         """
-        if self.mlflow_client is None:
-            return None, "mlflow_client_unavailable"
+        with _bounded_mlflow_http():
+            if self.mlflow_client is None:
+                return None, "mlflow_client_unavailable"
 
-        try:
-            versions = self.mlflow_client.get_latest_versions(
-                model_name, stages=["Production", "Staging", "None"]
-            )
-            if not versions:
-                return None, f"model_not_found:{model_name}"
+            try:
+                versions = self.mlflow_client.get_latest_versions(
+                    model_name, stages=["Production", "Staging", "None"]
+                )
+                if not versions:
+                    return None, f"model_not_found:{model_name}"
 
-            run_id = versions[0].run_id
-            run = self.mlflow_client.get_run(run_id)
-            metrics = run.data.metrics
-            if metric_name not in metrics:
-                return None, f"metric_not_found:{metric_name}"
-            return float(metrics[metric_name]), None
-        except Exception as e:
-            msg = str(e)[:200]
-            return None, f"mlflow_exception:{type(e).__name__}:{msg}"
+                run_id = versions[0].run_id
+                run = self.mlflow_client.get_run(run_id)
+                metrics = run.data.metrics
+                if metric_name not in metrics:
+                    return None, f"metric_not_found:{metric_name}"
+                return float(metrics[metric_name]), None
+            except Exception as e:
+                msg = str(e)[:200]
+                return None, f"mlflow_exception:{type(e).__name__}:{msg}"
 
     def _execute_query(
         self, query_id: str, params: list[Any]
