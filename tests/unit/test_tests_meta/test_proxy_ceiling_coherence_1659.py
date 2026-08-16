@@ -197,14 +197,26 @@ def test_longest_dispatch_budget_is_covered_by_the_keepalive_not_the_ceiling() -
     if longest_s < PROXY_READ_TIMEOUT_SECONDS:
         pytest.skip("no dispatch budget currently exceeds the proxy ceiling; nothing to guard")
 
-    wrapped = _streaming_response_bodies_are_wrapped(
-        REPO_ROOT / "src" / "api" / "routes" / "copilotkit.py",
-        function_name="stream_chat",
-    )
-    assert wrapped, (
-        f"the longest dispatch budget is {longest_s:.0f}s against a "
-        f"{PROXY_READ_TIMEOUT_SECONDS}s nginx ceiling, and stream_chat's "
-        "StreamingResponse body is no longer wrapped in with_sse_keepalive — the "
-        "silent window is back and completed work will be severed before it "
-        "reaches the user (#1659)."
-    )
+    # #1669: ``stream_chat`` is not the only route under this ceiling.
+    # ``copilotkit_custom_handler`` serves the AG-UI brain from the SAME nginx
+    # locations, and its ``agent/run`` branch builds its own StreamingResponse.
+    #
+    # Its OTHER branch delegates to the third-party ``sdk_handler``, which
+    # constructs the response inside the installed ``copilotkit`` package — no
+    # literal ``StreamingResponse(...)`` call exists here for this AST walk to
+    # find, so that branch is guarded BEHAVIOURALLY instead, by draining the
+    # real response body in
+    # ``tests/unit/test_api/test_agui_stream_health_1667_1669.py``. Keep both:
+    # this one catches a reverted call site, that one catches a lost wrapper.
+    for function_name in ("stream_chat", "copilotkit_custom_handler"):
+        wrapped = _streaming_response_bodies_are_wrapped(
+            REPO_ROOT / "src" / "api" / "routes" / "copilotkit.py",
+            function_name=function_name,
+        )
+        assert wrapped, (
+            f"the longest dispatch budget is {longest_s:.0f}s against a "
+            f"{PROXY_READ_TIMEOUT_SECONDS}s nginx ceiling, and {function_name}'s "
+            "StreamingResponse body is no longer wrapped in with_sse_keepalive — the "
+            "silent window is back and completed work will be severed before it "
+            "reaches the user (#1659, #1669)."
+        )
