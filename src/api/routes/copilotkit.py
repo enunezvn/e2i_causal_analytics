@@ -4076,7 +4076,71 @@ _SDKResponse = TypeVar("_SDKResponse", bound=Response)
 
 
 def _bound_silent_window(response: _SDKResponse) -> _SDKResponse:
-    """Bound the SILENT window of a streaming response the SDK handler built (#1669).
+    """Bound the SILENT windows of a streaming response the SDK handler built.
+
+    TWO independent windows of silence, two independent fixes, same seam:
+
+    * **#1669 — the window nginx kills.** Nothing in ``ag_ui_langgraph``
+      heartbeats a quiet graph, so a long tool call produces a silent stretch
+      with no ceiling of its own, against ``proxy_read_timeout 300s``. Bounded
+      by wrapping the body in ``with_sse_keepalive``.
+    * **#1673 — the window the USER sees.** nginx delivered the entire turn in a
+      single flush at the very end: measured on production ``TTFB 8.754s`` of an
+      ``8.756s`` turn (ttfb/total = 0.9998, 2 chunks), against ``TTFB 0.263s`` of
+      a ``7.709s`` turn (81 chunks) direct to the app. The answer was correct and
+      the status was 200 — token streaming was produced here and destroyed at the
+      proxy. Bounded by ``X-Accel-Buffering: no``.
+
+    They are orthogonal: the keepalive resets nginx's upstream read timer whether
+    or not the response is buffered, and the header changes nothing about how
+    long the graph stays quiet. Dropping either while keeping the other looks
+    correct in isolation, which is why
+    ``tests/unit/test_api/test_agui_accel_buffering_1673.py`` asserts both
+    survive together.
+
+    WHY ``X-Accel-Buffering`` FIXES A GZIP PROBLEM
+    ----------------------------------------------
+    #1673 attributed the buffering to ``proxy_buffering on``. Measurement says
+    otherwise — same production URL, same nginx, same ``location /api/``,
+    differing only in ``Accept-Encoding``::
+
+        gzip       TTFB 8.754s / total 8.756s   ratio 0.9998    2 chunks
+        identity   TTFB 0.683s / total 9.218s   ratio 0.0741   99 chunks
+
+    nginx forwards proxy buffers as they fill; it is the **gzip filter** that
+    holds the whole turn, because it emits only when its deflate buffer fills or
+    a flush marker arrives, and ``proxy_buffering on`` produces no flush markers.
+    The stream is gzip-eligible only because ``handle_execute_agent`` labels it
+    ``media_type="application/json"``, which is in the live ``gzip_types`` — the
+    two responses this module builds itself say ``text/event-stream``, which is
+    not, and escape by accident rather than by design.
+
+    That the header nevertheless defeats gzip buffering is the single
+    load-bearing assumption of this fix, so it was measured rather than reasoned:
+    on a replica nginx carrying the production gzip and ``proxy_buffer*``
+    directives verbatim, ``application/json`` + gzip + this header streamed in
+    **61 chunks at ttfb/total 0.0071 while still ``Content-Encoding: gzip``**,
+    against 1 chunk at 0.9999 without it. Disabling proxy buffering makes nginx
+    flag each upstream read with ``flush``, and the gzip filter honours flush
+    with a ``Z_SYNC_FLUSH``.
+
+    WHY THIS IS NOT AN NGINX-CONFIG CHANGE
+    --------------------------------------
+    #1673 suggested ``location /copilotkit/`` in ``docker/nginx/host-nginx.conf``.
+    That block is dead — it proxies to ``127.0.0.1:8000/copilotkit/``, a prefix
+    this app does not serve, and authenticated probes return ``404
+    EndpointNotFoundError`` on every path through it. The live surface is
+    ``location /api/``: the shipped frontend bundle bakes ``apiUrl:"/api"`` and
+    builds its runtime URL as ``${apiUrl}/copilotkit/``, and
+    ``scripts/demos/copilot_agui_runner.py`` defaults to
+    ``--api-base https://eznomics.site/api``. ``location /api/`` carries the whole
+    REST API, so disabling gzip or buffering there to fix one streaming endpoint
+    would de-optimise every JSON response the platform sends. The nginx config
+    also reaches production only via a manual root ``cp`` + ``nginx -t`` +
+    ``systemctl reload`` (``docs/runbooks/frontend-serving-flip.md``) — no
+    workflow ships it, ``/etc/nginx/sites-enabled/e2i-analytics`` is a regular
+    file rather than a symlink, and ``sites-available`` currently holds a
+    different, older copy. This header ships with the ordinary image deploy.
 
     The AG-UI surface has two entry points and only one of them constructs its
     own ``StreamingResponse`` in this module:
@@ -4110,12 +4174,16 @@ def _bound_silent_window(response: _SDKResponse) -> _SDKResponse:
 
     Keyed on the response TYPE, not on the path: ``sdk_handler`` also returns
     ``JSONResponse`` (info, agent state, errors) and those must pass through
-    untouched.
+    untouched — an ordinary JSON body has nothing to gain from either fix and
+    genuinely benefits from the proxy buffering the header would disable.
 
     Why this is not left to ``#1659``'s AST guard: that guard can only see
     literal ``StreamingResponse(...)`` calls, and this one is built inside a
     third-party package. ``tests/unit/test_api/test_agui_stream_health_1667_1669.py``
     covers it behaviourally instead, by draining the real response body.
+    ``tests/integration/api/test_agui_edge_buffering_1673.py`` goes one further
+    and asserts ``TTFB << total`` through a real nginx, because the buffering
+    property does not exist in-process: an ASGI call has no wire.
 
     No ``type: ignore`` here, deliberately. ``body_iterator`` is an
     ``AsyncIterable[str | bytes | memoryview]`` and ``with_sse_keepalive`` is
@@ -4126,6 +4194,10 @@ def _bound_silent_window(response: _SDKResponse) -> _SDKResponse:
     """
     if isinstance(response, StreamingResponse):
         response.body_iterator = with_sse_keepalive(response.body_iterator)
+        # Mutated in place rather than passed to a constructor for the same
+        # reason as the body iterator: this response was built inside
+        # ``copilotkit/integrations/fastapi.py``, not here.
+        response.headers["X-Accel-Buffering"] = "no"
     return response
 
 
