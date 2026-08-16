@@ -65,6 +65,7 @@ TWO ENTRY POINTS, BOTH COVERED
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Annotated, Any, AsyncIterator, List, Optional, TypedDict
@@ -129,6 +130,74 @@ def _build_stub_graph():
     workflow.add_edge(START, "chat")
     workflow.add_edge("chat", END)
     return workflow.compile(checkpointer=MemorySaver())
+
+
+#: How long the quiet-window graph stays silent. Several keepalive intervals at
+#: ``TEST_KEEPALIVE_INTERVAL``, still a fraction of a second.
+QUIET_SECONDS = 0.4
+
+#: Keepalive cadence for the quiet-window test. Production's default is 15 s
+#: (``SSE_KEEPALIVE_INTERVAL_SECONDS``); waiting for that would add 15 s to the
+#: unit lane. ``test_agui_stream_health_1667_1669.py`` already pins the
+#: production call site to the real constant, so shrinking it here cannot mask a
+#: drift in what production actually uses.
+TEST_KEEPALIVE_INTERVAL = 0.05
+
+
+def _build_quiet_graph():
+    """A real graph with a genuine silent window before it answers.
+
+    The pause is an ``await``, not a busy loop, deliberately: a keepalive is a
+    coroutine and can only fire while the event loop is free. A blocking sleep
+    would produce a silent window that the wrapper legitimately cannot cover, and
+    the test would fail for a reason that has nothing to do with either fix.
+    """
+    llm = _OneShotChatModel()
+
+    async def chat(state: _StubState) -> dict:
+        await asyncio.sleep(QUIET_SECONDS)
+        return {"messages": [await llm.ainvoke(state["messages"])]}
+
+    workflow = StateGraph(_StubState)
+    workflow.add_node("chat", chat)
+    workflow.add_edge(START, "chat")
+    workflow.add_edge("chat", END)
+    return workflow.compile(checkpointer=MemorySaver())
+
+
+@pytest.fixture
+def quiet_graph_registry():
+    """A registry whose agent goes quiet long enough for a keepalive to fire."""
+    from copilotkit import CopilotKitRemoteEndpoint
+
+    from src.api.routes.copilotkit import LangGraphAgent
+
+    agent = LangGraphAgent(
+        name="default",
+        description="stub agent with a quiet window",
+        graph=_build_quiet_graph(),
+    )
+    return CopilotKitRemoteEndpoint(agents=[agent], actions=[])
+
+
+@pytest.fixture
+def fast_keepalive(monkeypatch):
+    """Run the REAL wrapper at a unit-lane interval.
+
+    ``with_sse_keepalive``'s default interval is bound at definition time, so
+    patching the constant would not reach it. This replaces the module-level NAME
+    the route calls with a thin partial over the real implementation — so if the
+    route ever stops calling it, no keepalive appears and the assertion fails,
+    which is the regression this exists to catch.
+    """
+    import src.api.routes.copilotkit as ck
+    from src.api.utils.sse_keepalive import with_sse_keepalive
+
+    def _fast(source, interval_seconds: float = TEST_KEEPALIVE_INTERVAL):
+        return with_sse_keepalive(source, interval_seconds=interval_seconds)
+
+    monkeypatch.setattr(ck, "with_sse_keepalive", _fast)
+    return ck
 
 
 def _registry():
@@ -288,7 +357,9 @@ class TestTheHeaderIsNotTheOnlyThingThatMustSurvive:
     """#1672's keepalive and #1673's header ride the same seam; neither may
     displace the other."""
 
-    async def test_sdk_subpath_keeps_both_the_keepalive_wrap_and_the_header(self):
+    async def test_sdk_subpath_keeps_both_the_keepalive_wrap_and_the_header(
+        self, quiet_graph_registry, fast_keepalive
+    ):
         """Two fixes now mutate the same SDK-built response on the way out.
 
         #1669's keepalive bounds the SILENT window (what nginx's
@@ -297,22 +368,35 @@ class TestTheHeaderIsNotTheOnlyThingThatMustSurvive:
         defects with independent failure modes, and a future edit to
         ``_bound_silent_window`` that keeps one while dropping the other would
         look correct in isolation.
+
+        Both are asserted on OBSERVED OUTPUT, not on the presence of a symbol: a
+        real quiet window in the graph must produce a real ``: keepalive`` record
+        on the wire, and the response must carry the header. Asserting that the
+        wrapper's frame constant merely exists would pass with the wrap deleted.
         """
+        from src.api.routes.copilotkit import copilotkit_custom_handler
         from src.api.utils.sse_keepalive import SSE_KEEPALIVE_FRAME
 
-        response = await _drive("agent/default", _turn_body())
+        response = await copilotkit_custom_handler(
+            _make_request("agent/default", _turn_body()),
+            quiet_graph_registry,
+            path="agent/default",
+        )
 
-        assert _accel(response) == "no", "the #1673 header was dropped"
+        assert _accel(response) == "no", f"the #1673 header was dropped: {dict(response.headers)}"
 
-        # The keepalive wrapper is only observable by draining the body; assert
-        # the frames still parse as the AG-UI protocol so the wrap did not
-        # corrupt the stream it now shares with the header fix.
         chunks = [
             c.decode() if isinstance(c, (bytes, bytearray)) else str(c)
             async for c in response.body_iterator
         ]
+        keepalives = [c for c in chunks if c.strip() == SSE_KEEPALIVE_FRAME.strip()]
         payloads = [c for c in chunks if c.startswith("data: ")]
+
+        assert keepalives, (
+            f"no keepalive ever fired across a {QUIET_SECONDS}s quiet window — the "
+            f"#1669 wrap was lost while the #1673 header survived. Chunks seen: "
+            f"{[c[:40] for c in chunks[:6]]}"
+        )
         assert payloads, f"the stream delivered no data frames at all: {chunks[:3]}"
         types = {json.loads(c[len("data: ") :]).get("type") for c in payloads}
         assert "RUN_FINISHED" in types, f"the turn never completed; saw {sorted(types)}"
-        assert SSE_KEEPALIVE_FRAME  # the wrapper's frame constant is still the contract

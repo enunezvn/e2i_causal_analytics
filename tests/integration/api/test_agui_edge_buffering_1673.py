@@ -300,6 +300,11 @@ http {{
 """
 
 
+#: URL prefix of the CONTROL route: the identical response with the #1673 header
+#: stripped back off. See ``_build_app``.
+UNFIXED_PREFIX = "/api/unfixed"
+
+
 def _build_app():
     """A FastAPI app whose ``/api/copilotkit/{path}`` is the REAL handler.
 
@@ -310,9 +315,24 @@ def _build_app():
     ``CopilotKitRemoteEndpoint`` so the third-party dispatch
     (``copilotkit/sdk.py::execute_agent`` -> ``handle_execute_agent`` ->
     ``StreamingResponse``) runs exactly as in production.
+
+    A second route, ``/api/unfixed/copilotkit/{path}``, serves the SAME response
+    with the #1673 header removed again on the way out. It is the CONTROL, and it
+    exists because without it this suite has a blind spot: once the fix is in,
+    every assertion here passes, and they would go on passing if the edge stopped
+    buffering for some unrelated reason (someone sets ``gzip off`` on
+    ``location /api/``, a future SDK release relabels the stream
+    ``text/event-stream``, nginx changes its flush semantics). The fix would then
+    be dead weight and nothing would say so.
+
+    The control turns the diagnosis into an executable claim: on the same nginx,
+    in the same run, the header's ABSENCE must still reproduce the buffering. It
+    strips rather than bypasses so that the two responses differ in exactly one
+    header and nothing else.
     """
     from copilotkit import CopilotKitRemoteEndpoint
     from fastapi import FastAPI
+    from starlette.responses import StreamingResponse
 
     from src.api.routes.copilotkit import LangGraphAgent, copilotkit_custom_handler
 
@@ -328,9 +348,21 @@ def _build_app():
     async def handler(request: Request, path: str = ""):
         return await copilotkit_custom_handler(request, sdk, path)
 
+    async def unfixed_handler(request: Request, path: str = ""):
+        response = await copilotkit_custom_handler(request, sdk, path)
+        if isinstance(response, StreamingResponse):
+            del response.headers["X-Accel-Buffering"]
+        return response
+
     app.add_api_route(
         "/api/copilotkit/{path:path}",
         handler,
+        methods=["GET", "POST"],
+        include_in_schema=False,
+    )
+    app.add_api_route(
+        f"{UNFIXED_PREFIX}/copilotkit/{{path:path}}",
+        unfixed_handler,
         methods=["GET", "POST"],
         include_in_schema=False,
     )
@@ -347,7 +379,20 @@ class _Edge:
 
 @pytest.fixture(scope="module")
 def edge(tmp_path_factory):
-    """Start a real nginx in front of a real uvicorn; tear both down after."""
+    """Start a real nginx in front of a real uvicorn; tear both down after.
+
+    SKIP AND FAIL ARE NOT INTERCHANGEABLE HERE. The ONLY skippable condition is
+    "there is no nginx binary on this machine" — an environment fact this suite
+    cannot do anything about, and one where nothing faithful can be substituted
+    (a fake proxy has no buffers to observe). Everything after that point is
+    ours: if the replica config does not parse, or the edge never accepts a
+    connection, that is a defect in this file or in the environment we asked for,
+    and skipping it would let a broken replica report green forever. Those fail.
+
+    Teardown is entered the moment either process is created, so a failure during
+    startup cannot leak an nginx process or a uvicorn thread onto the host — this
+    box is also production.
+    """
     nginx_bin = shutil.which("nginx")
     if not nginx_bin:
         pytest.skip(
@@ -366,46 +411,56 @@ def edge(tmp_path_factory):
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-
     conf_path = Path(tmp) / "nginx.conf"
     conf_path.write_text(_NGINX_CONF.format(tmp=str(tmp), edge_port=edge_port, app_port=app_port))
-    proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
-        [nginx_bin, "-p", str(tmp), "-c", str(conf_path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
 
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if not server.started:
-            time.sleep(0.05)
-            continue
-        try:
-            with socket.create_connection(("127.0.0.1", edge_port), timeout=0.5):
-                break
-        except OSError:
-            if proc.poll() is not None:
-                err = (
-                    (Path(tmp) / "error.log").read_text()
-                    if (Path(tmp) / "error.log").exists()
-                    else ""
-                )
-                pytest.skip(f"replica nginx failed to start: {err[:400]}")
-            time.sleep(0.05)
-    else:
-        pytest.skip("replica edge did not come up within 30s")
-
+    proc = None
+    thread.start()
     try:
+        proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            [nginx_bin, "-p", str(tmp), "-c", str(conf_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if not server.started:
+                time.sleep(0.05)
+                continue
+            try:
+                with socket.create_connection(("127.0.0.1", edge_port), timeout=0.5):
+                    break
+            except OSError:
+                if proc.poll() is not None:
+                    raise AssertionError(
+                        f"replica nginx exited during startup (rc={proc.returncode}). "
+                        f"error.log: {_nginx_error_log(tmp)}"
+                    )
+                time.sleep(0.05)
+        else:
+            raise AssertionError(
+                f"replica edge did not accept a connection on 127.0.0.1:{edge_port} "
+                f"within 30s (uvicorn started={server.started}, nginx rc={proc.poll()}). "
+                f"error.log: {_nginx_error_log(tmp)}"
+            )
+
         yield _Edge(f"http://127.0.0.1:{edge_port}", f"http://127.0.0.1:{app_port}")
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-            proc.kill()
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+                proc.kill()
+                proc.wait(timeout=10)
         server.should_exit = True
         thread.join(timeout=15)
+
+
+def _nginx_error_log(tmp) -> str:
+    log = Path(tmp) / "error.log"
+    return log.read_text()[:600] if log.exists() else "(no error.log written)"
 
 
 class Timeline:
@@ -439,8 +494,13 @@ class Timeline:
         )
 
 
-def _drive(origin: str, accept_encoding: str = "gzip") -> Timeline:
-    """One real AG-UI turn over real HTTP, timing every chunk off the socket."""
+def _drive(origin: str, accept_encoding: str = "gzip", prefix: str = "") -> Timeline:
+    """One real AG-UI turn over real HTTP, timing every chunk off the socket.
+
+    ``prefix`` selects the control route (``UNFIXED_PREFIX``) instead of the
+    fixed one. Both are served by the same app behind the same nginx
+    ``location /api/``, so the only difference on the wire is the header.
+    """
     payload = {
         "threadId": str(uuid.uuid4()),
         "state": {},
@@ -460,7 +520,7 @@ def _drive(origin: str, accept_encoding: str = "gzip") -> Timeline:
     with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as client:
         with client.stream(
             "POST",
-            f"{origin}/api/copilotkit/agent/default",
+            f"{origin}{prefix or '/api'}/copilotkit/agent/default",
             headers={
                 "Content-Type": "application/json",
                 "Accept-Encoding": accept_encoding,
@@ -564,27 +624,55 @@ class TestEdgeStreams:
         assert timeline.chunks > 1, f"gzip still collapsed the turn to one flush: {timeline!r}"
 
 
-class TestGzipIsTheMechanism:
-    """Pins the DIAGNOSIS, so a future reader does not re-derive it from the
-    issue's original (wrong) ``proxy_buffering on`` hypothesis."""
+class TestTheFixIsWhatIsDoingTheWork:
+    """Without these, the suite has a blind spot: every assertion above would go
+    on passing if the edge stopped buffering for a reason unrelated to the fix,
+    and the header would be dead weight with nothing to say so.
 
-    def test_identity_encoding_streams_even_when_the_fix_is_absent(self, edge):
-        """``Accept-Encoding: identity`` is the control that identified gzip.
+    Both tests drive ``UNFIXED_PREFIX``, which serves the SAME response with the
+    #1673 header stripped back off. Same nginx, same run, one header apart.
+    """
 
-        It streams regardless of the fix, because ``proxy_buffering on`` alone
-        does not hold a chunked response — nginx forwards buffers as they fill.
-        Kept as an executable record of the cheapest disproof: it is what
-        eliminated ``proxy_buffering`` as the cause and pointed at the gzip
-        filter, which is why the fix targets the response header rather than the
-        buffer directives #1673 named.
+    def test_removing_the_header_still_reproduces_the_defect(self, edge):
+        """The defect must remain reproducible, or the fix is not the cause of health.
+
+        This is the RED state, kept executable. If it ever fails, the edge is no
+        longer buffering for some other reason — a config change on
+        ``location /api/``, a SDK release that relabels the stream
+        ``text/event-stream``, a different nginx flush policy — and the header is
+        no longer load-bearing. That is a fine outcome, but it must be a DECISION,
+        not a silent drift discovered years later.
         """
-        timeline = _drive(edge.base, accept_encoding="identity")
+        timeline = _drive(edge.base, prefix=UNFIXED_PREFIX)
 
-        assert timeline.status == 200, f"edge did not answer: {timeline!r}"
+        assert timeline.status == 200, f"control route did not answer: {timeline!r}"
+        assert timeline.total >= MIN_TURN_SECONDS, f"turn too short to judge: {timeline!r}"
+        assert timeline.ratio >= STREAMING_RATIO, (
+            f"WITHOUT the X-Accel-Buffering header the edge STREAMED anyway "
+            f"(ttfb/total={timeline.ratio:.4f}) — so something other than this fix is "
+            f"keeping the stream alive and the fix may now be inert. Re-derive the "
+            f"cause before trusting the passing tests above. {timeline!r}"
+        )
+
+    def test_identity_encoding_streams_even_without_the_header(self, edge):
+        """gzip, not ``proxy_buffering on``, is the mechanism — asserted, not narrated.
+
+        Same control route, same missing header, only ``Accept-Encoding`` differs
+        from the test above. It streams: ``proxy_buffering on`` alone does not
+        hold a chunked response, because nginx forwards proxy buffers as they
+        fill. Paired with the test above, the two form the A/B that eliminated
+        ``proxy_buffering`` — the hypothesis #1673 filed — and pointed at the gzip
+        filter, which is why the fix is a response header rather than the buffer
+        directives the issue named.
+        """
+        timeline = _drive(edge.base, accept_encoding="identity", prefix=UNFIXED_PREFIX)
+
+        assert timeline.status == 200, f"control route did not answer: {timeline!r}"
         assert timeline.headers.get("content-encoding") is None, (
             f"expected an uncompressed response for the control: {timeline!r}"
         )
         assert timeline.ratio < STREAMING_RATIO, (
-            f"uncompressed AND buffered — the cause is not gzip after all and this "
-            f"whole diagnosis needs redoing ({timeline!r})"
+            f"uncompressed AND buffered with no header — then gzip is NOT the "
+            f"mechanism, `proxy_buffering on` holds chunked responses after all, and "
+            f"this whole diagnosis needs redoing ({timeline!r})"
         )
