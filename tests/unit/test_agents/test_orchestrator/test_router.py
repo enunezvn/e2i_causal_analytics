@@ -93,8 +93,12 @@ class TestRouterNode:
         result = await router.execute(state)
 
         assert result["dispatch_plan"][0]["agent_name"] == "experiment_designer"
-        # 150s workload-appropriate SLA (measured 88-90s live, #1351)
-        assert result["dispatch_plan"][0]["timeout_ms"] == 150000
+        # #1635: raised 150s -> 240s. The old 150s sat BELOW the agent's own
+        # serial internal step ceilings (design_reasoning 120s + validity_audit
+        # 90s = 210s declared in code), so the dispatch timeout could fire
+        # mid-graph and discard a design the agent was about to return. See
+        # TestDispatchBudgetsAreJustified for the composition and the ceiling.
+        assert result["dispatch_plan"][0]["timeout_ms"] == 240000
         assert result["dispatch_plan"][0]["parameters"] == {"preregistration_formality": "medium"}
 
     @pytest.mark.asyncio
@@ -172,7 +176,11 @@ class TestRouterNode:
         result = await router.execute(state)
 
         assert result["dispatch_plan"][0]["agent_name"] == "health_score"
-        assert result["dispatch_plan"][0]["timeout_ms"] == 5000
+        # #1634: raised 5000ms -> 20000ms. The old value was the only budget in
+        # INTENT_TO_AGENTS with no justifying comment and was never measured;
+        # the agent's measured cold worst case is 3673ms (n=5, faithful
+        # chat-path wiring), which 5000ms cleared by only 1.36x on an idle box.
+        assert result["dispatch_plan"][0]["timeout_ms"] == 20000
 
     @pytest.mark.asyncio
     async def test_route_drift_check(self):
@@ -543,10 +551,13 @@ class TestIntentToAgentMapping:
         # the full 37,378-row gold conversion frame's CausalForestDML +
         # per-segment effect_interval + hierarchical uplift MEASURED 269.7s
         # serialized (gate 11, clean substrate); 420s = measured + ~55% headroom.
-        # experiment_design is 150s as of 2026-07-29 (#1351) — both forced-route
-        # attempts in the #1337 Step 0 pass timed out at the old 60s budget while
-        # the live surface completed the same asks in a measured 88-90s;
-        # 150s = measured + ~67% headroom for LLM-latency variance.
+        # experiment_design is 240s as of 2026-08-16 (#1635) — the previous 150s
+        # (#1351) sat BELOW the agent's own serial internal step ceilings
+        # (design_reasoning wait_for 120s + a 60s fallback LLM; validity_audit
+        # wait_for 90s, which degrades rather than fails), so the dispatch
+        # timeout could fire mid-graph and discard a design the agent was about
+        # to return. 240s covers the realistic degraded path (~235s) and stays
+        # 60s under the host-nginx proxy_read_timeout 300s ceiling.
         # causal_effect is 300s as of 2026-07-31 (#1419) — critical-gates-first
         # refutation on the 5k stratified subsample measures ~223s on the live
         # 37,371-row conversion frame (recon ~12s + e-value ~2s + 30 placebo
@@ -555,7 +566,7 @@ class TestIntentToAgentMapping:
         max_timeout_ms = {
             "multi_faceted": 180_000,
             "segment_analysis": 420_000,
-            "experiment_design": 150_000,
+            "experiment_design": 240_000,
             "causal_effect": 300_000,
         }
         for intent, dispatches in router.INTENT_TO_AGENTS.items():
@@ -1002,3 +1013,147 @@ class TestDiscoveryRoutingIntegration:
         assert params["discovered_dag_edge_types"] == {"treatment<->segment": "BIDIRECTED"}
         assert params["discovery_gate_decision"] == "accept"
         assert params["discovery_gate_confidence"] == 0.80
+
+
+class TestDispatchBudgetsAreJustified:
+    """#1634 / #1635: every per-agent dispatch budget must be defensible against
+    the agent's MEASURED runtime, and a budget the agent cannot meet must not
+    turn a served capability into a user-facing dead end.
+
+    These tests deliberately pin the *reasoning*, not just the constant: each
+    asserts the budget against the measurement (or the code-derived internal
+    ceiling) that justifies it, so a future edit that reverts the number to an
+    unmeasured guess fails here rather than silently in a chat turn.
+    """
+
+    # docker/nginx/host-nginx.conf:119 -- ``proxy_read_timeout 300s``. A dispatch
+    # emits NO bytes while it runs (measured: turn 3.4's first_progress_ms equals
+    # its total_ms), so this bounds the SILENT window end-to-end and is a hard
+    # ceiling on any single-agent budget that wants to reach the user.
+    HOST_NGINX_SILENT_WINDOW_CEILING_MS = 300_000
+
+    # src/agents/experiment_designer/nodes/design_reasoning.py -- the primary
+    # reasoning LLM is wrapped in ``asyncio.wait_for(..., timeout=120)``.
+    DESIGN_REASONING_PRIMARY_CEILING_MS = 120_000
+    # src/agents/experiment_designer/nodes/validity_audit.py -- the audit LLM is
+    # wrapped in ``asyncio.wait_for(..., timeout=90)`` and DEGRADES on expiry
+    # (validity_audit_status="timed_out") rather than failing the run.
+    VALIDITY_AUDIT_CEILING_MS = 90_000
+
+    @staticmethod
+    def _dispatch_for(plan, agent_name):
+        for dispatch in plan:
+            if dispatch["agent_name"] == agent_name:
+                return dispatch
+        raise AssertionError(f"{agent_name} not in dispatch plan")
+
+    @staticmethod
+    async def _plan(primary_intent, confidence=0.95):
+        router = RouterNode()
+        state = {
+            "intent": {
+                "primary_intent": primary_intent,
+                "confidence": confidence,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            }
+        }
+        result = await router.execute(state)
+        return result["dispatch_plan"]
+
+    @pytest.mark.asyncio
+    async def test_system_health_budget_covers_measured_cold_runtime(self):
+        """#1634: the 5000ms budget was never measured -- it shipped with the
+        initial platform commit and is the only entry in INTENT_TO_AGENTS with
+        no justifying comment.
+
+        MEASURED 2026-08-16 on the faithful chat-path wiring
+        (``factory._health_score_kwargs()`` -- the same four real backends
+        ``create_agent_registry`` injects), full graph, all four dimensions
+        reported measured=True, grade A, zero errors:
+          cold (fresh process, n=5): 2311 / 2342 / 2922 / 3000 / 3673 ms
+          warm (same process):        107 - 594 ms
+        A chat dispatch hits the COLD path after a worker respawn, so the worst
+        cold run (3673 ms) is the number the budget must clear. 5000 ms leaves
+        only 1.36x over it on an idle box with no gunicorn contention -- which is
+        why the live turn timed out at 5000 ms while the agent served the same
+        ask in 14.7 s wall under the previous route.
+        """
+        plan = await self._plan("system_health", confidence=0.96)
+        dispatch = self._dispatch_for(plan, "health_score")
+
+        measured_cold_worst_ms = 3673
+        assert dispatch["timeout_ms"] >= 4 * measured_cold_worst_ms, (
+            "system_health budget must clear the measured cold worst case with "
+            "real headroom for container contention"
+        )
+        assert dispatch["timeout_ms"] == 20_000
+
+    @pytest.mark.asyncio
+    async def test_experiment_design_budget_covers_agent_internal_ceilings(self):
+        """#1635: 150000 ms sat BELOW the agent's own internal step ceilings, so
+        the dispatch timeout could fire mid-graph and discard a design the agent
+        was about to return.
+
+        The experiment_designer graph is sequential (context_loader ->
+        design_reasoning -> power_analysis -> validity_audit -> template_generator),
+        and its two LLM steps declare 120 s + 90 s of internal budget on that
+        serial path -- 210 s, i.e. 1.4x the old 150 s dispatch budget. The budget
+        must cover the composition it wraps.
+        """
+        plan = await self._plan("experiment_design", confidence=0.90)
+        dispatch = self._dispatch_for(plan, "experiment_designer")
+
+        serial_internal_ceiling_ms = (
+            self.DESIGN_REASONING_PRIMARY_CEILING_MS + self.VALIDITY_AUDIT_CEILING_MS
+        )
+        assert dispatch["timeout_ms"] >= serial_internal_ceiling_ms, (
+            "dispatch budget must cover the agent's own serial internal step "
+            "ceilings, or it cuts off runs the agent would have completed"
+        )
+        assert dispatch["timeout_ms"] == 240_000
+
+    @pytest.mark.asyncio
+    async def test_experiment_design_budget_stays_under_host_nginx_ceiling(self):
+        """#1635: the budget may not exceed the host-nginx silent-window ceiling.
+
+        A budget above 300 s cannot reach the user at all -- nginx closes the
+        connection first, so the agent would be doing work no one receives.
+        """
+        plan = await self._plan("experiment_design", confidence=0.90)
+        dispatch = self._dispatch_for(plan, "experiment_designer")
+
+        assert dispatch["timeout_ms"] < self.HOST_NGINX_SILENT_WINDOW_CEILING_MS
+
+    @pytest.mark.asyncio
+    async def test_experiment_design_keeps_no_failing_closed_fallback(self):
+        """#1635: ``fallback_agent`` stays None -- deliberately, with a disproof.
+
+        ``explainer`` is the platform's universal fallback, but
+        ``_resolve_explainer_input`` (dispatcher.py) fails CLOSED at step (4)
+        when there are no upstream results to explain: on an experiment_designer
+        timeout it is the ONLY dispatched agent, so an explainer fallback would
+        re-fail with nothing to explain and reproduce the same dead end -- the
+        precedent already documented on the ``cohort_definition`` entry.
+
+        The methodological fallback is restored by the BUDGET instead: the
+        agent's own graceful-degradation path (validity_audit self-caps at 90 s
+        and proceeds to template_generator) yields a real design, which the old
+        150 s dispatch budget was cutting off.
+        """
+        plan = await self._plan("experiment_design", confidence=0.90)
+        dispatch = self._dispatch_for(plan, "experiment_designer")
+
+        assert dispatch["fallback_agent"] is None
+
+    @pytest.mark.asyncio
+    async def test_no_dispatch_budget_is_an_unjustified_round_guess(self):
+        """#1634 guard: the two budgets this pair repaired must not silently
+        revert to their previous unmeasured values."""
+        health = self._dispatch_for(await self._plan("system_health", 0.96), "health_score")
+        design = self._dispatch_for(
+            await self._plan("experiment_design", 0.90), "experiment_designer"
+        )
+
+        assert health["timeout_ms"] != 5_000, "reverted to the unmeasured 5000ms guess"
+        assert design["timeout_ms"] != 150_000, "reverted to the sub-composition 150s budget"

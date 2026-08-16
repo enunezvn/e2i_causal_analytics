@@ -115,7 +115,49 @@ class RouterNode:
                 # 150s = measured + ~67% headroom for LLM-latency variance — a
                 # workload-appropriate SLA in line with the other heavy
                 # analytical agents above, not a latency target.
-                timeout_ms=150000,
+                #
+                # #1635 (2026-08-16): 150s was still BELOW the agent's own
+                # internal step ceilings, so this dispatch timeout could fire
+                # mid-graph and DISCARD a design the agent was about to return.
+                # The graph is sequential (context_loader → design_reasoning →
+                # power_analysis → validity_audit → template_generator) and its
+                # two LLM steps declare, in code, on that serial path:
+                #   design_reasoning: asyncio.wait_for(primary, timeout=120),
+                #     then a fallback LLM with client timeout=60  → ≤180s
+                #   validity_audit:   asyncio.wait_for(audit, timeout=90),
+                #     which DEGRADES on expiry (validity_audit_status=
+                #     "timed_out") and proceeds rather than failing → ≤90s
+                # 120+90 = 210s of declared internal budget alone, i.e. 1.4x the
+                # old 150s dispatch budget. Confirmed live in the 2026-08-15
+                # eval: 3.6 COMPLETED with a full RCT design + power analysis
+                # only because validity_audit hit its internal 90s cap and
+                # self-degraded (validity score 0.00), while 3.4 — same agent,
+                # same brand, two turns apart — was cut at exactly 150000ms and
+                # returned nothing. That is a budget-composition defect, not a
+                # transient: there is no retry anywhere on this path
+                # (_execute_single_agent returns on the first TimeoutError).
+                # 240s covers the realistic degraded path — primary reasoning
+                # exhausts its 120s cap, the fast fallback LLM answers in ~20s,
+                # validity_audit burns its full 90s, +~5s non-LLM steps ≈ 235s —
+                # and sits 60s under the host-nginx proxy_read_timeout 300s
+                # ceiling (docker/nginx/host-nginx.conf:119), which bounds the
+                # SILENT dispatch window: measured, 3.4 emitted no bytes at all
+                # until the end (first_progress_ms == total_ms). It deliberately
+                # does NOT cover design_reasoning exhausting both its 120s
+                # primary AND its full 60s fallback (=275s): that is a wedge,
+                # and timing out is the correct guard.
+                timeout_ms=240000,
+                # No fallback by design (#1635), with the disproof recorded:
+                # explainer is the platform's universal fallback, but
+                # _resolve_explainer_input fails CLOSED at step (4) when there
+                # are no upstream results to explain — and on an
+                # experiment_designer timeout it is the ONLY dispatched agent,
+                # so an explainer fallback would re-fail with nothing to explain
+                # and reproduce the same dead end (the precedent already
+                # documented on cohort_definition below). The grounded
+                # methodological fallback is restored by the BUDGET instead: the
+                # agent's own graceful-degradation path yields a real design,
+                # which 150s was cutting off.
                 fallback_agent=None,
             )
         ],
@@ -151,7 +193,33 @@ class RouterNode:
                 agent_name="health_score",
                 priority="critical",
                 parameters={},
-                timeout_ms=5000,
+                # #1634: the previous 5000ms was the ONLY budget in this table
+                # with no justifying comment — it shipped unchanged in the
+                # initial platform commit (3e1c70cf4) and was never measured.
+                # It became user-visible when the AG-UI brain started routing
+                # "system health score" through orchestrator_tool (the #1562
+                # prompt change advertising that tool's cohort path, fcfb70a64)
+                # instead of e2i_data_query_tool: the old route READ stored
+                # agent_analysis rows, the new one EXECUTES the agent.
+                # MEASURED 2026-08-16 on the faithful chat-path wiring
+                # (factory._health_score_kwargs() — the same four real backends
+                # create_agent_registry injects), full graph, all four
+                # dimensions measured=True, grade A, 0 errors:
+                #   cold (fresh process, n=5): 2311/2342/2922/3000/3673 ms
+                #   warm (same process):        107–594 ms
+                # A chat dispatch hits the COLD path after a worker respawn, so
+                # 3673ms is the binding number; 5000ms left only 1.36x over it
+                # on an IDLE box — no gunicorn contention, no concurrent
+                # dispatch — which is why the live turn timed out while the
+                # agent served the same ask in 14.7s wall under the old route.
+                # 20000 = measured cold worst x ~5.4, matching the DB-backed
+                # peers (gap_analyzer/resource_optimizer 20s); still tight
+                # enough to catch a genuinely wedged health check.
+                timeout_ms=20000,
+                # No fallback by design: with a budget the agent comfortably
+                # meets, an expiry means the health substrate itself is down —
+                # and the current fail-closed notice (which fabricates nothing
+                # and explains itself) is the correct answer to that.
                 fallback_agent=None,
             )
         ],
