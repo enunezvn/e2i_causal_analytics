@@ -446,27 +446,104 @@ class TestAnswerGraphIsAlwaysTopLevel:
     directly). That is a property of the CALLERS, not of this module, so pin it
     — a future ``add_node("...", e2i_chat_graph)`` anywhere in ``src/`` must fail
     HERE instead of silently blanking every answer.
+
+    SCOPE, STATED HONESTLY: the scan below is a TRIPWIRE, not a proof. It parses
+    ``src/`` and taints names bound to the factory's result (through imports,
+    aliases and simple assignments), which covers the realistic refactors — but a
+    sufficiently indirect construction (a registry, a lambda, a dict of graphs)
+    would still slip past. It buys early warning on the likely path, not a
+    guarantee.
     """
 
     def test_chat_graph_is_never_embedded_as_a_subgraph(self):
+        import ast
         import pathlib
 
         import src
 
         src_root = pathlib.Path(src.__file__).parent
-        symbols = ("create_e2i_chat_agent", "e2i_chat_graph")
+        origin = "src.api.routes.copilotkit"
+        seeds = {"create_e2i_chat_agent", "e2i_chat_graph"}
         offenders = []
+
         for py in src_root.rglob("*.py"):
-            for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), start=1):
-                if "add_node" not in line:
+            try:
+                tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+            except SyntaxError:  # pragma: no cover - defensive
+                continue
+
+            # Local names that refer to the chat graph or its factory: the seed
+            # symbols themselves, any alias they were imported under, and any
+            # variable assigned from the factory call or the compiled graph.
+            tainted = set(seeds)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(origin):
+                    for alias in node.names:
+                        if alias.name in seeds:
+                            tainted.add(alias.asname or alias.name)
+                elif isinstance(node, ast.Assign):
+                    value = node.value
+                    referent = value.func if isinstance(value, ast.Call) else value
+                    name = getattr(referent, "id", None) or getattr(referent, "attr", None)
+                    if name in tainted:
+                        for target in node.targets:
+                            if isinstance(target, ast.Name):
+                                tainted.add(target.id)
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
                     continue
-                if any(sym in line for sym in symbols):
-                    offenders.append(f"{py}:{lineno}: {line.strip()}")
+                if getattr(node.func, "attr", None) != "add_node":
+                    continue
+                for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                    referent = arg.func if isinstance(arg, ast.Call) else arg
+                    name = getattr(referent, "id", None) or getattr(referent, "attr", None)
+                    if name in tainted:
+                        offenders.append(f"{py}:{node.lineno}: add_node(... {name} ...)")
+
         assert not offenders, (
             "the AG-UI chat graph is being embedded as a SUBGRAPH; its answer "
             "nodes would then carry a nested checkpoint namespace and be "
-            "suppressed as machinery (#1641):\n" + "\n".join(offenders)
+            "suppressed as machinery, muting the chatbot (#1641):\n" + "\n".join(offenders)
         )
+
+    def test_the_subgraph_tripwire_actually_detects_an_embedding(self):
+        """A scan that can never fire is worse than no scan. Prove this one trips
+        on the exact refactor it is meant to catch — an aliased import assigned to
+        a local and then embedded — so it cannot silently rot into a no-op."""
+        import ast
+
+        source = (
+            "from src.api.routes.copilotkit import create_e2i_chat_agent as make_graph\n"
+            "inner = make_graph()\n"
+            "workflow.add_node('chat_subgraph', inner)\n"
+        )
+        tree = ast.parse(source)
+        tainted = {"create_e2i_chat_agent", "e2i_chat_graph"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(
+                "src.api.routes.copilotkit"
+            ):
+                for alias in node.names:
+                    if alias.name in tainted:
+                        tainted.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Assign):
+                value = node.value
+                referent = value.func if isinstance(value, ast.Call) else value
+                name = getattr(referent, "id", None) or getattr(referent, "attr", None)
+                if name in tainted:
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            tainted.add(target.id)
+
+        hits = [
+            arg
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "add_node"
+            for arg in node.args
+            if getattr(arg, "id", None) in tainted
+        ]
+        assert hits, "the tripwire failed to detect an aliased subgraph embedding"
 
     def test_graph_registers_the_answer_nodes_at_its_own_top_level(self):
         """The other half of the invariant: the nodes the allow-list names really
