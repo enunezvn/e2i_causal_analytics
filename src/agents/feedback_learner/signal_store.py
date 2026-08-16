@@ -96,7 +96,7 @@ def _parse_dt(value: Optional[str]) -> Optional[datetime]:
 
 
 def decide_optimizer_trigger(
-    signals: List[Dict[str, Any]], state: Dict[str, Any]
+    signals: List[Dict[str, Any]], state: Dict[str, Any], scheduled: bool = False
 ) -> Tuple[bool, str]:
     """Pure trigger decision over the available signals + persisted state.
 
@@ -106,17 +106,33 @@ def decide_optimizer_trigger(
     trigger checks cooldown BEFORE the signal count, then a forced interval,
     then a reward delta, so a health surface that modelled only "count >=
     threshold" could report Ready while the beat skipped (#1661).
+
+    ``scheduled`` (#1656) marks the wall-clock cron path, which suppresses the
+    cooldown. ``last_optimization`` is stamped *after* a run completes, so on a
+    ``crontab(hour=6, minute=0)`` entry any nonzero runtime leaves the next
+    fire under the 24h window (a 06:35 finish gives 23.4h) and the task skips —
+    a daily schedule that silently runs every OTHER day. The crontab already IS
+    the rate limit on that path; a second, drifting rate limiter can only
+    interfere. Event-triggered runs keep the cooldown, because nothing else
+    bounds how often they fire.
+
+    Passing ``last_optimization=None`` rather than widening the trigger keeps
+    the cooldown semantics in one place, so the status surface and the beat
+    stay the same function — the #1661 invariant. Callers reporting on the beat
+    MUST pass the same ``scheduled`` value the beat uses, or the surface
+    reports Ready while the beat skips.
     """
     from .dspy_integration import GEPAOptimizationTrigger
 
     n = len(signals)
     mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
     trigger = GEPAOptimizationTrigger(min_signals=optimizer_min_signals())
+    last_optimization = None if scheduled else _parse_dt(state.get("last_optimization"))
     return trigger.should_trigger(
         signal_count=n,
         current_reward=mean_reward,
         baseline_reward=float(state.get("baseline_reward", 0.0)),
-        last_optimization=_parse_dt(state.get("last_optimization")),
+        last_optimization=last_optimization,
         has_critical_patterns=False,
     )
 
@@ -295,7 +311,12 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
     runs = int(getattr(runs_res, "count", 0) or 0)
     last_eligible = eligible_rows[0].get("created_at") if eligible_rows else None
 
-    would_trigger, reason = decide_optimizer_trigger(eligible_rows, load_trigger_state())
+    # scheduled=True mirrors the beat's own call (#1656). This surface exists to
+    # report what the beat WOULD decide, so the flag must match it — asking with
+    # a different value is exactly the Ready-while-skipping defect of #1661.
+    would_trigger, reason = decide_optimizer_trigger(
+        eligible_rows, load_trigger_state(), scheduled=True
+    )
 
     return {
         "eligible_signals": eligible,
