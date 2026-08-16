@@ -372,19 +372,64 @@ def test_beat_signal_read_is_deterministically_ordered():
 
 
 @pytest.mark.asyncio
-async def test_gate_status_surfaces_the_cooldown_once_the_signal_gate_opens(monkeypatch):
-    """The gate that binds NEXT must be visible too, not just the first one."""
+async def test_gate_status_agrees_with_the_beat_once_the_signal_gate_opens(monkeypatch):
+    """The status must report what the BEAT would decide — the #1661 invariant.
+
+    Superseded the earlier form of this test, which asserted that a recent
+    ``last_optimization`` surfaces as ``"Cooldown active"`` once the signal gate
+    opens. That was correct while the cooldown bound the beat. #1656 established
+    that it must NOT: ``last_optimization`` is a COMPLETION stamp, so on a
+    ``crontab(hour=6)`` entry any nonzero runtime leaves the next fire inside the
+    24h window and the daily task silently runs every OTHER day. The beat now
+    passes ``scheduled=True``, so the cooldown no longer binds it.
+
+    Asserting "Cooldown active" here would therefore pin the status surface to a
+    gate the beat does not apply — reporting Skipped while the beat runs, which
+    is #1661's own defect with the sign flipped. So this now asserts the
+    invariant directly (status == beat decision) rather than one instance of it,
+    which is the property #1661 existed to protect.
+    """
     from datetime import datetime, timedelta, timezone
 
     from src.agents.feedback_learner import signal_store
 
     recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    monkeypatch.setattr(signal_store, "load_trigger_state", lambda: {"last_optimization": recent})
+    state = {"last_optimization": recent}
+    monkeypatch.setattr(signal_store, "load_trigger_state", lambda: state)
     status = await signal_store.get_optimizer_gate_status(
         client=_FakeClient({}, eligible=25, total=300, runs=1, last="2026-08-16T00:00:00+00:00")
     )
-    assert status["would_trigger"] is False
-    assert "Cooldown active" in status["reason"]
+
+    # What the beat itself would decide. Reward differs from the fake client's
+    # rows, so the reason STRINGS differ in their numbers — the invariant is the
+    # decision and the gate that produced it, not the formatted text.
+    beat_should, beat_reason = signal_store.decide_optimizer_trigger(
+        [{"reward": 0.9}] * 25, state, scheduled=True
+    )
+    assert status["would_trigger"] == beat_should
+    assert ("Cooldown" in status["reason"]) == ("Cooldown" in beat_reason)
+    # ...and concretely: a run 2h ago no longer suppresses the scheduled path.
+    assert status["would_trigger"] is True
+    assert "Cooldown" not in status["reason"]
+
+
+@pytest.mark.asyncio
+async def test_event_triggered_path_still_surfaces_the_cooldown(monkeypatch):
+    """The cooldown is not gone — it still binds runs the crontab does not pace.
+
+    Retains the coverage the superseded test above provided, on the path where
+    the cooldown remains load-bearing (#1656 dropped it for the cron path only).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from src.agents.feedback_learner import signal_store
+
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    should, reason = signal_store.decide_optimizer_trigger(
+        [{"reward": 0.9}] * 25, {"last_optimization": recent}, scheduled=False
+    )
+    assert should is False
+    assert "Cooldown active" in reason
 
 
 @pytest.mark.asyncio

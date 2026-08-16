@@ -456,7 +456,13 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
         min_reward=OPTIMIZER_MIN_REWARD, limit=OPTIMIZER_SIGNAL_LIMIT
     )
     state = _load_trigger_state()
-    should, reason = _decide_trigger(signals, state)
+    # scheduled=True (#1656): this task is driven by ``crontab(hour=6, minute=0)``,
+    # which already bounds the rate. The 24h cooldown measures from the previous
+    # run's COMPLETION, so any nonzero runtime leaves the next 06:00 fire inside
+    # the window (a 06:35 finish gives 23.4h) and this would skip every other day.
+    # ``get_optimizer_gate_status`` passes the same flag so the health surface
+    # keeps reporting what this task would actually decide (#1661).
+    should, reason = _decide_trigger(signals, state, scheduled=True)
 
     if not force and not should:
         return {
