@@ -4116,9 +4116,16 @@ def _bound_silent_window(response: _SDKResponse) -> _SDKResponse:
     literal ``StreamingResponse(...)`` calls, and this one is built inside a
     third-party package. ``tests/unit/test_api/test_agui_stream_health_1667_1669.py``
     covers it behaviourally instead, by draining the real response body.
+
+    No ``type: ignore`` here, deliberately. ``body_iterator`` is an
+    ``AsyncIterable[str | bytes | memoryview]`` and ``with_sse_keepalive`` is
+    bounded by that same union (``sse_keepalive.SSEFrame``), so the assignment
+    type-checks on its own. It previously needed a suppression only because the
+    wrapper's TypeVar was over-restricted to ``str`` — a suppression would have
+    hidden the mismatch rather than resolved it (#1672 CI).
     """
     if isinstance(response, StreamingResponse):
-        response.body_iterator = with_sse_keepalive(response.body_iterator)  # type: ignore[assignment,arg-type]
+        response.body_iterator = with_sse_keepalive(response.body_iterator)
     return response
 
 
