@@ -60,9 +60,22 @@ class RouterNode:
                 # data_subset (~8s) runs when headroom remains and the
                 # non-critical bootstrap (50 x ~11.7s inference-bearing sims
                 # ~585s) degrades to an honest SKIPPED result under the #1419
-                # skip policy + heavy-cost gate. 300s also aligns with the
-                # host-nginx proxy_read_timeout ceiling, so this dispatch
-                # budget stays the binding constraint end-to-end. The resolver
+                # skip policy + heavy-cost gate. 300s was chosen to align with
+                # the host-nginx proxy_read_timeout ceiling.
+                #
+                # #1659 (2026-08-16) CORRECTION: matching the ceiling did NOT
+                # make this budget "the binding constraint end-to-end", as this
+                # comment previously claimed. proxy_read_timeout bounds the
+                # SILENT window, and the chat SSE stream was measured silent for
+                # the ENTIRE turn (34,395.7ms client-side vs 34,389.4ms of
+                # summed node wall time on a live 2026-08-16 request) — so the
+                # real constraint was `total turn wall time < 300s`, of which
+                # this dispatch is only one term. A 223s critical-gates turn
+                # plus ~28s of retrieve_rag/classification/finalisation was
+                # already inside 300s only by luck. The silent window is now
+                # bounded by with_sse_keepalive instead (see
+                # src/api/utils/sse_keepalive.py), which is what actually makes
+                # this budget safe. The resolver
                 # still sets the cooperative compute_deadline INSIDE this
                 # budget so refutation self-gates instead of orphaning
                 # to_thread compute.
@@ -98,6 +111,31 @@ class RouterNode:
                 # (LOKY_MAX_CPU_COUNT=1, real CausalForestDML + per-segment
                 # effect_interval + hierarchical uplift). 420s = measured + ~55%
                 # headroom; a workload-appropriate SLA, not a latency target.
+                #
+                # #1659 (2026-08-16): this budget is 120s ABOVE the nginx
+                # proxy_read_timeout (300s — docker/nginx/host-nginx.conf
+                # locations /api/ and /copilotkit/, mirrored in
+                # src/api/utils/sse_keepalive.PROXY_READ_TIMEOUT_SECONDS). That
+                # only ever mattered because the chat SSE stream was SILENT for
+                # the whole turn, and proxy_read_timeout bounds the silent
+                # window rather than the request duration. MEASURED through the
+                # live host nginx on 2026-08-16, on a turn that dispatched this
+                # very agent: one frame at 860.9ms, then 34,395.7ms of nothing
+                # against 34,389.4ms of summed node wall time — 6ms apart, i.e.
+                # the silent window WAS the whole turn. On that arithmetic even
+                # the measured 269.7s run breached 300s once retrieve_rag
+                # (23.5s in that trace, up to ~41s per #1484) and the rest of
+                # the graph were counted, so the budget did NOT need to reach
+                # 420s to sever a completing analysis.
+                #
+                # The fix bounds the silent window instead of the budget:
+                # /api/copilotkit/chat/stream now wraps its body in
+                # with_sse_keepalive, which emits an SSE comment every
+                # SSE_KEEPALIVE_INTERVAL_SECONDS while the graph is quiet. This
+                # budget is therefore free to exceed the proxy ceiling — but
+                # only while that wrapper is in place, which
+                # tests/unit/test_tests_meta/test_proxy_ceiling_coherence_1659.py
+                # asserts.
                 timeout_ms=420000,
                 fallback_agent="gap_analyzer",
             )
