@@ -59,8 +59,12 @@ def _proxy_read_timeouts_by_location(conf_text: str) -> dict[str, int]:
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
+        # Braces inside a quoted value (e.g. add_header X-Debug "{";) are data,
+        # not block structure — blank them before counting, or a stray quoted
+        # brace lets one location absorb the NEXT location's timeout.
+        depth_line = re.sub(r"'[^']*'|\"[^\"]*\"", "", line)
 
-        loc = re.match(r"^location\s+(?:[=~^*]+\s+)?(\S+)\s*\{", line)
+        loc = re.match(r"^location\s+(?:[=~^*]+\s+)?(\S+)\s*\{", depth_line)
         if loc and current is None:
             current = loc.group(1)
             depth = 1
@@ -73,7 +77,7 @@ def _proxy_read_timeouts_by_location(conf_text: str) -> dict[str, int]:
         if prt:
             timeouts[current] = int(prt.group(1))
 
-        depth += line.count("{") - line.count("}")
+        depth += depth_line.count("{") - depth_line.count("}")
         if depth <= 0:
             current = None
             depth = 0
@@ -87,8 +91,24 @@ def _streaming_response_bodies_are_wrapped(module_path: Path, function_name: str
     in source`` check would still pass with the import and this module's comments
     left in place while the call site itself was reverted — which is exactly the
     regression this guard exists to catch.
+
+    Local aliases of ``StreamingResponse`` (``from fastapi.responses import
+    StreamingResponse as SR``) are resolved from the module's own imports, so a
+    second, aliased, unwrapped return cannot slip past.
     """
     tree = ast.parse(module_path.read_text())
+
+    # Every name that currently refers to StreamingResponse in this module.
+    response_names = {"StreamingResponse"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "StreamingResponse" and alias.asname:
+                    response_names.add(alias.asname)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.endswith(".StreamingResponse") and alias.asname:
+                    response_names.add(alias.asname)
 
     target: ast.AsyncFunctionDef | ast.FunctionDef | None = None
     for node in ast.walk(tree):
@@ -103,7 +123,7 @@ def _streaming_response_bodies_are_wrapped(module_path: Path, function_name: str
             continue
         callee = node.func
         name = callee.attr if isinstance(callee, ast.Attribute) else getattr(callee, "id", None)
-        if name != "StreamingResponse" or not node.args:
+        if name not in response_names or not node.args:
             continue
         found_any = True
         body = node.args[0]
