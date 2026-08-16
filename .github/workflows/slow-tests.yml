@@ -174,6 +174,16 @@ jobs:
       - name: Run slow-marked tests
         # Pass workflow_dispatch inputs through env vars (NOT direct ${{ }})
         # to avoid the github_actions.run-shell-injection semgrep finding.
+        #
+        # No --max-worker-restart here: the lane inherits `=0` from pyproject's
+        # addopts (#1648). This step used to pass `=2`, added for #78 on the
+        # premise that "pytest-xdist (without this flag) refuses to restart" a
+        # dead worker. That premise is false -- xdist's
+        # get_default_max_worker_restart returns numprocesses * 4, so the flag
+        # was silently *reducing* an existing budget of 8 to 2, not enabling
+        # restarts. Since every restart re-runs the test that killed the
+        # previous worker, `=2` still let one bad test burn 3 x the 300s
+        # timeout here. 0 ends the run on the first death.
         env:
           EXTRA_ARGS: ${{ inputs.extra_pytest_args }}
         run: |
@@ -200,7 +210,6 @@ jobs:
             --junitxml=/tmp/slow-tests-junit.xml \
             -n 2 \
             --dist=loadscope \
-            --max-worker-restart=2 \
             --timeout=300 \
             --tb=short ${EXTRA_ARGS}
 

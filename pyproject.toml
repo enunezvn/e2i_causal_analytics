@@ -205,6 +205,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 # Global timeout: 30 seconds per test (safety net against hanging)
 timeout = 30
+# "thread" never interrupts the running call: pytest_timeout.timeout_timer dumps
+# the stacks and then calls os._exit(1) on the worker, unconditionally. So a test
+# that outlives its lane's --timeout does not fail -- it KILLS its xdist worker.
+# That is why addopts below must disable worker restarts (#1648).
 timeout_method = "thread"
 # Custom markers for test categorization
 markers = [
@@ -232,7 +236,28 @@ filterwarnings = [
 # IMPORTANT: Limit parallel workers to prevent memory exhaustion
 # System has 7.5GB RAM, heavy ML imports use ~500MB/worker
 # Safe default: 4 workers = ~2GB for tests + ~4GB for OS/services
-addopts = "-v --tb=short -n 4 --dist=loadscope"
+#
+# --max-worker-restart=0 (#1648): end the session on the FIRST worker death
+# instead of replacing the worker. timeout_method="thread" above means any test
+# over its lane's --timeout kills its worker outright, and continuing past that
+# has twice bought us a job cancelled at its cap instead of a failure:
+#
+#  * the replacement can re-run the test that killed its predecessor. Absent
+#    this flag, xdist.dsession.get_default_max_worker_restart returns
+#    numprocesses * 4 (8 on the -n 2 lanes), and a timeout kill is deterministic,
+#    so the offender executes 9 times. Measured locally against this config with
+#    a real 5s cap: 9 kills / 130.7s vs 1 kill / 25.8s. The retries recovered
+#    ZERO extra tests ("9 failed, 340 passed" vs "1 failed, 340 passed").
+#  * or the session limps on and stalls elsewhere. That is what PR #1643's Unit
+#    Tests actually did: ONE crash, ONE replacement, then 19.5 min of silence
+#    waiting on a single test that never reported, cancelled at the 30-min cap.
+#
+# Stopping at the first crash cures both, and costs almost nothing: xdist reports
+# a crashed test as FAILED whether or not it is retried (measured: "1 failed, 6
+# passed" with restarts vs "1 failed, 4 passed" without), so the only price is
+# the tail of the dead worker's queue, in a run that was already failing.
+# Guarded by tests/unit/test_tests_meta/test_xdist_worker_crash_fast_fail.py.
+addopts = "-v --tb=short -n 4 --dist=loadscope --max-worker-restart=0"
 # Enable test authentication bypass mode
 env = [
     "E2I_TESTING_MODE=true",
