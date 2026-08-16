@@ -351,7 +351,19 @@ class TestAggressiveCoordinatorsStayHarmless:
             ("TRx-share", "WS3-BI-008"),
             ("conversion-rate", "WS3-BI-009"),
             ("time-to-release", "WS1-DQ-009"),
-            ("roc-auc", "WS1-MP-001"),
+            # ("roc-auc", "WS1-MP-001") is deliberately NOT here. The guard this
+            # test exercises fires before any computation, so roc-auc adds no
+            # coverage of it -- but the tool goes on to COMPUTE, and WS1-MP-001
+            # is the one id whose calculator falls through to the MLflow leg when
+            # the gold-standard and SQL legs are absent, which is exactly the CI
+            # case. Measured against a dead tracking URI: still running at 200s,
+            # no result. Under xdist that trips the lane timeout, whose ``thread``
+            # method os._exit()s the worker; the run then hangs to its cap. This
+            # box could never show it -- it is also prod, so the gold-standard
+            # leg answers in 0.08s locally. That the fallback is unbounded at all
+            # is a product defect, filed as #1650; roc-auc's own reachability is
+            # covered cheaply by test_every_kpi_resolves_to_itself, which asserts
+            # all 45 registry ids through recognize_kpi without computing.
         ],
     )
     async def test_punctuation_inside_one_label_still_computes(self, kpi_name, expected_id):

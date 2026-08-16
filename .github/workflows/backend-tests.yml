@@ -341,7 +341,6 @@ jobs:
             tests/unit/test_workflows_yaml_parse.py \
             tests/api/test_predictions_endpoints.py \
             tests/api/test_explain_endpoints.py \
-            --ignore=tests/unit/test_api/test_kpi_tool_compound_ask_1637.py \
             --ignore=tests/unit/test_api/test_episodic_memory_bridge.py \
             --ignore=tests/unit/test_api/test_cors_configuration.py \
             --ignore=tests/unit/test_api/test_dependencies/test_auth.py \
@@ -430,18 +429,25 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-xdist pytest-timeout pytest-asyncio
 
-      # This lane runs WITHOUT --cov, which is why memory-hungry suites belong
-      # here. Measured 2026-08-16 on test_kpi_tool_compound_ask_1637.py (80
-      # tests, each a real kpi_calculate_tool.ainvoke), same box, -n 0:
-      #     these flags   33.7s, 1.04GB peak RSS
-      #     --cov=src    102.8s, 1.21GB peak RSS   (3.05x wall, +16% RSS)
-      # A worker therefore holds ~1GB three times as long under the unit lane's
-      # flags, and in that lane one SIGKILLed mid-test ("node down: Not properly
-      # terminated") while a sibling worker stalled 16s on a trivial mocked test
-      # — the signature of runner-wide memory starvation. xdist then replaced
-      # the dead worker and the session hung at 99% for 19.5 min until the job
-      # cap cancelled it. #1648 tracks that hang (a crash should fail fast, not
-      # burn the cap); moving the file here is the memory fix.
+      # This lane runs WITHOUT --cov and with a 60s per-test timeout instead of
+      # the unit lane's 30s, which is what tests/unit/test_synthetic/ needs:
+      # test_provenance_stamp.py::test_all_datasets_stamped_is_synthetic
+      # generates every dataset and measures 20.2s bare but 38.6s under --cov,
+      # i.e. OVER the unit lane's cap.
+      #
+      # Exceeding the cap there is not a soft failure. pytest-timeout runs with
+      # ``timeout method: thread`` under xdist, which cannot preempt the call and
+      # so calls os._exit(1) on the worker. xdist reports that as
+      # "[gwN] node down: Not properly terminated" + "replacing crashed worker",
+      # then replaces the worker and the SESSION NEVER TERMINATES -- the job
+      # sits at 99% until its cap cancels it (measured: 4.8 min of tests
+      # followed by 19.5 min of silence). #1648 tracks that hang; a crashed
+      # worker should fail the job fast rather than burn the cap.
+      #
+      # Diagnosing this class: measure the gap from the test's start line to
+      # "node down" and compare it to the lane's --timeout. If they match, it is
+      # a timeout kill, NOT an OOM -- the gap tracked 37.1s against a 30s cap
+      # here and 60.1s against a 60s cap in this lane, which is what proved it.
       - name: Run heavy unit tests
         run: |
           pytest \
@@ -459,7 +465,6 @@ jobs:
             tests/unit/test_security/ \
             tests/unit/test_synthetic/ \
             tests/unit/test_tasks/ \
-            tests/unit/test_api/test_kpi_tool_compound_ask_1637.py \
             -n 2 \
             --dist=loadscope \
             --timeout=60 \
