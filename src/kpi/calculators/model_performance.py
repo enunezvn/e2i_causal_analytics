@@ -23,16 +23,37 @@ alerts) can then distinguish "MLflow unreachable" from "model is random",
 and "no rows in window" from "SHAP coverage is 0%".
 
 Unavailability reasons:
-  - mlflow_client_unavailable    (no MLflow client wired in)
+  - mlflow_client_unavailable    (mlflow is ABSENT from this environment — the
+    `import mlflow` itself raised ImportError. NOT "a client was passed as
+    None": that argument only means "build one lazily".)
   - model_not_found:<name>       (registry returned no versions)
   - metric_not_found:<metric>    (run exists but metric key absent)
   - mlflow_exception:<Class>:<msg>  (any other MLflow-side failure, INCLUDING
     an unreachable, unroutable or silent tracking server — see the time bound
     below. A connection/timeout failure is not a new category: mlflow raises
     `MlflowException` and it lands on this existing reason, carrying the URL
-    and "failed with exception" / "failed with timeout exception" in <msg>.)
+    and "failed with exception" / "failed with timeout exception" in <msg>.
+    Also carries CONSTRUCTION failures since #1658 — see below.)
   - db_query_failed:<reason>     (SQL execution raised)
   - db_query_returned_empty[:<note>]  (no rows / NULL value)
+
+Construction is inside the taxonomy too (#1658)
+-----------------------------------------------
+The taxonomy above wraps CALLS. Until #1658 it did not wrap CONSTRUCTION: the
+lazy `mlflow_client` property caught only `ImportError`, which is all the
+`import mlflow` line can raise, so every way `MlflowClient()` itself can fail —
+an unsupported or typo'd `MLFLOW_TRACKING_URI` scheme, a backing store that will
+not open, a bad credential — escaped a plain attribute access. ABSENT was
+handled and MISCONFIGURED was not, which is the one shape a working deployment
+can actually regress into: prod ships `MLFLOW_TRACKING_URI=http://mlflow:5000`
+and `htp://mlflow:5000` (one character) raises
+`UnsupportedModelRegistryStoreURIException` at construction.
+
+Those failures now fail closed to a `None` client, exactly like the absent case,
+and report `mlflow_exception:<Class>:<msg>` — the module's existing catch-all for
+"MLflow-side failure", not a new category. The two stay distinguishable because
+absent keeps `mlflow_client_unavailable`. Nothing about no-fabrication changes:
+the fix decides how a failure is NAMED, never that a value exists.
 
 Time bound on the MLflow leg (#1650)
 ------------------------------------
@@ -144,6 +165,12 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         self._db_client = db_client
         self._mlflow_client = mlflow_client
+        # #1658: why the lazy client could not be built, already in this
+        # module's `mlflow_exception:<Class>:<msg>` / `mlflow_client_unavailable`
+        # vocabulary. `None` means "not attempted yet"; a non-None value is a
+        # remembered failure and STOPS further construction attempts on this
+        # instance (see the property below for why that matters).
+        self._mlflow_client_error: str | None = None
 
     @property
     def db_client(self) -> Any:
@@ -156,14 +183,66 @@ class ModelPerformanceCalculator(KPICalculatorBase):
 
     @property
     def mlflow_client(self) -> Any:
-        """Get MLflow client, lazily initializing if needed."""
-        if self._mlflow_client is None:
-            try:
-                import mlflow
+        """Get MLflow client, lazily initializing if needed. NEVER raises (#1658).
 
-                self._mlflow_client = mlflow.tracking.MlflowClient()
-            except ImportError:
-                pass
+        Two distinct things can go wrong here, and before #1658 only the first
+        was handled:
+
+        - **ABSENT** — mlflow is not installed. `import mlflow` raises
+          `ImportError`, the client stays `None`, and the leg reports
+          `mlflow_client_unavailable`. Nothing an operator can do.
+        - **MISCONFIGURED** — mlflow is installed but the client cannot be BUILT:
+          an unsupported/typo'd `MLFLOW_TRACKING_URI` scheme, a backing store
+          that will not open, a bad credential, a missing DB driver. The old
+          `except ImportError` wrapped both statements but only the import can
+          raise it, so these escaped a mere attribute access and bypassed the
+          module's entire error taxonomy. Measured on mlflow 3.11.1:
+          `htp://mlflow:5000` — one character off the value prod ships — raises
+          `UnsupportedModelRegistryStoreURIException` right here.
+
+        Note the two are told apart by WHICH STATEMENT failed, not by exception
+        type, and that distinction is load-bearing: `MlflowClient()` can itself
+        raise an `ImportError` subclass — measured, `mysql://…` raises
+        `ModuleNotFoundError: No module named 'MySQLdb'` — and a missing DB
+        driver is a config problem, not an absent mlflow. Collapsing the two
+        `try`s into one `except ImportError` would file it under "no MLflow
+        here" and send the operator looking in the wrong place.
+
+        Both now fail CLOSED to `None`, with the reason recorded in
+        `_mlflow_client_error` for `_get_metric_from_mlflow` to surface. This is
+        classification, not repair: no value is ever invented.
+
+        The failure is REMEMBERED for the life of the instance. Construction is
+        not uniformly cheap — an unreachable DB-backed tracking URI costs ~102s
+        per attempt (mlflow's `create_sqlalchemy_engine_with_retry` backs off
+        over `MAX_RETRY_COUNT`, a module constant with no env knob, and
+        `_bounded_mlflow_http` cannot reach it: those knobs are read only by the
+        REST store). A WS1 model-performance grid asks this calculator for 7
+        MLflow-backed KPIs, so retrying per access would turn one ~102s failure
+        into ~12 minutes of "fail-closed" — the #1650 hang shape, re-entered
+        through the door this fix opens. Remembering it is safe because the
+        lifetime is one request: `get_kpi_calculator()` (src/api/routes/kpi.py)
+        is a plain `Depends(...)` with no `lru_cache`, so a corrected config is
+        picked up on the very next request without a restart.
+        """
+        if self._mlflow_client is None and self._mlflow_client_error is None:
+            try:
+                try:
+                    import mlflow
+                except ImportError:
+                    self._mlflow_client_error = "mlflow_client_unavailable"
+                else:
+                    self._mlflow_client = mlflow.tracking.MlflowClient()
+            except Exception as e:
+                # Constructor failures (measured, exercised by the #1658 tests)
+                # and — defensively, and NOT exercised by a real-config test
+                # because only a corrupt install can produce it — a non-ImportError
+                # failure raised while importing mlflow itself. Both are
+                # environment problems rather than an absent mlflow, so both take
+                # the `mlflow_exception:` family. This branch exists so the "NEVER
+                # raises" promise above is true of the code and not just of the
+                # cases we could reproduce.
+                self._mlflow_client_error = f"mlflow_exception:{type(e).__name__}:{str(e)[:200]}"
         return self._mlflow_client
 
     def supports(self, kpi: KPIMetadata) -> bool:
@@ -457,6 +536,12 @@ class ModelPerformanceCalculator(KPICalculatorBase):
               - `(<float>, None)` on success.
               - `(None, "mlflow_client_unavailable")` when no MLflow client
                 is wired in (e.g., mlflow not installed in this environment).
+              - `(None, "mlflow_exception:<ExceptionClass>:<msg[:200]>")` when
+                mlflow IS installed but the client could not be CONSTRUCTED
+                (#1658) — a misconfigured `MLFLOW_TRACKING_URI`, an unopenable
+                backing store, a bad credential. Distinct from the line above on
+                purpose: "no MLflow here" needs no action, "your MLflow config
+                is wrong" needs an operator.
               - `(None, "model_not_found:<name>")` when the registry has no
                 versions for the model.
               - `(None, "metric_not_found:<metric>")` when the latest run
@@ -473,12 +558,22 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         `_bounded_mlflow_http`, so an unreachable tracking server resolves to
         an `mlflow_exception:` reason within `MLFLOW_LEG_WORST_CASE_SECONDS`
         instead of retrying for minutes. The scope covers the `mlflow_client`
-        property too, so a client that reaches the network while constructing
-        itself is bounded as well.
+        property too, but note what that does and does not buy (measured, #1658):
+        an HTTP tracking URI touches NO network while constructing, so there is
+        nothing there to bound; a DB-backed one does, via SQLAlchemy, which does
+        not read `MLFLOW_HTTP_REQUEST_*` at all and so is NOT bounded by this
+        scope. What keeps that case from compounding is the property's
+        remembered failure, not this context manager.
         """
         with _bounded_mlflow_http():
             if self.mlflow_client is None:
-                return None, "mlflow_client_unavailable"
+                # #1658: prefer the recorded reason — absent
+                # (`mlflow_client_unavailable`) and misconfigured
+                # (`mlflow_exception:...`) are different problems needing
+                # different fixes. The fallback covers a `mlflow_client` property
+                # that was overridden to return None without going through the
+                # lazy path (which the fail-closed tests do).
+                return None, self._mlflow_client_error or "mlflow_client_unavailable"
 
             try:
                 versions = self.mlflow_client.get_latest_versions(

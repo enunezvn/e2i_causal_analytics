@@ -837,6 +837,250 @@ class TestMlflowLegIsTimeBounded:
 
 
 # ===========================================================================
+# #1658: a client that cannot be CONSTRUCTED must land in the taxonomy too
+# ===========================================================================
+
+# A tracking URI whose scheme is parseable but not registered with mlflow's
+# store registry. This is a ONE-CHARACTER typo of the value prod actually ships
+# (`docker/docker-compose.yml` x-common-env: `MLFLOW_TRACKING_URI:
+# http://mlflow:5000`), which is why it is the faithful shape rather than an
+# exotic one: measured, `mlflow.tracking.MlflowClient()` raises
+# `UnsupportedModelRegistryStoreURIException` for it in ~0.00s, at CONSTRUCTION,
+# before any request is made. `except ImportError` cannot see it.
+_UNSUPPORTED_SCHEME_URI = "htp://mlflow:5000"
+
+# Same family, different failure site: the scheme IS registered but the store
+# cannot be opened. Raises `FileNotFoundError` out of mlflow's sqlite store.
+_UNOPENABLE_STORE_URI = "sqlite:////proc/nope/cannot/exist.db"
+
+
+class TestMlflowClientConstructionFailsClosed:
+    """WS1-MP-001/002/003 (#1658): MISCONFIGURED must be classified, not raised.
+
+    `mlflow_client` used to wrap two statements in one `try ... except
+    ImportError`, but only `import mlflow` can raise `ImportError`. Every way
+    `MlflowClient()` itself can fail — unsupported/typo'd `MLFLOW_TRACKING_URI`,
+    an unopenable backing store, a bad credential — escaped a *property access*
+    and bypassed the module's whole error taxonomy.
+
+    ABSENT was handled (ImportError -> None -> `mlflow_client_unavailable`).
+    MISCONFIGURED was not. These tests pin the gap shut using REAL
+    configuration: the constructor is never patched to raise, the URI makes it
+    raise on its own.
+    """
+
+    def test_property_returns_none_instead_of_raising(self, monkeypatch):
+        """A property access must never explode. Pre-fix: raises."""
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNSUPPORTED_SCHEME_URI)
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        assert calc.mlflow_client is None, (
+            "a construction failure must fail CLOSED to None, the same shape as "
+            "the absent-mlflow case, not propagate out of attribute access"
+        )
+
+    def test_leg_honours_its_value_error_contract(self, monkeypatch):
+        """`_get_metric_from_mlflow` documents a `(value, error)` return.
+
+        Pre-fix it RAISED here instead, so the documented contract was a lie
+        for exactly one input: a misconfigured tracking URI.
+        """
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNSUPPORTED_SCHEME_URI)
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        value, error = calc._get_metric_from_mlflow("default_model", "pr_auc")
+        assert value is None, "no-fabrication: a broken client must not yield a value"
+        assert error is not None and error.startswith("mlflow_exception:"), error
+        assert "UnsupportedModelRegistryStoreURIException" in error, error
+
+    def test_unopenable_store_is_classified_too(self, monkeypatch):
+        """Different failure site (store open, not scheme lookup), same taxonomy."""
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNOPENABLE_STORE_URI)
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        value, error = calc._get_metric_from_mlflow("default_model", "pr_auc")
+        assert value is None
+        assert error is not None and error.startswith("mlflow_exception:"), error
+        assert "FileNotFoundError" in error, error
+
+    def test_constructor_importerror_is_config_not_absence(self, monkeypatch):
+        """The two legs are told apart by WHICH STATEMENT failed, not by type.
+
+        `MlflowClient()` can itself raise an `ImportError` SUBCLASS: measured,
+        `mssql://…` raises `ModuleNotFoundError: No module named 'pyodbc'` in
+        ~0.03s. A missing DB driver is a configuration problem — mlflow is
+        installed and fine. Collapsing the property's two `try`s into a single
+        `except ImportError` would file it under `mlflow_client_unavailable`
+        ("no MLflow here") and point the operator at the wrong thing. This test
+        is the tripwire on that simplification.
+        """
+        try:
+            import pyodbc  # noqa: F401
+        except ImportError:
+            pass
+        else:  # pragma: no cover - no driver is pinned anywhere in this repo
+            pytest.skip("pyodbc is installed; this URI would attempt a real connection")
+
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", "mssql://u:p@127.0.0.1:1/db")
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        value, error = calc._get_metric_from_mlflow("default_model", "pr_auc")
+        assert value is None
+        assert error != "mlflow_client_unavailable", (
+            "a missing DB driver is MISCONFIGURED, not ABSENT — mlflow imported fine"
+        )
+        assert error is not None and error.startswith("mlflow_exception:ModuleNotFoundError"), error
+
+    def test_misconfigured_is_distinguishable_from_absent(self, monkeypatch):
+        """The point of the taxonomy is that these two need different fixes.
+
+        `mlflow_client_unavailable` means "no MLflow here" — nothing to do.
+        A construction failure means "your MLFLOW_TRACKING_URI is wrong" — an
+        operator action. Collapsing the second into the first would stop the
+        crash while destroying the diagnosis, which is a labelling fix, not a
+        functional one.
+        """
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNSUPPORTED_SCHEME_URI)
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        _, error = calc._get_metric_from_mlflow("default_model", "pr_auc")
+        assert error != "mlflow_client_unavailable"
+        assert _UNSUPPORTED_SCHEME_URI in (error or ""), (
+            "the reason must carry enough detail to name the offending URI"
+        )
+
+    @pytest.mark.parametrize(
+        "kpi_fixture",
+        [
+            "roc_auc_kpi",
+            "pr_auc_kpi",
+            "f1_score_kpi",
+            "recall_at_k_kpi",
+            "brier_score_kpi",
+            "calibration_slope_kpi",
+        ],
+    )
+    def test_calculate_returns_a_typed_unknown_not_a_raw_traceback(
+        self, kpi_fixture, request, monkeypatch
+    ):
+        """End to end: every MLflow-backed KPI must reach UNKNOWN with a typed reason.
+
+        `calculate()`'s blanket `except Exception` already stopped a raw
+        exception reaching the caller, so `value=None`/UNKNOWN held even pre-fix
+        — the no-fabrication property was never the thing at risk. What leaked
+        was CLASSIFICATION: `error` was the bare exception message with no
+        taxonomy prefix, indistinguishable to a consumer from any other crash.
+        """
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNSUPPORTED_SCHEME_URI)
+        db = Mock()
+        db.rpc.return_value.execute.return_value.data = []
+        calc = ModelPerformanceCalculator(db_client=db)
+        result = calc.calculate(request.getfixturevalue(kpi_fixture), {"model_name": "test"})
+        assert result.value is None
+        assert result.status == KPIStatus.UNKNOWN
+        assert result.error is not None
+        assert result.error.startswith("mlflow_exception:"), (
+            f"construction failure escaped the taxonomy: {result.error!r}"
+        )
+
+    def test_feature_drift_keeps_its_two_leg_message(self, monkeypatch):
+        """WS1-MP-009 composes both legs into one reason — pre-fix the raise
+        unwound past that composition and the SQL leg's outcome was lost."""
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNSUPPORTED_SCHEME_URI)
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        calc._execute_query = Mock(return_value=([], None))
+        kpi = KPIMetadata(
+            id="WS1-MP-009",
+            name="Feature Drift (PSI)",
+            definition="Population stability index",
+            formula="custom",
+            calculation_type=CalculationType.DIRECT,
+            workstream=Workstream.WS1_MODEL_PERFORMANCE,
+            threshold=KPIThreshold(target=0.10, warning=0.25, critical=0.50),
+        )
+        result = calc.calculate(kpi, {"model_name": "test"})
+        assert result.value is None
+        assert result.status == KPIStatus.UNKNOWN
+        assert result.error is not None
+        assert "sql_leg" in result.error and "mlflow_leg" in result.error, result.error
+        assert "mlflow_exception:" in result.error, result.error
+
+    def test_construction_is_attempted_once_per_calculator(self, monkeypatch):
+        """The failure must be CACHED, or a bounded leg becomes an unbounded one.
+
+        Construction cost is NOT uniform. Measured against mlflow 3.11.1:
+          * unsupported scheme      -> raises in ~0.00s
+          * unopenable sqlite store -> raises in ~0.00s (after import)
+          * unreachable DB-backed tracking URI (`postgresql://...` on a dead
+            port) -> raises after ~102s, because mlflow's
+            `create_sqlalchemy_engine_with_retry` retries with 0.1*(2**n - 1)
+            backoff and `MAX_RETRY_COUNT` is a module constant with no env knob.
+
+        `_bounded_mlflow_http` does NOT cover that: it scopes
+        `MLFLOW_HTTP_REQUEST_*`, which only the REST store reads. So a
+        construction failure swallowed but NOT cached would be re-paid once per
+        MLflow-backed KPI — 7 of them in a WS1 model-performance grid — turning
+        one ~102s failure into ~12 minutes of "fail-closed". That is the #1650
+        hang shape reintroduced through the door #1658 opens.
+
+        Caching is safe precisely because the lifetime is short:
+        `get_kpi_calculator()` in `src/api/routes/kpi.py` is a plain
+        `Depends(...)` with no `lru_cache`, so a calculator lives for ONE
+        request and a corrected config is picked up on the next one.
+
+        The spy below only COUNTS; it delegates to the real constructor, and the
+        real (broken) URI is what makes that constructor raise.
+        """
+        import mlflow
+
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", _UNSUPPORTED_SCHEME_URI)
+        real_client_cls = mlflow.tracking.MlflowClient
+        attempts = {"n": 0}
+
+        def _counting_client(*args: Any, **kwargs: Any):
+            attempts["n"] += 1
+            return real_client_cls(*args, **kwargs)
+
+        monkeypatch.setattr(mlflow.tracking, "MlflowClient", _counting_client)
+
+        db = Mock()
+        db.rpc.return_value.execute.return_value.data = []
+        calc = ModelPerformanceCalculator(db_client=db)
+        for metric in ("roc_auc", "pr_auc", "f1_score", "brier_score", "calibration_slope"):
+            value, error = calc._get_metric_from_mlflow("default_model", metric)
+            assert value is None
+            assert error is not None and error.startswith("mlflow_exception:"), error
+
+        assert attempts["n"] == 1, (
+            f"MlflowClient() was constructed {attempts['n']}x across 5 KPI reads on "
+            "one calculator; a failed construction must be remembered for the life "
+            "of the instance (#1658/#1650)"
+        )
+
+    def test_reachable_but_dead_endpoint_still_takes_the_call_path(self):
+        """Regression guard: do NOT collapse 'unreachable' into 'misconfigured'.
+
+        Measured: `http://127.0.0.1:<dead port>` CONSTRUCTS fine — an HTTP
+        tracking URI touches no network at construction time. It must keep
+        failing where it always did, inside the #1650-bounded call, so the two
+        remain separately diagnosable.
+        """
+        import mlflow
+
+        uri = f"http://127.0.0.1:{_dead_port()}"
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        calc._mlflow_client = mlflow.tracking.MlflowClient(tracking_uri=uri)  # constructs fine
+        value, error = calc._get_metric_from_mlflow("default_model", "roc_auc")
+        assert value is None
+        assert error is not None and error.startswith("mlflow_exception:MlflowException"), error
+
+    def test_absent_mlflow_still_reads_as_client_unavailable(self, monkeypatch):
+        """The ImportError leg keeps its own distinct reason (unchanged)."""
+        monkeypatch.setattr(
+            ModelPerformanceCalculator, "mlflow_client", property(lambda self: None)
+        )
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        value, error = calc._get_metric_from_mlflow("default_model", "roc_auc")
+        assert value is None
+        assert error == "mlflow_client_unavailable"
+
+
+# ===========================================================================
 # Guardrails: no plausible-default magic numbers remain in caller bodies
 # ===========================================================================
 
