@@ -23,8 +23,9 @@ alerts) can then distinguish "MLflow unreachable" from "model is random",
 and "no rows in window" from "SHAP coverage is 0%".
 
 Unavailability reasons:
-  - mlflow_client_unavailable    (no MLflow client wired in — mlflow is ABSENT
-    from this environment, or one was explicitly passed as None)
+  - mlflow_client_unavailable    (mlflow is ABSENT from this environment — the
+    `import mlflow` itself raised ImportError. NOT "a client was passed as
+    None": that argument only means "build one lazily".)
   - model_not_found:<name>       (registry returned no versions)
   - metric_not_found:<metric>    (run exists but metric key absent)
   - mlflow_exception:<Class>:<msg>  (any other MLflow-side failure, INCLUDING
@@ -190,14 +191,22 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         - **ABSENT** — mlflow is not installed. `import mlflow` raises
           `ImportError`, the client stays `None`, and the leg reports
           `mlflow_client_unavailable`. Nothing an operator can do.
-        - **MISCONFIGURED** — mlflow is installed but `MlflowClient()` cannot be
-          BUILT: an unsupported/typo'd `MLFLOW_TRACKING_URI` scheme, a backing
-          store that will not open, a bad credential. The old `except
-          ImportError` wrapped both statements but only the import can raise it,
-          so these escaped a mere attribute access and bypassed the module's
-          entire error taxonomy. Measured on mlflow 3.11.1: `htp://mlflow:5000`
-          — one character off the value prod ships — raises
+        - **MISCONFIGURED** — mlflow is installed but the client cannot be BUILT:
+          an unsupported/typo'd `MLFLOW_TRACKING_URI` scheme, a backing store
+          that will not open, a bad credential, a missing DB driver. The old
+          `except ImportError` wrapped both statements but only the import can
+          raise it, so these escaped a mere attribute access and bypassed the
+          module's entire error taxonomy. Measured on mlflow 3.11.1:
+          `htp://mlflow:5000` — one character off the value prod ships — raises
           `UnsupportedModelRegistryStoreURIException` right here.
+
+        Note the two are told apart by WHICH STATEMENT failed, not by exception
+        type, and that distinction is load-bearing: `MlflowClient()` can itself
+        raise an `ImportError` subclass — measured, `mysql://…` raises
+        `ModuleNotFoundError: No module named 'MySQLdb'` — and a missing DB
+        driver is a config problem, not an absent mlflow. Collapsing the two
+        `try`s into one `except ImportError` would file it under "no MLflow
+        here" and send the operator looking in the wrong place.
 
         Both now fail CLOSED to `None`, with the reason recorded in
         `_mlflow_client_error` for `_get_metric_from_mlflow` to surface. This is
@@ -218,16 +227,22 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         if self._mlflow_client is None and self._mlflow_client_error is None:
             try:
-                import mlflow
-            except ImportError:
-                self._mlflow_client_error = "mlflow_client_unavailable"
-            else:
                 try:
+                    import mlflow
+                except ImportError:
+                    self._mlflow_client_error = "mlflow_client_unavailable"
+                else:
                     self._mlflow_client = mlflow.tracking.MlflowClient()
-                except Exception as e:
-                    self._mlflow_client_error = (
-                        f"mlflow_exception:{type(e).__name__}:{str(e)[:200]}"
-                    )
+            except Exception as e:
+                # Constructor failures (measured, exercised by the #1658 tests)
+                # and — defensively, and NOT exercised by a real-config test
+                # because only a corrupt install can produce it — a non-ImportError
+                # failure raised while importing mlflow itself. Both are
+                # environment problems rather than an absent mlflow, so both take
+                # the `mlflow_exception:` family. This branch exists so the "NEVER
+                # raises" promise above is true of the code and not just of the
+                # cases we could reproduce.
+                self._mlflow_client_error = f"mlflow_exception:{type(e).__name__}:{str(e)[:200]}"
         return self._mlflow_client
 
     def supports(self, kpi: KPIMetadata) -> bool:
@@ -552,10 +567,12 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         with _bounded_mlflow_http():
             if self.mlflow_client is None:
-                # #1658: prefer the recorded construction reason — absent
+                # #1658: prefer the recorded reason — absent
                 # (`mlflow_client_unavailable`) and misconfigured
-                # (`mlflow_exception:...`) are different problems. The fallback
-                # covers a client explicitly wired in as None.
+                # (`mlflow_exception:...`) are different problems needing
+                # different fixes. The fallback covers a `mlflow_client` property
+                # that was overridden to return None without going through the
+                # lazy path (which the fail-closed tests do).
                 return None, self._mlflow_client_error or "mlflow_client_unavailable"
 
             try:

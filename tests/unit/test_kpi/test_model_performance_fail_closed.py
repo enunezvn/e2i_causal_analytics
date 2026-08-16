@@ -900,6 +900,33 @@ class TestMlflowClientConstructionFailsClosed:
         assert error is not None and error.startswith("mlflow_exception:"), error
         assert "FileNotFoundError" in error, error
 
+    def test_constructor_importerror_is_config_not_absence(self, monkeypatch):
+        """The two legs are told apart by WHICH STATEMENT failed, not by type.
+
+        `MlflowClient()` can itself raise an `ImportError` SUBCLASS: measured,
+        `mssql://…` raises `ModuleNotFoundError: No module named 'pyodbc'` in
+        ~0.03s. A missing DB driver is a configuration problem — mlflow is
+        installed and fine. Collapsing the property's two `try`s into a single
+        `except ImportError` would file it under `mlflow_client_unavailable`
+        ("no MLflow here") and point the operator at the wrong thing. This test
+        is the tripwire on that simplification.
+        """
+        try:
+            import pyodbc  # noqa: F401
+        except ImportError:
+            pass
+        else:  # pragma: no cover - no driver is pinned anywhere in this repo
+            pytest.skip("pyodbc is installed; this URI would attempt a real connection")
+
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", "mssql://u:p@127.0.0.1:1/db")
+        calc = ModelPerformanceCalculator(db_client=Mock())
+        value, error = calc._get_metric_from_mlflow("default_model", "pr_auc")
+        assert value is None
+        assert error != "mlflow_client_unavailable", (
+            "a missing DB driver is MISCONFIGURED, not ABSENT — mlflow imported fine"
+        )
+        assert error is not None and error.startswith("mlflow_exception:ModuleNotFoundError"), error
+
     def test_misconfigured_is_distinguishable_from_absent(self, monkeypatch):
         """The point of the taxonomy is that these two need different fixes.
 
