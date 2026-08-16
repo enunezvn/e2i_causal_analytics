@@ -254,6 +254,10 @@ function FeedbackLearning() {
   // fabricated "Online" / "12".
   const healthPending = !healthData && isHealthLoading;
 
+  // #1661: optimizer-gate block from the health poll. Absent (older backend or
+  // health still loading) renders nothing rather than a fabricated placeholder.
+  const optimizer = healthData?.optimizer ?? null;
+
   // Prepare chart data
   const severityChartData = useMemo(() => {
     const counts: Record<PatternSeverity, number> = {
@@ -463,6 +467,59 @@ function FeedbackLearning() {
           </CardContent>
         </Card>
       </div>
+
+      {/* #1661: the optimizer half of the loop.
+          The daily prompt-optimization beat returns a legitimate
+          `{"status":"skipped"}` at its trigger, so it can complete successfully
+          for months without ever compiling anything — and every other signal on
+          this page stays green while it does. This card is the one place that
+          says so. The denominator is deliberate: "8" alone reads as a volume
+          shortfall, "8 of 218" reads as the low-yield problem it actually is. */}
+      {optimizer && (
+        <Card className="mb-6">
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <CardDescription>Prompt Optimizer</CardDescription>
+                <CardTitle className="text-2xl flex items-center gap-2">
+                  {`${optimizer.eligible_signals ?? '—'} / ${optimizer.min_signals}`}
+                  {optimizer.would_trigger === true ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                  ) : optimizer.would_trigger === false ? (
+                    <AlertTriangle className="h-5 w-5 text-amber-500" />
+                  ) : (
+                    <XCircle className="h-5 w-5 text-[var(--color-muted-foreground)]" />
+                  )}
+                </CardTitle>
+              </div>
+              <Badge variant={optimizer.would_trigger === true ? 'default' : 'secondary'}>
+                {optimizer.would_trigger === true
+                  ? 'Ready'
+                  : optimizer.would_trigger === false
+                    ? 'Inert'
+                    : 'Unknown'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <p className="text-sm text-[var(--color-muted-foreground)]">{optimizer.reason}</p>
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              {optimizer.total_signals !== null && optimizer.total_signals !== undefined
+                ? `${optimizer.total_signals} signals recorded`
+                : 'signal count unknown'}
+              {' • '}
+              {optimizer.optimization_runs === 0
+                ? 'never optimized'
+                : optimizer.optimization_runs
+                  ? `${optimizer.optimization_runs} optimization runs`
+                  : 'run count unknown'}
+              {optimizer.last_eligible_signal_at
+                ? ` • last eligible signal ${new Date(optimizer.last_eligible_signal_at).toLocaleString()}`
+                : ''}
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Strategic Interpretation — grounded in persisted cycles/patterns/updates
           and the real feedback inflow (server-derived) */}

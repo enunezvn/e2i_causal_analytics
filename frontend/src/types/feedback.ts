@@ -358,6 +358,35 @@ export interface UpdateListResponse {
 }
 
 /**
+ * State of the daily DSPy prompt-optimization trigger (#1661).
+ *
+ * The beat returns a legitimate `{"status": "skipped"}` whenever its trigger is
+ * unsatisfied, so the self-improvement loop can stay inert indefinitely without
+ * anything failing or alerting. These are the trigger's own inputs.
+ *
+ * Counts are `null` — never 0 — when the read fails, so an unknown never reads
+ * as a measurement.
+ */
+export interface OptimizerGateStatus {
+  /** feedback_learner signals clearing the reward floor */
+  eligible_signals: number | null;
+  /** All feedback_learner signals ever — the yield denominator */
+  total_signals: number | null;
+  /** When an eligible signal was last recorded */
+  last_eligible_signal_at: string | null;
+  /** prompt_optimization_runs rows; 0 means never optimized */
+  optimization_runs: number | null;
+  /** Eligible signals the trigger requires */
+  min_signals: number;
+  /** Reward floor a signal must clear */
+  min_reward: number;
+  /** Whether the count gate is satisfied right now */
+  would_trigger: boolean | null;
+  /** Human-readable gate verdict */
+  reason: string;
+}
+
+/**
  * Health check response for feedback learning service
  */
 export interface FeedbackHealthResponse {
@@ -373,4 +402,6 @@ export interface FeedbackHealthResponse {
   patterns_active: number;
   /** Updates pending approval */
   pending_updates: number;
+  /** Daily prompt-optimization trigger state (#1661) */
+  optimizer?: OptimizerGateStatus | null;
 }

@@ -369,6 +369,40 @@ class UpdateListResponse(BaseModel):
     updates: List[KnowledgeUpdate] = Field(..., description="List of updates")
 
 
+class OptimizerGateStatus(BaseModel):
+    """State of the daily DSPy prompt-optimization trigger (#1661).
+
+    The beat that drives prompt optimization returns ``{"status": "skipped"}``
+    whenever its trigger is unsatisfied — a legitimate return, so nothing fails
+    and nothing alerts while the self-improvement loop stays inert. These are
+    the trigger's own inputs, so an operator watching this page can see whether
+    the loop is actually doing anything.
+
+    Counts are ``None`` (not 0) when the read fails: a fabricated zero on a
+    health surface is indistinguishable from a measured one.
+    """
+
+    eligible_signals: Optional[int] = Field(
+        default=None, description="feedback_learner signals clearing the reward floor"
+    )
+    total_signals: Optional[int] = Field(
+        default=None,
+        description="All feedback_learner signals ever — the yield denominator",
+    )
+    last_eligible_signal_at: Optional[str] = Field(
+        default=None, description="When an eligible signal was last recorded"
+    )
+    optimization_runs: Optional[int] = Field(
+        default=None, description="prompt_optimization_runs rows; 0 means never optimized"
+    )
+    min_signals: int = Field(..., description="Eligible signals the trigger requires")
+    min_reward: float = Field(..., description="Reward floor a signal must clear")
+    would_trigger: Optional[bool] = Field(
+        default=None, description="Whether the count gate is satisfied right now"
+    )
+    reason: str = Field(..., description="Human-readable gate verdict")
+
+
 class FeedbackHealthResponse(BaseModel):
     """Health check response for feedback learning service."""
 
@@ -380,6 +414,10 @@ class FeedbackHealthResponse(BaseModel):
     cycles_24h: int = Field(default=0, description="Learning cycles in last 24 hours")
     patterns_active: int = Field(default=0, description="Active patterns being tracked")
     pending_updates: int = Field(default=0, description="Updates pending approval")
+    optimizer: Optional[OptimizerGateStatus] = Field(
+        default=None,
+        description="Daily prompt-optimization trigger state (#1661)",
+    )
 
 
 # =============================================================================
@@ -1094,6 +1132,24 @@ async def get_feedback_health() -> FeedbackHealthResponse:
     patterns_active = len(await _all_patterns())
     pending_updates = sum(1 for u in updates if u.status == UpdateStatus.PROPOSED)
 
+    # #1661: the optimizer half of the loop. Read here rather than left to a
+    # log line, because "the daily task ran and skipped" and "the daily task
+    # ran and optimized" are indistinguishable from everything else on this
+    # page — and the loop has been in the first state since it was built.
+    from src.agents.feedback_learner import signal_store
+    from src.memory.services.factories import get_async_supabase_client
+
+    try:
+        gate_client = await get_async_supabase_client()
+        optimizer = OptimizerGateStatus(**await signal_store.get_optimizer_gate_status(gate_client))
+    except Exception as e:  # noqa: BLE001 - health must degrade, never 500
+        logger.warning("optimizer gate status unavailable: %s", e)
+        optimizer = OptimizerGateStatus(
+            min_signals=signal_store.optimizer_min_signals(),
+            min_reward=signal_store.OPTIMIZER_MIN_REWARD,
+            reason=f"Optimizer gate status unavailable ({e})",
+        )
+
     return FeedbackHealthResponse(
         status="healthy" if agent_available else "degraded",
         agent_available=agent_available,
@@ -1101,6 +1157,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
         cycles_24h=cycles_24h,
         patterns_active=patterns_active,
         pending_updates=pending_updates,
+        optimizer=optimizer,
     )
 
 

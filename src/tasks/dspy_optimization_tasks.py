@@ -19,6 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+from src.agents.feedback_learner.signal_store import (
+    OPTIMIZER_MIN_REWARD,
+    OPTIMIZER_SIGNAL_LIMIT,
+    optimizer_min_signals,
+)
 from src.tasks import rag_example_sources as rag_sources
 from src.workers.celery_app import celery_app
 
@@ -434,9 +439,10 @@ def _decide_trigger(signals: List[Dict[str, Any]], state: Dict[str, Any]) -> Tup
 
     n = len(signals)
     mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
-    # ~1 signal/cycle; 20 ≈ reachable in normal operation
-    min_signals = int(os.getenv("DSPY_MIN_SIGNALS", "20"))
-    trigger = GEPAOptimizationTrigger(min_signals=min_signals)
+    # #1661: threshold resolution lives in signal_store, beside the reward floor
+    # the eligible-signal query applies, so GET /feedback/health reports the same
+    # gate this beat skips on instead of a re-declared copy that can drift.
+    trigger = GEPAOptimizationTrigger(min_signals=optimizer_min_signals())
     return trigger.should_trigger(
         signal_count=n,
         current_reward=mean_reward,
@@ -455,7 +461,9 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
         get_feedback_learner_training_signals,
     )
 
-    signals = await get_feedback_learner_training_signals(min_reward=0.5, limit=2000)
+    signals = await get_feedback_learner_training_signals(
+        min_reward=OPTIMIZER_MIN_REWARD, limit=OPTIMIZER_SIGNAL_LIMIT
+    )
     state = _load_trigger_state()
     should, reason = _decide_trigger(signals, state)
 

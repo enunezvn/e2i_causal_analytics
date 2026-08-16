@@ -424,3 +424,116 @@ describe('FeedbackLearning — #1244 Recent Activity pattern attribution', () =>
     expect(screen.queryByText(/N\/A\s*•/)).not.toBeInTheDocument();
   });
 });
+
+describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
+  const baseMocks = () => {
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { patterns: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { updates: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useQuickLearningCycle as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+    (useApplyUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useRollbackUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useFeedbackLearningInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      data: undefined,
+      error: null,
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    baseMocks();
+  });
+
+  it('surfaces an inert optimizer with its yield denominator, not just the shortfall', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: 8,
+          total_signals: 218,
+          last_eligible_signal_at: '2026-08-08T07:09:02.686027+00:00',
+          optimization_runs: 0,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: false,
+          reason: 'Optimizer inert: 8 of 218 feedback_learner signals clear reward >= 0.5',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    // The shortfall AND the denominator — "8" alone reads as a volume problem.
+    expect(screen.getByText('8 / 20')).toBeInTheDocument();
+    expect(screen.getByText(/218 signals/i)).toBeInTheDocument();
+    // "Never optimized" is the fact the page currently hides behind "Online".
+    expect(screen.getByText(/never optimized/i)).toBeInTheDocument();
+    expect(screen.getByText(/Optimizer inert: 8 of 218/)).toBeInTheDocument();
+  });
+
+  it('shows a ready optimizer once the gate is satisfied', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: 25,
+          total_signals: 300,
+          last_eligible_signal_at: '2026-08-16T00:00:00+00:00',
+          optimization_runs: 3,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: true,
+          reason: '25 of 300 feedback_learner signals clear reward >= 0.5; threshold 20 met',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('25 / 20')).toBeInTheDocument();
+    expect(screen.getByText(/3 optimization runs/i)).toBeInTheDocument();
+    expect(screen.queryByText(/never optimized/i)).not.toBeInTheDocument();
+  });
+
+  it('renders unknown — never a fabricated zero — when the gate read failed', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: null,
+          total_signals: null,
+          last_eligible_signal_at: null,
+          optimization_runs: null,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: null,
+          reason: 'Optimizer gate status unavailable (db down)',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('— / 20')).toBeInTheDocument();
+    expect(screen.getByText(/status unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/never optimized/i)).not.toBeInTheDocument();
+  });
+});
