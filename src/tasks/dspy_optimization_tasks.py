@@ -16,20 +16,22 @@ import os
 import traceback
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, Tuple, cast
 
 from src.agents.feedback_learner.signal_store import (
     OPTIMIZER_MIN_REWARD,
     OPTIMIZER_SIGNAL_LIMIT,
-    optimizer_min_signals,
+    TRIGGER_STATE_PATH,
+    decide_optimizer_trigger,
+    load_trigger_state,
 )
 from src.tasks import rag_example_sources as rag_sources
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-_STATE_PATH = Path("optimized_modules") / ".trigger_state.json"
+# #1661: one path, shared with the reader in signal_store.
+_STATE_PATH = TRIGGER_STATE_PATH
 
 # --- RAG-prompt optimization leg (#1486) -------------------------------------
 #
@@ -407,13 +409,16 @@ async def _run_rag_leg_guarded() -> Dict[str, Any]:
         return {"status": "failed", "reason": str(e)}
 
 
-def _load_trigger_state() -> Dict[str, Any]:
-    try:
-        if _STATE_PATH.exists():
-            return cast(Dict[str, Any], json.loads(_STATE_PATH.read_text()))
-    except Exception:  # noqa: BLE001
-        pass
-    return {}
+# #1661: the state read and the trigger decision moved to signal_store, beside
+# the reward floor the eligible-signal query applies, because GET
+# /feedback/health now reports this same gate to an operator. Two copies of the
+# decision would let the health surface say "Ready" while this beat skipped —
+# the same false green the issue is about, one layer up. Aliased rather than
+# re-exported so the identity holds for callers and tests.
+# The WRITER stays here: ``optimized_modules`` is read-only on the api service,
+# and only the beat may advance the state it later reads back.
+_load_trigger_state = load_trigger_state
+_decide_trigger = decide_optimizer_trigger
 
 
 def _save_trigger_state(state: Dict[str, Any]) -> None:
@@ -422,34 +427,6 @@ def _save_trigger_state(state: Dict[str, Any]) -> None:
         _STATE_PATH.write_text(json.dumps(state, indent=2))
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist trigger state: %s", e)
-
-
-def _parse_dt(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-
-def _decide_trigger(signals: List[Dict[str, Any]], state: Dict[str, Any]) -> Tuple[bool, str]:
-    """Pure trigger decision over the available signals + persisted state."""
-    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
-
-    n = len(signals)
-    mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
-    # #1661: threshold resolution lives in signal_store, beside the reward floor
-    # the eligible-signal query applies, so GET /feedback/health reports the same
-    # gate this beat skips on instead of a re-declared copy that can drift.
-    trigger = GEPAOptimizationTrigger(min_signals=optimizer_min_signals())
-    return trigger.should_trigger(
-        signal_count=n,
-        current_reward=mean_reward,
-        baseline_reward=float(state.get("baseline_reward", 0.0)),
-        last_optimization=_parse_dt(state.get("last_optimization")),
-        has_critical_patterns=False,
-    )
 
 
 async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:

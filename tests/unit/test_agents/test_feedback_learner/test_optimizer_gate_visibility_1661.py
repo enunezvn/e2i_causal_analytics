@@ -112,12 +112,50 @@ def test_replays_two_real_production_rows_exactly():
 
 
 def test_beat_reads_the_gate_constants_from_signal_store():
-    """The beat must not re-declare the floor/threshold as bare literals."""
+    """The beat must not re-declare the floor/limit/state path as bare literals."""
     from src.agents.feedback_learner import signal_store
     from src.tasks import dspy_optimization_tasks as task
 
     assert task.OPTIMIZER_MIN_REWARD is signal_store.OPTIMIZER_MIN_REWARD
-    assert task.optimizer_min_signals is signal_store.optimizer_min_signals
+    assert task.OPTIMIZER_SIGNAL_LIMIT is signal_store.OPTIMIZER_SIGNAL_LIMIT
+    assert task._STATE_PATH is signal_store.TRIGGER_STATE_PATH
+
+
+def test_beat_and_health_surface_share_one_trigger_decision():
+    """The health surface must not re-implement a subset of the gate.
+
+    The real trigger checks cooldown BEFORE the signal count, then a forced
+    interval, then a reward delta. A status field that models only "count >=
+    threshold" would report Ready while the beat still skips — reproducing, one
+    layer up, exactly the false-green this issue is about.
+    """
+    from src.agents.feedback_learner import signal_store
+    from src.tasks import dspy_optimization_tasks as task
+
+    assert task._decide_trigger is signal_store.decide_optimizer_trigger
+    assert task._load_trigger_state is signal_store.load_trigger_state
+
+
+def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
+    """Plenty of signals + a recent optimization must NOT read as Ready."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
+
+    signals = [{"reward": 0.9}] * 50
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    should, reason = decide_optimizer_trigger(signals, {"last_optimization": recent})
+    assert should is False
+    assert "Cooldown active" in reason
+
+
+def test_signal_gate_is_what_binds_with_no_prior_optimization():
+    """Today's real state: no trigger file, 8 eligible signals."""
+    from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
+
+    should, reason = decide_optimizer_trigger([{"reward": 0.6}] * 8, {})
+    assert should is False
+    assert reason == "Insufficient signals: 8 < 20"
 
 
 def test_min_signals_honours_the_env_override(monkeypatch):
@@ -184,16 +222,18 @@ class _FakeClient:
         if name == "prompt_optimization_runs":
             return _FakeQuery(name, self.sink, [], self.runs)
 
-        # dspy_agent_training_signals: the eligible read carries a gte filter,
-        # the total read does not. Decide by inspecting the built query.
+        # dspy_agent_training_signals: the eligible read carries a gte filter
+        # (and returns rows, because the trigger needs their mean reward); the
+        # total read does not. Decide by inspecting the built query.
         client = self
 
         class _Dispatch(_FakeQuery):
             async def execute(self):
                 client.sink.setdefault("queries", []).append((name, list(self.filters)))
-                is_eligible_read = any(f[0] == "gte" for f in self.filters)
-                if is_eligible_read:
-                    rows = [{"created_at": client.last}] if client.last else []
+                if any(f[0] == "gte" for f in self.filters):
+                    rows = [
+                        {"reward": 0.6, "created_at": client.last} for _ in range(client.eligible)
+                    ]
                     return type("R", (), {"data": rows, "count": client.eligible})()
                 return type("R", (), {"data": [], "count": client.total})()
 
@@ -201,44 +241,65 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_gate_status_reports_real_counts_and_the_gate_verdict():
-    from src.agents.feedback_learner.signal_store import (
-        OPTIMIZER_MIN_REWARD,
-        get_optimizer_gate_status,
-    )
+async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch):
+    from src.agents.feedback_learner import signal_store
+
+    monkeypatch.setattr(signal_store, "load_trigger_state", dict)
 
     sink: dict = {}
     client = _FakeClient(
         sink, eligible=8, total=218, runs=0, last="2026-08-08T07:09:02.686027+00:00"
     )
-    status = await get_optimizer_gate_status(client=client)
+    status = await signal_store.get_optimizer_gate_status(client=client)
 
     assert status["eligible_signals"] == 8
     assert status["total_signals"] == 218
     assert status["optimization_runs"] == 0
-    assert status["min_reward"] == OPTIMIZER_MIN_REWARD
+    assert status["min_reward"] == signal_store.OPTIMIZER_MIN_REWARD
     assert status["min_signals"] == 20
     assert status["would_trigger"] is False
     assert status["last_eligible_signal_at"] == "2026-08-08T07:09:02.686027+00:00"
+    # Verbatim from the REAL trigger, not a re-worded copy.
+    assert status["reason"] == "Insufficient signals: 8 < 20"
     # The denominator is what stops "8 < 20" reading as a volume problem.
-    assert "218" in status["reason"] and "8" in status["reason"]
+    assert status["total_signals"] == 218
 
     # The eligible read must use the gate's own filters, not a re-invention.
     signal_queries = [f for t, f in sink["queries"] if t == "dspy_agent_training_signals"]
     eligible_filters = next(f for f in signal_queries if any(x[0] == "gte" for x in f))
     assert ("eq", "source_agent", "feedback_learner") in eligible_filters
-    assert ("gte", "reward", OPTIMIZER_MIN_REWARD) in eligible_filters
+    assert ("gte", "reward", signal_store.OPTIMIZER_MIN_REWARD) in eligible_filters
+    assert ("limit", signal_store.OPTIMIZER_SIGNAL_LIMIT) in eligible_filters
 
 
 @pytest.mark.asyncio
-async def test_gate_status_flips_to_would_trigger_when_supply_clears_threshold():
-    from src.agents.feedback_learner.signal_store import get_optimizer_gate_status
+async def test_gate_status_flips_to_would_trigger_when_supply_clears_threshold(monkeypatch):
+    from src.agents.feedback_learner import signal_store
 
-    status = await get_optimizer_gate_status(
+    # Baseline 0.0 with mean reward 0.6 -> the reward-delta branch fires once
+    # the count gate is open, which is what the beat itself would do.
+    monkeypatch.setattr(signal_store, "load_trigger_state", dict)
+    status = await signal_store.get_optimizer_gate_status(
         client=_FakeClient({}, eligible=25, total=300, runs=3, last="2026-08-16T00:00:00+00:00")
     )
     assert status["would_trigger"] is True
     assert status["optimization_runs"] == 3
+
+
+@pytest.mark.asyncio
+async def test_gate_status_surfaces_the_cooldown_once_the_signal_gate_opens(monkeypatch):
+    """The gate that binds NEXT must be visible too, not just the first one."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.agents.feedback_learner import signal_store
+
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    monkeypatch.setattr(signal_store, "load_trigger_state", lambda: {"last_optimization": recent})
+    status = await signal_store.get_optimizer_gate_status(
+        client=_FakeClient({}, eligible=25, total=300, runs=1, last="2026-08-16T00:00:00+00:00")
+    )
+    assert status["would_trigger"] is False
+    assert "Cooldown active" in status["reason"]
 
 
 @pytest.mark.asyncio

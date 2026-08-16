@@ -11,9 +11,12 @@ feedback_learner itself.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from .dspy_integration import FeedbackLearnerTrainingSignal
 
@@ -33,11 +36,14 @@ RUNS_TABLE = "prompt_optimization_runs"
 # 218 feedback_learner signals exist, 8 clear ``reward >= 0.5``. That is not a
 # volume shortfall. ``compute_reward`` gives the coverage and actionability
 # terms zero on any cycle that detected no patterns, which caps such a cycle at
-# EXACTLY 0.5 (0.3 with no rubric) — so only cycles that found real quality
-# defects can ever produce an eligible training example. All 8 came from the
-# 2026-08-05..08-08 window, the only stretch where user-reward ratings dipped
-# below the analyzer's 3.0 gate. Eligibility is therefore coupled to the
-# platform behaving badly; see #1661 before touching either constant.
+# EXACTLY 0.5 (0.3 with no rubric). The comparison is ``>=``, so a pattern-free
+# cycle is eligible only at a flawless 5.0 rubric AND perfect efficiency; in 218
+# stored rows that has never happened (203 pattern-free rows, max reward 0.4100
+# at rubric 3.92). All 8 eligible rows came from cycles that found >= 2
+# patterns, inside the 2026-08-05..08-08 window — the only stretch where
+# user-reward ratings dipped below the analyzer's 3.0 gate. Eligibility is
+# therefore coupled in practice to the platform behaving badly; see #1661
+# before touching either constant.
 OPTIMIZER_MIN_REWARD = 0.5
 OPTIMIZER_SIGNAL_LIMIT = 2000
 DEFAULT_MIN_SIGNALS = 20
@@ -60,6 +66,59 @@ def optimizer_min_signals() -> int:
             "%s=%r is not an integer; using default %d", MIN_SIGNALS_ENV, raw, DEFAULT_MIN_SIGNALS
         )
         return DEFAULT_MIN_SIGNALS
+
+
+# Persisted trigger state, written by the beat after a completed optimization.
+# ``optimized_modules`` is a named volume: read-write on worker_medium (the
+# producer), READ-ONLY on api (docker/docker-compose.yml) — which is what lets
+# the health surface below evaluate the same trigger the beat evaluates. Only
+# the beat writes; nothing here does.
+TRIGGER_STATE_PATH = Path("optimized_modules") / ".trigger_state.json"
+
+
+def load_trigger_state() -> Dict[str, Any]:
+    """Read the beat's persisted trigger state ({} when absent or unreadable)."""
+    try:
+        if TRIGGER_STATE_PATH.exists():
+            return cast(Dict[str, Any], json.loads(TRIGGER_STATE_PATH.read_text()))
+    except Exception:  # noqa: BLE001 - absent/corrupt state is a normal cold start
+        pass
+    return {}
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def decide_optimizer_trigger(
+    signals: List[Dict[str, Any]], state: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """Pure trigger decision over the available signals + persisted state.
+
+    THE single decision function: the Celery beat calls it to decide whether to
+    optimize, and ``get_optimizer_gate_status`` calls it to tell an operator
+    what the beat would decide. Keeping one implementation is the point — the
+    trigger checks cooldown BEFORE the signal count, then a forced interval,
+    then a reward delta, so a health surface that modelled only "count >=
+    threshold" could report Ready while the beat skipped (#1661).
+    """
+    from .dspy_integration import GEPAOptimizationTrigger
+
+    n = len(signals)
+    mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
+    trigger = GEPAOptimizationTrigger(min_signals=optimizer_min_signals())
+    return trigger.should_trigger(
+        signal_count=n,
+        current_reward=mean_reward,
+        baseline_reward=float(state.get("baseline_reward", 0.0)),
+        last_optimization=_parse_dt(state.get("last_optimization")),
+        has_critical_patterns=False,
+    )
 
 
 def build_signal_record(signal: FeedbackLearnerTrainingSignal) -> Dict[str, Any]:
@@ -156,8 +215,13 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
     and nothing alerts — and the loop can stay inert indefinitely while every
     signal an operator looks at stays green (#1661).
 
-    This derives the gate's verdict from the SAME table, filters and constants
-    the beat uses, so the two cannot drift:
+    ``would_trigger``/``reason`` come from :func:`decide_optimizer_trigger` —
+    the beat's OWN decision function, over the same eligible signals and the
+    same persisted state — so the surface cannot report Ready while the beat
+    skips. In particular the cooldown branch, which the trigger evaluates
+    BEFORE the signal count, stays visible once supply clears the threshold.
+
+    The counts around it explain that verdict:
 
     - ``eligible_signals``  — feedback_learner signals at ``reward >= min_reward``
     - ``total_signals``     — ALL feedback_learner signals ever. The denominator
@@ -166,7 +230,6 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
     - ``last_eligible_signal_at`` — when supply last moved (None = never).
     - ``optimization_runs`` — rows in ``prompt_optimization_runs``; 0 means the
       loop has never once compiled anything.
-    - ``would_trigger``     — whether the count gate is satisfied right now.
 
     Every count is ``None``, never 0, when the read fails: a fabricated zero on
     a health surface is indistinguishable from a measured one.
@@ -192,13 +255,16 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
         return unavailable
 
     try:
+        # The eligible read returns ROWS, not just a count: the trigger needs
+        # their mean reward, and taking the same rows the beat takes (same
+        # filters, same limit) is what keeps the two verdicts identical.
         eligible_res = await _maybe_await(
             client.table(TABLE)
-            .select("created_at", count="exact")
+            .select("reward, created_at", count="exact")
             .eq("source_agent", "feedback_learner")
             .gte("reward", OPTIMIZER_MIN_REWARD)
             .order("created_at", desc=True)
-            .limit(1)
+            .limit(OPTIMIZER_SIGNAL_LIMIT)
             .execute()
         )
         total_res = await _maybe_await(
@@ -215,27 +281,13 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
         logger.warning("Optimizer gate status read failed: %s", e)
         return {**unavailable, "reason": f"Optimizer gate status unavailable ({e})"}
 
-    eligible = int(getattr(eligible_res, "count", 0) or 0)
+    eligible_rows = getattr(eligible_res, "data", None) or []
+    eligible = int(getattr(eligible_res, "count", None) or len(eligible_rows))
     total = int(getattr(total_res, "count", 0) or 0)
     runs = int(getattr(runs_res, "count", 0) or 0)
-    eligible_rows = getattr(eligible_res, "data", None) or []
     last_eligible = eligible_rows[0].get("created_at") if eligible_rows else None
 
-    would_trigger = eligible >= min_signals
-    if would_trigger:
-        reason = (
-            f"{eligible} of {total} feedback_learner signals clear reward "
-            f">= {OPTIMIZER_MIN_REWARD}; threshold {min_signals} met"
-        )
-    else:
-        reason = (
-            f"Optimizer inert: {eligible} of {total} feedback_learner signals clear "
-            f"reward >= {OPTIMIZER_MIN_REWARD}, below the {min_signals} required. "
-            "Only cycles that detected quality patterns can clear that floor "
-            "(see #1661); "
-            + (f"last eligible signal {last_eligible}" if last_eligible else "none ever recorded")
-            + f"; {runs} optimization run(s) recorded"
-        )
+    would_trigger, reason = decide_optimizer_trigger(eligible_rows, load_trigger_state())
 
     return {
         "eligible_signals": eligible,

@@ -1070,8 +1070,25 @@ async def test_get_feedback_health():
 # it must carry the gate's own numbers or the inertness stays invisible.
 
 
+@pytest.fixture
+def _stub_async_supabase(monkeypatch):
+    """Pin the async client factory the health route resolves before reading.
+
+    The suite's autouse guard only disarms the SYNC ``get_supabase_client``. The
+    async factory RAISES ``ServiceConnectionError`` when SUPABASE_URL is unset,
+    which is CI's state — the route would then degrade before the stubbed status
+    reader ran, and these assertions would be graded against the fallback. This
+    box hides that because pytest autoloads a real ``.env``.
+    """
+
+    async def _client():
+        return object()
+
+    monkeypatch.setattr("src.memory.services.factories.get_async_supabase_client", _client)
+
+
 @pytest.mark.asyncio
-async def test_health_carries_the_optimizer_gate_status(monkeypatch):
+async def test_health_carries_the_optimizer_gate_status(monkeypatch, _stub_async_supabase):
     from src.api.routes import feedback as feedback_routes
 
     async def _status(client=None):
@@ -1102,7 +1119,7 @@ async def test_health_carries_the_optimizer_gate_status(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_health_survives_an_unreadable_optimizer_gate(monkeypatch):
+async def test_health_survives_an_unreadable_optimizer_gate(monkeypatch, _stub_async_supabase):
     """A failed gate read must degrade the block, never 500 the health check."""
     from src.api.routes import feedback as feedback_routes
 
@@ -1118,6 +1135,26 @@ async def test_health_survives_an_unreadable_optimizer_gate(monkeypatch):
     assert result.optimizer is not None
     assert result.optimizer.eligible_signals is None
     assert result.optimizer.would_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_health_degrades_when_the_async_client_cannot_be_built(monkeypatch):
+    """CI's real shape: no SUPABASE_URL, so the client factory raises."""
+    from src.api.routes import feedback as feedback_routes
+
+    async def _raise():
+        raise RuntimeError("SUPABASE_URL not configured")
+
+    monkeypatch.setattr("src.memory.services.factories.get_async_supabase_client", _raise)
+    with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
+        result = await feedback_routes.get_feedback_health()
+
+    assert result.optimizer is not None
+    assert result.optimizer.eligible_signals is None
+    assert result.optimizer.would_trigger is None
+    assert "unavailable" in result.optimizer.reason.lower()
+    # The threshold is still reported — it comes from config, not the DB.
+    assert result.optimizer.min_signals == 20
 
 
 # =============================================================================

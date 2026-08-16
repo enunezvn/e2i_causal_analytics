@@ -469,7 +469,8 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
           min_signals: 20,
           min_reward: 0.5,
           would_trigger: false,
-          reason: 'Optimizer inert: 8 of 218 feedback_learner signals clear reward >= 0.5',
+          // Verbatim from the beat's own trigger — not a re-worded copy.
+          reason: 'Insufficient signals: 8 < 20',
         },
       },
       refetch: vi.fn().mockResolvedValue({}),
@@ -482,7 +483,35 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
     expect(screen.getByText(/218 signals/i)).toBeInTheDocument();
     // "Never optimized" is the fact the page currently hides behind "Online".
     expect(screen.getByText(/never optimized/i)).toBeInTheDocument();
-    expect(screen.getByText(/Optimizer inert: 8 of 218/)).toBeInTheDocument();
+    expect(screen.getByText('Insufficient signals: 8 < 20')).toBeInTheDocument();
+    expect(screen.getByText('Inert')).toBeInTheDocument();
+  });
+
+  it('surfaces the cooldown gate once the signal gate opens', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        agent_available: true,
+        cycles_24h: 1,
+        optimizer: {
+          eligible_signals: 25,
+          total_signals: 300,
+          last_eligible_signal_at: '2026-08-16T00:00:00+00:00',
+          optimization_runs: 1,
+          min_signals: 20,
+          min_reward: 0.5,
+          would_trigger: false,
+          reason: 'Cooldown active: 2.0h < 24h',
+        },
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    // Count gate satisfied, yet still not running — the page must say WHY.
+    expect(screen.getByText('25 / 20')).toBeInTheDocument();
+    expect(screen.getByText('Cooldown active: 2.0h < 24h')).toBeInTheDocument();
+    expect(screen.getByText('Inert')).toBeInTheDocument();
   });
 
   it('shows a ready optimizer once the gate is satisfied', () => {
@@ -498,7 +527,7 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
           min_signals: 20,
           min_reward: 0.5,
           would_trigger: true,
-          reason: '25 of 300 feedback_learner signals clear reward >= 0.5; threshold 20 met',
+          reason: 'Reward improved: 0.600 >= 0.05',
         },
       },
       refetch: vi.fn().mockResolvedValue({}),
