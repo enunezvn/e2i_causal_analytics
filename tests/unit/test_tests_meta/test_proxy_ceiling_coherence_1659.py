@@ -20,6 +20,7 @@ value it mirrors, so editing one side without the other fails CI.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -40,22 +41,82 @@ SSE_LOCATIONS = ("/api/", "/copilotkit/")
 
 
 def _proxy_read_timeouts_by_location(conf_text: str) -> dict[str, int]:
-    """Map ``location <path> {`` -> its effective ``proxy_read_timeout`` seconds."""
+    """Map ``location <path> {`` -> the ``proxy_read_timeout`` seconds in ITS block.
+
+    Brace-tracked, so a location that declares no ``proxy_read_timeout`` cannot
+    silently absorb a later directive from outside its block. Deliberately NOT a
+    general "effective timeout" resolver: it does not follow ``include``, and it
+    does not fall back to a server-level default. Both limitations are safe
+    *because* the tests below assert the location is present in the result — a
+    location whose timeout moved into an include, or that lost its own
+    directive, drops out of the map and fails loudly rather than silently
+    reporting an inherited number.
+    """
     timeouts: dict[str, int] = {}
     current: str | None = None
+    depth = 0
     for raw in conf_text.splitlines():
-        line = raw.strip()
-        loc = re.match(r"^location\s+(?:=\s+)?(\S+)\s*\{", line)
-        if loc:
-            current = loc.group(1)
+        line = raw.split("#", 1)[0].strip()
+        if not line:
             continue
+
+        loc = re.match(r"^location\s+(?:[=~^*]+\s+)?(\S+)\s*\{", line)
+        if loc and current is None:
+            current = loc.group(1)
+            depth = 1
+            continue
+
         if current is None:
             continue
-        prt = re.match(r"^proxy_read_timeout\s+(\d+)(s?)\s*;", line)
+
+        prt = re.match(r"^proxy_read_timeout\s+(\d+)s?\s*;", line)
         if prt:
             timeouts[current] = int(prt.group(1))
+
+        depth += line.count("{") - line.count("}")
+        if depth <= 0:
             current = None
+            depth = 0
     return timeouts
+
+
+def _streaming_response_bodies_are_wrapped(module_path: Path, function_name: str) -> bool:
+    """True iff every ``StreamingResponse`` body in ``function_name`` is keepalive-wrapped.
+
+    Deliberately AST-based rather than a substring search. A ``"with_sse_keepalive"
+    in source`` check would still pass with the import and this module's comments
+    left in place while the call site itself was reverted — which is exactly the
+    regression this guard exists to catch.
+    """
+    tree = ast.parse(module_path.read_text())
+
+    target: ast.AsyncFunctionDef | ast.FunctionDef | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == function_name:
+            target = node
+            break
+    assert target is not None, f"{function_name} not found in {module_path} — did it move?"
+
+    found_any = False
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        name = callee.attr if isinstance(callee, ast.Attribute) else getattr(callee, "id", None)
+        if name != "StreamingResponse" or not node.args:
+            continue
+        found_any = True
+        body = node.args[0]
+        body_name = (
+            body.func.attr
+            if isinstance(body, ast.Call) and isinstance(body.func, ast.Attribute)
+            else getattr(getattr(body, "func", None), "id", None)
+        )
+        if body_name != "with_sse_keepalive":
+            return False
+
+    assert found_any, f"no StreamingResponse call found in {function_name} — did it move?"
+    return True
 
 
 @pytest.mark.parametrize("location", SSE_LOCATIONS)
@@ -116,10 +177,14 @@ def test_longest_dispatch_budget_is_covered_by_the_keepalive_not_the_ceiling() -
     if longest_s < PROXY_READ_TIMEOUT_SECONDS:
         pytest.skip("no dispatch budget currently exceeds the proxy ceiling; nothing to guard")
 
-    route_source = (REPO_ROOT / "src" / "api" / "routes" / "copilotkit.py").read_text()
-    assert "with_sse_keepalive" in route_source, (
+    wrapped = _streaming_response_bodies_are_wrapped(
+        REPO_ROOT / "src" / "api" / "routes" / "copilotkit.py",
+        function_name="stream_chat",
+    )
+    assert wrapped, (
         f"the longest dispatch budget is {longest_s:.0f}s against a "
-        f"{PROXY_READ_TIMEOUT_SECONDS}s nginx ceiling, and the chat SSE route no "
-        "longer wraps its body in with_sse_keepalive — the silent window is back "
-        "and completed work will be severed before it reaches the user (#1659)."
+        f"{PROXY_READ_TIMEOUT_SECONDS}s nginx ceiling, and stream_chat's "
+        "StreamingResponse body is no longer wrapped in with_sse_keepalive — the "
+        "silent window is back and completed work will be severed before it "
+        "reaches the user (#1659)."
     )
