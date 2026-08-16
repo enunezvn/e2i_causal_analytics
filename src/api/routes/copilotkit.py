@@ -1065,8 +1065,6 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     and not is_state_event
                     and is_terminal_event
                 ):
-                    import time
-
                     current_ts = int(time.time() * 1000)
                     source = "e2i-copilot"
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
@@ -1118,8 +1116,6 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     # SCREAMING_SNAKE_CASE: TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, etc.
                     #
                     # CRITICAL FIX (v1.19.0): Add timestamp and source to ALL events
-                    import time
-
                     current_ts = int(time.time() * 1000)
                     source = "e2i-copilot"
 
@@ -1225,8 +1221,6 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             # FIX (v1.23.0): Emit TEXT_MESSAGE_END if streaming was in progress
             # This handles the case where the generator ends without a non-streaming event
             if streaming_started and streaming_message_id:
-                import time
-
                 current_ts = int(time.time() * 1000)
                 source = "e2i-copilot"
                 # Note: We can't yield from finally, so we need a different approach
@@ -1241,8 +1235,6 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # FIX (v1.23.0): Emit final TEXT_MESSAGE_END if streaming was still active
         # This ensures the message is properly terminated even if generator ends
         if streaming_started and streaming_message_id:
-            import time
-
             current_ts = int(time.time() * 1000)
             source = "e2i-copilot"
             yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
