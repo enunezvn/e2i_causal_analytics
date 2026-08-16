@@ -254,6 +254,19 @@ jobs:
       # lane's switch (issue #952). With it false the SDK never uploads.
       OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
+      # #1655: fail this lane if its CONTROLLER goes silent for 10 min, instead
+      # of waiting out timeout-minutes with no diagnosis. --timeout only arms a
+      # timer inside a worker's runtest protocol, so a stall in the controller
+      # (or in a worker holding the GIL in native code) has no timer at all —
+      # this job was CANCELLED at its 30-min cap on run 31915535379 with one
+      # test dispatched and never reported and --timeout=30 never firing.
+      # 600 is 3.3x the largest per-test budget this lane can hit (180s, from
+      # a @pytest.mark.timeout in tests/unit/test_api/test_chatbot_warmup_1454.py;
+      # --timeout is 30s) and 5.8x its measured 103.7s startup. The sizing is
+      # recomputed from this file on every run by
+      # tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py, so a new
+      # long test fails that guard rather than this lane.
+      E2I_PYTEST_STALL_TIMEOUT: '600'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -397,6 +410,11 @@ jobs:
       # (see Unit Tests lane above; issue #952).
       OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
+      # #1655 session stall watchdog (see Unit Tests lane). 600 is 2x this
+      # lane's largest per-test budget of 300s (@pytest.mark.timeout in
+      # tests/unit/test_data_preparer/test_adaptive_validity_check.py;
+      # --timeout is 60s) and 18x its measured 32.4s startup.
+      E2I_PYTEST_STALL_TIMEOUT: '600'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -748,6 +766,11 @@ jobs:
       OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
       OPENAI_API_KEY: 'test-key'
+      # #1655 session stall watchdog (see Unit Tests lane). 600 is 3.3x this
+      # lane's largest per-test budget of 180s (its own --timeout; the biggest
+      # @pytest.mark.timeout under tests/unit/test_agents is 120s) and 10x its
+      # measured 57.6s startup.
+      E2I_PYTEST_STALL_TIMEOUT: '600'
       # Pin BLAS/OpenMP thread counts to 1 — deterministic FP reductions and
       # lower memory/CPU contention for the in-test ML training under -n2.
       OMP_NUM_THREADS: '1'
