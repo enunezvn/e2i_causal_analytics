@@ -268,6 +268,7 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
             .eq("source_agent", "feedback_learner")
             .gte("reward", OPTIMIZER_MIN_REWARD)
             .order("created_at", desc=True)
+            .order("signal_id", desc=True)  # PK tiebreak — see the adapter
             .limit(OPTIMIZER_SIGNAL_LIMIT)
             .execute()
         )

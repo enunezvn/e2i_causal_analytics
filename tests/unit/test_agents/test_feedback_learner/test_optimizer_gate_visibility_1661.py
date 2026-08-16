@@ -362,8 +362,13 @@ def test_beat_signal_read_is_deterministically_ordered():
     )
     filters = sink["queries"][0][1]
     assert ("order", "created_at", True) in filters
+    # created_at is NOT unique: without a PK tiebreak, rows tied at the limit
+    # boundary can come back in different physical orders across plans, and the
+    # two readers' slices diverge again.
+    assert ("order", "signal_id", True) in filters
     # ...and the order must be applied BEFORE the limit, or it sorts a slice.
     assert filters.index(("order", "created_at", True)) < filters.index(("limit", 2000))
+    assert filters.index(("order", "signal_id", True)) < filters.index(("limit", 2000))
 
 
 @pytest.mark.asyncio

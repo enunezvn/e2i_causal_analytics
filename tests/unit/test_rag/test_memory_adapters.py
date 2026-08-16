@@ -11,7 +11,7 @@ Tests cover:
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 
@@ -645,7 +645,10 @@ class TestSignalCollectorAdapter:
 
         assert len(signals) == 1
         assert signals[0]["reward"] == 0.9
-        mock_query.order.assert_called_once_with("created_at", desc=True)
+        assert mock_query.order.call_args_list == [
+            call("created_at", desc=True),
+            call("signal_id", desc=True),  # PK tiebreak: created_at is not unique
+        ]
 
     @pytest.mark.asyncio
     async def test_get_signals_no_client(self, adapter):
