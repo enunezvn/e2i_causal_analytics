@@ -422,9 +422,23 @@ _decide_trigger = decide_optimizer_trigger
 
 
 def _save_trigger_state(state: Dict[str, Any]) -> None:
+    """Persist the trigger state atomically.
+
+    #1661: this file now has a READER in another container (the api service
+    mounts ``optimized_modules`` read-only and reports the gate on
+    /feedback/health). A bare ``write_text`` is not atomic, so a concurrent read
+    could see a truncated file; ``load_trigger_state`` would swallow the parse
+    error and return ``{}``, briefly reporting "no prior optimization" — i.e.
+    hiding an active cooldown behind an honest-looking cold start. Write to a
+    uniquely-named temp file in the same directory, then ``os.replace``, which
+    is atomic within a filesystem. The uuid (not the pid) keeps two writers from
+    colliding on one temp inode.
+    """
     try:
         _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(json.dumps(state, indent=2))
+        tmp = _STATE_PATH.with_name(f"{_STATE_PATH.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, _STATE_PATH)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist trigger state: %s", e)
 

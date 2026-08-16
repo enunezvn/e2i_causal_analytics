@@ -223,7 +223,9 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
 
     The counts around it explain that verdict:
 
-    - ``eligible_signals``  — feedback_learner signals at ``reward >= min_reward``
+    - ``eligible_signals``  — feedback_learner signals at ``reward >= min_reward``,
+      capped at ``OPTIMIZER_SIGNAL_LIMIT`` exactly as the beat's own read is,
+      so this number and the verdict always describe the same rows.
     - ``total_signals``     — ALL feedback_learner signals ever. The denominator
       is the point: "8 of 218" reads as a low-yield problem, "8" alone reads as
       a volume problem and invites lowering the threshold instead.
@@ -257,10 +259,12 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
     try:
         # The eligible read returns ROWS, not just a count: the trigger needs
         # their mean reward, and taking the same rows the beat takes (same
-        # filters, same limit) is what keeps the two verdicts identical.
+        # filters, same newest-first order, same limit — see
+        # SignalCollectorAdapter.get_signals_for_optimization) is what keeps
+        # the two verdicts identical.
         eligible_res = await _maybe_await(
             client.table(TABLE)
-            .select("reward, created_at", count="exact")
+            .select("reward, created_at")
             .eq("source_agent", "feedback_learner")
             .gte("reward", OPTIMIZER_MIN_REWARD)
             .order("created_at", desc=True)
@@ -282,7 +286,10 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
         return {**unavailable, "reason": f"Optimizer gate status unavailable ({e})"}
 
     eligible_rows = getattr(eligible_res, "data", None) or []
-    eligible = int(getattr(eligible_res, "count", None) or len(eligible_rows))
+    # The rows the gate actually counted, capped at OPTIMIZER_SIGNAL_LIMIT —
+    # NOT a wider exact count, which would keep counting past the cap and let
+    # the reported figure disagree with the verdict's own "N < M" string.
+    eligible = len(eligible_rows)
     total = int(getattr(total_res, "count", 0) or 0)
     runs = int(getattr(runs_res, "count", 0) or 0)
     last_eligible = eligible_rows[0].get("created_at") if eligible_rows else None

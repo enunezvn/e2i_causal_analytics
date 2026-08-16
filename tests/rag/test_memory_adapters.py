@@ -144,6 +144,11 @@ class MockTableQuery:
         self._filters[f"{column}__gte"] = value
         return self
 
+    def order(self, column: str, desc: bool = False):
+        # #1661: signal reads are ordered newest-first before being limited.
+        self._filters["__order"] = (column, desc)
+        return self
+
     def insert(self, records: List[Dict]):
         self._inserted_list.extend(records)
         return self

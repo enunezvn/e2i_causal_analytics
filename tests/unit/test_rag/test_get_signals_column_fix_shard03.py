@@ -23,6 +23,12 @@ class _RecordingQuery:
         self.sink["gte"] = (col, val)
         return self
 
+    def order(self, col, desc=False):
+        # #1661: newest-first BEFORE the limit, so the beat and the
+        # operator-facing gate status take the same slice of the same table.
+        self.sink["order"] = (col, desc)
+        return self
+
     def limit(self, n):
         self.sink["limit"] = n
         return self

@@ -234,6 +234,11 @@ class _FakeClient:
                     rows = [
                         {"reward": 0.6, "created_at": client.last} for _ in range(client.eligible)
                     ]
+                    # Honour the limit the way PostgREST does — a fake that
+                    # ignored it could not catch a count/verdict mismatch.
+                    cap = next((f[1] for f in self.filters if f[0] == "limit"), None)
+                    if cap is not None:
+                        rows = rows[:cap]
                     return type("R", (), {"data": rows, "count": client.eligible})()
                 return type("R", (), {"data": [], "count": client.total})()
 
@@ -284,6 +289,81 @@ async def test_gate_status_flips_to_would_trigger_when_supply_clears_threshold(m
     )
     assert status["would_trigger"] is True
     assert status["optimization_runs"] == 3
+
+
+@pytest.mark.asyncio
+async def test_eligible_count_is_what_the_gate_actually_counted(monkeypatch):
+    """Report the rows the trigger saw, not a wider exact count.
+
+    The eligible read is capped at ``OPTIMIZER_SIGNAL_LIMIT``. A PostgREST
+    ``count="exact"`` would keep counting past that cap, so a card reading
+    "3000 / 2500" could sit beside a reason saying "Insufficient signals:
+    2000 < 2500". The count and the verdict must describe the same row set.
+    """
+    from src.agents.feedback_learner import signal_store
+
+    monkeypatch.setattr(signal_store, "load_trigger_state", dict)
+    monkeypatch.setattr(signal_store, "OPTIMIZER_SIGNAL_LIMIT", 5)
+    monkeypatch.setenv("DSPY_MIN_SIGNALS", "10")
+
+    # 12 rows exist; the capped read returns 5. Both numbers must say 5.
+    client = _FakeClient({}, eligible=12, total=99, runs=0, last="2026-08-16T00:00:00+00:00")
+    status = await signal_store.get_optimizer_gate_status(client=client)
+
+    assert status["eligible_signals"] == 5
+    assert status["reason"] == "Insufficient signals: 5 < 10"
+
+
+def test_trigger_state_write_is_atomic_and_leaves_no_temp_behind(tmp_path, monkeypatch):
+    """A reader in another container must never see a half-written file."""
+    from src.agents.feedback_learner import signal_store
+    from src.tasks import dspy_optimization_tasks as task
+
+    path = tmp_path / "optimized_modules" / ".trigger_state.json"
+    monkeypatch.setattr(task, "_STATE_PATH", path)
+    monkeypatch.setattr(signal_store, "TRIGGER_STATE_PATH", path)
+
+    task._save_trigger_state({"last_optimization": "2026-08-16T00:00:00+00:00"})
+    assert signal_store.load_trigger_state() == {"last_optimization": "2026-08-16T00:00:00+00:00"}
+    # Overwriting must not leave a partial file or temp litter beside it.
+    task._save_trigger_state({"baseline_reward": 0.6})
+    assert signal_store.load_trigger_state() == {"baseline_reward": 0.6}
+    assert [p.name for p in path.parent.iterdir()] == [".trigger_state.json"]
+
+
+def test_beat_signal_read_is_deterministically_ordered():
+    """Both readers must take the SAME slice when the limit binds.
+
+    The beat reads eligible signals through SignalCollectorAdapter and the
+    health surface reads them directly. An unordered ``limit`` makes the row
+    set arbitrary, so the two could compute different mean rewards from the
+    same database and disagree on the reward-delta branch. Newest-first is the
+    right slice for training on recent signals, and it makes the two identical.
+    """
+    import asyncio
+
+    from src.rag.memory_adapters import SignalCollectorAdapter
+
+    sink: dict = {}
+
+    class _SyncQuery(_FakeQuery):
+        def execute(self):
+            self.sink.setdefault("queries", []).append((self.table, list(self.filters)))
+            return type("R", (), {"data": []})()
+
+    class _SyncClient:
+        def table(self, name):
+            return _SyncQuery(name, sink, [], 0)
+
+    asyncio.run(
+        SignalCollectorAdapter(supabase_client=_SyncClient()).get_signals_for_optimization(
+            source_agent="feedback_learner", min_reward=0.5, limit=2000
+        )
+    )
+    filters = sink["queries"][0][1]
+    assert ("order", "created_at", True) in filters
+    # ...and the order must be applied BEFORE the limit, or it sorts a slice.
+    assert filters.index(("order", "created_at", True)) < filters.index(("limit", 2000))
 
 
 @pytest.mark.asyncio

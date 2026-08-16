@@ -633,6 +633,9 @@ class TestSignalCollectorAdapter:
         mock_query.gte = Mock(return_value=mock_query)
         mock_query.limit = Mock(return_value=mock_query)
         mock_query.eq = Mock(return_value=mock_query)
+        # #1661: the read is ordered newest-first before it is limited, so two
+        # readers of the same table take the same slice.
+        mock_query.order = Mock(return_value=mock_query)
 
         mock_client.table.return_value.select = Mock(return_value=mock_query)
 
@@ -642,6 +645,7 @@ class TestSignalCollectorAdapter:
 
         assert len(signals) == 1
         assert signals[0]["reward"] == 0.9
+        mock_query.order.assert_called_once_with("created_at", desc=True)
 
     @pytest.mark.asyncio
     async def test_get_signals_no_client(self, adapter):
