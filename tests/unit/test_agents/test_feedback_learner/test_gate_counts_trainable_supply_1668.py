@@ -8,12 +8,12 @@ cycle that detected no patterns, so a row clears 0.5 essentially only when the
 cycle found patterns — and it is now measuring a different quantity from the one
 the builder consumes.
 
-Measured 2026-08-17 against the 222 real ``feedback_learner`` rows, read-only:
+Measured 2026-08-17 against the 223 real ``feedback_learner`` rows, read-only:
 
-    A  eligible reward >= 0.5                       8    <- today's gate
-    B  informative pool (non-empty feedback_batch) 74
-    C  minority label class (pattern phase)        15    <- the real constraint
-    D  built pattern examples                      30    == 2 * C
+    A  eligible reward >= 0.5                       8    <- the ORIGINAL gate
+    B  informative pool (non-empty feedback_batch) 75
+    C  minority label class (pattern phase)        15
+    D  built pattern examples                      30    == 2 * C, THE GATE'S UNIT
 
 and, decisively:
 
@@ -321,7 +321,7 @@ async def test_status_reports_the_number_the_beat_decides_on(monkeypatch):
     """
     from src.agents.feedback_learner import signal_store
 
-    pool = [_positive(f"p{i}") for i in range(15)] + [_negative(f"n{i}") for i in range(59)]
+    pool = [_positive(f"p{i}") for i in range(15)] + [_negative(f"n{i}") for i in range(60)]
 
     async def _pool(client=None):
         return pool
@@ -329,7 +329,7 @@ async def test_status_reports_the_number_the_beat_decides_on(monkeypatch):
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
 
-    status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=222, runs=0))
+    status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=223, runs=0))
 
     beat_should, beat_reason = signal_store.decide_optimizer_trigger(pool, {}, scheduled=True)
     assert status["would_trigger"] == beat_should
@@ -337,9 +337,9 @@ async def test_status_reports_the_number_the_beat_decides_on(monkeypatch):
 
     assert status["trainset_examples"] == 30
     assert status["positive_signals"] == 15
-    assert status["negative_signals"] == 59
+    assert status["negative_signals"] == 60
     assert status["governing_phase"] == "pattern"
-    assert status["total_signals"] == 222
+    assert status["total_signals"] == 223
     assert status["optimization_runs"] == 0
     assert status["min_trainset_examples"] == 40
     assert status["reason"] == "Insufficient trainset: 30 < 40 examples"
@@ -488,7 +488,7 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
             return _Q()
 
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
-    client = _ExplodingPoolClient(total=222, runs=0)
+    client = _ExplodingPoolClient(total=223, runs=0)
 
     # Positive control on the FAKE itself: the counts really do succeed, so a
     # `None` below is caused by the pool read and not by a client that fails at
@@ -496,7 +496,7 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
     from src.agents.feedback_learner.signal_store import TABLE
 
     probe = client.table(TABLE).select("signal_id", count="exact").limit(1).execute()
-    assert probe.count == 222
+    assert probe.count == 223
 
     status = await signal_store.get_optimizer_gate_status(client=client)
 

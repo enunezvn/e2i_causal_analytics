@@ -296,8 +296,8 @@ class FeedbackLearnerTrainingSignal:
         # exactly as this module already does for `pattern_accuracy` (#424),
         # `update_effectiveness` (#837) and `efficiency` (#1668).
         #
-        # Measured 2026-08-11 over all 220 real prod signals then held: 0 rows
-        # change reward and
+        # Measured 2026-08-11 over the 220 real prod signals of that date
+        # (#1675's experiment, not re-run since): 0 rows change reward and
         # eligibility is unchanged at 8, because every one of the 148
         # zero-feedback rows also carries `rubric=None` and `actionability=0.0`,
         # so its remaining terms are all zero either way. That null result has a
@@ -1019,14 +1019,20 @@ def label_class_counts(signals: List[Dict[str, Any]], phase: str) -> tuple[int, 
 
 
 def trainable_supply(signals: List[Dict[str, Any]], phase: str) -> int:
-    """Signals of the SCARCER label class — the constraint on a balanced trainset.
+    """Signals of the SCARCER label class — the per-class half of the trainset.
 
     ``FeedbackLearnerOptimizer._interleave`` emits exactly ``k = min(n_pos,
     n_neg)`` pairs, so the trainset it builds is ``2 * trainable_supply(...)``
-    examples, always. Counting the informative pool (74 today) or the built
-    examples (30) instead would overstate what is actually trainable: neither
-    can exceed twice this number, and both move when the ABUNDANT class moves
-    while the trainset does not.
+    examples, always — which is why the GATE counts
+    :func:`trainset_examples_for_phase` and not this. Use this one for the
+    per-class BREAKDOWN, which is what says which class the loop is starved of.
+
+    The quantity to avoid is the informative pool (75 on 2026-08-17): it counts
+    rows the optimizer cannot use in balance, and it MOVES when the abundant
+    class moves while the trainset does not. Built examples are not that
+    mistake — ``2 * min(...)`` is flat in the abundant class by construction.
+    An earlier version of this docstring lumped the two together and so argued
+    against the unit the gate now uses.
     """
     positives, negatives = label_class_counts(signals, phase)
     return min(positives, negatives)
@@ -1451,7 +1457,8 @@ class FeedbackLearnerOptimizer:
           ``(recommendation, current_knowledge)`` pair that is not persisted, so
           examples would be fabrication (audit F6).
         - **summary** (#1668) — ``learning_summary`` is a deterministic f-string
-          assembled by ``KnowledgeUpdaterNode._generate_summary``; all 220 stored
+          assembled by ``KnowledgeUpdaterNode._generate_summary``; all 220 rows
+          stored as of 2026-08-11 had
           values match that template (min length 135). There is nothing for an
           LLM prompt to learn from a format string, the metric's only
           discriminating term (length >= 40) saturates on every row, its other
@@ -1473,7 +1480,8 @@ class FeedbackLearnerOptimizer:
         inoperative, since it is applied a second time downstream of the fetch.
 
         Deleting the floor alone is not the fix: the raw population is 148
-        empty-input rows / 59 informative negatives / 15 positives, so the
+        empty-input rows / 60 informative negatives / 15 positives on
+        2026-08-17, so the
         unfiltered trainset would be 93% empty-label and teach the mirror
         defect. The builder therefore requires the PHASE'S INPUT to be non-empty
         and balances the two label classes (see :meth:`_interleave`).

@@ -15,12 +15,13 @@ Two things are wrong with it.
 
 2. **It is exactly the sampling bias the issue is about.** For the pattern
    phase the label IS the patterns the cycle found, so selecting on reward
-   selects on *having found patterns*. Measured over 220 real prod signals: the
+   selects on *having found patterns*. Measured 2026-08-11 over the 220 real
+   prod signals of that date (#1675's experiment, not re-run since): the
    surviving trainset is 8 examples, **100% non-empty label**. The pattern
    detector would never once see a healthy batch labelled "no patterns", and
    under a gold-aware metric that trainset can only teach over-reporting.
 
-Deleting the floor is NOT the fix either. Measured on the same 220 rows, the
+Deleting the floor is NOT the fix either. Measured on those same 220 rows, the
 unfiltered population is:
 
     feedback_batch  patterns   n
@@ -28,7 +29,9 @@ unfiltered population is:
     present         absent      57   <- the informative NEGATIVES
     present         present     15   <- the POSITIVES
 
-So the informative pool is **72**, not 220, and it is 79.2% / 20.8%. Feeding it
+So the informative pool was **72**, not 220, and it was 79.2% / 20.8% (on the
+2026-08-17 corpus of 223 rows it is 75 at 80% / 20% — the RATIO is the point,
+and it has held). Feeding it
 raw would swap one bias for its mirror: under a symmetric metric a
 never-report prompt would score 57/72 = 0.79 while a always-report prompt scores
 15/72 = 0.21, and GEPA maximises the mean.
@@ -142,7 +145,8 @@ def test_balanced_trainset_survives_the_80_20_prefix_split():
 
 
 def test_empty_input_signals_are_not_examples():
-    """148 of 220 real rows collected NO feedback. 'given [], emit []' teaches
+    """148 of the 220 real rows on 2026-08-11 collected NO feedback (148 of 223
+    on 2026-08-17 — the degenerate class has not grown). 'given [], emit []' teaches
     nothing and is not a negative example — it is a degenerate one."""
     signals = [
         _signal(tag=f"e{i}", patterns=[], recommendations=[], feedback=[], reward=0.0)
@@ -171,7 +175,7 @@ def test_single_class_pool_refuses_to_build_a_trainset():
 
 def test_summary_phase_is_an_explicit_skip():
     """``learning_summary`` is a deterministic f-string built by
-    ``KnowledgeUpdaterNode._generate_summary`` — measured: all 220 stored values
+    ``KnowledgeUpdaterNode._generate_summary`` — measured 2026-08-11: all 220 stored values
     match that template, min length 135, so the metric's only discriminating
     term (length >= 40) saturates on every row. There is no gradient and no
     consumer loads ``feedback_learner_summary``."""

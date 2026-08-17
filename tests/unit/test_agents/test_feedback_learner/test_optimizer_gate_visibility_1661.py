@@ -270,10 +270,11 @@ async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch)
 
     from ._gate_supply_fixtures import negative, positive
 
-    # Today's real shape: 15 positives, 59 negatives (plus 148 empty-input rows
-    # that are neither class and are therefore left out of the balance).
+    # The real shape measured 2026-08-17: 15 positives, 60 negatives (plus 148
+    # empty-input rows that are neither class and are therefore left out of the
+    # balance). 15 + 60 + 148 == the 223 `total_signals` asserted below.
     pool = [positive(f"p{i}", created_at="2026-08-08T07:09:02.686027+00:00") for i in range(15)] + [
-        negative(f"n{i}") for i in range(59)
+        negative(f"n{i}") for i in range(60)
     ]
     called: dict = {}
 
@@ -284,14 +285,14 @@ async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch)
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
 
-    client = _CountClient(total=222, runs=0)
+    client = _CountClient(total=223, runs=0)
     status = await signal_store.get_optimizer_gate_status(client=client)
 
     assert status["trainset_examples"] == 30
     assert status["positive_signals"] == 15
-    assert status["negative_signals"] == 59
+    assert status["negative_signals"] == 60
     assert status["governing_phase"] == "pattern"
-    assert status["total_signals"] == 222
+    assert status["total_signals"] == 223
     assert status["optimization_runs"] == 0
     assert status["min_trainset_examples"] == 40
     assert status["would_trigger"] is False

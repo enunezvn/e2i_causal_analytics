@@ -69,7 +69,8 @@ def negative(tag: str, *, reward: float = 0.0, **kw: Any) -> Dict[str, Any]:
 
 
 def degenerate(tag: str, *, reward: float = 0.0, **kw: Any) -> Dict[str, Any]:
-    """No feedback at all — 148 of the 222 real rows. Neither class: the INPUT
+    """No feedback at all — 148 of the 223 real rows on 2026-08-17. Neither
+    class: the INPUT
     is empty too, so the example would say "given nothing, emit nothing"."""
     return signal_row(tag=tag, patterns=[], recommendations=[], feedback=[], reward=reward, **kw)
 
@@ -78,7 +79,8 @@ def balanced_pool(k: int, *, reward: float = 0.9) -> List[Dict[str, Any]]:
     """``k`` positives + ``k`` negatives — a pool with trainable supply ``k``.
 
     ``reward`` applies to the positives only; a negative that cleared a reward
-    floor has never been observed in 222 real rows and would misrepresent the
+    floor has never been observed in 223 real rows (2026-08-17) and would
+    misrepresent the
     population (a correct abstention scores near zero by construction).
     """
     return [positive(f"p{i}", reward=reward) for i in range(k)] + [

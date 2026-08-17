@@ -76,7 +76,7 @@ def test_miprov2_clears_the_minibatch_gate_at_realistic_trainset_sizes():
     (mipro_optimizer_v2.py:311-317) and refuses to minibatch when the default
     ``minibatch_size=35`` exceeds it (:201). With ``minibatch`` defaulting to
     True, EVERY trainset below 44 examples raised before any rollout — and the
-    #1668 balanced builder produces 30 from today's 220 real signals.
+    #1668 balanced builder produces 30 from the 223 real signals of 2026-08-17.
 
     Spends no tokens: the first LM-touching step, ``_bootstrap_fewshot_examples``,
     is replaced with a sentinel, so reaching it is positive proof that both

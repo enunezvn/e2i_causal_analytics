@@ -550,7 +550,8 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     #     that installed NOTHING pins the baseline to a prompt that was never
     #     saved: the next beat then computes delta ~= 0 and returns "No trigger",
     #     so the loop goes quiet after a single no-op run. That matters now
-    #     rather than in theory — supply is 15 against a threshold of 20, so the
+    #     rather than in theory — the trainset is 30 against a threshold of 40
+    #     examples (measured 2026-08-17), so the
     #     first time this gate has ever opened is a near-term event, and a first
     #     run is exactly when "no LM configured" or "no phase built a trainset"
     #     is most likely.
