@@ -474,15 +474,20 @@ function FeedbackLearning() {
           for months without ever compiling anything — and every other signal on
           this page stays green while it does. This card is the one place that
           says so. The denominator is deliberate: "15" alone reads as a volume
-          shortfall, "15 of 222" reads as the low-yield problem it actually is.
+          shortfall, "30 examples out of 223 signals" (measured 2026-08-17)
+          reads as the low-yield problem it actually is.
 
-          #1668 changed WHICH number sits above the threshold. It was the count
-          of signals clearing the reward floor (8) — a measure of how many
-          cycles found defects. It is now the scarcer label class, which is what
-          bounds a balanced trainset: the optimizer pairs one "found patterns"
-          example with one "correctly found none" example, so it can never use
-          more than twice the smaller class. The positive/negative split below
-          is the actionable part — it says which side the supply is waiting on. */}
+          #1668 changed WHICH number sits above the threshold, twice. It was
+          the count of signals clearing the reward floor (8) — a measure of how
+          many cycles found defects. Then it was the scarcer label class (15),
+          which is the real constraint but was shown against a threshold in a
+          different unit. It is now the TRAINSET the builder produces: the
+          optimizer pairs one "found patterns" example with one "correctly found
+          none" example, so the trainset is exactly twice the smaller class, and
+          both numbers on this card are now in examples. The positive/negative
+          split below is the actionable part — it says which side the supply is
+          waiting on, and stays per-signal because that is what an operator
+          acts on. */}
       {optimizer && (
         <Card className="mb-6">
           <CardHeader className="pb-2">
@@ -490,7 +495,7 @@ function FeedbackLearning() {
               <div>
                 <CardDescription>Prompt Optimizer</CardDescription>
                 <CardTitle className="text-2xl flex items-center gap-2">
-                  {`${optimizer.trainable_signals ?? '—'} / ${optimizer.min_signals}`}
+                  {`${optimizer.trainset_examples ?? '—'} / ${optimizer.min_trainset_examples}`}
                   {optimizer.would_trigger === true ? (
                     <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                   ) : optimizer.would_trigger === false ? (
@@ -511,16 +516,16 @@ function FeedbackLearning() {
           </CardHeader>
           <CardContent className="space-y-1">
             <p className="text-sm text-[var(--color-muted-foreground)]">{optimizer.reason}</p>
-            {/* Why the headline number is what it is. Without this "15 < 20"
-                sits beside "222 signals recorded" and reads as a contradiction:
-                the gate counts trainable PAIRS, and only the scarcer class
-                counts. */}
+            {/* Why the headline number is what it is. Without this "30 < 40"
+                sits beside "223 signals recorded" and reads as a contradiction:
+                the trainset is built from PAIRS, so only the scarcer class
+                bounds it. */}
             {optimizer.positive_signals !== null &&
               optimizer.positive_signals !== undefined &&
               optimizer.negative_signals !== null &&
               optimizer.negative_signals !== undefined && (
                 <p className="text-xs text-[var(--color-muted-foreground)]">
-                  {`Trainable supply is the scarcer label class`}
+                  {`The trainset is twice the scarcer label class`}
                   {optimizer.governing_phase ? ` on the ${optimizer.governing_phase} phase` : ''}
                   {`: ${optimizer.positive_signals} signals with a finding / ${optimizer.negative_signals} without. `}
                   {/* Supply is min(with, without), so only the SCARCER class can

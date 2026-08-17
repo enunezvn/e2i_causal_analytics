@@ -453,7 +453,7 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     #
     # The read RAISES on failure rather than returning [] (see
     # read_optimizer_signal_pool). A swallowed outage would land here as an
-    # empty pool and be reported as "Insufficient signals: 0 < 20" — a skip that
+    # empty pool and be reported as "Insufficient trainset: 0 < 40 examples" — a skip that
     # looks exactly like the starved steady state this whole issue is about. A
     # failed read is a failed run, and says so.
     try:
@@ -475,13 +475,17 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     should, reason = _decide_trigger(signals, state, scheduled=True)
 
     # What the gate actually decided on, alongside the pool size it came from.
-    # `reason` says "Insufficient signals: 15 < 20"; without this an operator
-    # reading the task result sees 15 beside a 222-row pool and cannot tell
-    # which quantity moved (#1668). Same function the health surface publishes,
-    # so a task result and the page can never carry different breakdowns.
-    governing_phase, trainable, positives, negatives = signal_store.gate_supply_breakdown(signals)
+    # `reason` says "Insufficient trainset: 30 < 40 examples"; without this an
+    # operator reading the task result sees 30 beside a 223-row pool and cannot
+    # tell which quantity moved (#1668). Same functions the health surface
+    # publishes, so a task result and the page can never carry different
+    # breakdowns — and `trainset_examples` is in the gate's own unit, while the
+    # class counts stay per-signal because "which class is short" is what an
+    # operator acts on.
+    governing_phase, _supply, positives, negatives = signal_store.gate_supply_breakdown(signals)
+    _, trainset_examples = signal_store.gate_trainset_examples(signals)
     supply = {
-        "trainable_signals": trainable,
+        "trainset_examples": trainset_examples,
         "governing_phase": governing_phase,
         "positive_signals": positives,
         "negative_signals": negatives,
@@ -546,7 +550,8 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     #     that installed NOTHING pins the baseline to a prompt that was never
     #     saved: the next beat then computes delta ~= 0 and returns "No trigger",
     #     so the loop goes quiet after a single no-op run. That matters now
-    #     rather than in theory — supply is 15 against a threshold of 20, so the
+    #     rather than in theory — the trainset is 30 against a threshold of 40
+    #     examples (measured 2026-08-17), so the
     #     first time this gate has ever opened is a near-term event, and a first
     #     run is exactly when "no LM configured" or "no phase built a trainset"
     #     is most likely.

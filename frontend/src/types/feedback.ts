@@ -368,15 +368,21 @@ export interface UpdateListResponse {
  * clearing `reward >= 0.5`, i.e. 8 — which counts how many learning cycles found
  * DEFECTS, not how many signals can be trained on. Those 8 rows all carry the
  * same label, and the trainset builder refuses a single-class pool, so the gate
- * could have opened on rows that compile nothing. `trainable_signals` is the
- * scarcer label class: exactly half the balanced trainset the builder produces.
+ * could have opened on rows that compile nothing.
+ *
+ * Its replacement, `trainable_signals` (the scarcer label class), was right
+ * about the constraint but published in a DIFFERENT UNIT from the threshold
+ * beside it: 15 against 20, while the builder produced 30 against an effective
+ * 40. The headline is now `trainset_examples` — what the builder actually
+ * produces — against `min_trainset_examples`, so the two numbers on the card
+ * are comparable without doubling one of them in your head.
  *
  * Counts are `null` — never 0 — when the read fails, so an unknown never reads
  * as a measurement.
  */
 export interface OptimizerGateStatus {
-  /** Signals of the scarcer label class — the gate's own input */
-  trainable_signals: number | null;
+  /** Examples the trainset builder will produce — the gate's own input */
+  trainset_examples: number | null;
   /**
    * Phase the class counts describe: the best-supplied one, or the largest
    * usable pool when no phase has both classes. Null only when the read failed.
@@ -392,9 +398,14 @@ export interface OptimizerGateStatus {
   last_trainable_signal_at: string | null;
   /** prompt_optimization_runs rows; 0 means never optimized */
   optimization_runs: number | null;
-  /** Trainable signals the trigger requires */
-  min_signals: number;
-  /** Whether the count gate is satisfied right now */
+  /** Trainset examples the trigger requires */
+  min_trainset_examples: number;
+  /**
+   * Whether the optimizer beat would trigger right now — the WHOLE decision
+   * (cooldown, forced interval, reward delta, trainset size), not the size gate
+   * alone. `trainset_examples >= min_trainset_examples` with `would_trigger:
+   * false` is a normal state: read `reason` for which branch bound.
+   */
   would_trigger: boolean | null;
   /** Human-readable gate verdict */
   reason: string;

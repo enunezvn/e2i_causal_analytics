@@ -45,11 +45,26 @@ Signals now persist at **two points**:
 
 | Beat task | Schedule | Role |
 |---|---|---|
-| `src.tasks.run_feedback_learning_cycle` | every 6 h (`DSPY_MIN_SIGNALS`-unrelated) | GENERATES training signals by running `agent.learn()`; produces rows consumed by the optimizer |
-| `src.tasks.run_dspy_prompt_optimization` | every 24 h | CONSUMES signals; gated by `GEPAOptimizationTrigger` (default `min_signals=20`, env `DSPY_MIN_SIGNALS`) |
+| `src.tasks.run_feedback_learning_cycle` | every 6 h (gate-unrelated) | GENERATES training signals by running `agent.learn()`; produces rows consumed by the optimizer |
+| `src.tasks.run_dspy_prompt_optimization` | every 24 h | CONSUMES signals; gated by `GEPAOptimizationTrigger` (default `min_trainset_examples=40`, env `DSPY_MIN_TRAINSET_EXAMPLES`) |
 
 Both are registered in `src/workers/celery_app.py` and `src/tasks/dspy_optimization_tasks.py`.
-The trigger threshold default is **20** (previously an unreachable 100).
+The trigger threshold default is **40 TRAINSET EXAMPLES** (#1668). It was
+`min_signals=20` — a per-class count, so the effective bar was already a
+40-example trainset; restating it in the unit it gates changed the name, not
+the strictness. `DSPY_MIN_SIGNALS` is still honoured but TRANSLATED — it counted
+the scarcer label class, so it is applied as `2 x N` examples with a migration
+warning. Reading it at face value would halve whatever the operator asked for;
+ignoring it would relax any value above 20.
+
+**The env override does NOT reach the containers.** `x-common-env` in
+`docker/docker-compose.yml` is a whitelist and neither name is in it, so the
+in-code default governs every containerised run and setting the variable in the
+host `.env` is a silent no-op there. That gap predates #1668 and forwarding it
+is a deliberate deferral (see `test_compose_rag_feedstock_env_1489.py`): it
+would change when the nightly optimization triggers. Concretely, at today's
+30-example supply, a forwarded `DSPY_MIN_TRAINSET_EXAMPLES=20` would OPEN the
+gate. The override is honoured for host-side runs.
 
 ### 0.4 Full wired path
 
@@ -111,12 +126,17 @@ worker threads, empty instruction-hash on save; see
 no real user feedback flowing yet, and the recipient agents are not yet exercised
 by real production traffic. This means:
 
-- The optimization beats fire on schedule but find 0 signals → the
-  `GEPAOptimizationTrigger` gate (threshold 20) blocks optimization → no bundle
-  is produced → `install_all_prompt_bundles` installs nothing. This is correct
-  and expected behaviour, not a bug.
+- The optimization beats fire on schedule but the trainset they can build is
+  below the `GEPAOptimizationTrigger` threshold of **40 examples** → optimization
+  is blocked → no bundle is produced → `install_all_prompt_bundles` installs
+  nothing. This is correct and expected behaviour, not a bug.
+- The shortfall is NOT volume. Measured 2026-08-17: 223 signals recorded, of
+  which 148 collected no feedback at all (degenerate — empty input), 60 are
+  informative negatives and 15 are positives. The trainset is `2 * min(15, 60)`
+  = 30. Supply is bounded by the POSITIVE class, which has not moved since
+  2026-08-08.
 - Real production self-improvement will begin automatically once real usage
-  generates enough signals to cross the threshold.
+  generates enough of the scarcer class to carry a 40-example balanced trainset.
 - **Synthetic data is used only in tests/validation, never installed to prod as
   real training data.** The guardrail tests above lock this in.
 
@@ -480,7 +500,7 @@ Key test files added on this branch (beyond the original 356):
 | `test_recipient_scaffolding_b0.py` | B0 substrate + guardrails (seed ban, emit contract, provider round-trip, metric) |
 | `test_no_synthetic_seed_in_prod.py` | src/-wide import-ban on golden-seed modules (§0.6 guardrail) |
 | `test_recipient_optimizer_shard09.py` | Per-recipient GEPA optimizer end-to-end |
-| `test_gepa_trigger_a3_threshold.py` | `GEPAOptimizationTrigger` default=20, env-override |
+| `test_gepa_trigger_a3_threshold.py` | `GEPAOptimizationTrigger` default=40 trainset examples, env-override |
 | `test_finalize_node_persistence.py` | Graph finalize node persists signal on every run |
 | `test_graph_finalize_training_signal.py` | `_finalize_training_signal` state contracts |
 | `test_prompt_bundles_shard07.py` | `install_all_prompt_bundles` wiring |
@@ -499,11 +519,11 @@ Key test files added on this branch (beyond the original 356):
 | Implicit feedback | Specified in design | Stub only | LOW - Future enhancement |
 | Memory hooks | File exists | Integration pending | LOW - Memory system integration |
 | OpenTelemetry | Span tracing | Latency tracking only | LOW - Observability enhancement |
-| Per-recipient bundle in prod | Wired and tested | Installs nothing until real signals cross `min_signals=20` threshold | LOW - Working as designed; starvation resolves with real usage |
+| Per-recipient bundle in prod | Wired and tested | Installs nothing until the trainset crosses `min_trainset_examples=40` | LOW - Working as designed; starvation resolves with real usage |
 
 ### 14.2 Rationale
 
-The agent is fully functional with the core learning cycle and the DSPy loop is closed end-to-end. Implicit feedback and memory hooks are enhancement features that can be added incrementally without breaking contracts. The DSPy self-improvement loop produces no bundle yet because real usage has not generated enough training signals (threshold 20) — this is correct skip-on-cold-start behaviour, not a deficiency.
+The agent is fully functional with the core learning cycle and the DSPy loop is closed end-to-end. Implicit feedback and memory hooks are enhancement features that can be added incrementally without breaking contracts. The DSPy self-improvement loop produces no bundle yet because the trainset real usage can build is below the threshold (30 examples against 40, measured 2026-08-17) — this is correct skip-on-cold-start behaviour, not a deficiency.
 
 ---
 

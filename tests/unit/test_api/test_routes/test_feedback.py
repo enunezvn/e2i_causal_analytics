@@ -1092,21 +1092,22 @@ async def test_health_carries_the_optimizer_gate_status(monkeypatch, _stub_async
     from src.api.routes import feedback as feedback_routes
 
     async def _status(client=None):
-        # #1668: the headline number is the scarcer LABEL CLASS (15), not the
-        # reward-eligible row count (8). The two differed by more than their
-        # value: the 8 rows are single-class, so the trainset built from them
-        # was empty.
+        # #1668: the headline number is the TRAINSET the builder produces
+        # (30), not the reward-eligible row count (8) and not the scarcer label
+        # class (15). The 8 rows are single-class, so the trainset built from
+        # them was empty; the 15 was the right constraint in the wrong unit,
+        # published beside a threshold counted in examples.
         return {
-            "trainable_signals": 15,
+            "trainset_examples": 30,
             "governing_phase": "pattern",
             "positive_signals": 15,
-            "negative_signals": 59,
-            "total_signals": 222,
+            "negative_signals": 60,
+            "total_signals": 223,
             "last_trainable_signal_at": "2026-08-08T07:09:02.686027+00:00",
             "optimization_runs": 0,
-            "min_signals": 20,
+            "min_trainset_examples": 40,
             "would_trigger": False,
-            "reason": "Optimizer inert: 15 of 222 ...",
+            "reason": "Optimizer inert: 30 of 223 ...",
         }
 
     monkeypatch.setattr(
@@ -1116,13 +1117,13 @@ async def test_health_carries_the_optimizer_gate_status(monkeypatch, _stub_async
         result = await feedback_routes.get_feedback_health()
 
     assert result.optimizer is not None
-    assert result.optimizer.trainable_signals == 15
+    assert result.optimizer.trainset_examples == 30
     assert result.optimizer.governing_phase == "pattern"
     assert result.optimizer.positive_signals == 15
-    assert result.optimizer.negative_signals == 59
-    assert result.optimizer.total_signals == 222
+    assert result.optimizer.negative_signals == 60
+    assert result.optimizer.total_signals == 223
     assert result.optimizer.last_trainable_signal_at == "2026-08-08T07:09:02.686027+00:00"
-    assert result.optimizer.min_signals == 20
+    assert result.optimizer.min_trainset_examples == 40
     assert result.optimizer.optimization_runs == 0
     assert result.optimizer.would_trigger is False
     assert result.optimizer.reason.startswith("Optimizer inert")
@@ -1143,7 +1144,7 @@ async def test_health_survives_an_unreadable_optimizer_gate(monkeypatch, _stub_a
     assert result.status in ["healthy", "degraded"]
     # Unknown, never a fabricated zero that reads as a measurement.
     assert result.optimizer is not None
-    assert result.optimizer.trainable_signals is None
+    assert result.optimizer.trainset_examples is None
     assert result.optimizer.would_trigger is None
 
 
@@ -1160,11 +1161,11 @@ async def test_health_degrades_when_the_async_client_cannot_be_built(monkeypatch
         result = await feedback_routes.get_feedback_health()
 
     assert result.optimizer is not None
-    assert result.optimizer.trainable_signals is None
+    assert result.optimizer.trainset_examples is None
     assert result.optimizer.would_trigger is None
     assert "unavailable" in result.optimizer.reason.lower()
     # The threshold is still reported — it comes from config, not the DB.
-    assert result.optimizer.min_signals == 20
+    assert result.optimizer.min_trainset_examples == 40
 
 
 # =============================================================================

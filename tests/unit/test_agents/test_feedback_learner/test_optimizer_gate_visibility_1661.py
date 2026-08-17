@@ -141,8 +141,8 @@ def test_beat_reads_the_gate_constants_from_signal_store():
 def test_beat_and_health_surface_share_one_trigger_decision():
     """The health surface must not re-implement a subset of the gate.
 
-    The real trigger checks cooldown BEFORE the signal count, then a forced
-    interval, then a reward delta. A status field that models only "count >=
+    The real trigger checks cooldown BEFORE the trainset size, then a forced
+    interval, then a reward delta. A status field that models only "examples >=
     threshold" would report Ready while the beat still skips — reproducing, one
     layer up, exactly the false-green this issue is about.
     """
@@ -153,7 +153,7 @@ def test_beat_and_health_surface_share_one_trigger_decision():
     assert task._load_trigger_state is signal_store.load_trigger_state
 
 
-def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
+def test_cooldown_binds_even_when_the_trainset_gate_is_satisfied():
     """Plenty of signals + a recent optimization must NOT read as Ready."""
     from datetime import datetime, timedelta, timezone
 
@@ -168,12 +168,13 @@ def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
     assert "Cooldown active" in reason
 
 
-def test_signal_gate_is_what_binds_with_no_prior_optimization():
-    """Today's real state: no trigger file, supply below the threshold.
+def test_the_trainset_gate_is_what_binds_with_no_prior_optimization():
+    """Today's real state: no trigger file, trainset below the threshold.
 
     #1668: the rows are real-shaped rather than ``{"reward": 0.6}``. The gate
-    counts the scarcer label class now, so a row carrying only a reward is not
-    a signal the optimizer could train on and must not read as one.
+    counts the EXAMPLES the trainset builder would produce, so a row carrying
+    only a reward is not a signal the optimizer could train on and must not
+    read as one.
     """
     from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
@@ -181,19 +182,29 @@ def test_signal_gate_is_what_binds_with_no_prior_optimization():
 
     should, reason = decide_optimizer_trigger(balanced_pool(8), {})
     assert should is False
-    assert reason == "Insufficient signals: 8 < 20"
+    assert reason == "Insufficient trainset: 16 < 40 examples"
 
 
-def test_min_signals_honours_the_env_override(monkeypatch):
-    from src.agents.feedback_learner.signal_store import DEFAULT_MIN_SIGNALS, optimizer_min_signals
+def test_the_threshold_honours_the_env_override(monkeypatch):
+    """The override moved to DSPY_MIN_TRAINSET_EXAMPLES with the unit.
 
+    The old name is still honoured but TRANSLATED (``2 * N``) and loses to this
+    one when both are set — see ``test_gate_threshold_unit_1668`` for why
+    reading it at face value would halve the gate and ignoring it would relax
+    any value above 20.
+    """
+    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    default = GEPAOptimizationTrigger.min_trainset_examples
     monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
-    assert optimizer_min_signals() == DEFAULT_MIN_SIGNALS
-    monkeypatch.setenv("DSPY_MIN_SIGNALS", "7")
-    assert optimizer_min_signals() == 7
+    monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+    assert optimizer_min_trainset_examples() == default
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "14")
+    assert optimizer_min_trainset_examples() == 14
     # A garbled value must not crash the health surface.
-    monkeypatch.setenv("DSPY_MIN_SIGNALS", "not-a-number")
-    assert optimizer_min_signals() == DEFAULT_MIN_SIGNALS
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "not-a-number")
+    assert optimizer_min_trainset_examples() == default
 
 
 # =============================================================================
@@ -262,10 +273,11 @@ async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch)
 
     from ._gate_supply_fixtures import negative, positive
 
-    # Today's real shape: 15 positives, 59 negatives (plus 148 empty-input rows
-    # that are neither class and are therefore left out of the balance).
+    # The real shape measured 2026-08-17: 15 positives, 60 negatives (plus 148
+    # empty-input rows that are neither class and are therefore left out of the
+    # balance). 15 + 60 + 148 == the 223 `total_signals` asserted below.
     pool = [positive(f"p{i}", created_at="2026-08-08T07:09:02.686027+00:00") for i in range(15)] + [
-        negative(f"n{i}") for i in range(59)
+        negative(f"n{i}") for i in range(60)
     ]
     called: dict = {}
 
@@ -276,20 +288,20 @@ async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch)
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
 
-    client = _CountClient(total=222, runs=0)
+    client = _CountClient(total=223, runs=0)
     status = await signal_store.get_optimizer_gate_status(client=client)
 
-    assert status["trainable_signals"] == 15
+    assert status["trainset_examples"] == 30
     assert status["positive_signals"] == 15
-    assert status["negative_signals"] == 59
+    assert status["negative_signals"] == 60
     assert status["governing_phase"] == "pattern"
-    assert status["total_signals"] == 222
+    assert status["total_signals"] == 223
     assert status["optimization_runs"] == 0
-    assert status["min_signals"] == 20
+    assert status["min_trainset_examples"] == 40
     assert status["would_trigger"] is False
     assert status["last_trainable_signal_at"] == "2026-08-08T07:09:02.686027+00:00"
     # Verbatim from the REAL trigger, not a re-worded copy.
-    assert status["reason"] == "Insufficient signals: 15 < 20"
+    assert status["reason"] == "Insufficient trainset: 30 < 40 examples"
     # The pool read must go through the caller's client, not a second factory
     # lookup that could resolve to a different database.
     assert called["client"] is client
@@ -311,7 +323,7 @@ async def test_gate_status_flips_to_would_trigger_when_supply_clears_threshold(m
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=300, runs=3))
     assert status["would_trigger"] is True
-    assert status["trainable_signals"] == 25
+    assert status["trainset_examples"] == 50
     assert status["optimization_runs"] == 3
 
 
@@ -323,14 +335,15 @@ async def test_reported_supply_is_what_the_gate_actually_counted(monkeypatch):
     a PostgREST ``count="exact"`` that keeps counting past that cap, so it can
     legitimately exceed the pool — but the GATE's number must come from the
     capped rows, or a card reading "3000 / 2500" could sit beside a reason
-    saying "Insufficient signals: 2000 < 2500".
+    saying "Insufficient trainset: 4000 < 5000 examples".
     """
     from src.agents.feedback_learner import signal_store
 
     from ._gate_supply_fixtures import balanced_pool
 
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
-    monkeypatch.setenv("DSPY_MIN_SIGNALS", "10")
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "20")
 
     async def _pool(client=None):
         return balanced_pool(5)  # what the capped read returned
@@ -338,9 +351,9 @@ async def test_reported_supply_is_what_the_gate_actually_counted(monkeypatch):
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=999, runs=0))
 
-    assert status["trainable_signals"] == 5
+    assert status["trainset_examples"] == 10
     assert status["total_signals"] == 999
-    assert status["reason"] == "Insufficient signals: 5 < 10"
+    assert status["reason"] == "Insufficient trainset: 10 < 20 examples"
 
 
 def test_trigger_state_write_is_atomic_and_leaves_no_temp_behind(tmp_path, monkeypatch):
@@ -408,12 +421,12 @@ def test_beat_signal_read_is_deterministically_ordered():
 
 
 @pytest.mark.asyncio
-async def test_gate_status_agrees_with_the_beat_once_the_signal_gate_opens(monkeypatch):
+async def test_gate_status_agrees_with_the_beat_once_the_trainset_gate_opens(monkeypatch):
     """The status must report what the BEAT would decide — the #1661 invariant.
 
     Superseded the earlier form of this test, which asserted that a recent
-    ``last_optimization`` surfaces as ``"Cooldown active"`` once the signal gate
-    opens. That was correct while the cooldown bound the beat. #1656 established
+    ``last_optimization`` surfaces as ``"Cooldown active"`` once the trainset
+    gate opens. That was correct while the cooldown bound the beat. #1656 established
     that it must NOT: ``last_optimization`` is a COMPLETION stamp, so on a
     ``crontab(hour=6)`` entry any nonzero runtime leaves the next fire inside the
     24h window and the daily task silently runs every OTHER day. The beat now
@@ -485,7 +498,7 @@ async def test_gate_status_degrades_honestly_without_a_client(monkeypatch):
 
     monkeypatch.setattr("src.memory.services.factories.get_supabase_client", _none, raising=False)
     status = await signal_store.get_optimizer_gate_status(client=None)
-    assert status["trainable_signals"] is None
+    assert status["trainset_examples"] is None
     assert status["positive_signals"] is None
     assert status["negative_signals"] is None
     assert status["total_signals"] is None

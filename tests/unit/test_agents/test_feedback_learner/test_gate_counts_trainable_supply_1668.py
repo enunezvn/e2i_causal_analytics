@@ -1,29 +1,33 @@
 """#1668: the optimizer gate must count what the trainset builder can use.
 
 #1675 stopped the TRAINSET being selected on defect yield. The GATE was left
-measuring it: the beat counts ``feedback_learner`` rows at ``reward >= 0.5``,
-which is **8** on today's production table. That number is a defect-yield
-proxy — ``compute_reward`` gives the coverage and actionability terms zero on a
-cycle that detected no patterns, so a row clears 0.5 essentially only when the
-cycle found patterns — and it is now measuring a different quantity from the one
-the builder consumes.
+measuring it: BEFORE this change the beat counted ``feedback_learner`` rows at
+``reward >= 0.5``, which is **8** on the production table. That number is a
+defect-yield proxy — ``compute_reward`` gives the coverage and actionability
+terms zero on a cycle that detected no patterns, so a row clears 0.5 essentially
+only when the cycle found patterns — and it measured a different quantity from
+the one the builder consumes.
 
-Measured 2026-08-17 against the 222 real ``feedback_learner`` rows, read-only:
+(The gate has since moved once more: it counts TRAINSET EXAMPLES, and the
+threshold is stated in that unit too. The tests below assert the current
+behaviour; the paragraphs describe the defect they were written against.)
 
-    A  eligible reward >= 0.5                       8    <- today's gate
-    B  informative pool (non-empty feedback_batch) 74
-    C  minority label class (pattern phase)        15    <- the real constraint
-    D  built pattern examples                      30    == 2 * C
+Measured 2026-08-17 against the 223 real ``feedback_learner`` rows, read-only:
+
+    A  eligible reward >= 0.5                       8    <- the ORIGINAL gate
+    B  informative pool (non-empty feedback_batch) 75
+    C  minority label class (pattern phase)        15
+    D  built pattern examples                      30    == 2 * C, THE GATE'S UNIT
 
 and, decisively:
 
     pattern examples built from the BEAT's own reward>=0.5 pool:  0
 
-The eight rows the gate counts are 100% positive (all from cycles that found
-patterns), so they are single-class and ``_signals_to_examples`` refuses them
-outright. The gate and the builder are not merely different numbers; the gate's
-own row set trains nothing. Twenty such rows would satisfy today's gate and
-still be untrainable.
+The eight rows the OLD gate counted are 100% positive (all from cycles that
+found patterns), so they are single-class and ``_signals_to_examples`` refuses
+them outright. That gate and the builder were not merely different numbers; the
+gate's own row set trained nothing. Twenty such rows would have satisfied it and
+still been untrainable.
 
 ``_interleave`` caps the trainset at ``k = min(n_pos, n_neg)`` pairs, so the
 minority label class IS the supply constraint and ``len(trainset) == 2 * k``
@@ -64,17 +68,17 @@ def _optimizer() -> FeedbackLearnerOptimizer:
 
 
 # =============================================================================
-# 1. The gate counts the scarcer label class, not the reward-eligible rows
+# 1. The gate counts the trainset the builder produces, not reward-eligible rows
 # =============================================================================
 
 
 def test_all_positive_pool_that_builds_nothing_must_not_open_the_gate():
     """The sharpest form of the defect: 25 rows the builder refuses outright.
 
-    Every one clears ``reward >= 0.5``, so today's gate reads 25 >= 20 and
-    fires. ``_signals_to_examples`` then finds a single-class pool and returns
+    Every one clears ``reward >= 0.5``, so the PRE-#1668 gate read 25 >= 20 and
+    fired. ``_signals_to_examples`` then finds a single-class pool and returns
     ZERO examples — the beat would run and compile nothing. The gate must read
-    the supply as 0.
+    the trainset as 0.
     """
     pool = [_positive(f"p{i}", reward=0.9) for i in range(25)]
 
@@ -82,7 +86,7 @@ def test_all_positive_pool_that_builds_nothing_must_not_open_the_gate():
 
     should, reason = decide_optimizer_trigger(pool, {}, scheduled=True)
     assert should is False, reason
-    assert reason == "Insufficient signals: 0 < 20"
+    assert reason == "Insufficient trainset: 0 < 40 examples"
 
     # Positive control: the probe is not blind. Add the missing class and the
     # same function opens.
@@ -92,7 +96,7 @@ def test_all_positive_pool_that_builds_nothing_must_not_open_the_gate():
 
 
 def test_gate_counts_the_minority_class_not_the_reward_eligible_count():
-    """30 eligible positives + 5 ineligible negatives -> supply is 5, not 30."""
+    """30 eligible positives + 5 ineligible negatives -> a 10-example trainset, not 30."""
     from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
     pool = [_positive(f"p{i}", reward=0.9) for i in range(30)]
@@ -103,7 +107,7 @@ def test_gate_counts_the_minority_class_not_the_reward_eligible_count():
 
     should, reason = decide_optimizer_trigger(pool, {}, scheduled=True)
     assert should is False
-    assert reason == "Insufficient signals: 5 < 20"
+    assert reason == "Insufficient trainset: 10 < 40 examples"
 
 
 def test_degenerate_rows_are_neither_class():
@@ -321,7 +325,7 @@ async def test_status_reports_the_number_the_beat_decides_on(monkeypatch):
     """
     from src.agents.feedback_learner import signal_store
 
-    pool = [_positive(f"p{i}") for i in range(15)] + [_negative(f"n{i}") for i in range(59)]
+    pool = [_positive(f"p{i}") for i in range(15)] + [_negative(f"n{i}") for i in range(60)]
 
     async def _pool(client=None):
         return pool
@@ -329,20 +333,20 @@ async def test_status_reports_the_number_the_beat_decides_on(monkeypatch):
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
 
-    status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=222, runs=0))
+    status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=223, runs=0))
 
     beat_should, beat_reason = signal_store.decide_optimizer_trigger(pool, {}, scheduled=True)
     assert status["would_trigger"] == beat_should
     assert status["reason"] == beat_reason
 
-    assert status["trainable_signals"] == 15
+    assert status["trainset_examples"] == 30
     assert status["positive_signals"] == 15
-    assert status["negative_signals"] == 59
+    assert status["negative_signals"] == 60
     assert status["governing_phase"] == "pattern"
-    assert status["total_signals"] == 222
+    assert status["total_signals"] == 223
     assert status["optimization_runs"] == 0
-    assert status["min_signals"] == 20
-    assert status["reason"] == "Insufficient signals: 15 < 20"
+    assert status["min_trainset_examples"] == 40
+    assert status["reason"] == "Insufficient trainset: 30 < 40 examples"
 
 
 @pytest.mark.asyncio
@@ -410,7 +414,7 @@ async def test_status_degrades_honestly_without_a_client(monkeypatch):
 
     monkeypatch.setattr("src.memory.services.factories.get_supabase_client", _none, raising=False)
     status = await signal_store.get_optimizer_gate_status(client=None)
-    assert status["trainable_signals"] is None
+    assert status["trainset_examples"] is None
     assert status["positive_signals"] is None
     assert status["negative_signals"] is None
     assert status["total_signals"] is None
@@ -433,8 +437,8 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
     It now reads through ``SignalCollectorAdapter.get_signals_for_optimization``,
     which SWALLOWS read failures and returns ``[]`` (memory_adapters.py:844) —
     deliberately, because a DB outage must not crash the Celery beat. So a pool
-    read failure would publish ``trainable_signals: 0`` and "Insufficient
-    signals: 0 < 20", which is a measurement of an outage.
+    read failure would publish ``trainset_examples: 0`` and "Insufficient
+    trainset: 0 < 40 examples", which reads as a measurement of an outage.
 
     Worse than cosmetic: 0 is also the value a genuinely single-class corpus
     produces, so the one number an operator would use to tell "the loop is
@@ -488,7 +492,7 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
             return _Q()
 
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
-    client = _ExplodingPoolClient(total=222, runs=0)
+    client = _ExplodingPoolClient(total=223, runs=0)
 
     # Positive control on the FAKE itself: the counts really do succeed, so a
     # `None` below is caused by the pool read and not by a client that fails at
@@ -496,11 +500,11 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
     from src.agents.feedback_learner.signal_store import TABLE
 
     probe = client.table(TABLE).select("signal_id", count="exact").limit(1).execute()
-    assert probe.count == 222
+    assert probe.count == 223
 
     status = await signal_store.get_optimizer_gate_status(client=client)
 
-    assert status["trainable_signals"] is None
+    assert status["trainset_examples"] is None
     assert status["positive_signals"] is None
     assert status["negative_signals"] is None
     assert status["total_signals"] is None
@@ -525,9 +529,9 @@ async def test_a_genuinely_empty_corpus_still_reports_a_measured_zero(monkeypatc
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
     status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=0, runs=0))
 
-    assert status["trainable_signals"] == 0
+    assert status["trainset_examples"] == 0
     assert status["would_trigger"] is False
-    assert status["reason"] == "Insufficient signals: 0 < 20"
+    assert status["reason"] == "Insufficient trainset: 0 < 40 examples"
 
 
 @pytest.mark.asyncio
@@ -622,11 +626,11 @@ async def test_status_attributes_its_class_counts_even_when_no_phase_is_trainabl
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
     status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=15, runs=0))
 
-    assert status["trainable_signals"] == 0
+    assert status["trainset_examples"] == 0
     assert status["governing_phase"] == "pattern"
     assert status["positive_signals"] == 15
     assert status["negative_signals"] == 0
-    assert status["reason"] == "Insufficient signals: 0 < 20"
+    assert status["reason"] == "Insufficient trainset: 0 < 40 examples"
 
 
 def test_gate_supply_breakdown_names_a_phase_on_an_empty_pool():
@@ -678,7 +682,7 @@ async def test_last_trainable_signal_at_is_the_newest_pair_completer_on_a_tie(mo
     status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=2, runs=0))
 
     assert (status["positive_signals"], status["negative_signals"]) == (1, 1)
-    assert status["trainable_signals"] == 1
+    assert status["trainset_examples"] == 2
     # The NEGATIVE closed the pair, so it is what moved supply from 0 to 1.
     assert status["last_trainable_signal_at"] == "2026-08-17T05:00:00+00:00"
 

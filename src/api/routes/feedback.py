@@ -382,16 +382,24 @@ class OptimizerGateStatus(BaseModel):
     rows clearing ``reward >= 0.5``, i.e. 8 — which measures how many cycles
     found DEFECTS, not how many can be trained on. Those 8 rows are all one
     label class, so the trainset built from them is empty. The gate now counts
-    ``trainable_signals``, the scarcer label class of the best-supplied phase,
-    which is exactly half the balanced trainset the builder produces.
+    ``trainset_examples``, the number of examples the trainset builder will
+    actually produce for the best-supplied phase.
+
+    That headline moved once more in the #1668 follow-up. #1677 published
+    ``trainable_signals`` — the scarcer label class, 15 — beside a threshold of
+    20, while the builder produced 30 against an effective 40: right constraint,
+    wrong unit, and an operator had to double one number in their head to check
+    the verdict. Both are now in examples. ``positive_signals`` /
+    ``negative_signals`` stay per-signal because "which class is short" is the
+    actionable fact, and halving them would say nothing extra.
 
     Counts are ``None`` (not 0) when the read fails: a fabricated zero on a
     health surface is indistinguishable from a measured one.
     """
 
-    trainable_signals: Optional[int] = Field(
+    trainset_examples: Optional[int] = Field(
         default=None,
-        description="Signals of the scarcer label class — the gate's own input",
+        description="Examples the trainset builder will produce — the gate's own input",
     )
     governing_phase: Optional[str] = Field(
         default=None,
@@ -418,9 +426,13 @@ class OptimizerGateStatus(BaseModel):
     optimization_runs: Optional[int] = Field(
         default=None, description="prompt_optimization_runs rows; 0 means never optimized"
     )
-    min_signals: int = Field(..., description="Trainable signals the trigger requires")
+    min_trainset_examples: int = Field(..., description="Trainset examples the trigger requires")
     would_trigger: Optional[bool] = Field(
-        default=None, description="Whether the count gate is satisfied right now"
+        default=None,
+        description=(
+            "Whether the optimizer beat would trigger right now — the WHOLE decision "
+            "(cooldown, forced interval, reward delta, trainset size), not the size gate alone"
+        ),
     )
     reason: str = Field(..., description="Human-readable gate verdict")
 
@@ -1167,7 +1179,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
     except Exception as e:  # noqa: BLE001 - health must degrade, never 500
         logger.warning("optimizer gate status unavailable: %s", e)
         optimizer = OptimizerGateStatus(
-            min_signals=signal_store.optimizer_min_signals(),
+            min_trainset_examples=signal_store.optimizer_min_trainset_examples(),
             reason=f"Optimizer gate status unavailable ({e})",
         )
 

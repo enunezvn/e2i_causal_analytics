@@ -41,7 +41,7 @@ async def run_feedback_learner_optimization(
     that can drift from the gate's. #1675 established why the floor must be 0:
     for the pattern phase the training label IS the patterns a cycle found, so a
     reward floor selects on *having found patterns* and hands the optimizer a
-    100%-positive trainset (measured: 8 of 222 real signals, every one with a
+    100%-positive trainset (measured 2026-08-17: 8 of 223 real signals, every one with a
     non-empty label — and ``_signals_to_examples`` builds ZERO examples from
     them, because a single-class pool is an honest skip).
 
@@ -54,7 +54,11 @@ async def run_feedback_learner_optimization(
     from src.optimization.dspy_lm import ensure_dspy_configured
     from src.optimization.gepa import save_optimized_module
 
-    from .dspy_integration import FeedbackLearnerOptimizer
+    from .dspy_integration import (
+        FeedbackLearnerOptimizer,
+        recorded_set_sizes,
+        trainset_examples_for_phase,
+    )
     from .signal_store import (
         OPTIMIZER_SIGNAL_LIMIT,
         get_feedback_learner_training_signals,
@@ -112,11 +116,29 @@ async def run_feedback_learner_optimization(
     for phase in phases:
         run_id = None
         if effective_optimizer:
+            # The columns are called trainset_size / valset_size, and both
+            # siblings (`recipient_optimizer`, the RAG leg) fill them with the
+            # sets they hand to `compile()`. This used to receive `len(pool)` —
+            # 223 for a phase that builds 30 and a phase that builds 4, so every
+            # historical row claimed a trainset 7x larger than the one that ran
+            # and gave two phases an order of magnitude apart the same number.
+            # `recorded_set_sizes` reports what each optimizer path actually
+            # trains and validates on. The two split in OPPOSITE directions:
+            # GEPA keeps the 80% prefix (24/6 at 30 examples), MIPROv2 hands the
+            # whole list to dspy, which keeps the 20% prefix (6/24). Same defect
+            # class as the gate's own unit (#1668) — a name that stopped
+            # matching its quantity — and the example count alone would have
+            # been the next stop along it, which is exactly where the first
+            # attempt at this fix landed.
+            n_train, n_val = recorded_set_sizes(
+                trainset_examples_for_phase(pool, phase), effective_optimizer
+            )
             run_id = await record_run_started(
                 agent_name=f"feedback_learner_{phase}",
                 optimizer_type=effective_optimizer,
                 budget_preset=budget,
-                trainset_size=len(pool),
+                trainset_size=n_train,
+                valset_size=n_val,
                 created_by="run_dspy_prompt_optimization",
                 client=client,
             )

@@ -10,8 +10,8 @@ already applies twice: ``pattern_accuracy`` (F-015 / #424) and
 ``update_effectiveness`` (F15 / #837) are OMITTED and their weight redistributed
 when unmeasurable, never anchored.
 
-Measured over all 220 real ``dspy_agent_training_signals`` rows
-(``source_agent='feedback_learner'``, prod, 2026-08-17), replayed through the
+Measured 2026-08-11 over the 220 real ``dspy_agent_training_signals`` rows of
+that date (``source_agent='feedback_learner'``, prod), replayed through the
 real function: **0 rows change reward and eligibility stays 8 -> 8**, because
 every one of the 148 zero-feedback rows also has ``rubric=None`` and
 ``actionability=0.0``, so its remaining terms are all zero either way.
