@@ -52,8 +52,10 @@ Both are registered in `src/workers/celery_app.py` and `src/tasks/dspy_optimizat
 The trigger threshold default is **40 TRAINSET EXAMPLES** (#1668). It was
 `min_signals=20` — a per-class count, so the effective bar was already a
 40-example trainset; restating it in the unit it gates changed the name, not
-the strictness. `DSPY_MIN_SIGNALS` is read but deliberately IGNORED, because
-its value would mean half what its setter intended.
+the strictness. `DSPY_MIN_SIGNALS` is still honoured but TRANSLATED — it counted
+the scarcer label class, so it is applied as `2 x N` examples with a migration
+warning. Reading it at face value would halve whatever the operator asked for;
+ignoring it would relax any value above 20.
 
 **The env override does NOT reach the containers.** `x-common-env` in
 `docker/docker-compose.yml` is a whitelist and neither name is in it, so the

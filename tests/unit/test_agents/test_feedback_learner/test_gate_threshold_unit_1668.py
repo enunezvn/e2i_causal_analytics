@@ -181,20 +181,30 @@ def test_budget_escalates_on_the_derived_thresholds_not_on_multiples_of_the_gate
     assert trigger.get_recommended_budget(medium - 2, hours_since_last=1.0) == "light"
 
 
-def test_the_critical_override_relaxes_adequacy_but_not_feasibility():
-    """Urgency cannot create data.
+def test_the_critical_override_relaxes_adequacy_but_not_selectability():
+    """Urgency cannot create data, and it cannot make a choice measurable.
 
     The override used to accept ``min_signals // 2`` — a fraction of a number
-    whose unit changed underneath it. The only quantity for which "below this,
-    running is provably pointless" is a measured fact is the feasibility floor.
+    whose unit changed underneath it, which in the new unit is "half a
+    trainset". It now bounds at the lightest preset's ranking floor: below it
+    the valset cannot express a distinct level per candidate, so the argmax
+    that installs a prompt is arbitrary and urgency buys only spend.
+
+    That bound is 22, which is STRICTER than the 20 examples ``// 2`` allowed —
+    asserted here, because a critical-pattern path that fires where the
+    pre-change one stayed quiet would be a behaviour change this PR does not
+    claim.
     """
     from src.agents.feedback_learner.dspy_integration import (
-        MIN_FEASIBLE_TRAINSET_EXAMPLES,
+        BUDGET_MIN_TRAINSET_EXAMPLES,
         GEPAOptimizationTrigger,
     )
 
     trigger = GEPAOptimizationTrigger()
-    floor = MIN_FEASIBLE_TRAINSET_EXAMPLES
+    floor = BUDGET_MIN_TRAINSET_EXAMPLES["light"]
+
+    # The old bar, in the new unit: `min_signals // 2` == 10 per class == 20.
+    assert floor >= 20, "the override must not fire below where it fired before"
 
     fires, reason = trigger.should_trigger(
         trainset_examples=floor, current_reward=0.0, has_critical_patterns=True
@@ -221,24 +231,43 @@ def test_the_env_override_uses_the_new_name(monkeypatch):
     assert optimizer_min_trainset_examples() == 44
 
 
-def test_the_old_env_name_is_ignored_because_its_unit_changed(monkeypatch, caplog):
-    """Honouring ``DSPY_MIN_SIGNALS`` would HALVE the gate in the new unit.
+def test_the_old_env_name_is_TRANSLATED_not_read_at_face_value(monkeypatch, caplog):
+    """``DSPY_MIN_SIGNALS=N`` meant N per class, which is a 2N-example trainset.
 
-    An operator who set it to 20 meant "20 signals" = a 40-example trainset.
-    Reading that same 20 as examples would open the gate at 20 examples. Failing
-    closed on the in-code default, loudly, is the only safe reading.
+    Reading N as examples would HALVE whatever the operator asked for. IGNORING
+    it — the first version of this — is only fail-closed for N <= 20: a host
+    with N=100 meant a 200-example bar and would have been silently relaxed to
+    the 40-example default. Translating is the only reading that changes
+    nothing at any value, which is what this PR claims of itself.
     """
     import logging
 
-    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
     from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
 
     monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+
     monkeypatch.setenv("DSPY_MIN_SIGNALS", "20")
     with caplog.at_level(logging.WARNING):
-        value = optimizer_min_trainset_examples()
-    assert value == GEPAOptimizationTrigger().min_trainset_examples
+        assert optimizer_min_trainset_examples() == 40
     assert "DSPY_MIN_SIGNALS" in caplog.text
+
+    # The case that makes IGNORING it wrong: a legacy value STRICTER than the
+    # default must stay stricter.
+    monkeypatch.setenv("DSPY_MIN_SIGNALS", "100")
+    assert optimizer_min_trainset_examples() == 200
+
+
+def test_the_new_env_name_wins_when_both_are_set(monkeypatch, caplog):
+    """It needs no interpretation — it is already in the gate's unit."""
+    import logging
+
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    monkeypatch.setenv("DSPY_MIN_SIGNALS", "100")
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "44")
+    with caplog.at_level(logging.WARNING):
+        assert optimizer_min_trainset_examples() == 44
+    assert "Both" in caplog.text
 
 
 def test_an_override_below_the_feasibility_floor_is_clamped(monkeypatch, caplog):

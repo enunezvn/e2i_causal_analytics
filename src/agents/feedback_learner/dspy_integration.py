@@ -849,15 +849,26 @@ class GEPAOptimizationTrigger:
 
         # Critical patterns override other checks.
         #
-        # The floor here is FEASIBILITY, not a fraction of the threshold. It
-        # used to be ``min_signals // 2``, a half of a number whose unit has now
-        # changed twice; in the new unit that reads "half a trainset", which is
-        # not a quantity anything measures. Urgency can justify accepting a
-        # thinner statistical margin — it cannot create data, and below
-        # MIN_FEASIBLE_TRAINSET_EXAMPLES the production (GEPA) path rejects the
-        # trainset outright, so firing there buys a state write and no compile.
+        # The floor is derived, not a fraction of the threshold. It used to be
+        # ``min_signals // 2``, a half of a number whose unit has now changed
+        # twice; in the new unit that reads "half a trainset", which is not a
+        # quantity anything measures.
+        #
+        # What urgency may relax is the STATISTICAL ADEQUACY margin above the
+        # threshold — not the point below which the run cannot do its job. A
+        # triggered run generates candidate programs and installs the argmax
+        # over the valset; below BUDGET_MIN_TRAINSET_EXAMPLES["light"] the
+        # valset cannot express a distinct level per candidate even at the
+        # lightest preset (which is the one production spends), so the
+        # selection is arbitrary and urgency buys nothing but spend. That
+        # bound is 22 — STRICTER than the 20 examples the old ``// 2`` allowed,
+        # so this override cannot fire anywhere the previous one stayed quiet.
+        #
+        # MIN_FEASIBLE_TRAINSET_EXAMPLES (8) is a different job: it is where
+        # the optimizer refuses to compile at all, and it floors the operator's
+        # env override rather than this branch.
         if has_critical_patterns and self.critical_pattern_triggers:
-            if trainset_examples >= MIN_FEASIBLE_TRAINSET_EXAMPLES:
+            if trainset_examples >= BUDGET_MIN_TRAINSET_EXAMPLES["light"]:
                 return (
                     True,
                     f"Critical patterns detected with a {trainset_examples}-example trainset",

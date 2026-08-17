@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.agents.feedback_learner.dspy_integration import (
-    MIN_FEASIBLE_TRAINSET_EXAMPLES,
+    BUDGET_MIN_TRAINSET_EXAMPLES,
     GEPAOptimizationTrigger,
 )
 
@@ -171,16 +171,16 @@ class TestGEPAOptimizationTrigger:
         assert "Forced" in reason
 
     # Critical pattern tests
-    def test_critical_patterns_trigger_at_the_feasibility_floor(self, trigger):
-        """Urgency relaxes the adequacy margin, down to what can still compile.
+    def test_critical_patterns_trigger_at_the_lightest_presets_ranking_floor(self, trigger):
+        """Urgency relaxes the adequacy margin, down to where a choice is measurable.
 
-        The bound is MIN_FEASIBLE_TRAINSET_EXAMPLES, not a fraction of the
-        threshold: `min_signals // 2` was half of a number whose unit has since
-        changed twice, and "half a trainset" is not a quantity anything measures.
-        Read from the constant so the test tracks the derivation, not a literal.
-        """
+        The bound is BUDGET_MIN_TRAINSET_EXAMPLES['light'], not a fraction of
+        the threshold: `min_signals // 2` was half of a number whose unit has
+        since changed twice, and "half a trainset" is not a quantity anything
+        measures. Read from the constant so the test tracks the derivation
+        rather than a literal."""
         should_trigger, reason = trigger.should_trigger(
-            trainset_examples=MIN_FEASIBLE_TRAINSET_EXAMPLES,
+            trainset_examples=BUDGET_MIN_TRAINSET_EXAMPLES["light"],
             current_reward=0.70,
             baseline_reward=0.70,  # No delta
             last_optimization=None,
@@ -188,7 +188,7 @@ class TestGEPAOptimizationTrigger:
         assert should_trigger is False, "without critical patterns this must NOT fire"
 
         should_trigger, reason = trigger.should_trigger(
-            trainset_examples=MIN_FEASIBLE_TRAINSET_EXAMPLES,
+            trainset_examples=BUDGET_MIN_TRAINSET_EXAMPLES["light"],
             current_reward=0.70,
             baseline_reward=0.70,
             last_optimization=None,
@@ -198,10 +198,10 @@ class TestGEPAOptimizationTrigger:
         assert should_trigger is True
         assert "Critical patterns" in reason
 
-    def test_critical_patterns_cannot_go_below_the_feasibility_floor(self, trigger):
-        """One class-pair below the floor, both optimizer paths reject the trainset."""
+    def test_critical_patterns_cannot_go_below_the_ranking_floor(self, trigger):
+        """One class-pair below it the valset cannot rank the preset's candidates."""
         should_trigger, reason = trigger.should_trigger(
-            trainset_examples=MIN_FEASIBLE_TRAINSET_EXAMPLES - 2,
+            trainset_examples=BUDGET_MIN_TRAINSET_EXAMPLES["light"] - 2,
             current_reward=0.70,
             baseline_reward=0.70,
             last_optimization=None,

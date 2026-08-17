@@ -126,11 +126,25 @@ OPTIMIZER_SIGNAL_LIMIT = 2000
 # (scripts, tests, a manual invocation), not for the container.
 MIN_TRAINSET_EXAMPLES_ENV = "DSPY_MIN_TRAINSET_EXAMPLES"
 
-# Read but deliberately NOT honoured. An operator who set DSPY_MIN_SIGNALS=20
-# meant "20 signals of the scarcer class", i.e. a 40-example trainset. Reading
-# that same 20 as examples would HALVE the gate silently — the identical defect
-# this change exists to remove. Ignoring it and saying so fails closed.
+# Honoured, but TRANSLATED rather than read at face value. An operator who set
+# DSPY_MIN_SIGNALS=N meant "N signals of the scarcer class", which is a 2N-example
+# trainset — so it is applied as ``2 * N`` and a migration warning is logged.
+#
+# Reading N as examples would HALVE whatever they asked for, which is the exact
+# defect this change exists to remove. IGNORING it was the first attempt here and
+# it was wrong in the other direction: it is only fail-CLOSED for N <= 20, and a
+# host with DSPY_MIN_SIGNALS=100 (a 200-example bar) would have been silently
+# relaxed to the 40-example default. Translating is the only reading that changes
+# nothing for any value.
+#
+# ``DSPY_MIN_TRAINSET_EXAMPLES`` wins when both are set: it is stated in the unit
+# the gate uses, so it needs no interpretation.
 LEGACY_MIN_SIGNALS_ENV = "DSPY_MIN_SIGNALS"
+
+# A legacy value counted the scarcer label class; ``_interleave`` emits two
+# examples per class-pair, so this is the conversion — the same factor
+# ``trainset_examples_for_phase`` applies.
+LEGACY_SIGNALS_TO_EXAMPLES = 2
 
 
 def optimizer_min_trainset_examples() -> int:
@@ -147,38 +161,51 @@ def optimizer_min_trainset_examples() -> int:
     — it can only make the gate stricter than the operator asked for, never
     looser, and it is logged.
 
+    ``DSPY_MIN_SIGNALS`` is still honoured, TRANSLATED — see
+    ``LEGACY_MIN_SIGNALS_ENV``. The new name wins when both are set.
+
     A garbled override falls back to the default rather than raising: this is
     read on a health endpoint, and a bad env var must not take the page down.
     """
     default = GEPAOptimizationTrigger.min_trainset_examples
 
-    if os.getenv(LEGACY_MIN_SIGNALS_ENV) is not None:
+    raw = os.getenv(MIN_TRAINSET_EXAMPLES_ENV)
+    name = MIN_TRAINSET_EXAMPLES_ENV
+    scale = 1
+
+    if raw is None:
+        legacy = os.getenv(LEGACY_MIN_SIGNALS_ENV)
+        if legacy is None:
+            return default
+        raw, name, scale = legacy, LEGACY_MIN_SIGNALS_ENV, LEGACY_SIGNALS_TO_EXAMPLES
         logger.warning(
-            "%s is set but IGNORED: the gate now counts trainset examples, not signals, "
-            "so its value would mean half what it used to. Set %s instead; using %d.",
+            "%s=%r counts SIGNALS of the scarcer class; the gate now counts trainset "
+            "examples, which is twice that. Applying it as %s=%s. Migrate to %s.",
+            LEGACY_MIN_SIGNALS_ENV,
+            legacy,
+            MIN_TRAINSET_EXAMPLES_ENV,
+            f"{legacy} * {LEGACY_SIGNALS_TO_EXAMPLES}",
+            MIN_TRAINSET_EXAMPLES_ENV,
+        )
+    elif os.getenv(LEGACY_MIN_SIGNALS_ENV) is not None:
+        logger.warning(
+            "Both %s and %s are set; using %s, which is already in the gate's unit.",
+            MIN_TRAINSET_EXAMPLES_ENV,
             LEGACY_MIN_SIGNALS_ENV,
             MIN_TRAINSET_EXAMPLES_ENV,
-            default,
         )
 
-    raw = os.getenv(MIN_TRAINSET_EXAMPLES_ENV)
-    if raw is None:
-        return default
     try:
-        value = int(raw)
+        value = int(raw) * scale
     except ValueError:
-        logger.warning(
-            "%s=%r is not an integer; using default %d",
-            MIN_TRAINSET_EXAMPLES_ENV,
-            raw,
-            default,
-        )
+        logger.warning("%s=%r is not an integer; using default %d", name, raw, default)
         return default
     if value < MIN_FEASIBLE_TRAINSET_EXAMPLES:
         logger.warning(
-            "%s=%d is below the %d-example floor the production optimizer path enforces; "
-            "clamping to %d so the gate cannot open on a trainset that compiles nothing.",
-            MIN_TRAINSET_EXAMPLES_ENV,
+            "%s resolves to %d examples, below the %d-example floor the production "
+            "optimizer path enforces; clamping to %d so the gate cannot open on a "
+            "trainset that compiles nothing.",
+            name,
             value,
             MIN_FEASIBLE_TRAINSET_EXAMPLES,
             MIN_FEASIBLE_TRAINSET_EXAMPLES,
