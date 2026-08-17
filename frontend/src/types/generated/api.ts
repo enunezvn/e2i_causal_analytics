@@ -13823,7 +13823,7 @@ export interface components {
         OptimizationStatus: "pending" | "formulating" | "optimizing" | "analyzing" | "projecting" | "completed" | "failed";
         /**
          * OptimizerGateStatus
-         * @description State of the daily DSPy prompt-optimization trigger (#1661).
+         * @description State of the daily DSPy prompt-optimization trigger (#1661, #1668).
          *
          *     The beat that drives prompt optimization returns ``{"status": "skipped"}``
          *     whenever its trigger is unsatisfied — a legitimate return, so nothing fails
@@ -13831,25 +13831,47 @@ export interface components {
          *     the trigger's own inputs, so an operator watching this page can see whether
          *     the loop is actually doing anything.
          *
+         *     #1668 re-pointed the headline number. It used to be ``eligible_signals`` —
+         *     rows clearing ``reward >= 0.5``, i.e. 8 — which measures how many cycles
+         *     found DEFECTS, not how many can be trained on. Those 8 rows are all one
+         *     label class, so the trainset built from them is empty. The gate now counts
+         *     ``trainable_signals``, the scarcer label class of the best-supplied phase,
+         *     which is exactly half the balanced trainset the builder produces.
+         *
          *     Counts are ``None`` (not 0) when the read fails: a fabricated zero on a
          *     health surface is indistinguishable from a measured one.
          */
         OptimizerGateStatus: {
             /**
-             * Eligible Signals
-             * @description feedback_learner signals clearing the reward floor
+             * Trainable Signals
+             * @description Signals of the scarcer label class — the gate's own input
              */
-            eligible_signals?: number | null;
+            trainable_signals?: number | null;
+            /**
+             * Governing Phase
+             * @description Phase the class counts describe: the best-supplied one, or the largest usable pool when no phase has both classes. Null only when the read failed
+             */
+            governing_phase?: string | null;
+            /**
+             * Positive Signals
+             * @description Signals whose cycle produced the phase's output, on the governing phase
+             */
+            positive_signals?: number | null;
+            /**
+             * Negative Signals
+             * @description Signals whose cycle correctly produced none, on the governing phase
+             */
+            negative_signals?: number | null;
             /**
              * Total Signals
              * @description All feedback_learner signals ever — the yield denominator
              */
             total_signals?: number | null;
             /**
-             * Last Eligible Signal At
-             * @description When an eligible signal was last recorded
+             * Last Trainable Signal At
+             * @description When the scarcer label class last gained a signal
              */
-            last_eligible_signal_at?: string | null;
+            last_trainable_signal_at?: string | null;
             /**
              * Optimization Runs
              * @description prompt_optimization_runs rows; 0 means never optimized
@@ -13857,14 +13879,9 @@ export interface components {
             optimization_runs?: number | null;
             /**
              * Min Signals
-             * @description Eligible signals the trigger requires
+             * @description Trainable signals the trigger requires
              */
             min_signals: number;
-            /**
-             * Min Reward
-             * @description Reward floor a signal must clear
-             */
-            min_reward: number;
             /**
              * Would Trigger
              * @description Whether the count gate is satisfied right now

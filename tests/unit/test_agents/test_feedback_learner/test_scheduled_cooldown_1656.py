@@ -31,7 +31,33 @@ from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
 
 def _signals(n: int, reward: float = 0.9) -> list[dict]:
-    return [{"reward": reward} for _ in range(n)]
+    """A pool whose TRAINABLE SUPPLY is ``n`` — ``n`` positives + ``n`` negatives.
+
+    #1668: ``decide_optimizer_trigger`` counts the scarcer label class of the
+    best-supplied phase, derived from the same classifier the trainset builder
+    uses, so ``[{"reward": 0.9}] * n`` no longer stands for "n signals the
+    trigger will count" — such rows carry no input_context/output and are not
+    trainable at all. These tests are about the COOLDOWN, so the pool has to
+    genuinely carry the supply they name or every one of them would be decided
+    by the signal gate instead.
+    """
+    return [
+        {
+            "source_agent": "feedback_learner",
+            "reward": reward,
+            "input_context": {"feedback_batch": [{"x": 1}]},
+            "output": {"patterns": [{"severity": "high"}]},
+        }
+        for _ in range(n)
+    ] + [
+        {
+            "source_agent": "feedback_learner",
+            "reward": 0.0,
+            "input_context": {"feedback_batch": [{"x": 1}]},
+            "output": {"patterns": []},
+        }
+        for _ in range(n)
+    ]
 
 
 def _state(hours_ago: float, baseline: float = 0.0) -> dict:

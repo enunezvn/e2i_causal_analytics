@@ -532,7 +532,14 @@ class TestBeatPreservesLegState:
             return []
 
         async def _no_optimization(*a: Any, **k: Any) -> dict:
-            return {"status": "stubbed"}
+            # #1668: shaped like a run that INSTALLED a module. The beat now
+            # writes `baseline_reward` only when a phase reached
+            # status == "optimized" (a baseline is the reward level of the
+            # prompt currently installed, so pinning it to a prompt that was
+            # never saved silences the next run). These tests are about the RAG
+            # leg's fingerprint surviving the final save, so the stub has to
+            # represent the case where that save happens in full.
+            return {"status": "completed", "phases": {"pattern": {"status": "optimized"}}}
 
         monkeypatch.setattr(
             signal_module, "get_feedback_learner_training_signals", _no_signals, raising=True

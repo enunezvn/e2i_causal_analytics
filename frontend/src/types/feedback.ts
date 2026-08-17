@@ -358,28 +358,42 @@ export interface UpdateListResponse {
 }
 
 /**
- * State of the daily DSPy prompt-optimization trigger (#1661).
+ * State of the daily DSPy prompt-optimization trigger (#1661, #1668).
  *
  * The beat returns a legitimate `{"status": "skipped"}` whenever its trigger is
  * unsatisfied, so the self-improvement loop can stay inert indefinitely without
  * anything failing or alerting. These are the trigger's own inputs.
  *
+ * #1668 re-pointed the headline number. It used to be `eligible_signals` — rows
+ * clearing `reward >= 0.5`, i.e. 8 — which counts how many learning cycles found
+ * DEFECTS, not how many signals can be trained on. Those 8 rows all carry the
+ * same label, and the trainset builder refuses a single-class pool, so the gate
+ * could have opened on rows that compile nothing. `trainable_signals` is the
+ * scarcer label class: exactly half the balanced trainset the builder produces.
+ *
  * Counts are `null` — never 0 — when the read fails, so an unknown never reads
  * as a measurement.
  */
 export interface OptimizerGateStatus {
-  /** feedback_learner signals clearing the reward floor */
-  eligible_signals: number | null;
+  /** Signals of the scarcer label class — the gate's own input */
+  trainable_signals: number | null;
+  /**
+   * Phase the class counts describe: the best-supplied one, or the largest
+   * usable pool when no phase has both classes. Null only when the read failed.
+   */
+  governing_phase: string | null;
+  /** Signals whose cycle produced the phase's output, on the governing phase */
+  positive_signals: number | null;
+  /** Signals whose cycle correctly produced none, on the governing phase */
+  negative_signals: number | null;
   /** All feedback_learner signals ever — the yield denominator */
   total_signals: number | null;
-  /** When an eligible signal was last recorded */
-  last_eligible_signal_at: string | null;
+  /** When the scarcer label class last gained a signal */
+  last_trainable_signal_at: string | null;
   /** prompt_optimization_runs rows; 0 means never optimized */
   optimization_runs: number | null;
-  /** Eligible signals the trigger requires */
+  /** Trainable signals the trigger requires */
   min_signals: number;
-  /** Reward floor a signal must clear */
-  min_reward: number;
   /** Whether the count gate is satisfied right now */
   would_trigger: boolean | null;
   /** Human-readable gate verdict */

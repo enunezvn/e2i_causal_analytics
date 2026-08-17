@@ -19,8 +19,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Tuple, cast
 
 from src.agents.feedback_learner.signal_store import (
-    OPTIMIZER_MIN_REWARD,
-    OPTIMIZER_SIGNAL_LIMIT,
     TRIGGER_STATE_PATH,
     decide_optimizer_trigger,
     load_trigger_state,
@@ -444,17 +442,29 @@ def _save_trigger_state(state: Dict[str, Any]) -> None:
 
 
 async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
-    from src.agents.feedback_learner.optimization_runner import (
-        run_feedback_learner_optimization,
-    )
+    from src.agents.feedback_learner import optimization_runner, signal_store
     from src.agents.feedback_learner.prompt_bundles import install_all_prompt_bundles
-    from src.agents.feedback_learner.signal_store import (
-        get_feedback_learner_training_signals,
-    )
 
-    signals = await get_feedback_learner_training_signals(
-        min_reward=OPTIMIZER_MIN_REWARD, limit=OPTIMIZER_SIGNAL_LIMIT
-    )
+    # #1668: ONE read. These rows are counted by the gate below AND handed to
+    # the trainset builder — re-reading in the runner left the published verdict
+    # describing a different row set from the one that gets trained on (a
+    # learning cycle writes every 6h, and the two reads used different filters
+    # and different limits).
+    #
+    # The read RAISES on failure rather than returning [] (see
+    # read_optimizer_signal_pool). A swallowed outage would land here as an
+    # empty pool and be reported as "Insufficient signals: 0 < 20" — a skip that
+    # looks exactly like the starved steady state this whole issue is about. A
+    # failed read is a failed run, and says so.
+    try:
+        signals = await signal_store.read_optimizer_signal_pool()
+    except Exception as e:  # noqa: BLE001 - reported, not raised: this is a task body
+        logger.error("DSPy prompt optimization aborted: signal read failed: %s", e)
+        return {
+            "status": "failed",
+            "reason": f"signal read failed: {e}",
+            "task_id": task_id,
+        }
     state = _load_trigger_state()
     # scheduled=True (#1656): this task is driven by ``crontab(hour=6, minute=0)``,
     # which already bounds the rate. The 24h cooldown measures from the previous
@@ -464,15 +474,33 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     # keeps reporting what this task would actually decide (#1661).
     should, reason = _decide_trigger(signals, state, scheduled=True)
 
+    # What the gate actually decided on, alongside the pool size it came from.
+    # `reason` says "Insufficient signals: 15 < 20"; without this an operator
+    # reading the task result sees 15 beside a 222-row pool and cannot tell
+    # which quantity moved (#1668). Same function the health surface publishes,
+    # so a task result and the page can never carry different breakdowns.
+    governing_phase, trainable, positives, negatives = signal_store.gate_supply_breakdown(signals)
+    supply = {
+        "trainable_signals": trainable,
+        "governing_phase": governing_phase,
+        "positive_signals": positives,
+        "negative_signals": negatives,
+        "pool_signals": len(signals),
+    }
+
     if not force and not should:
         return {
             "status": "skipped",
             "reason": reason,
             "signals": len(signals),
+            **supply,
             "task_id": task_id,
         }
 
-    optimization = await run_feedback_learner_optimization(budget=budget)
+    # The rows the gate counted, not a second read of the table (#1668).
+    optimization = await optimization_runner.run_feedback_learner_optimization(
+        budget=budget, signals=signals
+    )
 
     # Produce optimized recipient bundles (Shard 09), best-effort per recipient,
     # so the install step below has real bundles to install. Each recipient is
@@ -506,18 +534,43 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
     # re-spending the judge budget on identical records every triggered beat.
     # Re-load rather than reusing `state` from before the legs ran, or this
     # would restore a snapshot that predates their writes.
-    final_state = _load_trigger_state()
-    final_state.update(
-        {
-            "last_optimization": datetime.now(timezone.utc).isoformat(),
-            "baseline_reward": mean_reward,
-        }
+    #
+    # #1668 (codex iter-1 HIGH): the two keys record DIFFERENT facts and are no
+    # longer written together.
+    #
+    #   last_optimization — "a run executed". Always stamped: one really did,
+    #     and it spent recipient budget. On the event-triggered path this stamp
+    #     is the only thing bounding how often the task re-fires.
+    #   baseline_reward   — "the reward level of the prompt now installed", the
+    #     anchor the reward-delta branch measures against. Writing it after a run
+    #     that installed NOTHING pins the baseline to a prompt that was never
+    #     saved: the next beat then computes delta ~= 0 and returns "No trigger",
+    #     so the loop goes quiet after a single no-op run. That matters now
+    #     rather than in theory — supply is 15 against a threshold of 20, so the
+    #     first time this gate has ever opened is a near-term event, and a first
+    #     run is exactly when "no LM configured" or "no phase built a trainset"
+    #     is most likely.
+    installed_a_module = any(
+        phase.get("status") == "optimized"
+        for phase in (optimization.get("phases") or {}).values()
+        if isinstance(phase, dict)
     )
+    final_state = _load_trigger_state()
+    final_state["last_optimization"] = datetime.now(timezone.utc).isoformat()
+    if installed_a_module:
+        final_state["baseline_reward"] = mean_reward
+    else:
+        logger.info(
+            "DSPy prompt optimization installed no module (%s); leaving baseline_reward "
+            "unchanged so the next scheduled run is not suppressed by a zero delta.",
+            optimization.get("status"),
+        )
     _save_trigger_state(final_state)
     return {
-        "status": "completed",
+        "status": "completed" if installed_a_module else "completed_no_modules",
         "trigger_reason": reason,
         "signals": len(signals),
+        **supply,
         "optimization": optimization,
         "recipient_bundles": recipient_bundles,
         "bundles_installed": installed,

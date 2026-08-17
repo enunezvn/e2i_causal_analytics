@@ -473,8 +473,16 @@ function FeedbackLearning() {
           `{"status":"skipped"}` at its trigger, so it can complete successfully
           for months without ever compiling anything — and every other signal on
           this page stays green while it does. This card is the one place that
-          says so. The denominator is deliberate: "8" alone reads as a volume
-          shortfall, "8 of 218" reads as the low-yield problem it actually is. */}
+          says so. The denominator is deliberate: "15" alone reads as a volume
+          shortfall, "15 of 222" reads as the low-yield problem it actually is.
+
+          #1668 changed WHICH number sits above the threshold. It was the count
+          of signals clearing the reward floor (8) — a measure of how many
+          cycles found defects. It is now the scarcer label class, which is what
+          bounds a balanced trainset: the optimizer pairs one "found patterns"
+          example with one "correctly found none" example, so it can never use
+          more than twice the smaller class. The positive/negative split below
+          is the actionable part — it says which side the supply is waiting on. */}
       {optimizer && (
         <Card className="mb-6">
           <CardHeader className="pb-2">
@@ -482,7 +490,7 @@ function FeedbackLearning() {
               <div>
                 <CardDescription>Prompt Optimizer</CardDescription>
                 <CardTitle className="text-2xl flex items-center gap-2">
-                  {`${optimizer.eligible_signals ?? '—'} / ${optimizer.min_signals}`}
+                  {`${optimizer.trainable_signals ?? '—'} / ${optimizer.min_signals}`}
                   {optimizer.would_trigger === true ? (
                     <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                   ) : optimizer.would_trigger === false ? (
@@ -503,6 +511,29 @@ function FeedbackLearning() {
           </CardHeader>
           <CardContent className="space-y-1">
             <p className="text-sm text-[var(--color-muted-foreground)]">{optimizer.reason}</p>
+            {/* Why the headline number is what it is. Without this "15 < 20"
+                sits beside "222 signals recorded" and reads as a contradiction:
+                the gate counts trainable PAIRS, and only the scarcer class
+                counts. */}
+            {optimizer.positive_signals !== null &&
+              optimizer.positive_signals !== undefined &&
+              optimizer.negative_signals !== null &&
+              optimizer.negative_signals !== undefined && (
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  {`Trainable supply is the scarcer label class`}
+                  {optimizer.governing_phase ? ` on the ${optimizer.governing_phase} phase` : ''}
+                  {`: ${optimizer.positive_signals} signals with a finding / ${optimizer.negative_signals} without. `}
+                  {/* Supply is min(with, without), so only the SCARCER class can
+                      raise it — and when the two are equal, the next signal of
+                      either class does (it completes a pair). Saying "detects
+                      patterns" on a tie would point at the wrong half. */}
+                  {optimizer.positive_signals === optimizer.negative_signals
+                    ? 'The classes are balanced, so the next cycle of either kind raises it.'
+                    : optimizer.positive_signals < optimizer.negative_signals
+                      ? 'Supply grows when a learning cycle detects patterns.'
+                      : 'Supply grows when a learning cycle processes feedback and correctly finds nothing.'}
+                </p>
+              )}
             <p className="text-xs text-[var(--color-muted-foreground)]">
               {optimizer.total_signals !== null && optimizer.total_signals !== undefined
                 ? `${optimizer.total_signals} signals recorded`
@@ -513,8 +544,8 @@ function FeedbackLearning() {
                 : optimizer.optimization_runs
                   ? `${optimizer.optimization_runs} optimization runs`
                   : 'run count unknown'}
-              {optimizer.last_eligible_signal_at
-                ? ` • last eligible signal ${new Date(optimizer.last_eligible_signal_at).toLocaleString()}`
+              {optimizer.last_trainable_signal_at
+                ? ` • supply last moved ${new Date(optimizer.last_trainable_signal_at).toLocaleString()}`
                 : ''}
             </p>
           </CardContent>

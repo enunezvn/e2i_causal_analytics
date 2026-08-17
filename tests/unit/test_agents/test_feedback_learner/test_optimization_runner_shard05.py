@@ -149,6 +149,16 @@ async def test_orchestrator_skips_when_insufficient_signals():
     )
 
     class _EmptyClient:
+        """A client whose signals table is genuinely EMPTY.
+
+        #1668: ``order`` was missing here, so the adapter's query chain raised
+        AttributeError, the adapter swallowed it and returned ``[]``, and this
+        test passed by exercising the SWALLOW rather than an empty table — the
+        very ambiguity ("nothing there" vs "the read broke") that #1668 made the
+        pool read strict to remove. With the method present the client now
+        answers the real query with no rows, which is what the test claims.
+        """
+
         def table(self, *_):
             return self
 
@@ -159,6 +169,9 @@ async def test_orchestrator_skips_when_insufficient_signals():
             return self
 
         def gte(self, *_):
+            return self
+
+        def order(self, *_, **__):
             return self
 
         def limit(self, *_):
@@ -201,7 +214,7 @@ async def test_orchestrator_discards_run_on_pre_compile_skip(monkeypatch):
     monkeypatch.setattr(rec, "record_run_failed", fake_failed)
     monkeypatch.setattr(rec, "record_run_discarded", fake_discarded, raising=False)
 
-    async def fake_signals(client=None, min_reward=0.5):
+    async def fake_signals(client=None, min_reward=0.0, limit=2000, strict=False):
         # 6 signals pass the runner's MIN_SIGNALS=5 guard, yet GEPA's own
         # trainset guard (int(6 * 0.8) = 4 < 5) skips pre-compile — the
         # common real shape of this bug.
@@ -272,7 +285,7 @@ async def test_run_that_compiles_nothing_is_not_reported_as_completed(monkeypatc
         d["reward"] = 0.9
         rows.append(d)
 
-    async def fake_signals(client=None, min_reward=0.0, limit=1000):
+    async def fake_signals(client=None, min_reward=0.0, limit=2000, strict=False):
         return rows
 
     monkeypatch.setattr(

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -22,41 +22,72 @@ async def run_feedback_learner_optimization(
     phases: Sequence[str] = DEFAULT_PHASES,
     budget: str = "light",
     client: Optional[Any] = None,
-    min_reward: float = 0.0,
+    min_reward: Optional[float] = None,
     optimizer_type: str = "gepa",
+    signals: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Run optimization across phases and persist artifacts. Never raises.
 
-    ``min_reward`` selects the CANDIDATE POOL read from the signal store; it is
-    not the training gate. #1668 changed its default from ``0.5`` to ``0.0``:
+    ``signals`` (#1668) is the candidate pool. The beat passes the rows its gate
+    already counted, so the published verdict and the trainset describe the SAME
+    rows — re-reading here meant the gate's "N trainable" and the builder's input
+    were two different queries seconds apart, and before #1668 they were also two
+    different filters and two different limits. When omitted the pool is read
+    from ``read_optimizer_signal_pool``, the one definition of it.
+
+    ``min_reward`` overrides that pool's reward floor and exists only for tests
+    and ad-hoc runs. It defaults to ``None`` — meaning "use the pool" — rather
+    than to a number, because a number here is a second definition of the pool
+    that can drift from the gate's. #1675 established why the floor must be 0:
     for the pattern phase the training label IS the patterns a cycle found, so a
     reward floor selects on *having found patterns* and hands the optimizer a
-    100%-positive trainset (measured: 8 of 220 real signals, every one with a
-    non-empty label). ``FeedbackLearnerOptimizer._signals_to_examples`` now does
-    the selecting — it requires each phase's INPUT to be non-empty and balances
-    the two label classes — so restricting the pool by reward here can only
-    starve it of the negative class.
+    100%-positive trainset (measured: 8 of 222 real signals, every one with a
+    non-empty label — and ``_signals_to_examples`` builds ZERO examples from
+    them, because a single-class pool is an honest skip).
 
     This does NOT open the optimizer's trigger. The daily beat still gates on
-    ``decide_optimizer_trigger`` over ``reward >= OPTIMIZER_MIN_REWARD`` signals
-    (``src/tasks/dspy_optimization_tasks.py``); nothing below runs until that
-    fires. ``MIN_SIGNALS`` here is only a cheap pre-check on raw rows — the
-    binding guard is ``len(trainset) < 5`` inside ``_optimize_with_gepa``, over
-    the examples actually built.
+    ``decide_optimizer_trigger`` (``src/tasks/dspy_optimization_tasks.py``);
+    nothing below runs until that fires. ``MIN_SIGNALS`` here is only a cheap
+    pre-check on raw rows — the binding guard is ``len(trainset) < 5`` inside
+    ``_optimize_with_gepa``, over the examples actually built.
     """
     from src.optimization.dspy_lm import ensure_dspy_configured
     from src.optimization.gepa import save_optimized_module
 
     from .dspy_integration import FeedbackLearnerOptimizer
-    from .signal_store import get_feedback_learner_training_signals
+    from .signal_store import (
+        OPTIMIZER_SIGNAL_LIMIT,
+        get_feedback_learner_training_signals,
+        read_optimizer_signal_pool,
+    )
 
     result: Dict[str, Any] = {"status": "completed", "signals_used": 0, "phases": {}}
 
-    signals = await get_feedback_learner_training_signals(client=client, min_reward=min_reward)
-    result["signals_used"] = len(signals)
-    if len(signals) < MIN_SIGNALS:
+    pool: List[Dict[str, Any]]
+    if signals is not None:
+        pool = list(signals)
+    elif min_reward is None:
+        # ``read_optimizer_signal_pool`` raises on a failed read so the gate can
+        # tell an outage from an empty corpus (#1668). This function's contract
+        # is "never raises", so the failure becomes a distinguishable STATUS
+        # rather than the "skipped_insufficient_signals" a swallowed [] would
+        # have produced — which reads as "nothing to do" for a database that is
+        # down.
+        try:
+            pool = await read_optimizer_signal_pool(client=client)
+        except Exception as e:  # noqa: BLE001 - documented never-raises contract
+            logger.error("Optimization aborted: signal read failed: %s", e)
+            result["status"] = "failed_signal_read"
+            result["error"] = str(e)
+            return result
+    else:
+        pool = await get_feedback_learner_training_signals(
+            client=client, min_reward=min_reward, limit=OPTIMIZER_SIGNAL_LIMIT
+        )
+    result["signals_used"] = len(pool)
+    if len(pool) < MIN_SIGNALS:
         result["status"] = "skipped_insufficient_signals"
-        logger.info("Optimization skipped: %d < %d signals", len(signals), MIN_SIGNALS)
+        logger.info("Optimization skipped: %d < %d signals", len(pool), MIN_SIGNALS)
         return result
 
     if not ensure_dspy_configured():
@@ -85,12 +116,12 @@ async def run_feedback_learner_optimization(
                 agent_name=f"feedback_learner_{phase}",
                 optimizer_type=effective_optimizer,
                 budget_preset=budget,
-                trainset_size=len(signals),
+                trainset_size=len(pool),
                 created_by="run_dspy_prompt_optimization",
                 client=client,
             )
         try:
-            module = await optimizer.optimize(phase, signals, budget=budget)  # type: ignore[arg-type]
+            module = await optimizer.optimize(phase, pool, budget=budget)  # type: ignore[arg-type]
             if module is None:
                 # optimize() returns None ONLY from pre-compile guards
                 # (dspy/GEPA unavailable, <5 phase examples, unavailable
