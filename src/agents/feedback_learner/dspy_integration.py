@@ -157,7 +157,15 @@ class FeedbackLearnerTrainingSignal:
     # rather than anchoring on a fabricated default. Treat `0.0` as "validated
     # poorly" (real signal), and `None` as "no measurement" (skip).
     pattern_accuracy: Optional[float] = None
-    recommendation_actionability: float = 0.0  # Percentage implemented
+    # NOT "percentage implemented" (the historical comment here): nothing measures
+    # implementation. `graph._finalize_training_signal` sets it to
+    # `min(len(recommendations) / 5.0, 1.0)` — a VOLUME proxy that saturates at 5
+    # recommendations. #1668: unlike `coverage` and `efficiency` this is defined
+    # at zero (the denominator is the constant 5, not a measured quantity), so it
+    # is a real measurement and is NOT omitted. Whether a cycle that correctly
+    # generated no recommendations should be scored 0.0 on it is a reward-
+    # SEMANTICS question, deliberately left to a product decision.
+    recommendation_actionability: float = 0.0
     # F15 (audit): None when the knowledge_store apply-backend is unwired (the
     # ratio is structurally unmeasurable). compute_reward skips it like
     # pattern_accuracy rather than anchoring on a misleading 0.0.
@@ -217,9 +225,10 @@ class FeedbackLearnerTrainingSignal:
         labels available), the term is skipped and its weight is redistributed
         proportionally across the remaining present terms — rather than
         substituted with 0.0 (which would penalize an unmeasurable property).
-        `update_effectiveness` (F15, #837/#838) and `efficiency` (#1668, when
-        `total_latency_ms` is 0 and throughput is therefore undefined) follow
-        the same rule: omit, never anchor.
+        `update_effectiveness` (F15, #837/#838), `efficiency` (#1668, when
+        `total_latency_ms` is 0 and throughput is therefore undefined) and
+        `coverage` (#1668, when `feedback_count` is 0 and patterns-per-item is
+        therefore undefined) follow the same rule: omit, never anchor.
 
         Returns:
             Float reward in range [0.0, 1.0]
@@ -280,12 +289,29 @@ class FeedbackLearnerTrainingSignal:
 
         # Coverage: patterns detected per feedback item
         # Target: 1 pattern per 10 feedback items
+        #
+        # #1668: with `feedback_count == 0` the ratio is `patterns / 0` —
+        # UNDEFINED, not zero. The `else` fabricated a 0.0 anchor, the same
+        # defect class #1671 fixed for `efficiency` one branch above. Omit it,
+        # exactly as this module already does for `pattern_accuracy` (#424),
+        # `update_effectiveness` (#837) and `efficiency` (#1668).
+        #
+        # Measured over all 220 real prod signals: 0 rows change reward and
+        # eligibility is unchanged at 8, because every one of the 148
+        # zero-feedback rows also carries `rubric=None` and `actionability=0.0`,
+        # so its remaining terms are all zero either way. That null result has a
+        # positive control (see the test): a zero-feedback cycle WITH a flawless
+        # 5.0 rubric moves 0.4 -> 0.5 and would become gate-eligible. No such row
+        # has ever been recorded, so this is forward-looking — and a contentless
+        # cycle is separately barred from the trainset by `_signals_to_examples`,
+        # which requires a non-empty `feedback_batch`.
         target_ratio = 0.1
+        coverage_score: Optional[float]
         if self.feedback_count > 0:
             actual_ratio = self.patterns_detected / self.feedback_count
             coverage_score = min(1.0, actual_ratio / target_ratio)
         else:
-            coverage_score = 0.0
+            coverage_score = None
 
         # Rubric quality: normalize 1-5 scale to 0-1
         # Score >= 4.0 is "acceptable", so 4.0 maps to 0.75, 5.0 maps to 1.0
@@ -298,8 +324,10 @@ class FeedbackLearnerTrainingSignal:
         # Pattern accuracy is omitted entirely when None (F-015).
         weight_score_pairs: list[tuple[float, float]] = [
             (weights["recommendation_actionability"], actionability_score),
-            (weights["coverage"], coverage_score),
         ]
+        # #1668: omit coverage when the cycle collected no feedback (0/0).
+        if coverage_score is not None:
+            weight_score_pairs.append((weights["coverage"], coverage_score))
         # #1668: omit efficiency when the cycle had no measurable duration.
         if efficiency_score is not None:
             weight_score_pairs.append((weights["efficiency"], efficiency_score))
@@ -1091,13 +1119,70 @@ class FeedbackLearnerOptimizer:
 
         return optimized
 
+    @staticmethod
+    def _interleave(positives: List[Any], negatives: List[Any]) -> List:
+        """Balance two label classes and interleave them (#1668).
+
+        ``_optimize_with_gepa`` splits ``examples`` into trainset/valset by
+        PREFIX (``examples[:int(0.8*n)]``). A class-ordered list would put every
+        negative in the valset and train on positives only — the very bias this
+        function exists to remove — so the two classes are alternated and any
+        prefix keeps the balance to within one example.
+
+        Balancing at ``k = min(len(pos), len(neg))`` makes GEPA's mean metric a
+        *balanced* accuracy: a missed detection and a false positive cost the
+        same. Feeding the natural production ratio instead (measured 57 negative
+        / 15 positive over 220 real signals, 79.2% / 20.8%) would make
+        "never report anything" score 0.79 and "always report" score 0.21, which
+        just inverts today's over-reporting bias into under-reporting.
+
+        Order within each class is the caller's (newest-first from
+        ``get_signals_for_optimization``), so the result is deterministic.
+        """
+        k = min(len(positives), len(negatives))
+        out: list = []
+        for i in range(k):
+            out.append(positives[i])
+            out.append(negatives[i])
+        return out
+
     def _signals_to_examples(self, signals: List[Dict[str, Any]], phase: str) -> List:
         """Convert persisted training signals to DSPy Examples for a phase.
 
-        Builds real, content-bearing examples for 'pattern', 'recommendation',
-        and 'summary'. The 'update' phase is intentionally skipped: its
-        KnowledgeUpdateSignature needs a (recommendation, current_knowledge)
-        pair we do not persist, so producing examples would be fabrication.
+        Builds balanced, content-bearing examples for 'pattern' and
+        'recommendation'. Two phases are skipped explicitly rather than
+        producing examples that would only look like training data:
+
+        - **update** — ``KnowledgeUpdateSignature`` needs a
+          ``(recommendation, current_knowledge)`` pair that is not persisted, so
+          examples would be fabrication (audit F6).
+        - **summary** (#1668) — ``learning_summary`` is a deterministic f-string
+          assembled by ``KnowledgeUpdaterNode._generate_summary``; all 220 stored
+          values match that template (min length 135). There is nothing for an
+          LLM prompt to learn from a format string, the metric's only
+          discriminating term (length >= 40) saturates on every row, its other
+          two output fields (``key_insights``/``next_steps``) are never produced
+          or persisted, and no consumer loads ``feedback_learner_summary``.
+
+        #1668 — what changed and why. This function used to carry its own floor::
+
+            if signal.get("reward", 0) < 0.5:  # only successful cycles
+                continue
+
+        For the pattern phase the LABEL IS the patterns the cycle found, so
+        selecting on reward selects on *having found patterns*: measured over
+        220 real prod signals the surviving trainset was 8 examples, **100%
+        non-empty label**. The detector would never once see a healthy batch
+        labelled "no patterns", so training could only teach over-reporting — and
+        ``PatternAnalyzerNode(prefer_optimized=True)`` loads the result into the
+        live learning cycle. The floor also made the caller's ``min_reward``
+        inoperative, since it is applied a second time downstream of the fetch.
+
+        Deleting the floor alone is not the fix: the raw population is 148
+        empty-input rows / 57 informative negatives / 15 positives, so the
+        unfiltered trainset would be 93% empty-label and teach the mirror
+        defect. The builder therefore requires the PHASE'S INPUT to be non-empty
+        and balances the two label classes (see :meth:`_interleave`).
         """
         if not DSPY_AVAILABLE:
             return []
@@ -1113,11 +1198,19 @@ class FeedbackLearnerOptimizer:
             )
             return []
 
-        examples: list = []
+        if phase == "summary":
+            logger.info(
+                "Skipping 'summary' phase optimization (#1668): learning_summary is a "
+                "deterministic f-string from KnowledgeUpdaterNode._generate_summary, so "
+                "the label carries no learnable signal and the metric's length term "
+                "saturates on every stored row — honest skip, not a silent stub."
+            )
+            return []
+
+        positives: list = []
+        negatives: list = []
         for signal in signals:
             if signal.get("source_agent") != "feedback_learner":
-                continue
-            if signal.get("reward", 0) < 0.5:  # only successful cycles
                 continue
 
             ic = signal.get("input_context", {}) or {}
@@ -1125,33 +1218,36 @@ class FeedbackLearnerOptimizer:
             feedback_batch = ic.get("feedback_batch", []) or []
             patterns = out.get("patterns", []) or []
             recommendations = out.get("recommendations", []) or []
-            applied_updates = out.get("applied_updates", []) or []
-            learning_summary = out.get("learning_summary", "") or ""
-
-            # Skip degenerate signals that carry no usable content for any phase
-            # (recommendations included so a recs-only cycle still trains the
-            # recommendation phase).
-            if not feedback_batch and not patterns and not recommendations and not learning_summary:
-                continue
 
             try:
                 if phase == "pattern":
+                    # The signature's input is the feedback batch. Without one
+                    # the example says "given nothing, emit nothing", which is
+                    # degenerate rather than a negative — 148 of 220 real rows.
+                    if not feedback_batch:
+                        continue
                     ex = dspy.Example(
                         feedback_batch=_json.dumps(feedback_batch),
                         agent_baselines=_json.dumps(ic.get("agent_baselines", {})),
                         historical_patterns=_json.dumps(ic.get("historical_patterns", [])),
                         patterns=patterns,
-                        confidence=0.8,
+                        # `confidence` is deliberately absent: nothing persists a
+                        # per-cycle confidence, the metric never scores it, and
+                        # the old hardcoded 0.8 was a fabricated label carried on
+                        # every example including abstentions (#1668).
                         root_causes=[
                             p.get("root_cause_hypothesis")
                             for p in patterns
                             if isinstance(p, dict) and p.get("root_cause_hypothesis")
                         ],
                     ).with_inputs("feedback_batch", "agent_baselines", "historical_patterns")
-                    examples.append(ex)
+                    (positives if patterns else negatives).append(ex)
 
                 elif phase == "recommendation":
-                    if not patterns and not recommendations:
+                    # The signature's input is `detected_patterns`; a cycle that
+                    # detected none has nothing to condition on, whatever its
+                    # recommendations field holds.
+                    if not patterns:
                         continue
                     ex = dspy.Example(
                         detected_patterns=_json.dumps(patterns),
@@ -1163,28 +1259,25 @@ class FeedbackLearnerOptimizer:
                         ],
                         risk_assessment=str(out.get("risk_assessment", "")),
                     ).with_inputs("detected_patterns", "prior_learnings", "optimization_examples")
-                    examples.append(ex)
-
-                elif phase == "summary":
-                    if not learning_summary and not patterns:
-                        continue
-                    ex = dspy.Example(
-                        patterns=_json.dumps(patterns),
-                        recommendations=_json.dumps(recommendations),
-                        applied_updates=_json.dumps(applied_updates),
-                        feedback_stats=_json.dumps(ic),
-                        summary=learning_summary,
-                        key_insights=[],
-                        next_steps=[],
-                    ).with_inputs(
-                        "patterns", "recommendations", "applied_updates", "feedback_stats"
-                    )
-                    examples.append(ex)
+                    (positives if recommendations else negatives).append(ex)
 
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"Failed to convert signal to example ({phase}): {e}")
 
-        return examples
+        if not positives or not negatives:
+            logger.warning(
+                "Skipping '%s' phase optimization (#1668): the available signals are "
+                "single-class (%d with a non-empty label, %d with an empty one). Training "
+                "on one class teaches unconditional %s regardless of the input — an "
+                "honest skip is the safe outcome, not a smaller trainset.",
+                phase,
+                len(positives),
+                len(negatives),
+                "over-reporting" if positives else "abstention",
+            )
+            return []
+
+        return self._interleave(positives, negatives)
 
 
 # =============================================================================
