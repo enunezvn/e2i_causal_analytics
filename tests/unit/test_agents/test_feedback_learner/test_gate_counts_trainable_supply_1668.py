@@ -1,12 +1,16 @@
 """#1668: the optimizer gate must count what the trainset builder can use.
 
 #1675 stopped the TRAINSET being selected on defect yield. The GATE was left
-measuring it: the beat counts ``feedback_learner`` rows at ``reward >= 0.5``,
-which is **8** on today's production table. That number is a defect-yield
-proxy — ``compute_reward`` gives the coverage and actionability terms zero on a
-cycle that detected no patterns, so a row clears 0.5 essentially only when the
-cycle found patterns — and it is now measuring a different quantity from the one
-the builder consumes.
+measuring it: BEFORE this change the beat counted ``feedback_learner`` rows at
+``reward >= 0.5``, which is **8** on the production table. That number is a
+defect-yield proxy — ``compute_reward`` gives the coverage and actionability
+terms zero on a cycle that detected no patterns, so a row clears 0.5 essentially
+only when the cycle found patterns — and it measured a different quantity from
+the one the builder consumes.
+
+(The gate has since moved once more: it counts TRAINSET EXAMPLES, and the
+threshold is stated in that unit too. The tests below assert the current
+behaviour; the paragraphs describe the defect they were written against.)
 
 Measured 2026-08-17 against the 223 real ``feedback_learner`` rows, read-only:
 
@@ -19,11 +23,11 @@ and, decisively:
 
     pattern examples built from the BEAT's own reward>=0.5 pool:  0
 
-The eight rows the gate counts are 100% positive (all from cycles that found
-patterns), so they are single-class and ``_signals_to_examples`` refuses them
-outright. The gate and the builder are not merely different numbers; the gate's
-own row set trains nothing. Twenty such rows would satisfy today's gate and
-still be untrainable.
+The eight rows the OLD gate counted are 100% positive (all from cycles that
+found patterns), so they are single-class and ``_signals_to_examples`` refuses
+them outright. That gate and the builder were not merely different numbers; the
+gate's own row set trained nothing. Twenty such rows would have satisfied it and
+still been untrainable.
 
 ``_interleave`` caps the trainset at ``k = min(n_pos, n_neg)`` pairs, so the
 minority label class IS the supply constraint and ``len(trainset) == 2 * k``

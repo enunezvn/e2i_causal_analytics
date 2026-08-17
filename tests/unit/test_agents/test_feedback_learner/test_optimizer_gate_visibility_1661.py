@@ -153,7 +153,7 @@ def test_beat_and_health_surface_share_one_trigger_decision():
     assert task._load_trigger_state is signal_store.load_trigger_state
 
 
-def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
+def test_cooldown_binds_even_when_the_trainset_gate_is_satisfied():
     """Plenty of signals + a recent optimization must NOT read as Ready."""
     from datetime import datetime, timedelta, timezone
 
@@ -168,7 +168,7 @@ def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
     assert "Cooldown active" in reason
 
 
-def test_signal_gate_is_what_binds_with_no_prior_optimization():
+def test_the_trainset_gate_is_what_binds_with_no_prior_optimization():
     """Today's real state: no trigger file, supply below the threshold.
 
     #1668: the rows are real-shaped rather than ``{"reward": 0.6}``. The gate
@@ -418,7 +418,7 @@ def test_beat_signal_read_is_deterministically_ordered():
 
 
 @pytest.mark.asyncio
-async def test_gate_status_agrees_with_the_beat_once_the_signal_gate_opens(monkeypatch):
+async def test_gate_status_agrees_with_the_beat_once_the_trainset_gate_opens(monkeypatch):
     """The status must report what the BEAT would decide — the #1661 invariant.
 
     Superseded the earlier form of this test, which asserted that a recent

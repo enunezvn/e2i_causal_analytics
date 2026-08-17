@@ -500,7 +500,7 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
     expect(screen.getByText(/detects patterns/i)).toBeInTheDocument();
   });
 
-  it('surfaces the cooldown gate once the signal gate opens', () => {
+  it('surfaces the cooldown gate once the trainset gate opens', () => {
     (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         agent_available: true,

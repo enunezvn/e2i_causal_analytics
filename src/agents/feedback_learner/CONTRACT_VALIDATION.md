@@ -124,12 +124,17 @@ worker threads, empty instruction-hash on save; see
 no real user feedback flowing yet, and the recipient agents are not yet exercised
 by real production traffic. This means:
 
-- The optimization beats fire on schedule but find 0 signals → the
-  `GEPAOptimizationTrigger` gate (threshold 20) blocks optimization → no bundle
-  is produced → `install_all_prompt_bundles` installs nothing. This is correct
-  and expected behaviour, not a bug.
+- The optimization beats fire on schedule but the trainset they can build is
+  below the `GEPAOptimizationTrigger` threshold of **40 examples** → optimization
+  is blocked → no bundle is produced → `install_all_prompt_bundles` installs
+  nothing. This is correct and expected behaviour, not a bug.
+- The shortfall is NOT volume. Measured 2026-08-17: 223 signals recorded, of
+  which 148 collected no feedback at all (degenerate — empty input), 60 are
+  informative negatives and 15 are positives. The trainset is `2 * min(15, 60)`
+  = 30. Supply is bounded by the POSITIVE class, which has not moved since
+  2026-08-08.
 - Real production self-improvement will begin automatically once real usage
-  generates enough signals to cross the threshold.
+  generates enough of the scarcer class to carry a 40-example balanced trainset.
 - **Synthetic data is used only in tests/validation, never installed to prod as
   real training data.** The guardrail tests above lock this in.
 

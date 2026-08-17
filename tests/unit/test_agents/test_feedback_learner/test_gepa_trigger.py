@@ -94,8 +94,8 @@ class TestGEPAOptimizationTrigger:
         assert should_trigger is True
 
     # Signal count tests
-    def test_insufficient_signals_blocks_trigger(self, trigger):
-        """Trigger should be blocked without enough signals (below new default of 20)."""
+    def test_a_trainset_below_the_threshold_blocks_the_trigger(self, trigger):
+        """Blocked when the trainset the builder would produce is under 40 examples."""
         should_trigger, reason = trigger.should_trigger(
             trainset_examples=15,  # below the 40-example default
             current_reward=0.9,
@@ -107,8 +107,8 @@ class TestGEPAOptimizationTrigger:
         assert "Insufficient trainset" in reason
         assert "examples" in reason
 
-    def test_sufficient_signals_allows_trigger(self, trigger):
-        """Trigger should work with sufficient signals."""
+    def test_a_trainset_above_the_threshold_allows_the_trigger(self, trigger):
+        """Fires once the trainset clears 40 examples and a reward delta exists."""
         should_trigger, reason = trigger.should_trigger(
             trainset_examples=150,
             current_reward=0.75,
@@ -249,8 +249,8 @@ class TestGEPAOptimizationTrigger:
 
         assert budget == "heavy"
 
-    def test_budget_heavy_for_many_signals(self, trigger):
-        """Many signals should recommend heavy budget."""
+    def test_budget_heavy_for_a_large_trainset(self, trigger):
+        """A trainset that can rank heavy's 18 candidates recommends heavy."""
         budget = trigger.get_recommended_budget(
             trainset_examples=82,  # BUDGET_MIN_TRAINSET_EXAMPLES["heavy"] → heavy
             hours_since_last=24,
@@ -259,8 +259,8 @@ class TestGEPAOptimizationTrigger:
 
         assert budget == "heavy"
 
-    def test_budget_medium_for_moderate_signals(self, trigger):
-        """Moderate signals should recommend medium budget."""
+    def test_budget_medium_for_a_moderate_trainset(self, trigger):
+        """Enough to rank medium's 12 candidates but not heavy's 18."""
         budget = trigger.get_recommended_budget(
             trainset_examples=52,  # BUDGET_MIN_TRAINSET_EXAMPLES["medium"], below heavy → medium
             hours_since_last=24,
@@ -269,8 +269,8 @@ class TestGEPAOptimizationTrigger:
 
         assert budget == "medium"
 
-    def test_budget_light_for_few_signals(self, trigger):
-        """Few signals should recommend light budget."""
+    def test_budget_light_for_a_small_trainset(self, trigger):
+        """Below medium's floor, only light's 6 candidates are rankable."""
         budget = trigger.get_recommended_budget(
             trainset_examples=25,  # below medium's 52 → light
             hours_since_last=24,
@@ -288,7 +288,7 @@ class TestGEPAOptimizationTriggerEdgeCases:
         """Create default trigger."""
         return GEPAOptimizationTrigger()
 
-    def test_zero_signals(self, trigger):
+    def test_an_empty_trainset(self, trigger):
         """Zero signals should not trigger."""
         should_trigger, reason = trigger.should_trigger(
             trainset_examples=0,

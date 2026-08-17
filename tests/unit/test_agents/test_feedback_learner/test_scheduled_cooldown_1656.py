@@ -16,11 +16,11 @@ The fix: a fixed daily crontab already IS the rate limit, so the cooldown is
 redundant on that path and only interferes. It is retained for event-triggered
 runs, where nothing else bounds the rate.
 
-NOT LIVE-VERIFIABLE at time of writing: the signal gate (8 < 20, see #1668)
-returns ``skipped`` before any optimization completes, so ``last_optimization``
-is never written and the cooldown branch is unreachable in production. These
-tests are the only evidence this fix works; they are written to fail against
-the pre-fix behaviour.
+NOT LIVE-VERIFIABLE at time of writing: the trainset gate (30 examples < 40,
+measured 2026-08-17, see #1668) returns ``skipped`` before any optimization
+completes, so ``last_optimization`` is never written and the cooldown branch is
+unreachable in production. These tests are the only evidence this fix works;
+they are written to fail against the pre-fix behaviour.
 """
 
 from __future__ import annotations
@@ -31,15 +31,16 @@ from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
 
 def _signals(n: int, reward: float = 0.9) -> list[dict]:
-    """A pool whose TRAINABLE SUPPLY is ``n`` — ``n`` positives + ``n`` negatives.
+    """``n`` positives + ``n`` negatives — a pool that builds a ``2n``-EXAMPLE trainset.
 
-    #1668: ``decide_optimizer_trigger`` counts the scarcer label class of the
-    best-supplied phase, derived from the same classifier the trainset builder
-    uses, so ``[{"reward": 0.9}] * n`` no longer stands for "n signals the
-    trigger will count" — such rows carry no input_context/output and are not
-    trainable at all. These tests are about the COOLDOWN, so the pool has to
-    genuinely carry the supply they name or every one of them would be decided
-    by the signal gate instead.
+    #1668: ``decide_optimizer_trigger`` counts the examples the trainset builder
+    will produce for the best-supplied phase, derived from the same classifier
+    the builder uses, so ``[{"reward": 0.9}] * n`` no longer stands for "n
+    signals the trigger will count" — such rows carry no input_context/output
+    and are not trainable at all. These tests are about the COOLDOWN, so the
+    pool has to genuinely carry the trainset they name or every one of them
+    would be decided by the size gate instead. ``_signals(8)`` is 16 examples,
+    ``_signals(50)`` is 100.
     """
     return [
         {
