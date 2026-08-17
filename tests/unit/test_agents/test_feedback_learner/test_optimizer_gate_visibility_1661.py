@@ -48,8 +48,14 @@ def test_zero_patterns_caps_reward_at_the_gate_floor():
     Perfect rubric (5.0) + perfect efficiency + zero patterns == 0.5. Anything
     less than a flawless rubric falls below it, which is why 203 of 218 real
     signals never qualified (observed max 0.4100 at rubric 3.92).
+
+    The 0.5 is a literal here, not ``OPTIMIZER_MIN_REWARD``. #1668 removed that
+    constant: the gate no longer applies a reward floor at all (it counts label
+    classes), so the number below is a property of ``compute_reward`` — which is
+    what this test is about — and importing a gate constant to express it would
+    re-couple the two after they were deliberately separated.
     """
-    from src.agents.feedback_learner.signal_store import OPTIMIZER_MIN_REWARD
+    reward_ceiling_for_a_pattern_free_cycle = 0.5
 
     best = _signal(
         patterns_detected=0,
@@ -57,16 +63,16 @@ def test_zero_patterns_caps_reward_at_the_gate_floor():
         total_latency_ms=1.0,
         rubric_weighted_score=5.0,
     )
-    assert best.compute_reward() == OPTIMIZER_MIN_REWARD
+    assert best.compute_reward() == reward_ceiling_for_a_pattern_free_cycle
 
-    # One notch off a flawless rubric already drops below the floor.
+    # One notch off a flawless rubric already drops below it.
     realistic = _signal(
         patterns_detected=0,
         recommendation_actionability=0.0,
         total_latency_ms=1.0,
         rubric_weighted_score=4.5,
     )
-    assert realistic.compute_reward() < OPTIMIZER_MIN_REWARD
+    assert realistic.compute_reward() < reward_ceiling_for_a_pattern_free_cycle
 
 
 def test_zero_patterns_without_rubric_caps_far_below_the_floor():
@@ -112,13 +118,24 @@ def test_replays_two_real_production_rows_exactly():
 
 
 def test_beat_reads_the_gate_constants_from_signal_store():
-    """The beat must not re-declare the floor/limit/state path as bare literals."""
+    """The beat must not re-declare the pool/state path as bare literals.
+
+    #1668 narrowed what there is to share. The beat used to build its own read
+    from ``OPTIMIZER_MIN_REWARD`` + ``OPTIMIZER_SIGNAL_LIMIT``; it now calls
+    ``read_optimizer_signal_pool``, so the SSOT is the FUNCTION rather than the
+    two constants it was assembled from — one fewer way for a caller to compose
+    a slightly different pool.
+    """
+    import inspect
+
     from src.agents.feedback_learner import signal_store
     from src.tasks import dspy_optimization_tasks as task
 
-    assert task.OPTIMIZER_MIN_REWARD is signal_store.OPTIMIZER_MIN_REWARD
-    assert task.OPTIMIZER_SIGNAL_LIMIT is signal_store.OPTIMIZER_SIGNAL_LIMIT
     assert task._STATE_PATH is signal_store.TRIGGER_STATE_PATH
+    source = inspect.getsource(task._run)
+    assert "read_optimizer_signal_pool()" in source
+    # ...and it must not have reintroduced a hand-rolled read beside it.
+    assert "get_feedback_learner_training_signals" not in source
 
 
 def test_beat_and_health_surface_share_one_trigger_decision():
@@ -142,7 +159,9 @@ def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
 
     from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
-    signals = [{"reward": 0.9}] * 50
+    from ._gate_supply_fixtures import balanced_pool
+
+    signals = balanced_pool(50)
     recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     should, reason = decide_optimizer_trigger(signals, {"last_optimization": recent})
     assert should is False
@@ -150,10 +169,17 @@ def test_cooldown_binds_even_when_the_signal_gate_is_satisfied():
 
 
 def test_signal_gate_is_what_binds_with_no_prior_optimization():
-    """Today's real state: no trigger file, 8 eligible signals."""
+    """Today's real state: no trigger file, supply below the threshold.
+
+    #1668: the rows are real-shaped rather than ``{"reward": 0.6}``. The gate
+    counts the scarcer label class now, so a row carrying only a reward is not
+    a signal the optimizer could train on and must not read as one.
+    """
     from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
-    should, reason = decide_optimizer_trigger([{"reward": 0.6}] * 8, {})
+    from ._gate_supply_fixtures import balanced_pool
+
+    should, reason = decide_optimizer_trigger(balanced_pool(8), {})
     assert should is False
     assert reason == "Insufficient signals: 8 < 20"
 
@@ -173,6 +199,15 @@ def test_min_signals_honours_the_env_override(monkeypatch):
 # =============================================================================
 # 3. The status reader — real queries, no fabricated numbers
 # =============================================================================
+#
+# #1668 rewrote this section's stand-ins. The status used to hand-roll its own
+# eligible-signals query, so the fake client had to answer it and the tests
+# asserted on the filters it built. It now reads the pool through
+# ``read_optimizer_signal_pool`` — the same call the beat makes — so what these
+# tests must pin is that the pool the status reports on IS that pool, and that
+# the numbers it publishes are the ones the beat's decision function derived
+# from it. The filters themselves are pinned once, at the adapter, by
+# ``test_beat_signal_read_is_deterministically_ordered`` below.
 
 
 class _FakeQuery:
@@ -208,109 +243,103 @@ class _FakeQuery:
         return type("R", (), {"data": self._data, "count": self._count})()
 
 
-class _FakeClient:
-    """Stand-in that answers the three reads the status needs."""
+class _CountClient:
+    """Answers the two exact-count reads the status makes beside the pool."""
 
-    def __init__(self, sink: dict, *, eligible: int, total: int, runs: int, last: str | None):
-        self.sink = sink
-        self.eligible = eligible
+    def __init__(self, *, total: int, runs: int, sink=None):
         self.total = total
         self.runs = runs
-        self.last = last
+        self.sink = sink if sink is not None else {}
 
     def table(self, name):
-        if name == "prompt_optimization_runs":
-            return _FakeQuery(name, self.sink, [], self.runs)
-
-        # dspy_agent_training_signals: the eligible read carries a gte filter
-        # (and returns rows, because the trigger needs their mean reward); the
-        # total read does not. Decide by inspecting the built query.
-        client = self
-
-        class _Dispatch(_FakeQuery):
-            async def execute(self):
-                client.sink.setdefault("queries", []).append((name, list(self.filters)))
-                if any(f[0] == "gte" for f in self.filters):
-                    rows = [
-                        {"reward": 0.6, "created_at": client.last} for _ in range(client.eligible)
-                    ]
-                    # Honour the limit the way PostgREST does — a fake that
-                    # ignored it could not catch a count/verdict mismatch.
-                    cap = next((f[1] for f in self.filters if f[0] == "limit"), None)
-                    if cap is not None:
-                        rows = rows[:cap]
-                    return type("R", (), {"data": rows, "count": client.eligible})()
-                return type("R", (), {"data": [], "count": client.total})()
-
-        return _Dispatch(name, self.sink, [], 0)
+        count = self.runs if name == "prompt_optimization_runs" else self.total
+        return _FakeQuery(name, self.sink, [], count)
 
 
 @pytest.mark.asyncio
 async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch):
     from src.agents.feedback_learner import signal_store
 
+    from ._gate_supply_fixtures import negative, positive
+
+    # Today's real shape: 15 positives, 59 negatives (plus 148 empty-input rows
+    # that are neither class and are therefore left out of the balance).
+    pool = [positive(f"p{i}", created_at="2026-08-08T07:09:02.686027+00:00") for i in range(15)] + [
+        negative(f"n{i}") for i in range(59)
+    ]
+    called: dict = {}
+
+    async def _pool(client=None):
+        called["client"] = client
+        return pool
+
+    monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
 
-    sink: dict = {}
-    client = _FakeClient(
-        sink, eligible=8, total=218, runs=0, last="2026-08-08T07:09:02.686027+00:00"
-    )
+    client = _CountClient(total=222, runs=0)
     status = await signal_store.get_optimizer_gate_status(client=client)
 
-    assert status["eligible_signals"] == 8
-    assert status["total_signals"] == 218
+    assert status["trainable_signals"] == 15
+    assert status["positive_signals"] == 15
+    assert status["negative_signals"] == 59
+    assert status["governing_phase"] == "pattern"
+    assert status["total_signals"] == 222
     assert status["optimization_runs"] == 0
-    assert status["min_reward"] == signal_store.OPTIMIZER_MIN_REWARD
     assert status["min_signals"] == 20
     assert status["would_trigger"] is False
-    assert status["last_eligible_signal_at"] == "2026-08-08T07:09:02.686027+00:00"
+    assert status["last_trainable_signal_at"] == "2026-08-08T07:09:02.686027+00:00"
     # Verbatim from the REAL trigger, not a re-worded copy.
-    assert status["reason"] == "Insufficient signals: 8 < 20"
-    # The denominator is what stops "8 < 20" reading as a volume problem.
-    assert status["total_signals"] == 218
-
-    # The eligible read must use the gate's own filters, not a re-invention.
-    signal_queries = [f for t, f in sink["queries"] if t == "dspy_agent_training_signals"]
-    eligible_filters = next(f for f in signal_queries if any(x[0] == "gte" for x in f))
-    assert ("eq", "source_agent", "feedback_learner") in eligible_filters
-    assert ("gte", "reward", signal_store.OPTIMIZER_MIN_REWARD) in eligible_filters
-    assert ("limit", signal_store.OPTIMIZER_SIGNAL_LIMIT) in eligible_filters
+    assert status["reason"] == "Insufficient signals: 15 < 20"
+    # The pool read must go through the caller's client, not a second factory
+    # lookup that could resolve to a different database.
+    assert called["client"] is client
 
 
 @pytest.mark.asyncio
 async def test_gate_status_flips_to_would_trigger_when_supply_clears_threshold(monkeypatch):
     from src.agents.feedback_learner import signal_store
 
-    # Baseline 0.0 with mean reward 0.6 -> the reward-delta branch fires once
-    # the count gate is open, which is what the beat itself would do.
+    from ._gate_supply_fixtures import balanced_pool
+
+    # Baseline 0.0 with a positive mean reward -> the reward-delta branch fires
+    # once the count gate is open, which is what the beat itself would do.
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
-    status = await signal_store.get_optimizer_gate_status(
-        client=_FakeClient({}, eligible=25, total=300, runs=3, last="2026-08-16T00:00:00+00:00")
-    )
+
+    async def _pool(client=None):
+        return balanced_pool(25)
+
+    monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
+    status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=300, runs=3))
     assert status["would_trigger"] is True
+    assert status["trainable_signals"] == 25
     assert status["optimization_runs"] == 3
 
 
 @pytest.mark.asyncio
-async def test_eligible_count_is_what_the_gate_actually_counted(monkeypatch):
+async def test_reported_supply_is_what_the_gate_actually_counted(monkeypatch):
     """Report the rows the trigger saw, not a wider exact count.
 
-    The eligible read is capped at ``OPTIMIZER_SIGNAL_LIMIT``. A PostgREST
-    ``count="exact"`` would keep counting past that cap, so a card reading
-    "3000 / 2500" could sit beside a reason saying "Insufficient signals:
-    2000 < 2500". The count and the verdict must describe the same row set.
+    The pool read is capped at ``OPTIMIZER_SIGNAL_LIMIT``. ``total_signals`` is
+    a PostgREST ``count="exact"`` that keeps counting past that cap, so it can
+    legitimately exceed the pool — but the GATE's number must come from the
+    capped rows, or a card reading "3000 / 2500" could sit beside a reason
+    saying "Insufficient signals: 2000 < 2500".
     """
     from src.agents.feedback_learner import signal_store
 
+    from ._gate_supply_fixtures import balanced_pool
+
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
-    monkeypatch.setattr(signal_store, "OPTIMIZER_SIGNAL_LIMIT", 5)
     monkeypatch.setenv("DSPY_MIN_SIGNALS", "10")
 
-    # 12 rows exist; the capped read returns 5. Both numbers must say 5.
-    client = _FakeClient({}, eligible=12, total=99, runs=0, last="2026-08-16T00:00:00+00:00")
-    status = await signal_store.get_optimizer_gate_status(client=client)
+    async def _pool(client=None):
+        return balanced_pool(5)  # what the capped read returned
 
-    assert status["eligible_signals"] == 5
+    monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
+    status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=999, runs=0))
+
+    assert status["trainable_signals"] == 5
+    assert status["total_signals"] == 999
     assert status["reason"] == "Insufficient signals: 5 < 10"
 
 
@@ -332,17 +361,18 @@ def test_trigger_state_write_is_atomic_and_leaves_no_temp_behind(tmp_path, monke
 
 
 def test_beat_signal_read_is_deterministically_ordered():
-    """Both readers must take the SAME slice when the limit binds.
+    """Every reader must take the SAME slice when the limit binds.
 
-    The beat reads eligible signals through SignalCollectorAdapter and the
-    health surface reads them directly. An unordered ``limit`` makes the row
-    set arbitrary, so the two could compute different mean rewards from the
-    same database and disagree on the reward-delta branch. Newest-first is the
-    right slice for training on recent signals, and it makes the two identical.
+    The beat, the runner and the health surface now all read through
+    ``read_optimizer_signal_pool`` -> ``SignalCollectorAdapter``. An unordered
+    ``limit`` makes the row set arbitrary, so two readers could compute
+    different label balances and different mean rewards from the same database.
+    Newest-first is the right slice for training on recent signals, and it makes
+    them identical.
     """
     import asyncio
 
-    from src.rag.memory_adapters import SignalCollectorAdapter
+    from src.agents.feedback_learner import signal_store
 
     sink: dict = {}
 
@@ -355,20 +385,26 @@ def test_beat_signal_read_is_deterministically_ordered():
         def table(self, name):
             return _SyncQuery(name, sink, [], 0)
 
-    asyncio.run(
-        SignalCollectorAdapter(supabase_client=_SyncClient()).get_signals_for_optimization(
-            source_agent="feedback_learner", min_reward=0.5, limit=2000
-        )
-    )
+    asyncio.run(signal_store.read_optimizer_signal_pool(client=_SyncClient()))
+    # Positive control: the assertions below would pass vacuously on an empty
+    # list, so prove a query was issued at all before inspecting its filters.
+    assert sink["queries"], "the pool helper issued no query"
     filters = sink["queries"][0][1]
+    assert ("eq", "source_agent", "feedback_learner") in filters
+    # #1668: NO reward floor on the pool. A correct abstention scores near zero
+    # by construction, so a floor and the negative class are the same set —
+    # filtering by reward starves the class the balance needs.
+    assert ("gte", "reward", signal_store.OPTIMIZER_POOL_MIN_REWARD) in filters
+    assert ("limit", signal_store.OPTIMIZER_SIGNAL_LIMIT) in filters
     assert ("order", "created_at", True) in filters
     # created_at is NOT unique: without a PK tiebreak, rows tied at the limit
     # boundary can come back in different physical orders across plans, and the
-    # two readers' slices diverge again.
+    # readers' slices diverge again.
     assert ("order", "signal_id", True) in filters
     # ...and the order must be applied BEFORE the limit, or it sorts a slice.
-    assert filters.index(("order", "created_at", True)) < filters.index(("limit", 2000))
-    assert filters.index(("order", "signal_id", True)) < filters.index(("limit", 2000))
+    limit_at = filters.index(("limit", signal_store.OPTIMIZER_SIGNAL_LIMIT))
+    assert filters.index(("order", "created_at", True)) < limit_at
+    assert filters.index(("order", "signal_id", True)) < limit_at
 
 
 @pytest.mark.asyncio
@@ -393,21 +429,26 @@ async def test_gate_status_agrees_with_the_beat_once_the_signal_gate_opens(monke
 
     from src.agents.feedback_learner import signal_store
 
+    from ._gate_supply_fixtures import balanced_pool
+
+    pool = balanced_pool(25)
     recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     state = {"last_optimization": recent}
     monkeypatch.setattr(signal_store, "load_trigger_state", lambda: state)
-    status = await signal_store.get_optimizer_gate_status(
-        client=_FakeClient({}, eligible=25, total=300, runs=1, last="2026-08-16T00:00:00+00:00")
-    )
 
-    # What the beat itself would decide. Reward differs from the fake client's
-    # rows, so the reason STRINGS differ in their numbers — the invariant is the
-    # decision and the gate that produced it, not the formatted text.
-    beat_should, beat_reason = signal_store.decide_optimizer_trigger(
-        [{"reward": 0.9}] * 25, state, scheduled=True
-    )
+    async def _pool(client=None):
+        return pool
+
+    monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
+    status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=300, runs=1))
+
+    # What the beat itself would decide, over the SAME rows and the same state.
+    # #1668 made this an exact string match: both sides now count the same pool
+    # through the same function, so a difference in the numbers inside the
+    # reason is a real disagreement rather than a fixture artefact.
+    beat_should, beat_reason = signal_store.decide_optimizer_trigger(pool, state, scheduled=True)
     assert status["would_trigger"] == beat_should
-    assert ("Cooldown" in status["reason"]) == ("Cooldown" in beat_reason)
+    assert status["reason"] == beat_reason
     # ...and concretely: a run 2h ago no longer suppresses the scheduled path.
     assert status["would_trigger"] is True
     assert "Cooldown" not in status["reason"]
@@ -424,9 +465,11 @@ async def test_event_triggered_path_still_surfaces_the_cooldown(monkeypatch):
 
     from src.agents.feedback_learner import signal_store
 
+    from ._gate_supply_fixtures import balanced_pool
+
     recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     should, reason = signal_store.decide_optimizer_trigger(
-        [{"reward": 0.9}] * 25, {"last_optimization": recent}, scheduled=False
+        balanced_pool(25), {"last_optimization": recent}, scheduled=False
     )
     assert should is False
     assert "Cooldown active" in reason
@@ -442,7 +485,9 @@ async def test_gate_status_degrades_honestly_without_a_client(monkeypatch):
 
     monkeypatch.setattr("src.memory.services.factories.get_supabase_client", _none, raising=False)
     status = await signal_store.get_optimizer_gate_status(client=None)
-    assert status["eligible_signals"] is None
+    assert status["trainable_signals"] is None
+    assert status["positive_signals"] is None
+    assert status["negative_signals"] is None
     assert status["total_signals"] is None
     assert status["would_trigger"] is None
     assert "unavailable" in status["reason"].lower()

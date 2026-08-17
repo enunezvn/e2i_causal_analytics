@@ -461,16 +461,21 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
       data: {
         agent_available: true,
         cycles_24h: 1,
+        // #1668: today's real production shape. The headline is the scarcer
+        // label class (15), NOT the reward-eligible row count (8) — those 8
+        // rows are single-class, so the trainset built from them is empty.
         optimizer: {
-          eligible_signals: 8,
-          total_signals: 218,
-          last_eligible_signal_at: '2026-08-08T07:09:02.686027+00:00',
+          trainable_signals: 15,
+          governing_phase: 'pattern',
+          positive_signals: 15,
+          negative_signals: 59,
+          total_signals: 222,
+          last_trainable_signal_at: '2026-08-08T07:09:02.686027+00:00',
           optimization_runs: 0,
           min_signals: 20,
-          min_reward: 0.5,
           would_trigger: false,
           // Verbatim from the beat's own trigger — not a re-worded copy.
-          reason: 'Insufficient signals: 8 < 20',
+          reason: 'Insufficient signals: 15 < 20',
         },
       },
       refetch: vi.fn().mockResolvedValue({}),
@@ -478,13 +483,16 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
 
     render(<FeedbackLearning />, { wrapper: createWrapper() });
 
-    // The shortfall AND the denominator — "8" alone reads as a volume problem.
-    expect(screen.getByText('8 / 20')).toBeInTheDocument();
-    expect(screen.getByText(/218 signals/i)).toBeInTheDocument();
+    // The shortfall AND the denominator — "15" alone reads as a volume problem.
+    expect(screen.getByText('15 / 20')).toBeInTheDocument();
+    expect(screen.getByText(/222 signals/i)).toBeInTheDocument();
     // "Never optimized" is the fact the page currently hides behind "Online".
     expect(screen.getByText(/never optimized/i)).toBeInTheDocument();
-    expect(screen.getByText('Insufficient signals: 8 < 20')).toBeInTheDocument();
+    expect(screen.getByText('Insufficient signals: 15 < 20')).toBeInTheDocument();
     expect(screen.getByText('Inert')).toBeInTheDocument();
+    // Why 15 and not 222: the class split, and which side supply waits on.
+    expect(screen.getByText(/15 signals with a finding \/ 59 without/i)).toBeInTheDocument();
+    expect(screen.getByText(/detects patterns/i)).toBeInTheDocument();
   });
 
   it('surfaces the cooldown gate once the signal gate opens', () => {
@@ -493,12 +501,14 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
         agent_available: true,
         cycles_24h: 1,
         optimizer: {
-          eligible_signals: 25,
+          trainable_signals: 25,
+          governing_phase: 'pattern',
+          positive_signals: 25,
+          negative_signals: 40,
           total_signals: 300,
-          last_eligible_signal_at: '2026-08-16T00:00:00+00:00',
+          last_trainable_signal_at: '2026-08-16T00:00:00+00:00',
           optimization_runs: 1,
           min_signals: 20,
-          min_reward: 0.5,
           would_trigger: false,
           reason: 'Cooldown active: 2.0h < 24h',
         },
@@ -520,12 +530,14 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
         agent_available: true,
         cycles_24h: 1,
         optimizer: {
-          eligible_signals: 25,
+          trainable_signals: 25,
+          governing_phase: 'pattern',
+          positive_signals: 25,
+          negative_signals: 40,
           total_signals: 300,
-          last_eligible_signal_at: '2026-08-16T00:00:00+00:00',
+          last_trainable_signal_at: '2026-08-16T00:00:00+00:00',
           optimization_runs: 3,
           min_signals: 20,
-          min_reward: 0.5,
           would_trigger: true,
           reason: 'Reward improved: 0.600 >= 0.05',
         },
@@ -546,12 +558,14 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
         agent_available: true,
         cycles_24h: 1,
         optimizer: {
-          eligible_signals: null,
+          trainable_signals: null,
+          governing_phase: null,
+          positive_signals: null,
+          negative_signals: null,
           total_signals: null,
-          last_eligible_signal_at: null,
+          last_trainable_signal_at: null,
           optimization_runs: null,
           min_signals: 20,
-          min_reward: 0.5,
           would_trigger: null,
           reason: 'Optimizer gate status unavailable (db down)',
         },
@@ -564,5 +578,8 @@ describe('FeedbackLearning — optimizer gate visibility (#1661)', () => {
     expect(screen.getByText('— / 20')).toBeInTheDocument();
     expect(screen.getByText(/status unavailable/i)).toBeInTheDocument();
     expect(screen.queryByText(/never optimized/i)).not.toBeInTheDocument();
+    // No class breakdown either — a "0 with a finding / 0 without" line would
+    // read as a measurement of an empty corpus rather than as an unknown.
+    expect(screen.queryByText(/scarcer label class/i)).not.toBeInTheDocument();
   });
 });

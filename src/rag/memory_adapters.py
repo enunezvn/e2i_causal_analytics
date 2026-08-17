@@ -794,6 +794,7 @@ class SignalCollectorAdapter:
         source_agent: Optional[str] = None,
         min_reward: float = 0.0,
         limit: int = 1000,
+        strict: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve signals for DSPy optimization.
@@ -805,12 +806,24 @@ class SignalCollectorAdapter:
                 column, so a filtered read must target `source_agent`.
             min_reward: Minimum reward threshold.
             limit: Maximum signals to retrieve.
+            strict: Re-raise read failures instead of returning ``[]`` (#1668).
+                Default False keeps the best-effort contract every existing
+                caller relies on — a DB outage must not abort a learning cycle.
+                But an empty list is now a MEASUREMENT for one caller: the
+                optimizer gate counts label classes over these rows and
+                publishes the result on /feedback/health, where "0 trainable
+                signals" would be indistinguishable from "the database is
+                down" — the exact fabricated-zero the #1661 surface exists to
+                avoid. That caller passes ``strict=True`` and handles the
+                failure itself.
 
         Returns:
             List of signal dicts suitable for DSPy optimization.
         """
         if self._client is None:
             logger.warning("No client configured, returning empty signals")
+            if strict:
+                raise RuntimeError("No Supabase client configured for signal read")
             return []
 
         try:
@@ -843,6 +856,8 @@ class SignalCollectorAdapter:
 
         except Exception as e:
             logger.error(f"Failed to retrieve signals: {e}")
+            if strict:
+                raise
             return []
 
 

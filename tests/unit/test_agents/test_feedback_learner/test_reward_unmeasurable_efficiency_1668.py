@@ -163,18 +163,22 @@ def test_the_repaired_rows_stay_far_below_the_optimizer_floor():
 
     Every row the fix touches has ``feedback_count == 0`` or 3, zero patterns
     and zero recommendations; the best of them stored 0.3. Lowering them to 0.0
-    cannot move a signal across ``OPTIMIZER_MIN_REWARD`` in either direction.
-    """
-    from src.agents.feedback_learner.signal_store import OPTIMIZER_MIN_REWARD
+    cannot move a signal across the 0.5 eligibility floor in either direction.
 
+    The 0.5 is a literal, not a gate constant. #1668 removed the gate's reward
+    floor entirely (it counts label classes now), so the number below describes
+    the eligibility rule these rows were measured against at the time — a fact
+    about the historical corpus, not a coupling to today's gate.
+    """
+    optimizer_floor_at_the_time = 0.5
     worst_case_before = 0.3  # measured max across the 42 affected prod rows
-    assert worst_case_before < OPTIMIZER_MIN_REWARD
+    assert worst_case_before < optimizer_floor_at_the_time
     for kwargs in (
         {"total_latency_ms": 0.0},
         {"total_latency_ms": 0.0, "update_effectiveness": 0.0},
         {"feedback_count": 3, "total_latency_ms": 0.0},
     ):
-        assert _signal(**kwargs).compute_reward() < OPTIMIZER_MIN_REWARD
+        assert _signal(**kwargs).compute_reward() < optimizer_floor_at_the_time
 
 
 def test_a_perfectly_efficient_measured_cycle_still_earns_the_full_term():

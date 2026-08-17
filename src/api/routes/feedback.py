@@ -370,7 +370,7 @@ class UpdateListResponse(BaseModel):
 
 
 class OptimizerGateStatus(BaseModel):
-    """State of the daily DSPy prompt-optimization trigger (#1661).
+    """State of the daily DSPy prompt-optimization trigger (#1661, #1668).
 
     The beat that drives prompt optimization returns ``{"status": "skipped"}``
     whenever its trigger is unsatisfied — a legitimate return, so nothing fails
@@ -378,25 +378,47 @@ class OptimizerGateStatus(BaseModel):
     the trigger's own inputs, so an operator watching this page can see whether
     the loop is actually doing anything.
 
+    #1668 re-pointed the headline number. It used to be ``eligible_signals`` —
+    rows clearing ``reward >= 0.5``, i.e. 8 — which measures how many cycles
+    found DEFECTS, not how many can be trained on. Those 8 rows are all one
+    label class, so the trainset built from them is empty. The gate now counts
+    ``trainable_signals``, the scarcer label class of the best-supplied phase,
+    which is exactly half the balanced trainset the builder produces.
+
     Counts are ``None`` (not 0) when the read fails: a fabricated zero on a
     health surface is indistinguishable from a measured one.
     """
 
-    eligible_signals: Optional[int] = Field(
-        default=None, description="feedback_learner signals clearing the reward floor"
+    trainable_signals: Optional[int] = Field(
+        default=None,
+        description="Signals of the scarcer label class — the gate's own input",
+    )
+    governing_phase: Optional[str] = Field(
+        default=None,
+        description=(
+            "Phase the class counts describe: the best-supplied one, or the largest "
+            "usable pool when no phase has both classes. Null only when the read failed"
+        ),
+    )
+    positive_signals: Optional[int] = Field(
+        default=None,
+        description="Signals whose cycle produced the phase's output, on the governing phase",
+    )
+    negative_signals: Optional[int] = Field(
+        default=None,
+        description="Signals whose cycle correctly produced none, on the governing phase",
     )
     total_signals: Optional[int] = Field(
         default=None,
         description="All feedback_learner signals ever — the yield denominator",
     )
-    last_eligible_signal_at: Optional[str] = Field(
-        default=None, description="When an eligible signal was last recorded"
+    last_trainable_signal_at: Optional[str] = Field(
+        default=None, description="When the scarcer label class last gained a signal"
     )
     optimization_runs: Optional[int] = Field(
         default=None, description="prompt_optimization_runs rows; 0 means never optimized"
     )
-    min_signals: int = Field(..., description="Eligible signals the trigger requires")
-    min_reward: float = Field(..., description="Reward floor a signal must clear")
+    min_signals: int = Field(..., description="Trainable signals the trigger requires")
     would_trigger: Optional[bool] = Field(
         default=None, description="Whether the count gate is satisfied right now"
     )
@@ -1146,7 +1168,6 @@ async def get_feedback_health() -> FeedbackHealthResponse:
         logger.warning("optimizer gate status unavailable: %s", e)
         optimizer = OptimizerGateStatus(
             min_signals=signal_store.optimizer_min_signals(),
-            min_reward=signal_store.OPTIMIZER_MIN_REWARD,
             reason=f"Optimizer gate status unavailable ({e})",
         )
 

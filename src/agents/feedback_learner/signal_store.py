@@ -18,33 +18,81 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
-from .dspy_integration import FeedbackLearnerTrainingSignal
+from .dspy_integration import FeedbackLearnerTrainingSignal, gate_supply, gate_supply_breakdown
+
+# Re-exported so the gate's SSOT stays addressable from one module (#1661): the
+# beat, this module's status surface and the trainset builder all count trainable
+# supply through the SAME function (#1668). Its definition lives beside
+# ``_signals_to_examples`` in dspy_integration, which is what it must agree with.
+__all__ = [
+    "DEFAULT_MIN_SIGNALS",
+    "MIN_SIGNALS_ENV",
+    "OPTIMIZER_POOL_MIN_REWARD",
+    "OPTIMIZER_SIGNAL_LIMIT",
+    "RUNS_TABLE",
+    "TABLE",
+    "TRIGGER_STATE_PATH",
+    "build_signal_record",
+    "decide_optimizer_trigger",
+    "gate_supply",
+    "gate_supply_breakdown",
+    "get_feedback_learner_training_signals",
+    "get_optimizer_gate_status",
+    "load_trigger_state",
+    "optimizer_min_signals",
+    "persist_training_signal",
+    "read_optimizer_signal_pool",
+]
 
 logger = logging.getLogger(__name__)
 
 TABLE = "dspy_agent_training_signals"
 RUNS_TABLE = "prompt_optimization_runs"
 
-# --- Optimizer-gate SSOT (#1661) ---------------------------------------------
+# --- Optimizer-gate SSOT (#1661, re-pointed by #1668) ------------------------
 #
 # The daily beat (src/tasks/dspy_optimization_tasks.py) reads signals through
-# this module and then gates on their count. Both halves of that gate live here
-# so the operator-visible status (GET /feedback/health) is derived from the SAME
+# this module and then gates on them. Both halves of that gate live here so the
+# operator-visible status (GET /feedback/health) is derived from the SAME
 # numbers the beat skips on, and cannot quietly disagree with it.
 #
-# Why the floor matters more than the threshold — measured 2026-08-16 in prod:
-# 218 feedback_learner signals exist, 8 clear ``reward >= 0.5``. That is not a
-# volume shortfall. ``compute_reward`` gives the coverage and actionability
-# terms zero on any cycle that detected no patterns, which caps such a cycle at
-# EXACTLY 0.5 (0.3 with no rubric). The comparison is ``>=``, so a pattern-free
-# cycle is eligible only at a flawless 5.0 rubric AND perfect efficiency; in 218
-# stored rows that has never happened (203 pattern-free rows, max reward 0.4100
-# at rubric 3.92). All 8 eligible rows came from cycles that found >= 2
-# patterns, inside the 2026-08-05..08-08 window — the only stretch where
-# user-reward ratings dipped below the analyzer's 3.0 gate. Eligibility is
-# therefore coupled in practice to the platform behaving badly; see #1661
-# before touching either constant.
-OPTIMIZER_MIN_REWARD = 0.5
+# WHAT THE GATE COUNTS, and why it changed (#1668). It used to count rows
+# clearing ``reward >= 0.5`` — 8 on the production table. That is a defect-yield
+# measure, not a supply measure: ``compute_reward`` gives the coverage and
+# actionability terms zero on a cycle that detected no patterns, capping such a
+# cycle at EXACTLY 0.5 (0.3 with no rubric), so in 222 stored rows every
+# eligible one came from a cycle that found >= 2 patterns.
+#
+# After #1675 the trainset builder no longer selects that way — it requires each
+# phase's INPUT to be non-empty and balances the two label classes — so the gate
+# and the builder had come to measure different quantities. Measured
+# 2026-08-17, read-only, against the 222 real feedback_learner rows:
+#
+#     eligible reward >= 0.5                        8   <- the old gate
+#     informative pool (non-empty feedback_batch)  74
+#     minority label class (pattern phase)         15   <- the real constraint
+#     built pattern examples                       30   == 2 * 15
+#
+#     pattern examples built from the OLD gate's own 8 rows:   0
+#
+# The last line is the defect, not the discrepancy: those 8 rows are 100%
+# positive, so the builder refuses them as single-class. Twenty of them would
+# have opened the gate and compiled nothing. The gate now counts
+# ``gate_supply`` — the scarcer label class of the best-supplied phase — which
+# is what ``_interleave`` can actually turn into a balanced trainset
+# (``len(trainset) == 2 * supply``, exactly).
+#
+# NOTE this does NOT decouple eligibility from the platform behaving badly:
+# today's supply is bounded by the POSITIVE class (15 of 74), and a positive is
+# a cycle that found defects. That coupling is inherent to the label — you
+# cannot teach "when to report" without examples of reporting — and it is a
+# product question (#1668), not something a gate quantity can fix. What changed
+# is that the gate now measures the real constraint instead of a proxy for it.
+#
+# The pool carries NO reward floor. A correct abstention scores near zero by
+# construction, so the negative class and a reward floor are the same set:
+# filtering the pool by reward starves the class the balance needs (#1675).
+OPTIMIZER_POOL_MIN_REWARD = 0.0
 OPTIMIZER_SIGNAL_LIMIT = 2000
 DEFAULT_MIN_SIGNALS = 20
 MIN_SIGNALS_ENV = "DSPY_MIN_SIGNALS"
@@ -100,6 +148,13 @@ def decide_optimizer_trigger(
 ) -> Tuple[bool, str]:
     """Pure trigger decision over the available signals + persisted state.
 
+    ``signals`` is the WHOLE optimizer pool (see
+    :func:`read_optimizer_signal_pool`), not a pre-filtered slice: the count
+    this gates on is ``gate_supply``, the scarcer label class of the
+    best-supplied phase, computed from the same classifier the trainset builder
+    uses (#1668). Passing a reward-filtered slice would understate it — and
+    would reintroduce exactly the divergence this function now closes.
+
     THE single decision function: the Celery beat calls it to decide whether to
     optimize, and ``get_optimizer_gate_status`` calls it to tell an operator
     what the beat would decide. Keeping one implementation is the point — the
@@ -122,10 +177,11 @@ def decide_optimizer_trigger(
     MUST pass the same ``scheduled`` value the beat uses, or the surface
     reports Ready while the beat skips.
     """
-    from .dspy_integration import GEPAOptimizationTrigger
+    from .dspy_integration import GEPAOptimizationTrigger, gate_supply
 
-    n = len(signals)
-    mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
+    _, n = gate_supply(signals)
+    total = len(signals)
+    mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / total) if total else 0.0
     trigger = GEPAOptimizationTrigger(min_signals=optimizer_min_signals())
     last_optimization = None if scheduled else _parse_dt(state.get("last_optimization"))
     return trigger.should_trigger(
@@ -200,13 +256,17 @@ async def persist_training_signal(
 
 async def get_feedback_learner_training_signals(
     client: Optional[Any] = None,
-    min_reward: float = 0.5,
-    limit: int = 1000,
+    min_reward: float = OPTIMIZER_POOL_MIN_REWARD,
+    limit: int = OPTIMIZER_SIGNAL_LIMIT,
+    strict: bool = False,
 ) -> list[Dict[str, Any]]:
     """Read back persisted feedback_learner signals for optimization (Shard 03/05).
 
     Thin wrapper over SignalCollectorAdapter.get_signals_for_optimization filtered
     to source_agent='feedback_learner'.
+
+    ``strict`` (#1668) turns a read failure into a raise instead of an empty
+    list. See :func:`read_optimizer_signal_pool` for why the gate needs it.
     """
     from src.rag.memory_adapters import SignalCollectorAdapter
 
@@ -216,10 +276,50 @@ async def get_feedback_learner_training_signals(
         client = await _maybe_await(get_supabase_client())
     if client is None:
         logger.warning("No Supabase client; cannot read training signals")
+        if strict:
+            raise RuntimeError("No Supabase client available to read training signals")
         return []
     adapter = SignalCollectorAdapter(supabase_client=client)
     return await adapter.get_signals_for_optimization(
-        source_agent="feedback_learner", min_reward=min_reward, limit=limit
+        source_agent="feedback_learner", min_reward=min_reward, limit=limit, strict=strict
+    )
+
+
+async def read_optimizer_signal_pool(client: Optional[Any] = None) -> list[Dict[str, Any]]:
+    """THE optimizer signal pool — one definition, three readers (#1668).
+
+    The daily beat gates on these rows, hands these same rows to
+    ``run_feedback_learner_optimization``, and ``get_optimizer_gate_status``
+    reports on these rows. Before #1668 the beat read ``reward >= 0.5`` at
+    ``limit=2000`` while the runner re-read at ``min_reward=0.0, limit=1000`` —
+    two different row sets, so the number the gate published described a pool
+    that was never trained on.
+
+    Newest-first with a PK tiebreak (see
+    ``SignalCollectorAdapter.get_signals_for_optimization``), so the slice is
+    identical for every reader once the limit binds.
+
+    Cost, measured 2026-08-17 against the production table: 222 rows, ~1.07 MiB,
+    ~310 ms warm. The health surface polls this every 30 s. Selecting fewer
+    columns would be cheaper but would give the gate a different row shape from
+    the builder's, which is precisely the divergence being closed — so the read
+    is whole-row on purpose.
+
+    RAISES on a read failure (``strict=True``), unlike every other caller of the
+    adapter. The adapter's default is to swallow and return ``[]``, which is
+    right for best-effort readers — but these rows are COUNTED and the count is
+    published, so an empty list here is a measurement. A swallowed outage would
+    surface as ``trainable_signals: 0`` and "Insufficient signals: 0 < 20",
+    which is precisely the fabricated zero the #1661 health contract forbids and
+    is indistinguishable from a genuinely single-class corpus. Both callers
+    handle the raise: the status returns its ``unavailable`` shape, the beat
+    returns a failed status rather than a skip.
+    """
+    return await get_feedback_learner_training_signals(
+        client=client,
+        min_reward=OPTIMIZER_POOL_MIN_REWARD,
+        limit=OPTIMIZER_SIGNAL_LIMIT,
+        strict=True,
     )
 
 
@@ -232,34 +332,54 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
     signal an operator looks at stays green (#1661).
 
     ``would_trigger``/``reason`` come from :func:`decide_optimizer_trigger` —
-    the beat's OWN decision function, over the same eligible signals and the
-    same persisted state — so the surface cannot report Ready while the beat
-    skips. In particular the cooldown branch, which the trigger evaluates
-    BEFORE the signal count, stays visible once supply clears the threshold.
+    the beat's OWN decision function, over the same pool
+    (:func:`read_optimizer_signal_pool`) and the same persisted state — so the
+    surface cannot report Ready while the beat skips. In particular the cooldown
+    branch, which the trigger evaluates BEFORE the signal count, stays visible
+    once supply clears the threshold.
 
     The counts around it explain that verdict:
 
-    - ``eligible_signals``  — feedback_learner signals at ``reward >= min_reward``,
-      capped at ``OPTIMIZER_SIGNAL_LIMIT`` exactly as the beat's own read is,
-      so this number and the verdict always describe the same rows.
+    - ``trainable_signals`` — the gate's own input: the scarcer label class of
+      the best-supplied phase. A balanced trainset is exactly twice this.
+      #1668 replaced ``eligible_signals`` (rows at ``reward >= 0.5``) here: that
+      number was 8 while the beat's builder could use 15, and those 8 rows were
+      single-class, so the trainset built from them was empty.
+    - ``governing_phase`` — the phase these class counts describe: the
+      best-supplied one, falling back to the largest usable pool when NO phase
+      has both classes. It is never null on a successful read, because the
+      single-class case is exactly when the breakdown matters most (it names the
+      class the loop is starved of) and a pair of counts beside a null phase
+      would describe nothing. ``trainable_signals == 0`` is what says nothing is
+      trainable.
+    - ``positive_signals`` / ``negative_signals`` — the two classes for that
+      phase. This is the actionable pair: it says WHICH class is short, and
+      today it is the positive one (15 vs 59), i.e. supply is waiting on the
+      platform to exhibit defects.
     - ``total_signals``     — ALL feedback_learner signals ever. The denominator
-      is the point: "8 of 218" reads as a low-yield problem, "8" alone reads as
-      a volume problem and invites lowering the threshold instead.
-    - ``last_eligible_signal_at`` — when supply last moved (None = never).
+      is the point: "15 of 222" reads as a low-yield problem, "15" alone reads
+      as a volume problem and invites lowering the threshold instead.
+    - ``last_trainable_signal_at`` — when the SCARCER class last moved (None =
+      never). Reporting the newest row of either class would show a date
+      advancing daily while the gate stayed frozen.
     - ``optimization_runs`` — rows in ``prompt_optimization_runs``; 0 means the
       loop has never once compiled anything.
 
     Every count is ``None``, never 0, when the read fails: a fabricated zero on
     a health surface is indistinguishable from a measured one.
     """
+    from .dspy_integration import classify_signal_for_phase, gate_supply_breakdown
+
     min_signals = optimizer_min_signals()
     unavailable: Dict[str, Any] = {
-        "eligible_signals": None,
+        "trainable_signals": None,
+        "governing_phase": None,
+        "positive_signals": None,
+        "negative_signals": None,
         "total_signals": None,
-        "last_eligible_signal_at": None,
+        "last_trainable_signal_at": None,
         "optimization_runs": None,
         "min_signals": min_signals,
-        "min_reward": OPTIMIZER_MIN_REWARD,
         "would_trigger": None,
         "reason": "Optimizer gate status unavailable (no database client)",
     }
@@ -273,21 +393,8 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
         return unavailable
 
     try:
-        # The eligible read returns ROWS, not just a count: the trigger needs
-        # their mean reward, and taking the same rows the beat takes (same
-        # filters, same newest-first order, same limit — see
-        # SignalCollectorAdapter.get_signals_for_optimization) is what keeps
-        # the two verdicts identical.
-        eligible_res = await _maybe_await(
-            client.table(TABLE)
-            .select("reward, created_at")
-            .eq("source_agent", "feedback_learner")
-            .gte("reward", OPTIMIZER_MIN_REWARD)
-            .order("created_at", desc=True)
-            .order("signal_id", desc=True)  # PK tiebreak — see the adapter
-            .limit(OPTIMIZER_SIGNAL_LIMIT)
-            .execute()
-        )
+        # The SAME rows the beat gates on and hands to the trainset builder.
+        pool = await read_optimizer_signal_pool(client)
         total_res = await _maybe_await(
             client.table(TABLE)
             .select("signal_id", count="exact")
@@ -302,29 +409,59 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
         logger.warning("Optimizer gate status read failed: %s", e)
         return {**unavailable, "reason": f"Optimizer gate status unavailable ({e})"}
 
-    eligible_rows = getattr(eligible_res, "data", None) or []
-    # The rows the gate actually counted, capped at OPTIMIZER_SIGNAL_LIMIT —
-    # NOT a wider exact count, which would keep counting past the cap and let
-    # the reported figure disagree with the verdict's own "N < M" string.
-    eligible = len(eligible_rows)
+    # `total` is a separate exact count on purpose: the pool is capped at
+    # OPTIMIZER_SIGNAL_LIMIT, so len(pool) is what the gate saw while `total` is
+    # how many exist. The gate's own numbers all come from `pool`, never from
+    # the wider count, so the figures and the verdict describe the same rows.
     total = int(getattr(total_res, "count", 0) or 0)
     runs = int(getattr(runs_res, "count", 0) or 0)
-    last_eligible = eligible_rows[0].get("created_at") if eligible_rows else None
+
+    # ONE breakdown function, shared with the beat's own task result (#1668):
+    # the phase is always named, so the class counts are never left describing
+    # nothing. `trainable == 0` is what says no phase has both classes.
+    phase, trainable, positives, negatives = gate_supply_breakdown(pool)
+
+    # When supply last moved. ``supply == min(positives, negatives)``, so:
+    #
+    #   unequal — only the SCARCER class can raise it; the newest row of that
+    #     class is what last did. Reporting the newest row of either class here
+    #     would advance the date on every abundant-class arrival while the gate
+    #     stayed frozen, which is the false-green shape #1661 removed (negatives
+    #     arrive steadily in production, positives do not).
+    #   equal   — adding EITHER class leaves ``min`` unchanged, so supply last
+    #     moved when the PAIR completed: the newest usable row of either class.
+    #
+    # `pool` is newest-first, so the first match is the newest.
+    if positives == negatives:
+
+        def _moved_supply(row: Dict[str, Any]) -> bool:
+            return classify_signal_for_phase(row, phase) is not None
+
+    else:
+        scarce_label = positives < negatives
+
+        def _moved_supply(row: Dict[str, Any]) -> bool:
+            return classify_signal_for_phase(row, phase) is scarce_label
+
+    last_trainable = next(
+        (row.get("created_at") for row in pool if _moved_supply(row)),
+        None,
+    )
 
     # scheduled=True mirrors the beat's own call (#1656). This surface exists to
     # report what the beat WOULD decide, so the flag must match it — asking with
     # a different value is exactly the Ready-while-skipping defect of #1661.
-    would_trigger, reason = decide_optimizer_trigger(
-        eligible_rows, load_trigger_state(), scheduled=True
-    )
+    would_trigger, reason = decide_optimizer_trigger(pool, load_trigger_state(), scheduled=True)
 
     return {
-        "eligible_signals": eligible,
+        "trainable_signals": trainable,
+        "governing_phase": phase,
+        "positive_signals": positives,
+        "negative_signals": negatives,
         "total_signals": total,
-        "last_eligible_signal_at": last_eligible,
+        "last_trainable_signal_at": last_trainable,
         "optimization_runs": runs,
         "min_signals": min_signals,
-        "min_reward": OPTIMIZER_MIN_REWARD,
         "would_trigger": would_trigger,
         "reason": reason,
     }

@@ -819,6 +819,138 @@ class GEPAOptimizationTrigger:
 
 
 # =============================================================================
+# 5b. TRAINABLE SUPPLY — the ONE definition of a usable signal (#1668)
+# =============================================================================
+#
+# Everything that needs to know "can this signal be trained on, and with which
+# label?" routes through ``classify_signal_for_phase``:
+#
+#   - ``FeedbackLearnerOptimizer._signals_to_examples`` builds the trainset;
+#   - ``signal_store.decide_optimizer_trigger`` gates the daily beat on it;
+#   - ``signal_store.get_optimizer_gate_status`` reports it to an operator.
+#
+# Why one function rather than three that agree today. Before #1668 the beat
+# gated on ``count(reward >= 0.5)``, which is **8** on the production table,
+# while the builder (post-#1675) selected on label balance, which yields **15**.
+# The two are not just different numbers: measured 2026-08-17, the eight rows
+# the gate counted are 100% positive — every one came from a cycle that found
+# patterns, because ``compute_reward`` zeroes the coverage and actionability
+# terms otherwise — so ``_signals_to_examples`` refuses them as single-class and
+# builds ZERO examples from them. Twenty such rows would have satisfied the gate
+# and trained nothing, which is the failure this factoring makes impossible.
+
+
+# Phases with a persisted (input, label) pair. 'update' has no persisted
+# ``current_knowledge`` (audit F6) and 'summary' is a deterministic f-string
+# (#1668) — both are honest skips in the builder, so neither can supply the gate.
+OPTIMIZABLE_PHASES: tuple[str, ...] = ("pattern", "recommendation")
+
+
+def classify_signal_for_phase(signal: Dict[str, Any], phase: str) -> Optional[bool]:
+    """Label a persisted signal for one optimization phase.
+
+    Returns ``True`` (positive: the cycle produced the phase's output),
+    ``False`` (negative: it correctly produced none), or ``None`` when the row
+    cannot be an example for this phase at all.
+
+    ``None`` is the load-bearing case. For the pattern phase it means the
+    signature's INPUT — the feedback batch — is empty, so the example would say
+    "given nothing, emit nothing": degenerate, not a negative. That is 148 of
+    the 222 real production rows, and admitting them as negatives would teach
+    unconditional abstention just as surely as the old all-positive trainset
+    taught unconditional reporting.
+    """
+    if signal.get("source_agent") != "feedback_learner":
+        return None
+
+    input_context = signal.get("input_context") or {}
+    output = signal.get("output") or {}
+
+    if phase == "pattern":
+        # PatternDetectionSignature conditions on the feedback batch.
+        if not (input_context.get("feedback_batch") or []):
+            return None
+        return bool(output.get("patterns") or [])
+
+    if phase == "recommendation":
+        # RecommendationGenerationSignature conditions on detected_patterns; a
+        # cycle that found none has nothing to condition on, whatever its
+        # recommendations field holds.
+        if not (output.get("patterns") or []):
+            return None
+        return bool(output.get("recommendations") or [])
+
+    return None
+
+
+def label_class_counts(signals: List[Dict[str, Any]], phase: str) -> tuple[int, int]:
+    """``(positives, negatives)`` usable by ``phase``. Degenerate rows count as neither."""
+    positives = negatives = 0
+    for signal in signals:
+        label = classify_signal_for_phase(signal, phase)
+        if label is None:
+            continue
+        if label:
+            positives += 1
+        else:
+            negatives += 1
+    return positives, negatives
+
+
+def trainable_supply(signals: List[Dict[str, Any]], phase: str) -> int:
+    """Signals of the SCARCER label class — the constraint on a balanced trainset.
+
+    ``FeedbackLearnerOptimizer._interleave`` emits exactly ``k = min(n_pos,
+    n_neg)`` pairs, so the trainset it builds is ``2 * trainable_supply(...)``
+    examples, always. Counting the informative pool (74 today) or the built
+    examples (30) instead would overstate what is actually trainable: neither
+    can exceed twice this number, and both move when the ABUNDANT class moves
+    while the trainset does not.
+    """
+    positives, negatives = label_class_counts(signals, phase)
+    return min(positives, negatives)
+
+
+def gate_supply(signals: List[Dict[str, Any]]) -> tuple[Optional[str], int]:
+    """``(phase, supply)`` for the best-supplied optimizable phase.
+
+    The daily beat gates ONE run that walks every phase, and the run is worth
+    doing if any phase can be trained — so the gate takes the max rather than
+    the pattern phase alone. Ties resolve to the first phase in
+    ``OPTIMIZABLE_PHASES``, which keeps the reported phase deterministic.
+    Returns ``(None, 0)`` when no phase has both classes — there is genuinely no
+    phase supplying the gate then. Use :func:`gate_supply_breakdown` when you
+    need to SHOW the class counts, which is exactly the case where that ``None``
+    would otherwise leave them unattributed.
+    """
+    best_phase: Optional[str] = None
+    best = 0
+    for phase in OPTIMIZABLE_PHASES:
+        supply = trainable_supply(signals, phase)
+        if supply > best:
+            best_phase, best = phase, supply
+    return best_phase, best
+
+
+def gate_supply_breakdown(signals: List[Dict[str, Any]]) -> tuple[str, int, int, int]:
+    """``(phase, supply, positives, negatives)`` — the phase these counts describe.
+
+    Unlike :func:`gate_supply`, the phase is never ``None``: when no phase has
+    both label classes it falls back to the one with the largest usable pool, so
+    a reported "15 with a finding / 0 without" is always attributed to the phase
+    it was measured on. That single-class case is precisely when an operator
+    most needs the breakdown — it names which class the loop is starved of — and
+    reporting the pair beside a null phase would leave it describing nothing.
+    ``supply`` is still 0 there, which is what says nothing is trainable.
+    """
+    phase, supply = gate_supply(signals)
+    if phase is None:
+        phase = max(OPTIMIZABLE_PHASES, key=lambda p: sum(label_class_counts(signals, p)))
+    positives, negatives = label_class_counts(signals, phase)
+    return phase, supply, positives, negatives
+
+
+# =============================================================================
 # 6. DSPy OPTIMIZATION HELPERS (MIPROv2 + GEPA)
 # =============================================================================
 
@@ -1191,10 +1323,21 @@ class FeedbackLearnerOptimizer:
         inoperative, since it is applied a second time downstream of the fetch.
 
         Deleting the floor alone is not the fix: the raw population is 148
-        empty-input rows / 57 informative negatives / 15 positives, so the
+        empty-input rows / 59 informative negatives / 15 positives, so the
         unfiltered trainset would be 93% empty-label and teach the mirror
         defect. The builder therefore requires the PHASE'S INPUT to be non-empty
         and balances the two label classes (see :meth:`_interleave`).
+
+        Which rows are usable, and which label they carry, is decided by
+        :func:`classify_signal_for_phase` — the SAME function the daily beat's
+        gate and the operator surface count through (#1668). Before that the
+        beat gated on ``count(reward >= 0.5)`` while this builder selected on
+        label balance; measured 2026-08-17 those eight rows are 100% positive
+        and this function returns ZERO examples for them, so the gate could open
+        on a pool that trains nothing. The invariant
+        ``len(self._signals_to_examples(pool, phase)) == 2 *
+        trainable_supply(pool, phase)`` is asserted in
+        ``test_gate_counts_trainable_supply_1668.py``.
         """
         if not DSPY_AVAILABLE:
             return []
@@ -1222,7 +1365,14 @@ class FeedbackLearnerOptimizer:
         positives: list = []
         negatives: list = []
         for signal in signals:
-            if signal.get("source_agent") != "feedback_learner":
+            # ONE definition of "usable, and with which label" (#1668). The
+            # beat's gate and the operator surface count the same rows through
+            # the same function, so a change to which signals are trainable
+            # moves the gate with the trainset instead of leaving them to drift.
+            # `tests/.../test_gate_counts_trainable_supply_1668.py` asserts the
+            # consequence directly: len(built) == 2 * trainable_supply(...).
+            label = classify_signal_for_phase(signal, phase)
+            if label is None:
                 continue
 
             ic = signal.get("input_context", {}) or {}
@@ -1233,11 +1383,6 @@ class FeedbackLearnerOptimizer:
 
             try:
                 if phase == "pattern":
-                    # The signature's input is the feedback batch. Without one
-                    # the example says "given nothing, emit nothing", which is
-                    # degenerate rather than a negative — 148 of 220 real rows.
-                    if not feedback_batch:
-                        continue
                     ex = dspy.Example(
                         feedback_batch=_json.dumps(feedback_batch),
                         agent_baselines=_json.dumps(ic.get("agent_baselines", {})),
@@ -1253,14 +1398,9 @@ class FeedbackLearnerOptimizer:
                             if isinstance(p, dict) and p.get("root_cause_hypothesis")
                         ],
                     ).with_inputs("feedback_batch", "agent_baselines", "historical_patterns")
-                    (positives if patterns else negatives).append(ex)
+                    (positives if label else negatives).append(ex)
 
                 elif phase == "recommendation":
-                    # The signature's input is `detected_patterns`; a cycle that
-                    # detected none has nothing to condition on, whatever its
-                    # recommendations field holds.
-                    if not patterns:
-                        continue
                     ex = dspy.Example(
                         detected_patterns=_json.dumps(patterns),
                         prior_learnings=_json.dumps(ic.get("prior_learnings", [])),
@@ -1271,10 +1411,21 @@ class FeedbackLearnerOptimizer:
                         ],
                         risk_assessment=str(out.get("risk_assessment", "")),
                     ).with_inputs("detected_patterns", "prior_learnings", "optimization_examples")
-                    (positives if recommendations else negatives).append(ex)
+                    (positives if label else negatives).append(ex)
 
             except Exception as e:  # noqa: BLE001
-                logger.debug(f"Failed to convert signal to example ({phase}): {e}")
+                # A drop here is the ONE way the trainset can come out smaller
+                # than the gate counted (#1668): `classify_signal_for_phase`
+                # already accepted this row, so the beat's "N trainable" promised
+                # an example that does not exist. Logged at WARNING, not debug,
+                # because it means the gate over-counted rather than merely that
+                # one row was odd.
+                logger.warning(
+                    "Signal dropped while building a '%s' example — the optimizer gate "
+                    "counted it as trainable and the trainset will be short by one: %s",
+                    phase,
+                    e,
+                )
 
         if not positives or not negatives:
             logger.warning(
@@ -1417,6 +1568,13 @@ __all__ = [
     # Optimization
     "FeedbackLearnerOptimizer",
     "GEPAOptimizationTrigger",
+    # Trainable supply — the gate and the trainset builder share these (#1668)
+    "OPTIMIZABLE_PHASES",
+    "classify_signal_for_phase",
+    "label_class_counts",
+    "trainable_supply",
+    "gate_supply",
+    "gate_supply_breakdown",
     "DSPY_AVAILABLE",
     "GEPA_AVAILABLE",
     "OptimizerType",

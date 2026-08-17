@@ -50,21 +50,30 @@ class TestGEPATriggerA3DefaultThreshold:
 class TestGEPATriggerA3EnvOverride:
     """A3: _decide_trigger reads DSPY_MIN_SIGNALS env var."""
 
-    def _make_signal(self, reward: float = 0.9) -> dict:
+    def _make_signal(self, reward: float = 0.9, *, patterns: bool = True) -> dict:
         return {
             "source_agent": "feedback_learner",
             "reward": reward,
             "input_context": {"feedback_batch": [{"x": 1}]},
-            "output": {"patterns": [{"severity": "high"}]},
+            "output": {"patterns": [{"severity": "high"}] if patterns else []},
         }
+
+    def _pool(self, k: int) -> list:
+        """``k`` positives + ``k`` negatives -> trainable supply ``k``.
+
+        #1668: the trigger counts the scarcer LABEL CLASS, not rows. ``k``
+        identical pattern-bearing rows are a single-class pool the trainset
+        builder refuses outright, so their supply is 0 — these tests are about
+        the THRESHOLD, so the pool must actually carry the supply they name.
+        """
+        return [self._make_signal(0.9)] * k + [self._make_signal(0.0, patterns=False)] * k
 
     def test_env_override_triggers_at_lower_count(self, monkeypatch):
         """When DSPY_MIN_SIGNALS=5, 5 signals with high reward should fire."""
         monkeypatch.setenv("DSPY_MIN_SIGNALS", "5")
         from src.tasks.dspy_optimization_tasks import _decide_trigger
 
-        signals = [self._make_signal(0.9)] * 5
-        should, reason = _decide_trigger(signals, state={})
+        should, reason = _decide_trigger(self._pool(5), state={})
         assert should is True
 
     def test_env_override_blocks_below_overridden_threshold(self, monkeypatch):
@@ -72,8 +81,7 @@ class TestGEPATriggerA3EnvOverride:
         monkeypatch.setenv("DSPY_MIN_SIGNALS", "10")
         from src.tasks.dspy_optimization_tasks import _decide_trigger
 
-        signals = [self._make_signal(0.9)] * 5
-        should, reason = _decide_trigger(signals, state={})
+        should, reason = _decide_trigger(self._pool(5), state={})
         assert should is False
         assert reason  # has a reason string
 
@@ -82,14 +90,12 @@ class TestGEPATriggerA3EnvOverride:
         monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
         from src.tasks.dspy_optimization_tasks import _decide_trigger
 
-        # 19 signals with high reward but no escape -> blocked
-        signals = [self._make_signal(0.9)] * 19
-        should, reason = _decide_trigger(signals, state={})
+        # supply 19, no escape -> blocked
+        should, reason = _decide_trigger(self._pool(19), state={})
         assert should is False
 
-        # 20 signals with reward > 0 baseline -> triggers
-        signals = [self._make_signal(0.9)] * 20
-        should, reason = _decide_trigger(signals, state={})
+        # supply 20 with mean reward > 0 baseline -> triggers
+        should, reason = _decide_trigger(self._pool(20), state={})
         assert should is True
 
 
