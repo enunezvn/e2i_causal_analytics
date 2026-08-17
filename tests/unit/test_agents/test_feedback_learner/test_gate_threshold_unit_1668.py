@@ -1,0 +1,343 @@
+"""#1668 follow-up: the gate's THRESHOLD must be stated in the unit it gates.
+
+#1677 made the gate count trainable supply and pinned the *supply's* unit
+(``len(_signals_to_examples(pool, phase)) == 2 * trainable_supply(pool, phase)``).
+It left the *threshold* in the old unit: a constant named ``min_signals``,
+compared against half a trainset, carrying a comment justifying 20 on a
+reachability argument about a quantity it no longer counts.
+
+The tests here pin the threshold's unit. The load-bearing one is
+:func:`test_the_gate_opens_exactly_where_the_builder_reaches_the_threshold`:
+it walks real pools through the real builder and asserts that the pool at which
+``decide_optimizer_trigger`` flips is the pool whose built trainset is exactly
+the threshold. That is the invariant a future semantic change cannot satisfy by
+accident — if the gate's quantity moves again without the threshold moving, the
+flip point stops matching the builder's output and this test fails.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from ._gate_supply_fixtures import balanced_pool, negative, positive
+
+# --------------------------------------------------------------------------
+# 1. The constant names its unit
+# --------------------------------------------------------------------------
+
+
+def test_the_threshold_is_named_and_typed_in_trainset_examples():
+    """``min_signals`` gated half a trainset. The name must say which unit."""
+    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
+
+    trigger = GEPAOptimizationTrigger()
+    assert hasattr(trigger, "min_trainset_examples")
+    assert not hasattr(trigger, "min_signals"), (
+        "a constant called min_signals that gates trainset examples is the defect"
+    )
+
+
+def test_the_threshold_comment_no_longer_claims_reachability():
+    """The justification in the source was measured false; it must not survive.
+
+    Measured on the production table 2026-08-17: 8 rows at ``reward >= 0.5``
+    over a 68.8-day span (0.116/day), and 0 positives in the last 8 recorded
+    days. "20 ≈ reachable in normal operation" is not a true statement about
+    either the old quantity or the new one.
+    """
+    import inspect
+
+    from src.agents.feedback_learner import dspy_integration
+
+    src = inspect.getsource(dspy_integration.GEPAOptimizationTrigger)
+    assert "reachable in normal operation" not in src
+
+
+# --------------------------------------------------------------------------
+# 2. THE unit-pinning test
+# --------------------------------------------------------------------------
+
+
+def _first_pool_that_opens_the_gate(max_supply: int = 60):
+    """Smallest balanced pool for which the beat's own decision flips to True."""
+    from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
+
+    state = {"baseline_reward": 0.0}
+    for k in range(1, max_supply + 1):
+        pool = balanced_pool(k)
+        should, _reason = decide_optimizer_trigger(pool, state, scheduled=True)
+        if should:
+            return k, pool
+    return None, None
+
+
+def test_the_gate_opens_exactly_where_the_builder_reaches_the_threshold():
+    """The threshold's unit == the builder's output unit, measured end to end.
+
+    No ``2 *`` anywhere in the assertion: the pool at which the gate flips is
+    fed to the REAL trainset builder, and the number of examples it produces
+    must equal the threshold the gate published. Before this change the gate
+    flipped at a 40-example trainset while publishing a threshold of 20.
+    """
+    pytest.importorskip("dspy")
+    from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    k, pool = _first_pool_that_opens_the_gate()
+    assert k is not None, "the gate never opened — the sweep is not measuring anything"
+
+    built = FeedbackLearnerOptimizer(optimizer_type="gepa")._signals_to_examples(pool, "pattern")
+    assert len(built) == optimizer_min_trainset_examples()
+
+    # Positive control for the flip point: one class-pair fewer must NOT open it,
+    # so the equality above is the boundary and not an accident of the sweep.
+    from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
+
+    smaller = balanced_pool(k - 1)
+    assert decide_optimizer_trigger(smaller, {"baseline_reward": 0.0}, scheduled=True)[0] is False
+
+
+def test_the_reason_string_states_the_unit():
+    from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
+
+    should, reason = decide_optimizer_trigger(balanced_pool(3), {}, scheduled=True)
+    assert should is False
+    assert "6" in reason and "example" in reason.lower(), reason
+
+
+# --------------------------------------------------------------------------
+# 3. The derived constants, each pinned to the thing it was derived FROM
+# --------------------------------------------------------------------------
+
+
+def test_the_feasibility_floor_is_pinned_to_the_gepa_guard_it_came_from():
+    """``MIN_FEASIBLE_TRAINSET_EXAMPLES`` is not a chosen number.
+
+    ``_optimize_with_gepa`` splits ``trainset = examples[: int(0.8 * n)]`` and
+    returns None when ``len(trainset) < 5``. The floor is the smallest EVEN n
+    (the builder emits pairs) that clears it. Asserted against the arithmetic
+    rather than against a literal, so changing the guard fails here.
+    """
+    from src.agents.feedback_learner.dspy_integration import MIN_FEASIBLE_TRAINSET_EXAMPLES
+
+    n = MIN_FEASIBLE_TRAINSET_EXAMPLES
+    assert n % 2 == 0, "the builder emits balanced pairs, so the floor is even"
+    assert int(n * 0.8) >= 5, "at the floor, GEPA's own trainset guard must pass"
+    assert int((n - 2) * 0.8) < 5, "one pair below the floor, the guard must reject"
+
+
+def test_the_budget_ladder_is_derived_from_dspys_own_candidate_counts():
+    """``*2``/``*3`` are replaced by the size each preset's ranking needs.
+
+    dspy's ``AUTO_RUN_SETTINGS`` says how many candidate programs each preset
+    explores (measured: light 6, medium 12, heavy 18). A candidate can only be
+    ranked if the valset can express a distinct level for it; on the gold-empty
+    half the metric is binary (measured), so a V-example valset expresses at
+    least V+1 levels, and V is ``n - int(0.8n)``.
+    """
+    dspy_gepa = pytest.importorskip("dspy.teleprompt.gepa.gepa")
+    from src.agents.feedback_learner.dspy_integration import BUDGET_MIN_TRAINSET_EXAMPLES
+
+    for preset, cfg in dspy_gepa.AUTO_RUN_SETTINGS.items():
+        candidates = cfg["n"]
+        expected = 2
+        while (expected - int(expected * 0.8)) + 1 < candidates:
+            expected += 2
+        assert BUDGET_MIN_TRAINSET_EXAMPLES[preset] == expected, preset
+
+
+def test_the_threshold_clears_the_lightest_presets_ranking_floor():
+    """The gate must never open below the size the budget it spends can use.
+
+    Production spends ``budget="light"`` (``run_feedback_learner_optimization``
+    default), so the gate opening below light's ranking floor would authorise a
+    run whose candidate selection the valset cannot support.
+    """
+    from src.agents.feedback_learner.dspy_integration import (
+        BUDGET_MIN_TRAINSET_EXAMPLES,
+        GEPAOptimizationTrigger,
+    )
+
+    assert GEPAOptimizationTrigger().min_trainset_examples >= BUDGET_MIN_TRAINSET_EXAMPLES["light"]
+
+
+def test_budget_escalates_on_the_derived_thresholds_not_on_multiples_of_the_gate():
+    from src.agents.feedback_learner.dspy_integration import (
+        BUDGET_MIN_TRAINSET_EXAMPLES,
+        GEPAOptimizationTrigger,
+    )
+
+    trigger = GEPAOptimizationTrigger()
+    heavy = BUDGET_MIN_TRAINSET_EXAMPLES["heavy"]
+    medium = BUDGET_MIN_TRAINSET_EXAMPLES["medium"]
+
+    assert trigger.get_recommended_budget(heavy, hours_since_last=1.0) == "heavy"
+    assert trigger.get_recommended_budget(heavy - 2, hours_since_last=1.0) == "medium"
+    assert trigger.get_recommended_budget(medium, hours_since_last=1.0) == "medium"
+    assert trigger.get_recommended_budget(medium - 2, hours_since_last=1.0) == "light"
+
+
+def test_the_critical_override_relaxes_adequacy_but_not_feasibility():
+    """Urgency cannot create data.
+
+    The override used to accept ``min_signals // 2`` — a fraction of a number
+    whose unit changed underneath it. The only quantity for which "below this,
+    running is provably pointless" is a measured fact is the feasibility floor.
+    """
+    from src.agents.feedback_learner.dspy_integration import (
+        MIN_FEASIBLE_TRAINSET_EXAMPLES,
+        GEPAOptimizationTrigger,
+    )
+
+    trigger = GEPAOptimizationTrigger()
+    floor = MIN_FEASIBLE_TRAINSET_EXAMPLES
+
+    fires, reason = trigger.should_trigger(
+        trainset_examples=floor, current_reward=0.0, has_critical_patterns=True
+    )
+    assert fires is True, reason
+
+    quiet, reason = trigger.should_trigger(
+        trainset_examples=floor - 2, current_reward=0.0, has_critical_patterns=True
+    )
+    assert quiet is False, reason
+    assert "example" in reason.lower()
+
+
+# --------------------------------------------------------------------------
+# 4. The env override moved with the unit
+# --------------------------------------------------------------------------
+
+
+def test_the_env_override_uses_the_new_name(monkeypatch):
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "44")
+    assert optimizer_min_trainset_examples() == 44
+
+
+def test_the_old_env_name_is_ignored_because_its_unit_changed(monkeypatch, caplog):
+    """Honouring ``DSPY_MIN_SIGNALS`` would HALVE the gate in the new unit.
+
+    An operator who set it to 20 meant "20 signals" = a 40-example trainset.
+    Reading that same 20 as examples would open the gate at 20 examples. Failing
+    closed on the in-code default, loudly, is the only safe reading.
+    """
+    import logging
+
+    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+    monkeypatch.setenv("DSPY_MIN_SIGNALS", "20")
+    with caplog.at_level(logging.WARNING):
+        value = optimizer_min_trainset_examples()
+    assert value == GEPAOptimizationTrigger().min_trainset_examples
+    assert "DSPY_MIN_SIGNALS" in caplog.text
+
+
+def test_an_override_below_the_feasibility_floor_is_clamped(monkeypatch, caplog):
+    """Below the floor every run provably compiles nothing but still spends state."""
+    import logging
+
+    from src.agents.feedback_learner.dspy_integration import MIN_FEASIBLE_TRAINSET_EXAMPLES
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "4")
+    with caplog.at_level(logging.WARNING):
+        assert optimizer_min_trainset_examples() == MIN_FEASIBLE_TRAINSET_EXAMPLES
+    assert "DSPY_MIN_TRAINSET_EXAMPLES" in caplog.text
+
+
+def test_the_default_has_ONE_definition(monkeypatch):
+    """signal_store must not carry a second copy of the dataclass default."""
+    from src.agents.feedback_learner import signal_store
+    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
+
+    monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+    assert (
+        signal_store.optimizer_min_trainset_examples()
+        == GEPAOptimizationTrigger().min_trainset_examples
+    )
+    assert not hasattr(signal_store, "DEFAULT_MIN_SIGNALS")
+
+
+# --------------------------------------------------------------------------
+# 5. The gate is still closed on the real corpus shape
+# --------------------------------------------------------------------------
+
+
+def test_the_gate_is_closed_at_the_production_supply_shape(monkeypatch):
+    """15 positives / 60 negatives — the measured corpus — must stay CLOSED.
+
+    Equivalently 30 examples < 40. Stated in the new unit so a future edit that
+    changes the unit again cannot keep this passing by coincidence.
+    """
+    pytest.importorskip("dspy")
+    monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+
+    from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
+    from src.agents.feedback_learner.signal_store import (
+        decide_optimizer_trigger,
+        optimizer_min_trainset_examples,
+    )
+
+    pool = [positive(f"p{i}") for i in range(15)] + [negative(f"n{i}") for i in range(60)]
+    built = FeedbackLearnerOptimizer(optimizer_type="gepa")._signals_to_examples(pool, "pattern")
+    assert len(built) == 30
+
+    should, reason = decide_optimizer_trigger(pool, {}, scheduled=True)
+    assert should is False, reason
+    assert f"30 < {optimizer_min_trainset_examples()}" in reason, reason
+
+
+# --------------------------------------------------------------------------
+# 6. The status surface publishes the gate's own unit
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_publishes_the_number_the_gate_compares(monkeypatch):
+    pytest.importorskip("dspy")
+    monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+
+    from src.agents.feedback_learner import signal_store
+
+    pool = [positive(f"p{i}") for i in range(15)] + [negative(f"n{i}") for i in range(60)]
+
+    async def _pool(_client=None, **_kw):
+        return pool
+
+    monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
+
+    class _Res:
+        count = 223
+
+    class _Table:
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return _Res()
+
+    class _Client:
+        def table(self, *_a, **_k):
+            return _Table()
+
+    status = await signal_store.get_optimizer_gate_status(_Client())
+    assert status["trainset_examples"] == 30
+    assert status["min_trainset_examples"] == 40
+    assert "trainable_signals" not in status
+    assert status["would_trigger"] is False
+    assert f"30 < {status['min_trainset_examples']}" in status["reason"]

@@ -45,11 +45,15 @@ Signals now persist at **two points**:
 
 | Beat task | Schedule | Role |
 |---|---|---|
-| `src.tasks.run_feedback_learning_cycle` | every 6 h (`DSPY_MIN_SIGNALS`-unrelated) | GENERATES training signals by running `agent.learn()`; produces rows consumed by the optimizer |
-| `src.tasks.run_dspy_prompt_optimization` | every 24 h | CONSUMES signals; gated by `GEPAOptimizationTrigger` (default `min_signals=20`, env `DSPY_MIN_SIGNALS`) |
+| `src.tasks.run_feedback_learning_cycle` | every 6 h (gate-unrelated) | GENERATES training signals by running `agent.learn()`; produces rows consumed by the optimizer |
+| `src.tasks.run_dspy_prompt_optimization` | every 24 h | CONSUMES signals; gated by `GEPAOptimizationTrigger` (default `min_trainset_examples=40`, env `DSPY_MIN_TRAINSET_EXAMPLES`) |
 
 Both are registered in `src/workers/celery_app.py` and `src/tasks/dspy_optimization_tasks.py`.
-The trigger threshold default is **20** (previously an unreachable 100).
+The trigger threshold default is **40 TRAINSET EXAMPLES** (#1668). It was
+`min_signals=20` — a per-class count, so the effective bar was already a
+40-example trainset; restating it in the unit it gates changed the name, not
+the strictness. `DSPY_MIN_SIGNALS` is read but deliberately IGNORED, because
+its value would mean half what its setter intended.
 
 ### 0.4 Full wired path
 
@@ -499,7 +503,7 @@ Key test files added on this branch (beyond the original 356):
 | Implicit feedback | Specified in design | Stub only | LOW - Future enhancement |
 | Memory hooks | File exists | Integration pending | LOW - Memory system integration |
 | OpenTelemetry | Span tracing | Latency tracking only | LOW - Observability enhancement |
-| Per-recipient bundle in prod | Wired and tested | Installs nothing until real signals cross `min_signals=20` threshold | LOW - Working as designed; starvation resolves with real usage |
+| Per-recipient bundle in prod | Wired and tested | Installs nothing until the trainset crosses `min_trainset_examples=40` | LOW - Working as designed; starvation resolves with real usage |
 
 ### 14.2 Rationale
 

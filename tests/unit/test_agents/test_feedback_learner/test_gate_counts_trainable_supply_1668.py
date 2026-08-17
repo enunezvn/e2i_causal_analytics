@@ -82,7 +82,7 @@ def test_all_positive_pool_that_builds_nothing_must_not_open_the_gate():
 
     should, reason = decide_optimizer_trigger(pool, {}, scheduled=True)
     assert should is False, reason
-    assert reason == "Insufficient signals: 0 < 20"
+    assert reason == "Insufficient trainset: 0 < 40 examples"
 
     # Positive control: the probe is not blind. Add the missing class and the
     # same function opens.
@@ -103,7 +103,7 @@ def test_gate_counts_the_minority_class_not_the_reward_eligible_count():
 
     should, reason = decide_optimizer_trigger(pool, {}, scheduled=True)
     assert should is False
-    assert reason == "Insufficient signals: 5 < 20"
+    assert reason == "Insufficient trainset: 10 < 40 examples"
 
 
 def test_degenerate_rows_are_neither_class():
@@ -335,14 +335,14 @@ async def test_status_reports_the_number_the_beat_decides_on(monkeypatch):
     assert status["would_trigger"] == beat_should
     assert status["reason"] == beat_reason
 
-    assert status["trainable_signals"] == 15
+    assert status["trainset_examples"] == 30
     assert status["positive_signals"] == 15
     assert status["negative_signals"] == 59
     assert status["governing_phase"] == "pattern"
     assert status["total_signals"] == 222
     assert status["optimization_runs"] == 0
-    assert status["min_signals"] == 20
-    assert status["reason"] == "Insufficient signals: 15 < 20"
+    assert status["min_trainset_examples"] == 40
+    assert status["reason"] == "Insufficient trainset: 30 < 40 examples"
 
 
 @pytest.mark.asyncio
@@ -410,7 +410,7 @@ async def test_status_degrades_honestly_without_a_client(monkeypatch):
 
     monkeypatch.setattr("src.memory.services.factories.get_supabase_client", _none, raising=False)
     status = await signal_store.get_optimizer_gate_status(client=None)
-    assert status["trainable_signals"] is None
+    assert status["trainset_examples"] is None
     assert status["positive_signals"] is None
     assert status["negative_signals"] is None
     assert status["total_signals"] is None
@@ -433,7 +433,7 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
     It now reads through ``SignalCollectorAdapter.get_signals_for_optimization``,
     which SWALLOWS read failures and returns ``[]`` (memory_adapters.py:844) —
     deliberately, because a DB outage must not crash the Celery beat. So a pool
-    read failure would publish ``trainable_signals: 0`` and "Insufficient
+    read failure would publish ``trainset_examples: 0`` and "Insufficient
     signals: 0 < 20", which is a measurement of an outage.
 
     Worse than cosmetic: 0 is also the value a genuinely single-class corpus
@@ -500,7 +500,7 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
 
     status = await signal_store.get_optimizer_gate_status(client=client)
 
-    assert status["trainable_signals"] is None
+    assert status["trainset_examples"] is None
     assert status["positive_signals"] is None
     assert status["negative_signals"] is None
     assert status["total_signals"] is None
@@ -525,9 +525,9 @@ async def test_a_genuinely_empty_corpus_still_reports_a_measured_zero(monkeypatc
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
     status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=0, runs=0))
 
-    assert status["trainable_signals"] == 0
+    assert status["trainset_examples"] == 0
     assert status["would_trigger"] is False
-    assert status["reason"] == "Insufficient signals: 0 < 20"
+    assert status["reason"] == "Insufficient trainset: 0 < 40 examples"
 
 
 @pytest.mark.asyncio
@@ -622,11 +622,11 @@ async def test_status_attributes_its_class_counts_even_when_no_phase_is_trainabl
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
     status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=15, runs=0))
 
-    assert status["trainable_signals"] == 0
+    assert status["trainset_examples"] == 0
     assert status["governing_phase"] == "pattern"
     assert status["positive_signals"] == 15
     assert status["negative_signals"] == 0
-    assert status["reason"] == "Insufficient signals: 0 < 20"
+    assert status["reason"] == "Insufficient trainset: 0 < 40 examples"
 
 
 def test_gate_supply_breakdown_names_a_phase_on_an_empty_pool():
@@ -678,7 +678,7 @@ async def test_last_trainable_signal_at_is_the_newest_pair_completer_on_a_tie(mo
     status = await signal_store.get_optimizer_gate_status(client=_PoolClient(total=2, runs=0))
 
     assert (status["positive_signals"], status["negative_signals"]) == (1, 1)
-    assert status["trainable_signals"] == 1
+    assert status["trainset_examples"] == 2
     # The NEGATIVE closed the pair, so it is what moved supply from 0 to 1.
     assert status["last_trainable_signal_at"] == "2026-08-17T05:00:00+00:00"
 

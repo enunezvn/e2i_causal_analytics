@@ -13835,18 +13835,26 @@ export interface components {
          *     rows clearing ``reward >= 0.5``, i.e. 8 — which measures how many cycles
          *     found DEFECTS, not how many can be trained on. Those 8 rows are all one
          *     label class, so the trainset built from them is empty. The gate now counts
-         *     ``trainable_signals``, the scarcer label class of the best-supplied phase,
-         *     which is exactly half the balanced trainset the builder produces.
+         *     ``trainset_examples``, the number of examples the trainset builder will
+         *     actually produce for the best-supplied phase.
+         *
+         *     That headline moved once more in the #1668 follow-up. #1677 published
+         *     ``trainable_signals`` — the scarcer label class, 15 — beside a threshold of
+         *     20, while the builder produced 30 against an effective 40: right constraint,
+         *     wrong unit, and an operator had to double one number in their head to check
+         *     the verdict. Both are now in examples. ``positive_signals`` /
+         *     ``negative_signals`` stay per-signal because "which class is short" is the
+         *     actionable fact, and halving them would say nothing extra.
          *
          *     Counts are ``None`` (not 0) when the read fails: a fabricated zero on a
          *     health surface is indistinguishable from a measured one.
          */
         OptimizerGateStatus: {
             /**
-             * Trainable Signals
-             * @description Signals of the scarcer label class — the gate's own input
+             * Trainset Examples
+             * @description Examples the trainset builder will produce — the gate's own input
              */
-            trainable_signals?: number | null;
+            trainset_examples?: number | null;
             /**
              * Governing Phase
              * @description Phase the class counts describe: the best-supplied one, or the largest usable pool when no phase has both classes. Null only when the read failed
@@ -13878,10 +13886,10 @@ export interface components {
              */
             optimization_runs?: number | null;
             /**
-             * Min Signals
-             * @description Trainable signals the trigger requires
+             * Min Trainset Examples
+             * @description Trainset examples the trigger requires
              */
-            min_signals: number;
+            min_trainset_examples: number;
             /**
              * Would Trigger
              * @description Whether the count gate is satisfied right now

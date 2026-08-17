@@ -88,15 +88,16 @@ class TestScheduledPathIgnoresCooldown:
         ]
         assert all(fired), f"#1656: only {sum(fired)}/7 scheduled days would fire"
 
-    def test_scheduled_still_respects_the_signal_gate(self):
+    def test_scheduled_still_respects_the_trainset_gate(self):
         """Dropping the cooldown must not drop the gate that actually matters.
 
-        The live production state (#1668) is 8 signals against min_signals=20.
+        The live production state (#1668) is a 30-example trainset against
+        min_trainset_examples=40.
         A scheduled run below the gate must still skip.
         """
         should, reason = decide_optimizer_trigger(_signals(8), _state(hours_ago=99), scheduled=True)
         assert not should
-        assert "signal" in reason.lower(), reason
+        assert "insufficient trainset" in reason.lower(), reason
 
 
 class TestEventTriggeredPathKeepsCooldown:
@@ -134,7 +135,7 @@ class TestGateStatusStaysHonest:
         for scheduled in (True, False):
             should, reason = decide_optimizer_trigger(_signals(8), {}, scheduled=scheduled)
             assert not should
-            assert "signal" in reason.lower(), (scheduled, reason)
+            assert "insufficient trainset" in reason.lower(), (scheduled, reason)
 
     def test_the_two_paths_differ_only_inside_the_cooldown_window(self):
         outside = {

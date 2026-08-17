@@ -54,7 +54,7 @@ async def run_feedback_learner_optimization(
     from src.optimization.dspy_lm import ensure_dspy_configured
     from src.optimization.gepa import save_optimized_module
 
-    from .dspy_integration import FeedbackLearnerOptimizer
+    from .dspy_integration import FeedbackLearnerOptimizer, trainset_examples_for_phase
     from .signal_store import (
         OPTIMIZER_SIGNAL_LIMIT,
         get_feedback_learner_training_signals,
@@ -116,7 +116,14 @@ async def run_feedback_learner_optimization(
                 agent_name=f"feedback_learner_{phase}",
                 optimizer_type=effective_optimizer,
                 budget_preset=budget,
-                trainset_size=len(pool),
+                # The column is called trainset_size, so it must hold the
+                # trainset — not the pool. `len(pool)` is 223 while the pattern
+                # phase builds 30 and the recommendation phase 4, so every
+                # historical row would have claimed a trainset 7x larger than
+                # the one that ran, and identical across phases that differ by
+                # an order of magnitude. Same defect class as the gate's own
+                # unit (#1668): a name that stopped matching its quantity.
+                trainset_size=trainset_examples_for_phase(pool, phase),
                 created_by="run_dspy_prompt_optimization",
                 client=client,
             )

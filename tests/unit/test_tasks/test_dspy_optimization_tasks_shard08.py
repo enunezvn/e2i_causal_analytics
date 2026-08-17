@@ -25,10 +25,10 @@ def _pool(k: int, reward: float = 0.9) -> list:
     return [_signal(reward)] * k + [_signal(0.0, patterns=False)] * k
 
 
-def test_decide_trigger_skips_below_min_signals():
+def test_decide_trigger_skips_below_the_trainset_threshold():
     from src.tasks.dspy_optimization_tasks import _decide_trigger
 
-    should, reason = _decide_trigger(_pool(3), state={})  # supply 3 < min_signals
+    should, reason = _decide_trigger(_pool(3), state={})  # 6 examples < 40
     assert should is False
     assert reason
 
@@ -53,7 +53,7 @@ def test_decide_trigger_does_not_fire_on_a_single_class_pool():
 
     should, reason = _decide_trigger([_signal(0.9)] * 240, state={})
     assert should is False
-    assert reason == "Insufficient signals: 0 < 20"
+    assert reason == "Insufficient trainset: 0 < 40 examples"
 
 
 def test_task_is_registered():

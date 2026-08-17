@@ -669,6 +669,66 @@ def __getattr__(name: str) -> Any:
 # =============================================================================
 # 5. GEPA OPTIMIZATION TRIGGER
 # =============================================================================
+#
+# THE UNIT. Everything in this section is counted in TRAINSET EXAMPLES — the
+# rows ``FeedbackLearnerOptimizer._signals_to_examples`` actually hands to the
+# optimizer — and never in signals, rows, or label-class members.
+#
+# Why the unit is named this loudly. Until this change the threshold was called
+# ``min_signals`` and its comment justified 20 as "~1 signal/cycle; 20 ≈
+# reachable in normal operation". It was chosen (commit 4ce164f4f, 2026-06-08,
+# lowering 100 -> 20) against ``count(reward >= 0.5)``. #1668/#1677 re-pointed
+# the gate at ``min(n_positive, n_negative)`` without touching the number, and
+# because ``_interleave`` emits exactly ``2 * min(n_pos, n_neg)`` examples, "20"
+# silently became "a 40-example trainset". The constant survived a semantic
+# change to what it counts, twice: the quantity moved and the justification was
+# falsified, and neither showed up as a diff.
+#
+# Stating the gate in the unit it bounds is the fix. ``trainset_examples_for_phase``
+# is the same number the builder produces, and the threshold is compared against
+# it directly, so a future change to what the gate counts cannot leave the
+# threshold behind without failing ``test_gate_threshold_unit_1668``.
+
+
+# --- Floors, each measured against the thing it is derived FROM --------------
+
+# The smallest trainset either optimizer path will accept. Below it a triggered
+# run provably compiles nothing while still spending the beat's state write.
+#
+# Measured against the installed dspy 3.1.0 (2026-08-17):
+#   GEPA   ``_optimize_with_gepa`` splits ``trainset = examples[: int(0.8*n)]``
+#          and returns None when ``len(trainset) < 5`` -> n >= 7; the builder
+#          emits balanced PAIRS, so the smallest reachable n is 8.
+#   MIPRO  ``_optimize_with_miprov2`` rejects ``len(examples) < 5`` -> n >= 5,
+#          even -> 6. dspy's own floor is lower still (2, measured by driving
+#          the real validation to the first LM-touching step): post-#1675
+#          ``minibatch=False`` removed the ``minibatch_size=35 > int(0.8*n)``
+#          gate that had made every trainset below 44 impossible.
+# The binding one is GEPA's, which is the production path.
+MIN_FEASIBLE_TRAINSET_EXAMPLES = 8
+
+# The trainset each GEPA budget preset needs before its own candidate search can
+# be RANKED, derived rather than chosen.
+#
+# dspy's ``AUTO_RUN_SETTINGS`` (teleprompt/gepa/gepa.py, measured) says how many
+# candidate programs each preset explores: light 6, medium 12, heavy 18. GEPA
+# installs the argmax over the valset, and the valset is ``V = n - int(0.8*n)``.
+# On the gold-EMPTY half of a balanced valset the metric is BINARY — measured on
+# the real 30-example production trainset, the observed score set there is
+# exactly {0.0, 1.0} (1.0 correct abstention, 0.0 anything emitted), against
+# {0.0, 0.3, 0.6, 0.8, 1.0} on the other half as the positive control. So the
+# aggregate mean moves in quanta of 1/V and expresses at least V+1 distinct
+# levels. Ranking C candidates needs at least C of them: V + 1 >= C.
+#
+#   light   C=6  -> V >= 5  -> n >= 22
+#   medium  C=12 -> V >= 11 -> n >= 52
+#   heavy   C=18 -> V >= 17 -> n >= 82
+#
+# This replaces ``min_signals * 2`` / ``* 3``. Those multipliers were relative to
+# a threshold that has now changed unit twice; these are absolute, and they
+# track dspy's constants rather than ours, which is where the requirement
+# actually comes from.
+BUDGET_MIN_TRAINSET_EXAMPLES: Dict[str, int] = {"light": 22, "medium": 52, "heavy": 82}
 
 
 @dataclass
@@ -677,7 +737,7 @@ class GEPAOptimizationTrigger:
     Determines when to trigger GEPA optimization based on accumulated signals.
 
     The trigger evaluates multiple conditions:
-    1. Minimum signal count: Enough training data for optimization
+    1. Minimum trainset size: enough EXAMPLES for the optimizer to compile
     2. Reward delta: Significant change in performance
     3. Cooldown period: Prevent excessive optimization runs
     4. Pattern severity: Critical patterns may force optimization
@@ -685,7 +745,7 @@ class GEPAOptimizationTrigger:
     Usage:
         trigger = GEPAOptimizationTrigger()
         should_trigger, reason = trigger.should_trigger(
-            signal_count=150,
+            trainset_examples=150,
             current_reward=0.72,
             baseline_reward=0.65,
             last_optimization=datetime(2025, 1, 1),
@@ -693,9 +753,40 @@ class GEPAOptimizationTrigger:
         )
     """
 
-    # Minimum signals required for optimization
-    # ~1 signal/cycle; 20 ≈ reachable in normal operation
-    min_signals: int = 20
+    # Trainset examples required before the optimizer is allowed to run.
+    #
+    # THIS VALUE IS INHERITED, NOT DERIVED, AND THAT IS DELIBERATE. 40 is the
+    # effective threshold that has been in force since #1677 (the old
+    # ``min_signals = 20`` gated a per-class count, and the trainset is twice
+    # it), so restating it here changes no behaviour. What changed is that the
+    # number is now in the unit it gates and its justification is measured
+    # rather than falsified.
+    #
+    # The derivation band, measured 2026-08-17, for the record — no criterion
+    # lands on 40:
+    #
+    #   8    feasibility: below it neither optimizer path can compile
+    #        (MIN_FEASIBLE_TRAINSET_EXAMPLES)
+    #   22   the lightest preset's candidate-ranking floor, which is the budget
+    #        production actually spends (``run_feedback_learner_optimization``
+    #        defaults to "light") — BUDGET_MIN_TRAINSET_EXAMPLES["light"]
+    #   100  the size at which the valset can express a difference as small as
+    #        this dataclass's own ``min_reward_delta`` (0.05): the abstention
+    #        half of the valset is binary, so the quantum is 1/V, and
+    #        1/V <= 0.05 needs V >= 20, i.e. n >= 100. At 40 the quantum is
+    #        0.125 — 2.5x coarser than the smallest improvement this same
+    #        object calls meaningful.
+    #
+    # So the honest reading is that 40 is comfortably feasible and comfortably
+    # above the ranking floor of the budget we spend, and well below what the
+    # selection would need to be statistically fine-grained. Moving it either
+    # way is a product decision about an optimizer that has never run, not a
+    # correctness fix — and 22 would OPEN the gate at the current supply of 30.
+    #
+    # Supply, for whoever revisits this: 15 positives / 60 negatives over 68.8
+    # days, 0 positives in the last 8 recorded days. The threshold is not what
+    # keeps the loop closed; the positive class is.
+    min_trainset_examples: int = 40
 
     # Minimum reward improvement delta to trigger
     min_reward_delta: float = 0.05
@@ -711,7 +802,7 @@ class GEPAOptimizationTrigger:
 
     def should_trigger(
         self,
-        signal_count: int,
+        trainset_examples: int,
         current_reward: float,
         baseline_reward: float = 0.0,
         last_optimization: Optional[datetime] = None,
@@ -721,7 +812,10 @@ class GEPAOptimizationTrigger:
         Determine if GEPA optimization should be triggered.
 
         Args:
-            signal_count: Number of accumulated training signals
+            trainset_examples: Examples the trainset builder will produce for
+                the best-supplied phase — ``gate_trainset_examples``, which is
+                the same count ``_signals_to_examples`` returns. NOT a signal
+                count and NOT a label-class count.
             current_reward: Average reward from recent learning cycles
             baseline_reward: Reward from last optimization baseline
             last_optimization: Timestamp of last optimization run
@@ -744,19 +838,28 @@ class GEPAOptimizationTrigger:
             # No previous optimization - skip forced check, rely on reward delta
             hours_since = 0.0
 
-        # Critical patterns override other checks
+        # Critical patterns override other checks.
+        #
+        # The floor here is FEASIBILITY, not a fraction of the threshold. It
+        # used to be ``min_signals // 2``, a half of a number whose unit has now
+        # changed twice; in the new unit that reads "half a trainset", which is
+        # not a quantity anything measures. Urgency can justify accepting a
+        # thinner statistical margin — it cannot create data, and below
+        # MIN_FEASIBLE_TRAINSET_EXAMPLES both optimizer paths reject the
+        # trainset outright, so firing there buys a state write and no compile.
         if has_critical_patterns and self.critical_pattern_triggers:
-            if signal_count >= self.min_signals // 2:  # Require half the signals
+            if trainset_examples >= MIN_FEASIBLE_TRAINSET_EXAMPLES:
                 return (
                     True,
-                    f"Critical patterns detected with {signal_count} signals",
+                    f"Critical patterns detected with a {trainset_examples}-example trainset",
                 )
 
-        # Check minimum signal count
-        if signal_count < self.min_signals:
+        # Check the trainset size
+        if trainset_examples < self.min_trainset_examples:
             return (
                 False,
-                f"Insufficient signals: {signal_count} < {self.min_signals}",
+                f"Insufficient trainset: {trainset_examples} < "
+                f"{self.min_trainset_examples} examples",
             )
 
         # Force optimization if too long since last run
@@ -781,20 +884,36 @@ class GEPAOptimizationTrigger:
 
         return (
             False,
-            f"No trigger: delta={reward_delta:.3f}, signals={signal_count}",
+            f"No trigger: delta={reward_delta:.3f}, trainset={trainset_examples} examples",
         )
 
     def get_recommended_budget(
         self,
-        signal_count: int,
+        trainset_examples: int,
         hours_since_last: float,
         has_critical_patterns: bool = False,
     ) -> str:
         """
         Get recommended GEPA budget based on context.
 
+        The size ladder is ABSOLUTE and derived (BUDGET_MIN_TRAINSET_EXAMPLES),
+        not a multiple of this object's own threshold. A preset's requirement
+        comes from how many candidate programs dspy explores at it — 6/12/18,
+        read from ``AUTO_RUN_SETTINGS`` — and from how many distinct levels the
+        valset can express, neither of which moves when an operator retunes
+        ``min_trainset_examples``. The old ``* 2`` / ``* 3`` tied them together
+        and were chosen against a quantity that no longer exists.
+
+        NOTE (intent, not a defect): this method has no production caller today.
+        ``run_feedback_learner_optimization`` takes ``budget: str = "light"``
+        and the beat does not override it, so production always spends "light".
+        It is kept and made coherent rather than deleted because it is part of
+        the trigger's documented contract and the escalation it describes is the
+        intended behaviour once supply exists — but nothing below is currently
+        reachable from the daily task.
+
         Args:
-            signal_count: Number of accumulated signals
+            trainset_examples: Examples the trainset builder will produce
             hours_since_last: Hours since last optimization
             has_critical_patterns: Whether critical patterns exist
 
@@ -809,10 +928,10 @@ class GEPAOptimizationTrigger:
         if hours_since_last > self.max_hours_without_optimization:
             return "heavy"
 
-        # Many signals available - use them
-        if signal_count > self.min_signals * 3:
+        # Enough examples to rank the preset's own candidate pool - use it
+        if trainset_examples >= BUDGET_MIN_TRAINSET_EXAMPLES["heavy"]:
             return "heavy"
-        elif signal_count > self.min_signals * 2:
+        elif trainset_examples >= BUDGET_MIN_TRAINSET_EXAMPLES["medium"]:
             return "medium"
         else:
             return "light"
@@ -909,6 +1028,34 @@ def trainable_supply(signals: List[Dict[str, Any]], phase: str) -> int:
     """
     positives, negatives = label_class_counts(signals, phase)
     return min(positives, negatives)
+
+
+def trainset_examples_for_phase(signals: List[Dict[str, Any]], phase: str) -> int:
+    """Examples ``_signals_to_examples`` will build for ``phase`` — THE gate unit.
+
+    ``_interleave`` emits exactly ``k = min(n_pos, n_neg)`` pairs, two appends
+    per iteration, so this is ``2 * trainable_supply``. It is a named function
+    rather than an inline doubling because the gate's THRESHOLD is compared
+    against it: the invariant a future edit must not break is
+    ``len(_signals_to_examples(pool, phase)) == trainset_examples_for_phase(pool, phase)``,
+    with no conversion factor anywhere in between for a reader to get wrong.
+
+    Pure Python — no dspy import — because the health surface publishes this
+    number and must answer without the optimizer stack loaded.
+    """
+    return 2 * trainable_supply(signals, phase)
+
+
+def gate_trainset_examples(signals: List[Dict[str, Any]]) -> tuple[Optional[str], int]:
+    """``(phase, examples)`` for the best-supplied phase — what the gate compares.
+
+    Same phase selection as :func:`gate_supply` (max across optimizable phases,
+    because one beat run walks them all and is worth doing if ANY phase can be
+    trained), expressed in trainset examples rather than in members of the
+    scarcer label class.
+    """
+    phase, supply = gate_supply(signals)
+    return phase, 2 * supply
 
 
 def gate_supply(signals: List[Dict[str, Any]]) -> tuple[Optional[str], int]:

@@ -2,7 +2,8 @@
 
 READ-ONLY. This test issues one bounded select against
 ``dspy_agent_training_signals`` and writes nothing. It is the faithful form of
-the unit-level invariant: the identity ``len(trainset) == 2 * gate_supply`` is
+the unit-level invariant: the identity
+``len(trainset) == trainset_examples_for_phase(pool, phase)`` is
 asserted over whatever the production table actually holds today, not over
 constructed rows, so a real signal shape the synthetic fixtures do not cover
 (a malformed ``output`` blob, a new key, a row the builder's ``dspy.Example``
@@ -16,19 +17,26 @@ nothing while looking green. Run it on the box:
     E2I_RUN_REAL_DB_READS=1 .venv/bin/pytest \\
       tests/integration/test_optimizer_gate_supply_real_1668.py -v -s
 
-Measured 2026-08-17 on the 222 real rows (recorded here so a future reader can
+Measured 2026-08-17 on the 223 real rows (recorded here so a future reader can
 tell drift from a defect — the assertions below are all relational, none pin
 these numbers):
 
     A  eligible reward >= 0.5                        8
-    B  informative pool (non-empty feedback_batch)  74
+    B  informative pool (non-empty feedback_batch)  75
     C  minority label class (pattern phase)         15
     D  built pattern examples                       30   == 2 * C
     pattern examples from the OLD gate's 8 rows      0
+    corpus span 2026-06-09..2026-08-17            68.8 days
+    positives in the last 8 recorded days            0
+
+The threshold's UNIT is pinned here too, not just the supply's: the gate is
+compared against ``trainset_examples_for_phase``, and this asserts that function
+equals what the builder returns on whatever production holds today.
 """
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -45,12 +53,12 @@ async def test_gate_supply_matches_the_builder_on_the_real_corpus(capsys):
         DSPY_AVAILABLE,
         OPTIMIZABLE_PHASES,
         FeedbackLearnerOptimizer,
-        gate_supply,
+        gate_trainset_examples,
         label_class_counts,
-        trainable_supply,
+        trainset_examples_for_phase,
     )
     from src.agents.feedback_learner.signal_store import (
-        optimizer_min_signals,
+        optimizer_min_trainset_examples,
         read_optimizer_signal_pool,
     )
 
@@ -64,18 +72,26 @@ async def test_gate_supply_matches_the_builder_on_the_real_corpus(capsys):
     for phase in OPTIMIZABLE_PHASES:
         positives, negatives = label_class_counts(pool, phase)
         built = optimizer._signals_to_examples(pool, phase)
-        supply = trainable_supply(pool, phase)
+        expected = trainset_examples_for_phase(pool, phase)
         print(
             f"{phase}: pool={len(pool)} usable={positives + negatives} "
-            f"pos={positives} neg={negatives} supply={supply} built={len(built)}"
+            f"pos={positives} neg={negatives} built={len(built)} gate_unit={expected}"
         )
-        # THE invariant, on real rows: the gate cannot promise more than the
-        # builder delivers, and cannot understate it either.
-        assert len(built) == 2 * supply
+        # THE invariant, on real rows, and now with NO conversion factor in the
+        # assertion: the quantity the gate compares against its threshold is the
+        # quantity the builder produces.
+        assert len(built) == expected
 
-    phase, supply = gate_supply(pool)
-    threshold = optimizer_min_signals()
-    print(f"gate: phase={phase} supply={supply} threshold={threshold}")
+    phase, examples = gate_trainset_examples(pool)
+    threshold = optimizer_min_trainset_examples()
+    print(f"gate: phase={phase} trainset_examples={examples} threshold={threshold}")
+
+    # The number the gate compares IS the trainset the run would compile, on the
+    # phase the gate named — not a proxy for it and not half of it. Both sides
+    # of the published comparison are the same unit, so a reader can check the
+    # verdict without doubling anything.
+    assert phase is not None, "no phase has both label classes — see the breakdown above"
+    assert examples == len(optimizer._signals_to_examples(pool, phase))
 
     # The old gate's quantity, for contrast — and the reason it was the wrong
     # one: those rows are single-class, so they build nothing.
@@ -105,7 +121,12 @@ async def test_the_status_surface_and_the_beat_agree_on_the_real_corpus():
     beat_should, beat_reason = decide_optimizer_trigger(pool, load_trigger_state(), scheduled=True)
     status = await get_optimizer_gate_status()
 
+    # Printed so `-s` gives the exact payload /feedback/health serves. A PR that
+    # claims "before and after" for this surface should paste this, not a
+    # reconstruction of it.
+    print(json.dumps(status, indent=1, default=str))
+
     assert status["would_trigger"] == beat_should
     assert status["reason"] == beat_reason
-    assert status["trainable_signals"] is not None
-    assert f"{status['trainable_signals']}" in status["reason"] or beat_should
+    assert status["trainset_examples"] is not None
+    assert f"{status['trainset_examples']}" in status["reason"] or beat_should

@@ -181,19 +181,27 @@ def test_signal_gate_is_what_binds_with_no_prior_optimization():
 
     should, reason = decide_optimizer_trigger(balanced_pool(8), {})
     assert should is False
-    assert reason == "Insufficient signals: 8 < 20"
+    assert reason == "Insufficient trainset: 16 < 40 examples"
 
 
-def test_min_signals_honours_the_env_override(monkeypatch):
-    from src.agents.feedback_learner.signal_store import DEFAULT_MIN_SIGNALS, optimizer_min_signals
+def test_the_threshold_honours_the_env_override(monkeypatch):
+    """The override moved to DSPY_MIN_TRAINSET_EXAMPLES with the unit.
 
+    The old name is deliberately not honoured — see
+    ``test_gate_threshold_unit_1668`` for why reading it would halve the gate.
+    """
+    from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
+    from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
+
+    default = GEPAOptimizationTrigger.min_trainset_examples
     monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
-    assert optimizer_min_signals() == DEFAULT_MIN_SIGNALS
-    monkeypatch.setenv("DSPY_MIN_SIGNALS", "7")
-    assert optimizer_min_signals() == 7
+    monkeypatch.delenv("DSPY_MIN_TRAINSET_EXAMPLES", raising=False)
+    assert optimizer_min_trainset_examples() == default
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "14")
+    assert optimizer_min_trainset_examples() == 14
     # A garbled value must not crash the health surface.
-    monkeypatch.setenv("DSPY_MIN_SIGNALS", "not-a-number")
-    assert optimizer_min_signals() == DEFAULT_MIN_SIGNALS
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "not-a-number")
+    assert optimizer_min_trainset_examples() == default
 
 
 # =============================================================================
@@ -279,17 +287,17 @@ async def test_gate_status_reports_real_counts_and_the_gate_verdict(monkeypatch)
     client = _CountClient(total=222, runs=0)
     status = await signal_store.get_optimizer_gate_status(client=client)
 
-    assert status["trainable_signals"] == 15
+    assert status["trainset_examples"] == 30
     assert status["positive_signals"] == 15
     assert status["negative_signals"] == 59
     assert status["governing_phase"] == "pattern"
     assert status["total_signals"] == 222
     assert status["optimization_runs"] == 0
-    assert status["min_signals"] == 20
+    assert status["min_trainset_examples"] == 40
     assert status["would_trigger"] is False
     assert status["last_trainable_signal_at"] == "2026-08-08T07:09:02.686027+00:00"
     # Verbatim from the REAL trigger, not a re-worded copy.
-    assert status["reason"] == "Insufficient signals: 15 < 20"
+    assert status["reason"] == "Insufficient trainset: 30 < 40 examples"
     # The pool read must go through the caller's client, not a second factory
     # lookup that could resolve to a different database.
     assert called["client"] is client
@@ -311,7 +319,7 @@ async def test_gate_status_flips_to_would_trigger_when_supply_clears_threshold(m
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=300, runs=3))
     assert status["would_trigger"] is True
-    assert status["trainable_signals"] == 25
+    assert status["trainset_examples"] == 50
     assert status["optimization_runs"] == 3
 
 
@@ -323,14 +331,15 @@ async def test_reported_supply_is_what_the_gate_actually_counted(monkeypatch):
     a PostgREST ``count="exact"`` that keeps counting past that cap, so it can
     legitimately exceed the pool — but the GATE's number must come from the
     capped rows, or a card reading "3000 / 2500" could sit beside a reason
-    saying "Insufficient signals: 2000 < 2500".
+    saying "Insufficient trainset: 4000 < 5000 examples".
     """
     from src.agents.feedback_learner import signal_store
 
     from ._gate_supply_fixtures import balanced_pool
 
     monkeypatch.setattr(signal_store, "load_trigger_state", dict)
-    monkeypatch.setenv("DSPY_MIN_SIGNALS", "10")
+    monkeypatch.delenv("DSPY_MIN_SIGNALS", raising=False)
+    monkeypatch.setenv("DSPY_MIN_TRAINSET_EXAMPLES", "20")
 
     async def _pool(client=None):
         return balanced_pool(5)  # what the capped read returned
@@ -338,9 +347,9 @@ async def test_reported_supply_is_what_the_gate_actually_counted(monkeypatch):
     monkeypatch.setattr(signal_store, "read_optimizer_signal_pool", _pool)
     status = await signal_store.get_optimizer_gate_status(client=_CountClient(total=999, runs=0))
 
-    assert status["trainable_signals"] == 5
+    assert status["trainset_examples"] == 10
     assert status["total_signals"] == 999
-    assert status["reason"] == "Insufficient signals: 5 < 10"
+    assert status["reason"] == "Insufficient trainset: 10 < 20 examples"
 
 
 def test_trigger_state_write_is_atomic_and_leaves_no_temp_behind(tmp_path, monkeypatch):
@@ -485,7 +494,7 @@ async def test_gate_status_degrades_honestly_without_a_client(monkeypatch):
 
     monkeypatch.setattr("src.memory.services.factories.get_supabase_client", _none, raising=False)
     status = await signal_store.get_optimizer_gate_status(client=None)
-    assert status["trainable_signals"] is None
+    assert status["trainset_examples"] is None
     assert status["positive_signals"] is None
     assert status["negative_signals"] is None
     assert status["total_signals"] is None
