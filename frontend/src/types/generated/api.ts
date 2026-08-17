@@ -13892,7 +13892,7 @@ export interface components {
             min_trainset_examples: number;
             /**
              * Would Trigger
-             * @description Whether the count gate is satisfied right now
+             * @description Whether the optimizer beat would trigger right now — the WHOLE decision (cooldown, forced interval, reward delta, trainset size), not the size gate alone
              */
             would_trigger?: boolean | null;
             /**

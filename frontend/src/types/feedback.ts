@@ -400,7 +400,12 @@ export interface OptimizerGateStatus {
   optimization_runs: number | null;
   /** Trainset examples the trigger requires */
   min_trainset_examples: number;
-  /** Whether the count gate is satisfied right now */
+  /**
+   * Whether the optimizer beat would trigger right now — the WHOLE decision
+   * (cooldown, forced interval, reward delta, trainset size), not the size gate
+   * alone. `trainset_examples >= min_trainset_examples` with `would_trigger:
+   * false` is a normal state: read `reason` for which branch bound.
+   */
   would_trigger: boolean | null;
   /** Human-readable gate verdict */
   reason: string;

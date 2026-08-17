@@ -474,7 +474,8 @@ function FeedbackLearning() {
           for months without ever compiling anything — and every other signal on
           this page stays green while it does. This card is the one place that
           says so. The denominator is deliberate: "15" alone reads as a volume
-          shortfall, "15 of 222" reads as the low-yield problem it actually is.
+          shortfall, "30 examples out of 223 signals" (measured 2026-08-17)
+          reads as the low-yield problem it actually is.
 
           #1668 changed WHICH number sits above the threshold, twice. It was
           the count of signals clearing the reward floor (8) — a measure of how

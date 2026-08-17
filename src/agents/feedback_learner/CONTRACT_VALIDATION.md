@@ -55,6 +55,15 @@ The trigger threshold default is **40 TRAINSET EXAMPLES** (#1668). It was
 the strictness. `DSPY_MIN_SIGNALS` is read but deliberately IGNORED, because
 its value would mean half what its setter intended.
 
+**The env override does NOT reach the containers.** `x-common-env` in
+`docker/docker-compose.yml` is a whitelist and neither name is in it, so the
+in-code default governs every containerised run and setting the variable in the
+host `.env` is a silent no-op there. That gap predates #1668 and forwarding it
+is a deliberate deferral (see `test_compose_rag_feedstock_env_1489.py`): it
+would change when the nightly optimization triggers. Concretely, at today's
+30-example supply, a forwarded `DSPY_MIN_TRAINSET_EXAMPLES=20` would OPEN the
+gate. The override is honoured for host-side runs.
+
 ### 0.4 Full wired path
 
 | Stage | Mechanism | File |

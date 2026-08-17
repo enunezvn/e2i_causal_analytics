@@ -373,7 +373,7 @@ async def read_optimizer_signal_pool(client: Optional[Any] = None) -> list[Dict[
     ``SignalCollectorAdapter.get_signals_for_optimization``), so the slice is
     identical for every reader once the limit binds.
 
-    Cost, measured 2026-08-17 against the production table: 222 rows, ~1.07 MiB,
+    Cost, measured 2026-08-17 against the production table: 223 rows, ~1.07 MiB,
     ~310 ms warm. The health surface polls this every 30 s. Selecting fewer
     columns would be cheaper but would give the gate a different row shape from
     the builder's, which is precisely the divergence being closed — so the read
@@ -433,7 +433,8 @@ async def get_optimizer_gate_status(client: Optional[Any] = None) -> Dict[str, A
       trainable.
     - ``positive_signals`` / ``negative_signals`` — the two classes for that
       phase. This is the actionable pair: it says WHICH class is short, and
-      today it is the positive one (15 vs 59), i.e. supply is waiting on the
+      today it is the positive one (15 vs 60, measured 2026-08-17), i.e. supply
+      is waiting on the
       platform to exhibit defects.
     - ``total_signals``     — ALL feedback_learner signals ever. The denominator
       is the point: "30 examples out of 223 signals" reads as a low-yield

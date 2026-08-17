@@ -296,7 +296,8 @@ class FeedbackLearnerTrainingSignal:
         # exactly as this module already does for `pattern_accuracy` (#424),
         # `update_effectiveness` (#837) and `efficiency` (#1668).
         #
-        # Measured over all 220 real prod signals: 0 rows change reward and
+        # Measured 2026-08-11 over all 220 real prod signals then held: 0 rows
+        # change reward and
         # eligibility is unchanged at 8, because every one of the 148
         # zero-feedback rows also carries `rubric=None` and `actionability=0.0`,
         # so its remaining terms are all zero either way. That null result has a
@@ -975,7 +976,8 @@ def classify_signal_for_phase(signal: Dict[str, Any], phase: str) -> Optional[bo
     ``None`` is the load-bearing case. For the pattern phase it means the
     signature's INPUT — the feedback batch — is empty, so the example would say
     "given nothing, emit nothing": degenerate, not a negative. That is 148 of
-    the 222 real production rows, and admitting them as negatives would teach
+    the 223 real production rows (measured 2026-08-17), and admitting them as
+    negatives would teach
     unconditional abstention just as surely as the old all-positive trainset
     taught unconditional reporting.
     """
@@ -1401,7 +1403,8 @@ class FeedbackLearnerOptimizer:
         # raised; all three clear both gates with `minibatch=False`.
         #
         # This builder caps the trainset at `2 * min(n_positive, n_negative)` by
-        # construction — 30 on today's 220 real signals — so minibatching is not
+        # construction — 30 on the 223 real signals of 2026-08-17 — so
+        # minibatching is not
         # merely blocked, it is meaningless at these sizes: evaluate the whole
         # valset. If the signal pool ever grows enough that a full valset
         # evaluation per trial is too expensive, that is a budget decision to
@@ -1422,9 +1425,9 @@ class FeedbackLearnerOptimizer:
 
         Balancing at ``k = min(len(pos), len(neg))`` makes GEPA's mean metric a
         *balanced* accuracy: a missed detection and a false positive cost the
-        same. Feeding the natural production ratio instead (measured 57 negative
-        / 15 positive over 220 real signals, 79.2% / 20.8%) would make
-        "never report anything" score 0.79 and "always report" score 0.21, which
+        same. Feeding the natural production ratio instead (measured 2026-08-17:
+        60 negative / 15 positive of 223 real signals, 80% / 20%) would make
+        "never report anything" score 0.80 and "always report" score 0.20, which
         just inverts today's over-reporting bias into under-reporting.
 
         Order within each class is the caller's (newest-first from
@@ -1461,8 +1464,8 @@ class FeedbackLearnerOptimizer:
                 continue
 
         For the pattern phase the LABEL IS the patterns the cycle found, so
-        selecting on reward selects on *having found patterns*: measured over
-        220 real prod signals the surviving trainset was 8 examples, **100%
+        selecting on reward selects on *having found patterns*: measured
+        2026-08-17 over 223 real prod signals the surviving pool was 8 rows, **100%
         non-empty label**. The detector would never once see a healthy batch
         labelled "no patterns", so training could only teach over-reporting — and
         ``PatternAnalyzerNode(prefer_optimized=True)`` loads the result into the

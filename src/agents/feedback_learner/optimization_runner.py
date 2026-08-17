@@ -41,7 +41,7 @@ async def run_feedback_learner_optimization(
     that can drift from the gate's. #1675 established why the floor must be 0:
     for the pattern phase the training label IS the patterns a cycle found, so a
     reward floor selects on *having found patterns* and hands the optimizer a
-    100%-positive trainset (measured: 8 of 222 real signals, every one with a
+    100%-positive trainset (measured 2026-08-17: 8 of 223 real signals, every one with a
     non-empty label — and ``_signals_to_examples`` builds ZERO examples from
     them, because a single-class pool is an honest skip).
 

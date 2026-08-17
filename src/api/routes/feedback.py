@@ -428,7 +428,11 @@ class OptimizerGateStatus(BaseModel):
     )
     min_trainset_examples: int = Field(..., description="Trainset examples the trigger requires")
     would_trigger: Optional[bool] = Field(
-        default=None, description="Whether the count gate is satisfied right now"
+        default=None,
+        description=(
+            "Whether the optimizer beat would trigger right now — the WHOLE decision "
+            "(cooldown, forced interval, reward delta, trainset size), not the size gate alone"
+        ),
     )
     reason: str = Field(..., description="Human-readable gate verdict")
 
