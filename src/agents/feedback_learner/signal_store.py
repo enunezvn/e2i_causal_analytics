@@ -111,6 +111,19 @@ OPTIMIZER_SIGNAL_LIMIT = 2000
 # The gate's unit is TRAINSET EXAMPLES (see dspy_integration section 5). The
 # threshold has ONE definition — the dataclass default — because two constants
 # that agree today are exactly how the previous one drifted out of its unit.
+#
+# NOT FORWARDED TO CONTAINERS, and deliberately left that way here. Neither this
+# name nor the ``DSPY_MIN_SIGNALS`` it replaces appears in ``x-common-env``
+# (docker/docker-compose.yml), which is a WHITELIST — so setting either in the
+# host ``.env`` does nothing for the beat, and the in-code default governs every
+# production run. That gap predates this change and is a KNOWN, DEFERRED
+# decision, recorded verbatim in ``test_compose_rag_feedstock_env_1489.py``:
+# "forwarding DSPY_MIN_SIGNALS would change when the nightly optimization
+# triggers — a behavioral change that needs its own decision, not a drive-by."
+# Wiring it here would be that drive-by, in a change whose whole claim is that
+# it alters no behaviour. Stated rather than silently fixed so nobody reads the
+# override below as effective in prod: it is effective for host-side runs
+# (scripts, tests, a manual invocation), not for the container.
 MIN_TRAINSET_EXAMPLES_ENV = "DSPY_MIN_TRAINSET_EXAMPLES"
 
 # Read but deliberately NOT honoured. An operator who set DSPY_MIN_SIGNALS=20
@@ -122,6 +135,10 @@ LEGACY_MIN_SIGNALS_ENV = "DSPY_MIN_SIGNALS"
 
 def optimizer_min_trainset_examples() -> int:
     """Trainset examples the beat's trigger requires (``DSPY_MIN_TRAINSET_EXAMPLES``).
+
+    The override is NOT forwarded into the containers — see
+    ``MIN_TRAINSET_EXAMPLES_ENV`` above — so in production this returns the
+    in-code default. It is honoured for host-side runs.
 
     Clamped up to ``MIN_FEASIBLE_TRAINSET_EXAMPLES``: below that floor both
     optimizer paths reject the trainset before any rollout, so a gate that

@@ -265,6 +265,43 @@ def test_the_default_has_ONE_definition(monkeypatch):
     assert not hasattr(signal_store, "DEFAULT_MIN_SIGNALS")
 
 
+def test_the_override_is_documented_as_not_reaching_the_containers():
+    """The comment claims the knob is inert in prod. Pin the claim to reality.
+
+    ``x-common-env`` in docker/docker-compose.yml is a WHITELIST, and neither
+    the new env name nor the ``DSPY_MIN_SIGNALS`` it replaces is in it — so the
+    in-code default governs every containerised run. That gap predates this
+    change and #1489 recorded the decision to leave it alone ("forwarding
+    DSPY_MIN_SIGNALS would change when the nightly optimization triggers — a
+    behavioral change that needs its own decision, not a drive-by").
+
+    This test exists so the two cannot silently disagree in EITHER direction:
+    wire the var into compose and this fails, forcing whoever does it to delete
+    the comment that says it is not wired — which is the moment that behavioural
+    decision gets made deliberately.
+    """
+    import pathlib
+
+    from src.agents.feedback_learner import signal_store
+
+    compose = pathlib.Path("docker/docker-compose.yml")
+    if not compose.exists():  # pragma: no cover - repo layout guard
+        pytest.skip("compose file not present in this checkout")
+    text = compose.read_text()
+
+    # Positive control: the file really is the env-carrying one, so "absent"
+    # below is a property of the variable rather than of an unread file.
+    assert "x-common-env" in text and "DSPY_LM_MODEL" in text
+
+    assert signal_store.MIN_TRAINSET_EXAMPLES_ENV not in text
+    assert signal_store.LEGACY_MIN_SIGNALS_ENV not in text
+
+    import inspect
+
+    doc = inspect.getsource(signal_store).split("def optimizer_min_trainset_examples")[0]
+    assert "NOT FORWARDED TO CONTAINERS" in doc
+
+
 # --------------------------------------------------------------------------
 # 5. The gate is still closed on the real corpus shape
 # --------------------------------------------------------------------------
