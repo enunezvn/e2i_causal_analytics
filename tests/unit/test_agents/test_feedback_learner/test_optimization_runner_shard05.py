@@ -69,6 +69,54 @@ def test_miprov2_construction_is_accepted_by_real_dspy_validation():
     assert "Trainset cannot be empty" in str(excinfo.value)
 
 
+def test_miprov2_clears_the_minibatch_gate_at_realistic_trainset_sizes():
+    """#1668 (codex iter-4): the SECOND pre-rollout gate, at the sizes we build.
+
+    dspy derives ``valset = int(0.80 * len(trainset))`` when none is passed
+    (mipro_optimizer_v2.py:311-317) and refuses to minibatch when the default
+    ``minibatch_size=35`` exceeds it (:201). With ``minibatch`` defaulting to
+    True, EVERY trainset below 44 examples raised before any rollout — and the
+    #1668 balanced builder produces 30 from today's 220 real signals.
+
+    Spends no tokens: the first LM-touching step, ``_bootstrap_fewshot_examples``,
+    is replaced with a sentinel, so reaching it is positive proof that both
+    validation gates were cleared rather than an absence of errors.
+    """
+    from dspy.teleprompt import MIPROv2
+
+    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini", api_key="not-used-no-call-is-made"))
+    student = dspy.Predict("question -> answer")
+    trainset = [
+        dspy.Example(question=f"q{i}", answer=f"a{i}").with_inputs("question") for i in range(30)
+    ]
+
+    def _metric(example, prediction, trace=None) -> float:
+        return 1.0
+
+    def _new():
+        return MIPROv2(
+            metric=_metric, auto=None, num_candidates=10, max_bootstrapped_demos=4, num_threads=4
+        )
+
+    # RED: dspy's default minibatch on a 30-example trainset (valset 24 < 35).
+    with pytest.raises(ValueError, match="Minibatch size cannot exceed"):
+        _new().compile(student, trainset=trainset, num_trials=6)
+
+    class _ReachedBootstrapping(RuntimeError):
+        pass
+
+    def _sentinel(*_args, **_kwargs):
+        raise _ReachedBootstrapping
+
+    fixed = _new()
+    fixed._bootstrap_fewshot_examples = _sentinel  # type: ignore[method-assign]
+    with pytest.raises(_ReachedBootstrapping):
+        fixed.compile(student, trainset=trainset, num_trials=6, minibatch=False)
+
+    src = inspect.getsource(fdi.FeedbackLearnerOptimizer._optimize_with_miprov2)
+    assert "minibatch=False" in src, "the MIPROv2 fallback must disable minibatching"
+
+
 def test_save_load_roundtrip_offline(tmp_path):
     """A real ChainOfThought saves and loads on dspy 3.1.0 without an LLM call."""
     from src.agents.feedback_learner.dspy_integration import PatternDetectionSignature

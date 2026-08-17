@@ -1112,7 +1112,22 @@ class FeedbackLearnerOptimizer:
 
         module = dspy.ChainOfThought(signatures[phase])
 
-        optimized = optimizer.compile(module, trainset=examples, num_trials=budget)
+        # #1668 (codex iter-4 HIGH): a SECOND pre-rollout gate. dspy derives
+        # `valset = int(0.80 * len(trainset))` when none is passed
+        # (mipro_optimizer_v2.py:311-317) and then refuses to minibatch when the
+        # default `minibatch_size=35` exceeds it (:201) — so with `minibatch`
+        # defaulting to True, EVERY trainset below 44 examples raised
+        # "Minibatch size cannot exceed the size of the valset" before any
+        # rollout. Measured against the installed dspy at n=8/30/43: all three
+        # raised; all three clear both gates with `minibatch=False`.
+        #
+        # This builder caps the trainset at `2 * min(n_positive, n_negative)` by
+        # construction — 30 on today's 220 real signals — so minibatching is not
+        # merely blocked, it is meaningless at these sizes: evaluate the whole
+        # valset. If the signal pool ever grows enough that a full valset
+        # evaluation per trial is too expensive, that is a budget decision to
+        # revisit, and it shows up as run duration rather than a silent failure.
+        optimized = optimizer.compile(module, trainset=examples, num_trials=budget, minibatch=False)
 
         return optimized
 
