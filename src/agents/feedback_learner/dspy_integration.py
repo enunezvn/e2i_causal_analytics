@@ -1104,8 +1104,12 @@ def recorded_set_sizes(n_examples: int, optimizer_type: Optional[str]) -> tuple[
     ``trainset_size`` originally received ``len(pool)`` (223 for a phase that
     builds 30); that was replaced with the EXAMPLE count, which is still not the
     trainset on either path. Fixing a unit error by landing on the next one
-    along is the failure this whole change is about, which is why the split
-    arithmetic is read from the dependency rather than restated here.
+    along is the failure this whole change is about, which is why neither split
+    is restated at a call site: GEPA's has one definition
+    (:func:`gepa_split_sizes`), and MIPROv2's restates the dependency's
+    arithmetic in exactly one place (:func:`miprov2_split_sizes`), asserted
+    against dspy's own ``_set_and_validate_datasets`` rather than against the
+    numbers a reader took from it.
     """
     if optimizer_type == "gepa":
         return gepa_split_sizes(n_examples)
