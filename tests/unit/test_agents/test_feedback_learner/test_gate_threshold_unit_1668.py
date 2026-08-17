@@ -385,7 +385,7 @@ async def test_status_publishes_the_number_the_gate_compares(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# 7. The persisted run row records the sets actually handed to compile()
+# 7. The persisted run row records the sets the optimizer TRAINS AND VALIDATES on
 # --------------------------------------------------------------------------
 
 
@@ -428,18 +428,24 @@ def test_the_feasibility_floor_is_pinned_to_the_shared_split():
     assert train_below < 5
 
 
-def test_recorded_run_sizes_are_what_the_optimizer_passes_to_compile():
-    """GEPA gets the split sets; MIPROv2 gets the whole example list, no valset.
+def test_recorded_run_sizes_are_the_sets_the_optimizer_trains_and_validates_on():
+    """The two paths split in OPPOSITE directions from the same example list.
 
     Both siblings (`recipient_optimizer`, the RAG leg) record
-    ``trainset_size=len(trainset)`` / ``valset_size=len(valset)`` for the sets
-    they hand to ``compile()``. This makes the feedback-learner runner agree,
-    rather than recording a third quantity under the same column name.
+    ``trainset_size=len(trainset)`` / ``valset_size=len(valset)`` for their
+    post-split sets — which, because they pass an explicit valset, is also what
+    they hand to ``compile()``. This path does not: `_optimize_with_miprov2`
+    passes the WHOLE list with no valset and dspy re-splits it internally, so
+    "what is passed to compile" and "what is trained on" are 30 and 6. The
+    column is named trainset_size, so it takes the latter — otherwise the
+    feedback-learner runner would record a third quantity under a name its
+    siblings already use for something else.
     """
     from src.agents.feedback_learner.dspy_integration import recorded_set_sizes
 
     assert recorded_set_sizes(30, "gepa") == (24, 6)
-    # MIPROv2 splits the OTHER WAY: dspy keeps the 20% prefix as the trainset.
+    # MIPROv2 is handed all 30 and splits the OTHER WAY internally: dspy keeps
+    # the 20% prefix as the trainset. 30 is the ARGUMENT, 6 is the trainset.
     assert recorded_set_sizes(30, "miprov2") == (6, 24)
     assert recorded_set_sizes(0, "gepa") == (0, 0)
 
