@@ -2,8 +2,9 @@
 
 The gate used to count rows, so ``[{"reward": 0.9}] * 25`` was a faithful
 stand-in for "25 signals the trigger will count". It no longer is: the gate
-counts the scarcer LABEL CLASS of the best-supplied phase, derived from the same
-``classify_signal_for_phase`` the trainset builder uses, so a row with no
+counts the EXAMPLES the trainset builder will produce for the best-supplied
+phase — ``2 * min(positives, negatives)``, derived from the same
+``classify_signal_for_phase`` the builder uses — so a row with no
 ``input_context``/``output`` is not a signal the optimizer can train on and must
 not be counted as one. These helpers build rows through the real
 ``FeedbackLearnerTrainingSignal.to_dict()``, which is what the persistence path
@@ -76,7 +77,7 @@ def degenerate(tag: str, *, reward: float = 0.0, **kw: Any) -> Dict[str, Any]:
 
 
 def balanced_pool(k: int, *, reward: float = 0.9) -> List[Dict[str, Any]]:
-    """``k`` positives + ``k`` negatives — a pool with trainable supply ``k``.
+    """``k`` positives + ``k`` negatives — a pool that builds a ``2k``-EXAMPLE trainset.
 
     ``reward`` applies to the positives only; a negative that cleared a reward
     floor has never been observed in 223 real rows (2026-08-17) and would
