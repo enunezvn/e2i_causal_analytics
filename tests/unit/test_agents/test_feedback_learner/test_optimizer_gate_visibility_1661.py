@@ -188,8 +188,10 @@ def test_the_trainset_gate_is_what_binds_with_no_prior_optimization():
 def test_the_threshold_honours_the_env_override(monkeypatch):
     """The override moved to DSPY_MIN_TRAINSET_EXAMPLES with the unit.
 
-    The old name is deliberately not honoured — see
-    ``test_gate_threshold_unit_1668`` for why reading it would halve the gate.
+    The old name is still honoured but TRANSLATED (``2 * N``) and loses to this
+    one when both are set — see ``test_gate_threshold_unit_1668`` for why
+    reading it at face value would halve the gate and ignoring it would relax
+    any value above 20.
     """
     from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
     from src.agents.feedback_learner.signal_store import optimizer_min_trainset_examples
