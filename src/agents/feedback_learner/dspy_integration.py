@@ -1092,8 +1092,22 @@ class FeedbackLearnerOptimizer:
             logger.warning(f"Phase '{phase}' not optimizable via MIPROv2; skipping")
             return None
 
+        # #1668 (codex iter-3 HIGH): `auto` defaults to "light" in dspy 3.1.0
+        # (mipro_optimizer_v2.py:56), and compile() rejects an explicit
+        # num_candidates/num_trials while auto is set (:151) — "If auto is not
+        # None, num_candidates and num_trials cannot be set". Constructing with
+        # num_candidates=10 and then calling compile(num_trials=budget) raised
+        # ValueError before any rollout, so this fallback has never once been
+        # able to compile. Measured against the installed dspy: with auto=None
+        # the same construction gets past that gate (the next error is the
+        # unrelated "Trainset cannot be empty"). We pass BOTH knobs explicitly,
+        # which is what auto=None requires.
         optimizer = MIPROv2(
-            metric=metrics[phase], num_candidates=10, max_bootstrapped_demos=4, num_threads=4
+            metric=metrics[phase],
+            auto=None,
+            num_candidates=10,
+            max_bootstrapped_demos=4,
+            num_threads=4,
         )
 
         module = dspy.ChainOfThought(signatures[phase])

@@ -25,6 +25,50 @@ def test_gepa_passes_auto_not_budget_kwarg():
     assert "auto=budget" in src
 
 
+def test_miprov2_construction_is_accepted_by_real_dspy_validation():
+    """#1668 (codex iter-3): the MIPROv2 fallback could never compile.
+
+    dspy 3.1.0 defaults ``MIPROv2.auto`` to ``"light"``
+    (mipro_optimizer_v2.py:56) and ``compile`` rejects an explicit
+    ``num_candidates``/``num_trials`` while ``auto`` is set (:151). The fallback
+    constructed ``MIPROv2(num_candidates=10)`` and then called
+    ``compile(num_trials=budget)``, so **every** MIPROv2 run raised ValueError
+    before a single rollout. Making its metric gold-aware would have been moot
+    on a path that cannot run at all.
+
+    This exercises dspy's REAL validation rather than asserting our own source:
+    the construction must get PAST the auto gate. No LM call is made — both the
+    old and the new error are raised during argument validation.
+    """
+    from dspy.teleprompt import MIPROv2
+
+    # MIPROv2.__init__ requires a default LM to exist. It is never called.
+    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini", api_key="not-used-no-call-is-made"))
+    student = dspy.Predict("question -> answer")
+
+    def _metric(example, prediction, trace=None) -> float:
+        return 1.0
+
+    # RED (the old construction): auto stays "light" and compile refuses.
+    old = MIPROv2(metric=_metric, num_candidates=10, max_bootstrapped_demos=4, num_threads=4)
+    assert old.auto == "light"
+    with pytest.raises(ValueError, match="If auto is not None"):
+        old.compile(student, trainset=[], num_trials=50)
+
+    # GREEN: the construction the code now uses clears that gate — the next
+    # failure is the unrelated dataset check, which is how we know we got past.
+    src = inspect.getsource(fdi.FeedbackLearnerOptimizer._optimize_with_miprov2)
+    assert "auto=None" in src, "the MIPROv2 fallback must pin auto=None"
+
+    fixed = MIPROv2(
+        metric=_metric, auto=None, num_candidates=10, max_bootstrapped_demos=4, num_threads=4
+    )
+    with pytest.raises(ValueError) as excinfo:
+        fixed.compile(student, trainset=[], num_trials=50)
+    assert "If auto is not None" not in str(excinfo.value)
+    assert "Trainset cannot be empty" in str(excinfo.value)
+
+
 def test_save_load_roundtrip_offline(tmp_path):
     """A real ChainOfThought saves and loads on dspy 3.1.0 without an LLM call."""
     from src.agents.feedback_learner.dspy_integration import PatternDetectionSignature
