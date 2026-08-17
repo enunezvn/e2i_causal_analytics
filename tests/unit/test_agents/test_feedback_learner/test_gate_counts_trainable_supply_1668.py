@@ -68,17 +68,17 @@ def _optimizer() -> FeedbackLearnerOptimizer:
 
 
 # =============================================================================
-# 1. The gate counts the scarcer label class, not the reward-eligible rows
+# 1. The gate counts the trainset the builder produces, not reward-eligible rows
 # =============================================================================
 
 
 def test_all_positive_pool_that_builds_nothing_must_not_open_the_gate():
     """The sharpest form of the defect: 25 rows the builder refuses outright.
 
-    Every one clears ``reward >= 0.5``, so today's gate reads 25 >= 20 and
-    fires. ``_signals_to_examples`` then finds a single-class pool and returns
+    Every one clears ``reward >= 0.5``, so the PRE-#1668 gate read 25 >= 20 and
+    fired. ``_signals_to_examples`` then finds a single-class pool and returns
     ZERO examples — the beat would run and compile nothing. The gate must read
-    the supply as 0.
+    the trainset as 0.
     """
     pool = [_positive(f"p{i}", reward=0.9) for i in range(25)]
 
@@ -96,7 +96,7 @@ def test_all_positive_pool_that_builds_nothing_must_not_open_the_gate():
 
 
 def test_gate_counts_the_minority_class_not_the_reward_eligible_count():
-    """30 eligible positives + 5 ineligible negatives -> supply is 5, not 30."""
+    """30 eligible positives + 5 ineligible negatives -> a 10-example trainset, not 30."""
     from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
     pool = [_positive(f"p{i}", reward=0.9) for i in range(30)]
@@ -438,7 +438,7 @@ async def test_a_failed_pool_read_reports_unknown_not_a_measured_zero(monkeypatc
     which SWALLOWS read failures and returns ``[]`` (memory_adapters.py:844) —
     deliberately, because a DB outage must not crash the Celery beat. So a pool
     read failure would publish ``trainset_examples: 0`` and "Insufficient
-    signals: 0 < 20", which is a measurement of an outage.
+    trainset: 0 < 40 examples", which reads as a measurement of an outage.
 
     Worse than cosmetic: 0 is also the value a genuinely single-class corpus
     produces, so the one number an operator would use to tell "the loop is

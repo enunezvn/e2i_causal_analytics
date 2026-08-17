@@ -6,11 +6,11 @@ from __future__ import annotations
 def _signal(reward: float, *, patterns: bool = True) -> dict:
     """One persisted signal row.
 
-    #1668: ``patterns`` is the LABEL, and the trigger now counts the scarcer
-    label class rather than the row count — so a pool of N identical
-    pattern-bearing rows has a trainable supply of ZERO, not N. That is not a
-    fixture quirk: ``_signals_to_examples`` refuses a single-class pool, so such
-    a beat would fire and compile nothing.
+    #1668: ``patterns`` is the LABEL, and the trigger now counts the EXAMPLES
+    the trainset builder would produce rather than the row count — so a pool of
+    N identical pattern-bearing rows builds a trainset of ZERO, not N. That is
+    not a fixture quirk: ``_signals_to_examples`` refuses a single-class pool,
+    so such a beat would fire and compile nothing.
     """
     return {
         "source_agent": "feedback_learner",

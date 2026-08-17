@@ -498,7 +498,7 @@ Key test files added on this branch (beyond the original 356):
 | `test_recipient_scaffolding_b0.py` | B0 substrate + guardrails (seed ban, emit contract, provider round-trip, metric) |
 | `test_no_synthetic_seed_in_prod.py` | src/-wide import-ban on golden-seed modules (§0.6 guardrail) |
 | `test_recipient_optimizer_shard09.py` | Per-recipient GEPA optimizer end-to-end |
-| `test_gepa_trigger_a3_threshold.py` | `GEPAOptimizationTrigger` default=20, env-override |
+| `test_gepa_trigger_a3_threshold.py` | `GEPAOptimizationTrigger` default=40 trainset examples, env-override |
 | `test_finalize_node_persistence.py` | Graph finalize node persists signal on every run |
 | `test_graph_finalize_training_signal.py` | `_finalize_training_signal` state contracts |
 | `test_prompt_bundles_shard07.py` | `install_all_prompt_bundles` wiring |
@@ -521,7 +521,7 @@ Key test files added on this branch (beyond the original 356):
 
 ### 14.2 Rationale
 
-The agent is fully functional with the core learning cycle and the DSPy loop is closed end-to-end. Implicit feedback and memory hooks are enhancement features that can be added incrementally without breaking contracts. The DSPy self-improvement loop produces no bundle yet because real usage has not generated enough training signals (threshold 20) — this is correct skip-on-cold-start behaviour, not a deficiency.
+The agent is fully functional with the core learning cycle and the DSPy loop is closed end-to-end. Implicit feedback and memory hooks are enhancement features that can be added incrementally without breaking contracts. The DSPy self-improvement loop produces no bundle yet because the trainset real usage can build is below the threshold (30 examples against 40, measured 2026-08-17) — this is correct skip-on-cold-start behaviour, not a deficiency.
 
 ---
 

@@ -141,8 +141,8 @@ def test_beat_reads_the_gate_constants_from_signal_store():
 def test_beat_and_health_surface_share_one_trigger_decision():
     """The health surface must not re-implement a subset of the gate.
 
-    The real trigger checks cooldown BEFORE the signal count, then a forced
-    interval, then a reward delta. A status field that models only "count >=
+    The real trigger checks cooldown BEFORE the trainset size, then a forced
+    interval, then a reward delta. A status field that models only "examples >=
     threshold" would report Ready while the beat still skips — reproducing, one
     layer up, exactly the false-green this issue is about.
     """
@@ -169,11 +169,12 @@ def test_cooldown_binds_even_when_the_trainset_gate_is_satisfied():
 
 
 def test_the_trainset_gate_is_what_binds_with_no_prior_optimization():
-    """Today's real state: no trigger file, supply below the threshold.
+    """Today's real state: no trigger file, trainset below the threshold.
 
     #1668: the rows are real-shaped rather than ``{"reward": 0.6}``. The gate
-    counts the scarcer label class now, so a row carrying only a reward is not
-    a signal the optimizer could train on and must not read as one.
+    counts the EXAMPLES the trainset builder would produce, so a row carrying
+    only a reward is not a signal the optimizer could train on and must not
+    read as one.
     """
     from src.agents.feedback_learner.signal_store import decide_optimizer_trigger
 
@@ -422,8 +423,8 @@ async def test_gate_status_agrees_with_the_beat_once_the_trainset_gate_opens(mon
     """The status must report what the BEAT would decide — the #1661 invariant.
 
     Superseded the earlier form of this test, which asserted that a recent
-    ``last_optimization`` surfaces as ``"Cooldown active"`` once the signal gate
-    opens. That was correct while the cooldown bound the beat. #1656 established
+    ``last_optimization`` surfaces as ``"Cooldown active"`` once the trainset
+    gate opens. That was correct while the cooldown bound the beat. #1656 established
     that it must NOT: ``last_optimization`` is a COMPLETION stamp, so on a
     ``crontab(hour=6)`` entry any nonzero runtime leaves the next fire inside the
     24h window and the daily task silently runs every OTHER day. The beat now
