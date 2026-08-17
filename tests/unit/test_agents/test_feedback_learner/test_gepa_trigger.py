@@ -433,7 +433,9 @@ class TestGEPAOptimizationTriggerIntegration:
         )
         assert should_trigger is False
 
-        # But after cooldown with critical patterns and half signals
+        # But once the cooldown has expired, a critical-pattern run fires on a
+        # 60-example trainset (well clear of both the 40 threshold and the
+        # override's own 22 floor)
         last_opt = now - timedelta(hours=30)
         should_trigger, reason = trigger.should_trigger(
             trainset_examples=60,
