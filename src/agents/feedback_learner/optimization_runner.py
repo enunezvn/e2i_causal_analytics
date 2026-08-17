@@ -54,7 +54,11 @@ async def run_feedback_learner_optimization(
     from src.optimization.dspy_lm import ensure_dspy_configured
     from src.optimization.gepa import save_optimized_module
 
-    from .dspy_integration import FeedbackLearnerOptimizer, trainset_examples_for_phase
+    from .dspy_integration import (
+        FeedbackLearnerOptimizer,
+        recorded_set_sizes,
+        trainset_examples_for_phase,
+    )
     from .signal_store import (
         OPTIMIZER_SIGNAL_LIMIT,
         get_feedback_learner_training_signals,
@@ -112,18 +116,26 @@ async def run_feedback_learner_optimization(
     for phase in phases:
         run_id = None
         if effective_optimizer:
+            # The columns are called trainset_size / valset_size, and both
+            # siblings (`recipient_optimizer`, the RAG leg) fill them with the
+            # sets they hand to `compile()`. This used to receive `len(pool)` —
+            # 223 for a phase that builds 30 and a phase that builds 4, so every
+            # historical row claimed a trainset 7x larger than the one that ran
+            # and gave two phases an order of magnitude apart the same number.
+            # `recorded_set_sizes` reports what each optimizer path actually
+            # passes: GEPA the 80/20 split (24/6 at 30 examples), MIPROv2 the
+            # whole list with no valset. Same defect class as the gate's own
+            # unit (#1668) — a name that stopped matching its quantity — and the
+            # example count alone would have been the next stop along it.
+            n_train, n_val = recorded_set_sizes(
+                trainset_examples_for_phase(pool, phase), effective_optimizer
+            )
             run_id = await record_run_started(
                 agent_name=f"feedback_learner_{phase}",
                 optimizer_type=effective_optimizer,
                 budget_preset=budget,
-                # The column is called trainset_size, so it must hold the
-                # trainset — not the pool. `len(pool)` is 223 while the pattern
-                # phase builds 30 and the recommendation phase 4, so every
-                # historical row would have claimed a trainset 7x larger than
-                # the one that ran, and identical across phases that differ by
-                # an order of magnitude. Same defect class as the gate's own
-                # unit (#1668): a name that stopped matching its quantity.
-                trainset_size=trainset_examples_for_phase(pool, phase),
+                trainset_size=n_train,
+                valset_size=n_val,
                 created_by="run_dspy_prompt_optimization",
                 client=client,
             )

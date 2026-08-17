@@ -693,6 +693,11 @@ def __getattr__(name: str) -> Any:
 
 # --- Floors, each measured against the thing it is derived FROM --------------
 
+# GEPA's train/val prefix split. Named because the guard below, the feasibility
+# floor derived FROM that guard, and the persisted run row all depend on where
+# this cut falls — see :func:`gepa_split_sizes`.
+GEPA_TRAIN_FRACTION = 0.8
+
 # The smallest trainset either optimizer path will accept. Below it a triggered
 # run provably compiles nothing while still spending the beat's state write.
 #
@@ -1038,6 +1043,48 @@ def trainable_supply(signals: List[Dict[str, Any]], phase: str) -> int:
     return min(positives, negatives)
 
 
+def gepa_split_sizes(n_examples: int) -> tuple[int, int]:
+    """``(trainset, valset)`` sizes for GEPA's 80/20 PREFIX split. ONE definition.
+
+    ``_optimize_with_gepa`` splits by prefix, and three other places need to
+    know where that cut falls: its own guard (``trainset < 5``), the feasibility
+    floor derived from that guard, and the run row that records which sets were
+    handed to ``compile()``. Each of them re-deriving ``int(len(examples) * 0.8)``
+    is how the cut drifts from the guard it bounds.
+
+    Exhaustive by construction — ``train + val == n_examples`` at every size —
+    so a reader cannot lose examples between the two halves.
+    """
+    train = int(n_examples * GEPA_TRAIN_FRACTION)
+    return train, n_examples - train
+
+
+def recorded_set_sizes(n_examples: int, optimizer_type: Optional[str]) -> tuple[int, Optional[int]]:
+    """``(trainset_size, valset_size)`` for ``prompt_optimization_runs``.
+
+    The column means *the sets this run hands to* ``compile()`` — that is what
+    both sibling recorders write (``recipient_optimizer`` and the RAG leg each
+    pass ``len(trainset)`` / ``len(valset)`` for their post-split sets). The two
+    optimizer paths hand over different things, so this reports what each
+    actually passes rather than a single number that is right for neither:
+
+    - GEPA gets ``trainset=`` and ``valset=`` from :func:`gepa_split_sizes`, so
+      a 30-example phase records 24 / 6, not 30.
+    - MIPROv2 gets ``trainset=examples`` and NO valset; dspy derives one
+      internally, which is dspy's business exactly as ``valset=None`` is. So the
+      whole example count is the honest value and ``valset_size`` is null.
+
+    #1668: this exists because the first fix for a wrong ``trainset_size`` —
+    it had been receiving ``len(pool)``, 223 for a phase that builds 30 —
+    replaced it with the example count, which is still not the trainset. Fixing
+    a unit error by landing on the next one along is the failure this whole
+    change is about.
+    """
+    if optimizer_type == "gepa":
+        return gepa_split_sizes(n_examples)
+    return n_examples, None
+
+
 def trainset_examples_for_phase(signals: List[Dict[str, Any]], phase: str) -> int:
     """Examples ``_signals_to_examples`` will build for ``phase`` — THE gate unit.
 
@@ -1277,8 +1324,11 @@ class FeedbackLearnerOptimizer:
 
         # Convert signals to examples
         examples = self._signals_to_examples(training_signals, phase)
-        trainset = examples[: int(len(examples) * 0.8)]
-        valset = examples[int(len(examples) * 0.8) :]
+        # ONE definition of the cut (#1668) — the guard below, the feasibility
+        # floor derived from it, and the persisted run row all read the same one.
+        n_train, _n_val = gepa_split_sizes(len(examples))
+        trainset = examples[:n_train]
+        valset = examples[n_train:]
 
         if len(trainset) < 5:
             logger.warning(f"Insufficient examples ({len(trainset)}) for GEPA optimization")

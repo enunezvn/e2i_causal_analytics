@@ -113,17 +113,21 @@ def test_the_reason_string_states_the_unit():
 def test_the_feasibility_floor_is_pinned_to_the_gepa_guard_it_came_from():
     """``MIN_FEASIBLE_TRAINSET_EXAMPLES`` is not a chosen number.
 
-    ``_optimize_with_gepa`` splits ``trainset = examples[: int(0.8 * n)]`` and
-    returns None when ``len(trainset) < 5``. The floor is the smallest EVEN n
-    (the builder emits pairs) that clears it. Asserted against the arithmetic
-    rather than against a literal, so changing the guard fails here.
+    ``_optimize_with_gepa`` splits via ``gepa_split_sizes`` and returns None
+    when ``len(trainset) < 5``. The floor is the smallest EVEN n (the builder
+    emits pairs) that clears it. Asserted through the SAME split function the
+    optimizer uses rather than a literal ``int(n * 0.8)``, so moving the cut
+    fails here instead of silently invalidating the floor.
     """
-    from src.agents.feedback_learner.dspy_integration import MIN_FEASIBLE_TRAINSET_EXAMPLES
+    from src.agents.feedback_learner.dspy_integration import (
+        MIN_FEASIBLE_TRAINSET_EXAMPLES,
+        gepa_split_sizes,
+    )
 
     n = MIN_FEASIBLE_TRAINSET_EXAMPLES
     assert n % 2 == 0, "the builder emits balanced pairs, so the floor is even"
-    assert int(n * 0.8) >= 5, "at the floor, GEPA's own trainset guard must pass"
-    assert int((n - 2) * 0.8) < 5, "one pair below the floor, the guard must reject"
+    assert gepa_split_sizes(n)[0] >= 5, "at the floor, GEPA's own trainset guard must pass"
+    assert gepa_split_sizes(n - 2)[0] < 5, "one pair below the floor, the guard must reject"
 
 
 def test_the_budget_ladder_is_derived_from_dspys_own_candidate_counts():
@@ -378,3 +382,64 @@ async def test_status_publishes_the_number_the_gate_compares(monkeypatch):
     assert "trainable_signals" not in status
     assert status["would_trigger"] is False
     assert f"30 < {status['min_trainset_examples']}" in status["reason"]
+
+
+# --------------------------------------------------------------------------
+# 7. The persisted run row records the sets actually handed to compile()
+# --------------------------------------------------------------------------
+
+
+def test_gepa_split_has_one_definition():
+    """``_optimize_with_gepa``'s 80/20 cut must not be re-derived by its readers.
+
+    The first attempt at fixing ``record_run_started(trainset_size=...)``
+    replaced the POOL size (223) with the EXAMPLE count (30) — still not the
+    trainset, because GEPA trains on ``examples[: int(0.8n)]`` = 24 and holds 6
+    back. Fixing a unit error by landing on the next one along is the failure
+    this file exists to stop, so the cut has exactly one definition and both
+    the optimizer and the recorder read it.
+    """
+    import inspect
+
+    from src.agents.feedback_learner.dspy_integration import (
+        FeedbackLearnerOptimizer,
+        gepa_split_sizes,
+    )
+
+    assert gepa_split_sizes(30) == (24, 6)
+    assert gepa_split_sizes(40) == (32, 8)
+    assert sum(gepa_split_sizes(37)) == 37, "the split must be exhaustive at any size"
+
+    src = inspect.getsource(FeedbackLearnerOptimizer._optimize_with_gepa)
+    assert "gepa_split_sizes" in src, "the optimizer must use the shared split, not re-derive it"
+    assert "int(len(examples) * 0.8)" not in src
+
+
+def test_the_feasibility_floor_is_pinned_to_the_shared_split():
+    """The floor tracks the real split function, not a literal copy of it."""
+    from src.agents.feedback_learner.dspy_integration import (
+        MIN_FEASIBLE_TRAINSET_EXAMPLES,
+        gepa_split_sizes,
+    )
+
+    train, _val = gepa_split_sizes(MIN_FEASIBLE_TRAINSET_EXAMPLES)
+    assert train >= 5
+    train_below, _ = gepa_split_sizes(MIN_FEASIBLE_TRAINSET_EXAMPLES - 2)
+    assert train_below < 5
+
+
+def test_recorded_run_sizes_are_what_the_optimizer_passes_to_compile():
+    """GEPA gets the split sets; MIPROv2 gets the whole example list, no valset.
+
+    Both siblings (`recipient_optimizer`, the RAG leg) record
+    ``trainset_size=len(trainset)`` / ``valset_size=len(valset)`` for the sets
+    they hand to ``compile()``. This makes the feedback-learner runner agree,
+    rather than recording a third quantity under the same column name.
+    """
+    from src.agents.feedback_learner.dspy_integration import recorded_set_sizes
+
+    assert recorded_set_sizes(30, "gepa") == (24, 6)
+    # MIPROv2 is passed `trainset=examples` with no valset — dspy derives its
+    # own internally, which is dspy's business exactly as `valset=None` is.
+    assert recorded_set_sizes(30, "miprov2") == (30, None)
+    assert recorded_set_sizes(0, "gepa") == (0, 0)
