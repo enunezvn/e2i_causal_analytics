@@ -123,10 +123,13 @@ async def run_feedback_learner_optimization(
             # historical row claimed a trainset 7x larger than the one that ran
             # and gave two phases an order of magnitude apart the same number.
             # `recorded_set_sizes` reports what each optimizer path actually
-            # passes: GEPA the 80/20 split (24/6 at 30 examples), MIPROv2 the
-            # whole list with no valset. Same defect class as the gate's own
-            # unit (#1668) — a name that stopped matching its quantity — and the
-            # example count alone would have been the next stop along it.
+            # trains and validates on. The two split in OPPOSITE directions:
+            # GEPA keeps the 80% prefix (24/6 at 30 examples), MIPROv2 hands the
+            # whole list to dspy, which keeps the 20% prefix (6/24). Same defect
+            # class as the gate's own unit (#1668) — a name that stopped
+            # matching its quantity — and the example count alone would have
+            # been the next stop along it, which is exactly where the first
+            # attempt at this fix landed.
             n_train, n_val = recorded_set_sizes(
                 trainset_examples_for_phase(pool, phase), effective_optimizer
             )

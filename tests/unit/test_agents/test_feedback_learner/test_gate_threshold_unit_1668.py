@@ -439,7 +439,27 @@ def test_recorded_run_sizes_are_what_the_optimizer_passes_to_compile():
     from src.agents.feedback_learner.dspy_integration import recorded_set_sizes
 
     assert recorded_set_sizes(30, "gepa") == (24, 6)
-    # MIPROv2 is passed `trainset=examples` with no valset — dspy derives its
-    # own internally, which is dspy's business exactly as `valset=None` is.
-    assert recorded_set_sizes(30, "miprov2") == (30, None)
+    # MIPROv2 splits the OTHER WAY: dspy keeps the 20% prefix as the trainset.
+    assert recorded_set_sizes(30, "miprov2") == (6, 24)
     assert recorded_set_sizes(0, "gepa") == (0, 0)
+
+
+def test_the_miprov2_split_matches_the_INSTALLED_dspy_not_our_reading_of_it():
+    """Pinned against dspy's real function, so a version bump fails loudly here.
+
+    `miprov2_split_sizes` restates arithmetic that lives in the dependency
+    (`_set_and_validate_datasets`). Restating a dependency's internals is a
+    drift risk by definition, so it is asserted against the dependency itself
+    rather than against the numbers I read out of it. Spends no tokens: this is
+    argument validation, no rollout.
+    """
+    mipro = pytest.importorskip("dspy.teleprompt.mipro_optimizer_v2")
+    dspy = pytest.importorskip("dspy")
+
+    from src.agents.feedback_learner.dspy_integration import miprov2_split_sizes
+
+    optimizer = object.__new__(mipro.MIPROv2)  # no LM needed for the split
+    for n in (2, 5, 8, 30, 40, 44, 100):
+        examples = [dspy.Example(q=str(i)).with_inputs("q") for i in range(n)]
+        real_train, real_val = mipro.MIPROv2._set_and_validate_datasets(optimizer, examples, None)
+        assert miprov2_split_sizes(n) == (len(real_train), len(real_val)), n

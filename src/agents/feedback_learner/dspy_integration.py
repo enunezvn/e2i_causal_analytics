@@ -1059,30 +1059,57 @@ def gepa_split_sizes(n_examples: int) -> tuple[int, int]:
     return train, n_examples - train
 
 
+def miprov2_split_sizes(n_examples: int) -> tuple[int, Optional[int]]:
+    """``(trainset, valset)`` sizes dspy's MIPROv2 derives when no valset is passed.
+
+    ``_optimize_with_miprov2`` calls ``compile(trainset=examples)`` with no
+    ``valset``, and dspy 3.1.0 immediately re-splits
+    (``mipro_optimizer_v2.py::_set_and_validate_datasets``)::
+
+        valset_size = min(1000, max(1, int(len(trainset) * 0.80)))
+        cutoff      = len(trainset) - valset_size
+        valset      = trainset[cutoff:]
+        trainset    = trainset[:cutoff]
+
+    Note the direction: the SMALL slice is the trainset. Measured against the
+    installed dspy, 30 examples become a trainset of 6 and a valset of 24 — the
+    inverse of GEPA's split, which is why "the example count" is not the
+    trainset size on this path either.
+
+    Below 2 examples dspy raises before splitting anything, so nothing was
+    split and ``valset_size`` is genuinely unknown rather than zero.
+    """
+    if n_examples < 2:
+        return n_examples, None
+    valset = min(1000, max(1, int(n_examples * 0.80)))
+    return n_examples - valset, valset
+
+
 def recorded_set_sizes(n_examples: int, optimizer_type: Optional[str]) -> tuple[int, Optional[int]]:
     """``(trainset_size, valset_size)`` for ``prompt_optimization_runs``.
 
-    The column means *the sets this run hands to* ``compile()`` — that is what
-    both sibling recorders write (``recipient_optimizer`` and the RAG leg each
-    pass ``len(trainset)`` / ``len(valset)`` for their post-split sets). The two
-    optimizer paths hand over different things, so this reports what each
-    actually passes rather than a single number that is right for neither:
+    The columns mean *the sets the optimizer actually trains and validates on*
+    — that is what both sibling recorders write (``recipient_optimizer`` and the
+    RAG leg each pass ``len(trainset)`` / ``len(valset)`` for their post-split
+    sets). The two optimizer paths split differently, and in OPPOSITE
+    directions, so this reports each rather than one number right for neither:
 
-    - GEPA gets ``trainset=`` and ``valset=`` from :func:`gepa_split_sizes`, so
-      a 30-example phase records 24 / 6, not 30.
-    - MIPROv2 gets ``trainset=examples`` and NO valset; dspy derives one
-      internally, which is dspy's business exactly as ``valset=None`` is. So the
-      whole example count is the honest value and ``valset_size`` is null.
+    - GEPA takes the 80% PREFIX as its trainset (:func:`gepa_split_sizes`), so a
+      30-example phase records 24 / 6.
+    - MIPROv2 is handed the whole list and re-splits internally, keeping the
+      20% prefix as its trainset (:func:`miprov2_split_sizes`), so the same 30
+      examples record 6 / 24.
 
-    #1668: this exists because the first fix for a wrong ``trainset_size`` —
-    it had been receiving ``len(pool)``, 223 for a phase that builds 30 —
-    replaced it with the example count, which is still not the trainset. Fixing
-    a unit error by landing on the next one along is the failure this whole
-    change is about.
+    #1668, and this function is the second correction rather than the first:
+    ``trainset_size`` originally received ``len(pool)`` (223 for a phase that
+    builds 30); that was replaced with the EXAMPLE count, which is still not the
+    trainset on either path. Fixing a unit error by landing on the next one
+    along is the failure this whole change is about, which is why the split
+    arithmetic is read from the dependency rather than restated here.
     """
     if optimizer_type == "gepa":
         return gepa_split_sizes(n_examples)
-    return n_examples, None
+    return miprov2_split_sizes(n_examples)
 
 
 def trainset_examples_for_phase(signals: List[Dict[str, Any]], phase: str) -> int:
