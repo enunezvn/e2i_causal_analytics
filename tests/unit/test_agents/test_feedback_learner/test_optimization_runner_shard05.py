@@ -138,3 +138,62 @@ async def test_orchestrator_discards_run_on_pre_compile_skip(monkeypatch):
     assert calls["started"] == 1
     assert calls["discarded"] == ["run-prov-1"]
     assert calls["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_that_compiles_nothing_is_not_reported_as_completed(monkeypatch, tmp_path):
+    """#1668: a run where every phase built no trainset must not look like success.
+
+    This is the issue's own acceptance item — "a daily task that has never run
+    should not look identical to one that ran and found nothing to do" — and the
+    #1668 trainset fix makes the no-module outcome MORE likely, not less: a
+    single-class signal pool is now an explicit skip rather than a silently
+    biased trainset. Reporting ``completed`` for that would relocate the silent
+    inertness from the beat down into the runner.
+
+    No LM is reached and the optimizer is the REAL one:
+    ``_signals_to_examples`` returns ``[]`` for a single-class pool, so
+    ``_optimize_with_gepa`` returns None at its ``< 5`` guard long before
+    ``compile``. Only the dspy-configured probe and the signal read are stubbed.
+    """
+    from src.agents.feedback_learner.dspy_integration import FeedbackLearnerTrainingSignal
+    from src.agents.feedback_learner.optimization_runner import (
+        run_feedback_learner_optimization,
+    )
+
+    sig = FeedbackLearnerTrainingSignal(
+        batch_id="allpos",
+        feedback_count=6,
+        time_range_start="t0",
+        time_range_end="t1",
+        patterns_detected=1,
+        recommendations_generated=1,
+        feedback_batch=[{"feedback_id": "f1", "feedback_type": "rating", "user_feedback": 2}],
+        patterns=[{"pattern_type": "accuracy_issue", "severity": "high"}],
+        recommendations=[{"category": "prompt_update", "expected_impact": "x"}],
+        learning_summary="Learning cycle complete. Processed 6 feedback items.",
+        total_latency_ms=900.0,
+    )
+    rows = []
+    for _ in range(8):  # all POSITIVE -> single class -> no trainset for any phase
+        d = sig.to_dict()
+        d["reward"] = 0.9
+        rows.append(d)
+
+    async def fake_signals(client=None, min_reward=0.0, limit=1000):
+        return rows
+
+    monkeypatch.setattr(
+        "src.agents.feedback_learner.signal_store.get_feedback_learner_training_signals",
+        fake_signals,
+    )
+    monkeypatch.setattr("src.optimization.dspy_lm.ensure_dspy_configured", lambda: True)
+    monkeypatch.chdir(tmp_path)
+
+    result = await run_feedback_learner_optimization()
+
+    assert all(p.get("status") == "no_module" for p in result["phases"].values()), result["phases"]
+    assert result["status"] != "completed", (
+        "a run that compiled nothing reports the same status as one that did"
+    )
+    assert result["status"] == "completed_no_modules"

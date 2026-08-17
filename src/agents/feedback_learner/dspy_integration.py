@@ -596,6 +596,29 @@ _GEPA_SYMBOL_NAMES = frozenset(
 
 
 @functools.lru_cache(maxsize=1)
+def _gold_aware_metric() -> Any:
+    """The single definition of "a good feedback_learner prediction" (#1668).
+
+    Both optimizer paths score against it: GEPA via ``get_metric_for_agent`` and
+    MIPROv2 via ``pattern_metric``/``recommendation_metric``. Two divergent
+    implementations is how the MIPROv2 fallback kept the inverted, gold-blind
+    metric after the GEPA one was fixed.
+
+    Imported lazily: ``src.optimization.gepa`` imports dspy eagerly (~714 MB) and
+    this module is on the Health Score fast path's import chain. Deliberately not
+    routed through ``_get_gepa_symbols``, which returns all-``None`` exactly when
+    GEPA is unavailable — i.e. precisely when the MIPROv2 fallback runs and needs
+    this most. A failure to import here must raise rather than silently restore
+    gold-blind scoring; the runner records it as a failed run.
+    """
+    from src.optimization.gepa.metrics.feedback_learner_metric import (
+        FeedbackLearnerGEPAMetric,
+    )
+
+    return FeedbackLearnerGEPAMetric()
+
+
+@functools.lru_cache(maxsize=1)
 def _get_gepa_symbols() -> Dict[str, Any]:
     """Import (once) and return the GEPA optimizer symbols.
 
@@ -850,76 +873,36 @@ class FeedbackLearnerOptimizer:
             logger.warning("No optimizer available - optimization disabled")
 
     def pattern_metric(self, example, prediction, trace=None) -> float:
+        """Metric for the MIPROv2 pattern phase — delegates to the gold-aware metric.
+
+        #1668 (codex iter-2 HIGH): this used to score the PREDICTION only —
+        per-pattern field presence, a calibrated-confidence bonus, and the COUNT
+        of root causes — without ever reading ``example``. That is the identical
+        inversion the GEPA metric carried: a fabricated set of well-formed
+        patterns scored 0.7 against a gold with no patterns at all, while a
+        correct abstention scored 0.2.
+
+        Fixing only the GEPA metric would have left that live. ``__init__`` falls
+        back from GEPA to MIPROv2 with nothing but a ``logger.warning``, and
+        ``optimizer_type="miprov2"`` is a public argument — so the fallback would
+        train the pattern prompt against an inverted metric and report success,
+        the exact silent-wrongness shape #1668 exists to remove.
+
+        Delegating (rather than porting the fix twice) keeps ONE definition of
+        "a good feedback_learner prediction" for both optimizers. The import is
+        function-local: ``src.optimization.gepa`` pulls dspy eagerly and this
+        module sits on the Health Score fast path's import chain.
         """
-        Metric for pattern detection optimization.
-
-        Good pattern detection should:
-        1. Find patterns that are actionable
-        2. Correctly identify affected agents
-        3. Produce accurate root cause hypotheses
-        """
-        score = 0.0
-
-        # Patterns should be specific
-        if hasattr(prediction, "patterns") and prediction.patterns:
-            for pattern in prediction.patterns:
-                if isinstance(pattern, dict):
-                    # Has required fields
-                    if all(k in pattern for k in ["type", "severity", "affected_agents"]):
-                        score += 0.1
-                    # Has root cause
-                    if pattern.get("root_cause_hypothesis"):
-                        score += 0.05
-
-        # Confidence should be calibrated (penalize over/under confidence)
-        if hasattr(prediction, "confidence"):
-            conf = prediction.confidence
-            if 0.3 <= conf <= 0.9:
-                score += 0.2
-
-        # Root causes should be specific
-        if hasattr(prediction, "root_causes") and prediction.root_causes:
-            score += min(0.3, len(prediction.root_causes) * 0.1)
-
-        return min(1.0, score)
+        return float(_gold_aware_metric()(example, prediction, trace).score)
 
     def recommendation_metric(self, example, prediction, trace=None) -> float:
+        """Metric for the MIPROv2 recommendation phase — see :meth:`pattern_metric`.
+
+        Same inversion, same fix: it scored recommendation count, category
+        membership, implementation-order presence and risk-assessment LENGTH,
+        never comparing to ``example.recommendations``.
         """
-        Metric for recommendation generation optimization.
-
-        Good recommendations should be:
-        1. Actionable (specific, implementable)
-        2. Prioritized correctly
-        3. Have realistic expected impacts
-        """
-        score = 0.0
-
-        # Recommendations should be actionable
-        if hasattr(prediction, "recommendations") and prediction.recommendations:
-            for rec in prediction.recommendations:
-                if isinstance(rec, dict):
-                    # Has category
-                    if rec.get("category") in [
-                        "prompt_update",
-                        "model_retrain",
-                        "data_update",
-                        "config_change",
-                        "new_capability",
-                    ]:
-                        score += 0.1
-                    # Has expected impact
-                    if rec.get("expected_impact"):
-                        score += 0.05
-
-        # Implementation order should be provided
-        if hasattr(prediction, "implementation_order") and prediction.implementation_order:
-            score += 0.2
-
-        # Risk assessment should be thoughtful
-        if hasattr(prediction, "risk_assessment") and len(str(prediction.risk_assessment)) > 50:
-            score += 0.2
-
-        return min(1.0, score)
+        return float(_gold_aware_metric()(example, prediction, trace).score)
 
     def summary_metric(self, example, prediction, trace=None) -> float:
         """Metric for the learning-summary phase (MIPROv2).

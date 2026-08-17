@@ -187,3 +187,51 @@ def test_unparseable_output_is_not_credited_as_an_abstention(metric):
     # a genuinely empty output is still a correct abstention
     assert _pattern_score(metric, [], "[]") == 1.0
     assert _pattern_score(metric, [], "") == 1.0
+
+
+# --- the SAME defect on the MIPROv2 fallback path ----------------------------
+
+
+def test_miprov2_fallback_metrics_are_gold_aware():
+    """codex iter-2 HIGH: fixing only the GEPA metric leaves the inversion live.
+
+    ``FeedbackLearnerOptimizer.__init__`` falls back from GEPA to MIPROv2 with a
+    ``logger.warning`` and nothing else, and ``optimizer_type="miprov2"`` is an
+    explicit public argument. Both paths compiled against ``pattern_metric`` /
+    ``recommendation_metric``, which scored structure, confidence and root-cause
+    COUNT without ever reading ``example`` — the same "reward volume, never
+    compare" shape, on a path that reports success. They now delegate to the one
+    gold-aware metric so there is a single definition of a good prediction.
+    """
+    from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
+
+    opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
+
+    empty_gold = dspy.Example(patterns=[]).with_inputs("feedback_batch")
+    full_gold = dspy.Example(patterns=PATTERNS_FULL).with_inputs("feedback_batch")
+    fabricating = dspy.Prediction(
+        patterns=PATTERNS_FULL, confidence=0.7, root_causes=["a", "b", "c"]
+    )
+    abstaining = dspy.Prediction(patterns=[], confidence=0.5, root_causes=[])
+
+    # RED before the fix: fabricating scored ~0.7 and abstaining ~0.2 — BOTH
+    # against a gold that carries no patterns at all.
+    assert opt.pattern_metric(empty_gold, fabricating) == 0.0
+    assert opt.pattern_metric(empty_gold, abstaining) == 1.0
+    assert opt.pattern_metric(full_gold, fabricating) == 1.0
+    assert opt.pattern_metric(full_gold, abstaining) == 0.0
+
+    empty_rec_gold = dspy.Example(recommendations=[]).with_inputs("detected_patterns")
+    rec_pred = dspy.Prediction(
+        recommendations=RECS_FULL,
+        implementation_order=["prompt_update"],
+        risk_assessment="Low risk. Rollback is possible if the metrics degrade at all.",
+    )
+    assert opt.recommendation_metric(empty_rec_gold, rec_pred) == 0.0
+    assert (
+        opt.recommendation_metric(
+            empty_rec_gold,
+            dspy.Prediction(recommendations=[], implementation_order=[], risk_assessment=""),
+        )
+        == 1.0
+    )

@@ -127,7 +127,20 @@ def test_gepa_compile_receives_valset():
 
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
 def test_summary_metric_scores_summary_outputs_not_recommendation_fields():
-    """MIPROv2 summary phase must use a summary-aware metric, not recommendation_metric."""
+    """MIPROv2 summary phase must use a summary-aware metric, not recommendation_metric.
+
+    #1668 narrowed what this test can assert. It used to close with
+    ``recommendation_metric(None, summary_pred) == 0.0`` — "signal-deaf, so you
+    must wire summary_metric". ``recommendation_metric`` now delegates to the one
+    gold-aware ``FeedbackLearnerGEPAMetric``, which dispatches on the
+    PREDICTION'S OWN output fields, so it scores a summary prediction as a
+    summary instead of returning a misleading 0.0. The guarantee that the summary
+    phase gets summary scoring therefore moved from "the other metric is deaf" to
+    the explicit phase->metric mapping in ``_optimize_with_miprov2``, which is
+    what is asserted below.
+    """
+    import inspect as _insp
+
     import dspy
 
     opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
@@ -139,8 +152,10 @@ def test_summary_metric_scores_summary_outputs_not_recommendation_fields():
     empty = dspy.Prediction(summary="", key_insights=[], next_steps=[])
     assert opt.summary_metric(None, good) >= 0.9
     assert opt.summary_metric(None, empty) == 0.0
-    # recommendation_metric would be signal-deaf for a summary prediction.
-    assert opt.recommendation_metric(None, good) == 0.0
+
+    src = _insp.getsource(FeedbackLearnerOptimizer._optimize_with_miprov2)
+    assert '"summary": self.summary_metric' in src
+    assert '"recommendation": self.recommendation_metric' in src
 
 
 @pytest.mark.asyncio

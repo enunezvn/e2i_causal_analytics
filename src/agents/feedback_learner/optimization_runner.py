@@ -117,4 +117,20 @@ async def run_feedback_learner_optimization(
             await record_run_failed(run_id, str(e), traceback.format_exc(), client=client)
             result["phases"][phase] = {"status": "error", "error": str(e)}
 
+    # #1668: a run that compiled NOTHING must not report the same status as one
+    # that did. This is the issue's own acceptance item ("a daily task that has
+    # never run should not look identical to one that ran and found nothing to
+    # do"), and the trainset fix makes the outcome more reachable: a single-class
+    # signal pool is now an explicit skip rather than a silently biased trainset.
+    # Leaving it as "completed" would move the silent inertness from the beat
+    # down into here. The only consumer is the beat, which embeds this dict as
+    # `optimization`; nothing branches on the string.
+    if not any(p.get("status") == "optimized" for p in result["phases"].values()):
+        result["status"] = "completed_no_modules"
+        logger.info(
+            "Optimization run compiled no modules across phases %s: %s",
+            list(phases),
+            {k: v.get("status") for k, v in result["phases"].items()},
+        )
+
     return result
