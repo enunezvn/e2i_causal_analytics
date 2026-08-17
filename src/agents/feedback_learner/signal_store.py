@@ -140,10 +140,10 @@ def optimizer_min_trainset_examples() -> int:
     ``MIN_TRAINSET_EXAMPLES_ENV`` above — so in production this returns the
     in-code default. It is honoured for host-side runs.
 
-    Clamped up to ``MIN_FEASIBLE_TRAINSET_EXAMPLES``: below that floor both
-    optimizer paths reject the trainset before any rollout, so a gate that
-    opened there would authorise a run that provably compiles nothing while
-    still stamping ``last_optimization``. Clamping UP is the fail-safe direction
+    Clamped up to ``MIN_FEASIBLE_TRAINSET_EXAMPLES``: below that floor the
+    production (GEPA) path rejects the trainset before any rollout, so a gate
+    that opened there would authorise a run that compiles nothing while still
+    stamping ``last_optimization``. Clamping UP is the fail-safe direction
     — it can only make the gate stricter than the operator asked for, never
     looser, and it is logged.
 
@@ -176,7 +176,7 @@ def optimizer_min_trainset_examples() -> int:
         return default
     if value < MIN_FEASIBLE_TRAINSET_EXAMPLES:
         logger.warning(
-            "%s=%d is below the %d-example floor both optimizer paths enforce; "
+            "%s=%d is below the %d-example floor the production optimizer path enforces; "
             "clamping to %d so the gate cannot open on a trainset that compiles nothing.",
             MIN_TRAINSET_EXAMPLES_ENV,
             value,

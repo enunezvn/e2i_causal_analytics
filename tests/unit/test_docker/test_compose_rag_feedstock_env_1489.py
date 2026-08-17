@@ -71,11 +71,13 @@ def _declared_leg_env_vars() -> list[str]:
     Known limits, stated so nobody reads this as broader than it is: it sees
     only names bound to an UPPERCASE module constant and prefixed ``DSPY_RAG_``.
     Env names read as string literals are invisible to it —
-    ``dspy_optimization_tasks`` has three (``DSPY_MIN_TRAINSET_EXAMPLES``,
-    ``DSPY_LEARN_FOCUS_AGENTS``, ``DSPY_LEARN_WINDOW_HOURS``), and all three are
+    the feedback-learner legs have three — ``DSPY_LEARN_FOCUS_AGENTS`` and
+    ``DSPY_LEARN_WINDOW_HOURS`` in ``dspy_optimization_tasks``, and the optimizer
+    gate's ``DSPY_MIN_TRAINSET_EXAMPLES`` in
+    ``agents/feedback_learner/signal_store`` — and all three are
     ALSO absent from x-common-env. That is the same silent-no-op class, but it
     belongs to the feedback-learner legs rather than the RAG leg #1489 deferral
-    2 names, and forwarding ``DSPY_MIN_SIGNALS`` would change when the nightly
+    2 names, and forwarding the gate's threshold would change when the nightly
     optimization triggers — a behavioral change that needs its own decision, not
     a drive-by. Reported, deliberately not fixed here.
     """

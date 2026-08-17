@@ -698,19 +698,21 @@ def __getattr__(name: str) -> Any:
 # this cut falls — see :func:`gepa_split_sizes`.
 GEPA_TRAIN_FRACTION = 0.8
 
-# The smallest trainset either optimizer path will accept. Below it a triggered
-# run provably compiles nothing while still spending the beat's state write.
+# The smallest trainset the PRODUCTION optimizer path (GEPA) will accept — the
+# LARGER of the two paths' floors, so a trainset below it compiles nothing on
+# the path that actually runs, while still spending the beat's state write. The
+# MIPROv2 fallback would accept less; taking the max is what makes the number
+# safe for whichever path `__init__` selects.
 #
 # Measured against the installed dspy 3.1.0 (2026-08-17):
-#   GEPA   ``_optimize_with_gepa`` splits ``trainset = examples[: int(0.8*n)]``
-#          and returns None when ``len(trainset) < 5`` -> n >= 7; the builder
-#          emits balanced PAIRS, so the smallest reachable n is 8.
+#   GEPA   ``_optimize_with_gepa`` splits via ``gepa_split_sizes`` and returns
+#          None when ``len(trainset) < 5`` -> n >= 7; the builder emits balanced
+#          PAIRS, so the smallest reachable n is 8.  <- BINDING
 #   MIPRO  ``_optimize_with_miprov2`` rejects ``len(examples) < 5`` -> n >= 5,
 #          even -> 6. dspy's own floor is lower still (2, measured by driving
 #          the real validation to the first LM-touching step): post-#1675
 #          ``minibatch=False`` removed the ``minibatch_size=35 > int(0.8*n)``
 #          gate that had made every trainset below 44 impossible.
-# The binding one is GEPA's, which is the production path.
 MIN_FEASIBLE_TRAINSET_EXAMPLES = 8
 
 # The trainset each GEPA budget preset needs before its own candidate search can
@@ -771,8 +773,9 @@ class GEPAOptimizationTrigger:
     # The derivation band, measured 2026-08-17, for the record — no criterion
     # lands on 40:
     #
-    #   8    feasibility: below it neither optimizer path can compile
-    #        (MIN_FEASIBLE_TRAINSET_EXAMPLES)
+    #   8    feasibility: below it the production (GEPA) path cannot compile
+    #        (MIN_FEASIBLE_TRAINSET_EXAMPLES; the MIPROv2 fallback's own floor
+    #        is 6, and the max of the two is what makes the number safe)
     #   22   the lightest preset's candidate-ranking floor, which is the budget
     #        production actually spends (``run_feedback_learner_optimization``
     #        defaults to "light") — BUDGET_MIN_TRAINSET_EXAMPLES["light"]
@@ -851,7 +854,7 @@ class GEPAOptimizationTrigger:
         # changed twice; in the new unit that reads "half a trainset", which is
         # not a quantity anything measures. Urgency can justify accepting a
         # thinner statistical margin — it cannot create data, and below
-        # MIN_FEASIBLE_TRAINSET_EXAMPLES both optimizer paths reject the
+        # MIN_FEASIBLE_TRAINSET_EXAMPLES the production (GEPA) path rejects the
         # trainset outright, so firing there buys a state write and no compile.
         if has_critical_patterns and self.critical_pattern_triggers:
             if trainset_examples >= MIN_FEASIBLE_TRAINSET_EXAMPLES:
