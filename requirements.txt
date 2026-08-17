@@ -315,7 +315,7 @@ sortedcontainers==2.4.0
 sparse==0.17.0
 sse-starlette==3.4.3
 SQLAlchemy==2.0.45
-sqlparse==0.5.5
+sqlparse==0.6.0
 starlette==0.50.0
 statsmodels==0.14.6
 storage3==2.27.0
