@@ -50,23 +50,58 @@ def test_to_dict_carries_feedback_batch_and_patterns():
     assert d["output"].get("learning_summary")
 
 
+def _healthy_signal() -> FeedbackLearnerTrainingSignal:
+    """A cycle that processed real feedback and correctly found no patterns.
+
+    #1668: this is the class the old builder discarded (it scores near 0, and
+    the builder re-applied a ``reward < 0.5`` floor of its own), which is why the
+    trainset was 100% positive and could only teach over-reporting.
+    """
+    sig = _rich_signal()
+    sig.patterns_detected = 0
+    sig.patterns = []
+    sig.recommendations = []
+    sig.recommendations_generated = 0
+    return sig
+
+
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
-def test_conversion_non_empty_for_pattern_recommendation_summary():
+def test_conversion_is_balanced_and_content_bearing():
+    """#1668 replaces the old ``8 rich signals -> 8 examples`` contract.
+
+    That assertion encoded the defect: 8 identical POSITIVE cycles produced 8
+    positive examples and the suite called it healthy. The builder now balances
+    the label classes, so a mixed pool yields ``2 * min(pos, neg)`` interleaved.
+    """
     opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
-    signals = [_rich_signal().to_dict() for _ in range(8)]
+    signals = [_rich_signal().to_dict() for _ in range(8)] + [
+        _healthy_signal().to_dict() for _ in range(8)
+    ]
 
     pat = opt._signals_to_examples(signals, "pattern")
     rec = opt._signals_to_examples(signals, "recommendation")
     summ = opt._signals_to_examples(signals, "summary")
     upd = opt._signals_to_examples(signals, "update")
 
-    assert len(pat) == 8
+    assert len(pat) == 16
+    assert sum(1 for e in pat if e.patterns) == 8
+    assert sum(1 for e in pat if not e.patterns) == 8
     assert json.loads(pat[0].feedback_batch)  # non-empty input now
-    assert len(rec) == 8
-    assert json.loads(rec[0].detected_patterns)
-    assert len(summ) == 8
+    # recommendation requires a non-empty detected_patterns INPUT, so only the
+    # 8 pattern-bearing cycles are candidates — and they are single-class.
+    assert rec == []
+    assert json.loads(pat[0].feedback_batch)
+    # summary is intentionally skipped (#1668: the label is an f-string template)
+    assert summ == []
     # update is intentionally skipped (no paired current_knowledge stored)
     assert upd == []
+
+
+@pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
+def test_single_class_pool_yields_no_examples():
+    """8 positives with no negatives is not a trainset — it is the #1668 bias."""
+    opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
+    assert opt._signals_to_examples([_rich_signal().to_dict() for _ in range(8)], "pattern") == []
 
 
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
@@ -92,7 +127,20 @@ def test_gepa_compile_receives_valset():
 
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
 def test_summary_metric_scores_summary_outputs_not_recommendation_fields():
-    """MIPROv2 summary phase must use a summary-aware metric, not recommendation_metric."""
+    """MIPROv2 summary phase must use a summary-aware metric, not recommendation_metric.
+
+    #1668 narrowed what this test can assert. It used to close with
+    ``recommendation_metric(None, summary_pred) == 0.0`` — "signal-deaf, so you
+    must wire summary_metric". ``recommendation_metric`` now delegates to the one
+    gold-aware ``FeedbackLearnerGEPAMetric``, which dispatches on the
+    PREDICTION'S OWN output fields, so it scores a summary prediction as a
+    summary instead of returning a misleading 0.0. The guarantee that the summary
+    phase gets summary scoring therefore moved from "the other metric is deaf" to
+    the explicit phase->metric mapping in ``_optimize_with_miprov2``, which is
+    what is asserted below.
+    """
+    import inspect as _insp
+
     import dspy
 
     opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
@@ -104,8 +152,10 @@ def test_summary_metric_scores_summary_outputs_not_recommendation_fields():
     empty = dspy.Prediction(summary="", key_insights=[], next_steps=[])
     assert opt.summary_metric(None, good) >= 0.9
     assert opt.summary_metric(None, empty) == 0.0
-    # recommendation_metric would be signal-deaf for a summary prediction.
-    assert opt.recommendation_metric(None, good) == 0.0
+
+    src = _insp.getsource(FeedbackLearnerOptimizer._optimize_with_miprov2)
+    assert '"summary": self.summary_metric' in src
+    assert '"recommendation": self.recommendation_metric' in src
 
 
 @pytest.mark.asyncio

@@ -21,35 +21,56 @@ pytestmark = pytest.mark.skipif(
 
 
 def _rows(n: int = 8):
+    """n/2 defect cycles + n/2 healthy cycles.
+
+    #1668: the seed used to be n identical POSITIVE cycles. The trainset builder
+    now refuses a single-class pool (an all-positive trainset is exactly the
+    sampling bias that made the loop teach over-reporting), so a fixture that
+    seeds only positives would produce zero examples and this test would assert
+    against a phase that never ran.
+    """
     from src.agents.feedback_learner.dspy_integration import FeedbackLearnerTrainingSignal
 
-    sig = FeedbackLearnerTrainingSignal(
-        batch_id="opt",
-        feedback_count=10,
-        time_range_start="t0",
-        time_range_end="t1",
-        patterns_detected=2,
-        recommendations_generated=1,
-        updates_applied=0,
-        recommendation_actionability=0.8,
-        update_effectiveness=0.9,
-        total_latency_ms=1000.0,
-        feedback_batch=[{"feedback_id": "f1", "feedback_type": "rating", "user_feedback": 2}],
-        patterns=[
-            {
-                "pattern_type": "accuracy_issue",
-                "severity": "high",
-                "affected_agents": ["causal_impact"],
-                "root_cause_hypothesis": "gap",
-            }
-        ],
-        recommendations=[{"category": "prompt_update", "expected_impact": "higher accuracy"}],
-        learning_summary="accuracy issue found",
-    )
+    feedback = [{"feedback_id": "f1", "feedback_type": "rating", "user_feedback": 2}]
+
+    def _signal(tag: str, *, patterns, recommendations) -> FeedbackLearnerTrainingSignal:
+        return FeedbackLearnerTrainingSignal(
+            batch_id=tag,
+            feedback_count=10,
+            time_range_start="t0",
+            time_range_end="t1",
+            patterns_detected=len(patterns),
+            recommendations_generated=len(recommendations),
+            updates_applied=0,
+            recommendation_actionability=0.8 if recommendations else 0.0,
+            update_effectiveness=0.9,
+            total_latency_ms=1000.0,
+            feedback_batch=list(feedback),
+            patterns=list(patterns),
+            recommendations=list(recommendations),
+            learning_summary="accuracy issue found" if patterns else "no patterns detected",
+        )
+
+    detected = [
+        {
+            "pattern_type": "accuracy_issue",
+            "severity": "high",
+            "affected_agents": ["causal_impact"],
+            "root_cause_hypothesis": "gap",
+        }
+    ]
+    recs = [{"category": "prompt_update", "expected_impact": "higher accuracy"}]
+
     rows = []
-    for _ in range(n):
+    for i in range(n):
+        positive = i % 2 == 0
+        sig = _signal(
+            f"opt{i}",
+            patterns=detected if positive else [],
+            recommendations=recs if positive else [],
+        )
         d = sig.to_dict()
-        d["reward"] = 0.9
+        d["reward"] = 0.9 if positive else 0.1
         rows.append(d)
     return rows
 

@@ -22,10 +22,28 @@ async def run_feedback_learner_optimization(
     phases: Sequence[str] = DEFAULT_PHASES,
     budget: str = "light",
     client: Optional[Any] = None,
-    min_reward: float = 0.5,
+    min_reward: float = 0.0,
     optimizer_type: str = "gepa",
 ) -> Dict[str, Any]:
-    """Run optimization across phases and persist artifacts. Never raises."""
+    """Run optimization across phases and persist artifacts. Never raises.
+
+    ``min_reward`` selects the CANDIDATE POOL read from the signal store; it is
+    not the training gate. #1668 changed its default from ``0.5`` to ``0.0``:
+    for the pattern phase the training label IS the patterns a cycle found, so a
+    reward floor selects on *having found patterns* and hands the optimizer a
+    100%-positive trainset (measured: 8 of 220 real signals, every one with a
+    non-empty label). ``FeedbackLearnerOptimizer._signals_to_examples`` now does
+    the selecting — it requires each phase's INPUT to be non-empty and balances
+    the two label classes — so restricting the pool by reward here can only
+    starve it of the negative class.
+
+    This does NOT open the optimizer's trigger. The daily beat still gates on
+    ``decide_optimizer_trigger`` over ``reward >= OPTIMIZER_MIN_REWARD`` signals
+    (``src/tasks/dspy_optimization_tasks.py``); nothing below runs until that
+    fires. ``MIN_SIGNALS`` here is only a cheap pre-check on raw rows — the
+    binding guard is ``len(trainset) < 5`` inside ``_optimize_with_gepa``, over
+    the examples actually built.
+    """
     from src.optimization.dspy_lm import ensure_dspy_configured
     from src.optimization.gepa import save_optimized_module
 
@@ -98,5 +116,21 @@ async def run_feedback_learner_optimization(
             logger.error("Optimization failed for phase %s: %s", phase, e)
             await record_run_failed(run_id, str(e), traceback.format_exc(), client=client)
             result["phases"][phase] = {"status": "error", "error": str(e)}
+
+    # #1668: a run that compiled NOTHING must not report the same status as one
+    # that did. This is the issue's own acceptance item ("a daily task that has
+    # never run should not look identical to one that ran and found nothing to
+    # do"), and the trainset fix makes the outcome more reachable: a single-class
+    # signal pool is now an explicit skip rather than a silently biased trainset.
+    # Leaving it as "completed" would move the silent inertness from the beat
+    # down into here. The only consumer is the beat, which embeds this dict as
+    # `optimization`; nothing branches on the string.
+    if not any(p.get("status") == "optimized" for p in result["phases"].values()):
+        result["status"] = "completed_no_modules"
+        logger.info(
+            "Optimization run compiled no modules across phases %s: %s",
+            list(phases),
+            {k: v.get("status") for k, v in result["phases"].items()},
+        )
 
     return result

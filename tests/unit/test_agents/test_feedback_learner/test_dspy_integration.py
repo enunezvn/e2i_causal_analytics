@@ -286,66 +286,84 @@ class TestFeedbackLearnerOptimizer:
             assert optimizer.optimizer_type is None
 
     def test_pattern_metric(self):
-        """Test pattern detection metric."""
+        """Pattern metric scores the prediction AGAINST THE GOLD (#1668).
+
+        These three cases used to pass ``example=None`` and assert only that the
+        score was positive — an assertion the pre-#1668 metric satisfied by
+        never looking at the gold at all. The gold is now the point, so it has
+        to be supplied.
+        """
+        import dspy
+
         from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
 
         optimizer = FeedbackLearnerOptimizer()
 
-        # Create mock prediction with good patterns
-        class MockPrediction:
-            patterns = [
-                {"type": "accuracy_drop", "severity": "high", "affected_agents": ["causal_impact"]},
-                {
-                    "type": "latency_spike",
-                    "severity": "medium",
-                    "affected_agents": ["orchestrator"],
-                    "root_cause_hypothesis": "LLM timeout",
-                },
-            ]
-            confidence = 0.7
-            root_causes = ["LLM timeout", "Data quality issue"]
+        patterns = [
+            {"type": "accuracy_drop", "severity": "high", "affected_agents": ["causal_impact"]},
+            {
+                "type": "latency_spike",
+                "severity": "medium",
+                "affected_agents": ["orchestrator"],
+                "root_cause_hypothesis": "LLM timeout",
+            },
+        ]
+        gold = dspy.Example(patterns=patterns).with_inputs("feedback_batch")
+        pred = dspy.Prediction(
+            patterns=patterns, confidence=0.7, root_causes=["LLM timeout", "Data quality issue"]
+        )
 
-        score = optimizer.pattern_metric(None, MockPrediction())
+        assert optimizer.pattern_metric(gold, pred) > 0
 
-        # Should have positive score
-        assert score > 0
+        # ...and the same prediction against a gold with NO patterns is a false
+        # positive, which must NOT be rewarded.
+        empty_gold = dspy.Example(patterns=[]).with_inputs("feedback_batch")
+        assert optimizer.pattern_metric(empty_gold, pred) == 0.0
 
     def test_pattern_metric_empty(self):
-        """Test pattern metric with empty prediction."""
+        """An empty prediction is graded by what the gold says, not by being empty."""
+        import dspy
+
         from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
 
         optimizer = FeedbackLearnerOptimizer()
+        pred = dspy.Prediction(patterns=[], confidence=0.5, root_causes=[])
 
-        class MockPrediction:
-            patterns = []
-            confidence = 0.5
-            root_causes = []
-
-        score = optimizer.pattern_metric(None, MockPrediction())
-
-        # Should handle empty patterns gracefully
-        assert score >= 0
+        # correct abstention on a healthy batch
+        assert optimizer.pattern_metric(dspy.Example(patterns=[]).with_inputs(), pred) == 1.0
+        # missed detection
+        assert (
+            optimizer.pattern_metric(
+                dspy.Example(
+                    patterns=[{"type": "accuracy_drop", "severity": "high"}]
+                ).with_inputs(),
+                pred,
+            )
+            == 0.0
+        )
 
     def test_recommendation_metric(self):
-        """Test recommendation generation metric."""
+        """Recommendation metric is gold-aware too (#1668) — same shape."""
+        import dspy
+
         from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
 
         optimizer = FeedbackLearnerOptimizer()
 
-        class MockPrediction:
-            recommendations = [
-                {"category": "prompt_update", "expected_impact": "10% accuracy improvement"},
-                {"category": "config_change", "expected_impact": "20% latency reduction"},
-            ]
-            implementation_order = ["prompt_update", "config_change"]
-            risk_assessment = (
-                "Low risk changes. Rollback possible if metrics degrade significantly."
-            )
+        recommendations = [
+            {"category": "prompt_update", "expected_impact": "10% accuracy improvement"},
+            {"category": "config_change", "expected_impact": "20% latency reduction"},
+        ]
+        gold = dspy.Example(recommendations=recommendations).with_inputs("detected_patterns")
+        pred = dspy.Prediction(
+            recommendations=recommendations,
+            implementation_order=["prompt_update", "config_change"],
+            risk_assessment="Low risk changes. Rollback possible if metrics degrade.",
+        )
 
-        score = optimizer.recommendation_metric(None, MockPrediction())
-
-        # Should have positive score
-        assert score > 0
+        assert optimizer.recommendation_metric(gold, pred) > 0
+        empty_gold = dspy.Example(recommendations=[]).with_inputs("detected_patterns")
+        assert optimizer.recommendation_metric(empty_gold, pred) == 0.0
 
     def test_signals_to_examples_empty(self):
         """Test converting empty signals to examples."""

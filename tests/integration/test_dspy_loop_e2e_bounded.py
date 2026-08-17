@@ -101,8 +101,12 @@ async def test_bounded_loop_e2e(capsys):
         _recs = [
             {"category": "data", "text": "Add a payer-mix covariate to the attribution model."}
         ]
-        # >=10 so the pattern trainset (80% split) clears GEPA's >=5 guard.
-        for i in range(10):
+        # #1668: seed BOTH label classes. The builder balances at
+        # k = min(n_pos, n_neg) and refuses a single-class pool, so 10 identical
+        # positive cycles (the old seed) now yield ZERO examples. 10 + 10 gives
+        # 20 interleaved examples; the 80% split leaves 16, clearing GEPA's >=5.
+        for i in range(20):
+            positive = i % 2 == 0
             b = f"{_LEARNER_BATCH_PREFIX}{i}"
             rec = {
                 "source_agent": "feedback_learner",
@@ -113,12 +117,18 @@ async def test_bounded_loop_e2e(capsys):
                     "historical_patterns": [],
                 },
                 "output": {
-                    "patterns": _patterns,
-                    "recommendations": _recs,
-                    "learning_summary": "Recurring payer-mix attribution gap on causal_impact.",
+                    # A healthy batch correctly yields no patterns — the class the
+                    # pre-#1668 trainset could never contain.
+                    "patterns": _patterns if positive else [],
+                    "recommendations": _recs if positive else [],
+                    "learning_summary": (
+                        "Recurring payer-mix attribution gap on causal_impact."
+                        if positive
+                        else "No systematic patterns detected in this batch."
+                    ),
                     "applied_updates": [],
                 },
-                "reward": 0.8,
+                "reward": 0.8 if positive else 0.1,
                 "is_training_example": True,
             }
             client.table("dspy_agent_training_signals").insert(rec).execute()
@@ -159,9 +169,18 @@ async def test_bounded_loop_e2e(capsys):
 
         opt = FeedbackLearnerOptimizer(optimizer_type="gepa")
         pattern_examples = opt._signals_to_examples(mine, "pattern")  # type: ignore[attr-defined]
-        print(f"[A] pattern examples built: {len(pattern_examples)}")
+        _pos = sum(1 for e in pattern_examples if e.patterns)
+        _neg = sum(1 for e in pattern_examples if not e.patterns)
+        print(f"[A] pattern examples built: {len(pattern_examples)} ({_pos} pos / {_neg} neg)")
         assert len(pattern_examples) >= 1, (
             "signal->example conversion is degenerate (empty trainset)"
+        )
+        # #1668, against a real DB round-trip: the trainset must carry BOTH
+        # classes. An all-positive trainset is what taught over-reporting, and
+        # it is exactly what `min_reward=0.0` above was meant to prevent — the
+        # parameter was inoperative until the builder stopped re-filtering.
+        assert _pos > 0 and _neg > 0, (
+            f"single-class pattern trainset ({_pos} pos / {_neg} neg) — #1668 regression"
         )
 
         provider = signal_example_provider("experiment_monitor", client=client)
