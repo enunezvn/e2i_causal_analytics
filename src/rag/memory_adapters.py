@@ -11,6 +11,7 @@ The adapters translate between:
 """
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -850,7 +851,25 @@ class SignalCollectorAdapter:
                 .limit(limit)
             )
 
+            # The client may be SYNC or ASYNC and both reach here (#1681).
+            #
+            # `run_in_executor` is for the sync client: its `execute()` blocks on
+            # HTTP, and calling it on the loop thread would stall every other
+            # request. Keep that offload.
+            #
+            # An async client's `execute()` does NOT block — it returns a
+            # coroutine, and the executor hands that coroutine straight back
+            # unawaited. `response.data` then raised `'coroutine' object has no
+            # attribute 'data'`, which is what took the operator-facing optimizer
+            # gate on /api/feedback/health to all-nulls: the route builds its
+            # client with `get_async_supabase_client()`.
+            #
+            # Awaiting here is safe: constructing a coroutine in the worker
+            # thread does not run it or bind it to a loop, so it is awaited on
+            # THIS loop, where the client's httpx session already lives.
             response = await asyncio.get_event_loop().run_in_executor(None, lambda: query.execute())
+            if inspect.isawaitable(response):
+                response = await response
 
             return response.data if response.data else []
 
