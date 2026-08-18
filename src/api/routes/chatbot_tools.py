@@ -819,7 +819,19 @@ async def _query_triggers(
     since: datetime,
     limit: int,
 ) -> Dict[str, Any]:
-    """Query triggers/alerts from triggers table."""
+    """Query triggers/alerts from triggers table.
+
+    #1700 (sibling of #1694): the triggers table has no brand or region
+    columns and this query applies no time filter, so the accepted
+    ``brand``/``region``/``since`` parameters are NOT filters. The payload
+    says so explicitly (``brand_applied``/``region_applied``/
+    ``time_period_applied: False``, plus a ``scope_note`` when a brand or
+    region was requested) — in the 2026-08-18 A.9-seed run the synthesis
+    layer attributed the conversation's region to region-less trigger rows
+    ("two unactioned ... triggers in the region") because the payload gave
+    it nothing honest to attribute scope to. Mirrors #1695's fields on
+    ``causal_analysis_tool``.
+    """
     try:
         client = await get_async_supabase_client()
         repo = TriggerRepository(client)
@@ -830,12 +842,30 @@ async def _query_triggers(
 
         triggers = await repo.get_many(filters=filters, limit=limit)
 
-        return {
+        response: Dict[str, Any] = {
             "success": True,
             "query_type": "triggers",
             "count": len(triggers),
             "data": triggers,
+            # #1700: no filter is applied above — without these fields the
+            # synthesis layer reads the request's brand/region/time context
+            # as applied filters and fabricates scope in prose.
+            "brand_applied": False,
+            "region_applied": False,
+            "time_period_applied": False,
         }
+        ignored = [
+            f"{name} {value!r}" for name, value in (("brand", brand), ("region", region)) if value
+        ]
+        if ignored:
+            response["scope_note"] = (
+                "The triggers table has no brand or region columns and this "
+                f"query applies no time filter — {' and '.join(ignored)} did "
+                "NOT filter these results; they are platform-wide across all "
+                "brands and regions. Do not present them as specific to any "
+                "brand or region."
+            )
+        return response
     except Exception as e:
         logger.error(f"Triggers query failed: {e}")
         return {"success": False, "error": str(e), "query_type": "triggers"}
