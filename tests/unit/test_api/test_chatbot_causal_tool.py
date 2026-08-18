@@ -160,3 +160,47 @@ def test_outcome_match_tokens_normalizes_free_text():
     # Short/empty tokens drop; morphological variants dedupe to one prefix.
     assert outcome_match_tokens("a b") == []
     assert outcome_match_tokens("Persistence & persistent") == ["persis"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_region_echo_discloses_it_was_not_applied_1694():
+    """#1694: the registry has no region dimension. Measured live, the same
+    path_ids come back for region='Northeast' and region=null, yet the echoed
+    ``region`` field read as an applied filter and the synthesis layer
+    fabricated regional scoping in 5 eval turns. The echo stays (context), but
+    the payload must say it was never a filter — and the repo call must not
+    grow a region kwarg it cannot honor."""
+    repo = _mock_repo([SAMPLE_PATH])
+    with (
+        patch("src.api.routes.chatbot_tools.get_async_supabase_client", new=AsyncMock()),
+        patch("src.api.routes.chatbot_tools.CausalPathRepository", return_value=repo),
+        patch("src.api.routes.chatbot_tools.kpi_include_synthetic", return_value=True),
+    ):
+        result = await causal_analysis_tool.ainvoke(
+            {"kpi_name": "treatment initiation", "brand": "Fabhalta", "region": "Northeast"}
+        )
+    assert result["success"] is True
+    assert result["region"] == "Northeast"
+    assert result["region_applied"] is False
+    assert result["time_period_applied"] is False
+    assert "no region dimension" in result["scope_note"]
+    assert "Northeast" in result["scope_note"]
+    assert "region" not in repo.search_paths_for_outcome.call_args.kwargs
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_no_region_requested_keeps_flags_but_no_scope_note_1694():
+    repo = _mock_repo([SAMPLE_PATH])
+    with (
+        patch("src.api.routes.chatbot_tools.get_async_supabase_client", new=AsyncMock()),
+        patch("src.api.routes.chatbot_tools.CausalPathRepository", return_value=repo),
+        patch("src.api.routes.chatbot_tools.kpi_include_synthetic", return_value=True),
+    ):
+        result = await causal_analysis_tool.ainvoke(
+            {"kpi_name": "treatment initiation", "brand": "Fabhalta"}
+        )
+    assert result["region_applied"] is False
+    assert result["time_period_applied"] is False
+    assert "scope_note" not in result
