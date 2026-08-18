@@ -1,0 +1,240 @@
+{
+  "grader": "n1n2",
+  "chembl_outage_confound": "ChEMBL was UP this run and no turn in sessions 1-2 touched it: zero clinical_context_tool / ChEMBL / static_fallback calls across all 14 turns in either run (2.1 used orchestrator_tool in both), so the morning outage never confounded this subset and its recovery produces no residual effect here.",
+  "questions": [
+    {
+      "question_id": "1.1",
+      "grade": "PASS",
+      "grounded_values": [
+        "TRx = 10,273 -> on_tool_end kpi_calculate_tool value: 10273.0",
+        "most recent 30 days / data through 2026-08-17 -> payload reporting_window + data_through: 2026-08-17",
+        "window is engine default -> payload window_status: default, window_requested: null",
+        "computed from treatment_events, not business_metrics -> payload measure_basis.substrate ['treatment_events'] + its verbatim note"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Identical retrieved value and identical default-window semantics to the morning run (10,273 through 2026-08-17). Two small content losses vs morning: the answer no longer cites the KPI id (payload kpi_id WS3-BI-005, morning cited it) and no longer labels the figure synthetic (payload data_source: 'synthetic', morning said 'synthetic data source'). Neither is a wrong claim, so the grade holds, but this is the first instance of the subset-wide synthetic-label omission recorded in overall_notes."
+    },
+    {
+      "question_id": "1.2",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "TRx Q4 2025 = 872 -> payload value: 872.0",
+        "window 2025-10-01..2026-01-01 applied -> payload window_applied + window_status: applied",
+        "trailing-30-day slice 270 -> payload window_coverage.trailing_30d_value: 270.0",
+        "30.96% of quarter -> payload trailing_30d_share: 0.3096",
+        "92-day quarter -> payload window_days: 92",
+        "'the 30.61% share you'd expect if volume were spread evenly' -> NOT FOUND. Payload uniform_expected_share is 0.3261 (32.61%); 30/92 = 32.61%. 0.3061/30.61 appears nowhere in this turn's payloads (it is 1.3's TRx Share value, retrieved one turn later)",
+        "cross-turn fence against 1.1's 10,273 -> 1.1 payload value: 10273.0"
+      ],
+      "vs_baseline": "worse",
+      "vs_baseline_reason": "GRADE CHANGE PASS -> PARTIAL. The morning run cited the uniform-expected share correctly as 32.61%; this run states 30.61%, a transposed digit that is in no payload. It is not cosmetic: against the true 32.61% the observed 30.96% sits BELOW uniform pace (mild late-quarter softness), whereas the answer's stated comparison (30.96 vs 30.61) reads as slightly ABOVE, and it concludes 'no major skew'. Everything else reproduces to the digit (872 / 270 / 30.96% / 92 days), confirming the KPI engine is deterministic on an explicit window. The morning flag that this 'trends' question still OFFERS a chart rather than rendering one is unchanged - it again ends with 'I can render it as a chart'."
+    },
+    {
+      "question_id": "1.3",
+      "grade": "PASS",
+      "grounded_values": [
+        "TRx Share 30.6% (0.3061) -> payload value: 0.306062863101445",
+        "kpi_name TRx Share -> payload kpi_id WS3-BI-008",
+        "trailing-30-day default window through 2026-08-17 -> payload window_status: default, data_through: 2026-08-17",
+        "not vs external competitors; Xolair/Dupixent absent -> payload semantic_note verbatim",
+        "remaining ~69.4% = Fabhalta + Remibrutinib -> payload semantic_note names the tracked portfolio as Fabhalta + Kisqali + Remibrutinib",
+        "'tracked Novartis portfolio' -> NOT FOUND (payload never says Novartis; real-world-true label, carries no number)"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Same value, same default window, same scope correction (portfolio share, not market share) as morning, and the residual is again named rather than mystified. Drops the KPI id WS3-BI-008 that morning cited (same omission pattern as 1.1). Morning's flag that the turn ends on an offer rather than pulling the other two brands' shares persists in a different form ('I can pull Kisqali's label/competitive-landscape context ... or break this portfolio share down by severity tier or region')."
+    },
+    {
+      "question_id": "1.4",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "TRx Northeast Q1 2025 = 142 -> payload value: 142.0, region_status: applied",
+        "90-day window 2025-01-01..2025-04-01 -> payload window_applied + window_days: 90",
+        "trailing-30-day 52, 36.6% vs 33.3% uniform -> payload trailing_30d_value 52.0, trailing_30d_share 0.3662, uniform_expected_share 0.3333",
+        "persistent_180d +0.285 / +$127,512 / 0.892 -> payload effect_size 0.285, business_impact_estimate 127512.04, confidence 0.892",
+        "formulary_status +0.223 / +$100,658 / 0.805 -> payload 0.223 / 100657.87 / 0.805",
+        "rep_detailing_frequency +0.166 / +$38,244 / 0.796 -> payload 0.166 / 38244.12 / 0.796",
+        "hcp_coverage +0.090 / +$29,541 / 0.899 -> payload 0.09 / 29540.62 / 0.899",
+        "copay_support_program +0.088 / +$17,025 / 0.794 -> payload 0.088 / 17024.65 / 0.794",
+        "competitor_activity -0.073 / -$24,218 / 0.793 -> payload -0.073 / -24218.4 / 0.793",
+        "churn_prevention trigger 2026-07-05, 'Competitor activity detected in territory', root cause competitor_activity, confidence 0.76 -> e2i_data_query_tool row scvtrg_31402 (brand_id Kisqali), causal_chain.confidence 0.76",
+        "'returned one Kisqali-tagged, Northeast-relevant trigger' -> PARTLY NOT FOUND: the payload carries THREE Kisqali-tagged rows (scvtrg_31402, scvtrg_31407, scvtrg_31408) and NO region column on any row, so 'Northeast-relevant' is not a payload property",
+        "causal drivers labelled 'Northeast' -> payload echoes region: 'Northeast' but returns the same six path_ids as the region=null pull in 1.5 (see overall_notes finding 4)"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Grade and grade driver unchanged from morning: the answer still does not confirm the presupposed drop and still OFFERS the prior-period call instead of making it ('Want me to pull Q4 2024 Northeast TRx...'). Better than morning on one axis: this run passed region='Northeast' to causal_analysis_tool, where morning called it brand-only and had to disclaim regional specificity. Worse on three: (a) it read 'Q1' as Q1 2025 where morning read Q1 2026 - with today at 2026-08-18, Q1 2026 is the more natural referent for a Monday-morning brand question, so the values are not comparable across runs (142 vs 126); (b) it says one Kisqali trigger came back when three did, and calls it 'Northeast-relevant' though no row carries a region; (c) 30.4 s breaches the T3 < 25 s budget, where morning's 24.6 s passed. Time_lag_days is dropped from the table again (present in payload: 55/24/78/77/64/70)."
+    },
+    {
+      "question_id": "1.5",
+      "grade": "PASS",
+      "grounded_values": [
+        "rep_detailing_frequency +0.166 -> payload effect_size: 0.166",
+        "+$38,244 -> payload business_impact_estimate: 38244.12",
+        "confidence 0.796 -> payload confidence: 0.796",
+        "validated, 5/5 refutation tests passed -> payload refutation_evidence tests_total 5, tests_passed 5, gate_decision 'proceed'",
+        "time lag 77 days -> payload time_lag_days: 77",
+        "mediated via hcp_engagement -> payload via: ['hcp_engagement']",
+        "ranks 3rd behind persistent_180d +0.285 and formulary_status +0.223, ahead of hcp_coverage +0.090, copay_support_program +0.088, competitor_activity -0.073 -> all six effect_size values exact",
+        "'no region/period filter was applied in this call' -> payload region: null, min_confidence_applied 0.5"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "TARGETED CHECK 2 (PROVENANCE) - DEFECT CLEARED. Morning's 1.5 invoked no tool and described a synthetic causal registry as 'real patient-journey data' with an invented '(DoWhy/EconML-style)' method label. This run invokes causal_analysis_tool, and the answer contains no 'real data' claim, no DoWhy/EconML embellishment, and no provenance upgrade of any kind - it calls the source 'the model's full validated causal-paths registry'. Every number traces exactly to the payload, the 77-day lag and the 5/5 refutation evidence that morning lost are both back, and the answer volunteers the correct scope caveat that this is brand-level, not the Northeast/Q1 cut from 1.4. Residual (subset-wide, not specific to this turn): the payload's data_source 'synthetic' and evidence_is_synthetic: true are not surfaced - an omission, not a misstatement."
+    },
+    {
+      "question_id": "1.6",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "model hcp_adoption_kisqali_goldstd_lr_v1 -> payload model_name (exact)",
+        "scored over 5,000 HCPs -> payload n_scored: 5000",
+        "holdout AUC 0.791 -> payload holdout_auc: 0.7907",
+        "Oncology 56.9% n=1,662 SE 0.006 -> payload 0.5689177 / 1662 / 0.0055467",
+        "Hematology 38.9% n=1,016 SE 0.007 -> payload 0.3890247 / 1016 / 0.0071586",
+        "Rheumatology 34.3% n=257 SE 0.014 -> payload 0.3425747 / 257 / 0.0138005",
+        "Dermatology 30.3% n=854 SE 0.007 -> payload 0.3026281 / 854 / 0.0070222",
+        "Allergy/Immunology 28.8% n=577 SE 0.008 -> payload 0.2884146 / 577 / 0.0083764",
+        "Neurology 26.7% n=156 SE 0.015 -> payload 0.2669463 / 156 / 0.0154467",
+        "Internal Medicine 26.6% n=478 SE 0.009 -> payload 0.2655994 / 478 / 0.0086360",
+        "overall mean 40.4% -> payload overall_mean_propensity: 0.4044584",
+        "'largest n at 1,662, tightest SE' -> payload: 1662 is max n, 0.0055467 is min SE (both true)",
+        "'neurology has the smallest n (156) and widest SE (0.015)' -> payload: 156 is min n, 0.0154467 is max SE (both true)",
+        "'none are flagged low_confidence' -> payload low_confidence: false on all 7 segments"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "TARGETED CHECK 1 (CHAMPION OUTAGE) - FIXED BY ENVIRONMENT. Morning returned nothing here: predict_hcp_segment_likelihood_tool failed closed with 'no production champion registered'. This run serves the real model by name (hcp_adoption_kisqali_goldstd_lr_v1), 5,000 scored HCPs and holdout AUC 0.7907, and the full 7-specialty ranking reproduces the 08-15 pre-outage numbers to the digit (oncology 56.9% n=1,662, overall mean 40.4%, AUC 0.791). Grade is PARTIAL rather than PASS on the same construct objection the 08-15 grader raised, not on any data defect: the question asks which segments show the strongest EFFECT (of rep visits, following 1.5), and adoption propensity is a different quantity. The answer states that limit itself ('this measures a snapshot likelihood-to-prescribe, not a rate of increase ... doesn't confirm which segments are driving growth'), and it resolves the T5 referent correctly by flagging that the ranking is brand-wide, not the Q1/Northeast cut from earlier. No superlative contradicts the table."
+    },
+    {
+      "question_id": "1.7",
+      "grade": "PASS",
+      "grounded_values": [
+        "Northeast engagement 10.0 / target 15.88 / 63.0% -> e2i_data_query_tool row 66cfc705 verbatim",
+        "Midwest 9.13 / 12.72 / 71.8% -> row dc00e66f verbatim",
+        "South 10.0 / 13.81 / 72.4% -> row cef8b326 verbatim (2026-08 row)",
+        "Northeast gap 5.88 points -> derived 15.88 - 10.0, both in payload",
+        "South TRx 238,448.55 vs target 221,514.66, achievement 107.6%, ROI 2.27 -> row dc95981d verbatim",
+        "South market share achievement 91.8% -> row bf3dfb8f verbatim",
+        "West TRx achievement 84.4% -> row cc99a7ee; West market share 89.6% -> row fe111dc2",
+        "'West lacks an engagement score in this pull' -> confirmed: the 10 rows carry hcp_engagement_score for south (2026-08 and 2026-07), northeast and midwest only",
+        "Oncology 56.9% n=1,662 / Hematology 38.9% n=1,016 / overall 40.4% -> carried from 1.6 payload, exact",
+        "rep_detailing_frequency +0.166, +$38,244, 0.796, 77-day lag -> carried from 1.5 payload, exact"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "All figures grounded and the substrate fence morning introduced is retained and correctly applied (business_metrics regional rows explicitly walled off from the treatment_events TRx/causal figures). Morning's one internal-reasoning flag is CLOSED: morning's body argued West was the efficient incremental target (ROI 3.5) while its bottom line recommended Northeast; this run does not make the West-efficiency claim at all and instead recommends Northeast on the achievement gap it actually shows (63.0%, largest gap at 5.88 points), with South named as the hold/trim case on 107.6% TRx achievement. It also declares West's missing engagement score as a data gap rather than assuming parity. No stray currency sign on a prescription-count row (morning's earlier '$17,145' class of error stays gone)."
+    },
+    {
+      "question_id": "2.1",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "orchestrator status 'partial_success' -> payload status: partial_success, has_partial_failure: true",
+        "dispatched gap_analyzer and heterogeneous_optimizer -> payload agents_dispatched: ['heterogeneous_optimizer','gap_analyzer']",
+        "heterogeneous_optimizer failed 'missing_required_inputs' twice -> payload failure_details: two entries, both reason missing_required_inputs",
+        "quoted response 'No significant performance gaps identified across 1 segments that meet the minimum threshold.' -> payload response verbatim",
+        "no cohort counts reported -> correct: payload carries no counts, no segments, no breakdowns",
+        "age >18 and diagnosis-year 2024 not tracked -> NOT IN PAYLOAD (data-model claim, consistent with morning's identical statement)"
+      ],
+      "vs_baseline": "worse",
+      "vs_baseline_reason": "GRADE CHANGE PASS -> PARTIAL, and this is the largest regression in the subset. Morning's 2.1 returned a real cohort profile (2,341 patients, partitioned by severity and by line of therapy, each summing exactly to the headline). This run's orchestrator never reached cohort_profiler: it dispatched heterogeneous_optimizer and gap_analyzer instead, heterogeneous_optimizer failed twice on missing_required_inputs, and the only text returned was a gap-analysis stub. Same container image as morning, so this is orchestrator planning variance, not code. The answer handles it about as well as it can - it quotes the failure verbatim, names both dispatched agents, states plainly that no counts or breakdowns came back, keeps the correct pre-emptive caveat that age and diagnosis-date are not queryable fields, and fabricates nothing - which is why it is PARTIAL and not FAIL. Downstream cost: 2.2/2.3 lose the independent cross-check against 2,341 that made them the subset's cleanest turns in the morning. Latency also regressed to 32.7 s (morning 19.0 s), breaching the T3 < 25 s budget. TARGETED CHECK: #1636 raw-classifier-JSON leak stays FIXED - the answer opens in prose, with no code fence and no routing state anywhere."
+    },
+    {
+      "question_id": "2.2",
+      "grade": "PASS",
+      "grounded_values": [
+        "Low severity 686 -> kpi_calculate_tool payload value: 686.0",
+        "Medium severity 1,238 -> payload value: 1238.0",
+        "High severity 417 -> payload value: 417.0",
+        "Total 2,341 -> derived 686+1238+417, all three in payloads",
+        "~53% / ~18% / ~29% -> derived 1238/2341=52.9%, 417/2341=17.8%, 686/2341=29.3%",
+        "WS3-BI-006 'New Prescriptions' -> payload kpi_id / kpi_name on all three calls",
+        "treatment_events ledger -> payload measure_basis.substrate",
+        "default 30-day window through 2026-08-17 -> payload window_status: default, data_through: 2026-08-17"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "Reproduces morning to the unit on all three buckets (686 / 1,238 / 417 = 2,341) via the same three-call-per-bucket method, and closes the one flag morning's grader left open: the percentage composition (~29%/53%/18%) that morning dropped is restored, so the reader no longer has to compute shares. Correctly does NOT claim reconciliation against 2.1 this time - morning could say 'consistent with the earlier cohort counts' because 2.1 had produced 2,341 independently; here 2.1 returned nothing, and the answer makes no such claim. That restraint is the right call and is what keeps this a clean PASS."
+    },
+    {
+      "question_id": "2.3",
+      "grade": "PASS",
+      "grounded_values": [
+        "Biologic-naive 1,379 -> kpi_calculate_tool payload value: 1379.0",
+        "Biologic-experienced 962 -> payload value: 962.0",
+        "Total 2,341 -> derived 1379+962, both in payloads",
+        "~59% / ~41% -> derived 1379/2341=58.9%, 962/2341=41.1%",
+        "WS3-BI-006 / treatment_events -> payload kpi_id and measure_basis.substrate",
+        "same default window through 2026-08-17 as the severity breakdown -> payload window_status: default, data_through: 2026-08-17 on both calls"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "Exact reproduction of morning (1,379 / 962), and the load-bearing reconciliation survives: a second independent partition of the same 30-day window sums to the same 2,341 as 2.2's severity partition, and the answer says so and says why (both are volume-partitioning axes). Adds the percentage split morning omitted. The KPI-id and substrate provenance morning introduced is retained. Only content loss vs morning is the interpretive line about biologic-naive share reflecting Remibrutinib's position in the CSU sequence - cosmetic."
+    },
+    {
+      "question_id": "2.4",
+      "grade": "PASS",
+      "grounded_values": [
+        "NRx = 448, Northeast, quarter-to-date -> kpi_calculate_tool payload value: 448.0, region_status applied",
+        "window 2026-07-01..2026-10-01, 48 days elapsed -> payload window_applied + window_coverage.window_days: 48",
+        "trailing-30-day 172, 38.4% share -> payload trailing_30d_value 172.0, trailing_30d_share 0.3839",
+        "62.5% uniform expectation -> payload uniform_expected_share: 0.625",
+        "3 validated causal paths -> payload causal_chains_found: 3",
+        "treatment_initiated +0.41 / 0.816 / $72,247 -> payload 0.41 / 0.816 / 72247.31",
+        "intent_to_prescribe +0.27 / 0.816 / $111,256 -> payload 0.27 / 0.816 / 111255.64",
+        "sample_dropped +0.092 / 0.841 / $30,580 -> payload 0.092 / 0.841 / 30579.61",
+        "'all three carry positive effect sizes' -> payload: 0.41, 0.27, 0.092, no negative path",
+        "'10 records returned span Remibrutinib, Fabhalta and Kisqali and carry no region field' -> payload brand_id counts: Remibrutinib 3, Fabhalta 4, Kisqali 3; no region key on any row",
+        "causal paths labelled 'Remibrutinib/northeast' -> payload echoes region: 'northeast' but returns the same three path_ids as morning's region=null pull (see overall_notes finding 4)"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "Same payload values as morning to the digit (448 / 48 days / 172 / 38.4% / 62.5%, and all three causal paths), with the same correct partial-quarter framing: it leads with quarter-to-date, states only 48 days have elapsed, and refuses to size a drop without a same-length prior period. Better than morning on two axes: it now flags the trigger-filter failure precisely and refuses to use those rows at all ('the filter doesn't appear to have been applied ... so I'm not using it to explain the drop'), where morning described the foreign rows but still summarised them; and it drops 33.7 s from 41.6 s, though it still breaches T3 < 25 s. One flag: because this run passed region='northeast' to causal_analysis_tool, the answer presents the three paths as Northeast-specific. That IS what the payload's region field says, but the returned rows are identical to the region=null pull, so the regional specificity is not real - a backend finding, not a chat fabrication."
+    },
+    {
+      "question_id": "2.5",
+      "grade": "PASS",
+      "grounded_values": [
+        "TRx Share 33.4% -> kpi_calculate_tool payload value: 0.33374050350067036, kpi_id WS3-BI-008",
+        "portfolio share not vs Xolair/Dupixent -> payload semantic_note verbatim",
+        "model hcp_adoption_remibrutinib_goldstd_lr_v1, holdout AUC 0.794 -> payload model_name (exact), holdout_auc 0.7945",
+        "n=5,000 scored -> payload n_scored: 5000 (both cuts)",
+        "Dermatology 55.0% n=854 -> payload 0.5497929 / 854",
+        "Allergy/Immunology 51.6% n=577 -> payload 0.5164989 / 577",
+        "Rheumatology 48.4% n=257 -> payload 0.4844036 / 257",
+        "Neurology 36.2% n=156 -> payload 0.3618387 / 156",
+        "Internal Medicine 33.1% n=478 -> payload 0.3313736 / 478",
+        "Hematology 33.0% n=1,016 -> payload 0.3300790 / 1016",
+        "Oncology 31.6% n=1,662 -> payload 0.3164008 / 1662",
+        "West 41.0% n=995 -> payload 0.4097551 / 995",
+        "South 39.9% n=1,830 -> payload 0.3991814 / 1830",
+        "Northeast 38.9% n=1,086 -> payload 0.3885188 / 1086",
+        "Midwest 37.5% n=1,089 -> payload 0.3746160 / 1089",
+        "'Hematology ... Largest cohort by n' -> CONTRADICTED BY PAYLOAD AND BY ITS OWN NEXT ROW: hematology n=1,016, oncology n=1,662"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "TARGETED CHECK 1 (CHAMPION OUTAGE) - FIXED BY ENVIRONMENT, on both cuts. Morning lost both propensity rankings to the champion-registry outage and could give a WHAT but no WHERE; this run serves hcp_adoption_remibrutinib_goldstd_lr_v1 at AUC 0.7945 over 5,000 HCPs and returns the full 7-specialty and 4-region rankings, reproducing the 08-15 pre-outage values (dermatology 55.0%, allergy/immunology 51.6%, West 41.0%). The question's 'where' is now answered on two axes plus current share (33.4%), and the morning grader's char-drop observation is reversed (2,370 vs 1,909). Two things to record. TARGETED CHECK 3 (SUPERLATIVES, #1691 family) REPRODUCES HERE, and this is the only instance in the subset: the specialty table annotates Hematology (n=1,016) as 'Largest cohort by n' while the very next row annotates Oncology (n=1,662) as 'Largest n overall'. The numbers in the table are correct; the two adjacent notes contradict each other. Second, the run swapped causal_analysis_tool for a TRx-share KPI call, so the opportunity is sized purely by propensity - morning's quantified gap lever (+0.114, +$50,167.18) has no counterpart here."
+    },
+    {
+      "question_id": "2.6",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "resource_optimizer failed, no allocation plan -> orchestrator payload success: false, status: 'failed', confidence 0.0",
+        "quoted failure text (needs entities with response coefficients AND a budget constraint; missing allocation_targets, constraints; 'Failing closed - no values were fabricated') -> payload response verbatim",
+        "failure reason missing_required_inputs -> payload failure_details: two entries, agent_name resource_optimizer",
+        "POST /resources/optimize -> named in payload response text",
+        "substitute propensity figures Dermatology 55.0%, Allergy/Immunology 51.6%, West 41.0%, South 39.9%, Northeast 38.9%, Midwest 37.5% -> carried from 2.5 payloads, all exact",
+        "substitute causal levers treatment_initiated +0.41, intent_to_prescribe +0.27, sample_dropped +0.092 -> carried from 2.4 payload, all exact",
+        "'for northeast Remibrutinib NRx' -> payload echoes region northeast but rows are national (see overall_notes finding 4)"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "TARGETED CHECK (#1549) - STILL FIXED: no planner JSON, no code fence, no line-initial brace; clean prose plus one block quote of the tool's own error string, and 16.0 s (morning 15.8 s, both far from the 73.8 s pre-fix state). Grade stays PARTIAL for the identical reason: a correct, well-sourced 'the substrate does not exist' is not an optimized allocation, and the question remains unanswered - but the blocker is a genuine structural absence (no per-entity allocation/response rows), the tool failed closed, and it explicitly refused to invent entities, coefficients or budgets. Improvement over morning: morning's grader flagged that the substitute guidance had thinned because the segment model was down; with the champion restored the answer now offers both propensity cuts and the causal levers, all exactly grounded, plus a concrete path to a real answer. Carries forward the same unbacked regional attribution on the causal levers as 2.4."
+    },
+    {
+      "question_id": "2.7",
+      "grade": "PASS",
+      "grounded_values": [
+        "Intent-to-Prescribe delta 1.0103 / '+1.01' -> kpi_calculate_tool payload value: 1.0103456383729132",
+        "KPI BR-002 'Remi - Intent-to-Prescribe delta' -> payload kpi_id: BR-002, kpi_name exact",
+        "no period applied -> payload window_status: 'default', window_requested: null",
+        "status flag 'good' -> payload status: 'good'",
+        "hcp_intent_surveys substrate -> payload measure_basis.substrate: ['hcp_intent_surveys']",
+        "no prior-period value available -> correct: no second call, no comparison figure in any payload"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "Identical retrieved value to morning (this KPI carries no window, so it does not drift), and it keeps morning's right resolution of the long-running unit problem: it declines to characterize direction at all rather than calling 1.01 'holding steady' or 'trending upward'. Closes morning's one recorded flag by citing the KPI id BR-002 alongside the hcp_intent_surveys substrate, so the figure is now auditable back to a definition AND comparable by substrate. Residual, unchanged and still needing a human: the unit of BR-002 is undefined in the payload, so a viewer cannot tell whether 1.010 is a ratio or an additive delta - and the headline renders it '+1.01', which leans additive without evidence. Not a correctness risk here because no direction is claimed in the body."
+    }
+  ],
+  "overall_notes": "TALLY 9 PASS / 5 PARTIAL / 0 FAIL, identical to the morning split for this subset but with different membership: 1.5, 1.6, 2.5 recovered and 1.2, 2.1 regressed. vs-baseline: 8 better, 4 same, 2 worse. Same container image 1a17b73e7 both runs, so every difference below is environment (champion registry, restored 15:09 UTC) or LLM/orchestrator variance.\n\nTARGETED CHECK 1 - CHAMPION OUTAGE (1.6, 2.5; 2.6 downstream): FIXED BY ENVIRONMENT, fully. predict_hcp_segment_likelihood_tool now serves real champions by name with real holdout AUCs - hcp_adoption_kisqali_goldstd_lr_v1 at AUC 0.7907 over 5,000 HCPs (1.6) and hcp_adoption_remibrutinib_goldstd_lr_v1 at AUC 0.7945 over 5,000 HCPs on both the specialty and geographic_region cuts (2.5). Every restored figure matches the 08-15 pre-outage run to the digit (oncology 56.9% n=1,662 overall mean 40.4%; dermatology 55.0%, allergy/immunology 51.6%, West 41.0%), which is strong evidence the restore returned the same models rather than retrained substitutes. 2.6 benefits indirectly: its substitute guidance is rich and grounded again instead of thin. The morning grader's cross-cutting note that all three brands had no production champion is closed for the two brands in this subset.\n\nTARGETED CHECK 2 - PROVENANCE (1.5): DEFECT CLEARED, with a new subset-wide caveat. Morning's 1.5 was a no-tool turn that described a synthetic causal registry as 'real patient-journey data' and invented a '(DoWhy/EconML-style)' method label. This run's 1.5 calls causal_analysis_tool, and I swept all 14 turns for 'real data' / 'real patient' / 'real-world data' claims: the only hits are in 2.6, where they quote the tool's own error string and ask the user to supply real inputs. No turn upgrades synthetic evidence to real. THE INVERSE NOW APPEARS INSTEAD: 0 of 14 rerun turns use the word 'synthetic' anywhere, against 5 of 14 in the morning (1.1, 1.2, 1.4, 2.5, 2.7), while every kpi_calculate_tool and causal_analysis_tool payload carries data_source: 'synthetic' (and refutation_evidence.evidence_is_synthetic: true). This is an omission, not a misstatement, and it is much less harmful than the morning defect - but a demo viewer in this run is never told the data is synthetic. Same pattern for KPI ids: 1.1 and 1.3 both dropped the WS3-BI-005 / WS3-BI-008 ids that morning cited, though 2.2/2.3/2.7 kept theirs.\n\nTARGETED CHECK 3 - PROSE-VS-TABLE CONTRADICTION (#1691 family): ONE INSTANCE, in 2.5. Its specialty table labels Hematology (n=1,016) 'Largest cohort by n' and Oncology (n=1,662) 'Largest n overall' in adjacent rows. Numbers correct, annotations self-contradicting. I checked every other superlative in the subset against its payload and all hold: 1.6's 'largest n at 1,662, tightest SE' (min SE 0.00555) and 'neurology smallest n / widest SE' (156, 0.01545); 1.4's 'only negative driver'; 1.5's '3rd largest'; 1.7's 'lowest achievement 63.0%, largest gap 5.88' (scoped to the three regions with data); 2.2's largest/smallest severity buckets; 2.4's largest/smallest causal drivers.\n\nNEW FINDING 4 (not present in the morning report) - causal_analysis_tool's region parameter is ECHOED BUT NOT APPLIED. In this run 1.4 and 2.4 both passed region and the payloads echo region: 'Northeast' / 'northeast', so both answers present the causal drivers as region-specific. The returned rows are byte-identical to the region=null pulls: 1.4 (region=Northeast) and 1.5 (region=null) return the same six path_ids scp_c22a286fad5d / c2713e97ea08 / c294cf50c23c / c2a6416f2147 / c648f5ff678f / c696e9a45437 with identical effect sizes, and 2.4's region=northeast pull returns the same three path_ids scp_c204596290cc / cc280ebce76c / ceef50ed3369 as the morning run's region=null pull. The chat answers are grounded in what the payload says, so this is a backend defect surfaced by the run, not a chat fabrication - but it means 1.4, 2.4 and 2.6 all assert a regional causal specificity that does not exist, where the morning run correctly disclaimed it ('brand-level, not region-specific - region: null in this result'). Worth a ticket.\n\nNEW FINDING 5 - 2.1's orchestrator misroute. Asked to build a Remibrutinib CSU cohort, the orchestrator dispatched heterogeneous_optimizer and gap_analyzer, never cohort_profiler; heterogeneous_optimizer failed twice on missing_required_inputs and the run returned a gap-analysis stub. Gold routing for 2.1 is SINGLE_AGENT -> cohort_profiler. Morning's identical query on the identical image reached the cohort profile and returned 2,341. This also removed the subset's best internal-consistency evidence: morning had three independent partitions (cohort profile, severity, biologic) all summing to 2,341; this run has only two.\n\nLATENCY. First-progress passes everywhere with large margin (max 788 ms vs the < 15 s budget). Three T3 turns breach the < 25 s budget: 2.4 at 33.7 s (improved from morning's 41.6 s but still red), 2.1 at 32.7 s (morning 19.0 s - newly red, and consistent with the wasted two-agent dispatch), 1.4 at 30.4 s (morning 24.6 s - newly red, and it ran three tools where the budget was baselined on single-agent turns). All T2 turns pass < 18 s (max 14.6 s at 1.2). 2.5 is tagged T3 in the run manifest though the scenario doc classes it T4; it passes either budget at 20.9 s.\n\nSTILL-FIXED REGRESSION GUARDS. I swept all 14 response texts for code fences, line-initial braces and routing keys (primary_intent / requires_multi_agent / routing_pattern): zero hits. #1636 (2.1's raw classifier blob) and #1549 (2.6's planner JSON plus 73.8 s latency) both remain closed.\n\nINSTRUMENT NOTE. tools_invoked under-records exactly as warned: 1.4 lists only kpi_calculate_tool while the event stream shows three on_tool_start events (kpi_calculate_tool, e2i_data_query_tool, causal_analysis_tool); same for 2.4. All tool judgements above are from on_tool_start / on_tool_end in the raw event stream, never from measurements_agui.csv."
+}

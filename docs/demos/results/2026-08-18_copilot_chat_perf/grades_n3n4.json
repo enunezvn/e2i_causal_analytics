@@ -1,0 +1,252 @@
+{
+  "grader": "n3n4",
+  "chembl_outage_confound": true,
+  "questions": [
+    {
+      "question_id": "3.1",
+      "grade": "PASS",
+      "grounded_values": [
+        "clinical_context_tool(brand='Fabhalta') -> success true; clinical_context keys the answer enumerates are all present: approved_indications (source 'openfda'), mechanism (mechanism_of_action 'complement Factor B inhibitor', source 'static_fallback'), pivotal_endpoints (13 endpoints, source 'clinicaltrials.gov'), real_world_evidence (source 'pubmed')",
+        "citation exact: pmid 39371251, 'Paroxysmal Nocturnal Hemoglobinuria, Pathophysiology, Diagnostics, and Treatment.', Transfus Med Hemother, pubdate '2024 Oct', doi 10.1159/000540474",
+        "no testing/diagnostic-rate field exists anywhere in the payload - the negative claim is verifiable against the returned object",
+        "'treatment initiation rates (NRx/NBRx)' offered as the downstream proxy matches the payload's our_outcome 'treatment_initiated' / mapped_endpoint 'Treatment initiation (complement-inhibitor start/switch)'"
+      ],
+      "vs_baseline": "different-but-equivalent",
+      "vs_baseline_reason": "Same correct refusal, same PMID, same reasoning that the platform tracks commercial KPIs and not population-level diagnostic uptake. The difference is evidentiary breadth, and it went the wrong way: baseline searched TWO independent sources (document_retrieval_tool AND clinical_context_tool) and reported what each returned, so its negative rested on two misses; this run probed clinical_context_tool only, so 'this isn't something our data model tracks' is now asserted from one source. The conclusion is still correct - no KPI in this platform carries a PNH testing rate - and the answer is honest about the substitute it can offer, so the quality is comparable.",
+      "flags": [
+        "CHEMBL-OUTAGE CONFOUND, HONEST: mechanism.source == 'static_fallback' in the payload (ChEMBL/EBI was returning 500s throughout the run). The answer never quotes a mechanism of action, so nothing sourced from the fallback reaches the reader - no fallback masquerading as live data. The other three blocks came back live (openfda, clinicaltrials.gov, pubmed).",
+        "single-source negative (see vs_baseline_reason): the document_retrieval_tool corroboration baseline had is gone",
+        "routing: scenario doc gives 3.1 gold SINGLE_AGENT -> explainer (human-triaged); the turn effectively delivered the explainer answer ('we don't carry this metric') but reached it by probing clinical_context_tool. That tool cannot answer an epidemiology/testing-rate question by construction - it returns label, trial and RWE context - so it serves the question only as a disconfirming probe, not as a source. Acceptable, and the answer does not pretend otherwise."
+      ],
+      "note": "Refuses cleanly and offers a real, defined substitute. The ChEMBL outage did not damage this turn."
+    },
+    {
+      "question_id": "3.2",
+      "grade": "PASS",
+      "grounded_values": [
+        "kpi_calculate_tool(kpi_name='TRx', brand='Fabhalta') -> kpi_id WS3-BI-005, value 12090.0, data_through '2026-08-17', reporting_window 'most recent 30 days of prescription data', window_requested null, window_applied null, window_status 'default'",
+        "answer's '12,090 prescriptions', 'most recent 30 days', 'data through 2026-08-17' and 'KPI ID WS3-BI-005' all match exactly",
+        "measure_basis.note reproduced faithfully: 'Computed from the operational substrate at query time - NOT read from the business_metrics snapshot table. Only compare with another figure whose substrate matches' -> answer: 'Computed on demand from the treatment_events ledger ... not read from the business_metrics snapshot table - so this figure is not comparable to any business_metrics-based TRx value you might see elsewhere'"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Same KPI, same default-window disclosure, but this run adds the two provenance elements baseline dropped: the KPI ID (WS3-BI-005) and the substrate/comparability note from measure_basis. Value moved 13,286 -> 12,090 (-9.0%) as data_through advanced 2026-08-13 -> 2026-08-17 on regenerated sample data; that is data movement, not a defect.",
+      "flags": [
+        "does not state data_source 'synthetic' (present in the payload) - the same omission baseline had",
+        "does not state status 'informational'"
+      ],
+      "note": "The comparability warning is the substantive gain: a reader can no longer accidentally compare this figure with a business_metrics TRx row."
+    },
+    {
+      "question_id": "3.3",
+      "grade": "FAIL",
+      "grounded_values": [
+        "predict_hcp_segment_likelihood_tool(brand='Fabhalta', segment_by='specialty', time_horizon='next quarter') -> {'success': false, 'segments': [], 'error': \"no production champion registered for Fabhalta HCP adoption (expected model_name='hcp_adoption_fabhalta_goldstd_lr_v1', is_champion, stage='production', artifact-backed, non-synthetic) - nothing was scored\"}",
+        "every claim in the answer traces to that error string; the answer invents no numbers and reports no ranking"
+      ],
+      "vs_baseline": "regressed",
+      "vs_baseline_reason": "Baseline returned a complete, internally consistent specialty ranking (7 segments, n summing to 5,000, holdout_auc 0.811, overall_mean_propensity 0.41756, hematology first at 58.4%). This run the tool fails closed and the turn delivers no ranking at all. The regression is in the platform, not the chat: the answer is exactly the behaviour the system prompt prescribes for this failure (src/api/routes/copilotkit.py:3061 - 'If it fails closed (no promoted champion), say so plainly - do NOT substitute a regional TRx trend as if it answered the segment question'), and it declines the substitution verbatim.",
+      "flags": [
+        "PLATFORM REGRESSION, NOT A CHAT DEFECT - and it is RUN-WIDE, not specific to this turn or brand. Scanning the whole 2026-08-18 raw file, 'no production champion registered' appears in 9 turns across all four grader subsets - 1.6 (Kisqali), 2.5/2.6/2.7 (Remibrutinib), 3.3 (Fabhalta), 6.1/6.2/6.3/6.4/6.5 (Kisqali). The same scan over the 2026-08-15 raw file returns ZERO hits. All three brands lost their HCP-adoption champion between the two runs.",
+        "graded FAIL on the rubric ('empty / error') and for consistency with how baseline 3.4 was graded - an honest, well-formed report of a tool failure that leaves the user's question unanswered. The conduct is exemplary; the deliverable is nil.",
+        "worth checking before the demo: whether the mlflow/model registry lost its production-stage champions, or whether the artifact-backed/non-synthetic predicate started rejecting them"
+      ],
+      "note": "The single most consequential finding outside my own subset: 9 of 51 turns in this run hit an empty HCP-adoption champion registry that was fully populated three days earlier. Recommend the team lead treat this as a run-level confound alongside the ChEMBL outage."
+    },
+    {
+      "question_id": "3.4",
+      "grade": "PASS",
+      "grounded_values": [
+        "orchestrator_tool(query='Design an experiment...', brand='Fabhalta', target_agent='experiment_designer') -> success true, fallback FALSE, status 'completed', agents_dispatched ['experiment_designer'], errors [] - the 08-15 failure mode (success false, failure_details two x reason 'timeout') is GONE",
+        "design_type 'instrumental_variable'; treatment 'speaker_program_invitation_and_attendance'; randomization_unit 'individual'; randomization_method 'stratified_block'; stratification ['territory','baseline_nrx_decile','specialty']; blocking ['rep_tenure','region'] - all six transcribed exactly",
+        "outcome fabhalta_nrx_90day, metric_type 'count', baseline_value 0.45, expected_effect_size 0.15 - answer prints both",
+        "PowerAnalysisOutput: required_sample_size 1396, per_arm 698, achieved_power 0.8, minimum_detectable_effect 0.15, scale 'cohens_d', alpha 0.05; duration_estimate_days 196 - answer's '1,396 total (698/arm)', '80% (MDE = 0.15, Cohen's d, alpha=0.05)', '196 days' and '~6.5 months' (196/30 = 6.5) all check out",
+        "caveats: validity_audit_status 'timed_out', overall_validity_score 0.0, validity_confidence 'low', warnings ['Past violation (unobserved_confounding): ...', 'Validity audit timed out'] - all surfaced",
+        "analysis plan matches the generated analysis_code: backdoor.linear_regression ATE, CausalForestDML CATE, placebo_treatment_refuter / random_common_cause / data_subset_refuter"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "THE VERDICT ASKED FOR: 3.4 genuinely succeeded, it is not a longer apology. Baseline was a hard failure - orchestrator_tool returned success false with two timeout attempts and the answer said 'No experiment design, sample-size guidance, or measurement framework was returned'. This run the same agent, same brand, same surface returned a complete instrumental-variable design in 149 s of tool time (total 165 s), and the 2,525 characters are all design content: rationale, treatment definition, target population, outcome definition, randomisation scheme, power analysis, duration, analysis plan, and caveats. FAIL -> PASS.",
+      "flags": [
+        "the design is substantively good, not just present: randomising INVITATION and instrumenting attendance is the correct answer to the self-selection confound in speaker-program measurement, and the payload's rationale says exactly that",
+        "the validity audit still times out (same sub-step that timed out on 08-15's 3.6). The answer handles it correctly - it explains that overall_validity_score 0.0 means NOT ASSESSED rather than 'scored zero', and closes with 'treat it as a draft until the validity audit completes'. The tool's own pre-registration document does the same ('Validity Score: not assessed - the validity audit timed out'), so this is a fixed disclosure, not a lucky phrasing.",
+        "MDE == expected_effect_size exactly (0.15 == 0.15) with the scale asserted as cohens_d while the outcome is metric_type 'count' with baseline_value 0.45. The power solve is arithmetically right FOR a Cohen's d of 0.15 (n/arm = 2*(1.96+0.84)^2/0.15^2 = 698), but nothing in the payload derives d=0.15 from an outcome SD - the expected effect appears to be reused as a standardised effect. Sane numbers now, but the scale mapping is unverified. Same pattern in 3.6.",
+        "duration_estimate_days appears to be a pure linear function of n (196/1396 = 0.1404; 3.6: 784/5582 = 0.1404; baseline 3.6: 94115/672206 = 0.1400), i.e. ~7.1 subjects/day accrual with no design-specific input. It happens to land plausibly here (106 d enrolment + the 90-day outcome window = 196)."
+      ],
+      "note": "Single most important verdict in the subset and it is a clean pass. The retry/timeout gap that produced the 08-15 FAIL did not recur - no retry or timeout event appears anywhere in this turn's event stream; the agent completed on its dispatch."
+    },
+    {
+      "question_id": "3.5",
+      "grade": "PASS",
+      "grounded_values": [
+        "no tool call this turn - every number is carried from 3.4's payload in the same session (history is resent: 9 messages at this turn), and each one matches: required_sample_size_per_arm 698, required_sample_size 1396, expected_effect_size 0.15, baseline_value 0.45, outcome fabhalta_nrx_90day",
+        "'via standard power analysis, not a digital twin simulation' matches sample_size_justification 'Based on two_sample_t_test: n=1396 provides 80% power to detect effect size of 0.150 at alpha=0.05'",
+        "no digital-twin tool exists in the bound tool set - the denial is correct"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Both turns correctly deny that a digital twin ran. Baseline could only say 'nothing was returned' because 3.4 had failed, so the follow-up was empty by inheritance. This run it is a real follow-up: it names the numbers the previous turn actually produced, attributes them to the right method (power analysis, not simulation), and refuses to let the sample size be re-labelled as digital-twin output. That is the T5 continuity beat the scenario doc describes, working end to end for the first time in this pair of runs.",
+      "flags": [
+        "'0.15 lift on 90-day NRx, off a 0.45 baseline' renders expected_effect_size as an absolute lift on the baseline value. The payload names the field that way (baseline_value 0.45, expected_effect_size 0.15) but the power analysis treats 0.15 as Cohen's d - so the same ambiguity flagged in 3.4 is propagated one turn further, here without the 'Cohen's d' qualifier that 3.4 printed.",
+        "offers two concrete next actions rather than re-running unasked - correct restraint"
+      ],
+      "note": "3.4 -> 3.5 is now a working narrative beat instead of two consecutive apologies."
+    },
+    {
+      "question_id": "3.6",
+      "grade": "PASS",
+      "grounded_values": [
+        "orchestrator_tool -> experiment_designer, success true, fallback false, status 'completed', total_latency_ms 58420",
+        "design_type 'RCT', randomization_unit 'cluster', randomization_method 'stratified_block', stratification ['region','baseline_trx_volume_tier','pnh_patient_population_proxy','payer_access_tier'], blocking ['rep_tenure','historical_nrx_trend'] - transcribed exactly",
+        "outcome hcp_monthly_nrx_fabhalta, metric_type 'count', baseline_value 0.5, expected_effect_size 0.075; treatment duration '3-month pre-period (baseline) + 6-month treatment period'",
+        "PowerAnalysisOutput: required_sample_size 5582, per_arm 2791, achieved_power 0.8, minimum_detectable_effect 0.075, scale 'cohens_d', alpha 0.05; duration_estimate_days 784; sample_size_justification 'Based on two_sample_t_test: n=5582 provides 80% power to detect effect size of 0.075 at alpha=0.05'",
+        "caveats: validity_audit_status 'timed_out', overall_validity_score 0.0, validity_confidence 'low', both warning strings - all surfaced"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "THE #1639 BOUNDS FIX HOLDS, measured on the exact numbers that were absurd on 08-15. duration_estimate_days 94,115 (258 years) -> 784; required_sample_size 672,206 -> 5,582; and the internal contradiction is gone - baseline reported minimum_detectable_effect 0.0015 on a 'rate_ratio' scale while solving n for an expected effect of 0.030 (a ~400x mismatch that fully explains the 672K), whereas this run reports MDE 0.075 == expected_effect_size 0.075 on a single declared scale. The power arithmetic now reproduces exactly: n/arm = 2*(1.96+0.84)^2/0.075^2 = 2,791. The answer also ties the design back to 3.4's numbers, which is a correct and useful cross-turn comparison.",
+      "flags": [
+        "PLAUSIBILITY, NOT ABSURDITY, BUT NOT CLEAN EITHER - 5,582 required HCPs is of the right order yet still exceeds the platform's entire HCP universe (5,000 scored HCPs in the 08-15 3.3 payload, seven specialties summing to exactly 5,000), and the design's target population is far narrower than that (PNH-treating haematologists/nephrologists; hematology alone was n=1,016). The answer does NOT sanity-check feasibility - baseline, for all its absurd numbers, explicitly did ('worth sanity-checking feasibility before fielding'). That instinct was lost with the absurdity that triggered it.",
+        "duration_estimate_days 784 (~2.1 years) is unreconciled with the design's own stated field period of 3 months pre + 6 months treatment (~270 days). The answer prints both, one line apart, without noticing. Same accrual-rate artefact as 3.4 (784 = 5582 * 0.1404).",
+        "METHOD/DESIGN MISMATCH carried over from baseline and still unflagged: the design randomises at CLUSTER (territory/rep) level, but the sample size comes from a two_sample_t_test whose stated assumptions are 'Equal variance between groups, Normal distribution of outcome, Independent observations' - no ICC or design-effect inflation, and no cluster count is reported. A cluster-randomised trial sized as if observations were independent understates the required n.",
+        "MDE == expected_effect_size on the cohens_d scale for a count outcome with baseline 0.5 - same unverified scale mapping as 3.4.",
+        "validity audit timed out again (third experiment-design turn in a row across both runs) - disclosed correctly, but it is now a standing sub-step failure, not an incident."
+      ],
+      "note": "The bounds fix did what it claimed: the numbers moved from impossible to plausible and are now internally consistent with each other. What remains is a modelling gap (cluster design sized with an independence assumption, effect size reused as a standardised effect) plus the loss of the feasibility challenge - worth an issue, but not a demo blocker."
+    },
+    {
+      "question_id": "4.1",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "orchestrator_tool(query='Profile the HCP cohort of oncologists in the Northeast region...', region='Northeast') -> success true, agents_dispatched ['cohort_profiler'], confidence 0.9, context.brand NULL",
+        "every printed number is exact: 3,428 HCPs, 37,006 TRx, window 2026-05-21 -> 2026-08-18 (90 days, defaulted); specialties oncology 1,134 / hematology 683 / dermatology 582 / allergy_immunology 400 / internal_medicine 343 / rheumatology 166 / neurology 120; tiers 677 / 676 / 693 / 675 / 707",
+        "'the tool result doesn't break tier out specifically for the oncology subgroup' - true, the payload's tier table is cohort-wide",
+        "'this is an aggregate cohort profile ... not a named-HCP roster' matches the payload's closing line ('cohort sizes from per-HCP TRx aggregation ..., not an outreach list with contact routing')"
+      ],
+      "vs_baseline": "regressed",
+      "vs_baseline_reason": "NOT the failure mode you flagged - it did NOT assume a brand. It called cohort_profiler with no brand, the agent ran an all-brands profile, and the payload labels itself '**HCP cohort profile - all brands**'. But it did drop that label: the word 'all brands' appears nowhere in the 1,379-character answer, so a reader sees '3,428 HCPs, 37,006 TRx' with no indication the figures are portfolio-wide rather than scoped to whatever brand they have in mind - in a platform where every other cohort number is brand-scoped. It also departs from the prompt contract that baseline was following: src/api/routes/copilotkit.py:3062 says 'if no brand appears anywhere in the conversation, ask which brand (an all-brands profile is a valid option to offer) - do NOT guess one'. Baseline asked and offered; this run neither asked nor disclosed. Richer output, weaker provenance.",
+      "flags": [
+        "SCOPE LABEL DROPPED: the payload's own '- all brands' header is the one qualifier that makes these numbers interpretable, and it is the one thing that did not survive into the answer",
+        "opening line is inaccurate on its own terms - 'Here's the HCP cohort profile filtered to oncologists in the Northeast region' when nothing was filtered to oncologists; the correction ('the underlying query returned the full cross-specialty cohort') arrives two lines later, so the answer contradicts itself before it clarifies",
+        "REGION FILTER UNVERIFIED - flagging as a suspicion, not a verdict, because it needs a cross-run comparison: the 'Northeast' cohort holds 3,428 HCPs, which is 69% of the platform's entire 5,000-HCP universe (08-15 3.3 payload), and the per-specialty ratios against that national breakdown are uniformly ~0.65-0.77 (1134/1662, 683/1016, 582/854, 400/577, 343/478, 166/257, 120/156). One region holding two-thirds of the national universe is implausible. Note also that the word 'Northeast' appears nowhere in the tool's rendered profile - only in the request's region parameter and in context.region - so the answer's regional attribution rests on what was asked for, not on what the profile says it returned. Worth an independent check (run the same profile for another region and compare).",
+        "the 90-day default window IS disclosed with both endpoints - good"
+      ],
+      "note": "Two defects, one real: the numbers are exact and the tool behaved sensibly, but the answer strips the 'all brands' scope and asserts a region the payload never confirms. Fixing this is a one-sentence change ('these are all-brands figures, since no brand was named')."
+    },
+    {
+      "question_id": "4.2",
+      "grade": "PASS",
+      "grounded_values": [
+        "no tool call - a capability-boundary answer plus a brand ask",
+        "'per-HCP TRx>50 filtering / roster export isn't something the platform serves ... not a named list of individual HCPs' matches the contract at src/api/routes/copilotkit.py:3062 ('What the platform genuinely does NOT serve is the individual level: named individual HCP/patient identities, per-person rosters, or list exports')",
+        "'the nearest supported analysis is the aggregate cohort profile broken out by priority tier' matches the same contract line ('state that limit in one sentence, then run (or offer) the aggregate cohort profile')",
+        "'this conversation hasn't named a brand yet' is TRUE - 4.1 ran with brand null and named none; history is resent (3 messages at this turn)"
+      ],
+      "vs_baseline": "equivalent",
+      "vs_baseline_reason": "Same two-part structure, same correct capability boundary, same brand ask with the all-brands option offered. Wording is tightened; substance is identical. Both are contract-correct.",
+      "flags": [
+        "'tier is the platform's proxy for high-value HCPs (it's assigned based on prescribing behavior/potential)' is not traceable to any payload in this turn - it is a characterisation of the tier field, not a numeric claim, and it is consistent with 4.1's tier table. Untraceable but not fabricated data.",
+        "mild session inconsistency with 4.1: 4.1 ran an all-brands cohort profile without asking, and one turn later this turn declines to run the same profile until a brand is named. It does offer the all-brands option, so the two are reconcilable, but the autonomy threshold moved between adjacent turns."
+      ],
+      "note": "Contract-correct on both halves: names the individual-level limit in one sentence, then offers the aggregate profile with the brand ask the prompt requires."
+    },
+    {
+      "question_id": "4.3",
+      "grade": "PASS",
+      "grounded_values": [
+        "no tool call - capability-boundary answer plus brand ask",
+        "'priority tier (Tier 1-5)' matches the five tiers returned in 4.1's payload (677/676/693/675/707), which is in this session's resent history",
+        "'severity tier (low/medium/high - a patient-severity axis, not a volume axis)' is consistent with the platform's severity segmentation (4.4's conversion-rate calls use segment='low_severity'/'medium_severity'/'high_severity')",
+        "'no brand has been named yet in this conversation' - TRUE at this point in the session"
+      ],
+      "vs_baseline": "equivalent",
+      "vs_baseline_reason": "Same correct reframe (no volume-tier axis exists; priority tier is the nearest supported cut) and same brand ask. This run adds one thing baseline lacked: an explicit mapping proposal for how the five tiers would be presented as the user's three buckets (Tier 1-2 -> high, Tier 3 -> medium, Tier 4-5 -> low), which converts a refusal into a concrete offer.",
+      "flags": [
+        "the tier mapping is the answer's own proposal, presented as such ('e.g.'), not a platform-defined mapping - correctly hedged",
+        "tier semantics ('correlates with prescribing behavior/potential') again untraceable in-turn, same as 4.2"
+      ],
+      "note": "Turns a 'that axis doesn't exist' answer into a usable offer by proposing how the five priority tiers would map onto the user's three buckets."
+    },
+    {
+      "question_id": "4.4",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "causal_analysis_tool(kpi_name='treatment_initiated', brand='Remibrutinib', min_confidence=0.5) -> causal_chains_found 15, collapsing to 2 distinct paths, both reproduced exactly: treatment_arm -> treatment_initiated via disease_severity, effect_size 0.437, confidence 0.945, method backdoor.linear_regression, time_lag_days 30, business_impact 182578.79; treatment_arm -> persistent_180d via engagement_score+disease_severity, effect_size 0.493, confidence 0.944, time_lag_days 26, business_impact 158005.19",
+        "three kpi_calculate_tool calls, segment->value mapping verified by matching on_tool_start/on_tool_end run_ids: segment='high_severity' -> 0.8091143594153053 (printed 0.809), 'medium_severity' -> 0.6278014941302028 (0.628), 'low_severity' -> 0.5492692126355493 (0.549). All three correct, no transposition.",
+        "kpi_id WS3-BI-009, reporting_window 'most recent 30 days of trigger data', data_through '2026-08-17' - all stated",
+        "five further calls (biologic='naive'/'experienced', ige_tier='low'/'medium'/'high') returned success false with the error the answer quotes almost verbatim: 'KPI WS3-BI-009 does not support the biologic-status / IgE-tier axes: conversion is computed over triggers, which carry no biologic/IgE dimension. Supported: brand, severity tier (segment), line of therapy, time window, or region alone.'"
+      ],
+      "vs_baseline": "regressed",
+      "vs_baseline_reason": "The question asks which HCP SEGMENTS show the strongest treatment effect. Baseline answered it correctly by refusing the premise where it did not hold - it stated plainly that the causal chains resolve to patient-level mediators (severity, engagement), 'not through HCP specialty', and then supplied the by-specialty adoption-propensity ranking as an explicitly labelled proxy. This run silently swaps the axis: it answers with PATIENT severity segments and labels the finding 'High-severity HCP/patient segments show the strongest conversion', blurring an HCP axis into a patient axis with a slash. No HCP-level cut is presented and the 'this is not an HCP cut' caveat is gone. That is the whole of the 2,436 -> 1,731 character drop: content lost, not tightened.",
+      "flags": [
+        "AXIS CONFLATION is the defect: severity segments in WS3-BI-009 are computed over triggers/treatment_events (patient level); calling them 'HCP/patient segments' invites a targeting decision the data does not support",
+        "the reporting of failed axes is exemplary and better than baseline - it names both unsupported axes, quotes the reason, and lists the supported ones instead of silently dropping them",
+        "does not disclose data_source 'synthetic' or refutation_evidence.evidence_is_synthetic true (both in the payload); baseline did not either",
+        "conversion rate is a funnel metric, not a treatment effect - the answer does connect it to the 0.437 causal chain through disease_severity, which is a legitimate link, but a conversion rate by severity is still not 'the treatment effect for segment X'"
+      ],
+      "note": "Every number is exact; the defect is what the numbers are called. Baseline's discipline here ('the causal engine doesn't cut by HCP specialty, so here is the labelled proxy') is exactly what regressed."
+    },
+    {
+      "question_id": "4.5",
+      "grade": "PASS",
+      "grounded_values": [
+        "kpi_calculate_tool(kpi_name='trigger precision', brand='Remibrutinib', window='this month') -> WS2-TR-001, value 0.5454545454545454, status 'warning', window_requested == window_applied == {'start':'2026-08-01T00:00:00+00:00','end':'2026-09-01T00:00:00+00:00'}, window_status 'applied'",
+        "kpi_calculate_tool(kpi_name='acceptance rate', ...) -> WS2-TR-004, value 0.6153846153846154, status 'good', identical applied window, window_status 'applied'",
+        "answer states 'August 2026 (2026-08-01 to 2026-09-01)' - byte-faithful to window_applied; values 0.545 / 0.615 and statuses warning / good all match",
+        "'computed on demand from the triggers substrate (not the business_metrics snapshot table)' matches measure_basis.note"
+      ],
+      "vs_baseline": "equivalent",
+      "vs_baseline_reason": "THE WINDOW FIX PERSISTS, verified on the payload and not just the prose: 'this month' still parses, window_status is still 'applied', requested and applied are still identical and still 2026-08-01 -> 2026-09-01, and the answer still states that resolved window explicitly. Values moved with the data (0.429 -> 0.545 precision, 0.625 -> 0.615 acceptance). Structurally identical answers.",
+      "flags": [
+        "same small-denominator opacity baseline flagged: 0.5454545... is exactly 6/11 and 0.6153846... is exactly 8/13, so both metrics rest on low-double-digit denominators for a partly-elapsed month. The tool returns no n, so the model could not know - but 'flagged as warning' is again presented as a performance signal that may be sampling noise.",
+        "does not say the August window is month-to-date (run date 2026-08-18, window ends 2026-09-01) - the same gap baseline had",
+        "scope inherited: the question says 'our trigger precision' with no brand, and the answer silently scopes to Remibrutinib. Unlike 4.1 the brand IS echoed in the header, but the inheritance is not stated.",
+        "'monthly grain' is the answer's own descriptor, not a payload field - harmless paraphrase of a calendar-month window"
+      ],
+      "note": "The #1444/window work is holding across runs. This turn's residual risks are all pre-existing, none new."
+    },
+    {
+      "question_id": "4.6",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "kpi_calculate_tool(kpi_name='false alert rate', brand='Remibrutinib') -> WS2-TR-005, value 0.11220136518771331, status 'warning', window_requested null, window_applied null, window_status 'default', data_through NULL, reporting_window NULL",
+        "kpi_calculate_tool(kpi_name='override rate', brand='Remibrutinib') -> WS2-TR-006, value 0.12396827965690241, status 'good', window_status 'default', data_through '2026-08-17', reporting_window 'most recent 30 days of trigger data'",
+        "printed values 0.112 / 0.124 and statuses warning / good are exact, and both KPI IDs are correctly attributed"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "The baseline defect is fixed: the question asks for two metrics and this run answers both. Baseline issued a single tool call (override rate only), delivered half the question, and mis-framed an incomplete tool plan as a tool limitation ('Only override rate came back from the tool call'). Here False Alert Rate resolves as WS2-TR-005 - so the metric IS reachable from chat now, which also settles baseline's open question about whether the alias map excluded it. Grade stays PARTIAL because the completeness gain came with a new window-provenance defect.",
+      "flags": [
+        "WINDOW CLAIM #1 IS UNGROUNDED: the answer's header applies 'most recent 30 days of trigger data (data through 2026-08-17)' to BOTH metrics, but only the override-rate payload carries that metadata. The false-alert-rate payload returns data_through null and reporting_window null - its window is asserted, not reported.",
+        "WINDOW CLAIM #2 IS WRONG: 'the same trailing-30-day trigger window as the precision/acceptance figures reported earlier' contradicts 4.5 in the same session, where precision and acceptance ran on the AUGUST CALENDAR window (2026-08-01 -> 2026-09-01, window_status 'applied'), not a trailing 30 days. The answer then builds a comparability claim on top of it ('comparable to each other and to trigger precision/acceptance rate'), which is true on substrate and false on window.",
+        "the substrate-comparability caveat itself is correct and valuable - it is only the window half that is wrong",
+        "'No non-overlapping prior-period figures were returned, so I can't state a trend' - honest, and correct given no prior-period call was made"
+      ],
+      "note": "Ironic inversion of the baseline: baseline was right about everything it said and omitted half the question; this run answers the whole question and gets the window provenance wrong in two ways. The fix is to read window metadata per KPI instead of generalising one payload's window across the pair - and, since 4.5 requested an explicit window and 4.6 did not, to say plainly that the two turns are on different windows."
+    },
+    {
+      "question_id": "4.7",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "causal_analysis_tool(kpi_name='TRx', brand='Remibrutinib', min_confidence=0.5) -> causal_chains_found 6, all 'validated'; every printed cell exact: rep_detailing_frequency -> trx_volume via hcp_engagement 0.298 / 0.897 / 86 d / 91288.53; formulary_status -> trx_volume via patient_access 0.272 / 0.823 / 26 d / 91457.38; persistent_180d -> trx_volume via refill_continuity 0.301 / 0.836 / 68 d / 66695.34; copay_support_program -> trx_volume via adherence 0.132 / 0.803 / 68 d / 58702.44; hcp_coverage -> trx_market_share via prescriber_base 0.114 / 0.833 / 67 d / 50167.18; competitor_activity -> trx_market_share via share_of_voice -0.058 / 0.885 / 56 d / -19667.51",
+        "kpi_calculate_tool(kpi_name='trigger funnel conversion', brand='Remibrutinib') -> WS2-TR-009, value 0.22689755623887362 (printed 0.227 / 22.7%), funnel_stages {delivered 6179, viewed 5633, accepted 3405, actioned 1402, outcome 384}, data_through '2026-08-17', reporting_window 'most recent 30 days of trigger data' - all six counts exact, and 1402/6179 = 22.69% checks out",
+        "the semantic_note is honoured: the answer calls the outcome stage 'reached a tracked outcome' and 'outcome-tracking ... is thin' rather than reading 384/1402 as an effectiveness rate"
+      ],
+      "vs_baseline": "regressed",
+      "vs_baseline_reason": "Same tool, different query, and the difference costs the answer its evidence. Baseline queried kpi_name='trigger action prescription lift' and got 15 chains INCLUDING the on-point one - trigger_accepted -> treatment_initiated, validated, +0.059 / 0.864 / $21,479.93 - so it could answer the literal question and was honest that the trigger->outcome step is the weakest link. This run queried kpi_name='TRx', got 6 chains, and NONE of them contains a trigger node. It then answers 'Yes' on rep_detailing_frequency -> trx_volume (+0.298), which is a rep-activity driver, not a trigger-driven one: nothing in the returned evidence links triggers to that detailing activity. The turn reverts to the answer-by-analogy shape the 08-11 run had, which baseline had specifically improved on.",
+      "flags": [
+        "UNSUPPORTED HEADLINE: 'Yes - the causal chain directly linking rep detailing frequency to TRx volume is validated ... supporting that rep actions do lift prescriptions' answers a question about rep actions IN GENERAL; the question asked about rep actions DRIVEN BY TRIGGERS. The word 'directly' is doing work the evidence does not support.",
+        "the answer does partially self-correct at the end ('These two figures use different substrates (causal registry vs. triggers funnel) and aren't directly combinable into one number'), which is the right disclosure - it just does not retract the headline it undercuts",
+        "the funnel commentary is genuinely good: it reads 22.7% actioned as a ceiling on realised lift rather than as an effectiveness rate, and flags the thin outcome-tracking stage",
+        "renders the funnel as 'delivered -> viewed -> accepted' when the payload's semantic_note says 'viewed' is a delivery-status progression state, NOT a funnel prerequisite for acceptance - minor, and baseline printed the stages without arrows",
+        "funnel volumes drifted with the regenerated data (delivered 6,392 -> 6,179, actioned 1,441 -> 1,402) while the ratio held (22.5% -> 22.7%) - consistent, not a defect"
+      ],
+      "note": "The 2,600 -> 2,208 character drop is not tightening: what is missing is the one causal chain that answers the question. Recommend checking whether the causal registry still contains trigger_accepted -> treatment_initiated for Remibrutinib, or whether only the kpi_name argument changed - baseline's 'trigger action prescription lift' query retrieved 15 chains where 'TRx' retrieves 6."
+    }
+  ],
+  "overall_notes": [
+    "COUNTS: 8 PASS (3.1, 3.2, 3.4, 3.5, 3.6, 4.2, 4.3, 4.5) / 4 PARTIAL (4.1, 4.4, 4.6, 4.7) / 1 FAIL (3.3).",
+    "HEADLINE 1 - 3.4 IS FIXED. The 08-15 FAIL was a real failure (orchestrator_tool success false, two timeout attempts, zero design content). This run returned success true / fallback false / status completed with a complete instrumental-variable design in 149 s of tool time, and all 2,525 characters are design content. No retry or timeout event appears anywhere in the turn's event stream.",
+    "HEADLINE 2 - #1639 BOUNDS FIX HOLDS. 3.6's power numbers went from impossible to plausible AND internally consistent: duration 94,115 d -> 784 d, n 672,206 -> 5,582, and the MDE/expected-effect contradiction (0.0015 rate_ratio vs a 0.030 effect) is gone (MDE == expected effect == 0.075, cohens_d). The power arithmetic now reproduces exactly (2*(1.96+0.84)^2/0.075^2 = 2,791/arm). Residual, worth an issue but not a demo blocker: n=5,582 still exceeds the platform's 5,000-HCP universe and the answer no longer sanity-checks feasibility; the cluster-randomised design is sized with an 'Independent observations' assumption and no ICC; and duration_estimate_days is a fixed ~7.1/day accrual function of n (196/1396 == 784/5582 == 0.1404), not a design-derived estimate.",
+    "HEADLINE 3 - RUN-WIDE PLATFORM REGRESSION, NOT IN MY SUBSET ALONE. The HCP-adoption champion model registry is empty for ALL THREE brands. 'no production champion registered' appears in 9 turns of the 2026-08-18 raw file (1.6 Kisqali; 2.5/2.6/2.7 Remibrutinib; 3.3 Fabhalta; 6.1-6.5 Kisqali) and in ZERO turns of 2026-08-15. This is the sole cause of my one FAIL, and it will be hitting the n1n2 and n5n6 subsets too. Recommend treating it as a run-level confound alongside the ChEMBL outage and checking the model registry before any demo.",
+    "CHEMBL CONFOUND, CONTAINED: 3.1 is my only ChEMBL-exposed turn. mechanism.source == 'static_fallback' in its payload, but the answer never quotes a mechanism of action, so no fallback value reaches the reader. The other three context blocks (openfda, clinicaltrials.gov, pubmed) came back live. Honest degradation; not penalised.",
+    "PATTERN ACROSS THE FOUR PARTIALs - all four are provenance/labelling defects on numerically exact answers, not hallucinations. 4.1 drops the payload's own 'all brands' scope header; 4.4 relabels patient severity segments as 'HCP/patient segments'; 4.6 generalises one KPI's window metadata onto another and then contradicts 4.5's applied window; 4.7 answers 'Yes' on a rep-activity chain that carries no trigger node. Zero fabricated numbers were found in this subset: every numeric claim across all 13 turns traced to a tool payload in that turn's event stream (or, for 3.5, to the immediately preceding turn's payload in the same resent session).",
+    "CHARACTER DROPS RESOLVED: 4.4 (2,436 -> 1,731) is content LOST - the explicit 'the causal engine does not cut by HCP specialty' caveat plus the labelled by-specialty proxy. 4.7 (2,600 -> 2,208) is also content lost - the trigger_accepted -> treatment_initiated chain, which was the only direct evidence for the question. Neither drop is tightening.",
+    "A NOTE ON METHOD: numbers were traced by matching on_tool_start / on_tool_end run_ids in the events, so segment->value mappings (4.4) and per-KPI window metadata (4.6) were verified per call rather than inferred from ordering. tools_invoked is lossy - it records one tool for turns that ran up to nine calls (4.4) - so it was not used for any judgement."
+  ]
+}
