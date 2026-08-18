@@ -12,8 +12,12 @@
 #     unique key, preserving row ids and therefore every RESTRICT FK from
 #     ml_performance_metrics / ml_drift_history / ml_monitoring_alerts
 #   - metric rows are delete-by-(model_id, source)-then-insert
-#   - all 12 models stay stage='staging'; cohort_deployer hard-refuses
-#     stage='production', so the serving ensemble is never touched
+#   - the 12 retrain slots all register at stage='staging' (cohort_deployer
+#     hard-refuses 'production', so the retrain itself never touches the
+#     serving ensemble); the 3 hcp_adoption rows are then RE-promoted to
+#     production champion through the #1384 calibration gate below — the
+#     UPSERT demotes them, and chat propensity serves only production
+#     champions (#1690)
 #   - the walk-forward re-windows by journey month, so new frontier months
 #     become new backtest points with no code change
 #
@@ -58,5 +62,27 @@ echo "=== goldstd retrain patient slots done $(date -Is) (3 HCP slots) ==="
 PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 E2I_DB_INTEGRATION=1 \
     .venv/bin/dotenv -f .env run -- \
     .venv/bin/python -m src.mlops.gold_standard_eval.run_hcp_cohorts
+
+echo "=== goldstd retrain HCP slots done $(date -Is) (re-promote hcp_adoption champions) ==="
+
+# The HCP-slot UPSERT above resets the three hcp_adoption rows to
+# stage='staging', is_champion=false — demoting the owner-ruled production
+# champions (#1354/#1384) that chat propensity serves from
+# (resolve_hcp_adoption_champion fails closed on anything else; #1690).
+# Re-promote through the #1384 calibration gate: the script re-scores each
+# retrained artifact against its fresh holdout metrics and HOLDs per brand on
+# faithfulness/pathology failure (that brand then stays staging and serving
+# fails closed — the designed behavior). Idempotent, allowlisted to the three
+# hcp_adoption model names. No serving-ensemble collision: each
+# hcp_adoption_<brand> target contains only its goldstd row (unlike
+# csu_treatment_initiation, the case the cohort_deployer stage guard was
+# written for). A promotion failure must NOT abort this wrapper — the retrain
+# itself succeeded and downstream reseed stages must still run — so warn
+# loudly instead of letting set -e kill the cron.
+if ! PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
+    .venv/bin/dotenv -f .env run -- \
+    .venv/bin/python scripts/promote_hcp_adoption_champions.py --execute; then
+    echo "WARNING: hcp_adoption champion re-promotion FAILED — chat propensity fails closed until scripts/promote_hcp_adoption_champions.py --execute succeeds (#1690)" >&2
+fi
 
 echo "=== goldstd retrain done $(date -Is) ==="

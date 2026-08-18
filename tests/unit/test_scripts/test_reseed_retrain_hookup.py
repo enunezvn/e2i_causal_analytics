@@ -29,6 +29,25 @@ def test_retrain_script_runs_both_cohort_clis() -> None:
     assert "LOKY_MAX_CPU_COUNT=1" in text
 
 
+def test_retrain_script_repromotes_hcp_adoption_champions() -> None:
+    """The HCP-slot UPSERT resets the three hcp_adoption rows to staging,
+    demoting the production champions the chat propensity path serves from —
+    the weekly demotion loop of #1690. The wrapper must re-promote through the
+    #1384 calibration gate with ``--execute`` (dry-run writes nothing), AFTER
+    the registration that demotes, and failure-tolerantly (a bare invocation
+    under ``set -e`` would abort the wrapper and kill downstream reseed
+    stages the retrain does not own)."""
+    text = RETRAIN.read_text()
+    assert "scripts/promote_hcp_adoption_champions.py --execute" in text
+    assert text.index("src.mlops.gold_standard_eval.run_hcp_cohorts") < text.index(
+        "promote_hcp_adoption_champions.py"
+    )
+    # Failure-tolerant wiring: the promotion invocation is an `if !` guard
+    # (warn + continue), never a bare command under set -euo pipefail.
+    assert "if ! PYTHONPATH=" in text
+    assert "WARNING: hcp_adoption champion re-promotion FAILED" in text
+
+
 def test_retrain_script_is_executable_in_git_index() -> None:
     """The INDEX mode is what CI/cron checkouts honor (core.fileMode=false on
     the droplet hides a 100644 locally — the #1128/#1134 lesson)."""
