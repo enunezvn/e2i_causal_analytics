@@ -533,3 +533,119 @@ async def test_patient_window_with_both_age_bounds_binds_all_five_params():
     assert args["query_id"].startswith("cohort_profiler_patient_criteria_profile_windowed")
     assert args["params"] == ["Remibrutinib", "2026-04-01", "2026-07-01", 18, 65]
     assert not out["cohort_profile"]["criteria_not_applied"]
+
+
+# ------------------------------------------------- region servability (#1693)
+# Eval turn 4.1 (2026-08-18) asked for "oncologist HCPs in the Northeast
+# region" and received the FULL 3,428-HCP cross-region cohort presented as
+# Northeast-scoped (real Northeast universe: 1,086 of 5,000 — measured). The
+# parser never recognized geographic terms, so the #1356 accounting could not
+# fire. These tests pin the fix: region parses as a criterion, BINDS on the
+# HCP path via the mig-129 `_region` statement, and is honestly disclosed as
+# not-applied on patient paths.
+
+_Q41 = "Show me an aggregate cohort profile for oncologist HCPs in the Northeast region"
+
+
+def test_parse_region_criterion_from_turn_4_1_ask():
+    ask = parse_cohort_ask(_Q41)
+    assert ask.entity_type == "hcp"
+    region = [c for c in ask.criteria if c.kind == "region"]
+    assert len(region) == 1
+    assert region[0].text_value == "northeast"
+    assert region[0].servable
+    assert "Northeast" in region[0].label
+
+
+def test_parse_region_stays_conservative():
+    # No locating preposition or region noun → no region criterion ("west
+    # coast performance" must not become a west filter), and the region-free
+    # q15 control stays region-free.
+    assert not any(
+        c.kind == "region"
+        for c in parse_cohort_ask("compare Kisqali west coast performance").criteria
+    )
+    assert not any(c.kind == "region" for c in parse_cohort_ask(_Q15).criteria)
+
+
+@pytest.mark.asyncio
+async def test_hcp_region_ask_binds_region_statement_1693():
+    agent, db = _agent(db_rows=[_HCP_ROWS], today=date(2026, 7, 30))
+    out = await agent.analyze(
+        {
+            "query": "Build a cohort of HCPs in the Northeast who prescribed more than 50 TRx last quarter"
+        }
+    )
+
+    assert out["status"] == "completed"
+    _fn, args = db.calls[0]
+    assert args["query_id"] == "cohort_profiler_hcp_trx_cohort_region"
+    assert args["params"] == [None, "2026-04-01", "2026-07-01", 50, "northeast"]
+
+    profile = out["cohort_profile"]
+    assert profile["region"] == "northeast"
+    assert profile["region_applied"] is True
+
+    narrative = out["narrative"]
+    assert "northeast" in narrative.lower()
+    # The per-criterion accounting names the bound region and its column.
+    assert "region = northeast" in narrative
+    assert "geographic_region" in narrative
+
+
+@pytest.mark.asyncio
+async def test_hcp_region_free_ask_keeps_base_statement():
+    agent, db = _agent(db_rows=[_HCP_ROWS], today=date(2026, 7, 30))
+    out = await agent.analyze({"query": _Q15})
+    _fn, args = db.calls[0]
+    assert args["query_id"] == "cohort_profiler_hcp_trx_cohort"
+    assert len(args["params"]) == 4
+    assert out["cohort_profile"]["region"] is None
+    assert out["cohort_profile"]["region_applied"] is False
+
+
+@pytest.mark.asyncio
+async def test_hcp_region_zero_match_probe_keeps_region_bind():
+    """The threshold-free base probe must stay region-scoped, so the honest
+    zero contrasts against the REGION's prescribing base, not the world's."""
+    base_rows = [
+        {"specialty": "oncology", "priority_tier": 1, "n_hcps": 366, "total_trx": 900, "max_trx": 9}
+    ]
+    agent, db = _agent(db_rows=[[], base_rows], today=date(2026, 7, 30))
+    out = await agent.analyze(
+        {"query": "HCPs in the Northeast who prescribed more than 500 TRx last quarter"}
+    )
+    assert out["status"] == "completed"
+    assert out["cohort_profile"]["cohort_size"] == 0
+    assert len(db.calls) == 2
+    for _fn, args in db.calls:
+        assert args["query_id"] == "cohort_profiler_hcp_trx_cohort_region"
+        assert args["params"][4] == "northeast"
+    assert db.calls[1][1]["params"][3] == 0
+
+
+@pytest.mark.asyncio
+async def test_patient_region_disclosed_not_silently_dropped_1693():
+    calc = _RecordingCalc(_REMI_NRX)
+    agent, db = _agent(calc=calc)
+    out = await agent.analyze({"query": "Build a patient cohort for Remibrutinib in the Northeast"})
+    assert out["status"] == "completed"
+    not_applied = out["cohort_profile"]["criteria_not_applied"]
+    assert any("Northeast" in c["label"] for c in not_applied)
+    assert any("HCP" in (c["guidance"] or "") for c in not_applied)
+    # The numbers served are the brand-level calculator path — no region bound.
+    assert not db.calls
+    assert "NOT applied" in out["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_patient_region_only_ask_fails_closed():
+    """'patients in the Northeast' pins down ONLY a criterion the patient path
+    cannot serve (no brand, no window): answering with an unscoped profile
+    would answer a different question — fail closed with guidance."""
+    agent, db = _agent(calc=_RecordingCalc(_REMI_NRX))
+    out = await agent.analyze({"query": "profile patients in the Northeast"})
+    assert out["status"] == "failed"
+    joined = " ".join(e.get("error", "") for e in out["errors"])
+    assert "HCP" in joined
+    assert not db.calls
