@@ -1,0 +1,1845 @@
+{
+ "request_id": "perf-agui-1.5",
+ "source": "docs/demos/results/2026-08-18_post1696_copilot_chat_perf/raw_agui.jsonl (2026-08-18 certification run); events trimmed to fold-relevant types, shapes verbatim",
+ "recorded_response_text": "Based on the causal-path registry data already retrieved for Kisqali, the closest modeled driver to \"rep visits\" is **rep_detailing_frequency**:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| rep_detailing_frequency | trx_volume | **+0.166** | **0.796** | **+$38,244.12** |\n\n**Interpretation:**\n- Higher rep detailing frequency is associated with a **positive, moderate** effect on TRx volume (effect size 0.166), with a modeled confidence of ~0.80 (above the typical 0.7 threshold used for these chains).\n- Estimated business impact: **+$38,244.12** in incremental value attributed to this pathway.\n- This is a **brand-level** result (Kisqali), not region-specific \u2014 the registry has no regional dimension.\n\n**Caveats:**\n- Source: `causal_analysis_tool` (causal-path registry), which is explicitly flagged **`evidence_is_synthetic: true`** \u2014 treat effect sizes and confidence as modeled estimates, not measured trial results.\n- \"Rep detailing frequency\" is the registry's node name and the nearest match to \"rep visits\" \u2014 I haven't verified these are defined identically, so note the terminology mapping if that distinction matters for your use case.\n- The confidence level (0.796) reflects the model's certainty in the *relationship*, not a percentage lift \u2014 don't convert it into an effect-size unit.\n\nWant me to compare this rep-detailing effect against the other drivers (e.g., formulary_status at +0.223) to help prioritize investment?",
+ "recorded_messages_out": [
+  "Based on the causal-path registry data already retrieved for Kisqali, the closest modeled driver to \"rep visits\" is **rep_detailing_frequency**:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| rep_detailing_frequency | trx_volume | **+0.166** | **0.796** | **+$38,244.12** |\n\n**Interpretation:**\n- Higher rep detailing frequency is associated with a **positive, moderate** effect on TRx volume (effect size 0.166), with a modeled confidence of ~0.80 (above the typical 0.7 threshold used for these chains).\n- Estimated business impact: **+$38,244.12** in incremental value attributed to this pathway.\n- This is a **brand-level** result (Kisqali), not region-specific \u2014 the registry has no regional dimension.\n\n**Caveats:**\n- Source: `causal_analysis_tool` (causal-path registry), which is explicitly flagged **`evidence_is_synthetic: true`** \u2014 treat effect sizes and confidence as modeled estimates, not measured trial results.\n- \"Rep detailing frequency\" is the registry's node name and the nearest match to \"rep visits\" \u2014 I haven't verified these are defined identically, so note the terminology mapping if that distinction matters for your use case.\n- The confidence level (0.796) reflects the model's certainty in the *relationship*, not a percentage lift \u2014 don't convert it into an effect-size unit.\n\nWant me to compare this rep-detailing effect against the other drivers (e.g., formulary_status at +0.223) to help prioritize investment?"
+ ],
+ "events": [
+  {
+   "t_ms": 349.8,
+   "type": "RUN_STARTED",
+   "timestamp": 1787080779984,
+   "rawEvent": null,
+   "threadId": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+   "runId": "798c0380-f261-4c7a-aa31-edd29ff05790",
+   "parentRunId": "",
+   "input": {
+    "threadId": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+    "runId": "798c0380-f261-4c7a-aa31-edd29ff05790",
+    "messages": [],
+    "tools": [],
+    "context": []
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 350.9,
+   "type": "RAW",
+   "timestamp": 1787080779986,
+   "rawEvent": null,
+   "event": {
+    "event": "on_chain_start",
+    "data": {
+     "input": {
+      "session_id": "d42b6795-8f28-4057-a587-eae3a8b66683",
+      "run_id": "798c0380-f261-4c7a-aa31-edd29ff05790",
+      "messages": [
+       {
+        "content": "What is TRx for Kisqali?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "fb1a63a3-549a-4891-a25e-ce56c463b205"
+       },
+       "<recursive>",
+       "<recursive>",
+       "<recursive>",
+       "<recursive>",
+       "<recursive>",
+       "<recursive>",
+       "<recursive>",
+       "<recursive>"
+      ],
+      "tools": [],
+      "copilotkit": {
+       "actions": "<recursive>",
+       "context": []
+      }
+     }
+    },
+    "name": "LangGraph",
+    "tags": [],
+    "run_id": "01a01650-a8d1-79c2-894c-b2a3c000064b",
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph"
+    },
+    "parent_ids": []
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 354.2,
+   "type": "STATE_SNAPSHOT",
+   "timestamp": 1787080779997,
+   "rawEvent": {
+    "type": "CUSTOM",
+    "timestamp": null,
+    "raw_event": {
+     "event": "on_custom_event",
+     "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+     "name": "copilotkit_manually_emit_intermediate_state",
+     "tags": [
+      "seq:step:1"
+     ],
+     "metadata": {
+      "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+      "ls_integration": "langgraph",
+      "langgraph_step": 1,
+      "langgraph_node": "chat",
+      "langgraph_triggers": [
+       "branch:to:chat"
+      ],
+      "langgraph_path": [
+       "__pregel_pull",
+       "chat"
+      ],
+      "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+      "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+     },
+     "data": {
+      "messages": [
+       {
+        "content": "What is TRx for Kisqali?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "fb1a63a3-549a-4891-a25e-ce56c463b205"
+       },
+       {
+        "content": "Kisqali **TRx = 10,273** prescriptions, covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**).\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. Note: `data_source` is flagged **synthetic**.\n- No specific period was requested, so this reflects the tool's default 30-day window rather than a custom range.",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "ai",
+        "name": null,
+        "id": "d8c6da61-3cdb-4476-9ba3-104b9f354dba",
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "usage_metadata": null
+       },
+       {
+        "content": "What are the TRx trends for Kisqali in Q4?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "fb19842b-be84-48b2-b3e8-4c756412d3e5"
+       },
+       {
+        "content": "Kisqali **TRx = 872 prescriptions** for **Q4 2025** (Oct 1 \u2013 Dec 31, 2025, a full 92-day window) \u2014 this is the calendar-period figure you asked for.\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. `data_source` is flagged **synthetic**.\n- The tool also returns a trailing-30-day slice within that window: **270** prescriptions (\u224831% of the Q4 total), close to the ~32.6% share you'd expect from a uniform pace across the quarter \u2014 so volume looks roughly evenly distributed within Q4, not concentrated at one end.\n\nNote: this 872-Rx Q4 figure is **not directly comparable** to the earlier 10,273 figure \u2014 that one covered the engine's default trailing-30-day window (through 2026-08-17), a different and non-overlapping period, so I can't derive a trend from those two numbers alone. If you'd like an actual quarter-over-quarter trend, I can pull Q3 2025 (or another prior quarter) on the same TRx basis for a true comparison.",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "ai",
+        "name": null,
+        "id": "35408f63-5352-4c98-9650-30a536100fb4",
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "usage_metadata": null
+       },
+       {
+        "content": "What is the market share for Kisqali compared to competitors?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "96440c16-a35c-4280-b268-b0d84d1631db"
+       },
+       {
+        "content": "Kisqali's **TRx Share = 30.6%** (0.3061), covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**), not the Q4 period discussed earlier.\n\nImportant clarification: this is **not** a comparison against external competitors. Per the tool's own definition, TRx Share measures Kisqali's share of the **tracked portfolio only** \u2014 Fabhalta + Kisqali + Remibrutinib combined (cross-indication brands in this data model). Competitors like Xolair or Dupixent aren't part of this dataset, so the remaining ~69.4% cannot be attributed to them \u2014 it's simply the combined share of Fabhalta and Remibrutinib within the tracked portfolio.\n\n- **Source:** `kpi_calculate_tool` (KPI ID WS3-BI-008, \"TRx Share\"), computed on demand from `treatment_events`. `data_source` is flagged **synthetic**.\n\nIf you'd like, I can pull Fabhalta's and Remibrutinib's TRx Share for the same window to show the full portfolio split.",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "ai",
+        "name": null,
+        "id": "5eaa06bc-c9c2-4f9a-b4fa-34c5d55dde37",
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "usage_metadata": null
+       },
+       {
+        "content": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "97d540fd-a060-4f38-b2d7-4f4eb03c5ceb"
+       },
+       {
+        "content": "Kisqali **TRx = 126 prescriptions** in the **northeast region for Q1 2026** (Jan 1 \u2013 Mar 31, 2026, a 90-day window). Source: `kpi_calculate_tool` (WS3-BI-005), computed from `treatment_events`, flagged **synthetic**.\n\n**Important limitation:** I don't have a non-overlapping prior-period figure for the northeast region to confirm a \"drop\" \u2014 no comparable baseline (e.g., Q4 2025 northeast TRx) was pulled, so I can't quantify a decline from the numbers alone. The 126 figure is a single data point, not a trend.\n\n**On causal drivers:** the `causal_analysis_tool` result carries this explicit note: *\"The causal-path registry has no region dimension \u2014 region 'northeast' was NOT applied as a filter; these results are brand-level. Do not present them as specific to that region.\"* So the drivers below explain Kisqali TRx dynamics **brand-wide**, not anything unique to the northeast:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| hcp_coverage | trx_market_share | +0.09 | 0.899 | +$29,540.62 |\n| persistent_180d | trx_volume | +0.285 | 0.892 | +$127,512.04 |\n| formulary_status | trx_volume | +0.223 | 0.805 | +$100,657.87 |\n| rep_detailing_frequency | trx_volume | +0.166 | 0.796 | +$38,244.12 |\n| copay_support_program | trx_volume | +0.088 | 0.794 | +$17,024.65 |\n| competitor_activity | trx_market_share | -0.073 | 0.793 | -$24,218.40 |\n\nOnly **competitor_activity \u2192 trx_market_share** shows a negative effect (-0.073, -$24,218.40 impact) \u2014 all other validated paths are positive drivers of TRx. All results are flagged `evidence_is_synthetic: true`.\n\n**Bottom line:** I can't confirm or explain a northeast-specific Q1 drop with the data pulled \u2014 I'd need (1) a prior-period (e.g., Q4 2025) northeast TRx figure to establish there was actually a decline, and (2) the causal registry doesn't support regional filtering, so any drop's specific regional cause can't be isolated from this tool. Want me to pull Q4 2025 northeast TRx as a same-length baseline for comparison?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "ai",
+        "name": null,
+        "id": "3cf08f2f-eec2-4488-81c8-1922e52ab17f",
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "usage_metadata": null
+       },
+       {
+        "content": "What is the causal impact of rep visits on TRx for Kisqali?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "92a37992-c072-42e3-86df-8643dc3805fd"
+       }
+      ],
+      "session_id": "d42b6795-8f28-4057-a587-eae3a8b66683",
+      "run_id": "798c0380-f261-4c7a-aa31-edd29ff05790",
+      "copilotkit": {
+       "actions": [],
+       "context": []
+      },
+      "current_node": "chat",
+      "progress_steps": [
+       "Processing your query..."
+      ],
+      "progress_percent": 25,
+      "agent_status": "processing",
+      "tools_executing": [],
+      "error_message": null
+     },
+     "parent_ids": [
+      "01a01650-a8d1-79c2-894c-b2a3c000064b"
+     ]
+    },
+    "name": "copilotkit_manually_emit_intermediate_state",
+    "value": {
+     "messages": [
+      {
+       "content": "What is TRx for Kisqali?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "fb1a63a3-549a-4891-a25e-ce56c463b205"
+      },
+      {
+       "content": "Kisqali **TRx = 10,273** prescriptions, covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**).\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. Note: `data_source` is flagged **synthetic**.\n- No specific period was requested, so this reflects the tool's default 30-day window rather than a custom range.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "d8c6da61-3cdb-4476-9ba3-104b9f354dba",
+       "tool_calls": [],
+       "invalid_tool_calls": [],
+       "usage_metadata": null
+      },
+      {
+       "content": "What are the TRx trends for Kisqali in Q4?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "fb19842b-be84-48b2-b3e8-4c756412d3e5"
+      },
+      {
+       "content": "Kisqali **TRx = 872 prescriptions** for **Q4 2025** (Oct 1 \u2013 Dec 31, 2025, a full 92-day window) \u2014 this is the calendar-period figure you asked for.\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. `data_source` is flagged **synthetic**.\n- The tool also returns a trailing-30-day slice within that window: **270** prescriptions (\u224831% of the Q4 total), close to the ~32.6% share you'd expect from a uniform pace across the quarter \u2014 so volume looks roughly evenly distributed within Q4, not concentrated at one end.\n\nNote: this 872-Rx Q4 figure is **not directly comparable** to the earlier 10,273 figure \u2014 that one covered the engine's default trailing-30-day window (through 2026-08-17), a different and non-overlapping period, so I can't derive a trend from those two numbers alone. If you'd like an actual quarter-over-quarter trend, I can pull Q3 2025 (or another prior quarter) on the same TRx basis for a true comparison.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "35408f63-5352-4c98-9650-30a536100fb4",
+       "tool_calls": [],
+       "invalid_tool_calls": [],
+       "usage_metadata": null
+      },
+      {
+       "content": "What is the market share for Kisqali compared to competitors?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "96440c16-a35c-4280-b268-b0d84d1631db"
+      },
+      {
+       "content": "Kisqali's **TRx Share = 30.6%** (0.3061), covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**), not the Q4 period discussed earlier.\n\nImportant clarification: this is **not** a comparison against external competitors. Per the tool's own definition, TRx Share measures Kisqali's share of the **tracked portfolio only** \u2014 Fabhalta + Kisqali + Remibrutinib combined (cross-indication brands in this data model). Competitors like Xolair or Dupixent aren't part of this dataset, so the remaining ~69.4% cannot be attributed to them \u2014 it's simply the combined share of Fabhalta and Remibrutinib within the tracked portfolio.\n\n- **Source:** `kpi_calculate_tool` (KPI ID WS3-BI-008, \"TRx Share\"), computed on demand from `treatment_events`. `data_source` is flagged **synthetic**.\n\nIf you'd like, I can pull Fabhalta's and Remibrutinib's TRx Share for the same window to show the full portfolio split.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "5eaa06bc-c9c2-4f9a-b4fa-34c5d55dde37",
+       "tool_calls": [],
+       "invalid_tool_calls": [],
+       "usage_metadata": null
+      },
+      {
+       "content": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "97d540fd-a060-4f38-b2d7-4f4eb03c5ceb"
+      },
+      {
+       "content": "Kisqali **TRx = 126 prescriptions** in the **northeast region for Q1 2026** (Jan 1 \u2013 Mar 31, 2026, a 90-day window). Source: `kpi_calculate_tool` (WS3-BI-005), computed from `treatment_events`, flagged **synthetic**.\n\n**Important limitation:** I don't have a non-overlapping prior-period figure for the northeast region to confirm a \"drop\" \u2014 no comparable baseline (e.g., Q4 2025 northeast TRx) was pulled, so I can't quantify a decline from the numbers alone. The 126 figure is a single data point, not a trend.\n\n**On causal drivers:** the `causal_analysis_tool` result carries this explicit note: *\"The causal-path registry has no region dimension \u2014 region 'northeast' was NOT applied as a filter; these results are brand-level. Do not present them as specific to that region.\"* So the drivers below explain Kisqali TRx dynamics **brand-wide**, not anything unique to the northeast:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| hcp_coverage | trx_market_share | +0.09 | 0.899 | +$29,540.62 |\n| persistent_180d | trx_volume | +0.285 | 0.892 | +$127,512.04 |\n| formulary_status | trx_volume | +0.223 | 0.805 | +$100,657.87 |\n| rep_detailing_frequency | trx_volume | +0.166 | 0.796 | +$38,244.12 |\n| copay_support_program | trx_volume | +0.088 | 0.794 | +$17,024.65 |\n| competitor_activity | trx_market_share | -0.073 | 0.793 | -$24,218.40 |\n\nOnly **competitor_activity \u2192 trx_market_share** shows a negative effect (-0.073, -$24,218.40 impact) \u2014 all other validated paths are positive drivers of TRx. All results are flagged `evidence_is_synthetic: true`.\n\n**Bottom line:** I can't confirm or explain a northeast-specific Q1 drop with the data pulled \u2014 I'd need (1) a prior-period (e.g., Q4 2025) northeast TRx figure to establish there was actually a decline, and (2) the causal registry doesn't support regional filtering, so any drop's specific regional cause can't be isolated from this tool. Want me to pull Q4 2025 northeast TRx as a same-length baseline for comparison?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "3cf08f2f-eec2-4488-81c8-1922e52ab17f",
+       "tool_calls": [],
+       "invalid_tool_calls": [],
+       "usage_metadata": null
+      },
+      {
+       "content": "What is the causal impact of rep visits on TRx for Kisqali?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "92a37992-c072-42e3-86df-8643dc3805fd"
+      }
+     ],
+     "session_id": "d42b6795-8f28-4057-a587-eae3a8b66683",
+     "run_id": "798c0380-f261-4c7a-aa31-edd29ff05790",
+     "copilotkit": {
+      "actions": [],
+      "context": []
+     },
+     "current_node": "chat",
+     "progress_steps": [
+      "Processing your query..."
+     ],
+     "progress_percent": 25,
+     "agent_status": "processing",
+     "tools_executing": [],
+     "error_message": null
+    }
+   },
+   "snapshot": {
+    "messages": [
+     {
+      "content": "What is TRx for Kisqali?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "fb1a63a3-549a-4891-a25e-ce56c463b205"
+     },
+     {
+      "content": "Kisqali **TRx = 10,273** prescriptions, covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**).\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. Note: `data_source` is flagged **synthetic**.\n- No specific period was requested, so this reflects the tool's default 30-day window rather than a custom range.",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "ai",
+      "name": null,
+      "id": "d8c6da61-3cdb-4476-9ba3-104b9f354dba",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null
+     },
+     {
+      "content": "What are the TRx trends for Kisqali in Q4?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "fb19842b-be84-48b2-b3e8-4c756412d3e5"
+     },
+     {
+      "content": "Kisqali **TRx = 872 prescriptions** for **Q4 2025** (Oct 1 \u2013 Dec 31, 2025, a full 92-day window) \u2014 this is the calendar-period figure you asked for.\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. `data_source` is flagged **synthetic**.\n- The tool also returns a trailing-30-day slice within that window: **270** prescriptions (\u224831% of the Q4 total), close to the ~32.6% share you'd expect from a uniform pace across the quarter \u2014 so volume looks roughly evenly distributed within Q4, not concentrated at one end.\n\nNote: this 872-Rx Q4 figure is **not directly comparable** to the earlier 10,273 figure \u2014 that one covered the engine's default trailing-30-day window (through 2026-08-17), a different and non-overlapping period, so I can't derive a trend from those two numbers alone. If you'd like an actual quarter-over-quarter trend, I can pull Q3 2025 (or another prior quarter) on the same TRx basis for a true comparison.",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "ai",
+      "name": null,
+      "id": "35408f63-5352-4c98-9650-30a536100fb4",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null
+     },
+     {
+      "content": "What is the market share for Kisqali compared to competitors?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "96440c16-a35c-4280-b268-b0d84d1631db"
+     },
+     {
+      "content": "Kisqali's **TRx Share = 30.6%** (0.3061), covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**), not the Q4 period discussed earlier.\n\nImportant clarification: this is **not** a comparison against external competitors. Per the tool's own definition, TRx Share measures Kisqali's share of the **tracked portfolio only** \u2014 Fabhalta + Kisqali + Remibrutinib combined (cross-indication brands in this data model). Competitors like Xolair or Dupixent aren't part of this dataset, so the remaining ~69.4% cannot be attributed to them \u2014 it's simply the combined share of Fabhalta and Remibrutinib within the tracked portfolio.\n\n- **Source:** `kpi_calculate_tool` (KPI ID WS3-BI-008, \"TRx Share\"), computed on demand from `treatment_events`. `data_source` is flagged **synthetic**.\n\nIf you'd like, I can pull Fabhalta's and Remibrutinib's TRx Share for the same window to show the full portfolio split.",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "ai",
+      "name": null,
+      "id": "5eaa06bc-c9c2-4f9a-b4fa-34c5d55dde37",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null
+     },
+     {
+      "content": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "97d540fd-a060-4f38-b2d7-4f4eb03c5ceb"
+     },
+     {
+      "content": "Kisqali **TRx = 126 prescriptions** in the **northeast region for Q1 2026** (Jan 1 \u2013 Mar 31, 2026, a 90-day window). Source: `kpi_calculate_tool` (WS3-BI-005), computed from `treatment_events`, flagged **synthetic**.\n\n**Important limitation:** I don't have a non-overlapping prior-period figure for the northeast region to confirm a \"drop\" \u2014 no comparable baseline (e.g., Q4 2025 northeast TRx) was pulled, so I can't quantify a decline from the numbers alone. The 126 figure is a single data point, not a trend.\n\n**On causal drivers:** the `causal_analysis_tool` result carries this explicit note: *\"The causal-path registry has no region dimension \u2014 region 'northeast' was NOT applied as a filter; these results are brand-level. Do not present them as specific to that region.\"* So the drivers below explain Kisqali TRx dynamics **brand-wide**, not anything unique to the northeast:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| hcp_coverage | trx_market_share | +0.09 | 0.899 | +$29,540.62 |\n| persistent_180d | trx_volume | +0.285 | 0.892 | +$127,512.04 |\n| formulary_status | trx_volume | +0.223 | 0.805 | +$100,657.87 |\n| rep_detailing_frequency | trx_volume | +0.166 | 0.796 | +$38,244.12 |\n| copay_support_program | trx_volume | +0.088 | 0.794 | +$17,024.65 |\n| competitor_activity | trx_market_share | -0.073 | 0.793 | -$24,218.40 |\n\nOnly **competitor_activity \u2192 trx_market_share** shows a negative effect (-0.073, -$24,218.40 impact) \u2014 all other validated paths are positive drivers of TRx. All results are flagged `evidence_is_synthetic: true`.\n\n**Bottom line:** I can't confirm or explain a northeast-specific Q1 drop with the data pulled \u2014 I'd need (1) a prior-period (e.g., Q4 2025) northeast TRx figure to establish there was actually a decline, and (2) the causal registry doesn't support regional filtering, so any drop's specific regional cause can't be isolated from this tool. Want me to pull Q4 2025 northeast TRx as a same-length baseline for comparison?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "ai",
+      "name": null,
+      "id": "3cf08f2f-eec2-4488-81c8-1922e52ab17f",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null
+     },
+     {
+      "content": "What is the causal impact of rep visits on TRx for Kisqali?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "92a37992-c072-42e3-86df-8643dc3805fd"
+     }
+    ],
+    "session_id": "d42b6795-8f28-4057-a587-eae3a8b66683",
+    "run_id": "798c0380-f261-4c7a-aa31-edd29ff05790",
+    "copilotkit": {
+     "actions": [],
+     "context": []
+    },
+    "current_node": "chat",
+    "progress_steps": [
+     "Processing your query..."
+    ],
+    "progress_percent": 25,
+    "agent_status": "processing",
+    "tools_executing": [],
+    "error_message": null
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 2386.8,
+   "type": "TEXT_MESSAGE_START",
+   "timestamp": 1787080782027,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "Based on the causal-path registry data already ret",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "role": "assistant",
+   "name": null,
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 2387.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080782029,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "Based on the causal-path registry data already ret",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "Based on the causal-path registry data already ret",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 2923.2,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080782567,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "rieved for Kisqali, the closest modeled driver to \"rep visits\" is **rep_detailing_frequency**:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "rieved for Kisqali, the closest modeled driver to \"rep visits\" is **rep_detailing_frequency**:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 3470.7,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080783115,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "|---|\n| rep_detailing_frequency | trx_volume | **+0.166** | **0.796** | **+$38,244.12** |\n\n**Interpretation:**\n- Higher rep detailing frequency is associ",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "|---|\n| rep_detailing_frequency | trx_volume | **+0.166** | **0.796** | **+$38,244.12** |\n\n**Interpretation:**\n- Higher rep detailing frequency is associ",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 4017.3,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080783661,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "ated with a **positive, moderate** effect on TRx volume (effect size 0.166), with a modeled confidence of ~0.80 (above the typical 0.7 threshold used for these ch",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "ated with a **positive, moderate** effect on TRx volume (effect size 0.166), with a modeled confidence of ~0.80 (above the typical 0.7 threshold used for these ch",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 4560.3,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080784204,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "ains).\n- Estimated business impact: **+$38,244.12** in incremental value attributed to this pathway.\n- This is a **brand-level** result",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "ains).\n- Estimated business impact: **+$38,244.12** in incremental value attributed to this pathway.\n- This is a **brand-level** result",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 5107.7,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080784750,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": " (Kisqali), not region-specific \u2014 the registry has no regional dimension.\n\n**Caveats:**\n- Source: `causal_analysis_tool` (causal-path registry), which is explicitly flagged **`evidence_is_syn",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": " (Kisqali), not region-specific \u2014 the registry has no regional dimension.\n\n**Caveats:**\n- Source: `causal_analysis_tool` (causal-path registry), which is explicitly flagged **`evidence_is_syn",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 5653.3,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080785297,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "thetic: true`** \u2014 treat effect sizes and confidence as modeled estimates, not measured trial results.\n- \"Rep detailing frequency\" is the regist",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "thetic: true`** \u2014 treat effect sizes and confidence as modeled estimates, not measured trial results.\n- \"Rep detailing frequency\" is the regist",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6196.5,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080785840,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "ry's node name and the nearest match to \"rep visits\" \u2014 I haven't verified these are defined identically, so note the",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "ry's node name and the nearest match to \"rep visits\" \u2014 I haven't verified these are defined identically, so note the",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6769.3,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080786412,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": " terminology mapping if that distinction matters for your use case.\n- The confidence level (0.796) reflects the model's cert",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": " terminology mapping if that distinction matters for your use case.\n- The confidence level (0.796) reflects the model's cert",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7286.5,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080786930,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "ainty in the *relationship*, not a percentage lift \u2014 don't convert it into an effect-size unit.\n\nWant me to compare this rep-detailing effect against",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": "ainty in the *relationship*, not a percentage lift \u2014 don't convert it into an effect-size unit.\n\nWant me to compare this rep-detailing effect against",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7578.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080787218,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": " the other drivers (e.g., formulary_status at +0.223) to help prioritize investment?",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "delta": " the other drivers (e.g., formulary_status at +0.223) to help prioritize investment?",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7589.5,
+   "type": "TEXT_MESSAGE_END",
+   "timestamp": 1787080787228,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "stop_reason": "end_turn",
+       "stop_sequence": null,
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": {
+       "input_tokens": 19192,
+       "output_tokens": 624,
+       "total_tokens": 19816,
+       "input_token_details": {
+        "cache_creation": 0,
+        "cache_read": 0
+       }
+      },
+      "tool_call_chunks": [],
+      "chunk_position": "last"
+     }
+    },
+    "run_id": "01a01650-a95b-7423-858c-d68d41e62066",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b",
+     "01a01650-a8d4-7733-8d87-f8575d86634d"
+    ]
+   },
+   "messageId": "lc_run--01a01650-a95b-7423-858c-d68d41e62066",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7597.0,
+   "type": "RAW",
+   "timestamp": 1787080787240,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "",
+     "message_id": "a870d624-805b-4d05-b336-40f36ac0e5fd",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7618.7,
+   "type": "RAW",
+   "timestamp": 1787080787262,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "",
+     "message_id": "72dc85d9-8bab-4749-aeaf-005759e32b3d",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7640.2,
+   "type": "RAW",
+   "timestamp": 1787080787284,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "Based on the causal-path registry data already ret",
+     "message_id": "d4e5abf3-7df6-46a5-ac92-6d7a90b213b8",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7662.0,
+   "type": "RAW",
+   "timestamp": 1787080787306,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "rieved for Kisqali, the closest modeled driver to \"rep visits\" is **rep_detailing_frequency**:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---",
+     "message_id": "5964ccb4-6cc6-4156-bae0-37efe038ccf3",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7682.7,
+   "type": "RAW",
+   "timestamp": 1787080787327,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "|---|\n| rep_detailing_frequency | trx_volume | **+0.166** | **0.796** | **+$38,244.12** |\n\n**Interpretation:**\n- Higher rep detailing frequency is associ",
+     "message_id": "8def597b-2ce9-485b-803a-4c90b3195882",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7704.6,
+   "type": "RAW",
+   "timestamp": 1787080787349,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "ated with a **positive, moderate** effect on TRx volume (effect size 0.166), with a modeled confidence of ~0.80 (above the typical 0.7 threshold used for these ch",
+     "message_id": "7680fe17-6e87-4d26-8200-c99403061d2e",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7725.7,
+   "type": "RAW",
+   "timestamp": 1787080787370,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "ains).\n- Estimated business impact: **+$38,244.12** in incremental value attributed to this pathway.\n- This is a **brand-level** result",
+     "message_id": "be1bd2d7-1a45-4600-b706-b9bfc7ab8ac2",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7747.0,
+   "type": "RAW",
+   "timestamp": 1787080787391,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": " (Kisqali), not region-specific \u2014 the registry has no regional dimension.\n\n**Caveats:**\n- Source: `causal_analysis_tool` (causal-path registry), which is explicitly flagged **`evidence_is_syn",
+     "message_id": "f0a45614-50e6-4d88-910a-fc7a3e210c6b",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7767.9,
+   "type": "RAW",
+   "timestamp": 1787080787412,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "thetic: true`** \u2014 treat effect sizes and confidence as modeled estimates, not measured trial results.\n- \"Rep detailing frequency\" is the regist",
+     "message_id": "923b71ce-aab6-4329-8c85-69c292a53065",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7790.0,
+   "type": "RAW",
+   "timestamp": 1787080787434,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "ry's node name and the nearest match to \"rep visits\" \u2014 I haven't verified these are defined identically, so note the",
+     "message_id": "dbc973c7-67b4-412c-bdd7-15aa4a8ecfb5",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7811.1,
+   "type": "RAW",
+   "timestamp": 1787080787455,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": " terminology mapping if that distinction matters for your use case.\n- The confidence level (0.796) reflects the model's cert",
+     "message_id": "9fa757a4-3132-4ec0-8610-8f58a67b3c0d",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7833.2,
+   "type": "RAW",
+   "timestamp": 1787080787475,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": "ainty in the *relationship*, not a percentage lift \u2014 don't convert it into an effect-size unit.\n\nWant me to compare this rep-detailing effect against",
+     "message_id": "dadb3d97-2acd-4976-86ee-184f921126a1",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7852.2,
+   "type": "RAW",
+   "timestamp": 1787080787496,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01650-a8d4-7733-8d87-f8575d86634d",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+     "ls_integration": "langgraph",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc",
+     "checkpoint_ns": "chat:0ba372f7-1bc6-5fc0-f079-3bdaaf655bbc"
+    },
+    "data": {
+     "message": " the other drivers (e.g., formulary_status at +0.223) to help prioritize investment?",
+     "message_id": "0f2a3c77-8d72-49fa-a83f-939ca39d0675",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01650-a8d1-79c2-894c-b2a3c000064b"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7971.5,
+   "type": "MESSAGES_SNAPSHOT",
+   "timestamp": 1787080787589,
+   "rawEvent": null,
+   "messages": [
+    {
+     "id": "fb1a63a3-549a-4891-a25e-ce56c463b205",
+     "role": "user",
+     "content": "What is TRx for Kisqali?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "d8c6da61-3cdb-4476-9ba3-104b9f354dba",
+     "role": "assistant",
+     "content": "Kisqali **TRx = 10,273** prescriptions, covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**).\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. Note: `data_source` is flagged **synthetic**.\n- No specific period was requested, so this reflects the tool's default 30-day window rather than a custom range.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    },
+    {
+     "id": "fb19842b-be84-48b2-b3e8-4c756412d3e5",
+     "role": "user",
+     "content": "What are the TRx trends for Kisqali in Q4?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "35408f63-5352-4c98-9650-30a536100fb4",
+     "role": "assistant",
+     "content": "Kisqali **TRx = 872 prescriptions** for **Q4 2025** (Oct 1 \u2013 Dec 31, 2025, a full 92-day window) \u2014 this is the calendar-period figure you asked for.\n\n- Source: `kpi_calculate_tool` (KPI ID WS3-BI-005), computed on demand from the `treatment_events` ledger. `data_source` is flagged **synthetic**.\n- The tool also returns a trailing-30-day slice within that window: **270** prescriptions (\u224831% of the Q4 total), close to the ~32.6% share you'd expect from a uniform pace across the quarter \u2014 so volume looks roughly evenly distributed within Q4, not concentrated at one end.\n\nNote: this 872-Rx Q4 figure is **not directly comparable** to the earlier 10,273 figure \u2014 that one covered the engine's default trailing-30-day window (through 2026-08-17), a different and non-overlapping period, so I can't derive a trend from those two numbers alone. If you'd like an actual quarter-over-quarter trend, I can pull Q3 2025 (or another prior quarter) on the same TRx basis for a true comparison.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    },
+    {
+     "id": "96440c16-a35c-4280-b268-b0d84d1631db",
+     "role": "user",
+     "content": "What is the market share for Kisqali compared to competitors?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "5eaa06bc-c9c2-4f9a-b4fa-34c5d55dde37",
+     "role": "assistant",
+     "content": "Kisqali's **TRx Share = 30.6%** (0.3061), covering the engine's default reporting window \u2014 the **most recent 30 days** of prescription data (through **2026-08-17**), not the Q4 period discussed earlier.\n\nImportant clarification: this is **not** a comparison against external competitors. Per the tool's own definition, TRx Share measures Kisqali's share of the **tracked portfolio only** \u2014 Fabhalta + Kisqali + Remibrutinib combined (cross-indication brands in this data model). Competitors like Xolair or Dupixent aren't part of this dataset, so the remaining ~69.4% cannot be attributed to them \u2014 it's simply the combined share of Fabhalta and Remibrutinib within the tracked portfolio.\n\n- **Source:** `kpi_calculate_tool` (KPI ID WS3-BI-008, \"TRx Share\"), computed on demand from `treatment_events`. `data_source` is flagged **synthetic**.\n\nIf you'd like, I can pull Fabhalta's and Remibrutinib's TRx Share for the same window to show the full portfolio split.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    },
+    {
+     "id": "97d540fd-a060-4f38-b2d7-4f4eb03c5ceb",
+     "role": "user",
+     "content": "Why did Kisqali TRx drop in Q1 in the northeast region?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "3cf08f2f-eec2-4488-81c8-1922e52ab17f",
+     "role": "assistant",
+     "content": "Kisqali **TRx = 126 prescriptions** in the **northeast region for Q1 2026** (Jan 1 \u2013 Mar 31, 2026, a 90-day window). Source: `kpi_calculate_tool` (WS3-BI-005), computed from `treatment_events`, flagged **synthetic**.\n\n**Important limitation:** I don't have a non-overlapping prior-period figure for the northeast region to confirm a \"drop\" \u2014 no comparable baseline (e.g., Q4 2025 northeast TRx) was pulled, so I can't quantify a decline from the numbers alone. The 126 figure is a single data point, not a trend.\n\n**On causal drivers:** the `causal_analysis_tool` result carries this explicit note: *\"The causal-path registry has no region dimension \u2014 region 'northeast' was NOT applied as a filter; these results are brand-level. Do not present them as specific to that region.\"* So the drivers below explain Kisqali TRx dynamics **brand-wide**, not anything unique to the northeast:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| hcp_coverage | trx_market_share | +0.09 | 0.899 | +$29,540.62 |\n| persistent_180d | trx_volume | +0.285 | 0.892 | +$127,512.04 |\n| formulary_status | trx_volume | +0.223 | 0.805 | +$100,657.87 |\n| rep_detailing_frequency | trx_volume | +0.166 | 0.796 | +$38,244.12 |\n| copay_support_program | trx_volume | +0.088 | 0.794 | +$17,024.65 |\n| competitor_activity | trx_market_share | -0.073 | 0.793 | -$24,218.40 |\n\nOnly **competitor_activity \u2192 trx_market_share** shows a negative effect (-0.073, -$24,218.40 impact) \u2014 all other validated paths are positive drivers of TRx. All results are flagged `evidence_is_synthetic: true`.\n\n**Bottom line:** I can't confirm or explain a northeast-specific Q1 drop with the data pulled \u2014 I'd need (1) a prior-period (e.g., Q4 2025) northeast TRx figure to establish there was actually a decline, and (2) the causal registry doesn't support regional filtering, so any drop's specific regional cause can't be isolated from this tool. Want me to pull Q4 2025 northeast TRx as a same-length baseline for comparison?",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    },
+    {
+     "id": "92a37992-c072-42e3-86df-8643dc3805fd",
+     "role": "user",
+     "content": "What is the causal impact of rep visits on TRx for Kisqali?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "msg-d9eb1213-84e0-4db3-b697-fe2455b2cc5b",
+     "role": "assistant",
+     "content": "Based on the causal-path registry data already retrieved for Kisqali, the closest modeled driver to \"rep visits\" is **rep_detailing_frequency**:\n\n| Cause | Effect | Effect Size | Confidence | Business Impact |\n|---|---|---|---|---|\n| rep_detailing_frequency | trx_volume | **+0.166** | **0.796** | **+$38,244.12** |\n\n**Interpretation:**\n- Higher rep detailing frequency is associated with a **positive, moderate** effect on TRx volume (effect size 0.166), with a modeled confidence of ~0.80 (above the typical 0.7 threshold used for these chains).\n- Estimated business impact: **+$38,244.12** in incremental value attributed to this pathway.\n- This is a **brand-level** result (Kisqali), not region-specific \u2014 the registry has no regional dimension.\n\n**Caveats:**\n- Source: `causal_analysis_tool` (causal-path registry), which is explicitly flagged **`evidence_is_synthetic: true`** \u2014 treat effect sizes and confidence as modeled estimates, not measured trial results.\n- \"Rep detailing frequency\" is the registry's node name and the nearest match to \"rep visits\" \u2014 I haven't verified these are defined identically, so note the terminology mapping if that distinction matters for your use case.\n- The confidence level (0.796) reflects the model's certainty in the *relationship*, not a percentage lift \u2014 don't convert it into an effect-size unit.\n\nWant me to compare this rep-detailing effect against the other drivers (e.g., formulary_status at +0.223) to help prioritize investment?",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    }
+   ],
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7972.5,
+   "type": "RUN_FINISHED",
+   "timestamp": 1787080787591,
+   "rawEvent": null,
+   "threadId": "2cc2e60b-4507-46d7-b25b-14fc4e965184",
+   "runId": "01a01650-a8d1-79c2-894c-b2a3c000064b",
+   "result": null,
+   "source": "e2i-copilot",
+   "parentRunId": "",
+   "output": {
+    "messages": []
+   }
+  }
+ ]
+}

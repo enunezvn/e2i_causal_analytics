@@ -67,6 +67,162 @@ def _contains_progress(obj: Any) -> bool:
     return False
 
 
+def _manual_emit_text(event: Dict[str, Any]) -> Optional[str]:
+    """Assistant text carried by a ``copilotkit_manually_emit_message`` RAW event.
+
+    Measured shape (2026-08-18 certification run, turn 3.3 events[103]):
+
+        {"type": "RAW", "event": {"event": "on_custom_event",
+         "name": "copilotkit_manually_emit_message",
+         "data": {"message": "...", "message_id": "...", "role": "assistant"},
+         ...}, ...}
+
+    Returns None for anything that is not an assistant-role manual emit.
+    """
+    if _norm(event.get("type")) != "raw":
+        return None
+    inner = event.get("event")
+    if not isinstance(inner, dict) or inner.get("name") != "copilotkit_manually_emit_message":
+        return None
+    data = inner.get("data")
+    if not isinstance(data, dict):
+        return None
+    if data.get("role") not in (None, "assistant"):
+        return None
+    message = data.get("message")
+    return message if isinstance(message, str) else None
+
+
+def fold_stream_text(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Fold a turn's recorded AG-UI events into the text the UI renders (#1699).
+
+    Pure function over the recorded ``events`` list (the same dicts stored in
+    the raw JSONL), extracted from ``run_turn`` so it can be tested against
+    real captured streams.
+
+    Two channels deliver assistant text, and only their union matches what the
+    CopilotKit UI renders (measured 2026-08-18, turn 3.3: streamed 1,265 chars
+    vs 1,481 persisted — the missing 216-char guard note travelled ONLY as a
+    manual emit and was invisible to all four graders + a marker sweep):
+
+    - ``TEXT_MESSAGE_CONTENT`` deltas — closed into segments on
+      ``TEXT_MESSAGE_END``, joined with a blank line (unchanged behaviour);
+    - ``copilotkit_manually_emit_message`` RAW events. CAUTION: the server
+      also MIRRORS every streamed chunk over this channel (measured: all 51
+      turns of the 2026-08-18 run carry mirror emits, sometimes flushed only
+      after ``TEXT_MESSAGE_END``), so payloads are deduplicated against the
+      streamed text and only genuinely-new content is folded in, at its
+      stream position.
+
+    Reconciliation: the final ``MESSAGES_SNAPSHOT``'s assistant messages for
+    THIS turn (after its user message; the last assistant message alone is
+    wrong for multi-segment turns, e.g. 2.1's 408+1,390-char pair) are compared
+    against the folded text. On divergence neither side is silently trusted:
+    ``snapshot_mismatch`` records the discrepancy.
+
+    Returns a dict with:
+    - ``messages_out``   — closed TEXT_MESSAGE segments, in stream order
+      (meaning unchanged: manual-emit text is folded into ``response_text``
+      only);
+    - ``response_text``  — the rendered turn text;
+    - ``snapshot_mismatch`` — None when consistent (or no snapshot arrived),
+      else ``{response_text_len, snapshot_len, divergence_at,
+      response_text_at_divergence, snapshot_at_divergence}``.
+    """
+    # ---- pass 1: collect segments, manual emits (in order), final snapshot ----
+    pieces: List[tuple] = []  # ("segment"|"manual", text) in stream order
+    messages_out: List[str] = []
+    snapshot_messages: Optional[List[Any]] = None
+    current = ""
+    for event in events:
+        etype = _norm(event.get("type"))
+        if etype == "textmessagecontent":
+            current += event.get("delta") or event.get("content") or ""
+        elif etype == "textmessageend":
+            if current:
+                pieces.append(("segment", current))
+                messages_out.append(current)
+            current = ""
+        elif etype == "messagessnapshot":
+            messages = event.get("messages")
+            if isinstance(messages, list):
+                snapshot_messages = messages  # keep the LAST snapshot
+        else:
+            manual = _manual_emit_text(event)
+            if manual:
+                pieces.append(("manual", manual))
+    if current:  # unterminated stream (transport error mid-message)
+        pieces.append(("segment", current))
+        messages_out.append(current)
+
+    # ---- pass 2: drop mirror emits, keep genuinely-new manual content ----
+    # Mirror emits reproduce the streamed delta chunks in order (a contiguous
+    # run within the concatenated streamed text); they can lead or lag the
+    # deltas, so classification happens after the stream completes. A payload
+    # that neither continues the mirror run nor anchors anywhere in the
+    # streamed text is genuinely new.
+    streamed_concat = "".join(messages_out)
+    folded_pieces: List[tuple] = []
+    cursor = -1  # mirror cursor into streamed_concat; -1 = not anchored yet
+    for kind, text in pieces:
+        if kind == "segment":
+            folded_pieces.append((kind, text))
+            continue
+        if cursor >= 0 and streamed_concat.startswith(text, cursor):
+            cursor += len(text)  # mirror continuation
+            continue
+        anchor = streamed_concat.find(text)
+        if anchor >= 0:
+            cursor = anchor + len(text)  # mirror (re)anchor
+            continue
+        folded_pieces.append(("manual", text))
+
+    # ---- pass 3: assemble. Segments keep the old blank-line join; genuine
+    # manual content concatenates directly at its stream position (measured:
+    # the server persists it appended to the assistant message verbatim). ----
+    parts: List[str] = []
+    seen_segment = False
+    for kind, text in folded_pieces:
+        if kind == "segment":
+            if seen_segment:
+                parts.append("\n\n")
+            seen_segment = True
+        parts.append(text)
+    response_text = "".join(parts)
+
+    # ---- pass 4: reconcile against the final MESSAGES_SNAPSHOT ----
+    snapshot_mismatch: Optional[Dict[str, Any]] = None
+    if snapshot_messages:
+        last_user = -1
+        for i, message in enumerate(snapshot_messages):
+            if isinstance(message, dict) and message.get("role") == "user":
+                last_user = i
+        contents = [
+            (message.get("content") or "")
+            for message in snapshot_messages[last_user + 1 :]
+            if isinstance(message, dict) and message.get("role") == "assistant"
+        ]
+        snapshot_text = "\n\n".join(c for c in contents if c)
+        if snapshot_text != response_text:
+            limit = min(len(snapshot_text), len(response_text))
+            n = 0
+            while n < limit and snapshot_text[n] == response_text[n]:
+                n += 1
+            snapshot_mismatch = {
+                "response_text_len": len(response_text),
+                "snapshot_len": len(snapshot_text),
+                "divergence_at": n,
+                "response_text_at_divergence": response_text[n : n + 400],
+                "snapshot_at_divergence": snapshot_text[n : n + 400],
+            }
+
+    return {
+        "messages_out": messages_out,
+        "response_text": response_text,
+        "snapshot_mismatch": snapshot_mismatch,
+    }
+
+
 def user_message(text: str) -> Dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
@@ -114,12 +270,15 @@ def run_turn(
         "total_ms": None,
         "error": None,
         "http_status": None,
+        # Set when the final MESSAGES_SNAPSHOT's assistant text for this turn
+        # diverges from the accumulated response_text (#1699). Additive field;
+        # None when consistent (or when no snapshot arrived).
+        "snapshot_mismatch": None,
         # How many frames actually reached us. Recorded in the raw jsonl rather
         # than the CSV because CSV_COLUMNS is shared with copilot_chat_perf_runner;
         # the CSV already surfaces the outcome via `error` + `response_chars`.
         "stream_frames": 0,
     }
-    current_text = ""
     t0 = time.monotonic()
     try:
         with httpx.stream(
@@ -152,11 +311,6 @@ def run_turn(
                 if etype == "textmessagecontent":
                     if record["ttfb_ms"] is None:
                         record["ttfb_ms"] = round(now_ms, 1)
-                    current_text += event.get("delta") or event.get("content") or ""
-                elif etype == "textmessageend":
-                    if current_text:
-                        record["messages_out"].append(current_text)
-                    current_text = ""
                 elif etype in ("toolcallstart", "actionexecutionstart"):
                     name = event.get("toolCallName") or event.get("actionName") or event.get("name")
                     if name:
@@ -171,9 +325,17 @@ def run_turn(
     except Exception as exc:  # noqa: BLE001 - fail-soft per turn; the run must survive
         record["total_ms"] = round((time.monotonic() - t0) * 1000, 1)
         record["error"] = f"{type(exc).__name__}: {exc}"
-    if current_text:
-        record["messages_out"].append(current_text)
-    record["response_text"] = "\n\n".join(record["messages_out"])
+    folded = fold_stream_text(record["events"])
+    record["messages_out"] = folded["messages_out"]
+    record["response_text"] = folded["response_text"]
+    record["snapshot_mismatch"] = folded["snapshot_mismatch"]
+    if record["snapshot_mismatch"]:
+        logger.warning(
+            "[%s] snapshot mismatch: response_text=%d chars, snapshot=%d chars (#1699)",
+            request_id,
+            record["snapshot_mismatch"]["response_text_len"],
+            record["snapshot_mismatch"]["snapshot_len"],
+        )
     record["stream_frames"] = len(record["events"])
     _grade_stream_health(record)
     # Mirror the frontend: the assistant's reply joins the resent history.
@@ -208,8 +370,10 @@ def _grade_stream_health(record: Dict[str, Any]) -> None:
     * **frames but no answer text** — the run streamed machinery and no prose.
       Safe to fail HERE because this runner sends ``"actions": []``: with no
       frontend actions registered there is no legitimate way for a turn to
-      deliver its answer other than ``TEXT_MESSAGE_CONTENT``. A runner that
-      starts registering actions must revisit this.
+      deliver its answer other than ``TEXT_MESSAGE_CONTENT`` or a
+      ``copilotkit_manually_emit_message`` payload (both folded into
+      ``response_text`` since #1699). A runner that starts registering
+      actions must revisit this.
 
     Never overwrites an existing ``error`` — a transport failure or ``RUN_ERROR``
     is the more specific diagnosis and already fails the turn.
@@ -224,7 +388,7 @@ def _grade_stream_health(record: Dict[str, Any]) -> None:
     if not (record.get("response_text") or "").strip():
         record["error"] = (
             f"no answer delivered: HTTP 200 with {record['stream_frames']} frames but "
-            "zero TEXT_MESSAGE_CONTENT text (#1667)"
+            "zero rendered text (TEXT_MESSAGE_CONTENT + manual emits, #1667/#1699)"
         )
 
 
