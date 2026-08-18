@@ -15,7 +15,7 @@ import inspect
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol, cast, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, cast, runtime_checkable
 
 # Import procedural memory functions for semantic search
 from src.memory.procedural_memory import (
@@ -24,6 +24,34 @@ from src.memory.procedural_memory import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _execute_query(execute: Callable[[], Any]) -> Any:
+    """Run a postgrest ``execute`` that may belong to a SYNC or ASYNC client.
+
+    Every direct Supabase ``execute()`` in this module funnels through here
+    (#1681, #1683): the adapters accept whichever client the caller holds, and
+    both shapes reach them in production.
+
+    ``run_in_executor`` is for the sync client — its ``execute()`` blocks on
+    HTTP, and calling it on the loop thread would stall every other request.
+
+    An async client's ``execute()`` does NOT block: it returns a coroutine,
+    which the executor hands straight back unawaited. On the read path that
+    raised ``'coroutine' object has no attribute 'data'`` and took the
+    operator-facing optimizer gate on /api/feedback/health to all-nulls
+    (#1681). On the write path nothing reads the result, so the INSERT was
+    silently skipped while its caller logged success (#1683) — so the await
+    below is load-bearing for writes even though no attribute access follows.
+
+    Awaiting here is safe: constructing a coroutine in the worker thread
+    neither runs it nor binds it to a loop, so it is awaited on THIS loop,
+    where the client's httpx session already lives.
+    """
+    result = await asyncio.get_event_loop().run_in_executor(None, execute)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
 
 
 # =============================================================================
@@ -532,11 +560,10 @@ class ProceduralMemoryAdapter:
             return []
         # Try RPC function first
         try:
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
+            response = await _execute_query(
                 lambda: self._client.rpc(  # type: ignore[union-attr]
                     "search_procedural_memory", {"query_text": query, "limit_count": limit}
-                ).execute(),
+                ).execute()
             )
             return response.data if response.data else []
         except Exception as e:
@@ -544,9 +571,8 @@ class ProceduralMemoryAdapter:
 
         # Fallback to direct table query
         try:
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self._client.table("procedural_memory").select("*").limit(limit).execute(),  # type: ignore[union-attr]
+            response = await _execute_query(
+                lambda: self._client.table("procedural_memory").select("*").limit(limit).execute()  # type: ignore[union-attr]
             )
             return response.data if response.data else []
         except Exception as e:
@@ -772,13 +798,15 @@ class SignalCollectorAdapter:
                 for s in signals_to_flush
             ]
 
-            # Persist to database
+            # Persist to database. _execute_query's await is what makes an
+            # async client's INSERT actually run — nothing reads this result,
+            # so a dropped coroutine here is silent data loss, not an error
+            # (#1683).
             if self._client is not None:
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
+                await _execute_query(
                     lambda: (
                         self._client.table("dspy_agent_training_signals").insert(records).execute()
-                    ),  # type: ignore[union-attr]
+                    )  # type: ignore[union-attr]
                 )
 
             logger.info(f"Flushed {count} training signals to database")
@@ -851,25 +879,9 @@ class SignalCollectorAdapter:
                 .limit(limit)
             )
 
-            # The client may be SYNC or ASYNC and both reach here (#1681).
-            #
-            # `run_in_executor` is for the sync client: its `execute()` blocks on
-            # HTTP, and calling it on the loop thread would stall every other
-            # request. Keep that offload.
-            #
-            # An async client's `execute()` does NOT block — it returns a
-            # coroutine, and the executor hands that coroutine straight back
-            # unawaited. `response.data` then raised `'coroutine' object has no
-            # attribute 'data'`, which is what took the operator-facing optimizer
-            # gate on /api/feedback/health to all-nulls: the route builds its
-            # client with `get_async_supabase_client()`.
-            #
-            # Awaiting here is safe: constructing a coroutine in the worker
-            # thread does not run it or bind it to a loop, so it is awaited on
-            # THIS loop, where the client's httpx session already lives.
-            response = await asyncio.get_event_loop().run_in_executor(None, lambda: query.execute())
-            if inspect.isawaitable(response):
-                response = await response
+            # The client may be SYNC or ASYNC and both reach here — the route
+            # passes get_async_supabase_client() (#1681). See _execute_query.
+            response = await _execute_query(lambda: query.execute())
 
             return response.data if response.data else []
 
