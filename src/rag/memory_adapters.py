@@ -12,6 +12,7 @@ The adapters translate between:
 
 import asyncio
 import inspect
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -555,28 +556,35 @@ class ProceduralMemoryAdapter:
             )
 
     async def _execute_procedure_search(self, query: str, limit: int) -> List[Any]:
-        """Execute procedure search via Supabase."""
+        """Last-ditch fallback: best-first read of ``procedural_memories``.
+
+        #1685: this used to try an RPC (``search_procedural_memory``) and a
+        table (``procedural_memory``) that have never existed in this schema,
+        so it returned ``[]`` unconditionally. The real text-relevance search
+        is the PRIMARY path (``find_relevant_procedures`` via embedding); with
+        no embedding available here, the honest fallback is unranked-by-query:
+        active procedures, highest success_rate first — mirroring the RPC's
+        ``is_active`` filter and riding the ``idx_procedural_success`` partial
+        index.
+        """
         if self._client is None:
             return []
-        # Try RPC function first
         try:
             response = await _execute_query(
-                lambda: self._client.rpc(  # type: ignore[union-attr]
-                    "search_procedural_memory", {"query_text": query, "limit_count": limit}
-                ).execute()
+                lambda: (
+                    self._client.table("procedural_memories")  # type: ignore[union-attr]
+                    .select("*")
+                    .eq("is_active", True)
+                    .order("success_rate", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
             )
-            return response.data if response.data else []
+            rows = response.data if response.data else []
+            logger.debug(f"Procedural fallback returned {len(rows)} rows for query={query!r}")
+            return rows
         except Exception as e:
-            logger.debug(f"RPC search failed, trying table query: {e}")
-
-        # Fallback to direct table query
-        try:
-            response = await _execute_query(
-                lambda: self._client.table("procedural_memory").select("*").limit(limit).execute()  # type: ignore[union-attr]
-            )
-            return response.data if response.data else []
-        except Exception as e:
-            logger.warning(f"Direct table query failed: {e}")
+            logger.warning(f"Procedural fallback table query failed: {e}")
             return []
 
     def _transform_procedure_results(self, procedures: List[Any]) -> List[Dict[str, Any]]:
@@ -607,37 +615,60 @@ class ProceduralMemoryAdapter:
         return transformed
 
     def _build_procedure_content(self, proc: Dict[str, Any]) -> str:
-        """Build human-readable content from procedure."""
+        """Build human-readable content from procedure.
+
+        #1685: reads the REAL schema columns (``procedure_name``,
+        ``tool_sequence``, ``trigger_pattern`` — what both the table and the
+        ``find_relevant_procedures`` RPC return) with the originally-imagined
+        keys (``name``/``steps``/``pattern``) kept as legacy aliases.
+        """
         parts = []
 
         # Title/name
-        if "name" in proc:
-            parts.append(f"Procedure: {proc['name']}")
+        name = proc.get("procedure_name") or proc.get("name")
+        if name:
+            parts.append(f"Procedure: {name}")
         elif "procedure_type" in proc:
             parts.append(f"Procedure Type: {proc['procedure_type']}")
 
-        # Steps
-        if "steps" in proc:
-            steps = proc["steps"]
-            if isinstance(steps, list):
-                step_str = " → ".join(str(s) for s in steps[:5])
-                parts.append(f"Steps: {step_str}")
-            else:
-                parts.append(f"Steps: {steps}")
+        # Steps — tool_sequence may be a list of step dicts, a bare dict
+        # (HPO pattern rows), or a double-encoded JSON string (pre-#883 rows;
+        # repaired by migration 072, tolerated like procedural_memory.py does).
+        steps = proc.get("tool_sequence", proc.get("steps"))
+        if isinstance(steps, str):
+            try:
+                steps = json.loads(steps)
+            except (ValueError, TypeError):
+                pass
+        if isinstance(steps, list):
+            step_str = " → ".join(self._summarize_step(s) for s in steps[:5])
+            parts.append(f"Steps: {step_str}")
+        elif steps is not None:
+            parts.append(f"Steps: {self._summarize_step(steps)}")
 
         # Context
         if "context" in proc:
             parts.append(f"Context: {proc['context']}")
 
         # Pattern
-        if "pattern" in proc:
-            parts.append(f"Pattern: {proc['pattern']}")
+        pattern = proc.get("trigger_pattern") or proc.get("pattern")
+        if pattern:
+            parts.append(f"Pattern: {pattern}")
 
         # Success rate
         if "success_rate" in proc:
             parts.append(f"Success Rate: {proc['success_rate']:.0%}")
 
         return "; ".join(parts) if parts else str(proc)
+
+    @staticmethod
+    def _summarize_step(step: Any) -> str:
+        """One compact token for a tool_sequence entry."""
+        if isinstance(step, dict):
+            for key in ("tool", "type", "name", "action"):
+                if step.get(key):
+                    return str(step[key])
+        return str(step)
 
     def _get_fallback_procedures(self, query: str) -> List[Dict[str, Any]]:
         """Return fallback procedures when database unavailable."""

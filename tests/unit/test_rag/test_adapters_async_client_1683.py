@@ -59,23 +59,26 @@ PROC_ROWS: List[Dict[str, Any]] = [
 
 
 class _ProcQuery:
-    """Mimics the postgrest builder; ``execute`` is sync or async, or fails."""
+    """Mimics the postgrest builder; ``execute`` is sync or async."""
 
-    def __init__(self, is_async: bool, recorder: _ExecRecorder, tag: str, fail: bool = False):
+    def __init__(self, is_async: bool, recorder: _ExecRecorder, tag: str):
         self._is_async = is_async
         self._recorder = recorder
         self._tag = tag
-        self._fail = fail
 
     def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
         return self
 
     def limit(self, *a, **k):
         return self
 
     def execute(self):
-        if self._fail:
-            raise RuntimeError("rpc function missing")
         if self._is_async:
 
             async def _run():
@@ -88,13 +91,15 @@ class _ProcQuery:
 
 
 class _ProcClient:
-    def __init__(self, is_async: bool, rpc_fails: bool = False):
+    def __init__(self, is_async: bool):
         self._is_async = is_async
-        self._rpc_fails = rpc_fails
         self.recorder = _ExecRecorder()
 
     def rpc(self, _name, _params):
-        return _ProcQuery(self._is_async, self.recorder, "rpc", fail=self._rpc_fails)
+        # #1685 removed the phantom-RPC attempt; identifier correctness is
+        # pinned in test_procedural_search_real_schema_1685.py. This guard
+        # only ensures no RPC path sneaks back in behind this test's back.
+        raise AssertionError("_execute_procedure_search must not call rpc()")
 
     def table(self, _name):
         return _ProcQuery(self._is_async, self.recorder, "table")
@@ -103,22 +108,17 @@ class _ProcClient:
 # ``_execute_procedure_search`` is called directly: the public search path
 # goes through the semantic/global-embedding service first, and this method
 # is the self-contained unit that held the defect.
-
-
-@pytest.mark.parametrize("is_async", [True, False], ids=["async_client", "sync_client"])
-def test_procedure_search_rpc_returns_rows_for_either_client(is_async):
-    """RED before the fix on the async client: both paths raise on ``.data``, return []."""
-    adapter = ProceduralMemoryAdapter(supabase_client=_ProcClient(is_async))
-
-    rows = asyncio.run(adapter._execute_procedure_search("kisqali adoption", 5))
-
-    assert rows == PROC_ROWS, f"expected the real rows back, got {rows!r}"
+#
+# (The original RPC-path test was superseded by #1685: the RPC attempt it
+# exercised targeted a function that has never existed and was removed. Its
+# surviving concern — sync/async client handling of this method's execute —
+# is covered by the test below.)
 
 
 @pytest.mark.parametrize("is_async", [True, False], ids=["async_client", "sync_client"])
 def test_procedure_search_table_fallback_returns_rows_for_either_client(is_async):
-    """The RPC-missing fallback must also survive an async client."""
-    client = _ProcClient(is_async, rpc_fails=True)
+    """The table read must survive an async client (RED pre-#1684 on async)."""
+    client = _ProcClient(is_async)
     adapter = ProceduralMemoryAdapter(supabase_client=client)
 
     rows = asyncio.run(adapter._execute_procedure_search("kisqali adoption", 5))
