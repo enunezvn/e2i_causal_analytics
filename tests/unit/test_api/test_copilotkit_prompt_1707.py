@@ -34,8 +34,7 @@ def test_log_confidence_proxy_forbidden():
     # The cert_post1706 failure shape: avg per-run confidence offered as a
     # stand-in for the composite.
     assert (
-        "an average of per-run log confidences is NOT the health score"
-        in E2I_COPILOT_SYSTEM_PROMPT
+        "an average of per-run log confidences is NOT the health score" in E2I_COPILOT_SYSTEM_PROMPT
     )
 
 
