@@ -322,7 +322,7 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
-from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.synthesis_guard import (
     build_superlative_correction,
     find_superlative_contradictions,
@@ -355,6 +355,25 @@ _session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.Context
 _run_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "copilotkit_run_id", default=None
 )
+
+
+def _latest_user_text(messages: Any) -> str:
+    """Verbatim text of the most recent user message (dict or LC shapes).
+
+    #1698: stashed via ``set_raw_user_query`` so tool-side honesty accounting
+    sees the ask as the user typed it, not just the model's rewritten tool
+    args. Non-string content (multimodal parts) yields "" — the side channel
+    stays empty rather than guessing.
+    """
+    for msg in reversed(messages or []):
+        if isinstance(msg, dict):
+            if msg.get("role") == "user":
+                content = msg.get("content")
+                return content if isinstance(content, str) else ""
+        elif getattr(msg, "type", None) == "human":
+            content = getattr(msg, "content", "")
+            return content if isinstance(content, str) else ""
+    return ""
 
 
 # =============================================================================
@@ -887,6 +906,12 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             elif hasattr(msg, "type") and msg.type == "human":
                 last_user_msg_id = getattr(msg, "id", "") or ""
                 break
+
+        # #1698: stash the verbatim latest user message so orchestrator_tool
+        # can thread it past the model's lossy query rewrite into the cohort
+        # criteria accounting. Same fallback-channel rationale as
+        # _session_id_context below: tools only ever see the model's args.
+        set_raw_user_query(_latest_user_text(messages))
 
         # Build RunAgentInput
         # Generate run_id if not provided (SDK doesn't always pass it)
@@ -3066,7 +3091,7 @@ You MUST use tools proactively when users ask about data:
 - Use `document_retrieval_tool` for searching the knowledge base
 - Use `agent_routing_tool` to get agent status and information
 - Use `predict_hcp_segment_likelihood_tool` for "which HCP segments / specialties / regions are most likely to increase (or start / adopt) <brand> prescriptions?" — it scores the brand's promoted HCP-adoption champion over the real HCP cohort and returns a per-segment ranking of predicted adoption propensity with real n and standard errors. Pass the `brand` (required — do NOT guess one; the single brand a conversation is about is user-provided, use it and say so; if the conversation names multiple brands and the ask doesn't select one, run the ranking once per candidate brand or ask which one; only if no brand appears anywhere in the conversation, ask which brand) and `segment_by` ('specialty' by default, or 'geographic_region' for a region-phrased ask). The score is CURRENT adoption propensity (the platform's "likelihood to prescribe"), NOT a horizon-specific increase — if the user names a horizon ("next quarter") say the ranking is horizon-agnostic. Present the top segments as a table (segment, mean propensity, n) and flag any `low_confidence` (thin) segments. If it fails closed (no promoted champion), say so plainly — do NOT substitute a regional TRx trend as if it answered the segment question.
-- Use `orchestrator_tool` for complex multi-agent workflows — and for COHORT/PROFILE asks (#1562): aggregate HCP or patient cohort profiles ("profile the HCP cohort", "patient cohort for <brand>") ARE a supported analysis — route them through `orchestrator_tool`, which reaches the cohort_profiler agent and returns aggregate counts and breakdowns (e.g. by specialty, priority tier, severity). What the platform genuinely does NOT serve is the individual level: named individual HCP/patient identities, per-person rosters, or list exports — when a roster/export is asked for, state that limit in one sentence, then run (or offer) the aggregate cohort profile instead of declining the whole ask. Cohort asks follow the same brand rules as every tool: a single conversation brand is user-provided — use it and say so; if no brand appears anywhere in the conversation, ask which brand (an all-brands profile is a valid option to offer) — do NOT guess one.
+- Use `orchestrator_tool` for complex multi-agent workflows — and for COHORT/PROFILE asks (#1562): aggregate HCP or patient cohort profiles ("profile the HCP cohort", "patient cohort for <brand>") ARE a supported analysis — route them through `orchestrator_tool`, which reaches the cohort_profiler agent and returns aggregate counts and breakdowns (e.g. by specialty, priority tier, severity). What the platform genuinely does NOT serve is the individual level: named individual HCP/patient identities, per-person rosters, or list exports — when a roster/export is asked for, state that limit in one sentence, then run (or offer) the aggregate cohort profile instead of declining the whole ask. Cohort asks follow the same brand rules as every tool: a single conversation brand is user-provided — use it and say so; if no brand appears anywhere in the conversation, ask which brand (an all-brands profile is a valid option to offer) — do NOT guess one. When dispatching a cohort ask, pass the user's stated inclusion criteria (age bounds, dates, regions, thresholds) through in the query VERBATIM — even criteria you believe the data model doesn't carry: the cohort layer itself decides servability and honestly reports any criterion it can't apply; never pre-filter the ask, and never present your own rewrite's omission as a platform limitation.
 - Use `tool_composer_tool` for multi-faceted queries
 
 DO NOT just describe what tools can do - actually CALL them to get data!

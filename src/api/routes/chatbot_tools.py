@@ -14,6 +14,7 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -59,6 +60,28 @@ from src.services.enum_labels import (
 from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
+
+# #1698: the verbatim latest user message, stashed by the copilotkit handler
+# before the graph runs. The model's orchestrator_tool ``query`` arg is a lossy
+# rewrite — the measured 2.1 defect stripped servable cohort criteria from it —
+# and ToolNode invokes tools with the model's args only, so a side channel is
+# the only way the original ask can reach tool-side honesty accounting. A
+# contextvar (same rationale as copilotkit's _session_id_context) leaves every
+# non-chat caller (benchmarks, direct invocations) unaffected: the var is unset
+# there and behavior is unchanged.
+_raw_user_query_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "e2i_raw_user_query", default=None
+)
+
+
+def set_raw_user_query(text: Optional[str]) -> "contextvars.Token[Optional[str]]":
+    """Stash the verbatim latest user message for tool-side honesty accounting."""
+    return _raw_user_query_context.set(text or None)
+
+
+def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
+    _raw_user_query_context.reset(token)
+
 
 # Try to import Opik for tracing
 try:
@@ -1494,6 +1517,14 @@ async def orchestrator_tool(
             user_context["region"] = region
         if target_agent:
             user_context["target_agent"] = target_agent
+
+        # #1698: thread the user's original ask alongside the model's rewrite.
+        # The cohort accounting parses BOTH texts, so a criterion the rewrite
+        # dropped is still bound as a filter or honestly reported as
+        # criteria_not_applied — never silently lost.
+        raw_user_query = _raw_user_query_context.get()
+        if raw_user_query and raw_user_query != query:
+            user_context["raw_user_query"] = raw_user_query
 
         # Generate session_id if not provided
         effective_session_id = session_id or f"chatbot-{datetime.now().strftime('%Y%m%d%H%M%S')}"

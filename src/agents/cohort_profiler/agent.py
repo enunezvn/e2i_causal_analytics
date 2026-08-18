@@ -57,7 +57,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from .ask import CohortAsk, Criterion, Window, parse_cohort_ask
+from .ask import CohortAsk, Criterion, Window, merge_cohort_asks, parse_cohort_ask
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,18 @@ class CohortProfilerAgent:
         """
         query = str(agent_input.get("query") or "")
         ask = parse_cohort_ask(query, brand_hint=agent_input.get("brand"), today=self._today())
+
+        # #1698: ``query`` is the chat model's rewrite, and the measured 2.1
+        # defect is that rewrite silently dropping servable criteria. When the
+        # live chat path threads the user's original ask alongside it, parse
+        # that too and merge — a dropped criterion must still reach the
+        # servable-binding / criteria_not_applied accounting below.
+        raw = str(agent_input.get("raw_user_query") or "")
+        if raw and raw != query:
+            ask = merge_cohort_asks(
+                ask,
+                parse_cohort_ask(raw, brand_hint=agent_input.get("brand"), today=self._today()),
+            )
 
         if ask.entity_type == "hcp":
             return await self._analyze_hcp(ask)
