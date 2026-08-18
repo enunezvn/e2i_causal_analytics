@@ -76,6 +76,11 @@ _NRX_KPI_ID = "WS3-BI-006"
 # ``synthetic_mode.region_query_id`` (deliberately absent from
 # SYNTHETIC_TWINNED_QUERY_IDS, which is locked to migrations 066/085/095).
 _HCP_COHORT_QUERY_ID = "cohort_profiler_hcp_trx_cohort"
+# Region-bound sibling (mig-129, #1693): same statement + $5 region matched
+# case-insensitively against hcp_profiles.geographic_region; selected only
+# when the ask names a region so the 4-param base id keeps serving unscoped
+# asks (additive-variant idiom, and pre-migration code paths stay valid).
+_HCP_COHORT_REGION_QUERY_ID = "cohort_profiler_hcp_trx_cohort_region"
 _PATIENT_CRITERIA_QUERY_ID = "cohort_profiler_patient_criteria_profile"
 # Windowed sibling: [brand, start, end, min_age_exclusive, max_age_exclusive].
 # The mig-044 RPC once capped at 4 positional params (so max-age was dropped);
@@ -154,6 +159,30 @@ class CohortProfilerAgent:
     async def _analyze_patients(self, ask: CohortAsk) -> Dict[str, Any]:
         servable = [c for c in ask.criteria if c.servable]
         unserved = [c for c in ask.criteria if not c.servable]
+
+        # Region (#1693) binds on HCP cohorts only today (mig-129,
+        # hcp_profiles.geographic_region). On a patient ask it flows through
+        # the honest per-criterion accounting instead of silently profiling
+        # an unscoped population as region-filtered.
+        region_criteria = [c for c in servable if c.kind == "region"]
+        if region_criteria:
+            servable = [c for c in servable if c.kind != "region"]
+            for c in region_criteria:
+                unserved.append(
+                    Criterion(
+                        kind=c.kind,
+                        label=c.label,
+                        servable=False,
+                        text_value=c.text_value,
+                        guidance=(
+                            "geographic filters are served on HCP-entity cohorts "
+                            "(hcp_profiles.geographic_region) — re-ask as an HCP "
+                            "cohort (e.g. 'HCPs in the northeast'), or materialize "
+                            "a region-scoped patient cohort via the ML pipeline "
+                            "(scope_definer → cohort_constructor)"
+                        ),
+                    )
+                )
 
         # A KPI threshold on a PATIENT-entity ask is recognized but NOT
         # servable on this path today (no allowlisted per-patient KPI
@@ -436,29 +465,42 @@ class CohortProfilerAgent:
                 f"cannot serve the '{ask.threshold.label}' threshold: {ask.threshold.guidance}"
             )
 
-        # Recognized criteria (age / diagnosis-year) are patient-journey
-        # attributes — none bind to an HCP cohort today. They must surface in
-        # the per-criterion accounting, never vanish (#1356 codex iter-1
-        # finding 2); and if they are the ONLY specifics in the ask (no brand,
-        # no threshold, no explicit window), profiling all prescribing HCPs
-        # would answer a different question — fail closed with guidance.
-        unserved = [self._hcp_unservable(c) for c in ask.criteria]
-        if unserved and not (ask.brand or ask.threshold or (ask.window and ask.window.explicit)):
+        # Region (#1693) BINDS on this path via the mig-129 `_region` statement
+        # (hcp_profiles.geographic_region). Every other recognized criterion
+        # (age / diagnosis-year) is a patient-journey attribute — none bind to
+        # an HCP cohort today. They must surface in the per-criterion
+        # accounting, never vanish (#1356 codex iter-1 finding 2); and if they
+        # are the ONLY specifics in the ask (no brand, no threshold, no region,
+        # no explicit window), profiling all prescribing HCPs would answer a
+        # different question — fail closed with guidance.
+        region = next((c for c in ask.criteria if c.kind == "region"), None)
+        unserved = [self._hcp_unservable(c) for c in ask.criteria if c.kind != "region"]
+        if unserved and not (
+            ask.brand or ask.threshold or region or (ask.window and ask.window.explicit)
+        ):
             details = "; ".join(f"'{c.label}' — {c.guidance}" for c in unserved)
             return self._failed("no requested criterion can be served on an HCP cohort: " + details)
 
         window = ask.window or self._default_hcp_window()
         thr = ask.threshold.min_exclusive if ask.threshold else 0
         params: List[Any] = [ask.brand, window.start.isoformat(), window.end.isoformat(), thr]
-        qid = _profiler_query_id(_HCP_COHORT_QUERY_ID)
+        if region is not None:
+            params.append(region.text_value)
+            qid = _profiler_query_id(_HCP_COHORT_REGION_QUERY_ID)
+        else:
+            qid = _profiler_query_id(_HCP_COHORT_QUERY_ID)
 
         try:
             rows = await self._rpc_rows(qid, params)
             base_rows: Optional[List[Dict[str, Any]]] = None
             if not rows and thr > 0:
                 # Distinguish "threshold filtered everyone out" (honest zero)
-                # from "no prescribing data at all" (genuine empty).
-                base_rows = await self._rpc_rows(qid, [ask.brand, params[1], params[2], 0])
+                # from "no prescribing data at all" (genuine empty). The probe
+                # keeps the region bind so the contrast stays within scope.
+                base_params = [ask.brand, params[1], params[2], 0]
+                if region is not None:
+                    base_params.append(region.text_value)
+                base_rows = await self._rpc_rows(qid, base_params)
         except Exception as e:
             return self._failed(f"HCP cohort query unavailable: {e}")
 
@@ -466,6 +508,7 @@ class CohortProfilerAgent:
             return self._failed(
                 "no prescribing HCPs found for "
                 + (ask.brand or "any supported brand")
+                + (f" in the {region.text_value} region" if region is not None else "")
                 + f" in {window.label} ({window.start.isoformat()} → "
                 + f"{(window.end - timedelta(days=1)).isoformat()}) — nothing to "
                 "profile (no values were fabricated)"
@@ -489,12 +532,17 @@ class CohortProfilerAgent:
 
         base_size = sum(int(r.get("n_hcps") or 0) for r in base_rows) if base_rows else None
         narrative = self._render_hcp(
-            ask, window, thr, cohort_size, total_trx, max_trx, specialty, tiers, base_size
+            ask, window, thr, cohort_size, total_trx, max_trx, specialty, tiers, base_size, region
         )
-        if unserved:
+        if unserved or region is not None:
             applied = []
             if ask.brand:
                 applied.append(f"brand = {ask.brand}")
+            if region is not None:
+                applied.append(
+                    f"region = {region.text_value} "
+                    f"(hcp_profiles.geographic_region, '{region.label}')"
+                )
             if ask.threshold:
                 applied.append(f"TRx threshold ({ask.threshold.label})")
             applied.append(
@@ -510,6 +558,11 @@ class CohortProfilerAgent:
                 "entity": "hcp",
                 "segment_axis": "specialty+priority_tier",
                 "brand": ask.brand,
+                # #1693/#1694 scope honesty: region is None unless it was
+                # ACTUALLY bound as a filter — synthesis must never assert a
+                # regional scope this field does not carry.
+                "region": region.text_value if region is not None else None,
+                "region_applied": region is not None,
                 "window": {
                     "label": window.label,
                     "start": window.start.isoformat(),
@@ -579,8 +632,11 @@ class CohortProfilerAgent:
         specialty: Dict[str, int],
         tiers: Dict[str, int],
         base_size: Optional[int],
+        region: Optional[Criterion] = None,
     ) -> str:
         scope = ask.brand or "all brands"
+        if region is not None:
+            scope += f", {region.text_value} region"
         window_disp = f"{window.start.isoformat()} → {(window.end - timedelta(days=1)).isoformat()}"
         thr_disp = ask.threshold.label if ask.threshold else f"more than {thr} TRx"
 

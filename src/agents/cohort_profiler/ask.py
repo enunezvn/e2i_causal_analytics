@@ -94,6 +94,20 @@ _AGE_MAX_RES: Tuple[re.Pattern[str], ...] = (
 
 _DIAG_YEAR_RE = re.compile(r"\bdiagnos\w*\s+(?:in|during|since)\s+((?:19|20)\d{2})\b", re.I)
 
+# Geographic region (#1693): hcp_profiles.geographic_region is enum region_type
+# — northeast / midwest / south / west. Recognition is conservative per this
+# module's design: bare "south"/"west" only count with a locating preposition
+# ("in the south") or a region noun ("western territories"); the unambiguous
+# compass compounds northeast/midwest also match as "the Northeast".
+_REGION_NAMES = r"(?:north\s?east|mid\s?west|south|west)"
+_REGION_RE = re.compile(
+    rf"\b(?:in|from|across|within)\s+the\s+(?P<prep>{_REGION_NAMES})(?:ern)?"
+    r"(?:\s+(?:region|territor(?:y|ies)|market|states|u\.?s\.?))?\b"
+    rf"|\b(?P<noun>{_REGION_NAMES})(?:ern)?\s+(?:region|territor(?:y|ies)|market|states)\b"
+    r"|\bthe\s+(?P<comp>north\s?east|mid\s?west)\b",
+    re.I,
+)
+
 _DIAG_GUIDANCE = (
     "the data model carries no true diagnosis dates (treatment_events has zero "
     "'diagnosis' events; patient_journeys.journey_start_date is only a documented "
@@ -112,11 +126,12 @@ _LAST_N_DAYS_RE = re.compile(r"\b(?:last|past)\s+(\d{1,3})\s+days?\b", re.I)
 class Criterion:
     """One recognized inclusion criterion (servable or honestly not)."""
 
-    kind: str  # "age_min" | "age_max" | "diagnosis_year"
+    kind: str  # "age_min" | "age_max" | "diagnosis_year" | "region"
     label: str  # human-readable echo of the ask, e.g. 'diagnosed in 2024'
     servable: bool
     value: Optional[int] = None  # bound value (exclusive for age bounds)
     guidance: Optional[str] = None  # why it cannot be served + what to do
+    text_value: Optional[str] = None  # bound text value (region enum value, #1693)
 
 
 @dataclass(frozen=True)
@@ -219,6 +234,23 @@ def _parse_age_criteria(query: str) -> List[Criterion]:
     return criteria
 
 
+def _parse_region(query: str) -> Optional[Criterion]:
+    """Recognize a geographic-region criterion (#1693).
+
+    Normalizes the matched compass name to the ``region_type`` enum value
+    (northeast/midwest/south/west). Servability is entity-dependent and
+    decided by the agent per path (HCP cohorts bind it via the mig-129
+    ``_region`` statement; the patient paths disclose it as not applied) —
+    here it is recognized as servable so it can never silently vanish.
+    """
+    m = _REGION_RE.search(query)
+    if not m:
+        return None
+    raw = m.group("prep") or m.group("noun") or m.group("comp") or ""
+    region = re.sub(r"\s+", "", raw).lower()
+    return Criterion(kind="region", label=m.group(0).strip(), servable=True, text_value=region)
+
+
 def _quarter_start(d: date) -> date:
     return date(d.year, 3 * ((d.month - 1) // 3) + 1, 1)
 
@@ -273,6 +305,9 @@ def parse_cohort_ask(
     today = today or date.today()
 
     criteria: List[Criterion] = list(_parse_age_criteria(query))
+    region = _parse_region(query)
+    if region is not None:
+        criteria.append(region)
     m_diag = _DIAG_YEAR_RE.search(query)
     if m_diag:
         criteria.append(
