@@ -619,6 +619,12 @@ jobs:
       # erroring on `[Errno 111]`, so this step is best-effort but should
       # succeed on the standard ubuntu-latest image.
       - name: Start Redis (apt, no Docker Hub pull)
+        # Bounded + non-fatal (#1687): with no step timeout, a stalled apt ran
+        # until the job `timeout-minutes` cap killed the whole job. The bound
+        # plus continue-on-error makes the step match its best-effort contract
+        # above — a hung/failed apt costs ≤5 min and a skip, never the job.
+        timeout-minutes: 5
+        continue-on-error: true
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-server
@@ -823,6 +829,12 @@ jobs:
       # unavailable, `requires_redis` tests auto-skip rather than erroring on
       # `[Errno 111]`, so this step is best-effort.
       - name: Start Redis (apt, no Docker Hub pull)
+        # Bounded + non-fatal (#1687): with no step timeout, a stalled apt ran
+        # until the job `timeout-minutes` cap killed the whole job. The bound
+        # plus continue-on-error makes the step match its best-effort contract
+        # above — a hung/failed apt costs ≤5 min and a skip, never the job.
+        timeout-minutes: 5
+        continue-on-error: true
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-server
