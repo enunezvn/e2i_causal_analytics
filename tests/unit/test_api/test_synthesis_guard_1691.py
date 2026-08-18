@@ -117,6 +117,16 @@ def test_scoped_claim_is_log_only_never_visible():
     assert build_superlative_correction(text) == ""
 
 
+def test_rerun_3_3_same_paren_cross_quantity_annotation_is_silent():
+    """#1701 (the guard's first post-sweep FP): '(highest propensity, n=1,016)'
+    — the superlative names its own quantity ("propensity", whose 58.4% IS the
+    column max) while n= labels a different axis of the same row. The prose is
+    TRUE; no visible finding and no correction note may be produced."""
+    text = _load("rerun_3_3_same_paren_annotation.md")
+    assert _visible(text) == []
+    assert build_superlative_correction(text) == ""
+
+
 # ---------------------------------------------------------------------------
 # Focused synthetic cases: one per suppression/detection rule, so each rule
 # survives independently of the fixture texts.
@@ -165,3 +175,45 @@ def test_deictic_scope_stays_visible():
     text = _MINI_TABLE + "\nB carries the largest effect (0.20) among these three.\n"
     findings = _visible(text)
     assert len(findings) == 1
+
+
+# #1701 focused cases: same-parenthetical cross-quantity annotation, and the
+# single-letter-header demotion on backward pairs.
+
+_SEGMENT_TABLE = (
+    "| Segment | Propensity | n |\n"
+    "|---|---|---|\n"
+    "| A | 58.4% | 1,016 |\n"
+    "| B | 51.1% | 478 |\n"
+    "| C | 34.9% | 1,662 |\n"
+    "| D | 34.5% | 156 |\n"
+)
+
+
+def test_same_paren_cross_quantity_annotation_does_not_pair():
+    """#1701: inside one parenthetical, 'highest' names "propensity" while the
+    number is introduced by its own label 'n=' — the annotation names its own
+    axis and must not pair with the superlative (not even at log tier)."""
+    text = _SEGMENT_TABLE + "\nSegment A leads (highest propensity, n=1,016) here.\n"
+    assert find_superlative_contradictions(text) == []
+
+
+def test_same_paren_matching_label_still_pairs():
+    """Counter-control for the #1701 rule: when the label IS the quantity the
+    superlative names ('highest n=478'), the pair must survive and fire."""
+    text = _SEGMENT_TABLE + "\nSegment B stands out (highest n=478) here.\n"
+    findings = _visible(text)
+    assert len(findings) == 1
+    assert findings[0].value == pytest.approx(478)
+    assert findings[0].column_max == pytest.approx(1662)
+
+
+def test_backward_pair_single_letter_header_is_log_only():
+    """#1701 mechanism 2: a single-letter header ('n') can never satisfy the
+    backward visibility gate — such pairs stay log-only, never user-visible."""
+    text = _SEGMENT_TABLE + "\nSegment B sits at 478 (highest) in this table.\n"
+    findings = find_superlative_contradictions(text)
+    assert len(findings) == 1
+    assert findings[0].column_header == "n"
+    assert findings[0].visible is False
+    assert build_superlative_correction(text) == ""
