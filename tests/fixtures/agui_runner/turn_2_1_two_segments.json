@@ -1,0 +1,1981 @@
+{
+ "request_id": "perf-agui-2.1",
+ "source": "docs/demos/results/2026-08-18_post1696_copilot_chat_perf/raw_agui.jsonl (2026-08-18 certification run); events trimmed to fold-relevant types, shapes verbatim",
+ "recorded_response_text": "The platform's data model doesn't carry patient-level clinical criteria like diagnosis year or age cutoffs (18+) for building a custom-filtered cohort \u2014 I can't construct that specific inclusion/exclusion list. What I *can* do is pull the aggregate Remibrutinib (CSU) patient cohort profile \u2014 counts and breakdowns by severity tier, line of therapy, etc. \u2014 via the cohort_profiler agent. Let me run that now.\n\nHere's the Remibrutinib (CSU) patient cohort profile \u2014 note this covers the engine's default reporting window (new prescriptions, most recent 30 days of data), not a 2024-diagnosis-date filter, since diagnosis-year and adult-age (18+) criteria aren't fields the data model currently tracks for cohort construction. Only **brand = Remibrutinib** was applied as a criterion.\n\n### Remibrutinib \u2014 2,341 new-Rx patients (trailing 30 days)\n\n**By disease-severity tier:**\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 686 |\n| Medium severity | 1,238 |\n| High severity | 417 |\n\n**By line of therapy:**\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 603 |\n| 1 prior line (2nd line) | 552 |\n| 2 prior lines (3rd line) | 582 |\n| 3+ prior lines (4th line+) | 604 |\n\n**On your specific criteria:** Age (>18) and diagnosis year (2024) are not attributes captured in this cohort model \u2014 I can't filter or confirm the population against them. What's shown are aggregate population counts, not an eligible patient list.\n\nTo materialize an actual patient-level eligible cohort with full inclusion/exclusion criteria (including age and diagnosis-date logic, if those fields exist upstream) and an audit trail, that requires the dedicated cohort pipeline (scope_definer \u2192 cohort_constructor) rather than this profiling view \u2014 I can trigger that request if useful.",
+ "recorded_messages_out": [
+  "The platform's data model doesn't carry patient-level clinical criteria like diagnosis year or age cutoffs (18+) for building a custom-filtered cohort \u2014 I can't construct that specific inclusion/exclusion list. What I *can* do is pull the aggregate Remibrutinib (CSU) patient cohort profile \u2014 counts and breakdowns by severity tier, line of therapy, etc. \u2014 via the cohort_profiler agent. Let me run that now.",
+  "Here's the Remibrutinib (CSU) patient cohort profile \u2014 note this covers the engine's default reporting window (new prescriptions, most recent 30 days of data), not a 2024-diagnosis-date filter, since diagnosis-year and adult-age (18+) criteria aren't fields the data model currently tracks for cohort construction. Only **brand = Remibrutinib** was applied as a criterion.\n\n### Remibrutinib \u2014 2,341 new-Rx patients (trailing 30 days)\n\n**By disease-severity tier:**\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 686 |\n| Medium severity | 1,238 |\n| High severity | 417 |\n\n**By line of therapy:**\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 603 |\n| 1 prior line (2nd line) | 552 |\n| 2 prior lines (3rd line) | 582 |\n| 3+ prior lines (4th line+) | 604 |\n\n**On your specific criteria:** Age (>18) and diagnosis year (2024) are not attributes captured in this cohort model \u2014 I can't filter or confirm the population against them. What's shown are aggregate population counts, not an eligible patient list.\n\nTo materialize an actual patient-level eligible cohort with full inclusion/exclusion criteria (including age and diagnosis-date logic, if those fields exist upstream) and an audit trail, that requires the dedicated cohort pipeline (scope_definer \u2192 cohort_constructor) rather than this profiling view \u2014 I can trigger that request if useful."
+ ],
+ "events": [
+  {
+   "t_ms": 458.1,
+   "type": "RUN_STARTED",
+   "timestamp": 1787080831529,
+   "rawEvent": null,
+   "threadId": "29d87392-1472-4229-8680-b85240716758",
+   "runId": "d92bdb48-6b7c-48b5-b1c5-3e47fe54ad26",
+   "parentRunId": "",
+   "input": {
+    "threadId": "29d87392-1472-4229-8680-b85240716758",
+    "runId": "d92bdb48-6b7c-48b5-b1c5-3e47fe54ad26",
+    "messages": [],
+    "tools": [],
+    "context": []
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 461.6,
+   "type": "RAW",
+   "timestamp": 1787080831531,
+   "rawEvent": null,
+   "event": {
+    "event": "on_chain_start",
+    "data": {
+     "input": {
+      "session_id": "0074d3a6-636d-4420-a7ce-e36a09e22a2d",
+      "run_id": "d92bdb48-6b7c-48b5-b1c5-3e47fe54ad26",
+      "messages": [
+       {
+        "content": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "44a6fc52-7b0e-44ab-baf2-15ad54c18e5c"
+       }
+      ],
+      "tools": [],
+      "copilotkit": {
+       "actions": "<recursive>",
+       "context": []
+      }
+     }
+    },
+    "name": "LangGraph",
+    "tags": [],
+    "run_id": "01a01651-722a-7052-93c5-866f805faeca",
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph"
+    },
+    "parent_ids": []
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 464.8,
+   "type": "STATE_SNAPSHOT",
+   "timestamp": 1787080831542,
+   "rawEvent": {
+    "type": "CUSTOM",
+    "timestamp": null,
+    "raw_event": {
+     "event": "on_custom_event",
+     "run_id": "01a01651-722d-7c33-8079-ab7f3b5dea64",
+     "name": "copilotkit_manually_emit_intermediate_state",
+     "tags": [
+      "seq:step:1"
+     ],
+     "metadata": {
+      "thread_id": "29d87392-1472-4229-8680-b85240716758",
+      "ls_integration": "langgraph",
+      "langgraph_step": 1,
+      "langgraph_node": "chat",
+      "langgraph_triggers": [
+       "branch:to:chat"
+      ],
+      "langgraph_path": [
+       "__pregel_pull",
+       "chat"
+      ],
+      "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+      "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942"
+     },
+     "data": {
+      "messages": [
+       {
+        "content": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "44a6fc52-7b0e-44ab-baf2-15ad54c18e5c"
+       }
+      ],
+      "session_id": "0074d3a6-636d-4420-a7ce-e36a09e22a2d",
+      "run_id": "d92bdb48-6b7c-48b5-b1c5-3e47fe54ad26",
+      "copilotkit": {
+       "actions": [],
+       "context": []
+      },
+      "current_node": "chat",
+      "progress_steps": [
+       "Processing your query..."
+      ],
+      "progress_percent": 25,
+      "agent_status": "processing",
+      "tools_executing": [],
+      "error_message": null
+     },
+     "parent_ids": [
+      "01a01651-722a-7052-93c5-866f805faeca"
+     ]
+    },
+    "name": "copilotkit_manually_emit_intermediate_state",
+    "value": {
+     "messages": [
+      {
+       "content": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "44a6fc52-7b0e-44ab-baf2-15ad54c18e5c"
+      }
+     ],
+     "session_id": "0074d3a6-636d-4420-a7ce-e36a09e22a2d",
+     "run_id": "d92bdb48-6b7c-48b5-b1c5-3e47fe54ad26",
+     "copilotkit": {
+      "actions": [],
+      "context": []
+     },
+     "current_node": "chat",
+     "progress_steps": [
+      "Processing your query..."
+     ],
+     "progress_percent": 25,
+     "agent_status": "processing",
+     "tools_executing": [],
+     "error_message": null
+    }
+   },
+   "snapshot": {
+    "messages": [
+     {
+      "content": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "44a6fc52-7b0e-44ab-baf2-15ad54c18e5c"
+     }
+    ],
+    "session_id": "0074d3a6-636d-4420-a7ce-e36a09e22a2d",
+    "run_id": "d92bdb48-6b7c-48b5-b1c5-3e47fe54ad26",
+    "copilotkit": {
+     "actions": [],
+     "context": []
+    },
+    "current_node": "chat",
+    "progress_steps": [
+     "Processing your query..."
+    ],
+    "progress_percent": 25,
+    "agent_status": "processing",
+    "tools_executing": [],
+    "error_message": null
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 3259.4,
+   "type": "TEXT_MESSAGE_START",
+   "timestamp": 1787080834333,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "The platform's data model doesn't carry patient-level clinical criteria like diagnosis",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-72b9-7712-ba7c-8c2bebd99589",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-722d-7c33-8079-ab7f3b5dea64"
+    ]
+   },
+   "messageId": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+   "role": "assistant",
+   "name": null,
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 3259.5,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080834335,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "The platform's data model doesn't carry patient-level clinical criteria like diagnosis",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-72b9-7712-ba7c-8c2bebd99589",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-722d-7c33-8079-ab7f3b5dea64"
+    ]
+   },
+   "messageId": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+   "delta": "The platform's data model doesn't carry patient-level clinical criteria like diagnosis",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 3798.7,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080834872,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": " year or age cutoffs (18+) for building a custom-filtered cohort \u2014 I can't construct that specific inclusion/",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-72b9-7712-ba7c-8c2bebd99589",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-722d-7c33-8079-ab7f3b5dea64"
+    ]
+   },
+   "messageId": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+   "delta": " year or age cutoffs (18+) for building a custom-filtered cohort \u2014 I can't construct that specific inclusion/",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 4340.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080835417,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": "exclusion list. What I *can* do is pull the aggregate Remibrutinib (CSU) patient cohort profile \u2014 counts and breakdowns by severity tier, line of",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-72b9-7712-ba7c-8c2bebd99589",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-722d-7c33-8079-ab7f3b5dea64"
+    ]
+   },
+   "messageId": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+   "delta": "exclusion list. What I *can* do is pull the aggregate Remibrutinib (CSU) patient cohort profile \u2014 counts and breakdowns by severity tier, line of",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 4890.1,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080835967,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "text": " therapy, etc. \u2014 via the cohort_profiler agent. Let me run that now.",
+        "type": "text",
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-72b9-7712-ba7c-8c2bebd99589",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-722d-7c33-8079-ab7f3b5dea64"
+    ]
+   },
+   "messageId": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+   "delta": " therapy, etc. \u2014 via the cohort_profiler agent. Let me run that now.",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 4894.9,
+   "type": "TEXT_MESSAGE_END",
+   "timestamp": 1787080835973,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "id": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+        "input": {},
+        "name": "orchestrator_tool",
+        "type": "tool_use",
+        "caller": {
+         "type": "direct"
+        },
+        "index": 2
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+      "tool_calls": [
+       {
+        "name": "orchestrator_tool",
+        "args": {},
+        "id": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+        "type": "tool_call"
+       }
+      ],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [
+       {
+        "name": "orchestrator_tool",
+        "args": "",
+        "id": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+        "index": 2,
+        "type": "tool_call_chunk"
+       }
+      ],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-72b9-7712-ba7c-8c2bebd99589",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "checkpoint_ns": "chat:38197673-0c17-d793-5a6b-25a355817942",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-722d-7c33-8079-ab7f3b5dea64"
+    ]
+   },
+   "messageId": "lc_run--01a01651-72b9-7712-ba7c-8c2bebd99589",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 9857.7,
+   "type": "TOOL_CALL_START",
+   "timestamp": 1787080840929,
+   "rawEvent": {
+    "event": "on_tool_end",
+    "data": {
+     "output": {
+      "content": "{\"success\": true, \"fallback\": false, \"query\": \"Profile the Remibrutinib patient cohort (CSU) \u2014 aggregate counts and breakdowns\", \"response\": \"**Patient cohort profile \u2014 Remibrutinib**\\nEligible prescribing population sized by the clinical segment axes that exist in the data today (new prescriptions, most recent 30 days of data):\\n\\n### Remibrutinib \u2014 2,341 new-Rx patients\\n\\n_By disease-severity tier:_\\n\\n| Severity tier | New-Rx patients |\\n|---|---|\\n| Low severity | 686 |\\n| Medium severity | 1,238 |\\n| High severity | 417 |\\n\\n_By line of therapy:_\\n\\n| Line of therapy | New-Rx patients |\\n|---|---|\\n| 0 prior lines (1st line) | 603 |\\n| 1 prior line (2nd line) | 552 |\\n| 2 prior lines (3rd line) | 582 |\\n| 3+ prior lines (4th line+) | 604 |\\n\\n_These are population sizes, not a patient list. To materialize the actual eligible patients for an ML pipeline \u2014 with full inclusion/exclusion criteria and an audit trail \u2014 use the cohort pipeline (scope_definer \u2192 cohort_constructor)._\\n\\n**Criteria accounting**\\n- Applied: brand = Remibrutinib.\\n- No other criteria were applied.\", \"confidence\": 0.9, \"agents_dispatched\": [\"cohort_profiler\"], \"target_agent_requested\": null, \"context\": {\"brand\": \"Remibrutinib\", \"region\": null, \"session_id\": \"chatbot-20260818192036\"}, \"status\": \"completed\"}",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "tool",
+      "name": "orchestrator_tool",
+      "id": null,
+      "tool_call_id": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+      "artifact": null,
+      "status": "success"
+     },
+     "input": {
+      "query": "Profile the Remibrutinib patient cohort (CSU) \u2014 aggregate counts and breakdowns",
+      "brand": "Remibrutinib"
+     }
+    },
+    "run_id": "01a01651-85bf-7993-988e-939148eb98f5",
+    "name": "orchestrator_tool",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 2,
+     "langgraph_node": "tools",
+     "langgraph_triggers": [
+      "branch:to:tools"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "tools"
+     ],
+     "langgraph_checkpoint_ns": "tools:0b96ef62-b601-a8df-4c47-50dd8a92dff6",
+     "checkpoint_ns": "tools:0b96ef62-b601-a8df-4c47-50dd8a92dff6"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-85bc-7a91-891e-9f7577e226e0"
+    ]
+   },
+   "toolCallId": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+   "toolCallName": "orchestrator_tool",
+   "parentMessageId": "",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11175.5,
+   "type": "TEXT_MESSAGE_START",
+   "timestamp": 1787080842252,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "Here",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "role": "assistant",
+   "name": null,
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11177.4,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080842253,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "Here",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "Here",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11179.9,
+   "type": "RAW",
+   "timestamp": 1787080842258,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "Here",
+     "message_id": "030f2714-95f0-4d84-beea-74151e71b907",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11738.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080842811,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "'s the Remibrutinib (CSU) patient cohort profile \u2014 note this cov",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "'s the Remibrutinib (CSU) patient cohort profile \u2014 note this cov",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11739.7,
+   "type": "RAW",
+   "timestamp": 1787080842812,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "'s the Remibrutinib (CSU) patient cohort profile \u2014 note this cov",
+     "message_id": "20c766f2-2707-465c-befd-0368282e7d41",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 12298.4,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080843375,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "ers the engine's default reporting window (new prescriptions, most recent 30 days of data), not a 2024-diagnosis-date filter, since diagnosis-",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "ers the engine's default reporting window (new prescriptions, most recent 30 days of data), not a 2024-diagnosis-date filter, since diagnosis-",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 12299.5,
+   "type": "RAW",
+   "timestamp": 1787080843376,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "ers the engine's default reporting window (new prescriptions, most recent 30 days of data), not a 2024-diagnosis-date filter, since diagnosis-",
+     "message_id": "b2f0ffc9-774e-4bd2-946c-cc9f2eca9630",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 12843.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080843921,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "year and adult-age (18+) criteria aren't fields the data model currently tracks for cohort construction. Only **",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "year and adult-age (18+) criteria aren't fields the data model currently tracks for cohort construction. Only **",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 12844.6,
+   "type": "RAW",
+   "timestamp": 1787080843922,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "year and adult-age (18+) criteria aren't fields the data model currently tracks for cohort construction. Only **",
+     "message_id": "0e4f5c3b-3185-40bc-b1ef-fbad41b41270",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 13409.1,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080844485,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "brand = Remibrutinib** was applied as a criterion.\n\n### Remibrutinib \u2014 2,341 new-Rx patients (trailing 30 days)\n\n**By disease-severity t",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "brand = Remibrutinib** was applied as a criterion.\n\n### Remibrutinib \u2014 2,341 new-Rx patients (trailing 30 days)\n\n**By disease-severity t",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 13410.0,
+   "type": "RAW",
+   "timestamp": 1787080844486,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "brand = Remibrutinib** was applied as a criterion.\n\n### Remibrutinib \u2014 2,341 new-Rx patients (trailing 30 days)\n\n**By disease-severity t",
+     "message_id": "0e99efa9-088d-435b-949a-116100115d32",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 13939.6,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080845017,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "ier:**\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 686 |\n| Medium severity | 1,238 |\n| High severity | 417 |\n\n**By line of therapy:**\n|",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "ier:**\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 686 |\n| Medium severity | 1,238 |\n| High severity | 417 |\n\n**By line of therapy:**\n|",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 13943.0,
+   "type": "RAW",
+   "timestamp": 1787080845021,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "ier:**\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 686 |\n| Medium severity | 1,238 |\n| High severity | 417 |\n\n**By line of therapy:**\n|",
+     "message_id": "1c2bbdd9-e4a8-46d3-a580-482ad1fa850e",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 14489.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080845565,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 603 |\n| 1 prior line (2nd line) | 552 |\n| 2 prior lines (3rd line) | 582",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": " Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 603 |\n| 1 prior line (2nd line) | 552 |\n| 2 prior lines (3rd line) | 582",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 14491.3,
+   "type": "RAW",
+   "timestamp": 1787080845567,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": " Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 603 |\n| 1 prior line (2nd line) | 552 |\n| 2 prior lines (3rd line) | 582",
+     "message_id": "e0f36d07-d00c-4977-abb8-59810fe3f4ed",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 15037.5,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080846112,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " |\n| 3+ prior lines (4th line+) | 604 |\n\n**On your specific criteria:** Age (>18) and diagnosis year",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": " |\n| 3+ prior lines (4th line+) | 604 |\n\n**On your specific criteria:** Age (>18) and diagnosis year",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 15037.7,
+   "type": "RAW",
+   "timestamp": 1787080846113,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": " |\n| 3+ prior lines (4th line+) | 604 |\n\n**On your specific criteria:** Age (>18) and diagnosis year",
+     "message_id": "5f0692f5-192c-437f-a6eb-81d2fc324948",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 15579.9,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080846656,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " (2024) are not attributes captured in this cohort model \u2014 I can't filter or confirm the population against them. What's",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": " (2024) are not attributes captured in this cohort model \u2014 I can't filter or confirm the population against them. What's",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 15583.8,
+   "type": "RAW",
+   "timestamp": 1787080846657,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": " (2024) are not attributes captured in this cohort model \u2014 I can't filter or confirm the population against them. What's",
+     "message_id": "30fd1083-6b60-4564-a8aa-44c2fb6a3059",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 16122.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080847200,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " shown are aggregate population counts, not an eligible patient list.\n\nTo materialize an actual patient-level eligible cohort with full inclusion/exclus",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": " shown are aggregate population counts, not an eligible patient list.\n\nTo materialize an actual patient-level eligible cohort with full inclusion/exclus",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 16125.0,
+   "type": "RAW",
+   "timestamp": 1787080847203,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": " shown are aggregate population counts, not an eligible patient list.\n\nTo materialize an actual patient-level eligible cohort with full inclusion/exclus",
+     "message_id": "2434a0a6-337b-4fcb-a8b7-dadb705a776a",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 16691.2,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080847768,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "ion criteria (including age and diagnosis-date logic, if those fields exist upstream) and an audit trail, that requires the dedicated cohort p",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "ion criteria (including age and diagnosis-date logic, if those fields exist upstream) and an audit trail, that requires the dedicated cohort p",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 16691.6,
+   "type": "RAW",
+   "timestamp": 1787080847769,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "ion criteria (including age and diagnosis-date logic, if those fields exist upstream) and an audit trail, that requires the dedicated cohort p",
+     "message_id": "3cc35cb2-3cfb-4ebf-8f87-57e5f3fec90c",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 17459.2,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787080848534,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "ipeline (scope_definer \u2192 cohort_constructor) rather than this profiling view \u2014 I can trigger that request if useful.",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "delta": "ipeline (scope_definer \u2192 cohort_constructor) rather than this profiling view \u2014 I can trigger that request if useful.",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 17459.9,
+   "type": "RAW",
+   "timestamp": 1787080848536,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01651-96e4-7781-b6d4-dd66052b5fa9",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847"
+    },
+    "data": {
+     "message": "ipeline (scope_definer \u2192 cohort_constructor) rather than this profiling view \u2014 I can trigger that request if useful.",
+     "message_id": "ed9364c6-d35c-47ea-adf9-c055293dddb8",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 17512.8,
+   "type": "TEXT_MESSAGE_END",
+   "timestamp": 1787080848560,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "stop_reason": "end_turn",
+       "stop_sequence": null,
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": {
+       "input_tokens": 7940,
+       "output_tokens": 539,
+       "total_tokens": 8479,
+       "input_token_details": {
+        "cache_creation": 0,
+        "cache_read": 0
+       }
+      },
+      "tool_call_chunks": [],
+      "chunk_position": "last"
+     }
+    },
+    "run_id": "01a01651-9707-7ff3-a6e7-8c43611cb02e",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "29d87392-1472-4229-8680-b85240716758",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "checkpoint_ns": "synthesize:23abb0a0-25f5-a5b7-ce0d-7b763d4e6847",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01651-722a-7052-93c5-866f805faeca",
+     "01a01651-96e4-7781-b6d4-dd66052b5fa9"
+    ]
+   },
+   "messageId": "lc_run--01a01651-9707-7ff3-a6e7-8c43611cb02e",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 17585.9,
+   "type": "MESSAGES_SNAPSHOT",
+   "timestamp": 1787080848639,
+   "rawEvent": null,
+   "messages": [
+    {
+     "id": "44a6fc52-7b0e-44ab-baf2-15ad54c18e5c",
+     "role": "user",
+     "content": "Build a patient cohort for Remibrutinib CSU with inclusion criteria for adults over 18 diagnosed in 2024",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "msg-2a2403be-b4d8-4cda-a203-595ac39fd518",
+     "role": "assistant",
+     "content": "The platform's data model doesn't carry patient-level clinical criteria like diagnosis year or age cutoffs (18+) for building a custom-filtered cohort \u2014 I can't construct that specific inclusion/exclusion list. What I *can* do is pull the aggregate Remibrutinib (CSU) patient cohort profile \u2014 counts and breakdowns by severity tier, line of therapy, etc. \u2014 via the cohort_profiler agent. Let me run that now.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": [
+      {
+       "id": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+       "type": "function",
+       "function": {
+        "name": "orchestrator_tool",
+        "arguments": "{\"query\": \"Profile the Remibrutinib patient cohort (CSU) \\u2014 aggregate counts and breakdowns\", \"brand\": \"Remibrutinib\"}"
+       },
+       "encryptedValue": null
+      }
+     ]
+    },
+    {
+     "id": "tool-toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+     "role": "tool",
+     "content": "{\"success\": true, \"fallback\": false, \"query\": \"Profile the Remibrutinib patient cohort (CSU) \u2014 aggregate counts and breakdowns\", \"response\": \"**Patient cohort profile \u2014 Remibrutinib**\\nEligible prescribing population sized by the clinical segment axes that exist in the data today (new prescriptions, most recent 30 days of data):\\n\\n### Remibrutinib \u2014 2,341 new-Rx patients\\n\\n_By disease-severity tier:_\\n\\n| Severity tier | New-Rx patients |\\n|---|---|\\n| Low severity | 686 |\\n| Medium severity | 1,238 |\\n| High severity | 417 |\\n\\n_By line of therapy:_\\n\\n| Line of therapy | New-Rx patients |\\n|---|---|\\n| 0 prior lines (1st line) | 603 |\\n| 1 prior line (2nd line) | 552 |\\n| 2 prior lines (3rd line) | 582 |\\n| 3+ prior lines (4th line+) | 604 |\\n\\n_These are population sizes, not a patient list. To materialize the actual eligible patients for an ML pipeline \u2014 with full inclusion/exclusion criteria and an audit trail \u2014 use the cohort pipeline (scope_definer \u2192 cohort_constructor)._\\n\\n**Criteria accounting**\\n- Applied: brand = Remibrutinib.\\n- No other criteria were applied.\", \"confidence\": 0.9, \"agents_dispatched\": [\"cohort_profiler\"], \"target_agent_requested\": null, \"context\": {\"brand\": \"Remibrutinib\", \"region\": null, \"session_id\": \"chatbot-20260818192036\"}, \"status\": \"completed\"}",
+     "toolCallId": "toolu_01PmsWQVJ31hLiYaDARtZ3uS",
+     "encryptedValue": null,
+     "name": ""
+    },
+    {
+     "id": "msg-efdd16b8-0e1d-44ea-baca-a7a289539a95",
+     "role": "assistant",
+     "content": "Here's the Remibrutinib (CSU) patient cohort profile \u2014 note this covers the engine's default reporting window (new prescriptions, most recent 30 days of data), not a 2024-diagnosis-date filter, since diagnosis-year and adult-age (18+) criteria aren't fields the data model currently tracks for cohort construction. Only **brand = Remibrutinib** was applied as a criterion.\n\n### Remibrutinib \u2014 2,341 new-Rx patients (trailing 30 days)\n\n**By disease-severity tier:**\n| Severity tier | New-Rx patients |\n|---|---|\n| Low severity | 686 |\n| Medium severity | 1,238 |\n| High severity | 417 |\n\n**By line of therapy:**\n| Line of therapy | New-Rx patients |\n|---|---|\n| 0 prior lines (1st line) | 603 |\n| 1 prior line (2nd line) | 552 |\n| 2 prior lines (3rd line) | 582 |\n| 3+ prior lines (4th line+) | 604 |\n\n**On your specific criteria:** Age (>18) and diagnosis year (2024) are not attributes captured in this cohort model \u2014 I can't filter or confirm the population against them. What's shown are aggregate population counts, not an eligible patient list.\n\nTo materialize an actual patient-level eligible cohort with full inclusion/exclusion criteria (including age and diagnosis-date logic, if those fields exist upstream) and an audit trail, that requires the dedicated cohort pipeline (scope_definer \u2192 cohort_constructor) rather than this profiling view \u2014 I can trigger that request if useful.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    }
+   ],
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 17587.1,
+   "type": "RUN_FINISHED",
+   "timestamp": 1787080848642,
+   "rawEvent": null,
+   "threadId": "29d87392-1472-4229-8680-b85240716758",
+   "runId": "01a01651-722a-7052-93c5-866f805faeca",
+   "result": null,
+   "source": "e2i-copilot",
+   "parentRunId": "",
+   "output": {
+    "messages": []
+   }
+  }
+ ]
+}

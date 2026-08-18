@@ -1,0 +1,1698 @@
+{
+ "request_id": "perf-agui-3.3",
+ "source": "docs/demos/results/2026-08-18_post1696_copilot_chat_perf/raw_agui.jsonl (2026-08-18 certification run); events trimmed to fold-relevant types, shapes verbatim",
+ "recorded_response_text": "**Fabhalta HCP segment likelihood-to-prescribe, by specialty** (current adoption propensity \u2014 the requested \"next quarter\" horizon is context only; this ranking reflects current propensity, not a horizon-specific forecast)\n\n| Rank | Specialty | Mean Propensity | n | SE |\n|---|---|---|---|---|\n| 1 | Hematology | 58.4% | 1,016 | 0.007 |\n| 2 | Internal Medicine | 51.1% | 478 | 0.011 |\n| 3 | Neurology | 46.2% | 156 | 0.020 |\n| 4 | Dermatology | 36.5% | 854 | 0.008 |\n| 5 | Oncology | 34.9% | 1,662 | 0.006 |\n| 6 | Rheumatology | 34.5% | 257 | 0.015 |\n| 7 | Allergy/Immunology | 34.3% | 577 | 0.010 |\n\n- **Model:** `hcp_adoption_fabhalta_goldstd_lr_v1` (holdout AUC 0.811), scored over **5,000 HCPs**, overall mean propensity **41.8%**\n- No `low_confidence` flags \u2014 all segments have adequate sample sizes.\n- **Hematology** is the top segment (highest propensity, n=1,016), followed by Internal Medicine and Neurology; Oncology has the largest n (1,662) but ranks near the bottom on propensity.\n\nSince the score is a current adoption-propensity ranking rather than a next-quarter-specific increase forecast, hematology and internal medicine HCPs are the strongest current targets for expanded Fabhalta engagement. Happy to re-run this by geographic region if useful.",
+ "recorded_messages_out": [
+  "**Fabhalta HCP segment likelihood-to-prescribe, by specialty** (current adoption propensity \u2014 the requested \"next quarter\" horizon is context only; this ranking reflects current propensity, not a horizon-specific forecast)\n\n| Rank | Specialty | Mean Propensity | n | SE |\n|---|---|---|---|---|\n| 1 | Hematology | 58.4% | 1,016 | 0.007 |\n| 2 | Internal Medicine | 51.1% | 478 | 0.011 |\n| 3 | Neurology | 46.2% | 156 | 0.020 |\n| 4 | Dermatology | 36.5% | 854 | 0.008 |\n| 5 | Oncology | 34.9% | 1,662 | 0.006 |\n| 6 | Rheumatology | 34.5% | 257 | 0.015 |\n| 7 | Allergy/Immunology | 34.3% | 577 | 0.010 |\n\n- **Model:** `hcp_adoption_fabhalta_goldstd_lr_v1` (holdout AUC 0.811), scored over **5,000 HCPs**, overall mean propensity **41.8%**\n- No `low_confidence` flags \u2014 all segments have adequate sample sizes.\n- **Hematology** is the top segment (highest propensity, n=1,016), followed by Internal Medicine and Neurology; Oncology has the largest n (1,662) but ranks near the bottom on propensity.\n\nSince the score is a current adoption-propensity ranking rather than a next-quarter-specific increase forecast, hematology and internal medicine HCPs are the strongest current targets for expanded Fabhalta engagement. Happy to re-run this by geographic region if useful."
+ ],
+ "events": [
+  {
+   "t_ms": 554.1,
+   "type": "RUN_STARTED",
+   "timestamp": 1787081010169,
+   "rawEvent": null,
+   "threadId": "362967b2-e123-423e-ab22-88e0f8d398fa",
+   "runId": "80ccb136-2c40-4ff9-9f75-5007aff64f66",
+   "parentRunId": "",
+   "input": {
+    "threadId": "362967b2-e123-423e-ab22-88e0f8d398fa",
+    "runId": "80ccb136-2c40-4ff9-9f75-5007aff64f66",
+    "messages": [],
+    "tools": [],
+    "context": []
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 567.1,
+   "type": "RAW",
+   "timestamp": 1787081010176,
+   "rawEvent": null,
+   "event": {
+    "event": "on_chain_start",
+    "data": {
+     "input": {
+      "session_id": "a46beb9b-4c0d-4c05-b406-51d96b6f8826",
+      "run_id": "80ccb136-2c40-4ff9-9f75-5007aff64f66",
+      "messages": [
+       {
+        "content": "What percentage of PNH patients have been tested?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "e7b5ac14-8de6-4372-8831-056dd737c28c"
+       },
+       "<recursive>",
+       "<recursive>",
+       "<recursive>",
+       "<recursive>"
+      ],
+      "tools": [],
+      "copilotkit": {
+       "actions": "<recursive>",
+       "context": []
+      }
+     }
+    },
+    "name": "LangGraph",
+    "tags": [],
+    "run_id": "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph"
+    },
+    "parent_ids": []
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 573.9,
+   "type": "STATE_SNAPSHOT",
+   "timestamp": 1787081010205,
+   "rawEvent": {
+    "type": "CUSTOM",
+    "timestamp": null,
+    "raw_event": {
+     "event": "on_custom_event",
+     "run_id": "01a01654-2c04-7c40-a563-1ceaa24d2789",
+     "name": "copilotkit_manually_emit_intermediate_state",
+     "tags": [
+      "seq:step:1"
+     ],
+     "metadata": {
+      "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+      "ls_integration": "langgraph",
+      "langgraph_step": 1,
+      "langgraph_node": "chat",
+      "langgraph_triggers": [
+       "branch:to:chat"
+      ],
+      "langgraph_path": [
+       "__pregel_pull",
+       "chat"
+      ],
+      "langgraph_checkpoint_ns": "chat:330fa439-6248-4ec9-14c2-678fd892d75d",
+      "checkpoint_ns": "chat:330fa439-6248-4ec9-14c2-678fd892d75d"
+     },
+     "data": {
+      "messages": [
+       {
+        "content": "What percentage of PNH patients have been tested?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "e7b5ac14-8de6-4372-8831-056dd737c28c"
+       },
+       {
+        "content": "I don't have a tool or data source that tracks PNH (Paroxysmal Nocturnal Hemoglobinuria) diagnostic testing rates \u2014 the platform's data model covers commercial/prescription analytics (TRx, NRx, NBRx, market share, conversion rates) and modeled causal drivers for those metrics, not epidemiological or diagnostic-testing statistics on the broader PNH patient population. That figure would need external epidemiology/diagnostic-market research, which isn't part of this system.\n\nWhat I *can* do that's adjacent:\n- Pull **Fabhalta's** (the Novartis PNH brand) FDA-label indication, mechanism of action, and pivotal trial endpoints via `clinical_context_tool` \u2014 useful for grounding commercial targeting in the clinical reality of PNH.\n- Show real commercial KPIs for Fabhalta (TRx, NRx, NBRx, conversion rate, market share) if that's actually what you're after.\n\nLet me know if either of those would help, or if you had a different (commercial) metric in mind.",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "ai",
+        "name": null,
+        "id": "1e41dded-7ca1-4e6f-ae33-86e15cd1afdc",
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "usage_metadata": null
+       },
+       {
+        "content": "What is the current TRx volume for Fabhalta?",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "bc64dc0a-20d9-44eb-8a94-094e9e3b7bbf"
+       },
+       {
+        "content": "**Fabhalta TRx (current): 12,090 prescriptions**\n\n- **Brand:** Fabhalta\n- **Reporting window:** most recent 30 days of prescription data, data through **2026-08-17** (this is the engine's default reporting window \u2014 no specific period was requested)\n- **Source:** computed on demand from the `treatment_events` ledger (`kpi_id: WS3-BI-005`), flagged as **synthetic data**\n\nNote on comparability: this figure is computed directly from raw treatment events, not read from the `business_metrics` snapshot table \u2014 so it should not be compared to any TRx figure sourced from `business_metrics`, as those represent a different (modeled, market-scale) quantity.",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "ai",
+        "name": null,
+        "id": "e0cf4c86-4f48-49bf-88a2-9ece9f8a7d65",
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "usage_metadata": null
+       },
+       {
+        "content": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+        "additional_kwargs": {},
+        "response_metadata": {},
+        "type": "human",
+        "name": null,
+        "id": "507e875e-560f-4943-b7fc-7025d3350d15"
+       }
+      ],
+      "session_id": "a46beb9b-4c0d-4c05-b406-51d96b6f8826",
+      "run_id": "80ccb136-2c40-4ff9-9f75-5007aff64f66",
+      "copilotkit": {
+       "actions": [],
+       "context": []
+      },
+      "current_node": "chat",
+      "progress_steps": [
+       "Processing your query..."
+      ],
+      "progress_percent": 25,
+      "agent_status": "processing",
+      "tools_executing": [],
+      "error_message": null
+     },
+     "parent_ids": [
+      "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+     ]
+    },
+    "name": "copilotkit_manually_emit_intermediate_state",
+    "value": {
+     "messages": [
+      {
+       "content": "What percentage of PNH patients have been tested?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "e7b5ac14-8de6-4372-8831-056dd737c28c"
+      },
+      {
+       "content": "I don't have a tool or data source that tracks PNH (Paroxysmal Nocturnal Hemoglobinuria) diagnostic testing rates \u2014 the platform's data model covers commercial/prescription analytics (TRx, NRx, NBRx, market share, conversion rates) and modeled causal drivers for those metrics, not epidemiological or diagnostic-testing statistics on the broader PNH patient population. That figure would need external epidemiology/diagnostic-market research, which isn't part of this system.\n\nWhat I *can* do that's adjacent:\n- Pull **Fabhalta's** (the Novartis PNH brand) FDA-label indication, mechanism of action, and pivotal trial endpoints via `clinical_context_tool` \u2014 useful for grounding commercial targeting in the clinical reality of PNH.\n- Show real commercial KPIs for Fabhalta (TRx, NRx, NBRx, conversion rate, market share) if that's actually what you're after.\n\nLet me know if either of those would help, or if you had a different (commercial) metric in mind.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "1e41dded-7ca1-4e6f-ae33-86e15cd1afdc",
+       "tool_calls": [],
+       "invalid_tool_calls": [],
+       "usage_metadata": null
+      },
+      {
+       "content": "What is the current TRx volume for Fabhalta?",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "bc64dc0a-20d9-44eb-8a94-094e9e3b7bbf"
+      },
+      {
+       "content": "**Fabhalta TRx (current): 12,090 prescriptions**\n\n- **Brand:** Fabhalta\n- **Reporting window:** most recent 30 days of prescription data, data through **2026-08-17** (this is the engine's default reporting window \u2014 no specific period was requested)\n- **Source:** computed on demand from the `treatment_events` ledger (`kpi_id: WS3-BI-005`), flagged as **synthetic data**\n\nNote on comparability: this figure is computed directly from raw treatment events, not read from the `business_metrics` snapshot table \u2014 so it should not be compared to any TRx figure sourced from `business_metrics`, as those represent a different (modeled, market-scale) quantity.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "e0cf4c86-4f48-49bf-88a2-9ece9f8a7d65",
+       "tool_calls": [],
+       "invalid_tool_calls": [],
+       "usage_metadata": null
+      },
+      {
+       "content": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": "507e875e-560f-4943-b7fc-7025d3350d15"
+      }
+     ],
+     "session_id": "a46beb9b-4c0d-4c05-b406-51d96b6f8826",
+     "run_id": "80ccb136-2c40-4ff9-9f75-5007aff64f66",
+     "copilotkit": {
+      "actions": [],
+      "context": []
+     },
+     "current_node": "chat",
+     "progress_steps": [
+      "Processing your query..."
+     ],
+     "progress_percent": 25,
+     "agent_status": "processing",
+     "tools_executing": [],
+     "error_message": null
+    }
+   },
+   "snapshot": {
+    "messages": [
+     {
+      "content": "What percentage of PNH patients have been tested?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "e7b5ac14-8de6-4372-8831-056dd737c28c"
+     },
+     {
+      "content": "I don't have a tool or data source that tracks PNH (Paroxysmal Nocturnal Hemoglobinuria) diagnostic testing rates \u2014 the platform's data model covers commercial/prescription analytics (TRx, NRx, NBRx, market share, conversion rates) and modeled causal drivers for those metrics, not epidemiological or diagnostic-testing statistics on the broader PNH patient population. That figure would need external epidemiology/diagnostic-market research, which isn't part of this system.\n\nWhat I *can* do that's adjacent:\n- Pull **Fabhalta's** (the Novartis PNH brand) FDA-label indication, mechanism of action, and pivotal trial endpoints via `clinical_context_tool` \u2014 useful for grounding commercial targeting in the clinical reality of PNH.\n- Show real commercial KPIs for Fabhalta (TRx, NRx, NBRx, conversion rate, market share) if that's actually what you're after.\n\nLet me know if either of those would help, or if you had a different (commercial) metric in mind.",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "ai",
+      "name": null,
+      "id": "1e41dded-7ca1-4e6f-ae33-86e15cd1afdc",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null
+     },
+     {
+      "content": "What is the current TRx volume for Fabhalta?",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "bc64dc0a-20d9-44eb-8a94-094e9e3b7bbf"
+     },
+     {
+      "content": "**Fabhalta TRx (current): 12,090 prescriptions**\n\n- **Brand:** Fabhalta\n- **Reporting window:** most recent 30 days of prescription data, data through **2026-08-17** (this is the engine's default reporting window \u2014 no specific period was requested)\n- **Source:** computed on demand from the `treatment_events` ledger (`kpi_id: WS3-BI-005`), flagged as **synthetic data**\n\nNote on comparability: this figure is computed directly from raw treatment events, not read from the `business_metrics` snapshot table \u2014 so it should not be compared to any TRx figure sourced from `business_metrics`, as those represent a different (modeled, market-scale) quantity.",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "ai",
+      "name": null,
+      "id": "e0cf4c86-4f48-49bf-88a2-9ece9f8a7d65",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null
+     },
+     {
+      "content": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+      "additional_kwargs": {},
+      "response_metadata": {},
+      "type": "human",
+      "name": null,
+      "id": "507e875e-560f-4943-b7fc-7025d3350d15"
+     }
+    ],
+    "session_id": "a46beb9b-4c0d-4c05-b406-51d96b6f8826",
+    "run_id": "80ccb136-2c40-4ff9-9f75-5007aff64f66",
+    "copilotkit": {
+     "actions": [],
+     "context": []
+    },
+    "current_node": "chat",
+    "progress_steps": [
+     "Processing your query..."
+    ],
+    "progress_percent": 25,
+    "agent_status": "processing",
+    "tools_executing": [],
+    "error_message": null
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 2862.3,
+   "type": "TOOL_CALL_START",
+   "timestamp": 1787081012491,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": [
+       {
+        "id": "toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+        "input": {},
+        "name": "predict_hcp_segment_likelihood_tool",
+        "type": "tool_use",
+        "caller": {
+         "type": "direct"
+        },
+        "index": 1
+       }
+      ],
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-2d08-7521-bc8d-3bee097bf2d9",
+      "tool_calls": [
+       {
+        "name": "predict_hcp_segment_likelihood_tool",
+        "args": {},
+        "id": "toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+        "type": "tool_call"
+       }
+      ],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [
+       {
+        "name": "predict_hcp_segment_likelihood_tool",
+        "args": "",
+        "id": "toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+        "index": 1,
+        "type": "tool_call_chunk"
+       }
+      ],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-2d08-7521-bc8d-3bee097bf2d9",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 1,
+     "langgraph_node": "chat",
+     "langgraph_triggers": [
+      "branch:to:chat"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "chat"
+     ],
+     "langgraph_checkpoint_ns": "chat:330fa439-6248-4ec9-14c2-678fd892d75d",
+     "checkpoint_ns": "chat:330fa439-6248-4ec9-14c2-678fd892d75d",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-2c04-7c40-a563-1ceaa24d2789"
+    ]
+   },
+   "toolCallId": "toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+   "toolCallName": "predict_hcp_segment_likelihood_tool",
+   "parentMessageId": "lc_run--01a01654-2d08-7521-bc8d-3bee097bf2d9",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6257.2,
+   "type": "TEXT_MESSAGE_START",
+   "timestamp": 1787081015896,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "**",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "role": "assistant",
+   "name": null,
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6258.6,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081015897,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "**",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": "**",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6263.0,
+   "type": "RAW",
+   "timestamp": 1787081015903,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": "**",
+     "message_id": "e5c4aae7-dbbe-4a06-bc12-6dee80c36729",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6792.2,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081016432,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "Fabhalta HCP segment likelihood-to-prescribe,",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": "Fabhalta HCP segment likelihood-to-prescribe,",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 6796.8,
+   "type": "RAW",
+   "timestamp": 1787081016437,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": "Fabhalta HCP segment likelihood-to-prescribe,",
+     "message_id": "4cd5dc37-c39c-4754-8609-30b2780cea28",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7357.1,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081016993,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " by specialty** (current adoption propensity \u2014 the requested \"next quarter\" horizon is context only; this ranking reflects current prop",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": " by specialty** (current adoption propensity \u2014 the requested \"next quarter\" horizon is context only; this ranking reflects current prop",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7364.3,
+   "type": "RAW",
+   "timestamp": 1787081016998,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": " by specialty** (current adoption propensity \u2014 the requested \"next quarter\" horizon is context only; this ranking reflects current prop",
+     "message_id": "48648f7d-f255-450a-9ec2-62eb45c85d00",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7898.6,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081017536,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "ensity, not a horizon-specific forecast)\n\n| Rank | Specialty | Mean Propensity | n | SE |\n|---|---|---|---|---|\n| 1 | Hematology | 58.4% | 1,016 | 0.007 |\n| 2",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": "ensity, not a horizon-specific forecast)\n\n| Rank | Specialty | Mean Propensity | n | SE |\n|---|---|---|---|---|\n| 1 | Hematology | 58.4% | 1,016 | 0.007 |\n| 2",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 7900.3,
+   "type": "RAW",
+   "timestamp": 1787081017538,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": "ensity, not a horizon-specific forecast)\n\n| Rank | Specialty | Mean Propensity | n | SE |\n|---|---|---|---|---|\n| 1 | Hematology | 58.4% | 1,016 | 0.007 |\n| 2",
+     "message_id": "6b0aac71-a9f2-49f7-8f38-6b1813bc4524",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 8443.7,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081018083,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " | Internal Medicine | 51.1% | 478 | 0.011 |\n| 3 | Neurology | 46.2% | 156 | 0.020 |\n| 4 | Dermatology | 36.5% | 854 | 0.008",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": " | Internal Medicine | 51.1% | 478 | 0.011 |\n| 3 | Neurology | 46.2% | 156 | 0.020 |\n| 4 | Dermatology | 36.5% | 854 | 0.008",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 8449.3,
+   "type": "RAW",
+   "timestamp": 1787081018087,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": " | Internal Medicine | 51.1% | 478 | 0.011 |\n| 3 | Neurology | 46.2% | 156 | 0.020 |\n| 4 | Dermatology | 36.5% | 854 | 0.008",
+     "message_id": "622d4edf-b813-48e5-a470-713de542cefb",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 8990.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081018629,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " |\n| 5 | Oncology | 34.9% | 1,662 | 0.006 |\n| 6 | Rheumatology | 34.5% | 257 | 0.015 |\n| 7 | Allergy/Immunology | 34.3% | 577",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": " |\n| 5 | Oncology | 34.9% | 1,662 | 0.006 |\n| 6 | Rheumatology | 34.5% | 257 | 0.015 |\n| 7 | Allergy/Immunology | 34.3% | 577",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 8994.9,
+   "type": "RAW",
+   "timestamp": 1787081018635,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": " |\n| 5 | Oncology | 34.9% | 1,662 | 0.006 |\n| 6 | Rheumatology | 34.5% | 257 | 0.015 |\n| 7 | Allergy/Immunology | 34.3% | 577",
+     "message_id": "06f2ed5a-d77b-41e8-8a58-f724820a7b52",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 9537.8,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081019175,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " | 0.010 |\n\n- **Model:** `hcp_adoption_fabhalta_goldstd_lr_v1` (holdout AUC",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": " | 0.010 |\n\n- **Model:** `hcp_adoption_fabhalta_goldstd_lr_v1` (holdout AUC",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 9539.0,
+   "type": "RAW",
+   "timestamp": 1787081019177,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": " | 0.010 |\n\n- **Model:** `hcp_adoption_fabhalta_goldstd_lr_v1` (holdout AUC",
+     "message_id": "77d0eb3f-e63a-4baa-84d0-e5e08370176f",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 10139.4,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081019771,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " 0.811), scored over **5,000 HCPs**, overall mean propensity **41.8%**\n- No `low_confidence` flags \u2014 all segments have",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": " 0.811), scored over **5,000 HCPs**, overall mean propensity **41.8%**\n- No `low_confidence` flags \u2014 all segments have",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 10139.6,
+   "type": "RAW",
+   "timestamp": 1787081019773,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": " 0.811), scored over **5,000 HCPs**, overall mean propensity **41.8%**\n- No `low_confidence` flags \u2014 all segments have",
+     "message_id": "6cb8f30c-344e-4236-9490-17e6f77c1145",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 10644.2,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081020284,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": " adequate sample sizes.\n- **Hematology** is the top segment (highest propensity, n=1,016), followed by Internal Medicine and Neurology; Oncology has the largest n (1,662) but ",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": " adequate sample sizes.\n- **Hematology** is the top segment (highest propensity, n=1,016), followed by Internal Medicine and Neurology; Oncology has the largest n (1,662) but ",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 10645.4,
+   "type": "RAW",
+   "timestamp": 1787081020285,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": " adequate sample sizes.\n- **Hematology** is the top segment (highest propensity, n=1,016), followed by Internal Medicine and Neurology; Oncology has the largest n (1,662) but ",
+     "message_id": "24283048-a3eb-4bb4-9718-1c7559cc9b5f",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11174.4,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081020814,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "ranks near the bottom on propensity.\n\nSince the score is a current adoption-propensity ranking rather than a next-quarter-specific increase forecast, hematology and internal medicine H",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": "ranks near the bottom on propensity.\n\nSince the score is a current adoption-propensity ranking rather than a next-quarter-specific increase forecast, hematology and internal medicine H",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11205.0,
+   "type": "RAW",
+   "timestamp": 1787081020819,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": "ranks near the bottom on propensity.\n\nSince the score is a current adoption-propensity ranking rather than a next-quarter-specific increase forecast, hematology and internal medicine H",
+     "message_id": "2a1c0cb0-4362-4726-9936-a4abcfd40cd0",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11931.4,
+   "type": "TEXT_MESSAGE_CONTENT",
+   "timestamp": 1787081021569,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "CPs are the strongest current targets for expanded Fabhalta engagement. Happy to re-run this by geographic region if useful.",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": null,
+      "tool_call_chunks": [],
+      "chunk_position": null
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "delta": "CPs are the strongest current targets for expanded Fabhalta engagement. Happy to re-run this by geographic region if useful.",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11932.7,
+   "type": "RAW",
+   "timestamp": 1787081021571,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": "CPs are the strongest current targets for expanded Fabhalta engagement. Happy to re-run this by geographic region if useful.",
+     "message_id": "a9a56006-dd89-4e15-919f-4c2d10e0b5ff",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11955.8,
+   "type": "TEXT_MESSAGE_END",
+   "timestamp": 1787081021595,
+   "rawEvent": {
+    "event": "on_chat_model_stream",
+    "data": {
+     "chunk": {
+      "content": "",
+      "additional_kwargs": {},
+      "response_metadata": {
+       "stop_reason": "end_turn",
+       "stop_sequence": null,
+       "model_provider": "anthropic"
+      },
+      "type": "AIMessageChunk",
+      "name": null,
+      "id": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+      "tool_calls": [],
+      "invalid_tool_calls": [],
+      "usage_metadata": {
+       "input_tokens": 9261,
+       "output_tokens": 576,
+       "total_tokens": 9837,
+       "input_token_details": {
+        "cache_creation": 0,
+        "cache_read": 0
+       }
+      },
+      "tool_call_chunks": [],
+      "chunk_position": "last"
+     }
+    },
+    "run_id": "01a01654-3ce2-7d82-bec5-50ede37b52db",
+    "name": "ChatAnthropic",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langchain_chat_model",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "ls_provider": "anthropic",
+     "ls_model_name": "claude-sonnet-5",
+     "ls_model_type": "chat",
+     "ls_temperature": null,
+     "ls_max_tokens": 8192,
+     "predict_state": []
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+     "01a01654-3caf-75c1-939c-40398d352c5e"
+    ]
+   },
+   "messageId": "lc_run--01a01654-3ce2-7d82-bec5-50ede37b52db",
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 11969.6,
+   "type": "RAW",
+   "timestamp": 1787081021609,
+   "rawEvent": null,
+   "event": {
+    "event": "on_custom_event",
+    "run_id": "01a01654-3caf-75c1-939c-40398d352c5e",
+    "name": "copilotkit_manually_emit_message",
+    "tags": [
+     "seq:step:1"
+    ],
+    "metadata": {
+     "thread_id": "362967b2-e123-423e-ab22-88e0f8d398fa",
+     "ls_integration": "langgraph",
+     "langgraph_step": 3,
+     "langgraph_node": "synthesize",
+     "langgraph_triggers": [
+      "branch:to:synthesize"
+     ],
+     "langgraph_path": [
+      "__pregel_pull",
+      "synthesize"
+     ],
+     "langgraph_checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2",
+     "checkpoint_ns": "synthesize:2168cc9e-9b26-5920-119e-40d882b8f6c2"
+    },
+    "data": {
+     "message": "\n\n> \u26a0\ufe0f Automated table cross-check: the prose describes **1,016** as \"highest\", but in the \"n\" column above, its largest value is actually **1662**. Where prose and table disagree, the table values are authoritative.",
+     "message_id": "35a09bb6-c41f-4bfe-af79-81c08e6d9c21",
+     "role": "assistant"
+    },
+    "parent_ids": [
+     "01a01654-2bfb-76a2-912b-c70a1ef3c2ba"
+    ]
+   },
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 12091.8,
+   "type": "MESSAGES_SNAPSHOT",
+   "timestamp": 1787081021714,
+   "rawEvent": null,
+   "messages": [
+    {
+     "id": "e7b5ac14-8de6-4372-8831-056dd737c28c",
+     "role": "user",
+     "content": "What percentage of PNH patients have been tested?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "1e41dded-7ca1-4e6f-ae33-86e15cd1afdc",
+     "role": "assistant",
+     "content": "I don't have a tool or data source that tracks PNH (Paroxysmal Nocturnal Hemoglobinuria) diagnostic testing rates \u2014 the platform's data model covers commercial/prescription analytics (TRx, NRx, NBRx, market share, conversion rates) and modeled causal drivers for those metrics, not epidemiological or diagnostic-testing statistics on the broader PNH patient population. That figure would need external epidemiology/diagnostic-market research, which isn't part of this system.\n\nWhat I *can* do that's adjacent:\n- Pull **Fabhalta's** (the Novartis PNH brand) FDA-label indication, mechanism of action, and pivotal trial endpoints via `clinical_context_tool` \u2014 useful for grounding commercial targeting in the clinical reality of PNH.\n- Show real commercial KPIs for Fabhalta (TRx, NRx, NBRx, conversion rate, market share) if that's actually what you're after.\n\nLet me know if either of those would help, or if you had a different (commercial) metric in mind.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    },
+    {
+     "id": "bc64dc0a-20d9-44eb-8a94-094e9e3b7bbf",
+     "role": "user",
+     "content": "What is the current TRx volume for Fabhalta?",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "e0cf4c86-4f48-49bf-88a2-9ece9f8a7d65",
+     "role": "assistant",
+     "content": "**Fabhalta TRx (current): 12,090 prescriptions**\n\n- **Brand:** Fabhalta\n- **Reporting window:** most recent 30 days of prescription data, data through **2026-08-17** (this is the engine's default reporting window \u2014 no specific period was requested)\n- **Source:** computed on demand from the `treatment_events` ledger (`kpi_id: WS3-BI-005`), flagged as **synthetic data**\n\nNote on comparability: this figure is computed directly from raw treatment events, not read from the `business_metrics` snapshot table \u2014 so it should not be compared to any TRx figure sourced from `business_metrics`, as those represent a different (modeled, market-scale) quantity.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    },
+    {
+     "id": "507e875e-560f-4943-b7fc-7025d3350d15",
+     "role": "user",
+     "content": "Predict which HCP segments are most likely to increase Fabhalta prescriptions next quarter",
+     "name": "",
+     "encryptedValue": null
+    },
+    {
+     "id": "msg-609be284-6915-4475-b809-ef8906fe4eb7",
+     "role": "assistant",
+     "content": "",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": [
+      {
+       "id": "toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+       "type": "function",
+       "function": {
+        "name": "predict_hcp_segment_likelihood_tool",
+        "arguments": "{\"brand\": \"Fabhalta\", \"segment_by\": \"specialty\", \"time_horizon\": \"next quarter\"}"
+       },
+       "encryptedValue": null
+      }
+     ]
+    },
+    {
+     "id": "tool-toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+     "role": "tool",
+     "content": "{\"success\": true, \"query_type\": \"hcp_segment_likelihood\", \"brand\": \"Fabhalta\", \"model_name\": \"hcp_adoption_fabhalta_goldstd_lr_v1\", \"prediction_target\": \"adoption_propensity (likelihood to prescribe)\", \"segment_by\": \"specialty\", \"n_scored\": 5000, \"overall_mean_propensity\": 0.4175578974047212, \"holdout_auc\": 0.811, \"feature_source\": \"hcp_profiles covariates over the synthetic gold-standard adoption cohort\", \"segments\": [{\"segment\": \"hematology\", \"n\": 1016, \"mean_propensity\": 0.5840466419739503, \"se_propensity\": 0.0074732840591191846, \"min_propensity\": 0.05140244525807335, \"max_propensity\": 0.9914486873083693, \"low_confidence\": false}, {\"segment\": \"internal_medicine\", \"n\": 478, \"mean_propensity\": 0.5108471000055048, \"se_propensity\": 0.011154750171251983, \"min_propensity\": 0.04907536870554888, \"max_propensity\": 0.989558647495774, \"low_confidence\": false}, {\"segment\": \"neurology\", \"n\": 156, \"mean_propensity\": 0.46209342503952927, \"se_propensity\": 0.019919266745864316, \"min_propensity\": 0.022997811715618502, \"max_propensity\": 0.9789753239776768, \"low_confidence\": false}, {\"segment\": \"dermatology\", \"n\": 854, \"mean_propensity\": 0.3645750203719418, \"se_propensity\": 0.008077678152375254, \"min_propensity\": 0.020153033930769605, \"max_propensity\": 0.9840185250185175, \"low_confidence\": false}, {\"segment\": \"oncology\", \"n\": 1662, \"mean_propensity\": 0.34898799694060634, \"se_propensity\": 0.005746738862323596, \"min_propensity\": 0.019586937627007247, \"max_propensity\": 0.9810952351372563, \"low_confidence\": false}, {\"segment\": \"rheumatology\", \"n\": 257, \"mean_propensity\": 0.34475199785246785, \"se_propensity\": 0.01491976906744261, \"min_propensity\": 0.0172645821110296, \"max_propensity\": 0.9574871611532038, \"low_confidence\": false}, {\"segment\": \"allergy_immunology\", \"n\": 577, \"mean_propensity\": 0.34343193918243353, \"se_propensity\": 0.009651660407357371, \"min_propensity\": 0.02867697766477074, \"max_propensity\": 0.9553756887182936, \"low_confidence\": false}], \"narrative\": \"Predicted adoption propensity (likelihood to prescribe) for Fabhalta, ranked by HCP specialty, scored over 5000 HCPs via champion hcp_adoption_fabhalta_goldstd_lr_v1 (out-of-sample AUC 0.811).\\n1. hematology: mean propensity 58.4% (n=1016, SE 0.007)\\n2. internal_medicine: mean propensity 51.1% (n=478, SE 0.011)\\n3. neurology: mean propensity 46.2% (n=156, SE 0.020)\\n4. dermatology: mean propensity 36.5% (n=854, SE 0.008)\\n5. oncology: mean propensity 34.9% (n=1662, SE 0.006)\\nRequested horizon 'next quarter' is context only: this is a current adoption-propensity ranking, not a horizon-specific increase forecast.\"}",
+     "toolCallId": "toolu_01GcYpXm1zzuFrm8Ac4pUNNt",
+     "encryptedValue": null,
+     "name": ""
+    },
+    {
+     "id": "msg-4b717e1a-bd52-49a8-861a-3f1fd3632306",
+     "role": "assistant",
+     "content": "**Fabhalta HCP segment likelihood-to-prescribe, by specialty** (current adoption propensity \u2014 the requested \"next quarter\" horizon is context only; this ranking reflects current propensity, not a horizon-specific forecast)\n\n| Rank | Specialty | Mean Propensity | n | SE |\n|---|---|---|---|---|\n| 1 | Hematology | 58.4% | 1,016 | 0.007 |\n| 2 | Internal Medicine | 51.1% | 478 | 0.011 |\n| 3 | Neurology | 46.2% | 156 | 0.020 |\n| 4 | Dermatology | 36.5% | 854 | 0.008 |\n| 5 | Oncology | 34.9% | 1,662 | 0.006 |\n| 6 | Rheumatology | 34.5% | 257 | 0.015 |\n| 7 | Allergy/Immunology | 34.3% | 577 | 0.010 |\n\n- **Model:** `hcp_adoption_fabhalta_goldstd_lr_v1` (holdout AUC 0.811), scored over **5,000 HCPs**, overall mean propensity **41.8%**\n- No `low_confidence` flags \u2014 all segments have adequate sample sizes.\n- **Hematology** is the top segment (highest propensity, n=1,016), followed by Internal Medicine and Neurology; Oncology has the largest n (1,662) but ranks near the bottom on propensity.\n\nSince the score is a current adoption-propensity ranking rather than a next-quarter-specific increase forecast, hematology and internal medicine HCPs are the strongest current targets for expanded Fabhalta engagement. Happy to re-run this by geographic region if useful.\n\n> \u26a0\ufe0f Automated table cross-check: the prose describes **1,016** as \"highest\", but in the \"n\" column above, its largest value is actually **1662**. Where prose and table disagree, the table values are authoritative.",
+     "name": "",
+     "encryptedValue": null,
+     "toolCalls": []
+    }
+   ],
+   "source": "e2i-copilot"
+  },
+  {
+   "t_ms": 12094.1,
+   "type": "RUN_FINISHED",
+   "timestamp": 1787081021718,
+   "rawEvent": null,
+   "threadId": "362967b2-e123-423e-ab22-88e0f8d398fa",
+   "runId": "01a01654-2bfb-76a2-912b-c70a1ef3c2ba",
+   "result": null,
+   "source": "e2i-copilot",
+   "parentRunId": "",
+   "output": {
+    "messages": []
+   }
+  }
+ ]
+}
