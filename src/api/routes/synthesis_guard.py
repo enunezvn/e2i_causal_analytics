@@ -13,11 +13,15 @@ away — the caller appends a factual correction note instead (see
 ``build_superlative_correction``). A false correction is user-visible, so
 findings are two-tier: only high-confidence ones (``Finding.visible``) go into
 the note; the rest are for logging/monitoring. Every suppression rule below was
-forced by a measured false positive in a sweep over the 102 real responses of
-the two 2026-08-18 runs:
+forced by one measured false positive — a sweep over the 102 real responses of
+the two 2026-08-18 runs, plus the certification rerun's turn 3.3 (#1701):
 
 - paren annotations pair backward ("0.730 (Kisqali, lowest)" describes 0.730,
   not the next number in the sentence);
+- inside one parenthetical, a superlative that names its own quantity never
+  pairs with a number introduced by a DIFFERENT axis label ("(highest
+  propensity, n=1,016)" — rerun 3.3, #1701: "n=" annotates sample size while
+  "highest" binds to propensity, whose 58.4% IS the column max);
 - "largest NEGATIVE driver: … -0.073" — a negative column-min satisfies a
   max-superlative (and symmetrically for min-words);
 - Total/Sum rows are excluded from columns ("largest bucket (1,238)" is true
@@ -106,6 +110,10 @@ _CELL_RE = re.compile(
     re.IGNORECASE,
 )
 _TOTAL_ROW_RE = re.compile(r"^(?:total|sum|overall|all|combined)\b", re.IGNORECASE)
+#: "highest propensity" — the quantity word the superlative itself names.
+_NAMED_QUANTITY_RE = re.compile(r"\s+([A-Za-z][A-Za-z_-]*)")
+#: "n=1,016" / "SE = 0.007" — an axis label introducing the number that follows.
+_LABEL_INTRO_RE = re.compile(r"([A-Za-z][A-Za-z_]*)\s*=\s*$")
 _MARKUP_RE = re.compile(r"[*_`]")
 _WORD_RE = re.compile(r"[a-z]{3,}")
 
@@ -219,6 +227,14 @@ def _split_clauses(segment: str) -> List[str]:
     return [c for c in clauses if c.strip()]
 
 
+def _own_axis_annotation(clause: str, num_pos: int, quantity: str) -> bool:
+    """True when the number at num_pos is introduced by its own axis label
+    ("n=1,016", "SE = 0.007") that differs from the quantity the superlative
+    names — a same-row annotation, never the superlative's referent (#1701)."""
+    m = _LABEL_INTRO_RE.search(clause[:num_pos])
+    return m is not None and m.group(1).lower() != quantity
+
+
 def _paren_span(clause: str, pos: int) -> Optional[Tuple[int, int]]:
     """The (start, end) of the innermost paren group containing pos, if any."""
     depth = 0
@@ -279,6 +295,20 @@ def _iter_claims(text: str) -> List[_Claim]:
                 pair: Optional[Tuple[str, float, bool]] = None
                 if paren is not None:
                     inside = [(p, t, v) for p, t, v in numbers if paren[0] < p < paren[1]]
+                    # "(highest propensity, n=1,016)" — rerun 3.3 (#1701): the
+                    # superlative names its own quantity while the number is a
+                    # differently-labelled annotation of the same row, so they
+                    # must not pair. With no other in-paren number left, fall
+                    # through to the backward rule like any other annotating
+                    # parenthetical.
+                    named = _NAMED_QUANTITY_RE.match(clause, kw.end())
+                    if named:
+                        quantity = named.group(1).lower()
+                        inside = [
+                            (p, t, v)
+                            for p, t, v in inside
+                            if not _own_axis_annotation(clause, p, quantity)
+                        ]
                     if inside:
                         p, t, v = min(inside, key=lambda n: abs(n[0] - kw.start()))
                         pair = (t, v, True)
