@@ -2621,6 +2621,14 @@ def _resolve_cohort_profiler_input(
     out: Dict[str, Any] = {"query": agent_input.get("query") or ""}
     if brand:
         out["brand"] = brand
+    # #1698: thread the chat caller's original ask through so the agent can
+    # account for criteria the model's rewritten query dropped. user_context is
+    # the only caller-stash field the chat path threads into agent_input.
+    user_context = agent_input.get("user_context")
+    if isinstance(user_context, dict):
+        raw_user_query = user_context.get("raw_user_query")
+        if isinstance(raw_user_query, str) and raw_user_query.strip():
+            out["raw_user_query"] = raw_user_query
     return out
 
 

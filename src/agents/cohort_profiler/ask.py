@@ -327,3 +327,26 @@ def parse_cohort_ask(
         threshold=_parse_threshold(query),
         window=_parse_window(query, today),
     )
+
+
+def merge_cohort_asks(primary: CohortAsk, supplement: CohortAsk) -> CohortAsk:
+    """Union ``supplement``'s criteria/threshold/window into ``primary`` (#1698).
+
+    ``primary`` is parsed from the query the chat model dispatched;
+    ``supplement`` from the user's original ask. The measured 2.1 defect: the
+    model's rewrite dropped "adults over 18" / "diagnosed in 2024", so the
+    accounting never saw either criterion. Supplement criteria whose ``kind``
+    the primary lacks are appended (primary's first); on kind collision the
+    primary wins — the rewrite may have resolved anaphora the raw text leaves
+    dangling. ``threshold``/``window`` fill in only when the primary has none;
+    ``entity_type`` and ``brand`` stay the primary's.
+    """
+    have = {c.kind for c in primary.criteria}
+    criteria = tuple(primary.criteria) + tuple(c for c in supplement.criteria if c.kind not in have)
+    return CohortAsk(
+        entity_type=primary.entity_type,
+        brand=primary.brand,
+        criteria=criteria,
+        threshold=primary.threshold or supplement.threshold,
+        window=primary.window or supplement.window,
+    )
