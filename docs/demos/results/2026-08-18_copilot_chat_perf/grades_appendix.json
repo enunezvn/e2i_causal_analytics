@@ -1,0 +1,229 @@
+{
+  "grader": "appendix",
+  "chembl_outage_confound": true,
+  "questions": [
+    {
+      "question_id": "A.1",
+      "grade": "PASS",
+      "grounded_values": [
+        "Zero numeric claims (correct for a greeting probe)",
+        "Named all three brands: Kisqali, Fabhalta, Remibrutinib",
+        "Capability areas offered: KPI analysis (TRx, NRx, market share, conversion rates), causal drivers, HCP targeting/likelihood-to-prescribe, cohort profiling, experiment results, drift reports",
+        "No tool calls, no fabricated values, ends with an open invitation"
+      ],
+      "vs_baseline": "equivalent",
+      "vs_baseline_reason": "Same greeting-plus-capability shape, same brand list, no numbers either run. New drops the 'I'm the E2I Analytics Assistant' self-identification and compresses 545 -> 474 chars; nothing of substance is lost or added. TTFB improved 3,690 ms -> 2,263 ms while total went 3.7 s -> 5.1 s.",
+      "flags": [],
+      "note": "Clean. Correct shape for a contentless opener."
+    },
+    {
+      "question_id": "A.2a",
+      "grade": "PASS",
+      "grounded_values": [
+        "Brands with indications: Kisqali (HR+/HER2- breast cancer), Fabhalta (PNH), Remibrutinib (CSU)",
+        "KPI vocabulary: TRx, NRx, NBRx, TRx market share, conversion rate, ROI, HCP coverage",
+        "Correct axis scoping preserved: 'severity tier, line-of-therapy, region, and (Remibrutinib only) biologic status / IgE tier' — matches the HONESTY GUARD contract in src/api/routes/copilotkit.py:3054",
+        "Portfolio-share caveat volunteered: 'share of the tracked portfolio: Kisqali + Fabhalta + Remibrutinib'",
+        "Honest boundary preserved: cohort profiling is aggregate '(not individual-level rosters)'",
+        "ARCHITECTURE CLAIM VERIFIED CORRECT: '22-agent architecture (6 tiers: ML Foundation, Coordination, Causal Analytics, Monitoring, ML Predictions, Self-Improvement)' matches TIER_NAMES in src/agents/factory.py:236-240 and the 22-agent roster asserted in src/repositories/agent_registry.py:38 and src/api/routes/chatbot_dspy.py:191"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "The baseline's '21-agent tiered system' was factually WRONG — the roster is 22 agents across 6 tiers, and the new answer not only corrects the count but names all six tiers exactly as src/agents/factory.py names them. Everything the 08-15 grading credited is retained (Remibrutinib-only biologic/IgE scoping, tracked-portfolio share qualifier, aggregate-only cohort boundary). Same no-tool, no-number shape; 2,069 -> 2,250 chars.",
+      "flags": [
+        "capability overclaim measurable in this same run: item 6 advertises 'ML predictions' and 'data/model drift detection' as things it can query, but A.10 shows e2i_data_query_tool(query_type='predictions') and ('drift_reports') both return hybrid_rag episodic-memory rows of HISTORICAL monthly business_metrics — no forecast object and no drift statistic. The capability is advertised here and verifiably not delivered two turns later.",
+        "minor: drops the baseline's 'I'm upfront when the causal registry doesn't cover a specific ask' self-boundary — which the run then demonstrates anyway in A.9-seed and A.10"
+      ],
+      "note": "No fabricated numerics — the only quantitative claims are structural (three brands, 22 agents, 6 tiers) and all three were traced to source and confirmed. This is the turn the 'no tool = no grounding' worry applies to, and it comes out clean."
+    },
+    {
+      "question_id": "A.2b",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "Substrate fence quoted and correctly attributed: 'not comparable to volume figures from kpi_calculate_tool ... the tool notes business_metrics TRx is roughly 73x the trailing-30-day event count' — verbatim from the payload's measure_basis.note ('the national business_metrics TRx total is ~73x the trailing-30-day treatment_events prescription count for the same brand')",
+        "NRx 63,059 - 66,738: payload rows northeast 63,058.71 / south 65,007.59 / midwest 66,738.40 — range correct",
+        "Market share 0.45 - 0.51: payload south 0.45, northeast 0.51 — correct for the two rows returned",
+        "Conversion rate 0.56 - 0.59: payload south 0.56, northeast 0.59 — correct",
+        "HCP Engagement 10.0 'vs. targets of ~13.7-15.9': payload targets 13.74 (west), 13.81 (south), 15.88 (northeast) — correct",
+        "ROI 1.08 - 3.22 'by region/metric': payload min 1.08 (conversion_rate south), max 3.22 (trx northeast) — correctly labelled as pooled across metrics",
+        "Grain stated correctly: 'monthly grain, most recent month shown: August 2026' — payload metric_date 2026-08-01, measure_basis.grain 'brand x region x calendar month'",
+        "Per-HCP rollup fields enumerated (trx_count, nrx_count, total_rx_count, market_share, conversion_rate) — all present on the 7 per_hcp_rollup rows"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "The dominant 08-15 defect across this whole subset — Kisqali TRx appearing at mutually irreconcilable scales with nothing reconciling them — is FIXED here, and fixed at the right layer: the tool now ships a measure_basis fence and the answer surfaces it explicitly, quantifies it (73x), attributes it to the tool rather than asserting it, and states 'I haven't mixed the two here'. The 08-15 cross-turn contradiction with A.10 (207,270 here vs 48,654.99 there for the same brand/region/month) is also gone, because A.10 no longer prints a business_metrics volume figure at all.",
+      "flags": [
+        "WRONG RANGE, contradicted by its own payload: the table prints 'TRx | 207,270 - 238,449 (varies by region)' but the payload returned three Kisqali TRx rows — northeast 207,270.27, midwest 182,115.08, south 238,448.55. Midwest is BELOW the stated minimum, so the advertised regional spread excludes a row the tool actually returned.",
+        "coverage overclaim: 'broken out by region (northeast, midwest, south, west)' — TRx and NRx have 3 regions in the payload, market share and conversion rate have 2, and west appears only via hcp_engagement_score and per-HCP rollups. No metric in the table is actually four-region.",
+        "the payload's filters_applied echoes only {'brand': 'Kisqali'} and 7 of 20 rows are per-HCP noise crowding out aggregate rows — the thin regional coverage above is a retrieval-shape artifact the answer does not notice"
+      ],
+      "note": "The answer to the question actually asked — which KPIs exist for Kisqali — is complete, correctly scoped, and now carries the best provenance discipline in the subset. The PARTIAL is earned solely by the volunteered TRx range, whose lower bound is falsified by a row in its own tool result."
+    },
+    {
+      "question_id": "A.3",
+      "grade": "PASS",
+      "grounded_values": [
+        "Kisqali TRx = 10,273 — payload value 10273.0 exactly",
+        "Window: 'most recent 30 days of prescription data (through 2026-08-17)', flagged as the engine default — payload window_status 'default', data_through '2026-08-17', reporting_window 'most recent 30 days of prescription data'",
+        "Source: 'computed on demand from the treatment_events ledger (synthetic data), KPI ID WS3-BI-005' — payload kpi_id WS3-BI-005, data_source synthetic, measure_basis.computed true",
+        "Substrate fence reproduced faithfully: 'not from the stored business_metrics snapshot table — if you later see a different TRx value from a business_metrics query, it's measuring a different substrate and the two shouldn't be compared directly or summed' — matches measure_basis.note"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Typo 'Waht' silently tolerated exactly as in baseline, same default-window disclosure and same registry ID. The gain is the substrate fence: this turn now pre-empts the exact cross-tool scale confusion that the 08-15 grading called the dominant defect of the subset. Value moved 11,298 (through 2026-08-13) -> 10,273 (through 2026-08-17), which is expected sample-data regeneration, not drift.",
+      "flags": [
+        "minor: drops the baseline's offer of follow-up breakdowns (severity tier / therapy line / region / chart) in favour of the substrate note"
+      ],
+      "note": "Byte-identical value to A.8-cold and A.8-warm in this run (10,273 / WS3-BI-005 / through 2026-08-17), so the KPI fast path is self-consistent across three separate sessions."
+    },
+    {
+      "question_id": "A.4",
+      "grade": "PASS",
+      "grounded_values": [
+        "Remibrutinib conversion rate 63.4% (0.634), status good — payload value 0.6341012514220705, status 'good'",
+        "Window: 'most recent 30 days of trigger data (data through 2026-08-17)', flagged as engine default — payload window_status 'default', reporting_window 'most recent 30 days of trigger data'",
+        "Source: 'computed on demand from treatment_events and triggers (synthetic data)' — payload measure_basis.measure 'computed on demand from treatment_events, triggers'",
+        "Offered axes 'severity tier or line of therapy' are contract-correct for a conversion-rate KPI"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Both typos ('converson', 'Remibrutnib') silently corrected as in baseline, value equivalent modulo regeneration (0.633 -> 0.634). The real gain is the breakdown offer: the 08-15 grading CREDITED the baseline for offering 'biologic status (naive/experienced), or IgE tier' — but the platform contract (src/api/routes/copilotkit.py:3053) scopes those axes to 'REMIBRUTINIB ONLY (volume KPIs and share, NOT conversion rate)', and names segment/therapy_line as the axes that compose with conversion rate. The baseline's praised offer was actually an unsupported one; the new offer is the correct one.",
+      "flags": [
+        "minor: no longer prints the registry ID WS3-BI-009 in the answer text (it is present in the payload); the 08-15 grading had credited naming it. Substrate provenance replaces it, so traceability is not lost, only relabelled.",
+        "minor: drops the plain-language gloss ('roughly 63% of triggered conversion opportunities are resulting in successful conversions') — 628 -> 467 chars"
+      ],
+      "note": "Not a contradiction with anything else in the subset: this is a trailing-30-day read on the triggers substrate and no other Appendix turn reports a Remibrutinib conversion figure this run (the baseline's 0.524 last-quarter figure is gone with A.10's section 5)."
+    },
+    {
+      "question_id": "A.5",
+      "grade": "PASS",
+      "grounded_values": [
+        "Zero numeric claims and zero tool calls — the correct ambiguity outcome",
+        "Asks for exactly the missing slots: which metric (TRx, NRx, NBRx, market share, conversion rate, ROI), which brand (Kisqali/Fabhalta/Remibrutinib), and optionally time period or region",
+        "States what it will do once filled: 'pull the actual KPI data and run a causal analysis to explain the drop'",
+        "Never names a brand or metric as if it knew; fabricates nothing"
+      ],
+      "vs_baseline": "different-but-equivalent",
+      "vs_baseline_reason": "Structurally identical ask-back: no tools, same three slots, same promise to run causal analysis once disambiguated. New marks the third slot '(Optional)' and restores 'region' alongside time period; it drops the baseline's explicit 'this looks like the start of our conversation, so I don't know' no-prior-context recognition, which was a nice touch but not load-bearing. 485 -> 425 chars, 3.8 s -> 4.4 s (TTFB 3,786 -> 1,893 ms).",
+      "flags": [
+        "minor: loses the baseline's explicit statement that it has no prior context — a cold-start reader gets the ask-back but not the reason for it"
+      ],
+      "note": "This is the designed clarify-gate probe on a cold first message, so asking is the correct behaviour. Marking the time/region slot optional is arguably better aimed than the baseline: metric + brand really are the two blocking slots."
+    },
+    {
+      "question_id": "A.6",
+      "grade": "PASS",
+      "grounded_values": [
+        "TRx = total volume of prescriptions dispensed, includes new prescriptions and refills; 'TRx = NRx + Refill Rx'",
+        "NBRx distinguished as 'patients newly starting that specific brand (may switch from another therapy)'",
+        "Portfolio caveat retained: 'TRx Market/Portfolio Share — a brand's share of total prescriptions within the tracked portfolio'",
+        "No data values dumped — correct for a definitional probe",
+        "Offers to pull a real value rather than inventing one"
+      ],
+      "vs_baseline": "regressed",
+      "vs_baseline_reason": "Answering the char-drop question directly: 1,120 -> 867 is BOTH tightening and real content loss. Tightened harmlessly: the pharmacy/claims grain and roll-up axes sentence. Lost substantively: 'TRx is a volume metric — tracked for trend and context rather than scored against a target threshold (it is \"informational\" rather than \"good/warning/critical\")'. That sentence was the one platform-specific fact in the answer, it is corroborated by the payloads in this very run (A.3/A.8 return status 'informational' with no target while A.4 returns status 'good'), and the 08-15 grading singled it out as what made the definition platform-grounded rather than textbook. Without it the answer is correct but generic — it would read the same for any pharma product.",
+      "flags": [
+        "content loss: the 'informational, not threshold-scored' platform classification is gone",
+        "content loss: the grain/roll-up detail (pharmacy/claims level, rolled up by brand, region, HCP specialty, patient segment) is gone"
+      ],
+      "note": "Nothing stated is wrong, hence PASS. But this is the clearest case in the subset where shorter is worse: every sentence removed was a sentence only this platform could have written."
+    },
+    {
+      "question_id": "A.8-cold",
+      "grade": "PASS",
+      "grounded_values": [
+        "Kisqali TRx: 10,273 — payload value 10273.0",
+        "Source: 'kpi_calculate_tool (WS3-BI-005, Total Prescriptions), computed from the treatment_events ledger' — payload kpi_id WS3-BI-005, measure_basis.computed true",
+        "Window: default, most recent 30 days, through 2026-08-17 — payload window_status 'default', data_through '2026-08-17'",
+        "Substrate fence: 'not the stored business_metrics snapshot table ... measuring a different quantity (modeled market-scale level) and isn't directly comparable'"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Same answer shape, same tool round-trip, same three grounding facts (value, default-window disclosure, registry ID), plus the substrate fence the baseline lacked. Value moved 11,298 -> 10,273 with the as-of date 2026-08-13 -> 2026-08-17, consistent with data regeneration.",
+      "flags": [],
+      "note": "Byte-identical value, window and source to A.3 in this run, from a different session."
+    },
+    {
+      "question_id": "A.8-warm",
+      "grade": "PASS",
+      "grounded_values": [
+        "Kisqali TRx: 10,273 — identical to A.8-cold, and the warm turn's own payload returns 10273.0",
+        "Window: default, most recent 30 days, through 2026-08-17 — identical to cold",
+        "Source: kpi_calculate_tool / WS3-BI-005 / treatment_events — identical to cold",
+        "Explicit repeat acknowledgment: 'This is the same figure and window as before — nothing new was requested, so the value is unchanged'",
+        "Carries the substrate fence forward: 'As noted previously ... should not be compared to a business_metrics-sourced TRx figure'"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Baseline already acknowledged the repeat ('This matches the figure already provided earlier'); the new turn does that AND re-states why the value is unchanged AND carries the substrate caveat forward with 'As noted previously', which is exactly the session-memory behaviour T5 is probing. No replayed prior-turn text (the #1442 failure mode) in either turn.",
+      "flags": [
+        "behavioural change, unchanged from 08-15 and still worth recording: the warm turn re-ran kpi_calculate_tool rather than reusing the cold answer, so there is no latency saving — 8.78 s cold vs 9.06 s warm (baseline 5.51 s vs 5.96 s). The documented 'recap skips the tool round-trip' pattern from results/2026-07-31_t5_paraphrase_repeat/RESULTS.md has now failed to fire in two consecutive runs."
+      ],
+      "note": "A.8 PAIR CONSISTENCY: PASS. Value, window, source and substrate caveat all match cold exactly, and the pair is additionally consistent with A.3 in a third session. No contradictory values anywhere in the pair. The re-run remains the safer failure mode — the claimed match was actually re-derived and came back identical."
+    },
+    {
+      "question_id": "A.9-seed",
+      "grade": "PASS",
+      "grounded_values": [
+        "Kisqali TRx, Northeast, Q1 2025 = 142.0 — payload value 142.0, region 'northeast' with region_status 'applied', window_applied 2025-01-01 to 2025-04-01, window_status 'applied'",
+        "Six validated causal paths byte-matching the payload: persistent_180d +0.285 / 0.892 / +$127,512.04 / 24d; formulary_status +0.223 / 0.805 / +$100,657.87 / 78d; rep_detailing_frequency +0.166 / 0.796 / +$38,244.12 / 77d; hcp_coverage +0.09 / 0.899 / +$29,540.62 / 55d; copay_support_program +0.088 / 0.794 / +$17,024.65 / 64d; competitor_activity -0.073 / 0.793 / -$24,218.40 / 70d",
+        "PROVENANCE DISCIPLINE, EARNED: 'brand-wide, not region-specific — no region filter was applied by the tool' matches the causal payload's literal 'region': null (the tool was called without a region argument on this turn)",
+        "Trigger scvtrg_31402 (Kisqali, scvhcp_00819): churn_prevention, 'Competitor activity detected in territory', confidence 0.774, root cause competitor_activity via price_sensitivity/satisfaction_score, acceptance_status 'overridden', action_taken null — every field exact",
+        "Triggers scvtrg_31407 / scvtrg_31408 (both Kisqali, both scvhcp_02940): 31407 false_positive_flag true, expired, outcome 0.0; 31408 accepted, outcome 0.735 — exact",
+        "Premise refusal: 'No prior non-overlapping Q1 (or equivalent-length) figure was returned ... so I can't quantify the drop against a valid baseline'",
+        "Brand-leak disclosed: 'all brands returned' — correct, the brand='Kisqali' filter did not hold (7 of 10 rows are Fabhalta/Remibrutinib)"
+      ],
+      "vs_baseline": "different-but-equivalent",
+      "vs_baseline_reason": "Headline figure identical to baseline (142 for Q1 2025 Northeast) and the six causal rows match digit for digit; trigger IDs changed wholesale (scvtrg_31402/31407/31408 vs baseline's scvtrg_21005) consistent with data regeneration. It gains the data-hygiene reading that the 08-15 grading praised in the FOLLOWUP turn — here it discriminates an expired false-positive trigger from an accepted one on the same HCP and reads that as inconsistent follow-through. It also states the causal tool's null region filter explicitly rather than by implication. Against that it introduces a new unearned scoping label (below), so net it is a lateral move with different strengths.",
+      "flags": [
+        "unearned scoping in the section header: 'Northeast trigger signals (last 90 days...)'. The trigger payload carries NO region column at all, and the last_90_days filter demonstrably did NOT apply — the returned rows include trigger dates 2023-09-26, 2024-07-08 and 2025-12-29. The turn correctly noticed the brand filter leaked ('all brands returned') but assumed the region and time filters held. The three Kisqali rows it actually cites are dated 2026-07-05 and 2026-07-21, so nothing cited is stale, but the label describes the request, not the result.",
+        "temporal mismatch not stated: triggers from July 2026 are used as signal for a Q1 2025 question, ~18 months apart, with no caveat. The 08-15 followup explicitly discounted a trigger for being outside the Q1 2025 window; that discipline is absent here.",
+        "premise evidence left unused in its own payload: window_coverage returns trailing_30d_value 52.0 with trailing_30d_share 0.3662 against uniform_expected_share 0.3333 — the one piece of within-quarter pacing evidence that could speak to whether TRx was actually declining. The turn says it cannot assess the drop while that field sits unread in the result it is quoting. Same omission as 08-15."
+      ],
+      "note": "The best reasoning in the subset is again here: 'a downward TRx move is best explained as those positive levers under-performing ... rather than a large single negative force'. Notably A.10 now reasons the SAME way on the identical driver table — the 08-15 split where the seed reasoned correctly and A.10 committed a sign-vs-movement fallacy is closed."
+    },
+    {
+      "question_id": "A.9-followup",
+      "grade": "PASS",
+      "grounded_values": [
+        "TEMPLATE BLOAT GONE — verified by scan, not by impression: the seven marker phrases from the 08-15 regression ('Strategic Insights', 'BUSINESS IMPACT', '5-15%', 'data governance', 'continuous monitoring', 'Confidence level: 0.5', 'No actionable') all fire on the 08-15 text and ZERO of them appear anywhere in the new text — or in any of the other 11 Appendix turns.",
+        "Answer is specific to Kisqali/Northeast/Q1 from the title line onward ('Why Kisqali TRx is under pressure — Northeast, Q1 2025'); the referent 'this' is resolved without asking",
+        "CAUSAL PATHS ARE BACK, quantified: competitor_activity -> trx_market_share -0.073, ~-$24,218, 70-day lag, confidence 0.793; and all five positive drivers restated with effect sizes (persistent_180d +0.285, formulary_status +0.223, rep_detailing_frequency +0.166, hcp_coverage +0.09, copay_support_program +0.088) — every value matches the seed turn's causal payload",
+        "Trigger scvtrg_31402 re-cited with exact fields (Kisqali, scvhcp_00819, confidence 0.774, root cause competitor_activity via price_sensitivity/satisfaction_score, still overridden/unactioned)",
+        "Document-retrieval figures exact: July 2026 TRx 252,475 / achievement 93.6% / YoY +28.3% / ROI 1.86 and August 2026 TRx 207,270.27 / 73.9% / +22.0% / ROI 3.22 — both match the corpus_ingestion rows in the payload character for character",
+        "SUBSTRATE FENCE APPLIED CORRECTLY ACROSS TURNS: those business_metrics figures are explicitly declared 'a different substrate than the Q1 2025 treatment_events TRx of 142.0 you asked about originally ... supporting context only, not a trend line'",
+        "Region-level honesty retained: 'I don't have region-specific effect sizes for these six drivers, so I can't say which one is most under-performing in the Northeast specifically'",
+        "Competitor landscape correctly labelled 'curated' — payload competitor_landscape.source is 'curated', listing Ibrance (palbociclib) and Verzenio (abemaciclib)"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "This is the clearest fix in the subset and it lands on all three counts the task asked about. (1) The generic template is gone — no 'Strategic Insights Summary', no unsourced '5-15% performance gains', no 'Escalate to data governance team', and no headline contradicting the grounded section below it. (2) The answer is specific to Kisqali/Northeast/Q1 throughout. (3) Quantified causal content is back: the baseline's orchestrator_tool returned nothing and produced zero causal paths, whereas this turn delivers the negative driver with effect size, dollar impact, lag and confidence, plus all five positive drivers, plus a corroborating trigger. It also does something the baseline never did — reconciles two substrates explicitly instead of printing figures from both as if comparable. 6,026 -> 3,206 chars, and every char now earns its place.",
+      "flags": [
+        "CONFOUND, not a defect: the ChEMBL/EBI outage shows in the payload as mechanism.source == 'static_fallback'. The turn never claims a live ChEMBL lookup, so this is honest degradation, not fallback masquerading as live.",
+        "provenance smudge on the fallback field: 'Kisqali (ribociclib) is FDA-labeled as a CDK4/6 inhibitor ... (source: openFDA)'. The openFDA indications text in the payload says 'KISQALI is a kinase inhibitor'; the CDK4/6 specificity comes from the static_fallback mechanism field. The claim is factually correct for ribociclib and the fallback is not dressed up as live data, but two sources are folded under one attribution — and it happens to be the field the outage degraded.",
+        "inherits the seed's unearned Northeast trigger scoping and calls scvtrg_31402 'a live Northeast trigger': the trigger payload has no region column, and the trigger is dated 2026-07-05 with acceptance_status 'overridden'. 'Live' here means unactioned, not time-current, and it is cited as corroboration for a Q1 2025 decline ~18 months earlier without a window caveat.",
+        "minor: opens with 'no new number-crunching happened here' while two tools did run (clinical_context_tool and a document retrieval) — section 4 is transparent about the retrieval, so this reads as imprecision rather than concealment"
+      ],
+      "note": "A.9 PAIR CONSISTENCY: PASS. Referent carried correctly, the seed's 142.0 restated with its window, the brand-wide caveat on the causal registry repeated, and no value contradicts the seed. The remaining flags degrade a secondary corroboration (the trigger's region and recency), not the headline conclusion, which rests on the causal registry and is correctly hedged as a model attribution. Note the trade with A.9-seed: the out-of-window-trigger discipline the 08-15 grading praised in THIS turn has moved to the seed, and this turn no longer performs it."
+    },
+    {
+      "question_id": "A.10",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "Kisqali TRx, Northeast, 'last quarter' 2026-04-01 to 2026-07-01 = 190.0 — payload value 190.0, window_status 'applied', region_status 'applied'; the 'last quarter' parse fixed at 08-15 still holds",
+        "'91-day window' correct (2026-04-01 to 2026-07-01) and 'trailing-30d value 74.0' matches window_coverage.trailing_30d_value exactly",
+        "SCALE COHERENCE RESTORED: the only volume figures in the answer are 190 (quarter) and 74 (trailing 30d) — same treatment_events substrate, mutually consistent. The 08-15 defect of two figures 256x apart inside one answer is GONE, because the answer no longer prints a business_metrics volume figure at all. The one business_metrics number it does quote is an engagement score (10.0 vs target 15.88, 63.0% achievement, Aug 2026), which is unitless and matches its payload exactly.",
+        "Six causal paths byte-matching the payload including refutation metadata (5/5 tests passed on every path)",
+        "Biologic refusal correct and matches the platform contract: 'a real breakdown only for Remibrutinib ... Kisqali carries no biologic-experience field'; correct Kisqali axes named (segment, therapy_line)",
+        "REFUSAL 1 VERIFIED TRUE: 'Both predictions queries came back with the same historical monthly episodic records ... rather than a forward-looking forecast object'. Both payloads are retrieval_method 'hybrid_rag' over episodic_memories containing August/July 2026 business_metrics prose rows. There is no forecast object in either. 'Presenting these historicals as a forecast would misstate what the tool returned' is exactly right.",
+        "REFUSAL 2 VERIFIED TRUE: the drift_reports payloads contain no PSI/KS statistic and no alert flag — same hybrid_rag historical rows.",
+        "experiment_designer correctly placed at Tier 3 — matches src/api/routes/chatbot_dspy.py:191-197 (Tier 3 Monitoring)",
+        "Experiment design is derived from measured values, not invented: primary endpoint tied to rep_detailing_frequency effect size 0.166, duration '~80 days per arm' justified by the observed 77-78 day lags, guardrails on persistent_180d and hcp_coverage justified by their larger effect sizes"
+      ],
+      "vs_baseline": "improved",
+      "vs_baseline_reason": "Three 08-15 defects are fixed and one is fixed at the reasoning layer. (1) The 256x internal contradiction is gone — no business_metrics volume figure is printed, so nothing in the answer is scale-incoherent. (2) The heading/content mismatch is gone: section 3 is now titled 'not actually returned' instead of promising next-quarter predictions and delivering current-month actuals. (3) The sign-vs-movement non-sequitur is corrected — the baseline concluded 'the causal engine attributes the Northeast dip primarily to rising competitive share-of-voice pressure'; the new turn says the likeliest read is under-delivery on the positive levers 'rather than a single new negative shock', which is the correct inference and matches A.9-seed. (4) The apples-to-oranges gap comparison (Kisqali as-of 2026-06-13 vs Remibrutinib 2026-08-15) is gone with the section. It is still PARTIAL because two facets go undelivered and the region claim is not earned.",
+      "flags": [
+        "UNEARNED REGION SCOPING, now provable: the table is headed 'Causal drivers of Kisqali TRx (Northeast)' and the payload does echo region 'northeast' — but A.9-seed called the same tool WITHOUT a region argument, got region null, and got the six identical paths with identical effect sizes, confidences, lags and dollar impacts. The causal registry is brand-level; the tool echoes the requested region without filtering on it. The answer is faithful to its own payload and cannot know this within its session, so this is a platform defect (echo mistaken for filter) that the answer then presents to the reader as region-specific causal evidence.",
+        "GROUNDED EVIDENCE LEFT ON THE TABLE: the drift section says nothing came back, but its own payload contains 'Gap analysis for Kisqali: metrics=trx,conversion_rate,market_share, segments=region, gaps_found=10, total_addressable_value=$520,809' (as of 2026-06-13). The 08-15 baseline surfaced exactly this record while correctly refusing to call it drift, and the 08-15 grading counted that as one of its three real gains. That adjacent evidence is now dropped.",
+        "facets 3 and 4 of 5 are answered 'not available'. The refusals are correct and verified against the payloads, but per the honest-failure rule the clean reporting of a miss does not restore the missing usefulness — the demo audience asks five things and gets substantive answers to three.",
+        "the Remibrutinib premise check is gone entirely: the baseline reported Remibrutinib conversion 0.524 for last quarter with runtime provenance (region_status 'default'), which at least engaged the user's 'stayed flat' clause. The new answer never touches Remibrutinib conversion rate.",
+        "same unused pacing evidence as A.9-seed: the payload returns trailing_30d_share 0.3895 against uniform_expected_share 0.3297 while the answer states it cannot quantify the drop"
+      ],
+      "note": "ON THE TOOL-CHANGE PREMISE: A.10 did NOT regress to descriptive KPI reporting. tools_invoked records only the FIRST tool call — the event stream shows six calls on this turn (kpi_calculate with region+window, a causal call, two drift_reports queries, two predictions queries) and the causal payload with all six validated paths is present in the messages snapshot. So the 08-15 'causal_analysis_tool' vs 08-18 'kpi_calculate_tool' difference is a measurement artifact of the tools_invoked field, not a routing change, and the causal facet is answered on both runs. The same caveat applies to A.9-seed (3 calls, 1 recorded) and A.9-followup (2 calls, 1 recorded) — treat tools_invoked as first-tool-only for multi-call turns. SEPARATELY, a real platform change did occur between runs: on 08-15 query_type='predictions' returned prediction rows (Kisqali NE Aug 2026 TRx 48,654.99 vs target 65,800.04); on 08-18 the same query_type returns hybrid_rag episodic-memory prose. That is what makes the predictions facet undeliverable this run, and it is worth filing independently of this grading."
+    }
+  ],
+  "overall_notes": "10 PASS, 2 PARTIAL (A.2b, A.10), 0 FAIL across the 12 Appendix A probes. THE 08-15 TEMPLATE-BLOAT REGRESSION IS FIXED AND THE FIX IS VERIFIED BY SCAN, NOT IMPRESSION: all seven marker phrases from the 08-15 A.9-followup ('Strategic Insights', 'BUSINESS IMPACT', '5-15%', 'data governance', 'continuous monitoring', 'Confidence level: 0.5', 'No actionable') fire on the baseline text and appear ZERO times across all twelve new turns. A.9-followup is now specific to Kisqali/Northeast/Q1 from its title line, delivers the quantified causal content the question asks for (competitor_activity -0.073 / -$24,218 / 70-day lag / confidence 0.793 plus all five positive drivers), and does something the baseline never did — declares two substrates non-comparable instead of printing figures from both. THE SECOND DOMINANT 08-15 FINDING IS ALSO FIXED, AND AT THE RIGHT LAYER: Kisqali TRx no longer appears at irreconcilable scales. The kpi_calculate payloads now ship a measure_basis fence and every turn that touches TRx surfaces it — A.3 and both A.8 turns warn against comparing their treatment_events figure to business_metrics, A.2b quotes the fence in the other direction and quantifies it (73x, correctly attributed to the tool rather than asserted), and A.9-followup uses it to refuse a bogus trend line. A.10's two-figures-256x-apart defect is gone because A.10 now prints no business_metrics volume figure at all. THE TWO PARTIALS: A.2b prints 'TRx | 207,270 - 238,449 (varies by region)' when its own payload returned midwest at 182,115 — a regional range falsified by a row in its own result. A.10 heads its causal table '(Northeast)' on the strength of a region field the tool merely echoes back: A.9-seed called the same tool with no region, got region null, and got the six identical paths, which proves the causal registry is brand-level and the region argument is not a filter; A.10 also drops the gap-analysis record (10 gaps / $520,809) that sits in its own drift payload and that the baseline surfaced, and answers only three of five facets substantively. TWO MEASUREMENT ARTIFACTS THAT WOULD MISLEAD A SUMMARY. First, tools_invoked records only the FIRST tool call: A.10 made six calls (kpi, causal, 2x drift, 2x predictions), A.9-seed three, A.9-followup two. The apparent 'A.10 moved off causal_analysis_tool to kpi_calculate_tool' is therefore not a routing change — the causal payload with all six validated paths and 5/5 refutation is present in A.10's message stream and its content is in the answer. Second, a REAL platform change did occur underneath: on 08-15 query_type='predictions' returned prediction rows (Kisqali NE Aug 2026 TRx 48,654.99 vs target 65,800.04) while on 08-18 both 'predictions' and 'drift_reports' return retrieval_method 'hybrid_rag' episodic-memory prose about historical monthly business_metrics. A.10's two refusals are therefore correct and verified against its payloads — but the underlying capability regression is worth filing on its own, and note that A.2a advertises 'ML predictions' and 'data/model drift detection' as capabilities in the same run where A.10 cannot obtain either. THE CHEMBL OUTAGE SHOWS AS HONEST DEGRADATION: only A.9-followup called clinical_context_tool, its payload carries mechanism.source == 'static_fallback', and the answer never claims a live lookup — the one blemish is that the fallback's 'CDK4/6 inhibitor' is folded into a sentence attributed to openFDA (whose label text says 'kinase inhibitor'). No penalty for the outage; the smudge is flagged. SMALLER FINDINGS WORTH KEEPING: A.2a's '22-agent architecture, 6 tiers' is correct and the baseline's '21-agent' was wrong — the new tier names match src/agents/factory.py TIER_NAMES exactly. A.4's breakdown offer is now contract-correct: the 08-15 grading CREDITED the baseline for offering biologic status / IgE tier on a conversion-rate KPI, but the platform contract scopes those axes to Remibrutinib volume KPIs and share, NOT conversion rate — so the praised behaviour was the defective one and the new 'severity tier or line of therapy' is right. The A.8 pair is fully consistent (10,273 / WS3-BI-005 / through 2026-08-17 on both, matching A.3 in a third session) with an explicit repeat acknowledgment, though the warm turn again re-ran the tool with no latency saving (8.78 s vs 9.06 s), so the documented 'recap skips the tool round-trip' pattern has now failed to fire in two consecutive runs. A.6 is the one turn where the char drop cost something: 1,120 -> 867 removed the 'informational rather than good/warning/critical' classification that this run's own payloads corroborate, leaving a correct but generic textbook definition. Finally, a defect the fixes have exposed rather than introduced: BOTH quarter-window turns (A.9-seed, A.10) declare they cannot assess the 'drop' while window_coverage sits unread in the payload they are quoting — trailing_30d_share 0.3662 vs uniform 0.3333 on the seed, 0.3895 vs 0.3297 on A.10. That is the premise-testing evidence both turns say they lack."
+}

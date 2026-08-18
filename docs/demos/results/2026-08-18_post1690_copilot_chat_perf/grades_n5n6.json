@@ -1,0 +1,200 @@
+{
+  "grader": "n5n6",
+  "chembl_outage_confound": "ChEMBL was UP this run and confirmed live in-payload: 6.4's clinical_context_tool returned mechanism={'mechanism_of_action':'Complement factor B inhibitor','source':'chembl'} alongside clinicaltrials.gov, pubmed (PMID 39371251), openfda (boxed warning) and curated competitor sources — no residual outage effects in sessions 5 or 6.",
+  "questions": [
+    {
+      "question_id": "5.1",
+      "grade": "PASS",
+      "grounded_values": [
+        "Grade A, 99.4/100, 'all systems operational' -> orchestrator_tool on_tool_end: response='System health is excellent (Grade: A, Score: 99.4/100). All systems operational.'",
+        "agent dispatched = health_score -> payload agents_dispatched=['health_score'], target_agent_requested='health_score', fallback=false, status='completed'",
+        "'no comparison window was returned, so no trend can be stated' -> payload context has brand=null, region=null and no window fields; correct scoping caveat",
+        "NOT SURFACED (minor): payload confidence=0.5 is not mentioned in the answer"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "Two gains. (1) The morning run's 5.1 carried an unflagged #1691 superlative defect: its prose said 'Anomalies detected are highest for Remibrutinib (2026-08-16) ... at 3 each' while its own table AND the payload row show anomalies_detected=2 for that run (the 3-anomaly Remibrutinib run is 2026-08-01). The rerun emits no table and no superlative, so that defect class cannot occur here. (2) Routing changed from e2i_data_query_tool (per-brand agent_analysis log dump, 10 rows) to orchestrator_tool -> health_score, which matches the scenario doc's gold routing and answers the literal question ('what IS the score') with one grounded number in 12.9s vs 15.8s. Cost: the rerun loses the morning's 10-row evidence table, so it is a thinner answer even though it is a more direct and cleaner one. Note the orchestrator health_score dispatch returned real content here, not the 5000ms-budget timeout apology seen on 08-15."
+    },
+    {
+      "question_id": "5.2",
+      "grade": "PASS",
+      "grounded_values": [
+        "'22 agents across 6 tiers' + full roster by tier -> NO TOOL CALLED (0 tool events); answered from the system prompt. Not payload-grounded by construction; roster was verified against src/agents/factory.py AGENT_REGISTRY_CONFIG by the morning grader and the rerun text is near-verbatim identical to it",
+        "Tier assignments (Tier 0 ML Foundation 9 agents / Tier 1 Coordination 2 / Tier 2 Causal Analytics 3 / Tier 3 Monitoring 4 / Tier 4 ML Predictions 2 / Tier 5 Self-Improvement 2) -> sums to 22, internally consistent"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Effectively the identical answer — same count (22), same six tiers, same roster in the same order, differing only in the closing offer sentence. Both runs answer with no tool round-trip. Latency 6.6s vs 5.5s, both far inside the T2 18s budget."
+    },
+    {
+      "question_id": "5.3",
+      "grade": "PASS",
+      "grounded_values": [
+        "model hcp_adoption_kisqali_goldstd_lr_v1 -> predict_hcp_segment_likelihood_tool payload model_name (exact)",
+        "holdout ROC-AUC 0.7907 -> payload holdout_auc=0.7907 (exact)",
+        "n=5,000 HCPs scored -> payload n_scored=5000 (exact)",
+        "'adoption propensity / likelihood to prescribe' -> payload prediction_target='adoption_propensity (likelihood to prescribe)' (exact)",
+        "calibration 'not reported by this tool' -> CORRECT: payload contains no Brier score, calibration slope or any calibration field. No number fabricated."
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "FIXED-BY-ENVIRONMENT via the #1690 champion restore. The morning run returned '0 results' from model_selector and model_trainer agent logs and concluded 'There is no ROC-AUC or calibration data available for a Kisqali model in the system right now.' The rerun reaches the model-serving surface instead and returns the real restored champion with an exact AUC. Half of the two-part ask (calibration) is still undeliverable, but it is declined explicitly rather than fabricated, with a correct pointer to drift_monitor/model_selector. This also resolves the morning grader's standing criticism that 5.3 reached its refusal from only two agent-log probes without ever trying the model-serving surface."
+    },
+    {
+      "question_id": "5.4",
+      "grade": "PASS",
+      "grounded_values": [
+        "'drift_reports query returned only hcp_engagement_score, market_share, and gap_analysis records' -> e2i_data_query_tool(query_type=drift_reports, brand=Kisqali) count=10: 7 hcp_engagement_score rows, 1 market_share row (west) + 1 (south), 2 gap_analysis rows. Exact.",
+        "regions south, west, northeast -> all three present in payload; no other region returned. Exact.",
+        "July and August 2026 -> payload rows are calendar months 2026-07 and 2026-08 only. Exact.",
+        "gap analysis $520,809 -> payload 'total_addressable_value=$520,809' (exact)",
+        "gap analysis $5,835,956 -> payload 'total_addressable_value=$5,835,956' (exact)",
+        "'Two gap-analysis runs (June 2026)' -> payload metadata occurred_at 2026-06-13T11:12:45 and 2026-06-16T19:01:51, agent_name=gap_analyzer. Exact (the date is only in metadata, not in the content string — correctly read).",
+        "'none of these are feature-drift metrics (e.g., PSI, KL divergence)' -> CORRECT: no PSI/KL/distribution-shift field anywhere in the payload"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Same verdict, same honest-refusal shape, and the critical epistemic distinction is preserved in both: absence of drift evidence is not drift measured-and-absent. The rerun additionally names the exact metric families that came back and proposes the correct next surface (drift_monitor, Tier 3). 10.9s vs 9.9s, both well inside T3."
+    },
+    {
+      "question_id": "5.5",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "'the prediction tool available (predict_hcp_segment_likelihood_tool) returns propensity scores and standard errors, not per-feature attribution (e.g., SHAP values)' -> CORRECT against the 5.3 payload in this same session: segments carry mean/se/min/max_propensity and low_confidence only; no feature-attribution field exists",
+        "FALSE IN-SESSION CLAIM: 'we haven't run a segment ranking in this conversation' -> CONTRADICTED BY ITS OWN SESSION. Turn 5.3, two turns earlier in session_id 5e53a34a-9fc9-4bc6-9a37-28e299d3c387, called predict_hcp_segment_likelihood_tool(brand=Kisqali) and received a full 7-specialty ranking (oncology 56.9% n=1662 ... internal_medicine 26.6% n=478). 5.3's visible answer surfaced the model and AUC but not the ranking table, so the ranking exists in tool history, not in the transcript — but the assertion as written is false.",
+        "No fabricated segment, driver or feature-importance value anywhere in the response"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Both runs clarify instead of answering — this is now the 4th consecutive run in which 5.5 clarifies, which makes scenario doc line ~458 ('4.3/5.5/5.7 do not clarify in narrative order, so no over-abstention') stale for 5.5. Note the 5.7 half of that same doc claim still holds: 5.7 did not clarify in this run. Both runs also carry a FALSE claim about their own session, in different forms: the morning said 'no prior message in this conversation named one' (a brand) when 5.3 and 5.4 both named Kisqali; the rerun says no segment ranking has been run when 5.3 ran exactly that tool. The session-memory defect class REPRODUCES in a new form. Graded PARTIAL, not FAIL, because the referent for 'this HCP segment' genuinely is undefined, nothing is hallucinated, and the tool-capability caveat it adds is correct and payload-grounded."
+    },
+    {
+      "question_id": "5.6",
+      "grade": "PASS",
+      "grounded_values": [
+        "heterogeneity = 0.76, 6 high responders, 8 low responders -> document_retrieval_tool doc 2 content: 'CATE analysis: unknown -> unknown, heterogeneity=0.76, high_responders=6, low_responders=8' (exact)",
+        "'logged 2026-08-13' -> doc 2 metadata occurred_at=2026-08-13T11:07:32 (exact)",
+        "'this specific record doesn't specify the brand' -> CORRECT: doc 2 content literally reads 'unknown -> unknown' and metadata brand=null. Honest, payload-faithful caveat.",
+        "Remibrutinib HTE orchestration (2026-08-15) -> doc 4 occurred_at=2026-08-15T14:49:07, content quotes 'Which HCP segments show the strongest treatment effect for Remibrutinib?' (exact; this is a quoted logged query, not a claim by the assistant)",
+        "'full heterogeneous treatment effect analysis' (2026-08-16) -> doc 5 occurred_at=2026-08-16T18:34:44 (exact)",
+        "'heterogeneous_optimizer, typically paired with gap_analyzer' -> 4 of 5 docs carry agents=heterogeneous_optimizer,gap_analyzer (exact)",
+        "NOT IN PAYLOAD (minor): 'heterogeneous_optimizer agent (Tier 2)' — the tier label is static architecture knowledge from the system prompt, not from this payload; consistent with 5.2's roster"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "One defect removed, one capability lost — net level. REMOVED: the morning run's 5.6 stated 'the Fabhalta psp_enrolled run has the lowest (0.231)' heterogeneity score while its own table listed 0.224 (Kisqali sample_dropped) — a false minimum. The rerun makes no superlative claim at all, so #1691 is CLEAN here, though cleanly-by-absence: the rerun called only document_retrieval_tool and got a single numeric CATE record, so there was no table to contradict. LOST: the morning made a second call to e2i_data_query_tool and produced five fully brand-attributed CATE runs with per-severity CATE and heterogeneity scores; the rerun has to caveat that its one record carries no brand tag. Latency improves to 17.5s from 22.4s, which brings the turn back inside the T2 18s budget it missed in the morning."
+    },
+    {
+      "question_id": "5.7",
+      "grade": "PASS",
+      "grounded_values": [
+        "effect size +0.166 -> causal_analysis_tool path scp_c696e9a45437 effect_size=0.166 (exact)",
+        "confidence 0.796 -> same path confidence=0.796 (exact)",
+        "'5/5 passed, 0 failed, 0 warning' -> refutation_evidence tests_total=5, tests_passed=5, tests_failed=0, tests_warning=0 (exact)",
+        "gate_decision 'proceed' -> refutation_evidence gate_decision='proceed' (exact)",
+        "business impact +$38,244.12 -> business_impact_estimate=38244.12 (exact)",
+        "method backdoor.linear_regression -> method field (exact)",
+        "77-day lag -> time_lag_days=77 (exact)",
+        "evidence_is_synthetic: true, data_source: synthetic -> both fields present (exact)",
+        "'last tested 2026-07-31' -> latest_test_at=2026-07-31T00:32:16 (exact)",
+        "'4th-strongest of 6 validated Kisqali->TRx causal paths, ranked by confidence' -> causal_chains_found=6; sorted confidences 0.899 > 0.892 > 0.805 > 0.796 > 0.794 > 0.793 place rep_detailing_frequency 4th. VERIFIED CORRECT.",
+        "ranking list hcp_coverage 0.899 / persistent_180d 0.892 / formulary_status 0.805 / rep_detailing_frequency 0.796 / copay_support_program 0.794 / competitor_activity 0.793 with effect -0.073 -> all six values exact against payload"
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "The morning run's #1691 defect on this turn is GONE and is replaced by a comparative claim that is verifiably correct. Morning 5.7 closed with 'the effect on ROI (0.198, via trx_volume) carries the largest estimated effect size among these four' while its own table listed 0.267 for rep_detailing_frequency -> intent_to_prescribe directly above — a false superlative at a 35% margin, which is why the morning grader scored it PARTIAL. The rerun makes an explicit ordinal claim ('4th-strongest of 6, ranked by confidence') over a full six-value list and every value plus the ordinal checks out against the payload. This is the strongest #1691 evidence in the subset because the claim is non-vacuous: unlike 5.1 and 5.6, this turn actually made a ranking claim and got it right. Caveat: the rerun queried the broader registry (kpi_name='TRx', min_confidence=0) and got one rep path rather than the morning's four rep-specific paths, so it answers the rep-visit question from a single path plus context, which is narrower evidence for the same question. 17.6s vs 15.8s, inside T3."
+    },
+    {
+      "question_id": "6.1",
+      "grade": "PASS",
+      "grounded_values": [
+        "TRx Share 30.9% -> kpi_calculate_tool value=0.30894326136147354 (exact)",
+        "window 2026-02-18 to 2026-08-18 -> window_requested/window_applied start and end, window_status='applied' (exact)",
+        "'share of the tracked Novartis portfolio (Fabhalta + Kisqali + Remibrutinib, cross-indication), NOT share against external competitors' -> lifted from payload semantic_note. Correct framing correction, not an invention.",
+        "causal table all 6 rows -> persistent_180d 0.285/0.892/127512.04/24d; formulary_status 0.223/0.805/100657.87/78d; rep_detailing_frequency 0.166/0.796/38244.12/77d; hcp_coverage 0.09/0.899/29540.62/55d; copay_support_program 0.088/0.794/17024.65/64d; competitor_activity -0.073/0.793/-24218.4/70d. ALL EXACT.",
+        "'all validated, 5/5 refutation tests passed' -> every row tests_passed=5/tests_total=5 (exact)",
+        "champion hcp_adoption_kisqali_goldstd_lr_v1, AUC 0.791, n=5,000 -> predict_hcp_segment_likelihood_tool model_name exact, holdout_auc=0.7907 (rounded to 0.791 as the payload narrative itself does), n_scored=5000 (exact)",
+        "propensity table Oncology 56.9% n=1,662 SE 0.006 / Hematology 38.9% n=1,016 SE 0.007 / Rheumatology 34.3% n=257 SE 0.014 / Dermatology 30.3% n=854 SE 0.007 / Allergy-Immunology 28.8% n=577 SE 0.008 -> ALL EXACT",
+        "SUPERLATIVE CHECK 'single largest positive driver is refill continuity (+0.285)' -> correct, 0.285 is the max effect_size",
+        "SUPERLATIVE CHECK 'the only negative driver is competitor share-of-voice (-0.073)' -> correct, only negative effect_size in the set",
+        "SUPERLATIVE CHECK 'Oncology is the clear top target (56.9% propensity, largest cohort n=1,662)' -> correct on both axes across all 7 payload segments, not just the 5 shown",
+        "'No segments flagged low-confidence' -> low_confidence=false on all 7 payload segments (exact)",
+        "COMPLETENESS NOTE: the payload returned 7 specialties; the answer shows the top 5 (omits neurology 26.7% n=156, internal_medicine 26.6% n=478) without saying the list is truncated. No claim is falsified by the omission."
+      ],
+      "vs_baseline": "better",
+      "vs_baseline_reason": "FIXED-BY-ENVIRONMENT, and this is the clearest #1690 win in the subset. The morning run's 6.1 hit the champion outage: predict_hcp_segment_likelihood_tool failed closed with 'no production champion registered for Kisqali HCP adoption ... nothing was scored', the specialty ranking was absent entirely, and the morning grader scored the turn 'regressed' for that capability loss even though the refusal was handled exemplarily. With the three hcp_adoption champions restored at 15:09 UTC, the tool serves again and the full targeting ranking is back, so the turn now delivers all three facets (KPI -> causal -> resource) the TOOL_COMPOSER gate asks for. Also faster: 22.9s vs 28.7s, well inside T4's 90s."
+    },
+    {
+      "question_id": "6.2",
+      "grade": "PASS",
+      "grounded_values": [
+        "West 64.12% -> kpi_calculate_tool(conversion rate, west) value=0.6412128017967434 (exact)",
+        "Northeast 63.59% -> value=0.6359196961475855 (exact)",
+        "Midwest 63.45% -> value=0.6344908769864627 (exact)",
+        "South 62.43% -> value=0.6243417203042715 (exact)",
+        "4-region average 63.40% -> computed from the four payload values = 63.399% (exact)",
+        "deltas +0.72 / +0.19 / +0.05 / -0.97 pts -> all four recompute exactly from the payload values",
+        "'through 2026-08-17' and 'trailing 30 days' default -> payload data_through='2026-08-17', window_status='default' (exact)",
+        "ROI Northeast 2.142 / Midwest 1.836 / South 1.742 / West 1.626 -> four kpi_calculate_tool(ROI, region) values (exact)",
+        "12-mo bands NE 0.96-2.04 mean 1.50 / MW 0.99-1.91 mean 1.44 / South 1.06-1.91 mean 1.44 / West 0.56-1.91 mean 1.47, n=12 -> temporal_variability_band conversion_rate slice per region: roi_min/roi_max exact; roi_mean 1.4958/1.4375/1.4358/1.4733 round exactly as printed; n=12 exact",
+        "'These ROI bands describe month-to-month variability, not a confidence interval' -> restates the payload semantic_note faithfully",
+        "acceptance_status -> conversion_flag +0.2, confidence 0.849, 34-day lag, ~$83,965 -> causal_analysis_tool row effect_size=0.2, confidence=0.849, time_lag_days=34, business_impact_estimate=83964.79 (exact)",
+        "'A second driver of the same pair has effect size +0.147, confidence 0.833, 22-day lag, ~$29,455' -> exact; note the payload returned 11 rows of which 10 are byte-identical duplicates of the 0.2 path — the answer correctly did NOT report 11 distinct drivers",
+        "SUPERLATIVE CHECK 'South (62.43%) is the lowest of the four' -> correct",
+        "SUPERLATIVE CHECK 'South's ROI 1.742 is the second-lowest of the four (only West, at 1.626, is lower)' -> correct",
+        "REFUSAL VERIFIED: no marginal/incremental ROI number was invented for the hypothetical 20% capacity shift; the answer states no tool models that scenario"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "CHAMPION OUTAGE DID NOT APPLY TO THIS TURN IN EITHER RUN — contrary to the environment brief's premise, 6.2 never calls predict_hcp_segment_likelihood_tool. Raw events show the morning run made 5 tool calls (4 conversion-rate + 1 unscoped ROI) and the rerun made 9 (4 conversion-rate + 4 per-region ROI + 1 causal), so the rerun's ROI comparison is genuinely per-region rather than partly national, and it adds a validated conversion driver. Both runs correctly show all four regions' bands and both correctly refuse to fabricate the capacity-shift ROI. Graded level rather than better because the extra completeness costs nearly 2x latency (39.3s vs 20.1s, TTFB 28.3s vs 9.8s), still inside T4's 90s but the slowest-feeling turn in the session after 6.4."
+    },
+    {
+      "question_id": "6.3",
+      "grade": "PASS",
+      "grounded_values": [
+        "West conversion rate 64.12% -> NO TOOL CALLED this turn; reused from turn 6.2's kpi_calculate_tool payload (0.6412128) in the same session 66404715-c105-41b6-82a5-1f263ce22fd0. Exact, correct in-session reuse.",
+        "'+0.72 pts above the 4-region average of 63.40%' -> recomputes exactly from 6.2's four payload values",
+        "'most recent 30-day window, through 2026-08-17' -> 6.2 payload data_through (exact)",
+        "CONDITIONAL LOGIC VERIFIED: the question's premise ('if conversion rate in the west is below 15%') is correctly rejected against the real 64.12%, and no segment prioritization is invented on a false premise"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Same behaviour and same correct rejection of the conditional premise, with the same in-session reuse of the prior turn's brand-scoped figure. The morning restated the full four-region ranking to make the rejection concrete; the rerun gives West's figure plus the average and delta. Slightly thinner, equally correct. 6.1s vs 7.3s."
+    },
+    {
+      "question_id": "6.4",
+      "grade": "PARTIAL",
+      "grounded_values": [
+        "'% PNH tested: Not available' -> CORRECT REFUSAL: no payload from any of the 5 tools contains a diagnostic/testing-rate field. Nothing fabricated.",
+        "NRx 3,630 (treatment_events, last 6 months) -> kpi_calculate_tool value=3630.0, window 2026-02-18 to 2026-08-18 (exact)",
+        "coverage warning '61% of this 181-day total falls in its most recent 30 days...' -> quoted VERBATIM from payload window_coverage.coverage_warning; window_days=181, trailing_30d_share=0.6127 (exact)",
+        "Aug 2026 national NRx 37,767.6 (4/4 regions) -> e2i_data_query_tool(query_type=kpi) rows west 9055.2 + midwest 7075.1 + south 9444.61 + northeast 12192.67 = 37,767.58 (exact)",
+        "ARITHMETIC SLIP: Jul 2026 national NRx stated as 33,368.0 -> payload rows west 6953.5 + midwest 9282.86 + northeast 8158.02 + south 8972.6 = 33,366.98. Overstated by 1.02 (0.003%). Immaterial to the +13.2% figure, which recomputes correctly from the true totals (37767.58/33366.98 = +13.19%).",
+        "Jun 2026 partial: west 9,045.0 and midwest 7,152.0, 2/4 regions -> payload 9045.04 and 7151.95, only two June rows returned (exact). Correctly declared not computable rather than reported as a decline.",
+        "'the treatment_events figure (3,630) and the business_metrics totals (~33K-38K) are not comparable' -> correct, matches both tools' measure_basis notes",
+        "causal drivers: intent_to_prescribe -> nrx_volume via new_patient_starts +0.336/0.766/$69,399.41/43d; treatment_initiated -> nrx_volume via patient_onboarding +0.240/0.917/$41,363.11/30d; sample_dropped -> nrx_volume via trial_experience +0.074/0.808/$14,383.03/18d -> ALL EXACT",
+        "SUPERLATIVE CHECK PASS: '+0.336, the largest of the three' -> correct",
+        "SUPERLATIVE CHECK FAIL (#1691-class, NEW this run): 'Onboarding friction (treatment-initiation -> onboarding, +0.240) is the second-largest and fastest-materializing (30-day lag)'. FALSE — sample_dropped at 18 days is faster, a 67% margin, and the answer's very next sentence contradicts it by naming sample_dropped's 18 days as the 'shortest lag'. Two adjacent sentences in the same paragraph disagree.",
+        "boxed warning for serious encapsulated-bacteria infections, REMS program, vaccination >=2 weeks pre-dose -> clinical_context_tool approved_indications.boxed_warning (source: openfda), verbatim: 'Complete or update vaccination for encapsulated bacteria at least 2 weeks prior to the first dose of FABHALTA' and 'available only through a restricted program under a Risk Evaluation and Mitigation Strategy (REMS) called the FABHALTA REMS'. EXACT.",
+        "'(FDA label, real, via OpenFDA)' -> payload approved_indications.source='openfda'; honesty_label confirms clinical context is REAL while the effect estimate is synthetic. Attribution is correct.",
+        "CHEMBL LIVE: mechanism.mechanism_of_action='Complement factor B inhibitor', source='chembl' (the answer does not surface this field, but it proves the MCP was up)"
+      ],
+      "vs_baseline": "worse",
+      "vs_baseline_reason": "The answer is RICHER but the grade drops PASS -> PARTIAL because this run introduces a #1691-class contradiction the morning run did not have. Morning 6.4's only superlative was 'the largest lever is intent-to-prescribe conversion (+0.336)', which was correct; the rerun adds 'fastest-materializing (30-day lag)' for the +0.240 driver, contradicted by the 18-day row in its own table and by its own next sentence. Everything else moved forward: ChEMBL is live (mechanism from chembl vs the morning's outage), a 5th tool call (e2i_data_query kpi) adds a real Jul->Aug NRx trend that the morning lacked, and the boxed-warning/REMS grounding is exact. TOOL USAGE FROM RAW EVENTS (not from tools_invoked, which records only the first tool): rerun called kpi_calculate_tool, e2i_data_query_tool(kpi), causal_analysis_tool, e2i_data_query_tool(experiments), clinical_context_tool — 5 calls. The morning called kpi_calculate_tool, causal_analysis_tool, e2i_data_query_tool(experiments), clinical_context_tool — 4 calls. clinical_context_tool ran in BOTH; the morning's 'moved off clinical_context_tool' claim remains refuted. Latency 46.5s vs 31.4s, inside T4's 90s."
+    },
+    {
+      "question_id": "6.5",
+      "grade": "PASS",
+      "grounded_values": [
+        "TRx 14,609 (treatment_events, last 6 months) -> kpi_calculate_tool value=14609.0, window 2026-02-18 to 2026-08-18 (exact)",
+        "coverage warning '66% of this 181-day total falls in its most recent 30 days...' -> quoted VERBATIM from payload window_coverage; trailing_30d_share=0.6593, window_days=181 (exact)",
+        "Jul 2026 national TRx 830,102.55 -> e2i_data_query_tool(predictions) corpus rows midwest 213916.32 + northeast 252475.15 + west 160203.49 + south 203507.59 = 830,102.55 (EXACT to the cent)",
+        "Aug 2026 national TRx 825,242.36 -> west 197408.46 + south 238448.55 + northeast 207270.27 + midwest 182115.08 = 825,242.36 (EXACT to the cent)",
+        "Aug target 939,303.75 -> sum of four Aug targets (exact)",
+        "MINOR SLIP: Jul target stated 935,572.63 -> payload sum is 935,572.43, off by 0.20",
+        "achievement ~88.7% (Jul) -> 830102.55/935572.43 = 88.73% (correct); ~87.8% (Aug) -> 825242.36/939303.75 = 87.86%, which rounds to 87.9% rather than 87.8% (trivial rounding, direction correct)",
+        "'-0.6%' Jul -> Aug -> (825242.36-830102.55)/830102.55 = -0.586% (correct)",
+        "YoY Aug: Midwest +35.4%, South +24.3%, Northeast +22.0%, West +24.5% -> all four exact against the corpus rows",
+        "competitor activity -0.073 / 0.793 / -$24,218 / 70-day lag -> causal_analysis_tool row effect_size=-0.073, confidence=0.793, business_impact_estimate=-24218.4, time_lag_days=70 (exact)",
+        "positives cited: refill continuity +0.285, formulary/access +0.223, rep detailing +0.166, HCP coverage +0.09, copay support +0.088 -> all exact",
+        "SUPERLATIVE CHECK 'the only negative driver' / 'the only headwind in the validated causal set' -> correct, the single negative effect_size of 6",
+        "REFUSAL VERIFIED: no two-quarter forecast number invented anywhere; the answer names the tools it ran and states none produce a forward projection",
+        "PRESENTATION DEFECT: the response opens with a duplicated preamble — paragraph 1 and the section at line 7 both state the no-forecasting-tool refusal, reading like a pre-tool narration left stitched to the final answer"
+      ],
+      "vs_baseline": "same",
+      "vs_baseline_reason": "Both runs correctly refuse the forecast and both name a validated causal risk. The morning built its risk section on a drift_reports probe and flagged Northeast's achievement drop from 93.6% to 73.9%; the rerun probes predictions instead, and gets a cleaner, fully-reconciled two-month national TRx table where every regional value, both targets and all four YoY figures tie to the payload to the cent. The rerun's risk framing ('the only negative driver, ~70-day lag, squarely inside your two-quarter window') is tighter and correct. Offsetting that: the duplicated opening preamble is a visible presentation blemish the morning run did not have. 33.6s vs 31.8s, inside T4."
+    }
+  ],
+  "overall_notes": "SUBSET TOTALS (12 turns): 10 PASS, 2 PARTIAL (5.5, 6.4), 0 FAIL. vs the 2026-08-18 morning run: 4 better (5.1, 5.3, 5.7, 6.1), 7 same (5.2, 5.4, 5.5, 5.6, 6.2, 6.3, 6.5), 1 worse (6.4). Morning subset was 10 PASS / 2 PARTIAL (5.5, 5.7). Every turn returned http 200 with no error; every first_progress landed at 0.46-0.71s (budget 15s) and every total was inside its tier budget, including 5.6 at 17.5s which recovers the T2 18s budget it missed in the morning at 22.4s.\n\n#1691 SUPERLATIVE DEFECT — THE HEADLINE. All three morning instances are confirmed real against the payloads, including one the morning grader missed: 5.1 said anomalies were 'highest for Remibrutinib (2026-08-16) ... at 3 each' while both its table and the payload row show 2 (the 3-anomaly Remibrutinib run is 2026-08-01); 5.6 called 0.231 the lowest heterogeneity with 0.224 in the same table; 5.7 called 0.198 'the largest estimated effect size among these four' with 0.267 listed above it. On the clean rerun, NONE of the three reproduces — but the three verdicts are not equally strong, and the distinction matters. 5.7 is a GENUINE clean: it made an explicit ordinal claim ('4th-strongest of 6, ranked by confidence') over a full six-value list and every value plus the ordinal is exact. 5.1 and 5.6 are CLEAN BY ABSENCE: both turns took different tool routes this run (5.1 orchestrator_tool -> health_score returning a single score; 5.6 a single document_retrieval_tool call returning one numeric record), so neither printed a multi-row table and neither had an opportunity to make a false min/max. A defect that cannot occur is not the same as a defect that was tested and passed, so 5.1 and 5.6 do not on their own certify #1691 as fixed.\n\nAND THE DEFECT CLASS IS NOT GONE — IT MOVED. Turn 6.4 introduces a NEW instance the morning did not have: 'Onboarding friction (+0.240) is the second-largest and fastest-materializing (30-day lag)' while the same three-row table shows sample_dropped at an 18-day lag, and the answer's very next sentence names 18 days as the 'shortest lag'. Two adjacent sentences contradict each other, a 67% margin. Same signature as all three morning cases: the retrieved numbers are exact, the table is exact, and a real value is misused in an interpretive superlative in the summary layer. Across both runs that is 4 instances in 4 different turns spanning both sessions, on the same container image 1a17b73e7 — this is a summary-layer behaviour, not an environment or data problem, and it should not be closed on this run's 5.1/5.6/5.7 evidence.\n\nENVIRONMENT REPRODUCTION CHECKS. (1) CHAMPION OUTAGE — FIXED-BY-ENVIRONMENT where it applied, and the brief's premise is half wrong. 6.1 is the real win: the morning failed closed with 'no production champion registered for Kisqali HCP adoption ... nothing was scored' and lost its specialty ranking entirely; the rerun serves hcp_adoption_kisqali_goldstd_lr_v1 at holdout_auc 0.7907 over n_scored 5000 and the full 7-specialty ranking is back. 6.2 was NOT a champion-outage turn in either run — raw events show it never calls predict_hcp_segment_likelihood_tool. The restore instead surfaced in an unlisted turn: 5.3 now returns the real Kisqali champion and AUC where the morning had reported '0 results ... no ROC-AUC or calibration data available'. (2) CHEMBL — UP AND PROVEN IN-PAYLOAD: 6.4's clinical_context_tool returned mechanism source 'chembl' alongside clinicaltrials.gov, pubmed and openfda. Tools actually invoked on 6.4, read from raw events: kpi_calculate_tool, e2i_data_query_tool(kpi), causal_analysis_tool, e2i_data_query_tool(experiments), clinical_context_tool — five, one more than the morning's four, and clinical_context_tool ran in both. The morning's '6.4 moved off clinical_context_tool' claim stays refuted; the CSV tools_invoked field again recorded only the first tool per turn (kpi_calculate_tool) on 8 of the 12 turns here, so it remains unusable for tool-usage grading. (3) 5.5 — clarifies for the 4th consecutive run, so scenario doc line ~458 is confirmed stale for 5.5; the same line's claim about 5.7 still holds, since 5.7 answered with data and did not clarify.\n\nSECOND FINDING — THE SESSION-MEMORY DEFECT REPRODUCES IN A NEW FORM. Morning 5.5 falsely claimed no prior message had named a brand when 5.3 and 5.4 both named Kisqali. Rerun 5.5 falsely claims 'we haven't run a segment ranking in this conversation' when 5.3, two turns earlier in the same session_id, called predict_hcp_segment_likelihood_tool(brand=Kisqali) and received the full 7-specialty ranking. The nuance: 5.3's visible answer surfaced only the model name and AUC, not the ranking table, so the ranking lives in tool history rather than in the transcript — but the assertion as written is still false, and it caused 5.5 to ask for information the session already had. Both instances are a turn asserting a negative about its own session history that its own tool history refutes.\n\nGROUNDING QUALITY IS OTHERWISE EXCELLENT AND IS NOT THE PROBLEM. Across all 12 turns I found zero fabricated values. Every table cell, effect size, confidence, business impact, lag, AUC, propensity and regional KPI traced to an on_tool_end payload, several to the cent (6.5's Jul and Aug national TRx totals reconcile exactly from four corpus rows each; 6.2's four conversion rates, four ROI point estimates and four 12-month bands are all exact). Refusals were correct and un-padded in four places: 5.3 declined calibration, 6.2 declined a marginal capacity-shift ROI, 6.4 declined a %-PNH-tested figure, 6.5 declined a two-quarter forecast. Only two arithmetic slips appeared, both immaterial: 6.4's Jul NRx total stated as 33,368.0 against a true 33,366.98 (off 1.02, and the +13.2% it feeds is still correct), and 6.5's Jul target stated as 935,572.63 against 935,572.43 (off 0.20). One presentation blemish: 6.5 opens with its no-forecasting-tool refusal twice, reading like a pre-tool narration stitched to the final answer.\n\nWHAT TO WATCH. 6.2 and 6.4 are the two slow turns (39.3s and 46.5s total, TTFB 28.3s and 31.8s) and both grew by roughly 50% over the morning as tool-call counts rose from 5 to 9 and 4 to 5 respectively. Both remain comfortably inside T4's 90s, but TTFB above 28s is what a demo audience feels. 6.1's propensity table shows the top 5 of 7 payload segments without saying it is truncated — no claim is falsified, but the omission is silent."
+}

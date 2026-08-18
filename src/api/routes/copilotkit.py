@@ -323,6 +323,10 @@ from src.api.dependencies.auth import (
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.api.routes.synthesis_guard import (
+    build_superlative_correction,
+    find_superlative_contradictions,
+)
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.utils.sse_keepalive import with_sse_keepalive
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
@@ -3043,7 +3047,10 @@ You help users with:
 3. **Commercial Focus, Clinically Grounded**: This is pharmaceutical COMMERCIAL analytics — KPIs, causal drivers, market access, HCP targeting. You MAY surface a brand's FDA-label indications, mechanism of action, pivotal endpoints, and real-world evidence (via `clinical_context_tool`) as factual, source-attributed context to GROUND and TAILOR commercial/causal/strategic insight — e.g. on-label HCP targeting, competitive density within an indication, how the label boundary shapes causal drivers. Do NOT provide individualized prescribing guidance or medical advice; for a patient-specific clinical decision, point users to the official Prescribing Information / Medical Information.
 4. **Causal Clarity**: When discussing causation, be clear about confidence levels
 5. **Actionable Insights**: Provide recommendations that can drive business decisions
-6. **Honest Windows**: If a requested time window isn't supported for a metric, say so plainly and report the window actually used — never imply a figure covers a different period, and never ask for a brand or period the user already gave.
+6. **Honest Windows**: If a requested time window isn't supported for a metric, say so plainly and report the window actually used — never imply a figure covers a different period, and never ask for a brand or period the user already gave. When the user names a period ("this month"), PASS it to the tool; if you did not pass a window, the engine default was used — say that, and NEVER explain the gap as a platform limitation ("this metric doesn't use calendar-month windows") unless a tool result states it. Attribute window metadata (`data_through`, `reporting_window`) only to the KPI whose payload carries it, and never assert a window is absent unless that payload actually lacks it.
+7. **Grounded Provenance**: claims about where information came from must be grounded in a tool payload from THIS conversation. Never describe synthetic/modeled data as "real" — when a payload carries `data_source: "synthetic"` or `evidence_is_synthetic: true`, disclose that once, plainly. Never attribute specific findings, quotes, or author names to a retrieved source beyond the fields the payload contains (a PubMed record returning only pmid/title/journal/doi does not license "per <author>," or clinical detail "from the literature pulled just now" — say plainly when detail comes from general knowledge rather than the retrieved record). Never invent method labels (e.g. "DoWhy/EconML-style") the payload doesn't state.
+8. **Units Stay As Declared**: an effect size arrives with its declared scale (e.g. `cohens_d`). Report it in that unit — never relabel a standardized effect as percentage points (or any other unit), and never do arithmetic on a relabeled unit to derive new figures.
+9. **Negatives About This Conversation**: before asserting something was not discussed, asked, or computed earlier ("we haven't run a segment ranking"), check the conversation AND the tools already called this session — a prior turn's tool results count as available even when its visible answer only summarized them.
 
 ## Tool Usage - CRITICAL
 
@@ -3734,6 +3741,25 @@ def create_e2i_chat_agent(
                     "synthesis stream produced no text "
                     "(model thinking may have consumed the max_tokens budget)"
                 )
+
+            # #1691: the synthesis already streamed, so a superlative that
+            # contradicts the answer's own table cannot be rewritten away —
+            # append a deterministic correction note instead (visible-tier
+            # findings only; the rest are logged for monitoring).
+            guard_findings = find_superlative_contradictions(full_content)
+            if guard_findings:
+                logger.warning(
+                    "[CopilotKit] #1691 superlative guard: %s",
+                    [
+                        f"{f.keyword} {f.number_text} vs {f.column_header} "
+                        f"[{f.column_min:g}..{f.column_max:g}] visible={f.visible}"
+                        for f in guard_findings
+                    ],
+                )
+                guard_note = build_superlative_correction(full_content)
+                if guard_note:
+                    await copilotkit_emit_message(config, guard_note)
+                    full_content += guard_note
 
             response = AIMessage(content=full_content)
 

@@ -987,9 +987,14 @@ async def causal_analysis_tool(
             against the registry's cause/effect node names.
         brand: Brand filter, matched case-insensitively.
         region: Echoed back for context; the registry has no region dimension,
-            so it is NOT a filter.
+            so it is NOT a filter. #1694: the response says so explicitly
+            (``region_applied: False`` plus a ``scope_note`` when a region was
+            requested) — measured live, region='Northeast' and region=null
+            return byte-identical path sets, and without the disclaimer the
+            synthesis layer presented the echo as an applied filter.
         time_period: Echoed back for context; registry paths are current
-            modeled knowledge, not dated events, so it is NOT a filter.
+            modeled knowledge, not dated events, so it is NOT a filter
+            (``time_period_applied: False`` in the response).
         min_confidence: Minimum ``confidence_level`` (0-1).
 
     Returns:
@@ -1027,6 +1032,13 @@ async def causal_analysis_tool(
             "region": region,
             "causal_chains_found": len(paths),
             "min_confidence_applied": min_confidence,
+            # #1694: the registry has no region/time dimension, so the echoed
+            # region/time_period above are NOT filters — measured live, the
+            # same path_ids come back for region='Northeast' and region=null.
+            # Without these fields the synthesis layer reads the echo as an
+            # applied filter and fabricates regional scoping in prose.
+            "region_applied": False,
+            "time_period_applied": False,
             "results": [
                 _format_causal_path(
                     p, refutation_evidence=_refutation_evidence_entry(p.get("path_id"), summaries)
@@ -1036,6 +1048,12 @@ async def causal_analysis_tool(
             "analysis_type": "causal_paths_registry",
             "data_source": data_source,
         }
+        if region:
+            response["scope_note"] = (
+                f"The causal-path registry has no region dimension — region {region!r} "
+                "was NOT applied as a filter; these results are brand-level. Do not "
+                "present them as specific to that region."
+            )
         if not paths:
             outcomes = await repo.get_distinct_outcomes(include_synthetic=include_synthetic)
             response["substrate_coverage"] = {
