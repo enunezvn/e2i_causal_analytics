@@ -73,6 +73,42 @@ class TriggerRepository(BaseRepository):
             limit=limit,
         )
 
+    async def get_triggers_since(
+        self,
+        since: datetime,
+        limit: int = 100,
+        include_synthetic: bool = False,
+    ) -> List:
+        """
+        Get triggers with ``trigger_timestamp >= since`` (#1727).
+
+        The exact-cutoff twin of :meth:`get_recent_triggers`, backing the chat
+        ``e2i_data_query_tool`` triggers branch, whose window start is a
+        precomputed datetime (``_get_time_filter``) rather than a day count.
+
+        Args:
+            since: Window start (inclusive)
+            limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
+
+        Returns:
+            Triggers in the window ordered by timestamp descending
+        """
+        if not self.client:
+            return []
+
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
+            self.client.table(self.table_name)
+            .select("*")
+            .gte("trigger_timestamp", since.isoformat())
+        )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await query.order("trigger_timestamp", desc=True).limit(limit).execute()
+
+        return [self._to_model(row) for row in result.data]
+
     async def get_recent_triggers(
         self,
         days: int = 7,
@@ -90,23 +126,10 @@ class TriggerRepository(BaseRepository):
         Returns:
             Recent triggers ordered by timestamp descending
         """
-        if not self.client:
-            return []
-
-        from src.repositories.provenance import apply_provenance_filter
-
-        # Calculate the cutoff date
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-
-        query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .gte("trigger_timestamp", cutoff_date.isoformat())
+        return await self.get_triggers_since(
+            cutoff_date, limit=limit, include_synthetic=include_synthetic
         )
-        query = apply_provenance_filter(query, include_synthetic)
-        result = await query.order("trigger_timestamp", desc=True).limit(limit).execute()
-
-        return [self._to_model(row) for row in result.data]
 
     async def get_by_patient(
         self,

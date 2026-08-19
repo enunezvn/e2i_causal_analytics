@@ -10,9 +10,13 @@ and the synthesis layer answered "two unactioned ... triggers in the region"
 over rows that carry no region field — unearned regional scope.
 
 Contract (mirrors #1695's fields exactly):
-- ``region_applied: False``, ``time_period_applied: False`` and
-  ``brand_applied: False`` on every triggers payload (the booleans are
-  unconditional, like #1695's — certified 12/12 payloads carry them);
+- ``region_applied: False`` and ``brand_applied: False`` on every triggers
+  payload (the booleans are unconditional, like #1695's — certified 12/12
+  payloads carry them). ``time_period_applied`` was also pinned False here
+  until #1727 made the window real — it is now asserted True (the honesty
+  contract these tests guard is "the booleans tell the truth", not "nothing
+  is ever filtered"; the time-window behavior itself is covered in
+  test_chatbot_triggers_time_window_1727.py);
 - a ``scope_note`` synthesis can quote whenever a brand and/or region was
   requested, saying the results are NOT filtered;
 - ADDITIVE only: the pre-existing keys (success/query_type/count/data) stay.
@@ -37,7 +41,7 @@ SINCE = datetime(2026, 5, 20, tzinfo=timezone.utc)
 
 def _mock_repo(triggers):
     repo = MagicMock()
-    repo.get_many = AsyncMock(return_value=triggers)
+    repo.get_triggers_since = AsyncMock(return_value=triggers)
     return repo
 
 
@@ -59,13 +63,15 @@ async def test_region_requested_discloses_it_was_not_applied_1700():
     # #1695-mirrored honesty fields.
     assert result["region_applied"] is False
     assert result["brand_applied"] is False
-    assert result["time_period_applied"] is False
+    # #1727: the time window is now genuinely applied (and disclosed as such).
+    assert result["time_period_applied"] is True
     assert "Northeast" in result["scope_note"]
     assert "Kisqali" in result["scope_note"]
     assert "NOT" in result["scope_note"]
-    # The repo call must stay unfiltered — the fix is payload honesty, not a
-    # phantom filter the table cannot honor.
-    assert repo.get_many.await_args.kwargs["filters"] == {}
+    # The repo call must stay brand/region-unfiltered — the #1700 fix is
+    # payload honesty for scopes the query does not apply; the only filter is
+    # the #1727 time window.
+    assert repo.get_triggers_since.await_args.args[0] == SINCE
 
 
 @pytest.mark.unit
@@ -80,7 +86,7 @@ async def test_no_filters_requested_keeps_flags_but_no_scope_note_1700():
     assert result["success"] is True
     assert result["region_applied"] is False
     assert result["brand_applied"] is False
-    assert result["time_period_applied"] is False
+    assert result["time_period_applied"] is True
     assert "scope_note" not in result
 
 
@@ -131,7 +137,7 @@ async def test_scope_note_does_not_overstate_schema_1718():
 @pytest.mark.asyncio
 async def test_error_path_unchanged_1700():
     repo = MagicMock()
-    repo.get_many = AsyncMock(side_effect=RuntimeError("boom"))
+    repo.get_triggers_since = AsyncMock(side_effect=RuntimeError("boom"))
     with (
         patch("src.api.routes.chatbot_tools.get_async_supabase_client", new=AsyncMock()),
         patch("src.api.routes.chatbot_tools.TriggerRepository", return_value=repo),
@@ -161,5 +167,5 @@ async def test_e2i_data_query_tool_triggers_branch_carries_honesty_fields_1700()
     assert result["success"] is True
     assert result["region_applied"] is False
     assert result["brand_applied"] is False
-    assert result["time_period_applied"] is False
+    assert result["time_period_applied"] is True
     assert "Northeast" in result["scope_note"]

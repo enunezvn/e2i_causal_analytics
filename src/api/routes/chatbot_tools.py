@@ -844,41 +844,41 @@ async def _query_triggers(
 ) -> Dict[str, Any]:
     """Query triggers/alerts from triggers table.
 
-    #1700 (sibling of #1694), wording tightened by #1718: this query applies
-    no brand/region/time filters, so the accepted
-    ``brand``/``region``/``since`` parameters are NOT filters. (Triggers rows
-    DO carry a ``brand_id`` column — region is the one genuinely absent from
-    the row schema — but neither is applied as a filter here.) The payload
-    says so explicitly (``brand_applied``/``region_applied``/
-    ``time_period_applied: False``, plus a ``scope_note`` when a brand or
-    region was requested) — in the 2026-08-18 A.9-seed run the synthesis
-    layer attributed the conversation's region to region-less trigger rows
-    ("two unactioned ... triggers in the region") because the payload gave
-    it nothing honest to attribute scope to. Mirrors #1695's fields on
-    ``causal_analysis_tool``.
+    #1727: the requested time window IS applied — ``since`` filters
+    ``trigger_timestamp`` (the #1355 ``_query_agent_analysis`` pattern), and
+    the payload states the window (``time_period_applied: True`` +
+    ``window_start``). ``brand``/``region`` remain NOT applied (#1700,
+    wording tightened by #1718): triggers rows DO carry a ``brand_id``
+    column — region is the one genuinely absent from the row schema — but
+    neither is applied as a filter here, and the payload says so explicitly
+    (``brand_applied``/``region_applied``: False, plus a ``scope_note`` when
+    a brand or region was requested) — in the 2026-08-18 A.9-seed run the
+    synthesis layer attributed the conversation's region to region-less
+    trigger rows because the payload gave it nothing honest to attribute
+    scope to. Mirrors #1695's fields on ``causal_analysis_tool``.
     """
     try:
         client = await get_async_supabase_client()
         repo = TriggerRepository(client)
 
-        # Note: no filters are applied — rows carry brand_id (region does not
-        # exist in this table), but this query deliberately returns the
-        # platform-wide set. Parameters kept for API compatibility (#1718).
-        filters: dict[str, str] = {}
-
-        triggers = await repo.get_many(filters=filters, limit=limit)
+        # #1727: the time window is real (trigger_timestamp >= since). Brand/
+        # region are NOT applied — rows carry brand_id (region does not exist
+        # in this table), but this query deliberately returns the cross-brand
+        # set for the window. Parameters kept for API compatibility (#1718).
+        triggers = await repo.get_triggers_since(since, limit=limit)
 
         response: Dict[str, Any] = {
             "success": True,
             "query_type": "triggers",
             "count": len(triggers),
             "data": triggers,
-            # #1700: no filter is applied above — without these fields the
-            # synthesis layer reads the request's brand/region/time context
-            # as applied filters and fabricates scope in prose.
+            # #1700: brand/region filters are not applied above — without
+            # these fields the synthesis layer reads the request's brand/
+            # region context as applied filters and fabricates scope in prose.
             "brand_applied": False,
             "region_applied": False,
-            "time_period_applied": False,
+            "time_period_applied": True,
+            "window_start": since.isoformat(),
         }
         ignored = [
             f"{name} {value!r}" for name, value in (("brand", brand), ("region", region)) if value
@@ -891,14 +891,17 @@ async def _query_triggers(
             # schema. An answer quoting the note verbatim would inherit the
             # false schema claim, and it suppressed legitimate per-brand
             # tallies the rows support. What is true (and stated below): the
-            # scopes were NOT applied as filters.
+            # scopes were NOT applied as filters (while the #1727 time window
+            # WAS).
             verb = "was" if len(ignored) == 1 else "were"
+            noun = "a filter" if len(ignored) == 1 else "filters"
             response["scope_note"] = (
-                f"{' and '.join(ignored)} {verb} NOT applied as filters, and "
-                "this query applies no time filter — these results are "
-                "platform-wide across all brands and regions (rows carry a "
-                "brand_id tag, but region does not exist in this table). "
-                "Do not present them as specific to any brand or region."
+                f"{' and '.join(ignored)} {verb} NOT applied as {noun} — these "
+                "results are cross-brand and cross-region (rows carry a "
+                "brand_id tag, but region does not exist in this table). The "
+                f"requested time window WAS applied (triggers since "
+                f"{since.date().isoformat()}). Do not present them as "
+                "specific to any brand or region."
             )
         return response
     except Exception as e:
