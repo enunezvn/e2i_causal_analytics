@@ -87,6 +87,11 @@ Rules:
 - "title": the pill label, at most 42 characters, imperative or noun phrase; it MAY \
 start with a single emoji when it aids scanning (e.g. 📈 for a chart/trend follow-up).
 - "message": the full question the pill sends, one sentence.
+- When brand_filter is set (and is not "All"), every "message" MUST name that brand \
+explicitly (e.g. "... for Remibrutinib ..."), unless that pill is deliberately about \
+a different named brand or a cross-brand comparison. A pill click sends only the \
+message text, and a brand-less question forces the assistant to ask which brand \
+was meant. The title may omit the brand when space is tight; the message never.
 - When numeric KPIs were discussed or are shown on the page, at least one suggestion \
 should ask to chart a trend or comparison. NEVER propose comparing, summing, or \
 ratio-ing two figures whose sources differ or are unstated (#1640): page_content \
