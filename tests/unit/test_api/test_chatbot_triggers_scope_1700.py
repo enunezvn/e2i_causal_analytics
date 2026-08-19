@@ -99,6 +99,36 @@ async def test_region_only_scope_note_names_the_region_1700():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_scope_note_does_not_overstate_schema_1718():
+    """#1718: the note must distinguish column EXISTENCE from filter
+    APPLICATION. The certified #1700 wording prevented fabricated scoping but
+    planted a false schema claim -- "the triggers table has no brand or region
+    columns" -- while returned rows DO carry a ``brand_id`` column (mixed
+    Kisqali/Fabhalta/Remibrutinib values in the 2026-08-19 A.9-seed run); only
+    region is genuinely absent from the row schema. An answer quoting the note
+    verbatim would inherit the false claim, and the wording suppresses
+    legitimate per-brand tallies the rows support. Keep the do-not-scope
+    instruction; drop the false "no brand columns" claim."""
+    repo = _mock_repo([SAMPLE_TRIGGER])
+    with (
+        patch("src.api.routes.chatbot_tools.get_async_supabase_client", new=AsyncMock()),
+        patch("src.api.routes.chatbot_tools.TriggerRepository", return_value=repo),
+    ):
+        result = await _query_triggers(brand="Kisqali", region="Northeast", since=SINCE, limit=10)
+    note = result["scope_note"]
+    # The false schema claim is gone...
+    assert "has no brand or region columns" not in note
+    # ...replaced by the true claim: the scopes were not APPLIED as filters...
+    assert "NOT applied as filters" in note
+    # ...while the note stays honest about what the rows DO and DON'T carry.
+    assert "brand_id" in note
+    assert "region does not exist in this table" in note
+    # The do-not-scope instruction survives the rewording.
+    assert "Do not present them as specific to any brand or region" in note
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_error_path_unchanged_1700():
     repo = MagicMock()
     repo.get_many = AsyncMock(side_effect=RuntimeError("boom"))
