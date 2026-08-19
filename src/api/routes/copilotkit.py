@@ -543,6 +543,46 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
     return event_dict
 
 
+def _stream_chunk_text(content: Any) -> str:
+    """Extract user-visible text from a streamed chunk's content.
+
+    Anthropic streams content as a list of typed blocks; sonnet-5 adaptive
+    thinking prepends thinking/signature blocks — dicts with NO ``"text"``
+    key — before any text block (2026-08-19, session no90vkf: the old inline
+    ``block.get("text", "")`` join mapped them to ``""``, which was then
+    emitted and killed the browser stream). Only blocks that are actually
+    text contribute: a dict block with an explicit non-"text" type is dropped
+    even if a future SDK adds a "text" field to it. OpenAI's plain-str shape,
+    untyped dict blocks, and str items in lists pass through unchanged.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type", "text") == "text":
+                    parts.append(block.get("text") or "")
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(content)
+
+
+def _is_zod_fatal_empty_content(event_dict: Dict[str, Any]) -> bool:
+    """A TEXT_MESSAGE_CONTENT event with an empty delta.
+
+    The browser's @ag-ui/core Zod schema refines this exact field with
+    ``s.length > 0`` and one invalid event aborts the ENTIRE CopilotKit run
+    client-side — while the backend 200s, finishes the run, and persists the
+    answer (session no90vkf, 2026-08-19). ag-ui-protocol 0.1.18 (the image's
+    pin) no longer validates delta server-side, so the boundary must.
+    """
+    return str(event_dict.get("type")) == "TEXT_MESSAGE_CONTENT" and not event_dict.get("delta")
+
+
 # =============================================================================
 # SDK COMPATIBILITY: LangGraphAGUIAgent with execute() method
 # =============================================================================
@@ -1131,15 +1171,19 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 
                     # FIX (v1.21.4): Handle message as list of content blocks
                     # copilotkit_manually_emit_message sends message as list: [{'text': '...', 'type': 'text', 'index': 0}]
-                    # But delta field expects a string, not a list
-                    if isinstance(raw_message, list):
-                        # Extract text from all content blocks
-                        message = "".join(
-                            block.get("text", "") if isinstance(block, dict) else str(block)
-                            for block in raw_message
-                        )
-                    else:
-                        message = str(raw_message) if raw_message else ""
+                    # But delta field expects a string, not a list.
+                    # 2026-08-19 (session no90vkf): extraction goes through the
+                    # shared guarded helper — thinking/signature blocks
+                    # contribute nothing; list/str/None all normalize to str.
+                    message = _stream_chunk_text(raw_message)
+
+                    # An empty chunk must not open or feed a lifecycle: the
+                    # browser's @ag-ui/core Zod refine rejects delta:"" and
+                    # aborts the ENTIRE run client-side while the backend
+                    # finishes normally (the no90vkf stream-kill).
+                    if not message:
+                        dbg("Dropping empty manual-emit chunk (Zod-fatal client-side)")
+                        continue
 
                     # CRITICAL FIX (v1.16.0): Use SCREAMING_SNAKE_CASE event types
                     # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
@@ -1206,6 +1250,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                             dbg(f"Yielding string event type: {event_dict['type']}")
                         # Fix lifecycle events (v1.17.0)
                         event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                        if _is_zod_fatal_empty_content(event_dict):
+                            dbg("Dropping SDK empty-delta CONTENT event (str branch)")
+                            continue
                         _track_text_message_event(
                             event_dict, text_message_deltas, completed_text_messages
                         )
@@ -1225,6 +1272,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         dbg(f"Yielding Pydantic event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
                     event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                    if _is_zod_fatal_empty_content(event_dict):
+                        dbg("Dropping SDK empty-delta CONTENT event (pydantic v2 branch)")
+                        continue
                     _track_text_message_event(
                         event_dict, text_message_deltas, completed_text_messages
                     )
@@ -1240,6 +1290,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         dbg(f"Yielding Pydantic v1 event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
                     event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                    if _is_zod_fatal_empty_content(event_dict):
+                        dbg("Dropping SDK empty-delta CONTENT event (pydantic v1 branch)")
+                        continue
                     _track_text_message_event(
                         event_dict, text_message_deltas, completed_text_messages
                     )
@@ -2652,11 +2705,8 @@ def _extract_synthesis_history(messages: Sequence[Any]) -> List[Dict[str, str]]:
         if role is None:
             continue
         if isinstance(content, list):
-            # Anthropic content blocks
-            content = "".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
-            )
+            # Anthropic content blocks (thinking/signature blocks drop out)
+            content = _stream_chunk_text(content)
         if not isinstance(content, str) or not content.strip():
             continue
         turns.append({"role": role, "content": content.strip()[:_SYNTHESIS_HISTORY_MAX_CHARS]})
@@ -3394,16 +3444,18 @@ def create_e2i_chat_agent(
             async for chunk in llm_with_tools.astream(llm_messages):
                 # Accumulate content chunks (DON'T emit yet - wait to check for tool calls)
                 if hasattr(chunk, "content") and chunk.content:
-                    # Anthropic returns content as list of blocks, OpenAI returns str
-                    chunk_text = chunk.content
-                    if isinstance(chunk_text, list):
-                        chunk_text = "".join(
-                            block.get("text", "") if isinstance(block, dict) else str(block)
-                            for block in chunk_text
-                        )
-                    full_content += chunk_text
-                    content_chunks.append(chunk_text)
-                    logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk_text)} chars")
+                    # Anthropic returns content as list of blocks, OpenAI returns
+                    # str. Thinking/signature blocks extract to "" and must never
+                    # reach content_chunks — each buffered chunk is later emitted
+                    # verbatim, and an empty delta kills the browser stream
+                    # (session no90vkf, 2026-08-19).
+                    chunk_text = _stream_chunk_text(chunk.content)
+                    if not chunk_text:
+                        logger.debug("[CopilotKit] Skipping empty/thinking chunk")
+                    else:
+                        full_content += chunk_text
+                        content_chunks.append(chunk_text)
+                        logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk_text)} chars")
 
                 # Accumulate tool calls (they may come in chunks) — tool_call_chunks
                 # is authoritative, chunk.tool_calls is a merge-by-id fallback; see
@@ -3749,13 +3801,14 @@ def create_e2i_chat_agent(
                 ]
             ):
                 if hasattr(chunk, "content") and chunk.content:
-                    # Anthropic returns content as list of blocks, OpenAI returns str
-                    chunk_text = chunk.content
-                    if isinstance(chunk_text, list):
-                        chunk_text = "".join(
-                            block.get("text", "") if isinstance(block, dict) else str(block)
-                            for block in chunk_text
-                        )
+                    # Anthropic returns content as list of blocks, OpenAI returns
+                    # str. sonnet-5 adaptive thinking streams thinking/signature
+                    # blocks FIRST — they extract to "" and emitting "" is fatal:
+                    # the frontend's @ag-ui/core Zod refine rejects delta:"" and
+                    # aborts the whole run (session no90vkf, 2026-08-19).
+                    chunk_text = _stream_chunk_text(chunk.content)
+                    if not chunk_text:
+                        continue
                     full_content += chunk_text
                     await copilotkit_emit_message(config, chunk_text)
                     logger.debug(f"[CopilotKit] Streamed synthesis chunk: {len(chunk_text)} chars")
