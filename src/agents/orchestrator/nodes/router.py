@@ -344,6 +344,26 @@ class RouterNode:
         """
         start_time = time.time()
 
+        # #1714: an explicit caller-requested target takes routing authority.
+        # orchestrator_tool (src/api/routes/chatbot_tools.py) has always
+        # stashed the chat model's explicit choice under
+        # ``user_context["target_agent"]``, but NO node ever consumed it — the
+        # request was silently ignored for every agent and intent routing
+        # substituted its own plan (2026-08-19 eval, turn 5.5: requested
+        # 'explainer', dispatched ['heterogeneous_optimizer', 'gap_analyzer'];
+        # 3.4/3.6/4.4 only LOOKED honored because intent routing
+        # coincidentally agreed with the request). An explicit target that
+        # resolves to a router-dispatchable agent is dispatched as the sole
+        # critical agent — winning over the classification pipeline,
+        # multi-agent patterns, AND intent-classification failure (the
+        # ``_default_routing`` path below must not shadow it). An
+        # unknown/non-dispatchable target falls through to intent routing with
+        # a warning logged — the tool payload's ``target_agent_requested`` vs
+        # ``agents_dispatched`` pair keeps that mismatch visible to the caller.
+        explicit_plan = self._explicit_target_dispatch(state)
+        if explicit_plan is not None:
+            return self._finalize_explicit_target(state, explicit_plan, start_time)
+
         intent = state.get("intent")
         if not intent:
             # No intent classified, default to explainer
@@ -559,6 +579,95 @@ class RouterNode:
                 )
             ]
         return filtered_plan
+
+    def _dispatchable_agents(self) -> set[str]:
+        """Agent names this router knows how to dispatch (#1714).
+
+        Derived from ``INTENT_TO_AGENTS`` — the same table every routing path
+        resolves through — so an explicit target can only name an agent with a
+        deliberate dispatch config (priority/timeout/fallback). Chat-layer
+        ``VALID_AGENTS`` deliberately is NOT the reference set: it contains
+        ``cohort_constructor``, which cannot run from a chat payload
+        (dispatcher.py — the cohort_definition intent routes to
+        cohort_profiler instead for exactly that reason).
+        """
+        return {
+            dispatch["agent_name"]
+            for intent_agents in self.INTENT_TO_AGENTS.values()
+            for dispatch in intent_agents
+        }
+
+    def _finalize_explicit_target(
+        self,
+        state: OrchestratorState,
+        explicit_plan: List[AgentDispatch],
+        start_time: float,
+    ) -> OrchestratorState:
+        """Finalize an explicit-target dispatch plan (#1714).
+
+        Mirrors ``execute()``'s finalization — discovery enhancement, the
+        Issue #251 F1 self-dispatch guard, parallel_groups derived from the
+        CLEANED plan — so the explicit path cannot drift from the intent
+        path's invariants. ``routing_authority`` is ``"explicit_target"``
+        (#1582 semantics: names which subsystem actually decided THIS turn).
+        """
+        dispatch_plan = explicit_plan
+
+        discovery_routing_applied = False
+        discovery_aware_agents: List[str] = []
+        if self._should_apply_discovery_routing(state):
+            dispatch_plan, discovery_aware_agents = self._enhance_with_discovery_data(
+                dispatch_plan, state
+            )
+            discovery_routing_applied = len(discovery_aware_agents) > 0
+
+        dispatch_plan = self._apply_self_dispatch_guard(
+            dispatch_plan, source="execute(explicit_target)"
+        )
+        cleaned_names = [d["agent_name"] for d in dispatch_plan]
+
+        return {
+            **state,
+            "dispatch_plan": dispatch_plan,
+            "parallel_groups": [cleaned_names],
+            "routing_latency_ms": int((time.time() - start_time) * 1000),
+            "current_phase": "dispatching",
+            "routing_authority": "explicit_target",
+            "discovery_routing_applied": discovery_routing_applied,
+            "discovery_aware_agents": discovery_aware_agents if discovery_aware_agents else None,
+        }
+
+    def _explicit_target_dispatch(self, state: OrchestratorState) -> Optional[List[AgentDispatch]]:
+        """Resolve ``user_context["target_agent"]`` to a dispatch plan (#1714).
+
+        Returns a single-agent critical-priority plan when the caller's
+        explicit target names a router-dispatchable agent, or ``None`` to let
+        intent routing proceed (no target, blank target, or an unknown /
+        non-dispatchable name — the latter logged, and kept visible to the
+        caller via the orchestrator_tool payload's ``target_agent_requested``
+        vs ``agents_dispatched`` pair).
+
+        ``"orchestrator"`` can never resolve here: it appears in no
+        ``INTENT_TO_AGENTS`` entry, so the Issue #251 F1 self-dispatch
+        invariant holds by construction on this path too (and ``execute()``
+        still funnels the plan through ``_apply_self_dispatch_guard``).
+        """
+        user_context = state.get("user_context") or {}
+        if not isinstance(user_context, dict):
+            return None
+        target = user_context.get("target_agent")
+        if not isinstance(target, str) or not target.strip():
+            return None
+        normalized = target.strip().lower()
+        if normalized not in self._dispatchable_agents():
+            logger.warning(
+                "RouterNode #1714: explicit target_agent %r is not a dispatchable "
+                "agent (known: %s) — falling back to intent routing",
+                target,
+                sorted(self._dispatchable_agents()),
+            )
+            return None
+        return [self._get_dispatch_for_agent(normalized, "critical")]
 
     def _dispatch_from_classification(
         self, classification: Dict[str, Any]

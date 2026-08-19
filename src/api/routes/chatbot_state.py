@@ -77,7 +77,8 @@ class ChatbotState(TypedDict, total=False):
     routing_pattern: Optional[
         str
     ]  # SINGLE_AGENT | PARALLEL_DELEGATION | TOOL_COMPOSER | CLARIFICATION_NEEDED
-    # #1582: "pipeline" | "legacy" — which subsystem produced the dispatch plan.
+    # #1582: "pipeline" | "legacy" | "explicit_target" (#1714) — which
+    # subsystem produced the dispatch plan.
     # Disambiguates the line above, which is the PIPELINE's decision even when
     # legacy routing is what actually answered the turn.
     routing_authority: Optional[str]

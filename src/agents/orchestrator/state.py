@@ -162,9 +162,11 @@ class OrchestratorState(TypedDict, total=False):
     used_llm_layer: NotRequired[bool]
 
     # #1582: which subsystem produced this turn's dispatch plan —
-    # "pipeline" (active mode AND the pipeline was confident) or "legacy"
-    # (off, shadow, OR active-but-abstained). Set by RouterNode, where the
-    # plan's origin is known. Telemetry only; nothing routes on it.
+    # "pipeline" (active mode AND the pipeline was confident), "legacy"
+    # (off, shadow, OR active-but-abstained), or "explicit_target" (#1714:
+    # the caller's user_context["target_agent"] named a dispatchable agent
+    # and took authority). Set by RouterNode, where the plan's origin is
+    # known. Telemetry only; nothing routes on it.
     routing_authority: NotRequired[Optional[str]]
 
     # Timing
