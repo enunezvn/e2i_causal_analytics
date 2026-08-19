@@ -486,6 +486,13 @@ class _RecordingQuery:
         self._recorder["filters"].append(("limit", n))
         return self
 
+    def range(self, start, end):
+        # #1716: the paged dedup read slices with .range(); recorded like the
+        # other predicates so the sync/async filter-equivalence assertion
+        # covers pagination too.
+        self._recorder["filters"].append(("range", start, end))
+        return self
+
 
 class _SyncRecordingClient:
     def __init__(self, recorder: Dict[str, Any], rows: List[Dict[str, Any]]):
