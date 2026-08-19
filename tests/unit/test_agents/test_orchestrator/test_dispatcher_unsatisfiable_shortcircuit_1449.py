@@ -184,9 +184,14 @@ class TestRefusalMessagesAreUnweakened:
         assert isinstance(out, D.NeedsStructuredInput)
         assert out.agent_name == "heterogeneous_optimizer"
         assert out.missing == ("treatment_var", "outcome_var", "effect_modifiers")
+        # #1726 extended the canonical reason: the dispatcher now also tries
+        # the patient-journey cohort substrate before refusing, and the
+        # refusal must say so. Still pinned verbatim — only the canonical
+        # text moved.
         assert out.reason == (
-            "no recognized KPI substrate with a defined treatment and >=100 real "
-            "rows to bind the causal spec; a chat query alone cannot name the "
+            "no recognized KPI substrate and no resolvable patient-journey cohort "
+            "with a defined treatment and >=100 real rows to bind the "
+            "causal spec; a chat query alone cannot name the "
             "treatment/outcome/effect-modifier columns"
         )
         assert "Failing closed — no values were fabricated." in out.to_error()
