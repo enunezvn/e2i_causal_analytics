@@ -217,3 +217,21 @@ def test_content_block_list_reply_still_generates(test_client, auth_headers, mon
 
     assert resp.status_code == 200
     assert [s["title"] for s in resp.json()["suggestions"]] == [f"Pill {i}" for i in range(4)]
+
+
+# =============================================================================
+# PILL BRAND GROUNDING (2026-08-19 review)
+# =============================================================================
+
+
+def test_prompt_requires_brand_in_pill_messages_when_filter_set():
+    """A pill click sends ONLY the message text; a brand-less message hits the
+    assistant's brand-clarification wall (measured 2026-08-19: filter set to
+    Remibrutinib, chat answered "which brand?"). The prompt must require every
+    pill MESSAGE to name the active brand when brand_filter is set — not use
+    the filter as a mere tiebreaker — while brand="All" stays unconstrained.
+    """
+    prompt = chat_module._SYSTEM_PROMPT
+    assert "brand_filter is set" in prompt
+    assert "name that brand" in prompt
+    assert '"All"' in prompt

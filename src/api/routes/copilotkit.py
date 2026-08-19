@@ -543,6 +543,89 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
     return event_dict
 
 
+def _stream_chunk_text(content: Any) -> str:
+    """Extract user-visible text from a streamed chunk's content.
+
+    Anthropic streams content as a list of typed blocks; sonnet-5 adaptive
+    thinking prepends thinking/signature blocks — dicts with NO ``"text"``
+    key — before any text block (2026-08-19, session no90vkf: the old inline
+    ``block.get("text", "")`` join mapped them to ``""``, which was then
+    emitted and killed the browser stream). Only blocks that are actually
+    text contribute: a dict block with an explicit non-"text" type is dropped
+    even if a future SDK adds a "text" field to it. OpenAI's plain-str shape,
+    untyped dict blocks, and str items in lists pass through unchanged.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type", "text") == "text":
+                    parts.append(block.get("text") or "")
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(content)
+
+
+def _filters_context_note(filters: Any) -> str:
+    """Render the dashboard's active filters as a system-prompt suffix.
+
+    2026-08-19 review: the UI's brand filter had NO channel to the chat graph
+    (instructions/readables never leave the browser for agent runs; the route
+    hard-codes ``context=[]``) — the chat asked "which brand?" with the filter
+    set to Remibrutinib. The frontend now sends filters in the CoAgent state;
+    this note is how the nodes actually USE them.
+
+    Semantics: resolve-don't-ask for fields the user's message leaves
+    unspecified, but explicit user wording always wins. ``brand="All"`` is not
+    a brand constraint. Returns "" when nothing usable — filter-less runs keep
+    the prompt byte-identical (wave-16 tuning is freshly certified).
+    """
+    if not isinstance(filters, dict):
+        return ""
+
+    parts: list[str] = []
+    brand = filters.get("brand")
+    if isinstance(brand, str) and brand and brand.lower() != "all":
+        parts.append(f"brand={brand}")
+    date_range = filters.get("dateRange") or filters.get("date_range")
+    if isinstance(date_range, dict):
+        start, end = date_range.get("start"), date_range.get("end")
+        if isinstance(start, str) and isinstance(end, str) and start and end:
+            parts.append(f"date range={start}..{end}")
+    for key, label in (("territory", "territory"), ("hcpSegment", "HCP segment")):
+        value = filters.get(key)
+        if isinstance(value, str) and value:
+            parts.append(f"{label}={value}")
+    if not parts:
+        return ""
+
+    return (
+        "\n\nACTIVE DASHBOARD FILTERS (set by the user in the UI): "
+        + "; ".join(parts)
+        + ". When the user's message does not name a brand, period, territory, or "
+        "segment, resolve it from these filters instead of asking for "
+        "clarification — and say which filter value you used. If the user names "
+        "one explicitly in their message, the user's wording wins over the filter."
+    )
+
+
+def _is_zod_fatal_empty_content(event_dict: Dict[str, Any]) -> bool:
+    """A TEXT_MESSAGE_CONTENT event with an empty delta.
+
+    The browser's @ag-ui/core Zod schema refines this exact field with
+    ``s.length > 0`` and one invalid event aborts the ENTIRE CopilotKit run
+    client-side — while the backend 200s, finishes the run, and persists the
+    answer (session no90vkf, 2026-08-19). ag-ui-protocol 0.1.18 (the image's
+    pin) no longer validates delta server-side, so the boundary must.
+    """
+    return str(event_dict.get("type")) == "TEXT_MESSAGE_CONTENT" and not event_dict.get("delta")
+
+
 # =============================================================================
 # SDK COMPATIBILITY: LangGraphAGUIAgent with execute() method
 # =============================================================================
@@ -1131,15 +1214,19 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 
                     # FIX (v1.21.4): Handle message as list of content blocks
                     # copilotkit_manually_emit_message sends message as list: [{'text': '...', 'type': 'text', 'index': 0}]
-                    # But delta field expects a string, not a list
-                    if isinstance(raw_message, list):
-                        # Extract text from all content blocks
-                        message = "".join(
-                            block.get("text", "") if isinstance(block, dict) else str(block)
-                            for block in raw_message
-                        )
-                    else:
-                        message = str(raw_message) if raw_message else ""
+                    # But delta field expects a string, not a list.
+                    # 2026-08-19 (session no90vkf): extraction goes through the
+                    # shared guarded helper — thinking/signature blocks
+                    # contribute nothing; list/str/None all normalize to str.
+                    message = _stream_chunk_text(raw_message)
+
+                    # An empty chunk must not open or feed a lifecycle: the
+                    # browser's @ag-ui/core Zod refine rejects delta:"" and
+                    # aborts the ENTIRE run client-side while the backend
+                    # finishes normally (the no90vkf stream-kill).
+                    if not message:
+                        dbg("Dropping empty manual-emit chunk (Zod-fatal client-side)")
+                        continue
 
                     # CRITICAL FIX (v1.16.0): Use SCREAMING_SNAKE_CASE event types
                     # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
@@ -1206,6 +1293,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                             dbg(f"Yielding string event type: {event_dict['type']}")
                         # Fix lifecycle events (v1.17.0)
                         event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                        if _is_zod_fatal_empty_content(event_dict):
+                            dbg("Dropping SDK empty-delta CONTENT event (str branch)")
+                            continue
                         _track_text_message_event(
                             event_dict, text_message_deltas, completed_text_messages
                         )
@@ -1225,6 +1315,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         dbg(f"Yielding Pydantic event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
                     event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                    if _is_zod_fatal_empty_content(event_dict):
+                        dbg("Dropping SDK empty-delta CONTENT event (pydantic v2 branch)")
+                        continue
                     _track_text_message_event(
                         event_dict, text_message_deltas, completed_text_messages
                     )
@@ -1240,6 +1333,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         dbg(f"Yielding Pydantic v1 event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
                     event_dict = _fix_all_events(event_dict, thread_id, run_id)
+                    if _is_zod_fatal_empty_content(event_dict):
+                        dbg("Dropping SDK empty-delta CONTENT event (pydantic v1 branch)")
+                        continue
                     _track_text_message_event(
                         event_dict, text_message_deltas, completed_text_messages
                     )
@@ -2652,11 +2748,8 @@ def _extract_synthesis_history(messages: Sequence[Any]) -> List[Dict[str, str]]:
         if role is None:
             continue
         if isinstance(content, list):
-            # Anthropic content blocks
-            content = "".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
-            )
+            # Anthropic content blocks (thinking/signature blocks drop out)
+            content = _stream_chunk_text(content)
         if not isinstance(content, str) or not content.strip():
             continue
         turns.append({"role": role, "content": content.strip()[:_SYNTHESIS_HISTORY_MAX_CHARS]})
@@ -2977,12 +3070,16 @@ def build_synthesis_prompt(
     tool_calls: list[dict],
     tool_results: list[dict],
     history: Optional[List[Dict[str, str]]] = None,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Frame the prior conversation + the user's question + the tool calls (with args)
     + the tool results so the synthesizer answers the ACTUAL question, resolves
     follow-up references ("is that above baseline?") against earlier turns, names the
     brand/period it used, and is honest about any window limitation. Fixes the 'asks
-    for a brand it already used' and 'missing the preceding conversation' bugs."""
+    for a brand it already used' and 'missing the preceding conversation' bugs.
+    ``filters`` (2026-08-19): the dashboard's active filters from CoAgent state —
+    framed so the synthesizer resolves an unspecified brand/period from the UI
+    instead of re-asking; omitted entirely when absent (prompt stays byte-identical)."""
     import json as _json
 
     calls = _json.dumps(tool_calls, indent=2, default=str)
@@ -2997,8 +3094,12 @@ def build_synthesis_prompt(
             "Conversation so far (earlier turns; the question below may refer to values "
             "established here):\n" + transcript + "\n\n"
         )
+    filters_block = ""
+    filters_note = _filters_context_note(filters)
+    if filters_note:
+        filters_block = filters_note.strip() + "\n\n"
     return (
-        history_block + "User question:\n" + (original_query or "(none)") + "\n\n"
+        history_block + filters_block + "User question:\n" + (original_query or "(none)") + "\n\n"
         "Tool calls the assistant made (note the brand/window/args already chosen):\n"
         + calls
         + "\n\n"
@@ -3176,6 +3277,13 @@ class E2IAgentState(TypedDict, total=False):
     # power generative UI like the inline KPI trend chart (v1.30.0).
     copilotkit: Dict[str, Any]
 
+    # Dashboard filters sent by the frontend via useCoAgent shared state
+    # (2026-08-19 review: the ONLY channel that reaches the graph is state —
+    # instructions/readables never leave the browser for agent runs). Same
+    # declare-or-be-dropped trap as `copilotkit` above. Shape mirrors the UI's
+    # E2IFilters: {brand, territory, dateRange: {start, end}, hcpSegment}.
+    filters: Dict[str, Any]
+
 
 def create_e2i_chat_agent(
     chat_llm_tier: Literal["fast", "standard", "reasoning"] = "standard",
@@ -3351,8 +3459,13 @@ def create_e2i_chat_agent(
                 [*E2I_CHATBOT_TOOLS, *frontend_action_schemas], tool_choice="auto"
             )
 
-            # Build messages for LLM
-            system_msg = SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT)
+            # Build messages for LLM. The dashboard's active filters (CoAgent
+            # state) ride the system prompt so an ambiguous question resolves
+            # brand/period from the UI instead of asking for clarification
+            # (2026-08-19 review; suffix is "" when no filters arrived).
+            system_msg = SystemMessage(
+                content=E2I_COPILOT_SYSTEM_PROMPT + _filters_context_note(state.get("filters"))
+            )
             llm_messages: list[BaseMessage] = [system_msg]
 
             # Add conversation history (convert to LangChain format if needed)
@@ -3394,16 +3507,18 @@ def create_e2i_chat_agent(
             async for chunk in llm_with_tools.astream(llm_messages):
                 # Accumulate content chunks (DON'T emit yet - wait to check for tool calls)
                 if hasattr(chunk, "content") and chunk.content:
-                    # Anthropic returns content as list of blocks, OpenAI returns str
-                    chunk_text = chunk.content
-                    if isinstance(chunk_text, list):
-                        chunk_text = "".join(
-                            block.get("text", "") if isinstance(block, dict) else str(block)
-                            for block in chunk_text
-                        )
-                    full_content += chunk_text
-                    content_chunks.append(chunk_text)
-                    logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk_text)} chars")
+                    # Anthropic returns content as list of blocks, OpenAI returns
+                    # str. Thinking/signature blocks extract to "" and must never
+                    # reach content_chunks — each buffered chunk is later emitted
+                    # verbatim, and an empty delta kills the browser stream
+                    # (session no90vkf, 2026-08-19).
+                    chunk_text = _stream_chunk_text(chunk.content)
+                    if not chunk_text:
+                        logger.debug("[CopilotKit] Skipping empty/thinking chunk")
+                    else:
+                        full_content += chunk_text
+                        content_chunks.append(chunk_text)
+                        logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk_text)} chars")
 
                 # Accumulate tool calls (they may come in chunks) — tool_call_chunks
                 # is authoritative, chunk.tool_calls is a merge-by-id fallback; see
@@ -3737,6 +3852,7 @@ def create_e2i_chat_agent(
                 tool_calls,
                 tool_results,
                 history=_extract_synthesis_history(messages),
+                filters=state.get("filters"),
             )
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
@@ -3749,13 +3865,14 @@ def create_e2i_chat_agent(
                 ]
             ):
                 if hasattr(chunk, "content") and chunk.content:
-                    # Anthropic returns content as list of blocks, OpenAI returns str
-                    chunk_text = chunk.content
-                    if isinstance(chunk_text, list):
-                        chunk_text = "".join(
-                            block.get("text", "") if isinstance(block, dict) else str(block)
-                            for block in chunk_text
-                        )
+                    # Anthropic returns content as list of blocks, OpenAI returns
+                    # str. sonnet-5 adaptive thinking streams thinking/signature
+                    # blocks FIRST — they extract to "" and emitting "" is fatal:
+                    # the frontend's @ag-ui/core Zod refine rejects delta:"" and
+                    # aborts the whole run (session no90vkf, 2026-08-19).
+                    chunk_text = _stream_chunk_text(chunk.content)
+                    if not chunk_text:
+                        continue
                     full_content += chunk_text
                     await copilotkit_emit_message(config, chunk_text)
                     logger.debug(f"[CopilotKit] Streamed synthesis chunk: {len(chunk_text)} chars")

@@ -24,6 +24,15 @@ vi.mock('@copilotkit/react-core', () => ({
     sendMessage: () => Promise.resolve(),
     resetMessages: () => {},
   }),
+  useCoAgent: (options: { name: string; initialState?: Record<string, unknown> }) => ({
+    name: options?.name,
+    state: options?.initialState,
+    setState: () => undefined,
+    running: false,
+    start: () => undefined,
+    stop: () => undefined,
+    run: () => Promise.resolve(),
+  }),
 }));
 
 vi.mock('@copilotkit/react-ui', () => ({

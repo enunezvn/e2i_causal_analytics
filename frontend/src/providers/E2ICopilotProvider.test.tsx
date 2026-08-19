@@ -39,6 +39,11 @@ vi.mock('@/api/kpi', () => ({
   batchCalculateKPIs: (...args: unknown[]) => mockBatchCalculateKPIs(...args),
 }));
 
+// Track CoAgent state bridging (2026-08-19: filters ride agent state — the
+// only channel that reaches the backend graph for agent runs)
+const mockUseCoAgent = vi.fn();
+const mockCoAgentSetState = vi.fn();
+
 // Override the global CopilotKit mock for this test file
 vi.mock('@copilotkit/react-core', () => ({
   CopilotKit: ({ children }: { children: React.ReactNode }) => (
@@ -51,6 +56,18 @@ vi.mock('@copilotkit/react-core', () => ({
   useCopilotAction: (config: unknown) => {
     mockUseCopilotAction(config);
     return undefined;
+  },
+  useCoAgent: (options: { name: string; initialState?: Record<string, unknown> }) => {
+    mockUseCoAgent(options);
+    return {
+      name: options.name,
+      state: options.initialState,
+      setState: mockCoAgentSetState,
+      running: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      run: vi.fn(),
+    };
   },
 }));
 
@@ -404,6 +421,8 @@ describe('CopilotHooksConnector', () => {
     mockUseCopilotReadable.mockClear();
     mockUseCopilotAction.mockClear();
     mockNavigate.mockClear();
+    mockUseCoAgent.mockClear();
+    mockCoAgentSetState.mockClear();
   });
 
   it('registers readables when CopilotKit is enabled', () => {
@@ -486,6 +505,28 @@ describe('CopilotHooksConnector', () => {
     // No hooks should be called when disabled
     expect(mockUseCopilotReadable).not.toHaveBeenCalled();
     expect(mockUseCopilotAction).not.toHaveBeenCalled();
+    expect(mockUseCoAgent).not.toHaveBeenCalled();
+  });
+
+  it('bridges dashboard filters into the default agent CoAgent state', () => {
+    // 2026-08-19 review: readables/instructions never leave the browser for
+    // agent runs — filters must ride the agent's shared state or the backend
+    // asks "which brand?" with the filter set. This pins the mount: the
+    // provider tree must render AgentFiltersBridge when CopilotKit is enabled.
+    render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    const bridgeCall = mockUseCoAgent.mock.calls.find((call) => call[0]?.name === 'default');
+    expect(bridgeCall).toBeDefined();
+    expect(bridgeCall![0].initialState?.filters?.brand).toBe('Remibrutinib');
+    // And the filters are pushed into agent state (not just initialState,
+    // which only seeds the very first run).
+    expect(mockCoAgentSetState).toHaveBeenCalled();
   });
 });
 
