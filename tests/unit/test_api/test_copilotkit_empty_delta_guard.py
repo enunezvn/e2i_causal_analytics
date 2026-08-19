@@ -123,8 +123,7 @@ class TestEmptyStringEmit:
         TEXT_MESSAGE_CONTENT with empty delta (Zod would kill the run)."""
         events = await _sse_events(["", REAL_ANSWER])
         assert _empty_deltas(events) == [], (
-            "Zod-fatal empty delta reached the wire: "
-            f"{[e for e in _contents(events)]}"
+            f"Zod-fatal empty delta reached the wire: {_contents(events)}"
         )
 
     async def test_answer_still_delivered_after_empty_emit(self):
@@ -265,7 +264,9 @@ class TestPassthroughGuard:
             RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id="t", run_id="r"),
         ]
         events = await _sse_from_run_events(run_events)
-        assert _empty_deltas(events) == [], f"SDK-native empty delta passed through: {_contents(events)}"
+        assert _empty_deltas(events) == [], (
+            f"SDK-native empty delta passed through: {_contents(events)}"
+        )
         delivered = "".join(e.get("delta") or "" for e in _contents(events))
         assert REAL_ANSWER in delivered
 
@@ -274,9 +275,7 @@ class TestPassthroughGuard:
         passthrough door; same contract."""
         run_events = [
             json.dumps({"type": "RUN_STARTED", "threadId": "t", "runId": "r"}),
-            json.dumps(
-                {"type": "TEXT_MESSAGE_START", "messageId": "sdk-m2", "role": "assistant"}
-            ),
+            json.dumps({"type": "TEXT_MESSAGE_START", "messageId": "sdk-m2", "role": "assistant"}),
             json.dumps({"type": "TEXT_MESSAGE_CONTENT", "messageId": "sdk-m2", "delta": ""}),
             json.dumps(
                 {"type": "TEXT_MESSAGE_CONTENT", "messageId": "sdk-m2", "delta": REAL_ANSWER}
@@ -285,6 +284,8 @@ class TestPassthroughGuard:
             json.dumps({"type": "RUN_FINISHED", "threadId": "t", "runId": "r"}),
         ]
         events = await _sse_from_run_events(run_events)
-        assert _empty_deltas(events) == [], f"str-branch empty delta passed through: {_contents(events)}"
+        assert _empty_deltas(events) == [], (
+            f"str-branch empty delta passed through: {_contents(events)}"
+        )
         delivered = "".join(e.get("delta") or "" for e in _contents(events))
         assert REAL_ANSWER in delivered

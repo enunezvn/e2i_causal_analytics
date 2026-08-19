@@ -73,7 +73,9 @@ class TestFiltersContextNote:
         """A user naming a different brand mid-chat must override the filter —
         the note has to say so, or the filter would trap the conversation."""
         note = _filters_context_note(FULL_FILTERS).lower()
-        assert "user" in note and ("wins" in note or "overrides" in note or "takes precedence" in note)
+        assert "user" in note and (
+            "wins" in note or "overrides" in note or "takes precedence" in note
+        )
 
     def test_brand_all_is_not_a_brand_constraint(self):
         """brand='All' means no single brand is selected — advertising it as a

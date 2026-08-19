@@ -33,7 +33,13 @@ class TestThinkingShapes:
         """Thinking TEXT must never leak into the answer stream either."""
         assert (
             _stream_chunk_text(
-                [{"thinking": "Let me analyse the TRx shortfall...", "type": "thinking", "index": 0}]
+                [
+                    {
+                        "thinking": "Let me analyse the TRx shortfall...",
+                        "type": "thinking",
+                        "index": 0,
+                    }
+                ]
             )
             == ""
         )
@@ -47,9 +53,9 @@ class TestThinkingShapes:
 
 class TestTextShapes:
     def test_text_block(self):
-        assert _stream_chunk_text([{"text": "Remibrutinib is up 12%", "type": "text", "index": 1}]) == (
-            "Remibrutinib is up 12%"
-        )
+        assert _stream_chunk_text(
+            [{"text": "Remibrutinib is up 12%", "type": "text", "index": 1}]
+        ) == ("Remibrutinib is up 12%")
 
     def test_mixed_thinking_then_text_keeps_only_text(self):
         assert (
@@ -96,8 +102,7 @@ class TestLoopCoupling:
     def test_both_loops_use_the_extractor(self):
         src = self._factory_source()
         assert src.count("_stream_chunk_text(") >= 2, (
-            "chat_node and synthesize_node must BOTH extract chunk text via "
-            "_stream_chunk_text"
+            "chat_node and synthesize_node must BOTH extract chunk text via _stream_chunk_text"
         )
 
     def test_inline_extraction_is_gone(self):
