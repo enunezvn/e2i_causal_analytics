@@ -320,3 +320,73 @@ def test_clinical_axis_rows_for_upsert_are_content_addressed_and_brand_filterabl
     # Back-compat wrapper still returns the single Fabhalta pilot row.
     fab = fabhalta_clinical_rows_for_upsert()
     assert len(fab) == 1 and fab[0]["brand"] == "Fabhalta"
+
+
+def test_cohort_hcp_trigger_path_ids_are_content_addressed_and_idempotent_1725():
+    """#1725: the patient/hcp/trigger grains minted RANDOM uuid4 path_ids, so
+    the loader's conflict-on-PK upsert inserted a fresh copy of every path on
+    each reseed — measured live 2026-08-19: 2,657 rows over just 21 distinct
+    (start, end, brand) identities (~126x). The commercial/arm/clinical
+    families were already content-addressed; these three are now too.
+
+    Namespaces: scp_p (patient), scp_h (hcp), scp_t (trigger) — 'p'/'h'/'t'
+    are NON-hex, so the id space is disjoint from both the legacy uuid family
+    (scp_ + 13 hex) and the scp_c/scp_a/scp_f content families (hex letters),
+    which is what lets the one-off cleanup target the legacy rows by pattern.
+    """
+    import re
+
+    df_a = CausalPathsGenerator(GeneratorConfig(n_records=25)).generate()
+    df_b = CausalPathsGenerator(GeneratorConfig(n_records=25)).generate()
+
+    for grain, prefix in (("patient", "scp_p"), ("hcp", "scp_h"), ("trigger", "scp_t")):
+        ids_a = df_a[df_a["grain"] == grain]["path_id"].tolist()
+        ids_b = df_b[df_b["grain"] == grain]["path_id"].tolist()
+        assert ids_a, f"no {grain} rows generated"
+        # Deterministic across runs (the upsert updates in place on reseed).
+        assert ids_a == ids_b, f"{grain} path_ids differ across identical runs"
+        # No collisions within a run.
+        assert len(ids_a) == len(set(ids_a)), f"{grain} path_id collision"
+        # Namespaced, 16 chars, fits varchar(20).
+        assert all(re.fullmatch(rf"{prefix}[0-9a-f]{{11}}", pid) for pid in ids_a), (
+            f"{grain} ids not in the {prefix} namespace: {ids_a[:3]}"
+        )
+
+    # The legacy uuid4 shape must be gone entirely.
+    legacy = [pid for pid in df_a["path_id"] if re.fullmatch(r"scp_[0-9a-f]{13}", pid)]
+    assert legacy == [], f"legacy uuid-family ids still minted: {legacy[:3]}"
+
+
+def test_patient_grain_ids_distinct_per_occurrence_1725():
+    """n_records cycles the 9 (brand x outcome) cells, so the same cell recurs
+    (occurrence k = i // 9). Each occurrence must keep a DISTINCT deterministic
+    id — content-addressing must not collapse the generation contract."""
+    n = 25  # 9 cells -> occurrences 0..2 for the first 7 cells
+    df = CausalPathsGenerator(GeneratorConfig(n_records=n)).generate()
+    patient_ids = df[df["grain"] == "patient"]["path_id"].tolist()
+    assert len(patient_ids) == n
+    assert len(set(patient_ids)) == n
+
+
+def test_cohort_hcp_trigger_rows_for_upsert_shape_1725():
+    """Targeted apply helper for the #1725 cleanup script: DB-shaped records for
+    the patient/hcp/trigger grains ONLY, projected to the loader's causal_paths
+    columns (no generator-only 'grain' key), ids in the new content-addressed
+    namespaces, and identity-stable across calls so the on-PK upsert is
+    idempotent (row count can never grow on re-run)."""
+    import re
+
+    from src.ml.synthetic.generators.causal_paths_generator import (
+        cohort_hcp_trigger_rows_for_upsert,
+    )
+
+    records = cohort_hcp_trigger_rows_for_upsert()
+    # 25 patient (canonical load_synthetic_data count) + 6 hcp + 6 trigger.
+    assert len(records) == 37
+    ids = [r["path_id"] for r in records]
+    assert len(set(ids)) == len(ids)
+    assert all(re.fullmatch(r"scp_[pht][0-9a-f]{11}", pid) for pid in ids), ids[:3]
+    assert all("grain" not in r for r in records)
+    assert all(r["is_synthetic"] is True for r in records)
+    # Identity-stable: a second call emits the same PK set (values may restamp).
+    assert set(ids) == {r["path_id"] for r in cohort_hcp_trigger_rows_for_upsert()}

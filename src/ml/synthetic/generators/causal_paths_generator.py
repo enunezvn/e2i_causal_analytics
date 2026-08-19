@@ -11,7 +11,6 @@ is enum-exact (data_split_type: train/validation/test/holdout/unassigned).
 """
 
 import hashlib
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
@@ -307,6 +306,32 @@ def _comm_arm_path_id(brand: str, start: str, end: str) -> str:
     return "scp_a" + digest.hexdigest()[:11]
 
 
+def _cohort_path_id(brand: str, outcome: str, occurrence: int) -> str:
+    """Content-addressed id for a patient-grain cohort edge, namespaced scp_p*,
+    16 chars (varchar(20) cap). ``occurrence`` is the row's index within its
+    (brand, outcome) cell — n_records cycles the 9 cells, so the same cell
+    recurs and each recurrence keeps a distinct deterministic id (#1725: the
+    former uuid4 ids made every reseed INSERT ~n_records fresh rows through the
+    conflict-on-PK upsert; measured 2,657 rows over 21 identities)."""
+    digest = hashlib.sha1(f"p|{brand}|{outcome}|{occurrence}".encode(), usedforsecurity=False)
+    return "scp_p" + digest.hexdigest()[:11]
+
+
+def _hcp_path_id(brand: str, start: str, end: str) -> str:
+    """Content-addressed id for an HCP-grain adoption edge, namespaced scp_h*,
+    16 chars (varchar(20) cap). 'h' is non-hex, so the namespace is disjoint
+    from the legacy uuid family (scp_ + 13 hex) and the scp_c/a/f families."""
+    digest = hashlib.sha1(f"h|{brand}|{start}|{end}".encode(), usedforsecurity=False)
+    return "scp_h" + digest.hexdigest()[:11]
+
+
+def _trigger_path_id(brand: str, start: str, end: str) -> str:
+    """Content-addressed id for a trigger-grain RCT/effect-modifier edge,
+    namespaced scp_t*, 16 chars (varchar(20) cap)."""
+    digest = hashlib.sha1(f"t|{brand}|{start}|{end}".encode(), usedforsecurity=False)
+    return "scp_t" + digest.hexdigest()[:11]
+
+
 def _clinical_axis_path_id(token: str, start: str, end: str) -> str:
     """Content-addressed id for a brand-distinct clinical-axis edge, namespaced scp_f*
     (the clinical-axis family; the 'f' is historical — the pilot was Fabhalta), 16 chars
@@ -389,6 +414,27 @@ def fabhalta_clinical_rows_for_upsert() -> List[dict]:
     return clinical_axis_rows_for_upsert(["Fabhalta"])
 
 
+def cohort_hcp_trigger_rows_for_upsert(n_records: int = 25) -> List[dict]:
+    """The patient/hcp/trigger grains as DB-shaped records for the #1725 cleanup
+    script (scripts/cleanup_causal_paths_uuid_dupes.py).
+
+    ``n_records`` mirrors the canonical full-reseed count for the patient grain
+    (scripts/load_synthetic_data.py: ``max(12, patient_size // 100)`` = 25 at the
+    default 2500). path_ids are content-addressed (scp_p*/scp_h*/scp_t*), so the
+    upsert on path_id is idempotent by PK — re-runs update values in place and can
+    never grow the registry. Same column projection as the sibling helpers (the
+    generator-only 'grain' column is dropped — the DB has none)."""
+    import json
+
+    from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
+
+    df = CausalPathsGenerator(GeneratorConfig(n_records=n_records)).generate()
+    sub = df[df["grain"].isin(["patient", "hcp", "trigger"])]
+    cols = [c for c in TABLE_COLUMNS["causal_paths"] if c in sub.columns]
+    records: List[dict] = json.loads(sub[cols].to_json(orient="records"))
+    return records
+
+
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
     # validation_status="validated" on the rows below is a deliberate DGP
     # authorship, NOT a real RefutationSuite verdict. Since migration 119
@@ -409,6 +455,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
         cells = [(b, o) for b in _BRANDS for o in _COHORT_OUTCOMES]
         for i in range(self.config.n_records):
             brand, outcome = cells[i % len(cells)]
+            occurrence = i // len(cells)
             effect = round(float(self._rng.uniform(0.10, 0.55)), 4)  # recoverable band
             direct = round(effect * float(self._rng.uniform(0.4, 0.8)), 4)
             indirect = round(effect - direct, 4)
@@ -417,9 +464,10 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
             disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
             rows.append(
                 {
-                    # path_id is varchar(20) on the faithful DB -> a full uuid4 (36)
-                    # overflows (22001). Use a short collision-safe synthetic id.
-                    "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                    # path_id is varchar(20) on the faithful DB. Content-
+                    # addressed (#1725) so the conflict-on-PK upsert updates in
+                    # place on reseed instead of inserting a fresh copy.
+                    "path_id": _cohort_path_id(brand, outcome, occurrence),
                     "discovery_date": disc.isoformat(),
                     "causal_chain": {"nodes": ["treatment_arm", *mediators, outcome]},
                     "start_node": "treatment_arm",
@@ -458,7 +506,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                 disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
                 rows.append(
                     {
-                        "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                        "path_id": _hcp_path_id(brand, start_node, end_node),
                         "discovery_date": disc.isoformat(),
                         "causal_chain": {"nodes": [start_node, mediator, end_node]},
                         "start_node": start_node,
@@ -497,7 +545,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                 disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
                 rows.append(
                     {
-                        "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                        "path_id": _trigger_path_id(brand, start_node, end_node),
                         "discovery_date": disc.isoformat(),
                         "causal_chain": {"nodes": [start_node, end_node]},
                         "start_node": start_node,
