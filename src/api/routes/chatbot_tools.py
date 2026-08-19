@@ -1981,6 +1981,11 @@ KPI_REPORTING_WINDOWS = {
         "frontier (the conversion window must mature)"
     ),
     "WS2-TR-004": "most recent 30 days of trigger data",  # Acceptance rate
+    # #1713: verified against migration 089 (same frontier-anchored 30-day
+    # trigger window as WS2-TR-006). Omitting it while its sibling disclosed a
+    # window was the substrate of the eval-certified borrowing defect
+    # (Override Rate's window label asserted in prose for False Alert Rate).
+    "WS2-TR-005": "most recent 30 days of trigger data",  # False alert rate
     "WS2-TR-006": "most recent 30 days of trigger data",  # Override rate
     "WS2-TR-009": "most recent 30 days of trigger data",  # Funnel conversion
 }
@@ -2091,6 +2096,17 @@ def _kpi_result_to_response(
         window = KPI_REPORTING_WINDOWS.get(kpi.id)
         if window:
             response["reporting_window"] = window
+    # #1713: direction glosses on `status` ("above/below threshold") are only
+    # checkable when the payload names the metric's polarity — the 2026-08-19
+    # eval wrote "flagged warning (below healthy threshold)" for WS2-TR-005,
+    # which is lower-is-better (warning means ABOVE its threshold). Surface
+    # the exact flag the calculator evaluated the status WITH (stashed in
+    # KPIResult.metadata by the trigger/brand/model-performance calculators);
+    # honest absence when the calculator did not report one — never a polarity
+    # the evaluation didn't use.
+    lower_is_better = metadata.get("lower_is_better")
+    if lower_is_better is not None:
+        response["direction"] = "lower_is_better" if lower_is_better else "higher_is_better"
     semantic_note = KPI_SEMANTIC_NOTES.get(kpi.id)
     if semantic_note:
         response["semantic_note"] = semantic_note

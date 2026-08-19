@@ -156,9 +156,85 @@ def test_reporting_window_covers_frontier_anchored_ws3_family():
             "frontier (the conversion window must mature)"
         ),
         "WS2-TR-004": "most recent 30 days of trigger data",
+        "WS2-TR-005": "most recent 30 days of trigger data",
         "WS2-TR-006": "most recent 30 days of trigger data",
         "WS2-TR-009": "most recent 30 days of trigger data",
     }
+
+
+@pytest.mark.unit
+def test_ws2_tr005_payload_carries_window_metadata_1713():
+    """#1713 platform half: WS2-TR-005 (False Alert Rate) must disclose the
+    same window metadata as its sibling trigger-substrate KPI WS2-TR-006
+    (Override Rate). The 2026-08-19 full eval (turn 4.6) certified the
+    asymmetry -- Override Rate's payload carried ``reporting_window`` and
+    ``data_through`` while False Alert Rate's carried neither -- as the
+    substrate of a recurring defect: Override's window label was asserted in
+    prose for a metric whose payload declared no window. Migration 089
+    registers WS2-TR-005 with the exact same frontier-anchored 30-day trigger
+    window and ``data_through`` output column as WS2-TR-006, so the disclosure
+    is registry-verified, not guessed."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS2-TR-005")
+    assert kpi is not None
+    result = KPIResult(
+        kpi_id="WS2-TR-005",
+        value=0.083,
+        status=KPIStatus.WARNING,
+        metadata={"context": {"data_through": "2026-08-17"}, "lower_is_better": True},
+    )
+    resp = _kpi_result_to_response(kpi, result)
+    assert resp["reporting_window"] == "most recent 30 days of trigger data"
+    assert resp["data_through"] == "2026-08-17"
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_surfaces_direction_1713():
+    """Direction glosses ("above/below threshold") are only checkable when the
+    payload names the metric's polarity. The 2026-08-19 eval turn 4.6 wrote
+    "flagged warning (below healthy threshold)" for WS2-TR-005 -- inverted: it
+    is lower-is-better, so warning means ABOVE its threshold. The calculator
+    already evaluates status with a ``lower_is_better`` flag and stashes it in
+    ``KPIResult.metadata``; the response must surface that same flag (the
+    polarity the status was actually computed WITH) as ``direction``."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi_005 = get_registry().get("WS2-TR-005")
+    assert kpi_005 is not None
+    result = KPIResult(
+        kpi_id="WS2-TR-005",
+        value=0.083,
+        status=KPIStatus.WARNING,
+        metadata={"context": {}, "lower_is_better": True},
+    )
+    resp = _kpi_result_to_response(kpi_005, result)
+    assert resp["direction"] == "lower_is_better"
+
+    kpi_004 = get_registry().get("WS2-TR-004")
+    assert kpi_004 is not None
+    result = KPIResult(
+        kpi_id="WS2-TR-004",
+        value=0.55,
+        status=KPIStatus.GOOD,
+        metadata={"context": {}, "lower_is_better": False},
+    )
+    resp = _kpi_result_to_response(kpi_004, result)
+    assert resp["direction"] == "higher_is_better"
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_omits_direction_when_polarity_unknown_1713():
+    """A calculator that did not stash ``lower_is_better`` (e.g. the WS3
+    business-impact family) must yield NO ``direction`` field -- honest
+    absence over asserting a polarity the status evaluation never used."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-007")
+    assert kpi is not None
+    result = KPIResult(kpi_id="WS3-BI-007", value=9.0, status=KPIStatus.UNKNOWN, metadata={})
+    resp = _kpi_result_to_response(kpi, result)
+    assert "direction" not in resp
 
 
 @pytest.mark.unit
