@@ -32,6 +32,7 @@ import {
 } from '@/lib/kpi-alias';
 import { KpiTrendChart } from '@/components/chat/KpiTrendChart';
 import { FlintChart } from '@/components/chat/FlintChart';
+import { AgentFiltersBridge } from '@/components/chat/AgentFiltersBridge';
 // Value import kept to the chart-type list only (a plain string tuple); the
 // compiler itself is loaded lazily inside FlintChart to keep flint-chart out
 // of the eager bundle.
@@ -1248,8 +1249,10 @@ const CopilotHooksInner: React.FC = () => {
     },
   });
 
-  // Doesn't render anything - just registers hooks
-  return null;
+  // Renders no UI — registers hooks, plus the bridge that pushes the
+  // dashboard filters into the "default" agent's CoAgent state (the only
+  // channel that reaches the backend graph for agent runs; 2026-08-19).
+  return <AgentFiltersBridge filters={context?.filters || DEFAULT_FILTERS} />;
 };
 
 export default E2ICopilotProvider;

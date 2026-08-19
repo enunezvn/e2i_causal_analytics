@@ -571,6 +571,49 @@ def _stream_chunk_text(content: Any) -> str:
     return str(content)
 
 
+def _filters_context_note(filters: Any) -> str:
+    """Render the dashboard's active filters as a system-prompt suffix.
+
+    2026-08-19 review: the UI's brand filter had NO channel to the chat graph
+    (instructions/readables never leave the browser for agent runs; the route
+    hard-codes ``context=[]``) — the chat asked "which brand?" with the filter
+    set to Remibrutinib. The frontend now sends filters in the CoAgent state;
+    this note is how the nodes actually USE them.
+
+    Semantics: resolve-don't-ask for fields the user's message leaves
+    unspecified, but explicit user wording always wins. ``brand="All"`` is not
+    a brand constraint. Returns "" when nothing usable — filter-less runs keep
+    the prompt byte-identical (wave-16 tuning is freshly certified).
+    """
+    if not isinstance(filters, dict):
+        return ""
+
+    parts: list[str] = []
+    brand = filters.get("brand")
+    if isinstance(brand, str) and brand and brand.lower() != "all":
+        parts.append(f"brand={brand}")
+    date_range = filters.get("dateRange") or filters.get("date_range")
+    if isinstance(date_range, dict):
+        start, end = date_range.get("start"), date_range.get("end")
+        if isinstance(start, str) and isinstance(end, str) and start and end:
+            parts.append(f"date range={start}..{end}")
+    for key, label in (("territory", "territory"), ("hcpSegment", "HCP segment")):
+        value = filters.get(key)
+        if isinstance(value, str) and value:
+            parts.append(f"{label}={value}")
+    if not parts:
+        return ""
+
+    return (
+        "\n\nACTIVE DASHBOARD FILTERS (set by the user in the UI): "
+        + "; ".join(parts)
+        + ". When the user's message does not name a brand, period, territory, or "
+        "segment, resolve it from these filters instead of asking for "
+        "clarification — and say which filter value you used. If the user names "
+        "one explicitly in their message, the user's wording wins over the filter."
+    )
+
+
 def _is_zod_fatal_empty_content(event_dict: Dict[str, Any]) -> bool:
     """A TEXT_MESSAGE_CONTENT event with an empty delta.
 
@@ -3027,12 +3070,16 @@ def build_synthesis_prompt(
     tool_calls: list[dict],
     tool_results: list[dict],
     history: Optional[List[Dict[str, str]]] = None,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Frame the prior conversation + the user's question + the tool calls (with args)
     + the tool results so the synthesizer answers the ACTUAL question, resolves
     follow-up references ("is that above baseline?") against earlier turns, names the
     brand/period it used, and is honest about any window limitation. Fixes the 'asks
-    for a brand it already used' and 'missing the preceding conversation' bugs."""
+    for a brand it already used' and 'missing the preceding conversation' bugs.
+    ``filters`` (2026-08-19): the dashboard's active filters from CoAgent state —
+    framed so the synthesizer resolves an unspecified brand/period from the UI
+    instead of re-asking; omitted entirely when absent (prompt stays byte-identical)."""
     import json as _json
 
     calls = _json.dumps(tool_calls, indent=2, default=str)
@@ -3047,8 +3094,12 @@ def build_synthesis_prompt(
             "Conversation so far (earlier turns; the question below may refer to values "
             "established here):\n" + transcript + "\n\n"
         )
+    filters_block = ""
+    filters_note = _filters_context_note(filters)
+    if filters_note:
+        filters_block = filters_note.strip() + "\n\n"
     return (
-        history_block + "User question:\n" + (original_query or "(none)") + "\n\n"
+        history_block + filters_block + "User question:\n" + (original_query or "(none)") + "\n\n"
         "Tool calls the assistant made (note the brand/window/args already chosen):\n"
         + calls
         + "\n\n"
@@ -3226,6 +3277,13 @@ class E2IAgentState(TypedDict, total=False):
     # power generative UI like the inline KPI trend chart (v1.30.0).
     copilotkit: Dict[str, Any]
 
+    # Dashboard filters sent by the frontend via useCoAgent shared state
+    # (2026-08-19 review: the ONLY channel that reaches the graph is state —
+    # instructions/readables never leave the browser for agent runs). Same
+    # declare-or-be-dropped trap as `copilotkit` above. Shape mirrors the UI's
+    # E2IFilters: {brand, territory, dateRange: {start, end}, hcpSegment}.
+    filters: Dict[str, Any]
+
 
 def create_e2i_chat_agent(
     chat_llm_tier: Literal["fast", "standard", "reasoning"] = "standard",
@@ -3401,8 +3459,13 @@ def create_e2i_chat_agent(
                 [*E2I_CHATBOT_TOOLS, *frontend_action_schemas], tool_choice="auto"
             )
 
-            # Build messages for LLM
-            system_msg = SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT)
+            # Build messages for LLM. The dashboard's active filters (CoAgent
+            # state) ride the system prompt so an ambiguous question resolves
+            # brand/period from the UI instead of asking for clarification
+            # (2026-08-19 review; suffix is "" when no filters arrived).
+            system_msg = SystemMessage(
+                content=E2I_COPILOT_SYSTEM_PROMPT + _filters_context_note(state.get("filters"))
+            )
             llm_messages: list[BaseMessage] = [system_msg]
 
             # Add conversation history (convert to LangChain format if needed)
@@ -3789,6 +3852,7 @@ def create_e2i_chat_agent(
                 tool_calls,
                 tool_results,
                 history=_extract_synthesis_history(messages),
+                filters=state.get("filters"),
             )
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
