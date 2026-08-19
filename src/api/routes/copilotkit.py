@@ -4724,7 +4724,8 @@ class ChatResponse(BaseModel):
     # 4-stage ClassificationPipeline observability (ORCHESTRATOR_CLASSIFIER_MODE
     # shadow/active; None when off or when the orchestrator was not consulted).
     routing_pattern: Optional[str] = None
-    # #1582: "pipeline" | "legacy" — which subsystem produced this turn's
+    # #1582: "pipeline" | "legacy" | "explicit_target" (#1714) — which
+    # subsystem produced this turn's
     # dispatch plan. routing_pattern above is the PIPELINE's decision and is
     # emitted in shadow mode too, where legacy routing is what answered; this
     # names the difference so an abstaining pattern beside a real
