@@ -20,8 +20,11 @@ These tests pin (a) the new cohort-path guidance, (b) the disclaimer being
 scoped to what is genuinely unsupported (named individual rosters/exports,
 unservable clinical criteria), and (c) the #1549 honesty rules surviving
 verbatim — the clarify rules and the accurate capability description must
-coexist (issue acceptance: a zero-brand fresh-session cohort ask still asks
-which brand rather than guessing).
+coexist (#1562's original acceptance had a zero-brand fresh-session cohort
+ask still asking which brand; #1738 SUPERSEDED that for cohort asks — see
+test_cohort_brand_scope_supersession_1738 — after the post1730 eval measured
+the ask-first route as a regression from the graded-correct all-brands
+dispatch).
 """
 
 from src.api.routes.copilotkit import E2I_COPILOT_SYSTEM_PROMPT
@@ -56,13 +59,25 @@ def test_prompt_offers_aggregate_profile_when_roster_is_refused():
     assert "instead of declining the whole ask" in LOW
 
 
-def test_cohort_asks_keep_the_brand_clarify_rule():
-    """Issue acceptance: the accurate capability description and the
-    zero-brand clarify COEXIST — a fresh-session cohort ask with no brand
-    still asks which brand (all-brands offered as an option, not silently
-    assumed)."""
-    assert "ask which brand" in LOW
-    assert "an all-brands profile" in LOW
+def test_cohort_brand_scope_supersession_1738():
+    """SUPERSEDED by #1738 (was: test_cohort_asks_keep_the_brand_clarify_rule).
+
+    #1562's acceptance pinned ask-first coexistence: a zero-brand
+    fresh-session cohort ask asks which brand. The post1730 full eval
+    measured that route as a REGRESSION — turns 4.1-4.3 (brand-less cohort
+    asks) flipped to zero-tool clarifications where the post1708 baseline
+    dispatched cohort_profiler with answers headed "all brands", the route
+    the eval gold grades as correct (SINGLE_AGENT cohort_profiler). #1738
+    records the superseding product decision: brand-less cohort asks
+    dispatch the all-brands profile in the same turn.
+
+    What the old pin actually protected — the scope surfaced explicitly
+    rather than a single brand silently guessed — survives verbatim in the
+    new wording, re-pinned here. `predict_hcp_segment_likelihood_tool`'s
+    ask-which-brand text is untouched: that tool genuinely requires a
+    brand."""
+    assert "dispatch the all-brands cohort profile in the same turn" in LOW
+    assert "never silently guess a single brand" in LOW
 
 
 # ---------------------------------------------------------------------------
