@@ -301,9 +301,13 @@ def test_heterogeneous_resolver_excludes_treatment_source_from_modifiers(monkeyp
 
 
 def test_heterogeneous_resolver_no_kpi_fails_closed(monkeypatch) -> None:
-    """No recognized KPI → fail closed (NeedsStructuredInput), not a fabricated
-    causal spec."""
+    """No recognized KPI AND no cohort substrate → fail closed
+    (NeedsStructuredInput), not a fabricated causal spec. (#1726 added the
+    cohort fallback, so this test pins BOTH substrates absent.)"""
     monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: None)
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame", lambda *a, **k: None
+    )
 
     resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
         {"query": "do some analysis", "session_id": "s1", "user_context": {}, "parsed_query": {}},
@@ -316,10 +320,14 @@ def test_heterogeneous_resolver_no_kpi_fails_closed(monkeypatch) -> None:
 
 def test_heterogeneous_resolver_too_few_rows_fails_closed(monkeypatch) -> None:
     """A KPI frame below het_opt's tier0 row floor (100) → fail closed rather than
-    feed an underpowered frame the agent would silently drop for mock data."""
+    feed an underpowered frame the agent would silently drop for mock data.
+    (#1726: the cohort fallback is pinned absent so the floor is what decides.)"""
     kf = _real_kpi_frame(n=20)
     monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: object())
     monkeypatch.setattr("src.services.kpi_resolution.resolve_kpi_frame", lambda *a, **k: kf)
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame", lambda *a, **k: None
+    )
 
     resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
         {
@@ -331,6 +339,249 @@ def test_heterogeneous_resolver_too_few_rows_fails_closed(monkeypatch) -> None:
         _dispatch("heterogeneous_optimizer"),
     )
     assert isinstance(resolved, NeedsStructuredInput)
+
+
+# ---------------------------------------------------------------------------
+# heterogeneous_optimizer (#1726) — cohort-substrate fallback
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-08-19 (full eval 4.4/5.5, wave-17 BEFORE probe): EVERY chat
+# dispatch failed closed with missing_required_inputs. 4.4 ("...strongest
+# treatment effect for Remibrutinib") recognizes CM-001/ATE whose KPI frame
+# resolves to None; 5.5 recognizes no KPI at all — while the patient-journey
+# cohort substrate held 8,638 real Remibrutinib rows with a binary
+# treatment_arm, an outcome and covariates. The resolver now falls back to
+# that substrate (resolve_cohort_outcome_frame) before failing closed.
+
+
+def _real_cohort_spec(n: int = 500, cohort: str = "persistence"):
+    """A real ``CohortOutcomeSpec`` (no DB) on the patient-journey grain."""
+    from src.services.cohort_resolution import CohortOutcomeSpec
+
+    frame = pd.DataFrame(
+        {
+            "treatment_arm": [i % 2 for i in range(n)],
+            "persistent_180d": [(i % 3 == 0) for i in range(n)],
+            "disease_severity": [(i % 5) / 4 for i in range(n)],
+            "academic_hcp": [i % 2 == 0 for i in range(n)],
+            "geographic_region": ["west" if i % 2 else "east" for i in range(n)],
+        }
+    )
+    return CohortOutcomeSpec(
+        cohort=cohort,
+        frame=frame,
+        outcome_column="persistent_180d",
+        treatment_column="treatment_arm",
+        covariate_columns=["disease_severity", "academic_hcp", "geographic_region"],
+    )
+
+
+def test_het_resolver_excludes_outcome_derived_covariates_1726(monkeypatch) -> None:
+    """LEAKAGE GUARD (caught by the live disproof run): the persistence/
+    discontinuation cohorts append ``retention_benefit`` — RECOMPUTED from the
+    outcome (scale * disease_severity * persistent_180d, Shard 06, for
+    resource_optimizer's expected_response). A function of Y must NEVER be an
+    effect modifier; the spec declares it outcome-derived and the resolver
+    excludes it."""
+    from src.services.cohort_resolution import CohortOutcomeSpec
+
+    n = 500
+    frame = pd.DataFrame(
+        {
+            "treatment_arm": [i % 2 for i in range(n)],
+            "persistent_180d": [float(i % 3 == 0) for i in range(n)],
+            "disease_severity": [(i % 5) / 4 for i in range(n)],
+            "retention_benefit": [((i % 5) / 4) * float(i % 3 == 0) for i in range(n)],
+        }
+    )
+    spec = CohortOutcomeSpec(
+        cohort="persistence",
+        frame=frame,
+        outcome_column="persistent_180d",
+        treatment_column="treatment_arm",
+        covariate_columns=["disease_severity", "retention_benefit"],
+        outcome_derived_columns=["retention_benefit"],
+    )
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: None)
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame", lambda *a, **k: spec
+    )
+
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {
+            "query": "segments with strongest treatment effect",
+            "session_id": "s1",
+            "user_context": {},
+            "parsed_query": {},
+        },
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert "retention_benefit" not in resolved["effect_modifiers"], "outcome leakage!"
+    assert resolved["effect_modifiers"] == ["disease_severity"]
+
+
+def test_cohort_spec_declares_retention_benefit_outcome_derived_1726() -> None:
+    """The SSOT half of the leakage guard: when cohort_resolution appends the
+    outcome-recomputed ``retention_benefit`` covariate, the spec must declare
+    it in ``outcome_derived_columns`` so every causal consumer can apply the
+    exclusion (resource_optimizer, which reads it as expected_response, is
+    unaffected)."""
+    from src.services.cohort_resolution import CohortOutcomeSpec
+
+    spec = CohortOutcomeSpec(
+        cohort="persistence",
+        frame=pd.DataFrame({"a": [1]}),
+        outcome_column="persistent_180d",
+        treatment_column="treatment_arm",
+        covariate_columns=["disease_severity"],
+    )
+    # Default: no outcome-derived covariates declared.
+    assert spec.outcome_derived_columns == []
+
+
+def test_het_resolver_falls_back_to_cohort_substrate_when_no_kpi_1726(monkeypatch) -> None:
+    """The 5.5 shape: no KPI recognized → the cohort substrate grounds the spec
+    from REAL patient-journey columns; nothing fabricated."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: None)
+    calls: list = []
+
+    def fake_cohort(cohort, brand, region, **kwargs):
+        calls.append((cohort, brand, region))
+        return _real_cohort_spec()
+
+    monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_outcome_frame", fake_cohort)
+
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {
+            "query": "Why did the model flag this HCP segment - what features drove it?",
+            "session_id": "s1",
+            "user_context": {"brand": "Remibrutinib"},
+            "parsed_query": {"entities": []},
+        },
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["treatment_var"] == "treatment_arm"
+    assert resolved["outcome_var"] == "persistent_180d"
+    assert set(resolved["effect_modifiers"]) == {
+        "disease_severity",
+        "academic_hcp",
+        "geographic_region",
+    }
+    assert isinstance(resolved["tier0_data"], pd.DataFrame)
+    assert len(resolved["tier0_data"]) == 500
+    assert resolved["data_source"] == "cohort_substrate:persistence"
+    # Brand/region from the chat context are threaded into the resolution.
+    assert calls and calls[0][1] == "Remibrutinib"
+
+
+def test_het_resolver_falls_back_when_kpi_frame_unresolvable_1726(monkeypatch) -> None:
+    """The 4.4 shape: 'treatment effect' recognizes CM-001/ATE but its KPI frame
+    resolves to None → the cohort substrate must still ground the spec."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: object())
+    monkeypatch.setattr("src.services.kpi_resolution.resolve_kpi_frame", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame",
+        lambda *a, **k: _real_cohort_spec(),
+    )
+
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {
+            "query": "Which HCP segments show the strongest treatment effect for Remibrutinib?",
+            "session_id": "s1",
+            "user_context": {"brand": "Remibrutinib"},
+            "parsed_query": {"entities": []},
+        },
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["treatment_var"] == "treatment_arm"
+    assert resolved["data_source"] == "cohort_substrate:persistence"
+
+
+def test_het_resolver_cohort_keywords_select_the_cohort_1726(monkeypatch) -> None:
+    """Query wording picks the cohort: discontinuation phrasing must not run the
+    persistence cohort."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: None)
+    calls: list = []
+
+    def fake_cohort(cohort, brand, region, **kwargs):
+        calls.append(cohort)
+        return _real_cohort_spec(cohort=cohort)
+
+    monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_outcome_frame", fake_cohort)
+
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {
+            "query": "Which segments have heterogeneous discontinuation risk for Kisqali?",
+            "session_id": "s1",
+            "user_context": {"brand": "Kisqali"},
+            "parsed_query": {"entities": []},
+        },
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert calls == ["discontinuation"]
+    assert resolved["data_source"] == "cohort_substrate:discontinuation"
+
+
+def test_het_resolver_cohort_below_row_floor_fails_closed_1726(monkeypatch) -> None:
+    """A cohort frame under the same tier0 floor (100) must NOT be fed to the
+    agent — fail closed exactly like the KPI branch."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: None)
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame",
+        lambda *a, **k: _real_cohort_spec(n=40),
+    )
+
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {
+            "query": "segments with strongest treatment effect",
+            "session_id": "s1",
+            "user_context": {},
+            "parsed_query": {},
+        },
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, NeedsStructuredInput)
+
+
+def test_het_resolver_fail_closed_names_a_user_action_1726(monkeypatch) -> None:
+    """When BOTH substrates are absent the fail-closed signal must carry a
+    user-facing ``user_action`` (#1451 contract) so chat can say what to
+    supply instead of relaying pipeline jargon."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: None)
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame", lambda *a, **k: None
+    )
+
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {"query": "optimize things", "session_id": "s1", "user_context": {}, "parsed_query": {}},
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, NeedsStructuredInput)
+    assert resolved.user_action
+
+
+def test_het_resolver_explicit_params_still_win_over_cohort_1726(monkeypatch) -> None:
+    """The analyst passthrough must short-circuit BEFORE any substrate build —
+    including the new cohort branch."""
+    monkeypatch.setattr(
+        "src.services.cohort_resolution.resolve_cohort_outcome_frame",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not build cohort")),
+    )
+    params = {
+        "treatment_var": "rep_visits",
+        "outcome_var": "trx",
+        "effect_modifiers": ["specialty"],
+    }
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {"query": "het", "session_id": "s1", "user_context": {}, "parsed_query": {}},
+        _dispatch("heterogeneous_optimizer", params),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["treatment_var"] == "rep_visits"
 
 
 def test_heterogeneous_resolver_explicit_params_win(monkeypatch) -> None:
