@@ -45,7 +45,7 @@ cohort-loading code path, not two divergent ones.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import pandas as pd
@@ -303,13 +303,22 @@ def resolve_cohort_frame(
 
 @dataclass
 class CohortOutcomeSpec:
-    """A resolved cohort with a runnable causal var-set."""
+    """A resolved cohort with a runnable causal var-set.
+
+    ``outcome_derived_columns`` (#1726): covariates that are RECOMPUTED from the
+    outcome (e.g. ``retention_benefit`` = scale * disease_severity *
+    persistent_180d, Shard 06). They are legitimate inputs for
+    resource_optimizer's ``expected_response`` but MUST be excluded wherever the
+    covariates feed a causal estimator as effect modifiers/confounders — a
+    function of Y conditions the analysis on its own outcome.
+    """
 
     cohort: str
     frame: pd.DataFrame
     outcome_column: str
     treatment_column: str
     covariate_columns: list[str]
+    outcome_derived_columns: list[str] = field(default_factory=list)
 
 
 # Per-cohort (outcome, treatment, covariates) on the patient_journeys grain. Treatment
@@ -379,6 +388,7 @@ def resolve_cohort_outcome_frame(
     if df.empty:
         return None
     present_covars = [c for c in covars if c in df.columns]
+    outcome_derived: list[str] = []
     # Shard 06: retention_benefit (>=0) is RECOMPUTED at resolve time (not persisted —
     # Task 06.2) so resource_optimizer's problem_formulator (rejects expected_response<0)
     # can read it for the disc/persist cohorts. = per-severity scale * disease_severity *
@@ -403,12 +413,17 @@ def resolve_cohort_outcome_frame(
             lower=0.0
         )
         present_covars = present_covars + ["retention_benefit"]
+        # #1726: recomputed FROM the outcome — declare it so causal consumers
+        # (het optimizer effect modifiers) exclude it while resource_optimizer
+        # keeps reading it as expected_response.
+        outcome_derived.append("retention_benefit")
     return CohortOutcomeSpec(
         cohort=key,
         frame=df.reset_index(drop=True),
         outcome_column=outcome,
         treatment_column=treatment,
         covariate_columns=present_covars,
+        outcome_derived_columns=outcome_derived,
     )
 
 

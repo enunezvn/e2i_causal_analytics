@@ -162,6 +162,32 @@ def test_persistence_cohort_exposes_non_negative_retention_benefit():
     assert (spec.frame["retention_benefit"] >= 0).all()
 
 
+@pytest.mark.parametrize("cohort", ["persistence", "discontinuation"])
+def test_resolver_declares_retention_benefit_outcome_derived_1726(cohort):
+    """#1726 leakage SSOT: whenever the resolver MATERIALIZES retention_benefit
+    (a function of the outcome persistent_180d), it must ALSO declare it in
+    outcome_derived_columns — that declaration is what keeps causal consumers
+    (het optimizer effect modifiers) from conditioning on the outcome. A spec
+    that appends the covariate without the declaration reintroduces the leak."""
+    spec = cr.resolve_cohort_outcome_frame(
+        cohort, brand="Kisqali", region="northeast", supabase_client=_FakeClient(_PJ_ROWS)
+    )
+    assert spec is not None
+    assert "retention_benefit" in spec.covariate_columns
+    assert "retention_benefit" in spec.outcome_derived_columns
+
+
+def test_resolver_initiation_has_no_outcome_derived_columns_1726():
+    """The initiation cohort never materializes retention_benefit — its
+    declaration list must stay empty (no spurious exclusions downstream)."""
+    spec = cr.resolve_cohort_outcome_frame(
+        "initiation", brand="Kisqali", region="northeast", supabase_client=_FakeClient(_PJ_ROWS)
+    )
+    assert spec is not None
+    assert "retention_benefit" not in spec.covariate_columns
+    assert spec.outcome_derived_columns == []
+
+
 class _RecordingQuery:
     def __init__(self, rows, eq_calls):
         self._rows = rows

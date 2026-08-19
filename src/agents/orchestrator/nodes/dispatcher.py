@@ -413,6 +413,25 @@ def _resolve_tool_composer_input(
 _HET_MIN_ROWS = 100
 _HET_REQUIRED = ("treatment_var", "outcome_var", "effect_modifiers")
 
+# #1726 cohort-substrate fallback: which patient-journey cohort a het query is
+# about, chosen by wording. Restricted to the _PJ_COHORTS grain (binary
+# treatment_arm — unambiguously CATE-runnable); hcp_adoption's continuous
+# treatment + categorical outcome stays out until the agent's estimator is
+# proven on that shape. Default is persistence (the platform's primary
+# outcome, the DGP's planted treatment effect).
+_HET_COHORT_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("discontinuation", ("discontinu", "churn", "drop-off", "dropoff", "stop taking", "abandon")),
+    ("initiation", ("initiat", "first fill", "new patient start", "uptake", "onboard")),
+)
+
+
+def _choose_het_cohort(query: Any) -> str:
+    q = str(query or "").lower()
+    for cohort, tokens in _HET_COHORT_KEYWORDS:
+        if any(t in q for t in tokens):
+            return cohort
+    return "persistence"
+
 
 def _resolve_heterogeneous_optimizer_input(
     agent_input: Dict[str, Any], dispatch: AgentDispatch
@@ -498,7 +517,61 @@ def _resolve_heterogeneous_optimizer_input(
                     }
     except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
         logger.warning(
-            "heterogeneous_optimizer dispatch: KPI substrate build failed (%s); failing closed.",
+            "heterogeneous_optimizer dispatch: KPI substrate build failed (%s); "
+            "trying the cohort substrate.",
+            exc,
+        )
+
+    # (2b) #1726: no KPI substrate — build from the REAL patient-journey cohort
+    # substrate instead. Measured 2026-08-19: every chat dispatch (eval 4.4/5.5)
+    # failed closed at (3) while resolve_cohort_outcome_frame held 8,638
+    # Remibrutinib rows with a binary treatment_arm, an outcome and covariates —
+    # the exact var-set a CATE spec needs. Same floor, same leak discipline,
+    # same honesty: every bound name is a real column, the frame rides
+    # tier0_data, and data_source names the cohort so the answer can say which
+    # outcome was analyzed.
+    try:
+        from src.services import cohort_resolution
+
+        cohort = _choose_het_cohort(query)
+        spec = cohort_resolution.resolve_cohort_outcome_frame(
+            cohort, brand, region, include_synthetic=include_synthetic
+        )
+        if spec is not None and len(spec.frame) >= _HET_MIN_ROWS:
+            # Leak exclusion, mirroring the KPI branch: the treatment, the
+            # outcome, and any covariate RECOMPUTED from the outcome (e.g.
+            # retention_benefit — a function of Y is never a valid modifier;
+            # caught live by the 2026-08-19 disproof run).
+            excluded = {
+                spec.treatment_column,
+                spec.outcome_column,
+                *spec.outcome_derived_columns,
+            }
+            modifiers = [c for c in spec.covariate_columns if c not in excluded]
+            if modifiers:
+                logger.info(
+                    "heterogeneous_optimizer dispatch: built causal spec from the '%s' "
+                    "cohort substrate (treatment=%s, outcome=%s, modifiers=%s, %d real "
+                    "rows, brand=%r region=%r).",
+                    spec.cohort,
+                    spec.treatment_column,
+                    spec.outcome_column,
+                    modifiers,
+                    len(spec.frame),
+                    brand,
+                    region,
+                )
+                return {
+                    "treatment_var": spec.treatment_column,
+                    "outcome_var": spec.outcome_column,
+                    "effect_modifiers": modifiers,
+                    "segment_vars": modifiers,
+                    "data_source": f"cohort_substrate:{spec.cohort}",
+                    "tier0_data": spec.frame,
+                }
+    except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
+        logger.warning(
+            "heterogeneous_optimizer dispatch: cohort substrate build failed (%s); failing closed.",
             exc,
         )
 
@@ -507,11 +580,18 @@ def _resolve_heterogeneous_optimizer_input(
         agent_name="heterogeneous_optimizer",
         missing=_HET_REQUIRED,
         reason=(
-            "no recognized KPI substrate with a defined treatment and "
-            f">={_HET_MIN_ROWS} real rows to bind the causal spec; a chat query "
-            "alone cannot name the treatment/outcome/effect-modifier columns"
+            "no recognized KPI substrate and no resolvable patient-journey cohort "
+            f"with a defined treatment and >={_HET_MIN_ROWS} real rows to bind the "
+            "causal spec; a chat query alone cannot name the "
+            "treatment/outcome/effect-modifier columns"
         ),
         rest_endpoint="POST /segments/analyze",
+        user_action=(
+            'Name the KPI or patient cohort to analyze (for example "segments with '
+            'the strongest treatment effect on persistence for <brand>"), or supply '
+            "an explicit treatment/outcome/effect-modifier spec via POST "
+            "/segments/analyze."
+        ),
     )
 
 
