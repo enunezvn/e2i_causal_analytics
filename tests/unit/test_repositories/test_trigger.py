@@ -192,3 +192,58 @@ class TestProvenanceDefaultExclude(TestTriggerRepository):
         await repo.get_by_hcp("hcp-1")
 
         chain.eq.assert_called_with("is_synthetic", False)
+
+
+@pytest.mark.unit
+class TestGetTriggersSince(TestTriggerRepository):
+    """#1727: exact-cutoff windowed read backing the chat triggers query."""
+
+    @pytest.mark.asyncio
+    async def test_filters_on_trigger_timestamp_gte_cutoff(self, repo, mock_client):
+        result = MagicMock()
+        result.data = []
+        select = mock_client.table.return_value.select.return_value
+        chain = select.gte.return_value
+        chain.eq.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+        since = datetime(2026, 8, 12, tzinfo=timezone.utc)
+        await repo.get_triggers_since(since, limit=25)
+
+        select.gte.assert_called_once_with("trigger_timestamp", since.isoformat())
+        chain.eq.assert_called_with("is_synthetic", False)
+        chain.eq.return_value.order.return_value.limit.assert_called_with(25)
+
+    @pytest.mark.asyncio
+    async def test_includes_synthetic_when_opted_in(self, repo, mock_client):
+        result = MagicMock()
+        result.data = []
+        chain = mock_client.table.return_value.select.return_value.gte.return_value
+        chain.order.return_value.limit.return_value.execute = AsyncMock(return_value=result)
+
+        await repo.get_triggers_since(
+            datetime(2026, 8, 12, tzinfo=timezone.utc), include_synthetic=True
+        )
+
+        chain.eq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_recent_triggers_delegates_to_since(self, repo, mock_client):
+        """The pre-existing days-based read must keep its behavior (one query
+        shape, one provenance gate) by delegating to the exact-cutoff method."""
+        result = MagicMock()
+        result.data = []
+        select = mock_client.table.return_value.select.return_value
+        chain = select.gte.return_value
+        chain.eq.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+        await repo.get_recent_triggers(days=7, limit=10)
+
+        args = select.gte.call_args.args
+        assert args[0] == "trigger_timestamp"
+        cutoff = datetime.fromisoformat(args[1])
+        age_days = (datetime.now(timezone.utc) - cutoff).days
+        assert 6 <= age_days <= 8
