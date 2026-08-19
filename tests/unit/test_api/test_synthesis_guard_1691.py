@@ -217,3 +217,123 @@ def test_backward_pair_single_letter_header_is_log_only():
     assert findings[0].column_header == "n"
     assert findings[0].visible is False
     assert build_superlative_correction(text) == ""
+
+
+# ---------------------------------------------------------------------------
+# #1717: the em-dash blind spot found by positive control in the 2026-08-19
+# full eval (turn 4.1). '**X number N** — the largest ... (out of M total ...)'
+# severed N from the superlative, then bound "largest" to the no-column total
+# M and silently dropped the claim — a FALSE version of the shape shipped
+# uncorrected. full_4_1_true_emdash.md is the VERBATIM 4.1 response; the
+# falsified fixture is the n3n4 grader's controlled mutation (claim rewritten
+# to name neurology at 27, the HCPs column MINIMUM, table unchanged).
+# ---------------------------------------------------------------------------
+
+
+def test_full_4_1_falsified_emdash_split_is_detected():
+    """#1717 red-first: the grader's falsification of 4.1 — column minimum 27
+    claimed as 'largest' in the em-dash split shape — must fire a visible
+    finding (pre-fix the guard returned 0 findings on this exact text)."""
+    findings = _visible(_load("full_4_1_falsified_emdash.md"))
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.keyword == "largest"
+    assert f.value == pytest.approx(27)
+    assert f.column_header == "HCPs"
+    assert f.column_max == pytest.approx(256)
+
+
+def test_full_4_1_true_emdash_text_is_silent():
+    """The verbatim 4.1 response: 256 IS the HCPs column max, so the same
+    shape carrying a true claim stays silent at every tier."""
+    text = _load("full_4_1_true_emdash.md")
+    assert find_superlative_contradictions(text) == []
+    assert build_superlative_correction(text) == ""
+
+
+# Focused synthetic cases for the two #1717 mechanisms, independent of the
+# fixture texts: (a) a dash right after a closing-bold subject must not sever
+# it from the following superlative clause; (b) a forward pair bound to a
+# number appearing in no table column falls back to the preceding bolded
+# number instead of dropping the claim.
+
+
+@pytest.mark.parametrize("dash", ["—", "–", "-"])
+def test_bold_subject_dash_superlative_falsehood_fires(dash):
+    text = (
+        _MINI_TABLE + f"\n**Driver A stands at 0.10 units** {dash} the largest effect "
+        "in the set (out of 3 total drivers).\n"
+    )
+    findings = _visible(text)
+    assert len(findings) == 1
+    assert findings[0].value == pytest.approx(0.10)
+    assert findings[0].column_max == pytest.approx(0.30)
+
+
+@pytest.mark.parametrize("dash", ["—", "–", "-"])
+def test_bold_subject_dash_superlative_true_claim_is_silent(dash):
+    text = (
+        _MINI_TABLE + f"\n**Driver C stands at 0.30 units** {dash} the largest effect "
+        "in the set (out of 3 total drivers).\n"
+    )
+    assert find_superlative_contradictions(text) == []
+
+
+# The #1717 sweep measured two new FPs caused by the dash unsplitting — both
+# TRUE claims whose superlative names an INVERSE quantity of the paired
+# column ("largest engagement shortfall — 63.0% achievement" and "the largest
+# target miss" beside 73.9%, each the Achievement column MINIMUM). Such
+# claims are direction-ambiguous: only a strictly interior value fires.
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        # perf 1.7: '**Northeast has the largest engagement shortfall** —
+        # 63.0% achievement' — 63.0 IS the Achievement column minimum.
+        "perf_1_7_inverse_shortfall.md",
+        # perf 6.5: '**… 73.9% (August)** — the largest target miss of any
+        # region/period shown' — 73.9 IS the Achievement column minimum.
+        "perf_6_5_inverse_target_miss.md",
+    ],
+)
+def test_inverse_quantity_corpus_texts_stay_silent(fixture):
+    """No visible tier, no note, and the inverse 'largest' claims absent at
+    EVERY tier. (1.7 also carries a pre-existing log-only 'highest engagement
+    ROI … among the three regions shown' finding — the documented
+    restrictive-scope demotion, identical pre/post #1717 — so all-tier
+    emptiness is asserted per-keyword, not globally.)"""
+    text = _load(fixture)
+    findings = find_superlative_contradictions(text)
+    assert all(f.keyword != "largest" for f in findings)
+    assert _visible(text) == []
+    assert build_superlative_correction(text) == ""
+
+
+_ACHIEVEMENT_TABLE = (
+    "| Region | Achievement |\n|---|---|\n| NE | 63.0% |\n| MW | 71.8% |\n| S | 107.6% |\n"
+)
+
+
+def test_inverse_noun_at_column_minimum_is_silent():
+    text = (
+        _ACHIEVEMENT_TABLE
+        + "\n**NE has the largest engagement shortfall** — 63.0% achievement against target.\n"
+    )
+    assert find_superlative_contradictions(text) == []
+
+
+def test_inverse_noun_interior_value_fires_with_span_note():
+    """An interior value contradicts EVERY reading of 'largest shortfall', so
+    the claim still fires — and the note states the span, not a direction."""
+    text = (
+        _ACHIEVEMENT_TABLE
+        + "\n**MW has the largest engagement shortfall** — 71.8% achievement against target.\n"
+    )
+    findings = _visible(text)
+    assert len(findings) == 1
+    assert findings[0].value == pytest.approx(71.8)
+    assert findings[0].inverse_axis is True
+    note = build_superlative_correction(text)
+    assert "spans" in note
+    assert "largest value is actually" not in note
