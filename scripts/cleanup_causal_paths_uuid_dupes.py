@@ -84,6 +84,13 @@ async def main(dry_run: bool) -> None:
     print(f"synthetic causal_paths rows: {len(all_ids)}; legacy uuid-family: {len(legacy)}")
 
     records = cohort_hcp_trigger_rows_for_upsert()
+    expected_ids = {r["path_id"] for r in records}
+    # The helper's payload must itself be PK-unique, or the upsert would silently
+    # collapse rows (codex wave-17 iter-1: count-stability alone can false-green).
+    if len(expected_ids) != len(records):
+        raise SystemExit(
+            f"replacement payload has duplicate path_ids: {len(records)} rows, {len(expected_ids)} ids"
+        )
     print(f"deterministic replacement rows (scp_p/h/t): {len(records)}")
 
     if dry_run:
@@ -118,21 +125,28 @@ async def main(dry_run: bool) -> None:
         deleted_paths += len(result.data)
     print(f"deleted legacy causal_paths rows: {deleted_paths}")
 
-    # 3) Apply the deterministic replacement rows — twice, to PROVE idempotency
-    #    (the second pass must leave the registry count unchanged).
+    # 3) Apply the deterministic replacement rows — twice, to PROVE idempotency.
+    #    Exact-SET equality, not count stability (codex wave-17 iter-1: a count
+    #    can false-green through offsetting duplicate/missing ids): the registry
+    #    must end as precisely (pre-existing non-legacy) ∪ (replacement ids),
+    #    and the second pass must reproduce that same set.
+    pre_non_legacy = set(all_ids) - set(legacy)
+    expected_after = pre_non_legacy | expected_ids
     await client.table("causal_paths").upsert(records, on_conflict="path_id").execute()
-    count_after_first = len(await _scan_synthetic_path_ids(client))
+    ids_after_first = set(await _scan_synthetic_path_ids(client))
     await client.table("causal_paths").upsert(records, on_conflict="path_id").execute()
-    ids_after_second = await _scan_synthetic_path_ids(client)
+    ids_after_second = set(await _scan_synthetic_path_ids(client))
+    ok = ids_after_first == expected_after and ids_after_second == expected_after
     print(
-        f"registry after seed: {count_after_first} synthetic rows; "
-        f"after re-seed: {len(ids_after_second)} "
-        f"({'IDEMPOTENT' if len(ids_after_second) == count_after_first else 'NOT IDEMPOTENT'})"
+        f"registry after seed: {len(ids_after_first)} synthetic rows; "
+        f"after re-seed: {len(ids_after_second)}; expected exactly "
+        f"{len(expected_after)} ({'EXACT-SET MATCH, IDEMPOTENT' if ok else 'MISMATCH'})"
     )
-
-    leftovers = [pid for pid in ids_after_second if _LEGACY_UUID_FAMILY.match(pid)]
-    print(f"legacy uuid-family remaining: {len(leftovers)}")
-    if leftovers or len(ids_after_second) != count_after_first:
+    if not ok:
+        missing = expected_after - ids_after_second
+        extra = ids_after_second - expected_after
+        print(f"  missing from registry: {sorted(missing)[:10]}")
+        print(f"  unexpected in registry: {sorted(extra)[:10]}")
         raise SystemExit(1)
 
 
