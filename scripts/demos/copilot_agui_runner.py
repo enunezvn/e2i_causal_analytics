@@ -352,6 +352,30 @@ def run_turn(
     return record
 
 
+def client_fatal_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Frames the browser's ``@ag-ui/core`` Zod schema rejects outright.
+
+    The frontend aborts the WHOLE CopilotKit run at the first invalid event —
+    measured live 2026-08-19 (session no90vkf): ``TEXT_MESSAGE_CONTENT`` with
+    ``delta: ""`` ("Delta must not be an empty string") killed every browser
+    tool+synthesis turn while every server-side artifact stayed green. This
+    runner's lenient parser keeps reading past such frames, so certification
+    must mirror the client's rule explicitly.
+
+    Mirrored rule (the one that has bitten): ``TextMessageContentEventSchema``
+    requires ``delta`` to be a NON-EMPTY STRING. ``TOOL_CALL_ARGS``'s delta is
+    unconstrained in the TS schema — deliberately not checked here.
+    """
+    fatal: List[Dict[str, Any]] = []
+    for event in events:
+        if _norm(event.get("type")) != "textmessagecontent":
+            continue
+        delta = event.get("delta")
+        if not isinstance(delta, str) or len(delta) == 0:
+            fatal.append(event)
+    return fatal
+
+
 def _grade_stream_health(record: Dict[str, Any]) -> None:
     """Fail a turn that returned HTTP 200 and delivered nothing (#1667).
 
@@ -384,6 +408,16 @@ def _grade_stream_health(record: Dict[str, Any]) -> None:
         return
     if not record.get("stream_frames"):
         record["error"] = "empty stream: HTTP 200 with 0 frames — the run is dead (#1667)"
+        return
+    fatal = client_fatal_events(record.get("events") or [])
+    if fatal:
+        first = fatal[0]
+        record["error"] = (
+            f"client-fatal stream: {len(fatal)} TEXT_MESSAGE_CONTENT frame(s) with "
+            f"empty/non-string delta (first at t={first.get('t_ms')}ms) — the browser's "
+            "@ag-ui/core Zod validation aborts the whole run at this frame even though "
+            "the rest of the stream is healthy (session no90vkf, 2026-08-19)"
+        )
         return
     if not (record.get("response_text") or "").strip():
         record["error"] = (
