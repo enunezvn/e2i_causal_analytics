@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from src.kpi.calculators.business_impact import BusinessImpactCalculator
+from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
 from src.kpi.registry import get_registry
 
 
@@ -65,6 +66,25 @@ def test_calculator_honest_absence_when_row_has_no_data_through():
     result = calc.calculate(_nbrx_kpi(), {"brand": "Kisqali"})
     assert result.error is None
     assert "data_through" not in result.metadata["context"]
+
+
+@pytest.mark.unit
+def test_false_alert_rate_surfaces_data_through_1713():
+    """#1713: the WS2-TR-005 statement has carried a ``data_through`` column
+    since migration 089, but ``_calc_false_alert_rate`` never stashed it --
+    the only trigger-substrate KPI calculator that dropped it (precision,
+    acceptance, override and funnel all stash). The 2026-08-19 eval certified
+    the resulting payload asymmetry as the substrate of window-metadata
+    borrowing between sibling KPIs."""
+    calc = TriggerPerformanceCalculator(
+        db_client=_FakeDB([{"false_alert_rate": 0.083, "data_through": "2026-08-17"}])
+    )
+    kpi = get_registry().get("WS2-TR-005")
+    assert kpi is not None
+    result = calc.calculate(kpi, {})
+    assert result.error is None
+    assert result.value == pytest.approx(0.083)
+    assert result.metadata["context"]["data_through"] == "2026-08-17"
 
 
 @pytest.mark.unit

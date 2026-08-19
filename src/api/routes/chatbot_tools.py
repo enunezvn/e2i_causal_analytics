@@ -844,9 +844,11 @@ async def _query_triggers(
 ) -> Dict[str, Any]:
     """Query triggers/alerts from triggers table.
 
-    #1700 (sibling of #1694): the triggers table has no brand or region
-    columns and this query applies no time filter, so the accepted
-    ``brand``/``region``/``since`` parameters are NOT filters. The payload
+    #1700 (sibling of #1694), wording tightened by #1718: this query applies
+    no brand/region/time filters, so the accepted
+    ``brand``/``region``/``since`` parameters are NOT filters. (Triggers rows
+    DO carry a ``brand_id`` column — region is the one genuinely absent from
+    the row schema — but neither is applied as a filter here.) The payload
     says so explicitly (``brand_applied``/``region_applied``/
     ``time_period_applied: False``, plus a ``scope_note`` when a brand or
     region was requested) — in the 2026-08-18 A.9-seed run the synthesis
@@ -859,8 +861,9 @@ async def _query_triggers(
         client = await get_async_supabase_client()
         repo = TriggerRepository(client)
 
-        # Note: triggers table does not have 'brand' or 'region' columns
-        # Parameters kept for API compatibility but not used in direct queries
+        # Note: no filters are applied — rows carry brand_id (region does not
+        # exist in this table), but this query deliberately returns the
+        # platform-wide set. Parameters kept for API compatibility (#1718).
         filters: dict[str, str] = {}
 
         triggers = await repo.get_many(filters=filters, limit=limit)
@@ -881,12 +884,21 @@ async def _query_triggers(
             f"{name} {value!r}" for name, value in (("brand", brand), ("region", region)) if value
         ]
         if ignored:
+            # #1718: distinguish column EXISTENCE from filter APPLICATION. The
+            # earlier "the triggers table has no brand or region columns"
+            # claim was false for brand — rows DO carry a brand_id column
+            # (mixed values across brands); only region is absent from the row
+            # schema. An answer quoting the note verbatim would inherit the
+            # false schema claim, and it suppressed legitimate per-brand
+            # tallies the rows support. What is true (and stated below): the
+            # scopes were NOT applied as filters.
+            verb = "was" if len(ignored) == 1 else "were"
             response["scope_note"] = (
-                "The triggers table has no brand or region columns and this "
-                f"query applies no time filter — {' and '.join(ignored)} did "
-                "NOT filter these results; they are platform-wide across all "
-                "brands and regions. Do not present them as specific to any "
-                "brand or region."
+                f"{' and '.join(ignored)} {verb} NOT applied as filters, and "
+                "this query applies no time filter — these results are "
+                "platform-wide across all brands and regions (rows carry a "
+                "brand_id tag, but region does not exist in this table). "
+                "Do not present them as specific to any brand or region."
             )
         return response
     except Exception as e:
@@ -1981,6 +1993,11 @@ KPI_REPORTING_WINDOWS = {
         "frontier (the conversion window must mature)"
     ),
     "WS2-TR-004": "most recent 30 days of trigger data",  # Acceptance rate
+    # #1713: verified against migration 089 (same frontier-anchored 30-day
+    # trigger window as WS2-TR-006). Omitting it while its sibling disclosed a
+    # window was the substrate of the eval-certified borrowing defect
+    # (Override Rate's window label asserted in prose for False Alert Rate).
+    "WS2-TR-005": "most recent 30 days of trigger data",  # False alert rate
     "WS2-TR-006": "most recent 30 days of trigger data",  # Override rate
     "WS2-TR-009": "most recent 30 days of trigger data",  # Funnel conversion
 }
@@ -2091,6 +2108,17 @@ def _kpi_result_to_response(
         window = KPI_REPORTING_WINDOWS.get(kpi.id)
         if window:
             response["reporting_window"] = window
+    # #1713: direction glosses on `status` ("above/below threshold") are only
+    # checkable when the payload names the metric's polarity — the 2026-08-19
+    # eval wrote "flagged warning (below healthy threshold)" for WS2-TR-005,
+    # which is lower-is-better (warning means ABOVE its threshold). Surface
+    # the exact flag the calculator evaluated the status WITH (stashed in
+    # KPIResult.metadata by the trigger/brand/model-performance calculators);
+    # honest absence when the calculator did not report one — never a polarity
+    # the evaluation didn't use.
+    lower_is_better = metadata.get("lower_is_better")
+    if lower_is_better is not None:
+        response["direction"] = "lower_is_better" if lower_is_better else "higher_is_better"
     semantic_note = KPI_SEMANTIC_NOTES.get(kpi.id)
     if semantic_note:
         response["semantic_note"] = semantic_note

@@ -307,6 +307,12 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         query_id, params = self._scoped("trigger_performance_false_alert_rate", context)
         result = self._execute_query(query_id, params)
+        # #1713: migration 089 gave this statement the same data_through column
+        # as its sibling override rate, but only the #1360 effectiveness-family
+        # calculators were wired to stash it — the resulting payload asymmetry
+        # (WS2-TR-006 disclosing a window, WS2-TR-005 disclosing none) was the
+        # substrate of the eval-certified window-metadata borrowing defect.
+        self._stash_data_through(context, result)
         if result and result[0].get("false_alert_rate") is not None:
             return float(result[0]["false_alert_rate"])
         raise RuntimeError("KPI WS2-TR-005 unavailable: no data for false alert rate")
