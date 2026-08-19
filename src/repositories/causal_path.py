@@ -35,6 +35,61 @@ def outcome_match_tokens(term: str) -> List[str]:
     return list(seen)
 
 
+# ---------------------------------------------------------------------- #1716
+# Retrieval dedup for search_paths_for_outcome (both twins). Repeated
+# synthetic loads insert a FRESH random ``path_id`` per run for the SAME
+# causal question: the cohort family of CausalPathsGenerator mints
+# ``scp_<uuid4-hex>`` ids, so the loader's upsert-on-path_id is only
+# idempotent for the content-addressed scp_a*/scp_f* families. Measured
+# 2026-08-19 on the live registry: 2,729 rows collapse to 193 distinct
+# (cause, outcome, brand) questions, same-identity copies differing only in
+# path_id/discovery_date/created_at and RNG-jittered confidence — and 10
+# copies of one 0.945 path filled the whole 15-row cap for
+# 'treatment_initiated', crowding out distinct drivers (the 0.892
+# trigger_accepted path that turn 4.7 needed). The cap must therefore count
+# DISTINCT paths, which requires paging past the duplicates (the first
+# distinct rank of that trigger path was raw row ~866).
+
+_DEDUP_PAGE_SIZE = 500
+# Scan cap: 6 pages = 3,000 raw rows per read (the whole registry is ~2.7k
+# rows today). If the registry outgrows the cap, the LEAST-confident
+# identities may be missed — the cap bounds the read; it never duplicates.
+_DEDUP_MAX_PAGES = 6
+
+
+def causal_path_identity(row: dict) -> tuple:
+    """Dedup identity of a registry row: the causal QUESTION it answers.
+
+    (start_node, end_node, brand) — deliberately the same key
+    :meth:`CausalPathRepository.get_distinct_questions` calls a "distinct
+    causal question". Mediator-set variants of the same pair are the synthetic
+    generator's per-row random decoration, not distinct drivers (measured:
+    mediator-level identity leaves the whole top-15 ``treatment_arm``).
+    """
+    return (
+        str(row.get("start_node") or "").strip().lower(),
+        str(row.get("end_node") or "").strip().lower(),
+        str(row.get("brand") or "").strip().lower(),
+    )
+
+
+def _fold_deduped(rows: List[dict], deduped: dict, limit: int) -> bool:
+    """Fold confidence-desc ``rows`` into ``deduped`` keyed by identity.
+
+    First-seen wins — with the input ordered by confidence descending that IS
+    the max-confidence representative, and insertion order keeps the
+    representatives confidence-desc. Returns True once ``limit`` distinct
+    identities are collected.
+    """
+    for row in rows:
+        key = causal_path_identity(row)
+        if key not in deduped:
+            deduped[key] = row
+            if len(deduped) >= limit:
+                return True
+    return len(deduped) >= limit
+
+
 class CausalPathRepository(BaseRepository):
     """
     Repository for causal_paths table.
@@ -181,12 +236,18 @@ class CausalPathRepository(BaseRepository):
         Divergence is guarded by
         ``test_sync_and_async_causal_path_search_build_the_same_filters``.
 
+        #1716: ``limit`` counts DISTINCT paths (see
+        :func:`causal_path_identity`), not raw registry rows — duplicates from
+        repeated loads are collapsed to their max-confidence representative
+        BEFORE the cap, paging past duplicate floods up to
+        ``_DEDUP_MAX_PAGES * _DEDUP_PAGE_SIZE`` raw rows.
+
         Args:
             outcome_term: Free-text KPI/outcome name; tokenized via
                 :func:`outcome_match_tokens` against ``start_node``/``end_node``.
             brand: Optional brand, matched case-insensitively.
             min_confidence: Floor on ``confidence_level``.
-            limit: Maximum paths, highest confidence first.
+            limit: Maximum DISTINCT paths, highest confidence first.
             include_synthetic: When True, do not exclude synthetic rows (opt-in).
         """
         if not self.client:
@@ -195,22 +256,34 @@ class CausalPathRepository(BaseRepository):
         if not tokens:
             return []
 
-        query = self.client.table(self.table_name).select("*")
-        query = query.or_(
-            ",".join(
-                f"{col}.ilike.%{token}%" for token in tokens for col in ("start_node", "end_node")
+        def build_query() -> Any:
+            # Rebuilt per page: the postgrest builder's .range() APPENDS
+            # params (params.add), so a builder is not reusable across pages.
+            query = self.client.table(self.table_name).select("*")
+            query = query.or_(
+                ",".join(
+                    f"{col}.ilike.%{token}%"
+                    for token in tokens
+                    for col in ("start_node", "end_node")
+                )
             )
-        )
-        if brand:
-            query = query.ilike("brand", brand)
-        query = query.gte("confidence_level", min_confidence)
-        if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
-            from src.repositories.provenance import apply_provenance_filter
+            if brand:
+                query = query.ilike("brand", brand)
+            query = query.gte("confidence_level", min_confidence)
+            if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
+                from src.repositories.provenance import apply_provenance_filter
 
-            query = apply_provenance_filter(query, include_synthetic=False)
+                query = apply_provenance_filter(query, include_synthetic=False)
+            return query.order("confidence_level", desc=True)
 
-        result = await query.order("confidence_level", desc=True).limit(limit).execute()
-        return parse_supabase_rows(result.data)
+        deduped: dict[tuple, dict] = {}
+        for page in range(_DEDUP_MAX_PAGES):
+            start = page * _DEDUP_PAGE_SIZE
+            result = await build_query().range(start, start + _DEDUP_PAGE_SIZE - 1).execute()
+            rows = parse_supabase_rows(result.data)
+            if _fold_deduped(rows, deduped, limit) or len(rows) < _DEDUP_PAGE_SIZE:
+                break
+        return list(deduped.values())[:limit]
 
     async def get_distinct_outcomes(
         self,
@@ -352,6 +425,9 @@ def search_paths_for_outcome_sync(
     ``client`` is a SYNC supabase client. It defaults to the API-layer client
     (the one ``KPICalculator`` is built with), and a missing/unconfigured client
     returns ``[]`` — an honest "nothing resolved", never a fabricated path.
+
+    #1716: shares the async twin's dedup-before-cap semantics — ``limit``
+    counts DISTINCT :func:`causal_path_identity` paths, paged identically.
     """
     if client is None:
         from src.api.dependencies.supabase_client import get_supabase
@@ -363,17 +439,28 @@ def search_paths_for_outcome_sync(
     if not tokens:
         return []
 
-    query = client.table(CausalPathRepository.table_name).select("*")
-    query = query.or_(
-        ",".join(f"{col}.ilike.%{token}%" for token in tokens for col in ("start_node", "end_node"))
-    )
-    if brand:
-        query = query.ilike("brand", brand)
-    query = query.gte("confidence_level", min_confidence)
-    if not include_synthetic and CausalPathRepository.HAS_PROVENANCE:
-        from src.repositories.provenance import apply_provenance_filter
+    def build_query() -> Any:
+        # Rebuilt per page — see the async twin: .range() appends params.
+        query = client.table(CausalPathRepository.table_name).select("*")
+        query = query.or_(
+            ",".join(
+                f"{col}.ilike.%{token}%" for token in tokens for col in ("start_node", "end_node")
+            )
+        )
+        if brand:
+            query = query.ilike("brand", brand)
+        query = query.gte("confidence_level", min_confidence)
+        if not include_synthetic and CausalPathRepository.HAS_PROVENANCE:
+            from src.repositories.provenance import apply_provenance_filter
 
-        query = apply_provenance_filter(query, include_synthetic=False)
+            query = apply_provenance_filter(query, include_synthetic=False)
+        return query.order("confidence_level", desc=True)
 
-    result = query.order("confidence_level", desc=True).limit(limit).execute()
-    return parse_supabase_rows(result.data)
+    deduped: dict[tuple, dict] = {}
+    for page in range(_DEDUP_MAX_PAGES):
+        start = page * _DEDUP_PAGE_SIZE
+        result = build_query().range(start, start + _DEDUP_PAGE_SIZE - 1).execute()
+        rows = parse_supabase_rows(result.data)
+        if _fold_deduped(rows, deduped, limit) or len(rows) < _DEDUP_PAGE_SIZE:
+            break
+    return list(deduped.values())[:limit]

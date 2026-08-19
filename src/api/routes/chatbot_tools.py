@@ -1069,7 +1069,14 @@ async def causal_analysis_tool(
             kpi_name,
             brand=brand,
             min_confidence=min_confidence,
-            limit=15,
+            # #1716: limit counts DISTINCT (cause, outcome, brand) paths —
+            # the repository dedups duplicate registry rows BEFORE the cap.
+            # 25 (was 15): measured 2026-08-19, 'treatment_initiated' matches
+            # 24 distinct driver questions and the directly relevant
+            # trigger_accepted -> treatment_initiated path (0.892) ranked
+            # 17th by confidence, so a 15-distinct cap still crowded out the
+            # answer to eval turn 4.7.
+            limit=25,
             include_synthetic=include_synthetic,
         )
 
