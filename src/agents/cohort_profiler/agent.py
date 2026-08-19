@@ -41,6 +41,12 @@ distinct concepts separate: population *profiling* (this), cohort *materializati
   same ``treatment_events`` prescription substrate as the platform TRx KPI),
   returning cohort size + specialty / priority-tier breakdowns that mirror the
   patient-profile shape.
+* **Volume tiers (#1736)** — "Segment HCPs by prescription volume into
+  high, medium, and low tiers" (eval 4.3, undeliverable-promise shape across
+  two runs) buckets the same per-HCP TRx cohort into value-based terciles
+  computed WITHIN the queried scope (mig-130 statements), returning real
+  counts per high/medium/low tier with the measured cut points disclosed —
+  never the DISTINCT ``hcp_profiles.priority_tier`` targeting attribute.
 * **Cache identity** — the 26.4ms byte-identical q11/q15 repeat was the
   (context-keyed) Redis KPI cache serving two asks that had collapsed to the
   SAME parameterless call set. Binding the parameters restores the keying:
@@ -81,6 +87,16 @@ _HCP_COHORT_QUERY_ID = "cohort_profiler_hcp_trx_cohort"
 # when the ask names a region so the 4-param base id keeps serving unscoped
 # asks (additive-variant idiom, and pre-migration code paths stay valid).
 _HCP_COHORT_REGION_QUERY_ID = "cohort_profiler_hcp_trx_cohort_region"
+# Volume-tier siblings (mig-130, #1736): the SAME per-HCP TRx cohort CTE,
+# bucketed into high/medium/low by value-based terciles computed WITHIN the
+# queried scope (brand/window/threshold/region — measured 2026-08-19: the
+# northeast cohort's cuts are 1/5 while the global cohort's are 2/5, so the
+# cuts must follow the scope). Cut points ride along in every row and are
+# disclosed as measured, scope-relative values. Additive-variant idiom: these
+# ids are selected only when the ask names volume tiers, so the
+# single-threshold ids above keep serving their existing consumers.
+_HCP_VOLUME_TIER_QUERY_ID = "cohort_profiler_hcp_volume_tiers"
+_HCP_VOLUME_TIER_REGION_QUERY_ID = "cohort_profiler_hcp_volume_tiers_region"
 _PATIENT_CRITERIA_QUERY_ID = "cohort_profiler_patient_criteria_profile"
 # Windowed sibling: [brand, start, end, min_age_exclusive, max_age_exclusive].
 # The mig-044 RPC once capped at 4 positional params (so max-age was dropped);
@@ -99,6 +115,16 @@ _THERAPY_LINES: Tuple[Tuple[str, str], ...] = (
     ("1", "1 prior line (2nd line)"),
     ("2", "2 prior lines (3rd line)"),
     ("3", "3+ prior lines (4th line+)"),
+)
+
+# Rendering order + labels for the volume tiers (#1736). Vocabulary alignment:
+# domain_vocabulary.yaml hcp_segments names these segments high_volume /
+# medium_volume / low_volume; the keys here are the mig-130 statements'
+# volume_tier values.
+_VOLUME_TIER_ORDER: Tuple[Tuple[str, str], ...] = (
+    ("high", "High volume"),
+    ("medium", "Medium volume"),
+    ("low", "Low volume"),
 )
 
 _MATERIALIZE_FOOTER = (
@@ -215,6 +241,25 @@ class CohortProfilerAgent:
                         "e.g. 'HCPs who prescribed more than 50 TRx last "
                         "quarter', or materialize per-patient criteria via the "
                         "ML cohort pipeline (scope_definer → cohort_constructor)"
+                    ),
+                )
+            )
+
+        # Volume tiers on a PATIENT ask (#1736): per-HCP TRx is a PRESCRIBER
+        # axis — recognized, honestly not servable here, never silently
+        # dropped (mirrors the threshold accounting above).
+        if ask.volume_tiers:
+            unserved.append(
+                Criterion(
+                    kind="volume_tiers",
+                    label="high/medium/low prescription-volume tiers",
+                    servable=False,
+                    guidance=(
+                        "prescription-volume tiers bucket PRESCRIBERS by "
+                        "per-HCP TRx — re-ask as an HCP segmentation (e.g. "
+                        "'Segment HCPs by prescription volume into high, "
+                        "medium and low tiers'), or use the severity / "
+                        "line-of-therapy axes for patient populations"
                     ),
                 )
             )
@@ -488,13 +533,22 @@ class CohortProfilerAgent:
         region = next((c for c in ask.criteria if c.kind == "region"), None)
         unserved = [self._hcp_unservable(c) for c in ask.criteria if c.kind != "region"]
         if unserved and not (
-            ask.brand or ask.threshold or region or (ask.window and ask.window.explicit)
+            ask.brand
+            or ask.threshold
+            or region
+            or ask.volume_tiers
+            or (ask.window and ask.window.explicit)
         ):
             details = "; ".join(f"'{c.label}' — {c.guidance}" for c in unserved)
             return self._failed("no requested criterion can be served on an HCP cohort: " + details)
 
         window = ask.window or self._default_hcp_window()
         thr = ask.threshold.min_exclusive if ask.threshold else 0
+        if ask.volume_tiers:
+            # #1736: the tier ask is served by the mig-130 tercile statements
+            # (counts per high/medium/low tier); threshold/region/window all
+            # compose exactly as on the single-threshold path below.
+            return await self._analyze_hcp_volume_tiers(ask, window, thr, region, unserved)
         params: List[Any] = [ask.brand, window.start.isoformat(), window.end.isoformat(), thr]
         if region is not None:
             params.append(region.text_value)
@@ -681,6 +735,240 @@ class CohortProfilerAgent:
             parts.append("| Priority tier | HCPs |\n|---|---|")
             for tier, n in sorted(tiers.items()):
                 parts.append(f"| Tier {tier} | {n:,} |")
+        if not window.explicit:
+            parts.append(
+                f"\n_No time window was named — defaulted to the {window.label.split(' (')[0]} "
+                f"({window_disp}). Name a window (e.g. 'last quarter') to change it._"
+            )
+        parts.append(
+            "\n_These are cohort sizes from per-HCP TRx aggregation (same "
+            "prescription substrate as the platform TRx KPI), not an outreach "
+            "list with contact routing._"
+        )
+        return "\n".join(parts)
+
+    # ------------------------------------------------- volume tiers (#1736)
+    async def _analyze_hcp_volume_tiers(
+        self,
+        ask: CohortAsk,
+        window: Window,
+        thr: int,
+        region: Optional[Criterion],
+        unserved: List[Criterion],
+    ) -> Dict[str, Any]:
+        """HCP volume-tier segmentation: real counts per high/medium/low tier.
+
+        Serves the eval-4.3 promise ("counts per tier, plus specialty where
+        available") in ONE allowlisted call: the mig-130 statements bucket the
+        per-HCP TRx cohort into value-based terciles computed WITHIN the
+        queried scope (brand / window / threshold / region) and return the
+        measured cut points in every row, so the tiers are disclosed as
+        scope-relative measurements — never fixed global constants, and never
+        the DISTINCT ``hcp_profiles.priority_tier`` targeting attribute.
+        """
+        params: List[Any] = [ask.brand, window.start.isoformat(), window.end.isoformat(), thr]
+        if region is not None:
+            params.append(region.text_value)
+            qid = _profiler_query_id(_HCP_VOLUME_TIER_REGION_QUERY_ID)
+        else:
+            qid = _profiler_query_id(_HCP_VOLUME_TIER_QUERY_ID)
+
+        try:
+            rows = await self._rpc_rows(qid, params)
+            base_rows: Optional[List[Dict[str, Any]]] = None
+            if not rows and thr > 0:
+                # Distinguish "threshold filtered everyone out" (honest zero)
+                # from "no prescribing data at all" (genuine empty) — same
+                # probe idiom as the single-threshold path.
+                base_params: List[Any] = [ask.brand, params[1], params[2], 0]
+                if region is not None:
+                    base_params.append(region.text_value)
+                base_rows = await self._rpc_rows(qid, base_params)
+        except Exception as e:
+            return self._failed(f"HCP volume-tier query unavailable: {e}")
+
+        if not rows and not base_rows:
+            return self._failed(
+                "no prescribing HCPs found for "
+                + (ask.brand or "any supported brand")
+                + (f" in the {region.text_value} region" if region is not None else "")
+                + f" in {window.label} ({window.start.isoformat()} → "
+                + f"{(window.end - timedelta(days=1)).isoformat()}) — nothing to "
+                "segment into volume tiers (no values were fabricated)"
+            )
+
+        tiers: Dict[str, Dict[str, Any]] = {
+            key: {"n_hcps": 0, "trx_total": 0.0, "trx_min": None, "trx_max": None}
+            for key, _label in _VOLUME_TIER_ORDER
+        }
+        specialty: Dict[str, int] = {}
+        cut_low: Optional[int] = None
+        cut_medium: Optional[int] = None
+        cohort_size = 0
+        total_trx = 0.0
+        for row in rows:
+            key = str(row.get("volume_tier") or "")
+            if key not in tiers:  # pragma: no cover - defensive (unknown bucket)
+                continue
+            n = int(row.get("n_hcps") or 0)
+            trx = float(row.get("total_trx") or 0)
+            bucket = tiers[key]
+            bucket["n_hcps"] += n
+            bucket["trx_total"] += trx
+            row_min = row.get("min_trx")
+            row_max = row.get("max_trx")
+            if row_min is not None:
+                bucket["trx_min"] = (
+                    row_min if bucket["trx_min"] is None else min(bucket["trx_min"], row_min)
+                )
+            if row_max is not None:
+                bucket["trx_max"] = (
+                    row_max if bucket["trx_max"] is None else max(bucket["trx_max"], row_max)
+                )
+            cohort_size += n
+            total_trx += trx
+            spec = str(row.get("specialty") or "unknown")
+            specialty[spec] = specialty.get(spec, 0) + n
+            if cut_low is None:
+                cut_low = row.get("cut_low_max")
+                cut_medium = row.get("cut_medium_max")
+
+        base_size = sum(int(r.get("n_hcps") or 0) for r in base_rows) if base_rows else None
+        narrative = self._render_hcp_volume_tiers(
+            ask,
+            window,
+            thr,
+            cohort_size,
+            tiers,
+            specialty,
+            cut_low,
+            cut_medium,
+            base_size,
+            region,
+        )
+        applied: List[str] = []
+        if ask.brand:
+            applied.append(f"brand = {ask.brand}")
+        if region is not None:
+            applied.append(
+                f"region = {region.text_value} (hcp_profiles.geographic_region, '{region.label}')"
+            )
+        if ask.threshold:
+            applied.append(f"TRx threshold ({ask.threshold.label})")
+        applied.append(self._window_applied_text(window))
+        if unserved or region is not None or ask.threshold:
+            narrative += self._render_criteria_accounting(applied, unserved)
+
+        return {
+            "status": "completed",
+            "narrative": narrative,
+            "cohort_profile": {
+                "entity": "hcp",
+                "segment_axis": "volume_tier+specialty",
+                "brand": ask.brand,
+                "region": region.text_value if region is not None else None,
+                "region_applied": region is not None,
+                "window": {
+                    "label": window.label,
+                    "start": window.start.isoformat(),
+                    "end_exclusive": window.end.isoformat(),
+                    "explicit": window.explicit,
+                },
+                "threshold": {
+                    "metric": "trx",
+                    "min_exclusive": thr,
+                    "stated": ask.threshold.label if ask.threshold else None,
+                },
+                "cohort_size": cohort_size,
+                "volume_tiers": tiers,
+                "tier_boundaries": {
+                    "method": (
+                        "value-based terciles (percentile_disc 1/3 and 2/3) of "
+                        "the per-HCP TRx distribution within this scope; ties "
+                        "share a tier"
+                    ),
+                    "low_max_trx": cut_low,
+                    "medium_max_trx": cut_medium,
+                },
+                "specialty": specialty,
+                "trx_total": total_trx,
+                "criteria_not_applied": [
+                    {"label": c.label, "guidance": c.guidance} for c in unserved
+                ],
+            },
+            "confidence": 0.9,
+            "recommendations": [
+                "Tier boundaries are scope-relative terciles measured from this "
+                "cohort's TRx distribution — for a FIXED cutoff cohort instead, "
+                "state an explicit threshold (e.g. 'HCPs with more than 10 TRx').",
+            ],
+        }
+
+    def _render_hcp_volume_tiers(
+        self,
+        ask: CohortAsk,
+        window: Window,
+        thr: int,
+        cohort_size: int,
+        tiers: Dict[str, Dict[str, Any]],
+        specialty: Dict[str, int],
+        cut_low: Optional[int],
+        cut_medium: Optional[int],
+        base_size: Optional[int],
+        region: Optional[Criterion] = None,
+    ) -> str:
+        scope = ask.brand or "all brands"
+        if region is not None:
+            scope += f", {region.text_value} region"
+        window_disp = f"{window.start.isoformat()} → {(window.end - timedelta(days=1)).isoformat()}"
+
+        parts: List[str] = [f"**HCP volume-tier segmentation — {scope}**"]
+        thr_note = f", TRx > {thr}" if thr else ""
+        parts.append(
+            "Prescribing HCPs bucketed into high/medium/low prescription-volume "
+            f"tiers by per-HCP TRx (prescription events, {window.label}: "
+            f"{window_disp}{thr_note}):"
+        )
+        if cohort_size == 0:
+            parts.append(
+                f"\n**0 HCPs** met the threshold (> {thr} TRx) in this window"
+                + (
+                    f" — of {base_size:,} HCPs with any prescriptions in the same window."
+                    if base_size is not None
+                    else "."
+                )
+            )
+            parts.append(
+                "_This is a real zero over a real prescribing base, not missing "
+                "data: lower the threshold or widen the window, then re-run the "
+                "volume-tier segmentation._"
+            )
+        else:
+            parts.append(f"\n### {cohort_size:,} HCPs — counts per tier")
+            parts.append("\n| Volume tier | Per-HCP TRx | HCPs | TRx combined |\n|---|---|---|---|")
+            for key, label in _VOLUME_TIER_ORDER:
+                bucket = tiers[key]
+                rng = (
+                    f"{bucket['trx_min']}–{bucket['trx_max']}"
+                    if bucket["trx_min"] is not None
+                    else "—"
+                )
+                parts.append(
+                    f"| {label} | {rng} | {bucket['n_hcps']:,} | {self._fmt(bucket['trx_total'])} |"
+                )
+            parts.append(
+                "\n_Tier boundaries are value-based terciles of THIS cohort's "
+                f"per-HCP TRx distribution — measured cut points: low ≤ {cut_low} "
+                f"< medium ≤ {cut_medium} < high. They are scope-relative "
+                "measurements, not fixed global constants; HCPs with equal TRx "
+                "always share a tier. This axis is computed from prescribing "
+                "volume and is distinct from the static priority-tier targeting "
+                "attribute._"
+            )
+            parts.append("\n_By specialty (all tiers combined):_\n")
+            parts.append("| Specialty | HCPs |\n|---|---|")
+            for spec, n in sorted(specialty.items(), key=lambda kv: -kv[1]):
+                parts.append(f"| {spec} | {n:,} |")
         if not window.explicit:
             parts.append(
                 f"\n_No time window was named — defaulted to the {window.label.split(' (')[0]} "

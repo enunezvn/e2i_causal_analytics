@@ -208,7 +208,7 @@ if DSPY_AVAILABLE:
         - resource_optimizer: Resource allocation, optimization recommendations
         - explainer: Natural language explanations, summaries, interpretations
         - feedback_learner: Learns from feedback, improves over time
-        - cohort_profiler: Profiles cohorts from chat — patient populations for a brand (size plus severity-tier and line-of-therapy breakdowns, with brand/criteria binding) AND HCP-entity cohorts with KPI thresholds, e.g. 'HCPs who prescribed >50 TRx last quarter' (#1356; cohort_constructor materializes the actual patient list)
+        - cohort_profiler: Profiles cohorts from chat — patient populations for a brand (size plus severity-tier and line-of-therapy breakdowns, with brand/criteria binding) AND HCP-entity cohorts with KPI thresholds, e.g. 'HCPs who prescribed >50 TRx last quarter', AND HCP volume-tier segmentation with real counts per high/medium/low prescription-volume tier, e.g. 'Segment HCPs by prescription volume into high, medium, and low tiers' (#1356/#1736; cohort_constructor materializes the actual patient list)
         """
 
         query: str = dspy.InputField(desc="User's query to route to an agent")

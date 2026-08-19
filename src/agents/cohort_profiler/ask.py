@@ -108,6 +108,26 @@ _REGION_RE = re.compile(
     re.I,
 )
 
+# Volume-tier segmentation (#1736): "Segment HCPs by prescription volume into
+# high, medium, and low tiers" (eval 4.3, verbatim) / "high/medium/low
+# prescription-volume tiers" (the 4.3 clarification's promised follow-up).
+# Recognition is conservative per this module's design: it requires an explicit
+# VOLUME word ("prescription volume", "prescribing volume", "TRx volume",
+# "volume tiers") in tier context — a bare "tier" (e.g. "high priority tier")
+# can never trigger it, because hcp_profiles.priority_tier is a DISTINCT
+# targeting attribute (volume + brand affinity + accessibility per the
+# ontology), not a prescription-volume axis. Measured 2026-08-19: the data
+# model stores NO volume tier (prescribing_tier / prescribing_volume are NULL
+# on all 5,000 hcp_profiles rows), so tiers are COMPUTED from windowed per-HCP
+# TRx by the mig-130 statements.
+_VOLUME_WORD = r"(?:prescri(?:ption|bing)|rx|trx)[\s-]*volumes?"
+_VOLUME_TIER_RE = re.compile(
+    rf"\b{_VOLUME_WORD}\b[^.?!\n]*?\btier(?:s|ed|ing)?\b"
+    rf"|\btier(?:s|ed|ing)?\b[^.?!\n]*?\b{_VOLUME_WORD}\b"
+    r"|\bvolume[\s-]*tier(?:s|ed|ing)?\b",
+    re.I,
+)
+
 _DIAG_GUIDANCE = (
     "the data model carries no true diagnosis dates (treatment_events has zero "
     "'diagnosis' events; patient_journeys.journey_start_date is only a documented "
@@ -126,7 +146,7 @@ _LAST_N_DAYS_RE = re.compile(r"\b(?:last|past)\s+(\d{1,3})\s+days?\b", re.I)
 class Criterion:
     """One recognized inclusion criterion (servable or honestly not)."""
 
-    kind: str  # "age_min" | "age_max" | "diagnosis_year" | "region"
+    kind: str  # "age_min" | "age_max" | "diagnosis_year" | "region" | "volume_tiers"
     label: str  # human-readable echo of the ask, e.g. 'diagnosed in 2024'
     servable: bool
     value: Optional[int] = None  # bound value (exclusive for age bounds)
@@ -164,6 +184,10 @@ class CohortAsk:
     criteria: Tuple[Criterion, ...] = field(default_factory=tuple)
     threshold: Optional[Threshold] = None
     window: Optional[Window] = None
+    # "high/medium/low prescription-volume tiers" asked for (#1736) — served on
+    # the HCP path via the mig-130 tercile statements, accounted honestly on
+    # the patient path.
+    volume_tiers: bool = False
 
 
 # Delegations to the shared service (#1351). The names stay module-local so
@@ -320,12 +344,23 @@ def parse_cohort_ask(
             )
         )
 
+    volume_tiers = bool(_VOLUME_TIER_RE.search(query))
+    entity_type = _entity_type(query)
+    if volume_tiers and not _PATIENT_RE.search(query):
+        # Prescription-volume tiers bucket PRESCRIBERS by per-HCP TRx: with no
+        # explicit patient word, a tier ask lands on the HCP path (the eval-4.3
+        # follow-up often names only the brand plus the tier phrasing). An
+        # explicit patient ask keeps the patient path and is accounted honestly
+        # there.
+        entity_type = "hcp"
+
     return CohortAsk(
-        entity_type=_entity_type(query),
+        entity_type=entity_type,
         brand=_canonical_brand(brand_hint) or _brand_from_text(query),
         criteria=tuple(criteria),
         threshold=_parse_threshold(query),
         window=_parse_window(query, today),
+        volume_tiers=volume_tiers,
     )
 
 
@@ -339,6 +374,7 @@ def merge_cohort_asks(primary: CohortAsk, supplement: CohortAsk) -> CohortAsk:
     the primary lacks are appended (primary's first); on kind collision the
     primary wins — the rewrite may have resolved anaphora the raw text leaves
     dangling. ``threshold``/``window`` fill in only when the primary has none;
+    ``volume_tiers`` survives when either side asked for it (#1736);
     ``entity_type`` and ``brand`` stay the primary's.
     """
     have = {c.kind for c in primary.criteria}
@@ -349,4 +385,5 @@ def merge_cohort_asks(primary: CohortAsk, supplement: CohortAsk) -> CohortAsk:
         criteria=criteria,
         threshold=primary.threshold or supplement.threshold,
         window=primary.window or supplement.window,
+        volume_tiers=primary.volume_tiers or supplement.volume_tiers,
     )
