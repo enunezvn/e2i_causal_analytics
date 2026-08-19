@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
+import numpy as np
+
 from src.kpi.measure_basis import measure_basis_for_kpi
 from src.repositories.provenance import coerce_provenance_flag, deployment_includes_synthetic
 from src.utils.llm_content import normalize_llm_content
@@ -3384,6 +3386,28 @@ class DispatcherNode:
         return await self._dispatch_agent(fallback_dispatch, state)
 
 
+def _to_native(value: Any) -> Any:
+    """Recursively coerce numpy scalars/arrays to builtin Python types.
+
+    #1732: ``agent_results`` is checkpointed through langgraph's ormsgpack
+    serde, which raises on any numpy scalar — aborting the whole
+    ``orchestrator.run()`` AFTER the agent completed. Every agent result must
+    therefore be native-typed before it enters OrchestratorState.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        # tolist() natives non-object dtypes; recursing on its result handles
+        # object dtypes and 0-d arrays (where tolist() returns a bare scalar).
+        return _to_native(value.tolist())
+    if isinstance(value, dict):
+        return {_to_native(k): _to_native(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        coerced = [_to_native(v) for v in value]
+        return tuple(coerced) if isinstance(value, tuple) else coerced
+    return value
+
+
 def _normalize_agent_result(raw: Any) -> Dict[str, Any]:
     """Coerce an agent's return value to the dict shape AgentResult expects.
 
@@ -3391,20 +3415,21 @@ def _normalize_agent_result(raw: Any) -> Dict[str, Any]:
     object (e.g. ExperimentMonitorOutput, DriftMonitorOutput), or a plain
     string. ``isinstance(raw, dict)`` short-circuits the TypedDict case;
     dataclasses are flattened via ``__dict__``; anything else is wrapped.
+    Every path runs through ``_to_native`` — see #1732.
     """
     if raw is None:
         return {}
     if isinstance(raw, dict):
-        return cast(Dict[str, Any], raw)
+        return cast(Dict[str, Any], _to_native(raw))
     if hasattr(raw, "to_dict") and callable(raw.to_dict):
         try:
             result = raw.to_dict()
             if isinstance(result, dict):
-                return cast(Dict[str, Any], result)
+                return cast(Dict[str, Any], _to_native(result))
         except Exception:  # pragma: no cover - defensive
             pass
     if hasattr(raw, "__dict__"):
-        return {k: v for k, v in vars(raw).items() if not k.startswith("_")}
+        return {k: _to_native(v) for k, v in vars(raw).items() if not k.startswith("_")}
     return {"raw_output": str(raw)}
 
 

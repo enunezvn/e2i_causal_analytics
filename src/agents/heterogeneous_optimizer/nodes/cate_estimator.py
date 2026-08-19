@@ -723,8 +723,10 @@ class CATEEstimatorNode:
         if ate == 0:
             return 0.0
         cv = std / abs(ate)
-        # Normalize to 0-1 scale (CV/2, capped at 1.0)
-        return cast(float, min(cv / 2, 1.0))
+        # Normalize to 0-1 scale (CV/2, capped at 1.0). float() because cv is
+        # numpy.float64 and min() preserves it — a numpy scalar in the output
+        # kills orchestrator checkpoint serialization (#1732).
+        return float(min(cv / 2, 1.0))
 
     @staticmethod
     def _extract_dml_residuals(cf, n_rows: int) -> "tuple[np.ndarray, np.ndarray] | None":
