@@ -1060,12 +1060,18 @@ class TestQueryTriggers:
 
     @pytest.mark.asyncio
     async def test_query_triggers_success(self):
-        """Test successful triggers query."""
+        """Test successful triggers query.
+
+        #1727: the route reads ``get_triggers_since`` (windowed), not
+        ``get_many`` — the stub must be the method the code calls, or an
+        un-stubbed AsyncMock silently yields count 0.
+        """
         mock_triggers = [{"id": 1, "type": "alert", "message": "TRx dropped"}]
+        since = datetime.now(timezone.utc)
 
         with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
-            mock_repo.get_many.return_value = mock_triggers
+            mock_repo.get_triggers_since.return_value = mock_triggers
             mock_client.return_value = MagicMock()
 
             with patch(
@@ -1075,10 +1081,11 @@ class TestQueryTriggers:
                 result = await _query_triggers(
                     brand=None,
                     region=None,
-                    since=datetime.now(timezone.utc),
+                    since=since,
                     limit=10,
                 )
 
+        mock_repo.get_triggers_since.assert_awaited_once_with(since, limit=10)
         assert result["success"] is True
         assert result["query_type"] == "triggers"
         assert result["count"] == 1
