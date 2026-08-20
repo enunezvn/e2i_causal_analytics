@@ -23,6 +23,15 @@ import pytest
 
 from src.agents.gap_analyzer.graph import create_gap_analyzer_graph
 from src.agents.gap_analyzer.state import GapAnalyzerState
+from src.utils.frame_registry import _clear_all_for_tests, stash_frame
+
+
+@pytest.fixture(autouse=True)
+def _release_stashed_frames():
+    """Registry hygiene: _initial_state stashes the tier0 payload (#1743); drop
+    every entry after each test so a raising graph run cannot leak it."""
+    yield
+    _clear_all_for_tests()
 
 
 def _tier0_malformed_passthrough(n: int = 60):
@@ -49,7 +58,14 @@ def _initial_state(segments, tier0_data=None) -> GapAnalyzerState:
         "brand": "kisqali",
         "time_period": "current_quarter",
         "filters": None,
-        "tier0_data": tier0_data,
+        # #1743: these states go into graph.ainvoke, so the tier0 payload must
+        # travel as a registry handle — the schema no longer declares tier0_data
+        # and LangGraph would silently drop an in-dict frame at the boundary
+        # (turning the malformed-passthrough failure test vacuous). The autouse
+        # fixture above releases the stash.
+        "tier0_frame_ref": (
+            stash_frame(tier0_data, label="test-f2") if tier0_data is not None else None
+        ),
         "instrument_specs": None,
         "instrument_strength_by_feature": None,
         "gap_type": "vs_target",

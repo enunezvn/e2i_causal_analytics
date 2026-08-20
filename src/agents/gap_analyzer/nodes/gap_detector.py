@@ -185,8 +185,15 @@ class GapDetectorNode:
             )
             data_connector, benchmark_store = self._connectors_for(include_synthetic)
 
-            # Priority 1: Use tier0 passthrough data if available
-            tier0_data = state.get("tier0_data")
+            # Priority 1: Use tier0 passthrough data if available. #1743 (sibling
+            # of #1734): the frame rides the process-local frame registry (state
+            # carries only the tier0_frame_ref handle — a frame in state would
+            # re-stream to the chat client via every on_chain_* event); direct
+            # node callers may still hand an in-dict frame, which can never
+            # reach a compiled graph.
+            from src.utils.frame_registry import resolve_state_frame
+
+            tier0_data = resolve_state_frame(state)
             if tier0_data is not None and len(tier0_data) >= 50:
                 logger.info(
                     f"Using tier0 passthrough data ({len(tier0_data)} rows) for gap analysis",
