@@ -100,6 +100,32 @@ class TestFiltersContextNote:
         assert "east" in note
         assert "nested" not in note
 
+    # #1753 — the Home Region selector re-scopes the KPI dashboard, but the
+    # note folded brand/dateRange/territory/hcpSegment only: even once the
+    # frontend ships region in the CoAgent filters, agent runs stayed blind
+    # to it. Same skip-the-sentinel semantics as brand='All'.
+
+    def test_region_renders_when_set(self):
+        note = _filters_context_note({**FULL_FILTERS, "region": "West"})
+        assert "region=West" in note
+
+    def test_region_all_us_is_not_a_region_constraint(self):
+        """region='All US' means no region is selected — advertising it would
+        ground every ambiguous query in a fake geographic scope."""
+        note = _filters_context_note({**FULL_FILTERS, "region": "All US"})
+        assert "region=" not in note
+
+    def test_region_alone_renders(self):
+        note = _filters_context_note({"region": "Midwest"})
+        assert "region=Midwest" in note
+
+    def test_resolve_instruction_names_region(self):
+        """The use-don't-ask sentence enumerates the resolvable fields; region
+        must be in that contract or the model has no license to resolve it."""
+        note = _filters_context_note({**FULL_FILTERS, "region": "West"})
+        resolve_sentence = note.split("When the user's message", 1)[1]
+        assert "region" in resolve_sentence
+
 
 class TestSynthesisPromptFilters:
     def test_filters_section_present_with_brand(self):

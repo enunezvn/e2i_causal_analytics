@@ -92,6 +92,7 @@ function TestConsumer() {
   return (
     <div>
       <span data-testid="brand">{context.filters.brand}</span>
+      <span data-testid="region">{context.filters.region ?? 'missing'}</span>
       <span data-testid="territory">{context.filters.territory ?? 'none'}</span>
       <span data-testid="detail-level">{context.preferences.detailLevel}</span>
       <span data-testid="agent-count">{context.agents.length}</span>
@@ -570,6 +571,81 @@ describe('#1749 — brand filter defaults to All', () => {
     const bridgeCall = mockUseCoAgent.mock.calls.find((call) => call[0]?.name === 'default');
     expect(bridgeCall).toBeDefined();
     expect(bridgeCall![0].initialState?.filters?.brand).toBe('All');
+  });
+});
+
+// =============================================================================
+// TESTS: #1753 — REGION FILTER CHANNEL
+// =============================================================================
+// Home's Region selector re-scopes the KPI dashboard but had no channel to
+// chat agent runs: E2IFilters carried no region field, so AgentFiltersBridge
+// shipped nothing and the backend filter note had nothing to fold. 'All US'
+// is the honest no-selection sentinel (mirrors brand's 'All', #1749).
+
+describe('#1753 — region filter channel', () => {
+  beforeEach(() => {
+    mockUseCoAgent.mockClear();
+    mockUseCopilotAction.mockClear();
+  });
+
+  it("provides 'All US' as the default region filter", () => {
+    render(
+      <CopilotKitWrapper enabled={false}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    expect(screen.getByTestId('region')).toHaveTextContent(/^All US$/);
+  });
+
+  it("bridges the 'All US' region default into CoAgent state", () => {
+    render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    const bridgeCall = mockUseCoAgent.mock.calls.find((call) => call[0]?.name === 'default');
+    expect(bridgeCall).toBeDefined();
+    expect(bridgeCall![0].initialState?.filters?.region).toBe('All US');
+  });
+
+  it('registers the setRegionFilter action (two-way parity with setBrandFilter)', () => {
+    render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    const actionNames = mockUseCopilotAction.mock.calls.map((call) => call[0]?.name);
+    expect(actionNames).toContain('setRegionFilter');
+  });
+
+  it('setRegionFilter sets a valid region and rejects junk without writing it', () => {
+    render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    const actionCall = mockUseCopilotAction.mock.calls.find(
+      (call) => call[0]?.name === 'setRegionFilter'
+    );
+    const handler = actionCall?.[0]?.handler as
+      | ((params: { region: string }) => string)
+      | undefined;
+    expect(handler).toBeDefined();
+
+    expect(handler!({ region: 'West' })).toContain('West');
+    expect(handler!({ region: 'Atlantis' })).toMatch(/invalid/i);
   });
 });
 
