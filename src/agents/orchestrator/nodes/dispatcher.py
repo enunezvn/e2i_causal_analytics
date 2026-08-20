@@ -1158,67 +1158,47 @@ _DRIFT_PASSTHROUGH: Tuple[str, ...] = (
 
 
 def _sanitize_drift_params(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Shape/range-validate the router-supplied drift params against the
-    ``DriftMonitorInput`` contract, DROPPING (with a warning) any value that
-    would fail the model's validators.
+    """Validate the router-supplied drift params against the
+    ``DriftMonitorInput`` contract, DROPPING (with a warning) any value the
+    model itself would reject and forwarding the model-COERCED value otherwise.
 
     The router is an LLM: it can and does emit ``features_to_monitor: []``, a
     prose ``time_window``, or an out-of-range threshold. Those raw values used
     to ride ``_coerce_to_input_model``'s parameters overlay straight into the
     Pydantic build and crash it — the exact failure #1747 exists to remove
-    (codex iter-1 HIGH). Validation here mirrors the model's declared
-    constraints (min_length=1 list of names, ``'\\d+d'`` in 1..365,
-    significance in [0.01, 0.10], psi in [0, 1], strict bools); a dropped key
+    (codex iter-1 HIGH). Validation DELEGATES per key to the model's own
+    assignment validator rather than hand-mirroring its rules: an earlier
+    hand-rolled version was stricter than the model's lax coercion (dropping a
+    model-valid ``significance_level="0.01"`` or ``check_model_drift="false"``
+    to defaults, silently losing analyst intent — codex iter-2 MED), and
+    delegation makes that divergence structurally impossible. A dropped key
     falls back to the resolver's grounded value or the model default.
-    ``tier0_data`` is ``Any`` on the model — nothing to validate.
+
+    Deliberate strictness beyond the model (each carries no analyst intent):
+    blank/whitespace-only strings are dropped for ``model_id``/``brand`` and
+    filtered out of ``features_to_monitor`` (the model accepts ``""``, but a
+    blank name can never match a registered feature or brand); a padded
+    ``time_window`` is stripped BEFORE validation (the model's validator does
+    not strip, so this is laxer, rescuing ``" 30d "``).
     """
+    from src.agents.drift_monitor.agent import DriftMonitorInput
 
-    def _named(value: Any) -> bool:
-        return isinstance(value, str) and bool(value.strip())
+    def _blank(value: Any) -> bool:
+        return isinstance(value, str) and not value.strip()
 
-    def _valid(key: str, value: Any) -> bool:
-        if key == "features_to_monitor":
-            return (
-                isinstance(value, (list, tuple))
-                and len(value) > 0
-                and all(_named(f) for f in value)
-            )
-        if key == "time_window":
-            return (
-                isinstance(value, str)
-                and re.fullmatch(r"\d+d", value.strip()) is not None
-                and 1 <= int(value.strip()[:-1]) <= 365
-            )
-        if key in ("model_id", "brand"):
-            return _named(value)
-        if key == "significance_level":
-            return (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and 0.01 <= value <= 0.10
-            )
-        if key == "psi_threshold":
-            return (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and 0.0 <= value <= 1.0
-            )
-        if key.startswith("check_"):
-            return isinstance(value, bool)
-        if key in ("baseline_dag_adjacency", "current_dag_adjacency"):
-            return isinstance(value, list)
-        if key == "dag_nodes":
-            return isinstance(value, list) and all(isinstance(n, str) for n in value)
-        if key in ("baseline_dag_edge_types", "current_dag_edge_types"):
-            return isinstance(value, dict)
-        return True
-
+    probe = DriftMonitorInput.model_construct()
+    validator = DriftMonitorInput.__pydantic_validator__
     out: Dict[str, Any] = {}
     for key in _DRIFT_PASSTHROUGH:
         value = params.get(key)
         if value is None:
             continue
-        if not _valid(key, value):
+        if key == "time_window" and isinstance(value, str):
+            value = value.strip()
+        try:
+            # ValueError covers pydantic.ValidationError (subclass).
+            coerced = getattr(validator.validate_assignment(probe, key, value), key)
+        except ValueError:
             logger.warning(
                 "drift_monitor dispatch: dropping malformed router parameter %s=%r "
                 "(fails the DriftMonitorInput contract; the resolver-grounded value "
@@ -1228,11 +1208,23 @@ def _sanitize_drift_params(params: Dict[str, Any]) -> Dict[str, Any]:
             )
             continue
         if key == "features_to_monitor":
-            out[key] = list(value)
-        elif key == "time_window":
-            out[key] = value.strip()
-        else:
-            out[key] = value
+            coerced = [f for f in coerced if not _blank(f)]
+            if not coerced:
+                logger.warning(
+                    "drift_monitor dispatch: dropping features_to_monitor=%r "
+                    "(no non-blank names left; the resolver grounds features "
+                    "instead).",
+                    value,
+                )
+                continue
+        elif key in ("model_id", "brand") and _blank(coerced):
+            logger.warning(
+                "drift_monitor dispatch: dropping blank router parameter %s=%r.",
+                key,
+                value,
+            )
+            continue
+        out[key] = coerced
     return out
 
 
