@@ -39,8 +39,9 @@ export interface UseE2IFiltersReturn {
 // DEFAULT VALUES
 // =============================================================================
 
+// #1749: 'All' = no brand selected — never default to a specific brand.
 const DEFAULT_FILTERS: E2IFilters = {
-  brand: 'Remibrutinib',
+  brand: 'All',
   territory: null,
   dateRange: {
     start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -124,7 +125,8 @@ export function useE2IFilters(): UseE2IFiltersReturn {
   }, [setFilters]);
 
   const getFilterSummary = React.useCallback((): string => {
-    const parts: string[] = [filters.brand];
+    // The 'All' sentinel is not a brand — render it as prose (#1749).
+    const parts: string[] = [filters.brand === 'All' ? 'All brands' : filters.brand];
 
     if (filters.territory) {
       parts.push(filters.territory);

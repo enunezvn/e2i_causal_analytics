@@ -188,6 +188,16 @@ const graphHandlers = [
     return HttpResponse.json(createCausalChainResponse());
   }),
 
+  // GET /causal/value-chains - top REAL discovered causal value chains
+  // (Home mounts CausalValueChains on every render; without a handler MSW
+  // passed the request through — on the dev droplet that reaches the LIVE
+  // API on localhost:8000 and the passthrough socket dies as an unhandled
+  // EINVAL that fails the run. Same response shape as /graph/causal-chains.)
+  http.get(`${baseUrl}/causal/value-chains`, async () => {
+    await simulateDelay();
+    return HttpResponse.json(createCausalChainResponse());
+  }),
+
   // POST /graph/query - Execute Cypher query
   http.post(`${baseUrl}/graph/query`, async () => {
     await simulateDelay();

@@ -256,7 +256,8 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('brand')).toHaveTextContent('Remibrutinib');
+      // #1749: no selection defaults to 'All', never a specific brand.
+      expect(screen.getByTestId('brand')).toHaveTextContent(/^All$/);
       expect(screen.getByTestId('territory')).toHaveTextContent('none');
     });
 
@@ -319,7 +320,7 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('brand')).toHaveTextContent('Remibrutinib');
+      expect(screen.getByTestId('brand')).toHaveTextContent(/^All$/);
 
       await act(async () => {
         screen.getByText('Change Brand').click();
@@ -523,7 +524,8 @@ describe('CopilotHooksConnector', () => {
 
     const bridgeCall = mockUseCoAgent.mock.calls.find((call) => call[0]?.name === 'default');
     expect(bridgeCall).toBeDefined();
-    expect(bridgeCall![0].initialState?.filters?.brand).toBe('Remibrutinib');
+    // #1749: the bridge seeds the honest 'All' default (no brand selected).
+    expect(bridgeCall![0].initialState?.filters?.brand).toBe('All');
     // And the filters are pushed into agent state (not just initialState,
     // which only seeds the very first run).
     expect(mockCoAgentSetState).toHaveBeenCalled();

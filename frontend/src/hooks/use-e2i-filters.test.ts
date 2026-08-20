@@ -12,7 +12,7 @@ describe('useE2IFilters', () => {
     const { result } = renderHook(() => useE2IFilters());
 
     expect(result.current.filters).toBeDefined();
-    expect(result.current.filters.brand).toBe('Remibrutinib');
+    expect(result.current.filters.brand).toBe('All'); // #1749: no brand selected
     expect(result.current.filters.territory).toBeNull();
     expect(result.current.filters.hcpSegment).toBeNull();
   });
@@ -70,7 +70,7 @@ describe('useE2IFilters', () => {
       result.current.resetFilters();
     });
 
-    expect(result.current.filters.brand).toBe('Remibrutinib');
+    expect(result.current.filters.brand).toBe('All'); // #1749
     expect(result.current.filters.territory).toBeNull();
   });
 
@@ -79,7 +79,7 @@ describe('useE2IFilters', () => {
 
     const summary = result.current.getFilterSummary();
 
-    expect(summary).toContain('Remibrutinib');
+    expect(summary).toContain('All brands'); // #1749: sentinel rendered as prose
     expect(summary).toContain(' - '); // Date range separator
   });
 });
